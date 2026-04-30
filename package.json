@@ -1,0 +1,40 @@
+{
+  "name": "his-multipais",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sistema de Información Hospitalaria Multipaís - Inversiones Avante",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:e2e": "turbo run test:e2e",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "db:generate": "npm run -w @his/database generate",
+    "db:migrate": "npm run -w @his/database migrate",
+    "db:seed": "npm run -w @his/database seed",
+    "db:studio": "npm run -w @his/database studio",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.6.3",
+    "prettier": "^3.4.2",
+    "prettier-plugin-tailwindcss": "^0.6.9",
+    "@types/node": "^22.10.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@11.9.0",
+  "license": "UNLICENSED",
+  "author": "Inversiones Avante - Unidad de Transformación Digital"
+}
