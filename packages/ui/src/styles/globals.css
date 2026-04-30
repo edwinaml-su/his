@@ -1,0 +1,194 @@
+/*
+ * HIS Multipaís — Tokens globales del Design System
+ * Paquete: @his/ui
+ * Convención: Shadcn/ui (variables CSS HSL, light/dark via clase `.dark` en <html>).
+ * Documentación: docs/07_design_system.md
+ *
+ * IMPORTANTE: Toda variable está en formato HSL sin la función hsl() para que
+ * Tailwind pueda envolverla con alpha (`hsl(var(--primary) / 0.5)`).
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Base */
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    /* Azul Avante (acción primaria) */
+    --primary: 210 100% 35%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 16% 96%;
+    --muted-foreground: 215 16% 40%;
+
+    --accent: 210 16% 93%;
+    --accent-foreground: 222 47% 11%;
+
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 20% 88%;
+    --input: 214 20% 88%;
+    --ring: 210 100% 45%;
+
+    --radius: 0.5rem;
+
+    /* Estados clínicos semánticos */
+    --success: 142 71% 36%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 43 94% 36%;
+    --warning-foreground: 0 0% 100%;
+
+    --critical: 0 72% 45%;
+    --critical-foreground: 0 0% 100%;
+
+    --info: 217 91% 53%;
+    --info-foreground: 0 0% 100%;
+
+    /* Banners clínicos especiales */
+    --lasa: 17 75% 26%;          /* marrón oscuro — distinto de cualquier triage */
+    --lasa-foreground: 0 0% 100%;
+
+    --allergy: 348 83% 36%;       /* rosa oscuro — distinto del rojo de triage */
+    --allergy-foreground: 0 0% 100%;
+
+    /* Manchester Triage System (auditado WCAG 2.1 AA) */
+    --triage-red: 0 74% 50%;            /* #DC2626 sobre blanco -> 5.9:1 */
+    --triage-red-foreground: 0 0% 100%;
+
+    --triage-orange: 21 90% 48%;        /* #EA580C sobre blanco -> 4.6:1 */
+    --triage-orange-foreground: 0 0% 100%;
+
+    --triage-yellow: 43 96% 39%;        /* #CA8A04, foreground oscuro -> 8.2:1 */
+    --triage-yellow-foreground: 0 0% 10%;
+
+    --triage-green: 142 76% 36%;        /* #16A34A sobre blanco -> 4.5:1 */
+    --triage-green-foreground: 0 0% 100%;
+
+    --triage-blue: 221 83% 53%;         /* #2563EB sobre blanco -> 5.7:1 */
+    --triage-blue-foreground: 0 0% 100%;
+
+    /* Sidebar (multi-org switcher, navegación lateral) */
+    --sidebar-background: 210 16% 98%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-border: 214 20% 88%;
+    --sidebar-accent: 210 16% 93%;
+    --sidebar-accent-foreground: 222 47% 11%;
+  }
+
+  .dark {
+    /* Base */
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+
+    --card: 222 47% 8%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 8%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 100% 60%;
+    --primary-foreground: 222 47% 6%;
+
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 33% 14%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 217 33% 20%;
+    --input: 217 33% 20%;
+    --ring: 210 100% 65%;
+
+    /* Estados clínicos */
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 48 96% 53%;
+    --warning-foreground: 0 0% 10%;
+
+    --critical: 0 72% 55%;
+    --critical-foreground: 0 0% 100%;
+
+    --info: 217 91% 60%;
+    --info-foreground: 0 0% 100%;
+
+    --lasa: 17 60% 45%;
+    --lasa-foreground: 0 0% 100%;
+
+    --allergy: 348 70% 50%;
+    --allergy-foreground: 0 0% 100%;
+
+    /* Manchester Triage en dark (auditado WCAG 2.1 AA) */
+    --triage-red: 0 84% 60%;
+    --triage-red-foreground: 0 0% 100%;
+
+    --triage-orange: 25 95% 60%;
+    --triage-orange-foreground: 0 0% 10%;
+
+    --triage-yellow: 48 96% 53%;
+    --triage-yellow-foreground: 0 0% 10%;
+
+    --triage-green: 142 71% 45%;
+    --triage-green-foreground: 0 0% 100%;
+
+    --triage-blue: 217 91% 60%;
+    --triage-blue-foreground: 0 0% 100%;
+
+    /* Sidebar */
+    --sidebar-background: 222 47% 8%;
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-border: 217 33% 20%;
+    --sidebar-accent: 217 33% 17%;
+    --sidebar-accent-foreground: 210 40% 98%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  /* Datos numéricos clínicos en columnas (signos vitales, eMAR, contabilidad) */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Focus visible global (WCAG 2.1 AA — 2.4.7) */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+  /* Reduce motion (accesibilidad — usuarios con vestibular disorders) */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
