@@ -1,0 +1,1346 @@
+// =============================================================================
+// HIS Multi-país | Inversiones Avante | MVP fundacional
+// Schema Prisma — Postgres 15+ (Supabase) — 4NF estricto
+// Cubre TDR §5 (multi-entidad), §6 (seguridad), §7 (catálogos), §8 (MPI/ADT),
+// §9 (Triage Manchester).
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgcrypto, citext, uuid_ossp(map: "uuid-ossp"), pg_trgm]
+  schemas    = ["public", "audit"]
+}
+
+// =============================================================================
+// 0. ENUMS  (valores fijos del dominio; los catálogos evolutivos van como tablas)
+// =============================================================================
+
+/// TDR §5.4 — libros contables paralelos.
+enum LedgerKind {
+  FISCAL_LOCAL
+  IFRS
+  US_GAAP
+  MANAGEMENT
+  BUDGET
+  STATISTICAL
+
+  @@schema("public")
+}
+
+/// TDR §5.3 — tipo de tasa de cambio.
+enum FxRateType {
+  BUY
+  SELL
+  AVERAGE
+  OFFICIAL
+  FISCAL
+
+  @@schema("public")
+}
+
+/// TDR §6.1 — tipo de credencial usada para autenticar al usuario.
+enum AuthMethod {
+  PASSWORD
+  TOTP
+  SMS_OTP
+  EMAIL_OTP
+  PUSH
+  SAML
+  OIDC
+  LDAP
+  ESIGN
+
+  @@schema("public")
+}
+
+/// TDR §6.3 — acción auditada.
+enum AuditAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  PRINT
+  EXPORT
+  SIGN
+  VOID
+  LOGIN
+  LOGOUT
+  BREAK_GLASS
+
+  @@schema("public")
+}
+
+/// TDR §8.3 — tipo de admisión.
+enum AdmissionType {
+  EMERGENCY
+  SCHEDULED
+  TRANSFER_IN
+  BIRTH
+  NEWBORN
+
+  @@schema("public")
+}
+
+/// TDR §8.1 — clase de identificador del paciente en MPI.
+enum PatientIdentifierKind {
+  DUI
+  NIT
+  NIE
+  PASSPORT
+  BIRTH_CERT
+  MINOR_ID
+  RESIDENT_ID
+  NUP
+  OTHER
+
+  @@schema("public")
+}
+
+/// TDR §8.5 — tipos de alta.
+enum DischargeType {
+  MEDICAL
+  VOLUNTARY
+  TRANSFER_OUT
+  ABSCONDED
+  DEATH
+  AGAINST_MEDICAL_ADVICE
+
+  @@schema("public")
+}
+
+/// TDR §8.6 — estados de cama.
+enum BedStatus {
+  FREE
+  OCCUPIED
+  DIRTY
+  BLOCKED
+  MAINTENANCE
+  RESERVED
+
+  @@schema("public")
+}
+
+/// TDR §9 — niveles Manchester (color es derivado del nivel pero también persistido para auditoría).
+enum TriageColor {
+  RED
+  ORANGE
+  YELLOW
+  GREEN
+  BLUE
+
+  @@schema("public")
+}
+
+/// TDR §9.2 — estado de la evaluación de triage.
+enum TriageStatus {
+  IN_PROGRESS
+  COMPLETED
+  RE_TRIAGED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// TDR §6.2 — efecto del permiso.
+enum PermissionEffect {
+  ALLOW
+  DENY
+
+  @@schema("public")
+}
+
+// =============================================================================
+// 1. MULTI-ENTIDAD  (TDR §5)
+// =============================================================================
+
+/// TDR §5.1 — País. Raíz del aislamiento geográfico-regulatorio.
+model Country {
+  id            String   @id @default(uuid()) @db.Uuid
+  isoAlpha3     String   @unique @db.Char(3) /// ISO 3166-1 alfa-3 (SLV).
+  isoNumeric    Int      @unique
+  name          String   @db.VarChar(120)
+  defaultLocale String   @db.VarChar(20) /// es-SV, es-GT, etc.
+  defaultTzId   String   @db.VarChar(60) /// IANA: America/El_Salvador.
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @db.Timestamptz()
+
+  organizations   Organization[]
+  geoDivisions    GeoDivision[]
+  currencies      CountryCurrency[]
+  identifierTypes IdentifierType[]
+  holidays        Holiday[]
+
+  @@schema("public")
+}
+
+/// TDR §5.1 / §27.4 — división política jerárquica auto-referencial.
+/// 4NF: cada nivel (depto, municipio, distrito, cantón) en una sola tabla evita MVD entre niveles.
+model GeoDivision {
+  id        String    @id @default(uuid()) @db.Uuid
+  countryId String    @db.Uuid
+  parentId  String?   @db.Uuid
+  level     Int /// 1=departamento, 2=municipio, 3=distrito, 4=cantón.
+  code      String    @db.VarChar(20)
+  name      String    @db.VarChar(120)
+  validFrom DateTime  @db.Date /// vigencia del registro (reforma 2024 SV).
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+  updatedAt DateTime  @updatedAt @db.Timestamptz()
+
+  country  Country       @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  parent   GeoDivision?  @relation("GeoTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children GeoDivision[] @relation("GeoTree")
+
+  @@unique([countryId, code, level, validFrom])
+  @@index([parentId])
+  @@schema("public")
+}
+
+/// TDR §27.4 — feriados nacionales y locales.
+model Holiday {
+  id            String   @id @default(uuid()) @db.Uuid
+  countryId     String   @db.Uuid
+  geoDivisionId String?  @db.Uuid /// null => feriado nacional.
+  date          DateTime @db.Date
+  name          String   @db.VarChar(120)
+  kind          String   @db.VarChar(40) /// nacional/local/religioso/institucional.
+  recurring     Boolean  @default(false)
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+
+  country Country @relation(fields: [countryId], references: [id], onDelete: Cascade)
+
+  @@unique([countryId, geoDivisionId, date, name])
+  @@schema("public")
+}
+
+/// TDR §5.3 — moneda (catálogo global).
+model Currency {
+  id        String   @id @default(uuid()) @db.Uuid
+  isoCode   String   @unique @db.Char(3) /// USD, SVC, BTC, GTQ.
+  name      String   @db.VarChar(80)
+  decimals  Int      @default(2)
+  symbol    String   @db.VarChar(8)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz()
+  updatedAt DateTime @updatedAt @db.Timestamptz()
+
+  countries        CountryCurrency[]
+  orgsAsFunctional Organization[]    @relation("OrgFunctional")
+  orgsAsReporting  Organization[]    @relation("OrgReporting")
+  fxFromRates      ExchangeRate[]    @relation("FxFrom")
+  fxToRates        ExchangeRate[]    @relation("FxTo")
+  ledgers          Ledger[]          @relation("LedgerCurrency")
+  encounters       Encounter[]       @relation("EncounterCurrency")
+
+  @@schema("public")
+}
+
+/// TDR §5.1, §5.3 — relación país-moneda (n:m con atributo `isLegalTender`).
+/// 4NF: aísla la dependencia multivaluada países↔monedas.
+model CountryCurrency {
+  countryId     String  @db.Uuid
+  currencyId    String  @db.Uuid
+  isLegalTender Boolean @default(false)
+  isFunctional  Boolean @default(false) /// moneda funcional del país.
+
+  country  Country  @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  currency Currency @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+
+  @@id([countryId, currencyId])
+  @@schema("public")
+}
+
+/// TDR §5.3 — tipos de cambio históricos.
+model ExchangeRate {
+  id           String     @id @default(uuid()) @db.Uuid
+  fromCurrency String     @db.Uuid
+  toCurrency   String     @db.Uuid
+  rateType     FxRateType
+  rate         Decimal    @db.Decimal(18, 8)
+  validFrom    DateTime   @db.Timestamptz()
+  validTo      DateTime?  @db.Timestamptz()
+  source       String?    @db.VarChar(80) /// BCR, manual, etc.
+  createdAt    DateTime   @default(now()) @db.Timestamptz()
+
+  from Currency @relation("FxFrom", fields: [fromCurrency], references: [id], onDelete: Restrict)
+  to   Currency @relation("FxTo", fields: [toCurrency], references: [id], onDelete: Restrict)
+
+  @@unique([fromCurrency, toCurrency, rateType, validFrom])
+  @@index([validFrom])
+  @@schema("public")
+}
+
+/// TDR §5.2 — organización (entidad jurídica con NIT). Holding/Empresa.
+model Organization {
+  id                 String   @id @default(uuid()) @db.Uuid
+  countryId          String   @db.Uuid
+  parentId           String?  @db.Uuid /// jerarquía Holding -> Empresa.
+  legalName          String   @db.VarChar(200)
+  tradeName          String?  @db.VarChar(200)
+  taxId              String   @db.VarChar(40) /// NIT.
+  functionalCurrency String   @db.Uuid
+  reportingCurrency  String?  @db.Uuid
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now()) @db.Timestamptz()
+  createdBy          String?  @db.Uuid
+  updatedAt          DateTime @updatedAt @db.Timestamptz()
+  updatedBy          String?  @db.Uuid
+
+  country        Country                @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  parent         Organization?          @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children       Organization[]         @relation("OrgTree")
+  functionalCurr Currency               @relation("OrgFunctional", fields: [functionalCurrency], references: [id], onDelete: Restrict)
+  reportingCurr  Currency?              @relation("OrgReporting", fields: [reportingCurrency], references: [id], onDelete: Restrict)
+  establishments Establishment[]
+  ledgers        Ledger[]
+  userRoles      UserOrganizationRole[]
+  patients       Patient[]
+  encounters     Encounter[]
+  triages        TriageEvaluation[]
+  beds           Bed[]
+  services       ServiceUnit[]
+
+  @@unique([countryId, taxId])
+  @@index([parentId])
+  @@schema("public")
+}
+
+/// TDR §5.2 — establecimiento físico (sede). MINSAL exige código por establecimiento.
+model Establishment {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  geoDivisionId  String?  @db.Uuid
+  code           String   @db.VarChar(40) /// código MINSAL.
+  name           String   @db.VarChar(200)
+  addressLine    String?  @db.VarChar(300)
+  phone          String?  @db.VarChar(40)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  createdBy      String?  @db.Uuid
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+  updatedBy      String?  @db.Uuid
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  serviceUnits ServiceUnit[]
+  beds         Bed[]
+  encounters   Encounter[]
+  triages      TriageEvaluation[]
+
+  @@unique([organizationId, code])
+  @@schema("public")
+}
+
+/// TDR §5.4 — libro contable paralelo. Asientos se generan por libro activo.
+model Ledger {
+  id             String     @id @default(uuid()) @db.Uuid
+  organizationId String     @db.Uuid
+  code           String     @db.VarChar(40)
+  name           String     @db.VarChar(120)
+  kind           LedgerKind
+  currencyId     String     @db.Uuid
+  active         Boolean    @default(true)
+  createdAt      DateTime   @default(now()) @db.Timestamptz()
+  updatedAt      DateTime   @updatedAt @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  currency     Currency     @relation("LedgerCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, code])
+  @@schema("public")
+}
+
+// =============================================================================
+// 2. SEGURIDAD  (TDR §6)
+// =============================================================================
+
+/// TDR §6.1 — usuario humano del sistema. Las credenciales viven en tablas separadas (4NF).
+model User {
+  id          String    @id @default(uuid()) @db.Uuid
+  email       String    @unique @db.Citext
+  fullName    String    @db.VarChar(200)
+  active      Boolean   @default(true)
+  mfaEnabled  Boolean   @default(false)
+  lastLoginAt DateTime? @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+  createdBy   String?   @db.Uuid
+  updatedAt   DateTime  @updatedAt @db.Timestamptz()
+  updatedBy   String?   @db.Uuid
+
+  credentials            UserCredential[]
+  externalIdentities     UserExternalIdentity[]
+  roles                  UserOrganizationRole[]
+  sessions               Session[]
+  patientConsentsGranted PatientConsent[]       @relation("ConsentAuthor")
+
+  @@schema("public")
+}
+
+/// TDR §6.1 — credenciales locales. 4NF: separa la MVD usuario↔(método auth, hash).
+model UserCredential {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  method     AuthMethod
+  secretHash String /// bcrypt/argon2 (PASSWORD), TOTP secret cifrado, etc.
+  validFrom  DateTime   @default(now()) @db.Timestamptz()
+  validTo    DateTime?  @db.Timestamptz()
+  createdAt  DateTime   @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, method])
+  @@schema("public")
+}
+
+/// TDR §6.1 — identidad federada (SAML/OIDC/LDAP). 4NF: independiente de credenciales locales.
+model UserExternalIdentity {
+  id        String     @id @default(uuid()) @db.Uuid
+  userId    String     @db.Uuid
+  provider  AuthMethod /// SAML/OIDC/LDAP.
+  issuer    String     @db.VarChar(200)
+  subject   String     @db.VarChar(200)
+  createdAt DateTime   @default(now()) @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, issuer, subject])
+  @@schema("public")
+}
+
+/// TDR §6.1 — sesión activa (para revocación y auditoría).
+model Session {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  organizationId String?   @db.Uuid /// tenant context activo.
+  ip             String?   @db.Inet
+  userAgent      String?   @db.VarChar(400)
+  issuedAt       DateTime  @default(now()) @db.Timestamptz()
+  expiresAt      DateTime  @db.Timestamptz()
+  revokedAt      DateTime? @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+/// TDR §6.2 — rol parametrizable (RBAC). Por organización o global.
+model Role {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid /// null => rol global del sistema.
+  code           String   @db.VarChar(60)
+  name           String   @db.VarChar(120)
+  description    String?  @db.Text
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  permissions RolePermission[]
+  userRoles   UserOrganizationRole[]
+
+  @@unique([organizationId, code])
+  @@schema("public")
+}
+
+/// TDR §6.2 — permiso atómico (acción + recurso). Catálogo seed.
+model Permission {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(120) /// p.ej. "patient.read", "rx.sign".
+  resource  String   @db.VarChar(60)
+  action    String   @db.VarChar(40)
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  rolePermissions RolePermission[]
+
+  @@schema("public")
+}
+
+/// TDR §6.2 — n:m role↔permission con efecto allow/deny.
+model RolePermission {
+  roleId       String           @db.Uuid
+  permissionId String           @db.Uuid
+  effect       PermissionEffect @default(ALLOW)
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@schema("public")
+}
+
+/// TDR §6.2 — un usuario tiene roles distintos por organización (ABAC dim. tenant).
+/// 4NF: descompone MVD usuario↔(organización, rol).
+model UserOrganizationRole {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  organizationId String    @db.Uuid
+  roleId         String    @db.Uuid
+  validFrom      DateTime  @default(now()) @db.Timestamptz()
+  validTo        DateTime? @db.Timestamptz()
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, organizationId, roleId])
+  @@index([organizationId])
+  @@schema("public")
+}
+
+/// TDR §6.3 — log de auditoría append-only. En schema "audit" para aislar privilegios.
+model AuditLog {
+  id              BigInt      @id @default(autoincrement())
+  occurredAt      DateTime    @default(now()) @db.Timestamptz()
+  userId          String?     @db.Uuid
+  organizationId  String?     @db.Uuid
+  establishmentId String?     @db.Uuid
+  ip              String?     @db.Inet
+  userAgent       String?     @db.VarChar(400)
+  action          AuditAction
+  entity          String      @db.VarChar(80)
+  entityId        String?     @db.VarChar(80)
+  beforeJson      Json?
+  afterJson       Json?
+  justification   String?     @db.Text /// break-the-glass, eliminación.
+  signatureHash   String?     @db.VarChar(120)
+
+  @@index([entity, entityId])
+  @@index([userId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@schema("audit")
+}
+
+// =============================================================================
+// 3. CATÁLOGOS DE PERSONAS  (TDR §7.2)
+// =============================================================================
+
+/// TDR §7.2 / §27.3 — tipo de documento de identidad por país.
+model IdentifierType {
+  id          String    @id @default(uuid()) @db.Uuid
+  countryId   String    @db.Uuid
+  code        String    @db.VarChar(20) /// DUI, NIT, NIE...
+  name        String    @db.VarChar(80)
+  validatorFn String?   @db.VarChar(80) /// nombre función SQL: validate_dui, validate_nit.
+  active      Boolean   @default(true)
+  validFrom   DateTime  @default(now()) @db.Date
+  validTo     DateTime? @db.Date
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+  updatedAt   DateTime  @updatedAt @db.Timestamptz()
+
+  country     Country             @relation(fields: [countryId], references: [id], onDelete: Cascade)
+  identifiers PatientIdentifier[]
+
+  @@unique([countryId, code])
+  @@schema("public")
+}
+
+/// TDR §7.2 — género (identidad de género). Catálogo separado del sexo biológico (4NF).
+model Gender {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(20)
+  name      String    @db.VarChar(80)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patients Patient[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — sexo biológico al nacer.
+model BiologicalSex {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(20) /// M, F, I (intersex), U (unknown).
+  name      String    @db.VarChar(80)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patients Patient[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — estado civil.
+model MaritalStatus {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(20)
+  name      String    @db.VarChar(80)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patients Patient[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — etnia (parametrizable por país).
+model Ethnicity {
+  id        String    @id @default(uuid()) @db.Uuid
+  countryId String?   @db.Uuid /// null = global.
+  code      String    @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patientLinks PatientEthnicity[]
+
+  @@unique([countryId, code])
+  @@schema("public")
+}
+
+/// TDR §7.2 — nivel educativo.
+model EducationLevel {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  ordinal   Int /// orden creciente para reportería.
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patients Patient[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — ocupación CIUO.
+model Occupation {
+  id        String    @id @default(uuid()) @db.Uuid
+  ciuoCode  String    @unique @db.VarChar(20)
+  name      String    @db.VarChar(200)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patients Patient[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — religión / culto.
+model Religion {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patientLinks PatientReligion[]
+
+  @@schema("public")
+}
+
+/// TDR §7.2 — idioma.
+model Language {
+  id        String    @id @default(uuid()) @db.Uuid
+  isoCode   String    @unique @db.VarChar(10) /// ISO 639-3.
+  name      String    @db.VarChar(80)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  patientLinks PatientLanguage[]
+
+  @@schema("public")
+}
+
+// =============================================================================
+// 4. CATÁLOGOS CLÍNICOS  (TDR §7.3)
+// =============================================================================
+
+/// TDR §7.3.1 — tipo de paciente (ambulatorio, hospitalizado, emergencia...).
+model PatientType {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  encounters Encounter[]
+
+  @@schema("public")
+}
+
+/// TDR §7.3.1 — categoría de paciente (privado, ISSS, MINSAL, FOSALUD...).
+model PatientCategory {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  encounters Encounter[]
+
+  @@schema("public")
+}
+
+/// TDR §7.3.1 — clasificación etaria (neonato, lactante...).
+model AgeBand {
+  id        String    @id @default(uuid()) @db.Uuid
+  code      String    @unique @db.VarChar(30)
+  name      String    @db.VarChar(80)
+  minDays   Int
+  maxDays   Int? /// null = sin límite superior.
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  @@schema("public")
+}
+
+/// TDR §7.3.4 — especialidad médica.
+model MedicalSpecialty {
+  id        String    @id @default(uuid()) @db.Uuid
+  parentId  String?   @db.Uuid /// sub-especialidad.
+  code      String    @unique @db.VarChar(40)
+  name      String    @db.VarChar(120)
+  active    Boolean   @default(true)
+  validFrom DateTime  @default(now()) @db.Date
+  validTo   DateTime? @db.Date
+  version   Int       @default(1)
+  createdAt DateTime  @default(now()) @db.Timestamptz()
+
+  parent   MedicalSpecialty?  @relation("SpecialtyTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children MedicalSpecialty[] @relation("SpecialtyTree")
+  services ServiceUnit[]
+
+  @@schema("public")
+}
+
+/// TDR §7.3.4 — servicio/unidad funcional (UCI, sala de partos, consulta externa).
+model ServiceUnit {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  establishmentId String   @db.Uuid
+  specialtyId     String?  @db.Uuid
+  code            String   @db.VarChar(40)
+  name            String   @db.VarChar(120)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @db.Timestamptz()
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  specialty     MedicalSpecialty?  @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
+  beds          Bed[]
+  encounters    Encounter[]
+  triages       TriageEvaluation[]
+
+  @@unique([establishmentId, code])
+  @@schema("public")
+}
+
+/// TDR §7.3.2 — sistema de codificación clínica (CIE-10, CIE-11, SNOMED CT, LOINC, CIAP-2).
+model CodeSystem {
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique @db.VarChar(40) /// ICD10, ICD11, SNOMED, LOINC, CIAP2, ATC.
+  name      String   @db.VarChar(120)
+  version   String   @db.VarChar(40)
+  uri       String?  @db.VarChar(200)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  concepts ClinicalConcept[]
+
+  @@schema("public")
+}
+
+/// TDR §7.3.2 — concepto clínico genérico (diagnóstico, procedimiento, observación, prueba).
+/// 4NF: una sola tabla evita duplicar columnas por sistema. Mapeos cruzados en ClinicalConceptMap.
+model ClinicalConcept {
+  id           String    @id @default(uuid()) @db.Uuid
+  codeSystemId String    @db.Uuid
+  code         String    @db.VarChar(60)
+  display      String    @db.VarChar(400)
+  isAbstract   Boolean   @default(false)
+  active       Boolean   @default(true)
+  validFrom    DateTime  @default(now()) @db.Date
+  validTo      DateTime? @db.Date
+  version      Int       @default(1)
+  createdAt    DateTime  @default(now()) @db.Timestamptz()
+
+  codeSystem CodeSystem           @relation(fields: [codeSystemId], references: [id], onDelete: Restrict)
+  mapsFrom   ClinicalConceptMap[] @relation("MapFrom")
+  mapsTo     ClinicalConceptMap[] @relation("MapTo")
+
+  @@unique([codeSystemId, code])
+  @@index([codeSystemId])
+  @@schema("public")
+}
+
+/// TDR §7.3.2 — mapeo cruzado entre sistemas de codificación.
+model ClinicalConceptMap {
+  id            String   @id @default(uuid()) @db.Uuid
+  fromConceptId String   @db.Uuid
+  toConceptId   String   @db.Uuid
+  equivalence   String   @db.VarChar(40) /// equivalent, broader, narrower, related.
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+
+  from ClinicalConcept @relation("MapFrom", fields: [fromConceptId], references: [id], onDelete: Cascade)
+  to   ClinicalConcept @relation("MapTo", fields: [toConceptId], references: [id], onDelete: Cascade)
+
+  @@unique([fromConceptId, toConceptId, equivalence])
+  @@schema("public")
+}
+
+// =============================================================================
+// 5. MPI / PACIENTE  (TDR §8.1)
+// =============================================================================
+
+/// TDR §8.1 — paciente único en el MPI institucional.
+/// Soft delete vía `deletedAt` (TDR §5.5 regla 7).
+model Patient {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid /// organización propietaria del registro maestro.
+  mrn                String    @db.VarChar(40) /// medical record number interno.
+  firstName          String    @db.VarChar(120)
+  middleName         String?   @db.VarChar(120)
+  lastName           String    @db.VarChar(120)
+  secondLastName     String?   @db.VarChar(120)
+  preferredName      String?   @db.VarChar(120)
+  birthDate          DateTime? @db.Date
+  birthDateEstimated Boolean   @default(false)
+  birthPlaceGeoId    String?   @db.Uuid
+  biologicalSexId    String    @db.Uuid
+  genderId           String?   @db.Uuid
+  maritalStatusId    String?   @db.Uuid
+  educationLevelId   String?   @db.Uuid
+  occupationId       String?   @db.Uuid
+  bloodTypeAbo       String?   @db.VarChar(3) /// A, B, AB, O.
+  bloodRh            String?   @db.VarChar(3) /// +, -.
+  isUnknown          Boolean   @default(false) /// NN.
+  unknownLabel       String?   @db.VarChar(40) /// NN-AAAAMMDD-NNN.
+  motherPatientId    String?   @db.Uuid /// vínculo neonato↔madre.
+  active             Boolean   @default(true)
+  deletedAt          DateTime? @db.Timestamptz()
+  deletedBy          String?   @db.Uuid
+  createdAt          DateTime  @default(now()) @db.Timestamptz()
+  createdBy          String?   @db.Uuid
+  updatedAt          DateTime  @updatedAt @db.Timestamptz()
+  updatedBy          String?   @db.Uuid
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  biologicalSex  BiologicalSex   @relation(fields: [biologicalSexId], references: [id], onDelete: Restrict)
+  gender         Gender?         @relation(fields: [genderId], references: [id], onDelete: SetNull)
+  maritalStatus  MaritalStatus?  @relation(fields: [maritalStatusId], references: [id], onDelete: SetNull)
+  educationLevel EducationLevel? @relation(fields: [educationLevelId], references: [id], onDelete: SetNull)
+  occupation     Occupation?     @relation(fields: [occupationId], references: [id], onDelete: SetNull)
+  mother         Patient?        @relation("MotherChild", fields: [motherPatientId], references: [id], onDelete: SetNull)
+  children       Patient[]       @relation("MotherChild")
+
+  identifiers       PatientIdentifier[]
+  addresses         PatientAddress[]
+  phones            PatientPhone[]
+  emails            PatientEmail[]
+  emergencyContacts PatientEmergencyContact[]
+  ethnicities       PatientEthnicity[]
+  religions         PatientReligion[]
+  languages         PatientLanguage[]
+  allergies         PatientAllergy[]
+  consents          PatientConsent[]
+  mergeHistoryFrom  PatientMerge[]            @relation("MergeFrom")
+  mergeHistoryTo    PatientMerge[]            @relation("MergeTo")
+  encounters        Encounter[]
+  triages           TriageEvaluation[]
+
+  @@unique([organizationId, mrn])
+  @@index([lastName, firstName])
+  @@index([birthDate])
+  @@schema("public")
+}
+
+/// TDR §8.1 — identificador del paciente (DUI, NIT, pasaporte). 4NF: relación independiente.
+/// Un paciente puede tener N identificadores; cada tipo puede repetirse históricamente.
+model PatientIdentifier {
+  id               String                @id @default(uuid()) @db.Uuid
+  patientId        String                @db.Uuid
+  identifierTypeId String                @db.Uuid
+  kind             PatientIdentifierKind
+  value            String                @db.VarChar(80)
+  countryOfIssue   String?               @db.Uuid
+  issuedAt         DateTime?             @db.Date
+  expiresAt        DateTime?             @db.Date
+  isPrimary        Boolean               @default(false)
+  createdAt        DateTime              @default(now()) @db.Timestamptz()
+
+  patient        Patient        @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  identifierType IdentifierType @relation(fields: [identifierTypeId], references: [id], onDelete: Restrict)
+
+  @@unique([identifierTypeId, value])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §8.1 — direcciones (multivalor). 4NF: tabla independiente vs teléfonos/emails.
+model PatientAddress {
+  id            String    @id @default(uuid()) @db.Uuid
+  patientId     String    @db.Uuid
+  geoDivisionId String?   @db.Uuid
+  line1         String    @db.VarChar(300)
+  line2         String?   @db.VarChar(300)
+  postalCode    String?   @db.VarChar(20)
+  isPrimary     Boolean   @default(false)
+  validFrom     DateTime  @default(now()) @db.Date
+  validTo       DateTime? @db.Date
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §8.1 — teléfonos (multivalor independiente).
+model PatientPhone {
+  id        String   @id @default(uuid()) @db.Uuid
+  patientId String   @db.Uuid
+  phone     String   @db.VarChar(40)
+  kind      String   @db.VarChar(20) /// móvil, casa, trabajo.
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §8.1 — correos (multivalor independiente).
+model PatientEmail {
+  id        String   @id @default(uuid()) @db.Uuid
+  patientId String   @db.Uuid
+  email     String   @db.Citext
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §8.1 — contactos de emergencia.
+model PatientEmergencyContact {
+  id           String   @id @default(uuid()) @db.Uuid
+  patientId    String   @db.Uuid
+  fullName     String   @db.VarChar(200)
+  relationship String   @db.VarChar(60)
+  phone        String?  @db.VarChar(40)
+  email        String?  @db.Citext
+  priority     Int      @default(1)
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §7.2 / §8.1 — paciente↔etnia (multivalor 4NF independiente de idiomas y religiones).
+model PatientEthnicity {
+  patientId   String   @db.Uuid
+  ethnicityId String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+
+  patient   Patient   @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  ethnicity Ethnicity @relation(fields: [ethnicityId], references: [id], onDelete: Restrict)
+
+  @@id([patientId, ethnicityId])
+  @@schema("public")
+}
+
+/// TDR §7.2 / §8.1 — paciente↔religión (multivalor 4NF independiente).
+model PatientReligion {
+  patientId  String   @db.Uuid
+  religionId String   @db.Uuid
+  createdAt  DateTime @default(now()) @db.Timestamptz()
+
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  religion Religion @relation(fields: [religionId], references: [id], onDelete: Restrict)
+
+  @@id([patientId, religionId])
+  @@schema("public")
+}
+
+/// TDR §7.2 / §8.1 — paciente↔idioma (multivalor 4NF independiente).
+model PatientLanguage {
+  patientId   String   @db.Uuid
+  languageId  String   @db.Uuid
+  isPreferred Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  language Language @relation(fields: [languageId], references: [id], onDelete: Restrict)
+
+  @@id([patientId, languageId])
+  @@schema("public")
+}
+
+/// TDR §8.1 — alergia conocida del paciente. 4NF: independiente de idiomas, etnias, religiones.
+model PatientAllergy {
+  id                 String    @id @default(uuid()) @db.Uuid
+  patientId          String    @db.Uuid
+  substanceConceptId String?   @db.Uuid /// referencia a ClinicalConcept (RxNorm/ATC/SNOMED).
+  substanceText      String    @db.VarChar(200) /// texto libre si no hay concepto.
+  reaction           String?   @db.VarChar(400)
+  severity           String    @db.VarChar(20) /// mild, moderate, severe, life-threatening.
+  onsetDate          DateTime? @db.Date
+  verified           Boolean   @default(false)
+  active             Boolean   @default(true)
+  createdAt          DateTime  @default(now()) @db.Timestamptz()
+  createdBy          String?   @db.Uuid
+  updatedAt          DateTime  @updatedAt @db.Timestamptz()
+  updatedBy          String?   @db.Uuid
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §6.4 / §8.1 — consentimientos del paciente (datos, telemedicina, transfusión, MPI cross-org).
+model PatientConsent {
+  id         String    @id @default(uuid()) @db.Uuid
+  patientId  String    @db.Uuid
+  purpose    String    @db.VarChar(80) /// data_processing, mpi_cross_org, transfusion, ...
+  granted    Boolean
+  scope      Json? /// detalles parametrizables (organizaciones, finalidades).
+  signedAt   DateTime  @default(now()) @db.Timestamptz()
+  signedById String?   @db.Uuid /// usuario que registra el consentimiento.
+  validFrom  DateTime  @db.Timestamptz()
+  validTo    DateTime? @db.Timestamptz()
+  revokedAt  DateTime? @db.Timestamptz()
+
+  patient  Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  signedBy User?   @relation("ConsentAuthor", fields: [signedById], references: [id], onDelete: SetNull)
+
+  @@index([patientId, purpose])
+  @@schema("public")
+}
+
+/// TDR §8.1 — historial de fusiones MPI (cuando se identifica un NN o se descubre duplicado).
+model PatientMerge {
+  id            String   @id @default(uuid()) @db.Uuid
+  fromPatientId String   @db.Uuid /// registro absorbido (lógicamente eliminado).
+  toPatientId   String   @db.Uuid /// registro superviviente.
+  reason        String   @db.VarChar(200)
+  mergedAt      DateTime @default(now()) @db.Timestamptz()
+  mergedBy      String?  @db.Uuid
+
+  from Patient @relation("MergeFrom", fields: [fromPatientId], references: [id], onDelete: Restrict)
+  to   Patient @relation("MergeTo", fields: [toPatientId], references: [id], onDelete: Restrict)
+
+  @@index([toPatientId])
+  @@schema("public")
+}
+
+// =============================================================================
+// 6. ADT — ADMISIÓN, ALTAS, TRASLADOS  (TDR §8)
+// =============================================================================
+
+/// TDR §8.6 — cama (recurso físico).
+model Bed {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  establishmentId String    @db.Uuid
+  serviceUnitId   String    @db.Uuid
+  code            String    @db.VarChar(40)
+  room            String?   @db.VarChar(40)
+  status          BedStatus @default(FREE)
+  isolation       String?   @db.VarChar(40) /// contacto, gotitas, respiratorio, protector.
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now()) @db.Timestamptz()
+  updatedAt       DateTime  @updatedAt @db.Timestamptz()
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment Establishment   @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  serviceUnit   ServiceUnit     @relation(fields: [serviceUnitId], references: [id], onDelete: Restrict)
+  assignments   BedAssignment[]
+
+  @@unique([establishmentId, code])
+  @@index([status])
+  @@schema("public")
+}
+
+/// TDR §8.3 — encuentro asistencial (admisión / consulta / emergencia / hospitalización).
+/// Es la unidad transaccional que aglutina ADT en una visita.
+model Encounter {
+  id                 String         @id @default(uuid()) @db.Uuid
+  countryId          String         @db.Uuid
+  organizationId     String         @db.Uuid
+  establishmentId    String         @db.Uuid
+  serviceUnitId      String?        @db.Uuid
+  patientId          String         @db.Uuid
+  patientTypeId      String?        @db.Uuid
+  patientCategoryId  String?        @db.Uuid
+  admissionType      AdmissionType
+  encounterNumber    String         @db.VarChar(40) /// identificador legible "ADM-2026-000123".
+  admittedAt         DateTime       @db.Timestamptz()
+  dischargedAt       DateTime?      @db.Timestamptz()
+  dischargeType      DischargeType?
+  primaryDiagnosisId String?        @db.Uuid /// ClinicalConcept (CIE-10/11).
+  currencyId         String         @db.Uuid
+  exchangeRateToFunc Decimal        @db.Decimal(18, 8)
+  createdAt          DateTime       @default(now()) @db.Timestamptz()
+  createdBy          String?        @db.Uuid
+  updatedAt          DateTime       @updatedAt @db.Timestamptz()
+  updatedBy          String?        @db.Uuid
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment   Establishment    @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  serviceUnit     ServiceUnit?     @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  patient         Patient          @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  patientType     PatientType?     @relation(fields: [patientTypeId], references: [id], onDelete: SetNull)
+  patientCategory PatientCategory? @relation(fields: [patientCategoryId], references: [id], onDelete: SetNull)
+  currency        Currency         @relation("EncounterCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+
+  bedAssignments BedAssignment[]
+  transfers      EncounterTransfer[]
+  triages        TriageEvaluation[]
+
+  @@unique([organizationId, encounterNumber])
+  @@index([patientId])
+  @@index([organizationId, admittedAt])
+  @@schema("public")
+}
+
+/// TDR §8.3 / §8.4 — asignación de cama (historiable). 4NF: separa la MVD encuentro↔cama.
+model BedAssignment {
+  id          String    @id @default(uuid()) @db.Uuid
+  encounterId String    @db.Uuid
+  bedId       String    @db.Uuid
+  assignedAt  DateTime  @default(now()) @db.Timestamptz()
+  releasedAt  DateTime? @db.Timestamptz()
+  reason      String?   @db.VarChar(200)
+  createdBy   String?   @db.Uuid
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  bed       Bed       @relation(fields: [bedId], references: [id], onDelete: Restrict)
+
+  @@index([encounterId])
+  @@index([bedId, assignedAt])
+  @@schema("public")
+}
+
+/// TDR §8.4 — traslado interno (cambio de servicio o nivel de cuidado).
+model EncounterTransfer {
+  id            String   @id @default(uuid()) @db.Uuid
+  encounterId   String   @db.Uuid
+  fromServiceId String?  @db.Uuid
+  toServiceId   String   @db.Uuid
+  fromBedId     String?  @db.Uuid
+  toBedId       String?  @db.Uuid
+  reason        String   @db.VarChar(200)
+  occurredAt    DateTime @default(now()) @db.Timestamptz()
+  createdBy     String?  @db.Uuid
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+
+  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@schema("public")
+}
+
+// =============================================================================
+// 7. TRIAGE MANCHESTER  (TDR §9)
+// =============================================================================
+
+/// TDR §9.1 / §9.3 — nivel Manchester parametrizable por organización.
+model TriageLevel {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  color          TriageColor
+  priority       Int /// 1=rojo .. 5=azul.
+  name           String      @db.VarChar(40)
+  maxWaitMinutes Int
+  uiColorHex     String?     @db.VarChar(9)
+  active         Boolean     @default(true)
+  validFrom      DateTime    @default(now()) @db.Date
+  validTo        DateTime?   @db.Date
+  version        Int         @default(1)
+  createdAt      DateTime    @default(now()) @db.Timestamptz()
+  updatedAt      DateTime    @updatedAt @db.Timestamptz()
+
+  flowcharts     TriageFlowchart[]
+  discriminators TriageDiscriminator[]
+  evaluations    TriageEvaluation[]
+
+  @@unique([organizationId, color])
+  @@unique([organizationId, priority])
+  @@schema("public")
+}
+
+/// TDR §9.2 / §9.3 — flujograma de presentación Manchester (52 estándar + locales).
+model TriageFlowchart {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  code           String    @db.VarChar(60) /// chest_pain, dyspnea, ...
+  name           String    @db.VarChar(200)
+  isPediatric    Boolean   @default(false)
+  defaultLevelId String?   @db.Uuid /// nivel por defecto si ningún discriminador.
+  active         Boolean   @default(true)
+  validFrom      DateTime  @default(now()) @db.Date
+  validTo        DateTime? @db.Date
+  version        Int       @default(1)
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+
+  defaultLevel   TriageLevel?               @relation(fields: [defaultLevelId], references: [id], onDelete: SetNull)
+  discriminators TriageDiscriminator[]
+  vitalSigns     TriageFlowchartVitalSign[]
+  evaluations    TriageEvaluation[]
+
+  @@unique([organizationId, code])
+  @@schema("public")
+}
+
+/// TDR §9.2 — discriminador clínico (vía aérea, shock, dolor severo...).
+/// El primer discriminador positivo determina el nivel.
+model TriageDiscriminator {
+  id            String    @id @default(uuid()) @db.Uuid
+  flowchartId   String    @db.Uuid
+  resultLevelId String    @db.Uuid
+  code          String    @db.VarChar(60)
+  text          String    @db.VarChar(400)
+  ordinal       Int /// orden de evaluación dentro del flujograma.
+  active        Boolean   @default(true)
+  validFrom     DateTime  @default(now()) @db.Date
+  validTo       DateTime? @db.Date
+  version       Int       @default(1)
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @db.Timestamptz()
+
+  flowchart   TriageFlowchart          @relation(fields: [flowchartId], references: [id], onDelete: Cascade)
+  resultLevel TriageLevel              @relation(fields: [resultLevelId], references: [id], onDelete: Restrict)
+  hits        TriageDiscriminatorHit[]
+
+  @@unique([flowchartId, ordinal])
+  @@index([flowchartId])
+  @@schema("public")
+}
+
+/// TDR §9.3 — signos vitales obligatorios por flujograma. 4NF: independiente de discriminadores.
+model TriageFlowchartVitalSign {
+  flowchartId String  @db.Uuid
+  vitalCode   String  @db.VarChar(40) /// SpO2, BP, ECG, GLUC, GCS, PAIN, TEMP, HR, RR.
+  required    Boolean @default(true)
+
+  flowchart TriageFlowchart @relation(fields: [flowchartId], references: [id], onDelete: Cascade)
+
+  @@id([flowchartId, vitalCode])
+  @@schema("public")
+}
+
+/// TDR §9.2 — evaluación de triage de un encuentro.
+model TriageEvaluation {
+  id                     String       @id @default(uuid()) @db.Uuid
+  countryId              String       @db.Uuid
+  organizationId         String       @db.Uuid
+  establishmentId        String       @db.Uuid
+  serviceUnitId          String?      @db.Uuid
+  patientId              String       @db.Uuid
+  encounterId            String?      @db.Uuid
+  flowchartId            String       @db.Uuid
+  assignedLevelId        String       @db.Uuid /// nivel resultante.
+  systemSuggestedLevelId String?      @db.Uuid /// lo que el sistema sugirió.
+  overrideJustification  String?      @db.Text
+  status                 TriageStatus @default(IN_PROGRESS)
+  startedAt              DateTime     @default(now()) @db.Timestamptz()
+  completedAt            DateTime?    @db.Timestamptz()
+  reTriageOfId           String?      @db.Uuid /// si es re-triage, apunta al original.
+  triagistUserId         String?      @db.Uuid
+  createdAt              DateTime     @default(now()) @db.Timestamptz()
+  createdBy              String?      @db.Uuid
+  updatedAt              DateTime     @updatedAt @db.Timestamptz()
+  updatedBy              String?      @db.Uuid
+
+  organization    Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment   Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  serviceUnit     ServiceUnit?       @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  patient         Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  encounter       Encounter?         @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  flowchart       TriageFlowchart    @relation(fields: [flowchartId], references: [id], onDelete: Restrict)
+  assignedLevel   TriageLevel        @relation(fields: [assignedLevelId], references: [id], onDelete: Restrict)
+  reTriageOf      TriageEvaluation?  @relation("ReTriage", fields: [reTriageOfId], references: [id], onDelete: SetNull)
+  reTriageOf_back TriageEvaluation[] @relation("ReTriage")
+
+  vitalSigns        TriageVitalSign[]
+  discriminatorHits TriageDiscriminatorHit[]
+
+  @@index([patientId])
+  @@index([organizationId, startedAt])
+  @@index([assignedLevelId, startedAt])
+  @@schema("public")
+}
+
+/// TDR §9.2 — signos vitales medidos durante el triage. 4NF: separación por tipo en filas.
+model TriageVitalSign {
+  id           String   @id @default(uuid()) @db.Uuid
+  evaluationId String   @db.Uuid
+  vitalCode    String   @db.VarChar(40)
+  valueNumeric Decimal? @db.Decimal(10, 3)
+  valueText    String?  @db.VarChar(120)
+  unit         String?  @db.VarChar(20)
+  measuredAt   DateTime @default(now()) @db.Timestamptz()
+
+  evaluation TriageEvaluation @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+
+  @@unique([evaluationId, vitalCode, measuredAt])
+  @@index([evaluationId])
+  @@schema("public")
+}
+
+/// TDR §9.2 — registro de discriminadores positivos durante la evaluación.
+model TriageDiscriminatorHit {
+  id              String   @id @default(uuid()) @db.Uuid
+  evaluationId    String   @db.Uuid
+  discriminatorId String   @db.Uuid
+  positive        Boolean
+  observedAt      DateTime @default(now()) @db.Timestamptz()
+  notes           String?  @db.VarChar(400)
+
+  evaluation    TriageEvaluation    @relation(fields: [evaluationId], references: [id], onDelete: Cascade)
+  discriminator TriageDiscriminator @relation(fields: [discriminatorId], references: [id], onDelete: Restrict)
+
+  @@unique([evaluationId, discriminatorId])
+  @@schema("public")
+}
