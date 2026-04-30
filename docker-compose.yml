@@ -1,0 +1,49 @@
+# =============================================================================
+# HIS Multipaís - Stack de desarrollo local
+# Levanta: Postgres 15 (compatible con Supabase) + Redis (opcional)
+# Uso:  docker compose up -d
+#       npm run dev         # Next.js corre en host con DATABASE_URL apuntando aquí
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: his-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: his
+      POSTGRES_PASSWORD: his
+      POSTGRES_DB: his_dev
+      # extensiones útiles para la app
+      POSTGRES_INITDB_ARGS: '--encoding=UTF-8 --locale=C'
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U his -d his_dev']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis solo si se necesita para sesiones / rate limiting / colas locales.
+  # Comentar si no se usa para ahorrar recursos.
+  redis:
+    image: redis:7-alpine
+    container_name: his-redis
+    restart: unless-stopped
+    command: ['redis-server', '--save', '60', '1', '--loglevel', 'warning']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  redis-data:

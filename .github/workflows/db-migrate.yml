@@ -1,0 +1,70 @@
+name: DB Migrate (Prisma deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente destino'
+        required: true
+        type: choice
+        options:
+          - preview
+          - staging
+          - production
+      dry_run:
+        description: 'Solo mostrar migraciones pendientes (no aplicar)'
+        required: false
+        type: boolean
+        default: false
+
+# Solo una migración a la vez por ambiente
+concurrency:
+  group: db-migrate-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    name: prisma migrate deploy → ${{ github.event.inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Requiere que el ambiente esté configurado en GitHub con required reviewers
+    # (Settings → Environments → preview|staging|production)
+    environment: ${{ github.event.inputs.environment }}
+
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npx prisma validate --schema=packages/database/prisma/schema.prisma
+
+      - name: Show pending migrations (dry run)
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: npx prisma migrate status --schema=packages/database/prisma/schema.prisma
+
+      - name: Apply migrations
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: npx prisma migrate deploy --schema=packages/database/prisma/schema.prisma
+
+      - name: Verify state post-migration
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: npx prisma migrate status --schema=packages/database/prisma/schema.prisma
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          echo "::error::Migración a ${{ github.event.inputs.environment }} falló. Revisar logs y aplicar runbook RB-04."

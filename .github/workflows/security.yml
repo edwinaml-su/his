@@ -1,0 +1,52 @@
+name: Security
+
+on:
+  schedule:
+    # Lunes 07:00 UTC
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'package-lock.json'
+      - '**/package.json'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  npm-audit:
+    name: npm audit (high+)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install (no audit during install)
+        run: npm ci --no-audit
+
+      - name: Audit production deps (high severity)
+        run: npm audit --omit=dev --audit-level=high
+
+  gitleaks:
+    name: Gitleaks (secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Necesario para escanear el historial completo
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE solo necesaria para uso comercial en organizaciones grandes
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

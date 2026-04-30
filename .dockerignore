@@ -1,0 +1,29 @@
+# =============================================================================
+# HIS Multipaís - .dockerignore
+# =============================================================================
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/playwright-report
+**/test-results
+**/.turbo
+
+.git
+.github
+.vscode
+.idea
+
+.env
+.env.local
+.env.*.local
+*.log
+
+docs
+infra
+scripts/db-reset.sh
+
+Dockerfile
+docker-compose*.yml
+.dockerignore
+README.md

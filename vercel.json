@@ -1,0 +1,45 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "installCommand": "npm ci && npx prisma generate --schema=packages/database/prisma/schema.prisma",
+  "outputDirectory": "apps/web/.next",
+  "regions": ["iad1", "gru1"],
+  "github": {
+    "silent": false,
+    "autoJobCancelation": true
+  },
+  "env": {
+    "NEXT_TELEMETRY_DISABLED": "1"
+  },
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_SUPABASE_URL": "@next_public_supabase_url",
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY": "@next_public_supabase_anon_key",
+      "SUPABASE_SERVICE_ROLE_KEY": "@supabase_service_role_key",
+      "DATABASE_URL": "@database_url",
+      "DIRECT_URL": "@direct_url",
+      "AUTH_SECRET": "@auth_secret",
+      "SENTRY_DSN": "@sentry_dsn",
+      "SENTRY_ENVIRONMENT": "@sentry_environment",
+      "NEXT_PUBLIC_APP_URL": "@next_public_app_url"
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
+      ]
+    }
+  ],
+  "functions": {
+    "apps/web/app/api/**/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}

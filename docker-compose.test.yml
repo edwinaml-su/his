@@ -1,0 +1,22 @@
+# =============================================================================
+# HIS Multipaís - Stack de testing E2E (efímero, usado por CI)
+# tmpfs en lugar de volumes → BD se destruye al bajar el stack
+# =============================================================================
+
+services:
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: his-postgres-test
+    environment:
+      POSTGRES_USER: his
+      POSTGRES_PASSWORD: his
+      POSTGRES_DB: his_e2e
+    ports:
+      - '5432:5432'
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U his -d his_e2e']
+      interval: 5s
+      timeout: 3s
+      retries: 10
