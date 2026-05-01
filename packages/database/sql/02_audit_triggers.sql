@@ -110,12 +110,12 @@ DECLARE
   ];
 BEGIN
   FOREACH t IN ARRAY audited LOOP
-    EXECUTE format('DROP TRIGGER IF EXISTS trg_audit_%I ON public.%I', t, t);
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_audit_'||t, t);
     EXECUTE format(
-      'CREATE TRIGGER trg_audit_%I
+      'CREATE TRIGGER %I
          AFTER INSERT OR UPDATE OR DELETE ON public.%I
          FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row()',
-      t, t
+      'trg_audit_'||t, t
     );
   END LOOP;
 END$$;
@@ -132,13 +132,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_patient_break_glass ON public."Patient";
-CREATE TRIGGER trg_patient_break_glass
-  BEFORE SELECT OR UPDATE OR DELETE ON public."Patient"
-  FOR EACH STATEMENT EXECUTE FUNCTION public.fn_require_break_glass_justification();
--- Nota: BEFORE SELECT no existe en Postgres; se reemplaza por chequeo en
--- la capa de aplicación (middleware) que setea app.justification antes del SELECT.
--- El trigger anterior solo aplica a UPDATE/DELETE.
+-- Nota: Postgres no soporta BEFORE SELECT triggers. El control de break-glass
+-- en lecturas (SELECT) se hace desde la capa de aplicación (middleware) que
+-- setea app.justification antes del query. Aquí solo cubrimos UPDATE/DELETE.
 DROP TRIGGER IF EXISTS trg_patient_break_glass ON public."Patient";
 CREATE TRIGGER trg_patient_break_glass
   BEFORE UPDATE OR DELETE ON public."Patient"

@@ -18,7 +18,7 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "seed": "tsx prisma/seed.ts",
+    "seed": "tsx --env-file=.env prisma/seed.ts",
     "studio": "prisma studio",
     "validate": "prisma validate",
     "format": "prisma format",
@@ -26,7 +26,7 @@
     "lint": "echo 'no lint configured'"
   },
   "prisma": {
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx --env-file=.env prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0"
