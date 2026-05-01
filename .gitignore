@@ -39,6 +39,9 @@ test-results/
 *.swp
 *.swo
 
+# Claude Code (local agent settings — machine/user specific, not project)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
