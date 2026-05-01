@@ -19,7 +19,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-const TIMEOUT_MS = 2_000;
+const TIMEOUT_MS = 5_000;
 const APP_VERSION =
   process.env.APP_VERSION ?? process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? "dev";
 const startedAt = Date.now();
@@ -60,9 +60,13 @@ async function checkSupabase(): Promise<CheckResult> {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (!url) return { status: "degraded", error: "NEXT_PUBLIC_SUPABASE_URL no configurado" };
   try {
-    // Healthcheck público de Supabase — no requiere auth.
+    // Healthcheck Supabase Auth — requiere header apikey (cualquier publishable/anon key sirve).
+    const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
     const res = await withTimeout(
-      fetch(`${url}/auth/v1/health`, { cache: "no-store" }),
+      fetch(`${url}/auth/v1/health`, {
+        cache: "no-store",
+        headers: apikey ? { apikey } : undefined,
+      }),
       TIMEOUT_MS,
       "supabase",
     );
