@@ -9,7 +9,19 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Alert, AlertDescription } from "@his/ui/components/alert";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 
+// Wrapper exigido por Next.js 14: todo componente cliente que usa
+// useSearchParams() debe estar dentro de un <Suspense> para permitir
+// static rendering. Sin esto, `next build` falla con
+// "useSearchParams() should be wrapped in a suspense boundary".
 export default function LoginPage() {
+  return (
+    <React.Suspense fallback={null}>
+      <LoginForm />
+    </React.Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const redirect = params.get("redirect") ?? "/dashboard";
