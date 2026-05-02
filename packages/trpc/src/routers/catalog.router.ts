@@ -46,6 +46,7 @@ const modelMap: Record<CatalogKey, string> = {
   ageBand: "ageBand",
   medicalSpecialty: "medicalSpecialty",
   identifierType: "identifierType",
+  serviceUnit: "serviceUnit",
 };
 
 function model(prisma: unknown, key: CatalogKey) {
@@ -66,6 +67,69 @@ function validateData(catalog: CatalogKey, raw: Record<string, unknown>) {
     });
   }
   return parsed.data as Record<string, unknown>;
+}
+
+/**
+ * Validaciones cross-field específicas por catálogo (FKs y reglas semánticas).
+ * - medicalSpecialty: parentId (si viene) debe existir y NO puede coincidir con `id` (no self-ref).
+ * - serviceUnit: establishmentId debe existir; specialtyId (si viene) debe existir.
+ *
+ * Se ejecuta DESPUÉS de validateData (que ya garantiza forma UUID).
+ */
+async function validateCatalogReferences(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  prisma: any,
+  catalog: CatalogKey,
+  data: Record<string, unknown>,
+  selfId?: string,
+): Promise<void> {
+  if (catalog === "medicalSpecialty") {
+    const parentId = data.parentId as string | null | undefined;
+    if (parentId) {
+      if (selfId && parentId === selfId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Una especialidad no puede ser su propio padre.",
+        });
+      }
+      const parent = await prisma.medicalSpecialty.findUnique({
+        where: { id: parentId },
+        select: { id: true },
+      });
+      if (!parent) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "La especialidad padre (parentId) no existe.",
+        });
+      }
+    }
+  }
+  if (catalog === "serviceUnit") {
+    const establishmentId = data.establishmentId as string;
+    const establishment = await prisma.establishment.findUnique({
+      where: { id: establishmentId },
+      select: { id: true },
+    });
+    if (!establishment) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "El establecimiento (establishmentId) no existe.",
+      });
+    }
+    const specialtyId = data.specialtyId as string | null | undefined;
+    if (specialtyId) {
+      const specialty = await prisma.medicalSpecialty.findUnique({
+        where: { id: specialtyId },
+        select: { id: true },
+      });
+      if (!specialty) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "La especialidad (specialtyId) no existe.",
+        });
+      }
+    }
+  }
 }
 
 /** Convierte errores Prisma comunes en TRPCError con mensaje es-SV. */
@@ -121,6 +185,11 @@ export const catalogRouter = router({
 
   create: tenantProcedure.input(catalogCreateInput).mutation(async ({ ctx, input }) => {
     const data = validateData(input.catalog, input.data);
+    await validateCatalogReferences(ctx.prisma, input.catalog, data);
+    // serviceUnit es tenant-scoped: inyectar organizationId desde el contexto.
+    if (input.catalog === "serviceUnit") {
+      data.organizationId = ctx.tenant.organizationId;
+    }
     try {
       return await model(ctx.prisma, input.catalog).create({ data });
     } catch (err) {
@@ -130,6 +199,8 @@ export const catalogRouter = router({
 
   update: tenantProcedure.input(catalogUpdateInput).mutation(async ({ ctx, input }) => {
     const data = validateData(input.catalog, input.data);
+    await validateCatalogReferences(ctx.prisma, input.catalog, data, input.id);
+    // organizationId no se modifica en update (RLS protege cross-tenant edits).
     try {
       return await model(ctx.prisma, input.catalog).update({
         where: { id: input.id },

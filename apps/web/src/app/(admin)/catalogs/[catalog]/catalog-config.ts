@@ -200,6 +200,59 @@ export const CATALOGS = {
       ACTIVE_FIELD,
     ],
   },
+  "medical-specialty": {
+    model: "medicalSpecialty",
+    label: "Especialidades Médicas",
+    singular: "Especialidad",
+    description:
+      "Especialidades clínicas (TDR §7.3.4). Para sub-especialidades, indicar parentId existente.",
+    codeField: "code",
+    fields: [
+      { name: "code", label: "Código", type: "text", required: true, placeholder: "PED" },
+      { name: "name", label: "Nombre", type: "text", required: true, placeholder: "Pediatría" },
+      {
+        name: "parentId",
+        label: "Especialidad padre (UUID, opcional)",
+        type: "uuid",
+        required: false,
+        hint: "Vacío = especialidad raíz. TODO(Sprint 2): selector con árbol jerárquico.",
+      },
+      ACTIVE_FIELD,
+    ],
+  },
+  "service-unit": {
+    model: "serviceUnit",
+    label: "Unidades de Servicio",
+    singular: "Unidad",
+    description:
+      "Unidades funcionales del establecimiento: consulta externa, emergencia, UCI, partos, quirófano (TDR §7.3.4).",
+    codeField: "code",
+    fields: [
+      {
+        name: "establishmentId",
+        label: "Establecimiento (UUID)",
+        type: "uuid",
+        required: true,
+        hint: "TODO(Sprint 2): combo de establecimientos del tenant en lugar de UUID manual.",
+      },
+      {
+        name: "specialtyId",
+        label: "Especialidad (UUID, opcional)",
+        type: "uuid",
+        required: false,
+        hint: "Especialidad médica asociada (vacío para unidades sin especialidad).",
+      },
+      { name: "code", label: "Código", type: "text", required: true, placeholder: "UCI-A" },
+      {
+        name: "name",
+        label: "Nombre",
+        type: "text",
+        required: true,
+        placeholder: "Unidad de Cuidados Intensivos A",
+      },
+      ACTIVE_FIELD,
+    ],
+  },
 } as const satisfies Record<string, CatalogConfig>;
 
 export type CatalogSlug = keyof typeof CATALOGS;

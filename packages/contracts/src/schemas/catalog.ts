@@ -28,6 +28,7 @@ export const catalogKeyEnum = z.enum([
   "ageBand",
   "medicalSpecialty",
   "identifierType",
+  "serviceUnit",
 ]);
 export type CatalogKey = z.infer<typeof catalogKeyEnum>;
 
@@ -126,6 +127,20 @@ export const identifierTypeDataSchema = z.object({
   active: activeFlag,
 });
 
+/**
+ * US-3.4 — ServiceUnit (TDR §7.3.4).
+ * `organizationId` NO se valida aquí: lo inyecta el router desde ctx.tenant.
+ * `specialtyId` opcional (referencia a MedicalSpecialty).
+ * Nota: schema.prisma no expone `category` ni `capacity` (fuera de Sprint 1).
+ */
+export const serviceUnitDataSchema = z.object({
+  establishmentId: z.string().uuid("establishmentId requerido"),
+  specialtyId: optUuid,
+  code: code40,
+  name: name120,
+  active: activeFlag,
+});
+
 // ----- Mapa centralizado catalog → data schema -----
 export const catalogDataSchemas = {
   biologicalSex: biologicalSexDataSchema,
@@ -141,6 +156,7 @@ export const catalogDataSchemas = {
   ageBand: ageBandDataSchema,
   medicalSpecialty: medicalSpecialtyDataSchema,
   identifierType: identifierTypeDataSchema,
+  serviceUnit: serviceUnitDataSchema,
 } as const satisfies Record<CatalogKey, z.ZodTypeAny>;
 
 /** Devuelve el schema por catálogo o lanza si la key es desconocida. */

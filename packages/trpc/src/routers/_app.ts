@@ -8,6 +8,8 @@ import { bedRouter } from "./bed.router";
 import { triageRouter } from "./triage.router";
 import { catalogRouter } from "./catalog.router";
 import { auditRouter } from "./audit.router";
+import { breakGlassRouter } from "./break-glass.router";
+import { consentRouter } from "./consent.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -19,6 +21,8 @@ export const appRouter = router({
   triage: triageRouter,
   catalog: catalogRouter,
   audit: auditRouter,
+  breakGlass: breakGlassRouter,
+  consent: consentRouter,
 });
 
 export type AppRouter = typeof appRouter;
