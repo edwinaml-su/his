@@ -1,3 +1,4 @@
+export * from "./auth";
 export * from "./common";
 export * from "./country";
 export * from "./currency";
@@ -7,3 +8,4 @@ export * from "./patient";
 export * from "./encounter";
 export * from "./bed";
 export * from "./triage";
+export * from "./catalog";
