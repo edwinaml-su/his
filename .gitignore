@@ -42,6 +42,11 @@ test-results/
 # Claude Code (local agent settings — machine/user specific, not project)
 .claude/
 
+# Archivos temporales con credenciales para configuración manual de Vercel/etc.
+# (se generan con node, se copian al dashboard, y se borran)
+vercel-env*.txt
+*.secrets.txt
+
 # OS
 .DS_Store
 Thumbs.db
