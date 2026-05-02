@@ -20,6 +20,7 @@
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
     "seed": "tsx --env-file=.env prisma/seed.ts",
+    "seed:sv-extra": "tsx --env-file=.env seed-sv-extra.ts",
     "studio": "prisma studio",
     "validate": "prisma validate",
     "format": "prisma format",

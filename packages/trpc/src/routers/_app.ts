@@ -10,6 +10,11 @@ import { catalogRouter } from "./catalog.router";
 import { auditRouter } from "./audit.router";
 import { breakGlassRouter } from "./break-glass.router";
 import { consentRouter } from "./consent.router";
+import { mfaRouter } from "./mfa.router";
+import { exchangeRateRouter } from "./exchange-rate.router";
+import { rbacRouter } from "./rbac.router";
+import { userAdminRouter } from "./user-admin.router";
+import { localeRouter } from "./locale.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -23,6 +28,11 @@ export const appRouter = router({
   audit: auditRouter,
   breakGlass: breakGlassRouter,
   consent: consentRouter,
+  mfa: mfaRouter,
+  exchangeRate: exchangeRateRouter,
+  rbac: rbacRouter,
+  userAdmin: userAdminRouter,
+  locale: localeRouter,
 });
 
 export type AppRouter = typeof appRouter;
