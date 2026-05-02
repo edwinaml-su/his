@@ -18,9 +18,7 @@
     "lint": "echo 'no lint configured'",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@his/contracts": "*"
-  },
+  "dependencies": {},
   "devDependencies": {
     "typescript": "^5.6.3",
     "@types/node": "^22.10.2"

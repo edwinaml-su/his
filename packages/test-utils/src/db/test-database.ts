@@ -78,6 +78,8 @@ export async function openTestDatabase(): Promise<TestDbHandle> {
     async seedMinimal() {
       // Implementación pragmática: delega al `prisma/seed.ts` real para no
       // duplicar lógica. El seed es idempotente.
+      // @ts-expect-error -- import dinamico opcional: @his/database no exporta
+      // ./prisma/seed publicamente; .catch() captura runtime si no se resuelve.
       const seed = await import("@his/database/prisma/seed").catch(() => null);
       if (seed && "main" in seed) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

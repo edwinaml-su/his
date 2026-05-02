@@ -50,7 +50,12 @@ export default function NewTriagePage() {
                 encounterId: enc.id,
                 flowchartId,
                 assignedLevelId,
-                vitalSigns: vitals,
+                vitalSigns: vitals.map((v) => ({
+                  vitalCode: v.code,
+                  valueNumeric: v.valueNumeric ?? undefined,
+                  valueText: v.valueText ?? undefined,
+                  unit: v.unit ?? undefined,
+                })),
                 discriminatorHits: [],
               });
             }}

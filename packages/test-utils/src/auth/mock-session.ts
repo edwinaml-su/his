@@ -2,7 +2,16 @@
  * Sesión mockeada para tests unitarios y de integración.
  * Genera un `TRPCContext.user + tenant` listo para inyectar en routers.
  */
-import type { TenantContext } from "@his/contracts";
+// Tipo inlineado (duplicado minimo de @his/contracts TenantContext) para
+// romper el ciclo @his/contracts <-> @his/test-utils detectado por Turborepo.
+// Si la forma cambia en contracts, actualizar aqui tambien.
+type TenantContext = {
+  userId: string;
+  countryId: string;
+  organizationId: string;
+  establishmentId?: string;
+  roleCodes: string[];
+};
 
 export interface MockSessionUser {
   id: string;
