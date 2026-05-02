@@ -515,7 +515,11 @@ model AuditLog {
   beforeJson      Json?
   afterJson       Json?
   justification   String?     @db.Text /// break-the-glass, eliminación.
+  /// US-2.8 - SHA-256 de (id|prevHash|action|entity|entityId|beforeJson|afterJson|userId|occurredAt).
+  /// Permite verificar integridad de la cadena append-only.
   signatureHash   String?     @db.VarChar(120)
+  /// US-2.8 - hash del registro previo en la cadena (anti-tamper). NULL = primer registro.
+  prevHash        String?     @db.VarChar(120)
 
   @@index([entity, entityId])
   @@index([userId, occurredAt])

@@ -7,8 +7,160 @@ import {
   patientAllergySchema,
   patientAddressSchema,
   patientSearchSchema,
+  findDuplicatesInput,
+  mergePatientsInput,
+  unmergeInput,
+  mergeFieldKeys,
+  type PatientMergeFieldKey,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+
+// =============================================================================
+// US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
+// Se duplica intencionalmente porque el paquete trpc no puede importar de apps/web
+// sin ciclo. Tests viven en lib/mpi/dedupe.ts (fuente de verdad para la UI).
+// =============================================================================
+
+const W_IDENTIFIER = 0.4;
+const W_NAME = 0.25;
+const W_BIRTH = 0.2;
+const W_PHONE = 0.1;
+const W_ADDRESS = 0.05;
+
+function jaroWinkler(a: string, b: string): number {
+  const s1 = a.trim().toLowerCase();
+  const s2 = b.trim().toLowerCase();
+  if (!s1.length && !s2.length) return 1;
+  if (!s1.length || !s2.length) return 0;
+  if (s1 === s2) return 1;
+  const matchWindow = Math.max(0, Math.floor(Math.max(s1.length, s2.length) / 2) - 1);
+  const m1 = new Array<boolean>(s1.length).fill(false);
+  const m2 = new Array<boolean>(s2.length).fill(false);
+  let matches = 0;
+  for (let i = 0; i < s1.length; i++) {
+    const start = Math.max(0, i - matchWindow);
+    const end = Math.min(i + matchWindow + 1, s2.length);
+    for (let j = start; j < end; j++) {
+      if (m2[j] || s1[i] !== s2[j]) continue;
+      m1[i] = true;
+      m2[j] = true;
+      matches++;
+      break;
+    }
+  }
+  if (!matches) return 0;
+  let trans = 0;
+  let k = 0;
+  for (let i = 0; i < s1.length; i++) {
+    if (!m1[i]) continue;
+    while (!m2[k]) k++;
+    if (s1[i] !== s2[k]) trans++;
+    k++;
+  }
+  const jaro = (matches / s1.length + matches / s2.length + (matches - trans / 2) / matches) / 3;
+  let prefix = 0;
+  for (let i = 0; i < Math.min(4, s1.length, s2.length); i++) {
+    if (s1[i] === s2[i]) prefix++;
+    else break;
+  }
+  return jaro + prefix * 0.1 * (1 - jaro);
+}
+
+interface ScoreCandidate {
+  id: string;
+  firstName: string;
+  lastName: string;
+  secondLastName: string | null;
+  birthDate: Date | null;
+  identifiers: Array<{ kind: string; value: string }>;
+  phones: Array<{ phone: string }>;
+  addresses: Array<{ line1: string; geoDivisionId: string | null }>;
+}
+
+function scorePair(a: ScoreCandidate, b: ScoreCandidate): number {
+  // Identifier
+  const normId = (v: string) => v.replace(/[\s-]/g, "").toUpperCase();
+  const aIds = new Set(a.identifiers.map((i) => `${i.kind}|${normId(i.value)}`));
+  let identifier = 0;
+  for (const i of b.identifiers) {
+    if (aIds.has(`${i.kind}|${normId(i.value)}`)) {
+      identifier = 1;
+      break;
+    }
+  }
+
+  // Name (con swap firstName↔lastName)
+  const direct = jaroWinkler(
+    `${a.firstName} ${a.lastName} ${a.secondLastName ?? ""}`.trim(),
+    `${b.firstName} ${b.lastName} ${b.secondLastName ?? ""}`.trim(),
+  );
+  const swapped = jaroWinkler(
+    `${a.firstName} ${a.lastName}`,
+    `${b.lastName} ${b.firstName}`,
+  );
+  const name = Math.max(direct, swapped);
+
+  // Birth
+  let birth = 0;
+  if (a.birthDate && b.birthDate) {
+    const diff = Math.abs(a.birthDate.getTime() - b.birthDate.getTime()) / 86400000;
+    birth = diff === 0 ? 1 : diff <= 7 ? 0.5 : 0;
+  }
+
+  // Phone
+  const digits = (s: string) => s.replace(/\D/g, "").slice(-8);
+  const aPhones = new Set(a.phones.map((p) => digits(p.phone)).filter((d) => d.length >= 7));
+  let phone = 0;
+  for (const p of b.phones) {
+    const d = digits(p.phone);
+    if (d.length >= 7 && aPhones.has(d)) {
+      phone = 1;
+      break;
+    }
+  }
+
+  // Address
+  let address = 0;
+  for (const x of a.addresses) {
+    for (const y of b.addresses) {
+      const sim = jaroWinkler(x.line1, y.line1);
+      const sameGeo = x.geoDivisionId && y.geoDivisionId && x.geoDivisionId === y.geoDivisionId;
+      const s = sameGeo ? Math.min(1, sim * 0.7 + 0.3) : sim * 0.7;
+      if (s > address) address = s;
+    }
+  }
+
+  const score =
+    identifier * W_IDENTIFIER +
+    name * W_NAME +
+    birth * W_BIRTH +
+    phone * W_PHONE +
+    address * W_ADDRESS;
+
+  return Math.round(score * 10000) / 10000;
+}
+
+// =============================================================================
+// Tablas con FK a Patient que se reasignan en merge (TDR §8.1).
+// Comprehensiva: cualquier registro clínico/admin del paciente "from" debe migrar
+// al "to" para preservar continuidad asistencial. Cascade-delete tables (perfiles
+// 1:N como ethnicities/religions/languages) NO se migran porque tienen PK
+// compuesta y podrían colisionar; en MVP se descartan junto con el soft-delete
+// del paciente from. TODO(Sprint 3): de-dup y merge de esos perfiles.
+// =============================================================================
+const FK_REASSIGN_TABLES = [
+  "patientIdentifier",
+  "patientAddress",
+  "patientPhone",
+  "patientEmail",
+  "patientEmergencyContact",
+  "patientAllergy",
+  "patientConsent",
+  "encounter",
+  "triageEvaluation",
+] as const;
+
+const MERGE_REVERSE_WINDOW_DAYS = 7;
 
 export const patientRouter = router({
   search: tenantProcedure.input(patientSearchSchema).query(async ({ ctx, input }) => {
@@ -102,5 +254,293 @@ export const patientRouter = router({
       return ctx.prisma.patientAddress.create({
         data: { patientId: input.patientId, ...input.data },
       });
+    }),
+
+  // ===========================================================================
+  // US-4.3 — Buscar duplicados probables.
+  // ===========================================================================
+  findDuplicates: tenantProcedure
+    .input(findDuplicatesInput)
+    .query(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+
+      // 1) Pivote: el paciente sobre el cual se buscan candidatos.
+      const pivot = await ctx.prisma.patient.findFirst({
+        where: { id: input.patientId, organizationId: orgId, deletedAt: null },
+        include: {
+          identifiers: { select: { kind: true, value: true } },
+          phones: { select: { phone: true } },
+          addresses: { select: { line1: true, geoDivisionId: true } },
+        },
+      });
+      if (!pivot) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+      }
+
+      // 2) IDs de pacientes ya merge-eados con el pivote (en cualquier dirección)
+      // para excluirlos de la lista de candidatos.
+      const previousMerges = await ctx.prisma.patientMerge.findMany({
+        where: {
+          OR: [{ fromPatientId: pivot.id }, { toPatientId: pivot.id }],
+        },
+        select: { fromPatientId: true, toPatientId: true },
+      });
+      const excludedIds = new Set<string>([pivot.id]);
+      for (const m of previousMerges) {
+        excludedIds.add(m.fromPatientId);
+        excludedIds.add(m.toPatientId);
+      }
+
+      // 3) Bloque candidatos: misma org, no soft-deleted, no excluidos.
+      // Pre-filtro grueso por inicial de apellido o coincidencia de identificador
+      // para no traer toda la org. Heurística simple: comparten 1ra letra del lastName.
+      const initial = pivot.lastName?.[0]?.toLowerCase() ?? "";
+      const idValues = pivot.identifiers.map((i) => i.value);
+      const candidates = await ctx.prisma.patient.findMany({
+        where: {
+          organizationId: orgId,
+          deletedAt: null,
+          id: { notIn: Array.from(excludedIds) },
+          OR: [
+            initial ? { lastName: { startsWith: initial, mode: "insensitive" } } : undefined,
+            idValues.length > 0
+              ? { identifiers: { some: { value: { in: idValues } } } }
+              : undefined,
+            pivot.birthDate ? { birthDate: pivot.birthDate } : undefined,
+          ].filter(Boolean) as Array<Record<string, unknown>>,
+        },
+        take: 500, // hard cap para evitar O(n) explosivo en orgs grandes.
+        include: {
+          identifiers: { select: { kind: true, value: true } },
+          phones: { select: { phone: true } },
+          addresses: { select: { line1: true, geoDivisionId: true } },
+        },
+      });
+
+      // 4) Score y filtrado por threshold.
+      const pivotPayload: ScoreCandidate = {
+        id: pivot.id,
+        firstName: pivot.firstName,
+        lastName: pivot.lastName,
+        secondLastName: pivot.secondLastName,
+        birthDate: pivot.birthDate,
+        identifiers: pivot.identifiers,
+        phones: pivot.phones,
+        addresses: pivot.addresses,
+      };
+
+      const scored = candidates
+        .map((c) => {
+          const payload: ScoreCandidate = {
+            id: c.id,
+            firstName: c.firstName,
+            lastName: c.lastName,
+            secondLastName: c.secondLastName,
+            birthDate: c.birthDate,
+            identifiers: c.identifiers,
+            phones: c.phones,
+            addresses: c.addresses,
+          };
+          const score = scorePair(pivotPayload, payload);
+          const klass: "DUPLICATE_PROBABLE" | "CANDIDATE" | "DIFFERENT" =
+            score > 0.85 ? "DUPLICATE_PROBABLE" : score >= 0.65 ? "CANDIDATE" : "DIFFERENT";
+          return {
+            patient: {
+              id: c.id,
+              mrn: c.mrn,
+              firstName: c.firstName,
+              lastName: c.lastName,
+              secondLastName: c.secondLastName,
+              birthDate: c.birthDate,
+            },
+            score,
+            class: klass,
+          };
+        })
+        .filter((s) => s.score >= input.threshold)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, input.limit);
+
+      return { pivotId: pivot.id, candidates: scored };
+    }),
+
+  // ===========================================================================
+  // US-4.4 — Merge con auditoría (transaccional).
+  // ===========================================================================
+  mergePatients: tenantProcedure
+    .input(mergePatientsInput)
+    .mutation(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+
+      // 1) Cargar ambos pacientes (mismo tenant) y validar.
+      const [from, to] = await Promise.all([
+        ctx.prisma.patient.findFirst({
+          where: { id: input.fromPatientId, organizationId: orgId, deletedAt: null },
+        }),
+        ctx.prisma.patient.findFirst({
+          where: { id: input.toPatientId, organizationId: orgId, deletedAt: null },
+        }),
+      ]);
+      if (!from || !to) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Uno o ambos pacientes no existen o están eliminados.",
+        });
+      }
+      if (from.id === to.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No se puede fusionar un paciente consigo mismo.",
+        });
+      }
+
+      // 2) Construir el patch para `toPatient` según fieldsToTake.
+      const patch: Record<string, unknown> = { updatedBy: ctx.user.id };
+      for (const key of mergeFieldKeys) {
+        const choice = input.fieldsToTake[key as PatientMergeFieldKey];
+        if (choice === "from") {
+          patch[key] = (from as Record<string, unknown>)[key];
+        }
+      }
+
+      // 3) Snapshot before/after para auditoría.
+      const beforeSnapshot = {
+        from: { id: from.id, mrn: from.mrn, firstName: from.firstName, lastName: from.lastName },
+        to: { id: to.id, mrn: to.mrn, firstName: to.firstName, lastName: to.lastName },
+      };
+
+      // 4) Transaction.
+      const result = await ctx.prisma.$transaction(async (tx) => {
+        // 4a) PatientMerge audit row (campo se llama `reason` en schema).
+        const merge = await tx.patientMerge.create({
+          data: {
+            fromPatientId: from.id,
+            toPatientId: to.id,
+            reason: input.justification,
+            mergedBy: ctx.user.id,
+          },
+        });
+
+        // 4b) Reasignar FKs. Se hace una update por tabla; Prisma optimiza a UPDATE
+        // ... WHERE patientId = $from. Si una tabla no existe en el cliente Prisma
+        // (drift), saltamos silenciosamente para no romper el merge.
+        for (const table of FK_REASSIGN_TABLES) {
+          const delegate = (tx as unknown as Record<string, { updateMany?: Function }>)[table];
+          if (!delegate?.updateMany) continue;
+          await delegate.updateMany({
+            where: { patientId: from.id },
+            data: { patientId: to.id },
+          });
+        }
+
+        // 4c) Aplicar fields seleccionados al `to`.
+        if (Object.keys(patch).length > 1) {
+          await tx.patient.update({
+            where: { id: to.id },
+            data: patch,
+          });
+        }
+
+        // 4d) Soft-delete del `from`.
+        await tx.patient.update({
+          where: { id: from.id },
+          data: {
+            deletedAt: new Date(),
+            deletedBy: ctx.user.id,
+            active: false,
+          },
+        });
+
+        // 4e) Audit log entry (usa UPDATE porque MERGE_PATIENTS no está en enum).
+        await tx.auditLog.create({
+          data: {
+            userId: ctx.user.id,
+            organizationId: orgId,
+            establishmentId: ctx.tenant.establishmentId ?? null,
+            ip: ctx.ip ?? null,
+            userAgent: ctx.userAgent ?? null,
+            action: "UPDATE",
+            entity: "Patient",
+            entityId: to.id,
+            beforeJson: beforeSnapshot,
+            afterJson: {
+              op: "MERGE_PATIENTS",
+              mergeId: merge.id,
+              fromPatientId: from.id,
+              toPatientId: to.id,
+              fieldsToTake: input.fieldsToTake,
+              tablesReassigned: FK_REASSIGN_TABLES,
+            },
+            justification: input.justification,
+          },
+        });
+
+        return merge;
+      });
+
+      return { mergeId: result.id, toPatientId: to.id };
+    }),
+
+  // ===========================================================================
+  // US-4.4 — Unmerge (reversible dentro de ventana de 7 días).
+  // ===========================================================================
+  unmerge: tenantProcedure
+    .input(unmergeInput)
+    .mutation(async ({ ctx, input }) => {
+      const merge = await ctx.prisma.patientMerge.findUnique({
+        where: { id: input.mergeId },
+        include: { from: true, to: true },
+      });
+      if (!merge) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Merge no encontrado." });
+      }
+      if (merge.to.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Merge fuera del tenant." });
+      }
+      // El campo `reversedAt` no existe en schema actual; usamos heurística:
+      // un merge se considera reversible si `from.deletedAt != null` y han pasado
+      // < 7 días. La reversa en MVP solamente restaura el paciente "from"
+      // (deletedAt = null). Las relaciones reasignadas NO se restauran — por eso
+      // se documenta como acción no idempotente y se etiqueta en audit.
+      if (!merge.from.deletedAt) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "El merge ya fue revertido o el paciente from sigue activo.",
+        });
+      }
+      const ageMs = Date.now() - merge.mergedAt.getTime();
+      if (ageMs > MERGE_REVERSE_WINDOW_DAYS * 86400000) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `El merge solo puede revertirse dentro de ${MERGE_REVERSE_WINDOW_DAYS} días.`,
+        });
+      }
+
+      await ctx.prisma.$transaction(async (tx) => {
+        await tx.patient.update({
+          where: { id: merge.fromPatientId },
+          data: { deletedAt: null, deletedBy: null, active: true, updatedBy: ctx.user.id },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: ctx.user.id,
+            organizationId: ctx.tenant.organizationId,
+            establishmentId: ctx.tenant.establishmentId ?? null,
+            ip: ctx.ip ?? null,
+            userAgent: ctx.userAgent ?? null,
+            action: "UPDATE",
+            entity: "Patient",
+            entityId: merge.fromPatientId,
+            afterJson: {
+              op: "UNMERGE_PATIENTS",
+              mergeId: merge.id,
+              note: "MVP: relaciones reasignadas NO restauradas (TODO Sprint 3 con snapshot completo).",
+            },
+            justification: `Reverso de merge ${merge.id}`,
+          },
+        });
+      });
+
+      return { ok: true as const, restoredPatientId: merge.fromPatientId };
     }),
 });

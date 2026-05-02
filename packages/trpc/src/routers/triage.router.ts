@@ -1,6 +1,113 @@
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { triageEvaluationCreateSchema } from "@his/contracts";
+import {
+  triageEvaluationCreateSchema,
+  quickIntakeInputSchema,
+  recordVitalsInputSchema,
+  VITAL_REASONABLE_RANGES,
+  type TriageVitalCode,
+  type VitalAlert,
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+
+/** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
+function formatNnSuffix(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
+    `-${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`
+  );
+}
+
+/**
+ * Genera un encounter number EMERGENCY: ENC-YYYY-XXXXXX.
+ * Replicación local del helper de `encounter.router.ts` (Juliet) para evitar
+ * tocar ese archivo durante el sprint.
+ */
+async function nextEncounterNumber(
+  prisma: { encounter: { count: (args: { where: { organizationId: string; admittedAt: { gte: Date } } }) => Promise<number> } },
+  organizationId: string,
+): Promise<string> {
+  const year = new Date().getFullYear();
+  const start = new Date(`${year}-01-01T00:00:00Z`);
+  const count = await prisma.encounter.count({
+    where: { organizationId, admittedAt: { gte: start } },
+  });
+  return `ENC-${year}-${String(count + 1).padStart(6, "0")}`;
+}
+
+/**
+ * Resuelve la moneda funcional del país del tenant (`CountryCurrency.isFunctional`).
+ * Fallback: cualquier currency activa de curso legal en el país.
+ */
+async function resolveCountryCurrency(
+  prisma: PrismaForCurrency,
+  countryId: string,
+): Promise<string> {
+  const fn = await prisma.countryCurrency.findFirst({
+    where: { countryId, isFunctional: true },
+    select: { currencyId: true },
+  });
+  if (fn) return fn.currencyId;
+  const lt = await prisma.countryCurrency.findFirst({
+    where: { countryId, isLegalTender: true },
+    select: { currencyId: true },
+  });
+  if (!lt) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "El país del tenant no tiene moneda funcional/legal configurada.",
+    });
+  }
+  return lt.currencyId;
+}
+
+interface PrismaForCurrency {
+  countryCurrency: {
+    findFirst: (args: {
+      where: { countryId: string; isFunctional?: boolean; isLegalTender?: boolean };
+      select: { currencyId: true };
+    }) => Promise<{ currencyId: string } | null>;
+  };
+}
+
+/** Reglas de alerta para signos vitales (TDR §9.2 / Manchester guidelines). */
+function computeServerAlerts(
+  vitals: { vitalCode: TriageVitalCode; valueNumeric?: number | null }[],
+): VitalAlert[] {
+  const alerts: VitalAlert[] = [];
+  const num = (code: TriageVitalCode) =>
+    vitals.find((v) => v.vitalCode === code)?.valueNumeric ?? null;
+
+  const spo2 = num("SPO2");
+  if (spo2 != null) {
+    if (spo2 < 90) alerts.push({ vitalCode: "SPO2", severity: "CRITICAL", message: "Hipoxia severa" });
+    else if (spo2 < 95) alerts.push({ vitalCode: "SPO2", severity: "WARNING", message: "Hipoxia" });
+  }
+  const hr = num("HR");
+  if (hr != null) {
+    if (hr < 50) alerts.push({ vitalCode: "HR", severity: "CRITICAL", message: "Bradicardia" });
+    else if (hr > 130) alerts.push({ vitalCode: "HR", severity: "WARNING", message: "Taquicardia" });
+  }
+  const sys = num("BP_SYS");
+  if (sys != null) {
+    if (sys < 90) alerts.push({ vitalCode: "BP_SYS", severity: "CRITICAL", message: "Hipotensión / shock" });
+    else if (sys > 180) alerts.push({ vitalCode: "BP_SYS", severity: "WARNING", message: "Hipertensión severa" });
+  }
+  const temp = num("TEMP");
+  if (temp != null && temp > 39) {
+    alerts.push({ vitalCode: "TEMP", severity: "WARNING", message: "Fiebre alta" });
+  }
+  const gcs = num("GCS");
+  if (gcs != null && gcs < 9) {
+    alerts.push({ vitalCode: "GCS", severity: "CRITICAL", message: "Glasgow ≤8 — vía aérea" });
+  }
+  const pain = num("PAIN");
+  if (pain != null && pain >= 7) {
+    alerts.push({ vitalCode: "PAIN", severity: "INFO", message: "Dolor severo" });
+  }
+  return alerts;
+}
 
 export const triageRouter = router({
   /** Lista los niveles Manchester configurados en la organización activa. */
@@ -80,4 +187,257 @@ export const triageRouter = router({
         include: { assignedLevel: true, vitalSigns: true, discriminatorHits: true },
       });
     }),
+
+  /**
+   * US-6.1 — Recepción rápida en triage.
+   *
+   * Caminos:
+   *  - EXISTING_PATIENT: valida paciente vivo (no soft-deleted) en el tenant.
+   *  - NN: crea Patient con `mrn = NN-yyyyMMdd-HHmmss`, `firstName = "NN"`,
+   *    `lastName = description` (truncada). `isUnknown = true`,
+   *    `unknownLabel = mrn`.
+   *
+   * Reusa Encounter EMERGENCY abierto (no descargado) si existe; de lo
+   * contrario crea uno. Crea SIEMPRE un nuevo `TriageEvaluation` IN_PROGRESS
+   * **sin** asignar nivel (eso es US-6.4 con discriminadores). Para no
+   * romper el FK requerido `assignedLevelId`, se asigna provisoriamente el
+   * nivel de menor prioridad clínica (BLUE/priority=5) — quedará sobre-
+   * escrito por el discriminador final. Si el caller necesita reportar el
+   * nivel "real" mientras tanto, status sigue IN_PROGRESS.
+   */
+  quickIntake: tenantProcedure
+    .input(quickIntakeInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Selecciona un establecimiento antes de hacer recepción.",
+        });
+      }
+
+      const orgId = ctx.tenant.organizationId;
+      const countryId = ctx.tenant.countryId;
+      const estId = ctx.tenant.establishmentId;
+      const userId = ctx.user.id;
+
+      // 1. Resolver / crear paciente.
+      let patientId: string;
+      if (input.mode === "EXISTING_PATIENT") {
+        const p = await ctx.prisma.patient.findFirst({
+          where: { id: input.patientId, organizationId: orgId, deletedAt: null },
+          select: { id: true, active: true },
+        });
+        if (!p) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no existe en esta organización." });
+        }
+        if (!p.active) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Paciente inactivo (posible fallecimiento)." });
+        }
+        patientId = p.id;
+      } else {
+        const now = new Date();
+        const mrn = `NN-${formatNnSuffix(now)}`;
+        const truncated = input.nnFields.description.slice(0, 100).trim() || "Desconocido";
+        const created = await ctx.prisma.patient.create({
+          data: {
+            organizationId: orgId,
+            mrn,
+            firstName: "NN",
+            lastName: truncated,
+            biologicalSexId: input.nnFields.sexAtBirthId,
+            birthDateEstimated: input.nnFields.estimatedAge != null,
+            birthDate:
+              input.nnFields.estimatedAge != null
+                ? new Date(now.getFullYear() - input.nnFields.estimatedAge, 0, 1)
+                : null,
+            isUnknown: true,
+            unknownLabel: mrn,
+            createdBy: userId,
+          },
+        });
+        patientId = created.id;
+      }
+
+      // 2. Reusar o crear Encounter EMERGENCY abierto.
+      let encounter = await ctx.prisma.encounter.findFirst({
+        where: {
+          organizationId: orgId,
+          patientId,
+          admissionType: "EMERGENCY",
+          dischargedAt: null,
+        },
+        orderBy: { admittedAt: "desc" },
+      });
+      if (!encounter) {
+        const currencyId = await resolveCountryCurrency(ctx.prisma, countryId);
+        const encounterNumber = await nextEncounterNumber(ctx.prisma, orgId);
+        encounter = await ctx.prisma.encounter.create({
+          data: {
+            countryId,
+            organizationId: orgId,
+            establishmentId: estId,
+            patientId,
+            admissionType: "EMERGENCY",
+            encounterNumber,
+            admittedAt: new Date(),
+            currencyId,
+            exchangeRateToFunc: 1,
+            createdBy: userId,
+          },
+        });
+      }
+
+      // 3. Resolver flowchart "general" + nivel placeholder (BLUE).
+      const flowchart = await ctx.prisma.triageFlowchart.findFirst({
+        where: { organizationId: orgId, active: true },
+        orderBy: { name: "asc" },
+        select: { id: true },
+      });
+      if (!flowchart) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No hay flowchart Manchester activo configurado.",
+        });
+      }
+      const placeholderLevel = await ctx.prisma.triageLevel.findFirst({
+        where: { organizationId: orgId, active: true },
+        orderBy: { priority: "desc" }, // priority=5 (BLUE) primero
+        select: { id: true },
+      });
+      if (!placeholderLevel) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Niveles Manchester no seedeados.",
+        });
+      }
+
+      // 4. Crear TriageEvaluation IN_PROGRESS.
+      const triage = await ctx.prisma.triageEvaluation.create({
+        data: {
+          countryId,
+          organizationId: orgId,
+          establishmentId: estId,
+          patientId,
+          encounterId: encounter.id,
+          flowchartId: flowchart.id,
+          assignedLevelId: placeholderLevel.id, // placeholder; US-6.4 sobre-escribe.
+          status: "IN_PROGRESS",
+          startedAt: new Date(),
+          triagistUserId: userId,
+          createdBy: userId,
+        },
+        select: { id: true },
+      });
+
+      return {
+        encounterId: encounter.id,
+        triageEvaluationId: triage.id,
+        patientId,
+      };
+    }),
+
+  /**
+   * US-6.2 — Captura bulk de signos vitales en una evaluación abierta.
+   * Devuelve las alertas computadas (no se persisten — TODO Sprint 6).
+   */
+  recordVitals: tenantProcedure
+    .input(recordVitalsInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const evaluation = await ctx.prisma.triageEvaluation.findFirst({
+        where: {
+          id: input.triageEvaluationId,
+          organizationId: ctx.tenant.organizationId,
+        },
+        select: { id: true, status: true },
+      });
+      if (!evaluation) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Evaluación de triage no existe." });
+      }
+      if (evaluation.status === "COMPLETED" || evaluation.status === "CANCELLED") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "La evaluación está cerrada — no se pueden registrar más signos.",
+        });
+      }
+
+      // Dedupe en memoria por (vitalCode, takenAt) para no chocar con el unique
+      // (evaluationId, vitalCode, measuredAt) del schema.
+      const baseTime = new Date();
+      const seen = new Set<string>();
+      const data = input.vitals.map((v, idx) => {
+        const r = VITAL_REASONABLE_RANGES[v.vitalCode];
+        let measuredAt = v.takenAt ?? baseTime;
+        // Si dos vitales del mismo código llegan con el mismo timestamp,
+        // desplazamos +1ms por índice para no violar el UNIQUE.
+        const k = `${v.vitalCode}-${measuredAt.toISOString()}`;
+        if (seen.has(k)) {
+          measuredAt = new Date(measuredAt.getTime() + idx + 1);
+        }
+        seen.add(`${v.vitalCode}-${measuredAt.toISOString()}`);
+        return {
+          evaluationId: evaluation.id,
+          vitalCode: v.vitalCode,
+          valueNumeric: v.valueNumeric ?? null,
+          valueText: v.valueText ?? null,
+          unit: v.unit ?? r.unit,
+          measuredAt,
+        };
+      });
+
+      const result = await ctx.prisma.triageVitalSign.createMany({
+        data,
+        skipDuplicates: true,
+      });
+
+      const alerts = computeServerAlerts(
+        input.vitals.map((v) => ({ vitalCode: v.vitalCode, valueNumeric: v.valueNumeric ?? null })),
+      );
+      return { inserted: result.count, alerts };
+    }),
+
+  /**
+   * US-6.1 / US-6.2 — contadores para el dashboard de recepción.
+   * Útil para mostrar "X esperando triage", "Y con vitales pendientes".
+   */
+  dashboardCounts: tenantProcedure.query(async ({ ctx }) => {
+    const since = new Date();
+    since.setHours(0, 0, 0, 0);
+
+    const [waitingTriage, inProgress, completedToday, withoutVitals] = await Promise.all([
+      ctx.prisma.encounter.count({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          admissionType: "EMERGENCY",
+          dischargedAt: null,
+          admittedAt: { gte: since },
+          triages: { none: {} },
+        },
+      }),
+      ctx.prisma.triageEvaluation.count({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          status: "IN_PROGRESS",
+          startedAt: { gte: since },
+        },
+      }),
+      ctx.prisma.triageEvaluation.count({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          status: "COMPLETED",
+          completedAt: { gte: since },
+        },
+      }),
+      ctx.prisma.triageEvaluation.count({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          status: "IN_PROGRESS",
+          startedAt: { gte: since },
+          vitalSigns: { none: {} },
+        },
+      }),
+    ]);
+
+    return { waitingTriage, inProgress, completedToday, withoutVitals };
+  }),
 });
+

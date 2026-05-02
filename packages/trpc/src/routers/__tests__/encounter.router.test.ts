@@ -17,7 +17,31 @@ describe("encounterRouter", () => {
   });
 
   describe("admit", () => {
+    /**
+     * Helper: configura los mocks que usa la nueva pipeline de admit
+     *  - paciente activo
+     *  - sin encuentro abierto previo
+     *  - $transaction ejecuta el callback con el mismo prisma mock
+     */
+    function setupAdmitHappyPath() {
+      prisma.patient.findFirst.mockResolvedValue({
+        id: "p1",
+        active: true,
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.organization.findUnique.mockResolvedValue({
+        functionalCurrency: "00000000-0000-0000-0000-000000000020",
+      } as never);
+      // $transaction(callback) corre el callback con el propio mock.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
+          fn(prisma),
+        );
+    }
+
     it("genera encounterNumber con formato ENC-YYYY-NNNNNN", async () => {
+      setupAdmitHappyPath();
       prisma.encounter.count.mockResolvedValue(41);
       prisma.encounter.create.mockImplementation(((args: { data: { encounterNumber: string } }) => {
         return Promise.resolve({ id: "e1", ...args.data }) as never;
@@ -50,6 +74,13 @@ describe("encounterRouter", () => {
     });
 
     it("usa admittedAt del input si se provee", async () => {
+      setupAdmitHappyPath();
+      // SCHEDULED requiere bedId — mockeamos cama libre.
+      prisma.bed.findFirst.mockResolvedValue({
+        id: "b1",
+        code: "C-01",
+        status: "FREE",
+      } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({ id: "e2" } as never);
       const at = new Date("2026-01-15T08:00:00Z");
@@ -59,11 +90,54 @@ describe("encounterRouter", () => {
         patientId: "00000000-0000-0000-0000-000000000010",
         admissionType: "SCHEDULED",
         currencyId: "00000000-0000-0000-0000-000000000020",
+        bedId: "00000000-0000-0000-0000-000000000099",
         admittedAt: at,
       } as never);
 
       const args = prisma.encounter.create.mock.calls[0]![0];
       expect(args.data.admittedAt).toEqual(at);
+    });
+
+    it("retorna el encuentro abierto existente (idempotencia)", async () => {
+      prisma.patient.findFirst.mockResolvedValue({ id: "p1", active: true } as never);
+      const existing = {
+        id: "e-existing",
+        encounterNumber: "ENC-2026-000001",
+        dischargedAt: null,
+      };
+      prisma.encounter.findFirst.mockResolvedValue(existing as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      const out = await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "EMERGENCY",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      expect((out as { id: string }).id).toBe("e-existing");
+      expect(prisma.encounter.create).not.toHaveBeenCalled();
+    });
+
+    it("BIRTH/NEWBORN devuelven NOT_IMPLEMENTED en MVP", async () => {
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "BIRTH",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toBeInstanceOf(TRPCError);
+    });
+
+    it("SCHEDULED sin bedId rechaza con BAD_REQUEST", async () => {
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "SCHEDULED",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toBeInstanceOf(TRPCError);
     });
   });
 

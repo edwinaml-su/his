@@ -79,3 +79,61 @@ export type PatientIdentifierInput = z.infer<typeof patientIdentifierSchema>;
 export type PatientAllergyInput = z.infer<typeof patientAllergySchema>;
 export type PatientAddressInput = z.infer<typeof patientAddressSchema>;
 export type PatientSearchInput = z.infer<typeof patientSearchSchema>;
+
+// =============================================================================
+// US-4.3 / US-4.4 — Dedupe MPI + Merge con auditoría.
+// =============================================================================
+
+/** Campos que el usuario puede elegir individualmente al hacer merge. */
+export const mergeFieldKeys = [
+  "firstName",
+  "middleName",
+  "lastName",
+  "secondLastName",
+  "preferredName",
+  "birthDate",
+  "biologicalSexId",
+  "genderId",
+  "maritalStatusId",
+  "bloodTypeAbo",
+  "bloodRh",
+  "mrn",
+] as const;
+
+export type PatientMergeFieldKey = (typeof mergeFieldKeys)[number];
+
+/** Cada field se decide tomándolo del paciente "from" o "to". */
+export const mergeFieldChoiceSchema = z.enum(["from", "to"]);
+
+export const findDuplicatesInput = z.object({
+  patientId: z.string().uuid(),
+  threshold: z.number().min(0).max(1).default(0.65),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+
+export const mergePatientsInput = z
+  .object({
+    fromPatientId: z.string().uuid(),
+    toPatientId: z.string().uuid(),
+    justification: z
+      .string()
+      .trim()
+      .min(20, "La justificación debe tener al menos 20 caracteres.")
+      .max(500),
+    /** Por field: 'from' | 'to'. Si el field se omite, queda como está en `to`. */
+    fieldsToTake: z
+      .record(z.enum(mergeFieldKeys), mergeFieldChoiceSchema)
+      .default({}),
+  })
+  .refine((d) => d.fromPatientId !== d.toPatientId, {
+    message: "No se puede fusionar un paciente consigo mismo.",
+    path: ["fromPatientId"],
+  });
+
+export const unmergeInput = z.object({
+  mergeId: z.string().uuid(),
+});
+
+export type FindDuplicatesInput = z.infer<typeof findDuplicatesInput>;
+export type MergePatientsInput = z.infer<typeof mergePatientsInput>;
+export type UnmergeInput = z.infer<typeof unmergeInput>;

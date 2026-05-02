@@ -15,6 +15,8 @@ import { exchangeRateRouter } from "./exchange-rate.router";
 import { rbacRouter } from "./rbac.router";
 import { userAdminRouter } from "./user-admin.router";
 import { localeRouter } from "./locale.router";
+import { ledgerRouter } from "./ledger.router";
+import { auditIntegrityRouter } from "./audit-integrity.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -33,6 +35,8 @@ export const appRouter = router({
   rbac: rbacRouter,
   userAdmin: userAdminRouter,
   locale: localeRouter,
+  ledger: ledgerRouter,
+  auditIntegrity: auditIntegrityRouter,
 });
 
 export type AppRouter = typeof appRouter;
