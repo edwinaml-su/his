@@ -1,29 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "npm run build",
-  "installCommand": "npm ci && npx prisma generate --schema=packages/database/prisma/schema.prisma",
-  "outputDirectory": "apps/web/.next",
-  "regions": ["iad1", "gru1"],
   "github": {
     "silent": false,
     "autoJobCancelation": true
   },
   "env": {
     "NEXT_TELEMETRY_DISABLED": "1"
-  },
-  "build": {
-    "env": {
-      "NEXT_PUBLIC_SUPABASE_URL": "@next_public_supabase_url",
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY": "@next_public_supabase_anon_key",
-      "SUPABASE_SERVICE_ROLE_KEY": "@supabase_service_role_key",
-      "DATABASE_URL": "@database_url",
-      "DIRECT_URL": "@direct_url",
-      "AUTH_SECRET": "@auth_secret",
-      "SENTRY_DSN": "@sentry_dsn",
-      "SENTRY_ENVIRONMENT": "@sentry_environment",
-      "NEXT_PUBLIC_APP_URL": "@next_public_app_url"
-    }
   },
   "headers": [
     {
@@ -38,7 +21,7 @@
     }
   ],
   "functions": {
-    "apps/web/app/api/**/route.ts": {
+    "app/api/**/route.ts": {
       "maxDuration": 30
     }
   }
