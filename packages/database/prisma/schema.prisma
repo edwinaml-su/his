@@ -364,16 +364,20 @@ model Ledger {
 
 /// TDR §6.1 — usuario humano del sistema. Las credenciales viven en tablas separadas (4NF).
 model User {
-  id          String    @id @default(uuid()) @db.Uuid
-  email       String    @unique @db.Citext
-  fullName    String    @db.VarChar(200)
-  active      Boolean   @default(true)
-  mfaEnabled  Boolean   @default(false)
-  lastLoginAt DateTime? @db.Timestamptz()
-  createdAt   DateTime  @default(now()) @db.Timestamptz()
-  createdBy   String?   @db.Uuid
-  updatedAt   DateTime  @updatedAt @db.Timestamptz()
-  updatedBy   String?   @db.Uuid
+  id              String    @id @default(uuid()) @db.Uuid
+  email           String    @unique @db.Citext
+  fullName        String    @db.VarChar(200)
+  active          Boolean   @default(true)
+  mfaEnabled      Boolean   @default(false)
+  lastLoginAt     DateTime? @db.Timestamptz()
+  /// US-2.1 - intentos fallidos consecutivos de login (se resetea al login OK).
+  failedAttempts  Int       @default(0)
+  /// US-2.1 - bloqueo temporal por intentos fallidos. NULL = no bloqueado.
+  lockedUntil     DateTime? @db.Timestamptz()
+  createdAt       DateTime  @default(now()) @db.Timestamptz()
+  createdBy       String?   @db.Uuid
+  updatedAt       DateTime  @updatedAt @db.Timestamptz()
+  updatedBy       String?   @db.Uuid
 
   credentials            UserCredential[]
   externalIdentities     UserExternalIdentity[]
