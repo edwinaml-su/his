@@ -121,6 +121,15 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
     await prisma.$disconnect();
   });
 
+  // Demota al rol "authenticated" dentro de la transacción para que las
+  // policies RLS apliquen. Sin esto el rol postgres.<ref> de Supabase tiene
+  // BYPASSRLS y los tests de aislamiento no probarían nada.
+  // En runtime real este demote ocurre via Supabase Auth/PostgREST; en tests
+  // con conexión Prisma directa hay que hacerlo explícito.
+  async function demote(tx: PrismaClient): Promise<void> {
+    await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
+  }
+
   it("Test 1: User A con context Org A puede leer paciente A", async () => {
     if (!prisma) return;
     const result = await prisma.$transaction(async (tx) => {
@@ -128,6 +137,7 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
+      await demote(tx as unknown as PrismaClient);
       return tx.patient.findUnique({ where: { id: patientAId } });
     });
     expect(result).not.toBeNull();
@@ -142,6 +152,7 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
+      await demote(tx as unknown as PrismaClient);
       // Lookup directo por ID del paciente B → RLS lo oculta → null.
       const direct = await tx.patient.findUnique({ where: { id: patientBId } });
       // Listado por org B → RLS filtra a 0.
@@ -158,14 +169,12 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
     if (!prisma) return;
     const count = await prisma.$transaction(async (tx) => {
       await clearTenantContext(tx as unknown as PrismaClient);
+      await demote(tx as unknown as PrismaClient);
       const rows = await tx.patient.findMany({
         where: { id: { in: [patientAId, patientBId] } },
       });
       return rows.length;
     });
-    // Nota: si DATABASE_URL apunta al rol service_role / superuser con
-    // BYPASSRLS, este test verá ambos pacientes y fallará. Es la señal
-    // correcta — la suite debe correr con un rol app, no con bypass.
     expect(count).toBe(0);
   });
 
@@ -177,6 +186,7 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         { userId: userAId, organizationId: orgAId },
         { breakGlass: true },
       );
+      await demote(tx as unknown as PrismaClient);
       return tx.patient.findMany({
         where: { id: { in: [patientAId, patientBId] } },
       });
