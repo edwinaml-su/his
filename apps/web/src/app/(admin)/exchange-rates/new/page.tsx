@@ -24,7 +24,7 @@ export default function NewExchangeRatePage() {
           <h1 className="text-2xl font-bold">Nueva tasa de cambio</h1>
           <p className="text-sm text-muted-foreground">
             Histórico inmutable: si ya existe una tasa vigente para el mismo par y tipo, su
-            "vigente hasta" se cerrará automáticamente al momento de la nueva.
+            &quot;vigente hasta&quot; se cerrará automáticamente al momento de la nueva.
           </p>
         </div>
         <Button variant="outline" asChild>

@@ -46,12 +46,13 @@ test.describe("Triage Manchester", () => {
   });
 
   test("cola pendiente ordena por prioridad y antigüedad", async ({ page }) => {
-    await page.goto("/triage/pending");
+    // Ruta real: /triage (la antigua /triage/pending nunca existió).
+    await page.goto("/triage");
     const rows = page.getByRole("row");
     // Smoke: la lista renderiza al menos un row de header + uno de datos.
     await expect(rows.first()).toBeVisible();
     // Los roles de columna están presentes para a11y.
     await expect(page.getByRole("columnheader", { name: /paciente/i })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: /admisión|hora/i })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: /llegada|admisión|hora/i })).toBeVisible();
   });
 });

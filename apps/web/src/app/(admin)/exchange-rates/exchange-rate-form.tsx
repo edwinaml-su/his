@@ -238,7 +238,7 @@ export function ExchangeRateForm({ onSuccess }: ExchangeRateFormProps) {
               value={values.source}
               onChange={(e) => setField("source", e.target.value)}
             />
-            <FormHint>Opcional. Si se omite, queda como "manual".</FormHint>
+            <FormHint>Opcional. Si se omite, queda como &quot;manual&quot;.</FormHint>
             <FormError>{errors.source}</FormError>
           </FormField>
         </div>

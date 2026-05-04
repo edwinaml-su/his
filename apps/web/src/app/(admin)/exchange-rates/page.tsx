@@ -95,7 +95,7 @@ export default function ExchangeRatesPage() {
               ))}
             </ul>
             <p className="text-xs text-muted-foreground">
-              Para persistir, usa el formulario "Nueva tasa" copiando los valores deseados.
+              Para persistir, usa el formulario &quot;Nueva tasa&quot; copiando los valores deseados.
               La importación batch llegará en Sprint 5 con la integración real.
             </p>
           </CardContent>

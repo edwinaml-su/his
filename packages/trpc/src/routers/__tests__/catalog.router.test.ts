@@ -19,12 +19,12 @@ describe("catalogRouter", () => {
     prisma = mockDeep<PrismaClient>();
   });
 
-  it("list aplica activeOnly=true por defecto sobre el modelo solicitado", async () => {
+  it("list aplica filter active=true cuando activeOnly=true se pasa explícito", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (prisma as any).biologicalSex = { findMany: fn([]) };
 
     const caller = catalogRouter.createCaller(makeCtx({ prisma }));
-    await caller.list({ catalog: "biologicalSex" });
+    await caller.list({ catalog: "biologicalSex", activeOnly: true });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const fm = (prisma as any).biologicalSex.findMany;
@@ -62,14 +62,16 @@ describe("catalogRouter", () => {
     (prisma as any).occupation = { create: fn({ id: "x" }) };
 
     const caller = catalogRouter.createCaller(makeCtx({ prisma }));
+    // Occupation usa ciuoCode (CIUO-08 ISCO classification), no `code` genérico.
     await caller.create({
       catalog: "occupation",
-      data: { name: "Médico", code: "MED" },
+      data: { name: "Médico", ciuoCode: "MED" },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // El schema de occupation incluye active con default(true) — sale en el data.
     expect((prisma as any).occupation.create).toHaveBeenCalledWith({
-      data: { name: "Médico", code: "MED" },
+      data: { name: "Médico", ciuoCode: "MED", active: true },
     });
   });
 
