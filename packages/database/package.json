@@ -21,6 +21,8 @@
     "migrate:deploy": "prisma migrate deploy",
     "seed": "tsx --env-file=.env prisma/seed.ts",
     "seed:sv-extra": "tsx --env-file=.env seed-sv-extra.ts",
+    "seed:manchester": "tsx --env-file=.env seed-manchester.ts",
+    "seed:vaccines": "tsx --env-file=.env seed-vaccines-sv.ts",
     "studio": "prisma studio",
     "validate": "prisma validate",
     "format": "prisma format",
