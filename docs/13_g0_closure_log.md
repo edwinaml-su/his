@@ -177,31 +177,20 @@ A lo largo de este cierre se compartieron en chat:
 
 ### Críticos (seguridad)
 
-- **9 tablas críticas sin RLS habilitado** — `01_rls_policies.sql` cubrió Patient/Encounter/Triage pero dejó fuera:
-  - `audit.AuditLog` — auditoría inmutable expuesta
-  - `public.User`, `public.UserCredential`, `public.UserExternalIdentity` — identidad/auth cross-tenant
-  - `public.Session` — tokens de sesión visibles cross-tenant
-  - `public.RolePermission` — mapeo permisos org-scoped sin policies
-  - `public.DeathCertificate`, `public.PatientVaccination` — datos clínicos sin aislamiento
-  - `public.ExchangeRate` — tasas org-scoped sin policies
+- ~~**9 tablas críticas sin RLS habilitado**~~ — **Cerrado en G0** vía `06_rls_auth_audit.sql`. Las 9 tablas críticas (`audit.AuditLog`, `User`, `UserCredential`, `UserExternalIdentity`, `Session`, `RolePermission`, `DeathCertificate`, `PatientVaccination`, `ExchangeRate`) ahora tienen RLS habilitado + policies. 3 tests nuevos en `rls-isolation.test.ts` validan auditoría tenant-scoped, User cross-tenant via UOR, y UserCredential own-only. Estado actual: **38 tablas con RLS, 55 policies**, 7/7 RLS isolation tests verde.
 
-  Mitigación actual: aplicación filtra por `organizationId` en cada query (validado vía RLS isolation tests para tablas que sí tienen RLS). Pero un bug de filtro en cualquier router permitiría exfil. Defensa en profundidad requiere `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` + policies por comando para estas 9 tablas.
+- 23 catálogos globales (Country, Currency, GeoDivision, BiologicalSex, etc.) correctamente sin RLS — son lectura pública sin tenant scope.
 
-  23 catálogos globales (Country, Currency, GeoDivision, BiologicalSex, etc.) están correctamente sin RLS — son lectura pública sin tenant scope.
-
-- Considerar mover `SET LOCAL ROLE authenticated` al runtime path en `applyTenantContext` para que Prisma queries de la app **también** respeten RLS (defensa en profundidad). Hoy la app filtra solo en aplicación.
+- Considerar mover `SET LOCAL ROLE authenticated` al runtime path en `applyTenantContext` para que Prisma queries de la app **también** respeten RLS (defensa en profundidad). Hoy la app filtra en aplicación + RLS valida en BD; ambas capas existen pero no encadenadas en runtime.
 
 ### Críticos (performance)
 
-- **31 foreign keys sin índice** — gap de performance clásico. PostgreSQL no indexa FKs automáticamente; sin índice cada DELETE/UPDATE CASCADE hace full-table-scan. Top offenders:
+- **31 foreign keys sin índice** — SQL listo en `packages/database/sql/07_fk_indexes.sql` (no aplicado aún; revisar antes de aplicar en producción para evitar contención de locks). Para producción usar `CREATE INDEX CONCURRENTLY`. Top offenders:
   - `Encounter`: 5 FKs sin idx (currencyId, establishmentId, patientCategoryId, patientTypeId, serviceUnitId)
   - `Patient`: 3 FKs sin idx (biologicalSexId, educationLevelId, genderId)
   - `Bed`: 2 FKs sin idx (organizationId, serviceUnitId)
   - `Organization`: 2 FKs sin idx (functionalCurrency, reportingCurrency)
-  - `MedicalSpecialty.parentId` (jerarquía sin idx)
-  - + 18 más en otras tablas
-
-  Para staging G0 aceptable; en producción con volumen real (~10K pacientes/mes esperado) bloquearía. Generar SQL con `CREATE INDEX CONCURRENTLY ON ...` para cada uno.
+  - `MedicalSpecialty.parentId`, etc.
 
 ### Conocidos previos
 

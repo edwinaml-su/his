@@ -111,9 +111,18 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
 
   afterAll(async () => {
     if (!prisma) return;
-    // Cleanup en orden inverso. Cualquier fallo se loguea pero no bloquea.
+    // Cleanup en orden inverso de FKs. Cada paso tolera fallo aislado.
+    await prisma.userCredential
+      .deleteMany({ where: { userId: { in: [userAId, userBId] } } })
+      .catch(() => undefined);
+    await prisma.userOrganizationRole
+      .deleteMany({ where: { userId: { in: [userAId, userBId] } } })
+      .catch(() => undefined);
     await prisma.patient
       .deleteMany({ where: { id: { in: [patientAId, patientBId] } } })
+      .catch(() => undefined);
+    await prisma.user
+      .deleteMany({ where: { id: { in: [userAId, userBId] } } })
       .catch(() => undefined);
     await prisma.organization
       .deleteMany({ where: { id: { in: [orgAId, orgBId] } } })
@@ -194,5 +203,112 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
     expect(rows.map((r) => r.id).sort()).toEqual([patientAId, patientBId].sort());
     // Audit log de break-glass se valida en otro test (audit.router) —
     // aquí solo demostramos que la policy lo permite.
+  });
+
+  // 06_rls_auth_audit.sql — aislamiento de auth/audit/financial.
+  it("Test 5: audit.AuditLog respeta organizationId del contexto", async () => {
+    if (!prisma) return;
+    // entityId único por test para no chocar con auditoría de los seed inserts.
+    const tagA = `rls-audit-A-${RUN_TAG}`;
+    const tagB = `rls-audit-B-${RUN_TAG}`;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO audit."AuditLog" ("occurredAt", "organizationId", action, entity, "entityId")
+       VALUES (now(), $1::uuid, 'CREATE'::"AuditAction", 'TestEntity', $2),
+              (now(), $3::uuid, 'CREATE'::"AuditAction", 'TestEntity', $4)`,
+      orgAId,
+      tagA,
+      orgBId,
+      tagB,
+    );
+
+    const rows = await prisma.$transaction(async (tx) => {
+      await applyTenantContext(tx as unknown as PrismaClient, {
+        userId: userAId,
+        organizationId: orgAId,
+      });
+      await demote(tx as unknown as PrismaClient);
+      return tx.$queryRawUnsafe<Array<{ entityId: string }>>(
+        `SELECT "entityId" FROM audit."AuditLog" WHERE "entityId" IN ($1, $2)`,
+        tagA,
+        tagB,
+      );
+    });
+    expect(rows.map((r) => r.entityId)).toEqual([tagA]);
+
+    // Cleanup directo (postgres role bypass) — el trigger trg_auditlog_no_update
+    // bloquea DELETE/UPDATE app-side. Limpiar mediante DISABLE TRIGGER + restore
+    // sería caro; aceptamos que estos rows queden en el log (entityId tagueado).
+  });
+
+  it("Test 6: User es visible cross-tenant si comparte org via UserOrganizationRole", { timeout: 30_000 }, async () => {
+    if (!prisma) return;
+    // userA y userB no existen aun como User rows (los IDs son sólo refs).
+    // Crear ambos + asignar a sus orgs vía UserOrganizationRole.
+    const role = await prisma.role.findFirst({ select: { id: true } });
+    if (!role) throw new Error("seed sin Role minimo");
+
+    await prisma.$transaction([
+      prisma.user.upsert({
+        where: { id: userAId },
+        create: { id: userAId, email: `rls-a-${RUN_TAG}@x.test`, fullName: "RLS A" },
+        update: {},
+      }),
+      prisma.user.upsert({
+        where: { id: userBId },
+        create: { id: userBId, email: `rls-b-${RUN_TAG}@x.test`, fullName: "RLS B" },
+        update: {},
+      }),
+      prisma.userOrganizationRole.create({
+        data: { userId: userAId, organizationId: orgAId, roleId: role.id },
+      }),
+      prisma.userOrganizationRole.create({
+        data: { userId: userBId, organizationId: orgBId, roleId: role.id },
+      }),
+    ]);
+
+    const visible = await prisma.$transaction(async (tx) => {
+      await applyTenantContext(tx as unknown as PrismaClient, {
+        userId: userAId,
+        organizationId: orgAId,
+      });
+      await demote(tx as unknown as PrismaClient);
+      return tx.user.findMany({
+        where: { id: { in: [userAId, userBId] } },
+        select: { id: true },
+      });
+    });
+    // userA se ve a sí mismo + via UOR; userB es de otra org → invisible.
+    expect(visible.map((u) => u.id)).toEqual([userAId]);
+  });
+
+  it("Test 7: UserCredential sólo visible para el propio userId", { timeout: 30_000 }, async () => {
+    if (!prisma) return;
+    const credAId = randomUUID();
+    const credBId = randomUUID();
+    await prisma.$transaction([
+      prisma.userCredential.create({
+        data: { id: credAId, userId: userAId, method: "PASSWORD", secretHash: "x" },
+      }),
+      prisma.userCredential.create({
+        data: { id: credBId, userId: userBId, method: "PASSWORD", secretHash: "x" },
+      }),
+    ]);
+
+    const visible = await prisma.$transaction(async (tx) => {
+      await applyTenantContext(tx as unknown as PrismaClient, {
+        userId: userAId,
+        organizationId: orgAId,
+      });
+      await demote(tx as unknown as PrismaClient);
+      return tx.userCredential.findMany({
+        where: { id: { in: [credAId, credBId] } },
+        select: { id: true, userId: true },
+      });
+    });
+    expect(visible.map((c) => c.id)).toEqual([credAId]);
+
+    await prisma.userCredential
+      .deleteMany({ where: { id: { in: [credAId, credBId] } } })
+      .catch(() => undefined);
   });
 });
