@@ -49,10 +49,13 @@ const client = new pg.Client({ connectionString: cleanUrl, ssl: { rejectUnauthor
 await client.connect();
 
 try {
-  // Tomamos cualquier Role Administrador y la primer Organization (para asignar UOR).
-  const orgRes = await client.query(`SELECT id FROM public."Organization" ORDER BY "createdAt" LIMIT 1`);
-  const orgId = orgRes.rows[0]?.id;
-  if (!orgId) throw new Error('No hay Organization en la BD — corre seed primero');
+  // Asignar UOR a la organización que tenga Establishment (subsidiaria operativa).
+  // La holding no tiene Establishment ni ServiceUnits — UOR ahí no puede ver encuentros.
+  const orgRes = await client.query(
+    `SELECT "organizationId" FROM public."Establishment" LIMIT 1`
+  );
+  const orgId = orgRes.rows[0]?.organizationId;
+  if (!orgId) throw new Error('No hay Establishment en la BD — corre seed primero');
 
   for (const u of TEST_USERS) {
     process.stdout.write(`> ${u.email.padEnd(28)} ... `);
@@ -73,7 +76,13 @@ try {
       console.log(`SIN ROLE "${u.roleName}"`);
       continue;
     }
-    // Asegurar UOR (unique en userId+orgId+roleId).
+    // Limpiar UORs previos (de runs anteriores con orgId distinto) y asegurar
+    // sólo el UOR a la org operativa para que sea tenant default sin ambigüedad.
+    await client.query(
+      `DELETE FROM public."UserOrganizationRole"
+         WHERE "userId"=$1::uuid AND "organizationId" <> $2::uuid`,
+      [id, orgId]
+    );
     await client.query(
       `INSERT INTO public."UserOrganizationRole" (id, "userId","organizationId","roleId")
          VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid)

@@ -101,13 +101,18 @@ Adicional: `RUN_RLS_TESTS` agregado a `turbo.json:globalEnv` para que turbo lo p
 - `npm run build` verde — 1 m 27 s, 27+ rutas built (admin, clinical, dashboard, login, MFA, etc.).
 - `npm run dev` arranca sin errores. Verificación HTTP: `/` → 307, `/login` → 200.
 
-**E2E auth.spec.ts (corrido con keys reales + 2 test users seedeados):**
-- ✅ login exitoso redirige a área autenticada
-- ✅ login con credenciales inválidas muestra error (a11y `role=alert`)
-- ❌ logout limpia la sesión — selector del menú de perfil no matchea (`button name=/perfil|cuenta|menú/i` no existe en UI actual)
-- ❌ signup público deshabilitado — depende de comportamiento `/signup` no implementado en MVP
+**E2E pasando (3/8) contra Supabase HIS real:**
+- ✅ `auth.spec.ts` — login exitoso redirige a área autenticada
+- ✅ `auth.spec.ts` — login con credenciales inválidas muestra error (a11y `role=alert`)
+- ✅ `triage-manchester.spec.ts` — cola pendiente renderiza con datos del seed clínico
 
-**E2E admission + triage:** todos fallan, no por bugs de aplicación sino por seed data insuficiente. Los tests asumen pacientes/encounters/camas pre-poblados (`expect(rows.first()).toBeVisible()` sobre tablas vacías). Sprint 3 backlog: extender `seed-sv-extra.ts` con fixtures clínicas (10 pacientes representativos, encounters activos, beds asignados).
+**E2E pendientes (5/8) — drift tests-vs-app, NO bugs de aplicación:**
+- ❌ `auth.spec.ts` logout — selector `/perfil|cuenta|menú/i` no matchea UI actual (drift)
+- ❌ `auth.spec.ts` signup — depende de comportamiento `/signup` no implementado en MVP
+- ❌ `admission-discharge.spec.ts` × 3 — tests escritos para `/admission/new` pero la ruta real es `/admission` con form distinto al asumido
+- ❌ `triage-manchester.spec.ts` captura signos — escrito para `/triage/pending` (no existe); flujo real es `/triage` → click "Evaluar" → `/triage/new/[encounterId]` con form en otra estructura
+
+Reescribir los 5 tests = trabajo de Sprint 3 (rewrite estructural, no fixes triviales).
 
 **Test users creados** vía `packages/database/scripts/seed-test-users.mjs` (idempotente):
 - `qa.admin@his.test` / `TestPass123!` — auth.users + public.User + UOR Administrador
