@@ -5,7 +5,8 @@
   "description": "Sistema de Información Hospitalaria Multipaís - Inversiones Avante",
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "packages/config/*"
   ],
   "scripts": {
     "build": "turbo run build",

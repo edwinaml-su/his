@@ -195,7 +195,7 @@ export function LedgerTable({ organizationId }: LedgerTableProps) {
             {rows.length === 0 && !query.isLoading ? (
               <TableRow>
                 <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
-                  Sin libros para esta organización. Crea uno con "+ Nuevo libro".
+                  Sin libros para esta organización. Crea uno con &quot;+ Nuevo libro&quot;.
                 </TableCell>
               </TableRow>
             ) : null}
