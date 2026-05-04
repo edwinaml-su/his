@@ -96,13 +96,24 @@ Tres correcciones reales hechas para llegar ahí:
 
 Adicional: `RUN_RLS_TESTS` agregado a `turbo.json:globalEnv` para que turbo lo propague a workspaces. Commit `03d9833`.
 
-### Fase 7 — Build + dev smoke (parcial) ✅✋
+### Fase 7 — Build + dev smoke + E2E parcial ✅✋
 
-- `npm run build` verde — 1 m 27 s, 27+ rutas built (admin, clinical, dashboard, login, MFA, etc.). Mix static/dynamic per Next conventions.
-- `npm run dev` arranca sin errores. Verificación HTTP:
-  - `/` → 307 (redirect a `/login`, esperado para no-auth)
-  - `/login` → 200 (renderiza)
-- **Smoke manual completo (login → paciente con DUI → admit → triage rojo) pendiente** porque requiere keys reales de Supabase Auth (anon JWT + service_role) y ejecución interactiva en navegador.
+- `npm run build` verde — 1 m 27 s, 27+ rutas built (admin, clinical, dashboard, login, MFA, etc.).
+- `npm run dev` arranca sin errores. Verificación HTTP: `/` → 307, `/login` → 200.
+
+**E2E auth.spec.ts (corrido con keys reales + 2 test users seedeados):**
+- ✅ login exitoso redirige a área autenticada
+- ✅ login con credenciales inválidas muestra error (a11y `role=alert`)
+- ❌ logout limpia la sesión — selector del menú de perfil no matchea (`button name=/perfil|cuenta|menú/i` no existe en UI actual)
+- ❌ signup público deshabilitado — depende de comportamiento `/signup` no implementado en MVP
+
+**E2E admission + triage:** todos fallan, no por bugs de aplicación sino por seed data insuficiente. Los tests asumen pacientes/encounters/camas pre-poblados (`expect(rows.first()).toBeVisible()` sobre tablas vacías). Sprint 3 backlog: extender `seed-sv-extra.ts` con fixtures clínicas (10 pacientes representativos, encounters activos, beds asignados).
+
+**Test users creados** vía `packages/database/scripts/seed-test-users.mjs` (idempotente):
+- `qa.admin@his.test` / `TestPass123!` — auth.users + public.User + UOR Administrador
+- `qa.triagist@his.test` / `TestPass123!` — idem
+
+**Smoke manual (interactivo en navegador) pendiente** — login funcional verificado vía E2E, queda crear paciente + admit + triage manualmente.
 
 ### Fase 8 — Branch protection en main 🟦 PENDIENTE
 

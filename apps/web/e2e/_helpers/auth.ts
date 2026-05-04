@@ -15,6 +15,6 @@ export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "ad
   await page.goto("/login");
   await page.getByLabel(/correo|email/i).fill(creds.email);
   await page.getByLabel(/contraseña|password/i).fill(creds.password);
-  await page.getByRole("button", { name: /iniciar sesión|login/i }).click();
+  await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
   await page.waitForURL(/\/(dashboard|patients|beds|triage|admission)/);
 }

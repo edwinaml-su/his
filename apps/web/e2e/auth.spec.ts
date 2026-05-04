@@ -17,7 +17,7 @@ test.describe("Autenticación", () => {
     await page.goto("/login");
     await page.getByLabel(/correo|email/i).fill(TEST_CREDENTIALS.admin.email);
     await page.getByLabel(/contraseña|password/i).fill("contraseña-invalida");
-    await page.getByRole("button", { name: /iniciar sesión|login/i }).click();
+    await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
 
     // El error debe ser anunciado vía role=alert (a11y).
     await expect(page.getByRole("alert")).toBeVisible();
