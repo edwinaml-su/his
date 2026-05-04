@@ -175,8 +175,40 @@ A lo largo de este cierre se compartieron en chat:
 
 ## Backlog Sprint 3 surfaceado durante el cierre
 
+### Críticos (seguridad)
+
+- **9 tablas críticas sin RLS habilitado** — `01_rls_policies.sql` cubrió Patient/Encounter/Triage pero dejó fuera:
+  - `audit.AuditLog` — auditoría inmutable expuesta
+  - `public.User`, `public.UserCredential`, `public.UserExternalIdentity` — identidad/auth cross-tenant
+  - `public.Session` — tokens de sesión visibles cross-tenant
+  - `public.RolePermission` — mapeo permisos org-scoped sin policies
+  - `public.DeathCertificate`, `public.PatientVaccination` — datos clínicos sin aislamiento
+  - `public.ExchangeRate` — tasas org-scoped sin policies
+
+  Mitigación actual: aplicación filtra por `organizationId` en cada query (validado vía RLS isolation tests para tablas que sí tienen RLS). Pero un bug de filtro en cualquier router permitiría exfil. Defensa en profundidad requiere `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` + policies por comando para estas 9 tablas.
+
+  23 catálogos globales (Country, Currency, GeoDivision, BiologicalSex, etc.) están correctamente sin RLS — son lectura pública sin tenant scope.
+
+- Considerar mover `SET LOCAL ROLE authenticated` al runtime path en `applyTenantContext` para que Prisma queries de la app **también** respeten RLS (defensa en profundidad). Hoy la app filtra solo en aplicación.
+
+### Críticos (performance)
+
+- **31 foreign keys sin índice** — gap de performance clásico. PostgreSQL no indexa FKs automáticamente; sin índice cada DELETE/UPDATE CASCADE hace full-table-scan. Top offenders:
+  - `Encounter`: 5 FKs sin idx (currencyId, establishmentId, patientCategoryId, patientTypeId, serviceUnitId)
+  - `Patient`: 3 FKs sin idx (biologicalSexId, educationLevelId, genderId)
+  - `Bed`: 2 FKs sin idx (organizationId, serviceUnitId)
+  - `Organization`: 2 FKs sin idx (functionalCurrency, reportingCurrency)
+  - `MedicalSpecialty.parentId` (jerarquía sin idx)
+  - + 18 más en otras tablas
+
+  Para staging G0 aceptable; en producción con volumen real (~10K pacientes/mes esperado) bloquearía. Generar SQL con `CREATE INDEX CONCURRENTLY ON ...` para cada uno.
+
+### Conocidos previos
+
 - Hash chain de `audit.AuditLog` aún sin tests de carga concurrente (RELEASE_NOTES Sprint 2 ya lo flagea).
 - Patient unmerge no reversiona FK transitivos (RELEASE_NOTES Sprint 2).
 - Race condition en bed status (RELEASE_NOTES Sprint 2).
-- Considerar mover `SET LOCAL ROLE authenticated` al runtime path en `applyTenantContext` para que Prisma queries de la app **también** respeten RLS (defensa en profundidad). Hoy la app filtra solo en aplicación.
+
+### Operacional
+
 - 3 archivos npm install warnings deprecation (eslint 8.57.1, glob, etc.) — actualizar cuando se desbloquee Next.js compatibility.
