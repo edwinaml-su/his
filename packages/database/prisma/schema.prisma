@@ -308,6 +308,7 @@ model Organization {
   triages        TriageEvaluation[]
   beds           Bed[]
   services       ServiceUnit[]
+  vaccinations   PatientVaccination[]
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -889,10 +890,90 @@ model Patient {
   mergeHistoryTo    PatientMerge[]            @relation("MergeTo")
   encounters        Encounter[]
   triages           TriageEvaluation[]
+  vaccinations      PatientVaccination[]
+  deathCertificate  DeathCertificate?
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
   @@index([birthDate])
+  @@schema("public")
+}
+
+/// TDR §14.5 - catalogo de vacunas (PAI SV + universal).
+model Vaccine {
+  id           String   @id @default(uuid()) @db.Uuid
+  countryId    String?  @db.Uuid /// null = global
+  code         String   @db.VarChar(40) /// BCG, HepB, DPT, etc.
+  name         String   @db.VarChar(120)
+  manufacturer String?  @db.VarChar(120)
+  routeOfAdmin String?  @db.VarChar(40) /// IM, SC, oral, intradermal
+  scheduleNote String?  @db.Text /// edades recomendadas
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @db.Timestamptz()
+
+  vaccinations PatientVaccination[]
+
+  @@unique([countryId, code])
+  @@schema("public")
+}
+
+/// TDR §14.5 - registro de vacunacion aplicada al paciente.
+model PatientVaccination {
+  id                String    @id @default(uuid()) @db.Uuid
+  patientId         String    @db.Uuid
+  vaccineId         String    @db.Uuid
+  organizationId    String    @db.Uuid
+  establishmentId   String?   @db.Uuid
+  doseNumber        Int       @default(1)
+  administeredAt    DateTime  @db.Timestamptz()
+  lotNumber         String?   @db.VarChar(60)
+  expirationDate    DateTime? @db.Date
+  anatomicalSite    String?   @db.VarChar(40)
+  administeredById  String?   @db.Uuid /// User id
+  reactionsObserved String?   @db.Text
+  notes             String?   @db.Text
+  createdAt         DateTime  @default(now()) @db.Timestamptz()
+  createdBy         String?   @db.Uuid
+
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  vaccine      Vaccine      @relation(fields: [vaccineId], references: [id], onDelete: Restrict)
+  organization Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([patientId])
+  @@index([vaccineId])
+  @@schema("public")
+}
+
+/// TDR §8.7 - certificado medico de defuncion digital.
+/// 1:1 con Patient (un certificado por fallecimiento).
+model DeathCertificate {
+  id                        String    @id @default(uuid()) @db.Uuid
+  patientId                 String    @unique @db.Uuid
+  encounterId               String?   @db.Uuid /// encounter en el que se constato
+  organizationId            String    @db.Uuid
+  establishmentId           String    @db.Uuid
+  occurredAt                DateTime  @db.Timestamptz() /// fecha y hora del fallecimiento
+  certifiedById             String    @db.Uuid /// medico que certifica (User)
+  certifiedAt               DateTime  @default(now()) @db.Timestamptz()
+  /// Causas CIE-10 (codigo + descripcion libre porque puede no estar en ClinicalConcept aun).
+  basicCauseCode            String    @db.VarChar(20) /// causa basica
+  basicCauseDesc            String    @db.VarChar(300)
+  intermediateCauseCode     String?   @db.VarChar(20)
+  intermediateCauseDesc     String?   @db.VarChar(300)
+  directCauseCode           String?   @db.VarChar(20)
+  directCauseDesc           String?   @db.VarChar(300)
+  contributingCauses        String?   @db.Text
+  manner                    String?   @db.VarChar(40) /// natural, accident, suicide, homicide, undetermined
+  notifiedToCivilRegistryAt DateTime? @db.Timestamptz()
+  notes                     String?   @db.Text
+  createdAt                 DateTime  @default(now()) @db.Timestamptz()
+  updatedAt                 DateTime  @updatedAt @db.Timestamptz()
+
+  patient   Patient    @relation(fields: [patientId], references: [id])
+  encounter Encounter? @relation(fields: [encounterId], references: [id])
+
+  @@index([organizationId, occurredAt])
   @@schema("public")
 }
 
@@ -1141,9 +1222,10 @@ model Encounter {
   patientCategory PatientCategory? @relation(fields: [patientCategoryId], references: [id], onDelete: SetNull)
   currency        Currency         @relation("EncounterCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
 
-  bedAssignments BedAssignment[]
-  transfers      EncounterTransfer[]
-  triages        TriageEvaluation[]
+  bedAssignments     BedAssignment[]
+  transfers          EncounterTransfer[]
+  triages            TriageEvaluation[]
+  deathCertificates  DeathCertificate[]
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
