@@ -27,7 +27,7 @@ import {
   censusOccupancyStatsSchema,
   censusDailyMovementsSchema,
   censusKpisByServiceSchema,
-} from "../../../contracts/src/schemas/census";
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
 /** [00:00, 24:00) UTC del día que contiene `at` (o hoy si no se da). */

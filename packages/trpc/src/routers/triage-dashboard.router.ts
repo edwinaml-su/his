@@ -23,7 +23,7 @@ import {
   type TriageQueueItem,
   type TriageQueueResponse,
   type TriageTimerSeverity,
-} from "../../../contracts/src/schemas/triage-dashboard";
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
 /** elapsed / max → NORMAL (<70%) / WARNING (70-100%) / CRITICAL (>100%). */

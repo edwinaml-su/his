@@ -13,23 +13,11 @@
  * NO se registra en `schemas/index.ts` por restricción del Sprint 3.
  */
 import { z } from "zod";
+// Reusa la definición canónica del enum (encounter.ts) — el original duplicado
+// causaba conflicto de re-export en el barrel `schemas/index.ts`.
+import { dischargeTypeEnum } from "./encounter";
 
-/**
- * Tipos de alta soportados por el flujo. Refleja el `enum DischargeType`
- * de Prisma (`MEDICAL/VOLUNTARY/TRANSFER_OUT/ABSCONDED/DEATH/AGAINST_MEDICAL_ADVICE`).
- *
- * `DEATH` queda permitido en el contrato por compatibilidad con el enum,
- * pero el router lo bloquea y redirige al flujo de defunción que
- * mantiene otro equipo (Sprint 3 — equipo Quito).
- */
-export const dischargeTypeEnum = z.enum([
-  "MEDICAL",
-  "VOLUNTARY",
-  "TRANSFER_OUT",
-  "ABSCONDED",
-  "DEATH",
-  "AGAINST_MEDICAL_ADVICE",
-]);
+export { dischargeTypeEnum };
 
 /** Input para `encounter-discharge.dischargeEncounter`. */
 export const dischargeEncounterInput = z.object({

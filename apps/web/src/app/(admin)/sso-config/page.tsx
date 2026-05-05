@@ -50,7 +50,7 @@ import {
   ssoProtocolEnum,
   type SsoProvider,
   type SsoProviderConfig,
-} from "@his/contracts/schemas/sso";
+} from "@his/contracts";
 
 const STORAGE_KEY = "his.sso.providers.mvp";
 
