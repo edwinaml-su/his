@@ -1,7 +1,12 @@
 /**
  * E2E — flujo de autenticación.
  * US: AUTH-01 (login), AUTH-02 (login inválido), AUTH-03 (signup deshabilitado),
- *     AUTH-04 (logout).
+ *     AUTH-04 (sesión expira por inactividad).
+ *
+ * NOTA Sprint 3: el "logout via menu" no existe en MVP — la única salida
+ * autorizada es el diálogo de inactividad (15 min). Test 4 simula la
+ * expiración limpiando storage y verificando que protected routes
+ * redirigen a /login.
  */
 import { test, expect } from "@playwright/test";
 import { TEST_CREDENTIALS, login } from "./_helpers/auth";
@@ -25,20 +30,26 @@ test.describe("Autenticación", () => {
   });
 
   test("signup público está deshabilitado en producción del MVP", async ({ page }) => {
-    const resp = await page.goto("/signup");
-    // O bien la página retorna 404, o redirige a login con un mensaje informativo.
-    expect([404, 200]).toContain(resp?.status() ?? 0);
-    if (resp?.status() === 200) {
-      await expect(page.getByText(/registro deshabilitado|contacta al administrador/i)).toBeVisible();
-    }
+    // Ruta real: /auth/signup (Sprint 3 — antes era /signup).
+    const resp = await page.goto("/auth/signup");
+    expect(resp?.status() ?? 0).toBeLessThan(500);
+    await expect(page.getByText(/registro deshabilitado/i)).toBeVisible();
+    await expect(
+      page.getByText(/contacta al administrador|sólo por invitación/i),
+    ).toBeVisible();
   });
 
-  test("logout limpia la sesión", async ({ page }) => {
+  test("sesión expira: limpiar storage redirige áreas protegidas a /login", async ({
+    page,
+    context,
+  }) => {
     await login(page, "admin");
-    await page.getByRole("button", { name: /perfil|cuenta|menú/i }).click();
-    await page.getByRole("menuitem", { name: /cerrar sesión|logout/i }).click();
-    await page.waitForURL(/\/login/);
-    // Volver a entrar a un área protegida debe redirigir a /login.
+    // Simulamos expiración limpiando cookies y storage Supabase Auth.
+    await context.clearCookies();
+    await page.evaluate(() => {
+      window.localStorage.clear();
+      window.sessionStorage.clear();
+    });
     await page.goto("/patients");
     await page.waitForURL(/\/login/);
   });
