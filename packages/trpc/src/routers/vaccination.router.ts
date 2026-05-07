@@ -29,7 +29,7 @@ import {
   recordVaccinationInput,
   vaccinationByPatientInput,
   expectedDosesFor,
-} from "../../../contracts/src/schemas/vaccination";
+} from "@his/contracts/schemas/vaccination";
 import { router, tenantProcedure } from "../trpc";
 
 /**
@@ -56,7 +56,7 @@ const VACCINE_COMPONENTS: Record<string, ReadonlyArray<string>> = {
   COVID19: ["covid", "polietilenglicol", "peg"],
 };
 
-interface AllergyMatchHit {
+export interface AllergyMatchHit {
   allergyId: string;
   substance: string;
   severity: string;

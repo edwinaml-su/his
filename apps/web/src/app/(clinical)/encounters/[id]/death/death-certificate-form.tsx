@@ -181,7 +181,7 @@ export function DeathCertificateForm({
       setConfirmOpen(false);
       onCreated(cert.id);
     },
-    onError: (err) => {
+    onError: (err: { message: string }) => {
       setError(err.message);
       setConfirmOpen(false);
     },

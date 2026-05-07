@@ -28,7 +28,7 @@ import {
   dischargeEncounterInput,
   epicrisisInput,
   type EpicrisisDoc,
-} from "../../../contracts/src/schemas/discharge";
+} from "@his/contracts/schemas/discharge";
 import { router, tenantProcedure } from "../trpc";
 
 /**

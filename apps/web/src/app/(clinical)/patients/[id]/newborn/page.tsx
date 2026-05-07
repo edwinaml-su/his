@@ -237,7 +237,7 @@ function CreateNewbornForm({
     activeOnly: true,
   });
   const create = trpc.newborn.createNewborn.useMutation({
-    onSuccess: (r) => onCreated(r.newbornId),
+    onSuccess: (r: { newbornId: string }) => onCreated(r.newbornId),
   });
 
   const [form, setForm] = React.useState({
