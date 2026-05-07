@@ -130,14 +130,9 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
     await prisma.$disconnect();
   });
 
-  // Demota al rol "authenticated" dentro de la transacción para que las
-  // policies RLS apliquen. Sin esto el rol postgres.<ref> de Supabase tiene
-  // BYPASSRLS y los tests de aislamiento no probarían nada.
-  // En runtime real este demote ocurre via Supabase Auth/PostgREST; en tests
-  // con conexión Prisma directa hay que hacerlo explícito.
-  async function demote(tx: PrismaClient): Promise<void> {
-    await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
-  }
+  // El demote a rol `authenticated` ahora vive dentro de
+  // `applyTenantContext` y `clearTenantContext` (defensa en profundidad
+  // runtime). Estos tests heredan el comportamiento sin pasos extra.
 
   it("Test 1: User A con context Org A puede leer paciente A", async () => {
     if (!prisma) return;
@@ -146,7 +141,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
-      await demote(tx as unknown as PrismaClient);
       return tx.patient.findUnique({ where: { id: patientAId } });
     });
     expect(result).not.toBeNull();
@@ -161,7 +155,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
-      await demote(tx as unknown as PrismaClient);
       // Lookup directo por ID del paciente B → RLS lo oculta → null.
       const direct = await tx.patient.findUnique({ where: { id: patientBId } });
       // Listado por org B → RLS filtra a 0.
@@ -178,7 +171,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
     if (!prisma) return;
     const count = await prisma.$transaction(async (tx) => {
       await clearTenantContext(tx as unknown as PrismaClient);
-      await demote(tx as unknown as PrismaClient);
       const rows = await tx.patient.findMany({
         where: { id: { in: [patientAId, patientBId] } },
       });
@@ -195,7 +187,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         { userId: userAId, organizationId: orgAId },
         { breakGlass: true },
       );
-      await demote(tx as unknown as PrismaClient);
       return tx.patient.findMany({
         where: { id: { in: [patientAId, patientBId] } },
       });
@@ -226,7 +217,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
-      await demote(tx as unknown as PrismaClient);
       return tx.$queryRawUnsafe<Array<{ entityId: string }>>(
         `SELECT "entityId" FROM audit."AuditLog" WHERE "entityId" IN ($1, $2)`,
         tagA,
@@ -271,7 +261,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
-      await demote(tx as unknown as PrismaClient);
       return tx.user.findMany({
         where: { id: { in: [userAId, userBId] } },
         select: { id: true },
@@ -299,7 +288,6 @@ describe.skipIf(!RUN)("RLS isolation (US-1.7)", () => {
         userId: userAId,
         organizationId: orgAId,
       });
-      await demote(tx as unknown as PrismaClient);
       return tx.userCredential.findMany({
         where: { id: { in: [credAId, credBId] } },
         select: { id: true, userId: true },

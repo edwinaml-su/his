@@ -169,8 +169,8 @@ export async function resolveProviderByEmail(
   if (at < 0) return null;
   const domain = email.slice(at + 1).toLowerCase();
   const matches = await listSsoProvidersForLogin(domain);
-  if (matches.length === 0) return null;
   const m = matches[0];
+  if (!m) return null;
   return {
     id: m.id!,
     provider: m.provider,
@@ -186,10 +186,10 @@ export async function resolveProviderByEmail(
 export async function normalizeSsoClaims(
   claims: SsoClaims,
 ): Promise<{ email: string; fullName: string; externalId: string }> {
-  const fullName =
-    claims.name ??
-    [claims.givenName, claims.familyName].filter(Boolean).join(" ").trim() ||
-    claims.email.split("@")[0];
+  const composed =
+    [claims.givenName, claims.familyName].filter(Boolean).join(" ").trim();
+  const localPart = claims.email.split("@")[0] ?? claims.email;
+  const fullName = claims.name ?? (composed || localPart);
 
   return {
     email: claims.email.toLowerCase(),

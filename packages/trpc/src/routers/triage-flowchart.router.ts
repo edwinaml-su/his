@@ -30,7 +30,7 @@ import {
   type FlowchartDetail,
   type DiscriminatorOut,
   type TriageColorOut,
-} from "../../../contracts/src/schemas/triage-flowchart";
+} from "@his/contracts/schemas/triage-flowchart";
 import { router, tenantProcedure } from "../trpc";
 
 export const triageFlowchartRouter = router({

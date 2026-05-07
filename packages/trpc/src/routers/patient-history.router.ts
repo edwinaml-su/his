@@ -23,6 +23,7 @@
  * `personal.allergyRefs` es solo array de IDs — sin duplicación.
  */
 import { TRPCError } from "@trpc/server";
+import { Prisma } from "@his/database";
 import {
   patientHistoryGetInput,
   patientHistoryUpdateInput,
@@ -160,7 +161,7 @@ export const patientHistoryRouter = router({
           action: "UPDATE",
           entity: PATIENT_HISTORY_ENTITY,
           entityId: input.patientId,
-          beforeJson: prev?.afterJson ?? null,
+          beforeJson: (prev?.afterJson ?? Prisma.JsonNull) as Prisma.InputJsonValue,
           afterJson: {
             op: PATIENT_HISTORY_OP,
             history: input.history,

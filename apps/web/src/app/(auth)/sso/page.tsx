@@ -102,7 +102,7 @@ export default function SsoPage() {
     e.preventDefault();
     if (!email) return;
     const match = await resolveProviderByEmail(email);
-    if (!match) {
+    if (!match || !match.id) {
       setDialog({
         title: "Dominio no configurado",
         message:

@@ -34,6 +34,16 @@ import type { TenantContext } from "@his/contracts";
 export interface RlsContextOptions {
   /** Si es true, el GUC `app.is_break_glass` se setea a true. Audit trail aparte. */
   breakGlass?: boolean;
+  /**
+   * Si es false, NO ejecuta `SET LOCAL ROLE authenticated` después de
+   * setear el contexto. Default true: encadenar GUC + demote para que
+   * Prisma queries dentro de la transacción ya no bypaseen RLS (el rol
+   * `postgres.<ref>` de Supabase tiene BYPASSRLS por default).
+   *
+   * Useful escapar a false en flujos administrativos que necesitan tocar
+   * tablas con grants restrictivos al rol authenticated (ej. seeders).
+   */
+  demoteRole?: boolean;
 }
 
 /**
@@ -43,6 +53,10 @@ export interface RlsContextOptions {
  * Postgres rechaza `SET LOCAL` con valores no parseables; los UUID se validan
  * con un cast a `::uuid` en el SQL (lanza `invalid input syntax for type uuid`
  * si el caller pasó basura).
+ *
+ * Por default también demota el rol a `authenticated` (defensa en profundidad
+ * — sin esto, queries Prisma usan el rol bypass-RLS y el filtro tenant solo
+ * vive en código aplicación). Pasar `demoteRole: false` para excepciones.
  */
 export async function applyTenantContext(
   tx: Pick<PrismaClient, "$executeRawUnsafe">,
@@ -61,16 +75,30 @@ export async function applyTenantContext(
   await tx.$executeRawUnsafe(
     `SELECT public.set_tenant_context('${userId}'::uuid, '${orgId}'::uuid, ${bg});`,
   );
+
+  // Demote DESPUÉS de set_tenant_context — la función necesita EXECUTE que
+  // posiblemente solo el rol original tenga. Tras esto, todas las queries
+  // de la transacción se ejecutan como `authenticated` y RLS aplica.
+  if (options.demoteRole !== false) {
+    await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
+  }
 }
 
 /**
  * Borra el contexto tenant en la transacción actual.
  * Tras esto, las policies RLS verán `current_org_id() = NULL` → 0 filas.
+ *
+ * Por default también demota el rol a `authenticated` para que las policies
+ * apliquen efectivamente (el rol original puede tener BYPASSRLS).
  */
 export async function clearTenantContext(
   tx: Pick<PrismaClient, "$executeRawUnsafe">,
+  options: { demoteRole?: boolean } = {},
 ): Promise<void> {
   await tx.$executeRawUnsafe(`SELECT public.clear_tenant_context();`);
+  if (options.demoteRole !== false) {
+    await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
+  }
 }
 
 /**

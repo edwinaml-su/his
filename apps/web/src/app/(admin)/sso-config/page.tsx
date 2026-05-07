@@ -230,7 +230,7 @@ export default function SsoConfigPage() {
           <DialogHeader>
             <DialogTitle>Eliminar proveedor</DialogTitle>
             <DialogDescription>
-              ¿Eliminar la configuración de "{confirmDelete?.displayName}"? Esta
+              ¿Eliminar la configuración de &quot;{confirmDelete?.displayName}&quot;? Esta
               acción no se puede deshacer (en MVP).
             </DialogDescription>
           </DialogHeader>
