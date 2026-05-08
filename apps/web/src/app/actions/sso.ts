@@ -44,7 +44,7 @@ import {
   type SsoClaims,
   type SsoProvider,
   type SsoProviderConfig,
-} from "@his/contracts";
+} from "@his/contracts/schemas/sso";
 
 /**
  * Inicia el flujo SSO. MVP: siempre devuelve NOT_CONFIGURED.
@@ -186,11 +186,10 @@ export async function resolveProviderByEmail(
 export async function normalizeSsoClaims(
   claims: SsoClaims,
 ): Promise<{ email: string; fullName: string; externalId: string }> {
-  const fullName =
-    claims.name ??
-    ([claims.givenName, claims.familyName].filter(Boolean).join(" ").trim() ||
-      claims.email.split("@")[0] ||
-      claims.email);
+  const composed =
+    [claims.givenName, claims.familyName].filter(Boolean).join(" ").trim();
+  const localPart = claims.email.split("@")[0] ?? claims.email;
+  const fullName = claims.name ?? (composed || localPart);
 
   return {
     email: claims.email.toLowerCase(),

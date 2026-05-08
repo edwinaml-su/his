@@ -161,7 +161,7 @@ export const patientHistoryRouter = router({
           action: "UPDATE",
           entity: PATIENT_HISTORY_ENTITY,
           entityId: input.patientId,
-          beforeJson: (prev?.afterJson as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+          beforeJson: (prev?.afterJson ?? Prisma.JsonNull) as Prisma.InputJsonValue,
           afterJson: {
             op: PATIENT_HISTORY_OP,
             history: input.history,

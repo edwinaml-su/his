@@ -17,11 +17,10 @@ import { userAdminRouter } from "./user-admin.router";
 import { localeRouter } from "./locale.router";
 import { ledgerRouter } from "./ledger.router";
 import { auditIntegrityRouter } from "./audit-integrity.router";
-// Sprint 3 WIP routers (registrados post-merge para destrabar typecheck @his/web).
+import { censusRouter } from "./census.router";
 import { deathCertificateRouter } from "./death-certificate.router";
 import { encounterDischargeRouter } from "./encounter-discharge.router";
 import { encounterTransferRouter } from "./encounter-transfer.router";
-import { censusRouter } from "./census.router";
 import { newbornRouter } from "./newborn.router";
 import { patientHistoryRouter } from "./patient-history.router";
 import { triageDashboardRouter } from "./triage-dashboard.router";
@@ -47,11 +46,10 @@ export const appRouter = router({
   locale: localeRouter,
   ledger: ledgerRouter,
   auditIntegrity: auditIntegrityRouter,
-  // Sprint 3 WIP
+  census: censusRouter,
   deathCertificate: deathCertificateRouter,
   encounterDischarge: encounterDischargeRouter,
   encounterTransfer: encounterTransferRouter,
-  census: censusRouter,
   newborn: newbornRouter,
   patientHistory: patientHistoryRouter,
   triageDashboard: triageDashboardRouter,
