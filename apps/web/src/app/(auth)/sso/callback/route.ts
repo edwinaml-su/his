@@ -28,7 +28,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { ssoCallbackInputSchema } from "@his/contracts/schemas/sso";
+import { ssoCallbackInputSchema } from "@his/contracts";
 
 /**
  * Whitelist de paths a los que está permitido redirigir tras login.

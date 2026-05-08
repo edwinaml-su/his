@@ -29,7 +29,7 @@ import {
   recordVaccinationInput,
   vaccinationByPatientInput,
   expectedDosesFor,
-} from "@his/contracts/schemas/vaccination";
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
 /**

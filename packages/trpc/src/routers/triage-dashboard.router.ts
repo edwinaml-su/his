@@ -15,12 +15,15 @@
  *    mutación real la ejecuta `triage.recordVitals` (Kilo) — no la tocamos.
  */
 import { z } from "zod";
+// NOTE: @his/contracts re-exporta solo lo que está en `schemas/index.ts`.
+// Como Sierra tiene prohibido tocar ese barrel (lo cablea Orq), importamos por
+// path relativo al package — válido bajo la config TS workspace.
 import {
   triageDashboardFiltersSchema,
   type TriageQueueItem,
   type TriageQueueResponse,
   type TriageTimerSeverity,
-} from "@his/contracts/schemas/triage-dashboard";
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
 /** elapsed / max → NORMAL (<70%) / WARNING (70-100%) / CRITICAL (>100%). */

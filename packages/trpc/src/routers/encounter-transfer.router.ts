@@ -26,7 +26,7 @@ import {
   transferEncounterInput,
   listTransfersByEncounterInput,
   listRecentTransfersInput,
-} from "@his/contracts/schemas/transfer";
+} from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
 export const encounterTransferRouter = router({

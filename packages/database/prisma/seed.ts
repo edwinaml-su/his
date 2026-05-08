@@ -385,6 +385,16 @@ async function main() {
     { code: "audit.read", resource: "audit", action: "read" },
     { code: "user.manage", resource: "user", action: "manage" },
     { code: "org.manage", resource: "organization", action: "manage" },
+    // Sprint 4 — Pharmacy / LIS / EHR Notes (T14 permission scopes).
+    { code: "pharmacy.drug.manage", resource: "pharmacy", action: "drug.manage" },
+    { code: "pharmacy.prescribe", resource: "pharmacy", action: "prescribe" },
+    { code: "pharmacy.dispense", resource: "pharmacy", action: "dispense" },
+    { code: "lis.order.create", resource: "lis", action: "order.create" },
+    { code: "lis.specimen.collect", resource: "lis", action: "specimen.collect" },
+    { code: "lis.result.enter", resource: "lis", action: "result.enter" },
+    { code: "lis.result.validate", resource: "lis", action: "result.validate" },
+    { code: "ehr.note.author", resource: "ehr", action: "note.author" },
+    { code: "ehr.diagnosis.author", resource: "ehr", action: "diagnosis.author" },
   ];
   const permByCode = new Map<string, string>();
   for (const p of perms) {

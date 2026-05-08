@@ -42,7 +42,7 @@ import {
   listSsoProvidersForLogin,
   resolveProviderByEmail,
 } from "@/app/actions/sso";
-import type { SsoProvider } from "@his/contracts/schemas/sso";
+import type { SsoProvider } from "@his/contracts";
 
 interface ProviderRow {
   id: string;
@@ -111,6 +111,7 @@ export default function SsoPage() {
       });
       return;
     }
+    if (!match.id) return;
     await triggerLogin(match.id, match.provider);
   };
 
