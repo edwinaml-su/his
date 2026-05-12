@@ -5,6 +5,8 @@
     "silent": false,
     "autoJobCancelation": true
   },
+  "installCommand": "npm ci && npm run -w @his/database generate",
+  "buildCommand": "npm run build",
   "env": {
     "NEXT_TELEMETRY_DISABLED": "1"
   },

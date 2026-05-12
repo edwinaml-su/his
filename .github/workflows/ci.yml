@@ -69,7 +69,9 @@ jobs:
         run: npm run lint
 
       - name: Test (with coverage)
-        run: npm run test -- --coverage
+        # turbo necesita `--` para pass-through de flags Vitest. Sin esto,
+        # `--coverage` lo intercepta turbo y falla con "unexpected argument".
+        run: npx turbo run test -- --coverage
         env:
           CI: true
 
