@@ -1676,6 +1676,10 @@ model PrescriptionItem {
   durationDays   Int?
   prnAsNeeded    Boolean    @default(false)
   notes          String?    @db.Text
+  /// Cantidad total prescrita (unidades de dosis).
+  prescribedQty   Decimal    @default(0) @db.Decimal(12, 4)
+  /// Qty acumulada de administraciones con status=ADMINISTERED. Trigger la actualiza.
+  administeredQty Decimal    @default(0) @db.Decimal(12, 4)
 
   prescription    Prescription               @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
   drug            Drug                       @relation(fields: [drugId], references: [id], onDelete: Restrict)
@@ -2276,6 +2280,8 @@ model SurgeryCase {
 // =============================================================================
 
 enum MedAdminStatus {
+  SCHEDULED
+  ADMINISTERED
   GIVEN
   HELD
   REFUSED
@@ -2293,14 +2299,27 @@ model MedicationAdministration {
   prescriptionItemId      String         @db.Uuid
   administeredAt          DateTime       @default(now()) @db.Timestamptz()
   administeredById        String         @db.Uuid /// User (enfermero/a).
-  doubleCheckById         String?        @db.Uuid /// segundo verificador (alto riesgo).
-  status                  MedAdminStatus @default(GIVEN)
+  /// Doble-check requerido para alto riesgo (requiresControlledLog=true o RX_CONTROLLED).
+  secondVerifierId        String?        @db.Uuid
+  status                  MedAdminStatus @default(SCHEDULED)
   doseAmount              Decimal?       @db.Decimal(12, 4)
   doseUnit                String?        @db.VarChar(20)
   route                   AdminRoute?
-  site                    String?        @db.VarChar(80) /// "brazo izq", "abdomen", etc.
+  site                    String?        @db.VarChar(80)
+  /// BCMA — los tres scans deben ser true para STATUS=ADMINISTERED.
+  patientBarcodeScanned   Boolean        @default(false)
+  drugBarcodeScanned      Boolean        @default(false)
+  providerBadgeScanned    Boolean        @default(false)
+  scannedAt               DateTime?      @db.Timestamptz()
+  /// Campos legacy mantenidos por compatibilidad.
   barcodeScannedAt        DateTime?      @db.Timestamptz()
   patientWristbandScanned Boolean        @default(false)
+  doubleCheckById         String?        @db.Uuid
+  /// Timing-window enforcement.
+  scheduledTime           DateTime?      @db.Timestamptz()
+  timingWindowMinutes     Int            @default(30)
+  /// Override de timing o qty con audit.
+  overrideReason          String?        @db.VarChar(500)
   notes                   String?        @db.Text
   createdAt               DateTime       @default(now()) @db.Timestamptz()
   updatedAt               DateTime       @updatedAt @db.Timestamptz()
@@ -2308,14 +2327,15 @@ model MedicationAdministration {
   organization     Organization     @relation("OrgMedAdmins", fields: [organizationId], references: [id], onDelete: Restrict)
   prescriptionItem PrescriptionItem @relation("MedAdminItem", fields: [prescriptionItemId], references: [id], onDelete: Restrict)
   administeredBy   User             @relation("MedAdminAdministrator", fields: [administeredById], references: [id], onDelete: Restrict)
+  secondVerifier   User?            @relation("MedAdminSecondVerifier", fields: [secondVerifierId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, administeredAt])
   @@index([prescriptionItemId])
   @@index([administeredById])
   @@index([status])
+  @@index([scheduledTime])
   @@schema("public")
 }
-
 // =============================================================================
 // §18 RIS/PACS — Imaging Orders & Modalities (Wave 7 / Phase 2 entry)
 // =============================================================================
