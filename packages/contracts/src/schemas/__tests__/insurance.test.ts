@@ -1,6 +1,11 @@
 /**
- * Tests del schema §25 Insurance (Wave 8 / Phase 2 entry).
- * Valida forma del contrato Zod; pricing y enlaces con charges quedan en router.
+ * Tests del schema §25 Insurance (Wave 8 / Beta.14 hardening layer 1).
+ *
+ * Cambios b14:
+ *   - PENDING en authorizationStatusEnum.
+ *   - coveredProcedures en insurancePlanCreateInput.
+ *   - checkCoverageInput / getExpiringAuthorizationsInput.
+ *   - authorizationApproveInput: validUntil alias.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -17,6 +22,9 @@ import {
   authorizationRequestListInput,
   authorizationApproveInput,
   authorizationDenyInput,
+  coveredProcedureEntry,
+  checkCoverageInput,
+  getExpiringAuthorizationsInput,
 } from "../insurance";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -30,10 +38,12 @@ describe("insurerKindEnum / authorizationStatusEnum", () => {
   it("kind FOO inválido", () =>
     expect(insurerKindEnum.safeParse("FOO").success).toBe(false));
 
-  it.each(["REQUESTED", "APPROVED", "PARTIAL", "DENIED", "EXPIRED", "CANCELLED"])(
+  it.each(["PENDING", "REQUESTED", "APPROVED", "PARTIAL", "DENIED", "EXPIRED", "CANCELLED"])(
     "auth status %s válido",
     (s) => expect(authorizationStatusEnum.safeParse(s).success).toBe(true),
   );
+  it("b14: PENDING es estado válido", () =>
+    expect(authorizationStatusEnum.safeParse("PENDING").success).toBe(true));
   it("auth status XYZ inválido", () =>
     expect(authorizationStatusEnum.safeParse("XYZ").success).toBe(false));
 });
@@ -89,6 +99,28 @@ describe("insurerListInput", () => {
     expect(insurerListInput.safeParse({ limit: 999 }).success).toBe(false));
 });
 
+describe("coveredProcedureEntry (b14)", () => {
+  it("acepta entry mínimo con code", () =>
+    expect(coveredProcedureEntry.safeParse({ code: "MRI" }).success).toBe(true));
+
+  it("acepta entry con maxCoverage y description", () =>
+    expect(
+      coveredProcedureEntry.safeParse({
+        code: "CT-SCAN",
+        maxCoverage: 800,
+        description: "TAC sin contraste",
+      }).success,
+    ).toBe(true));
+
+  it("rechaza code vacío", () =>
+    expect(coveredProcedureEntry.safeParse({ code: "" }).success).toBe(false));
+
+  it("rechaza maxCoverage negativo", () =>
+    expect(
+      coveredProcedureEntry.safeParse({ code: "X", maxCoverage: -1 }).success,
+    ).toBe(false));
+});
+
 describe("insurancePlanCreateInput / listInput", () => {
   it("acepta plan válido", () =>
     expect(
@@ -99,6 +131,29 @@ describe("insurancePlanCreateInput / listInput", () => {
         copayPct: 20,
       }).success,
     ).toBe(true));
+
+  it("b14: acepta plan con coveredProcedures", () =>
+    expect(
+      insurancePlanCreateInput.safeParse({
+        insurerId: u,
+        code: "PLAN-B",
+        name: "Plan B",
+        coveredProcedures: [
+          { code: "MRI", maxCoverage: 1500 },
+          { code: "LAB-CBC" },
+        ],
+      }).success,
+    ).toBe(true));
+
+  it("b14: rechaza procedimiento con code vacío en coveredProcedures", () =>
+    expect(
+      insurancePlanCreateInput.safeParse({
+        insurerId: u,
+        code: "PLAN-C",
+        name: "Plan C",
+        coveredProcedures: [{ code: "" }],
+      }).success,
+    ).toBe(false));
 
   it("rechaza copay > 100", () =>
     expect(
@@ -206,10 +261,32 @@ describe("authorizationRequest", () => {
         id: u,
         externalRef: "AUTH-9876",
         approvedAmount: 500,
+        validUntil: to,
       }).success,
     ).toBe(true));
 
-  it("approve rechaza validTo <= validFrom si ambos presentes", () =>
+  it("b14: approve acepta validUntil como alias de validTo", () => {
+    const r = authorizationApproveInput.safeParse({
+      id: u,
+      externalRef: "X",
+      validFrom: from,
+      validUntil: to,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.validUntil).toEqual(to);
+  });
+
+  it("approve rechaza validUntil <= validFrom", () =>
+    expect(
+      authorizationApproveInput.safeParse({
+        id: u,
+        externalRef: "X",
+        validFrom: to,
+        validUntil: from,
+      }).success,
+    ).toBe(false));
+
+  it("approve rechaza validTo <= validFrom (backward compat field)", () =>
     expect(
       authorizationApproveInput.safeParse({
         id: u,
@@ -236,4 +313,43 @@ describe("authorizationRequest", () => {
         denialReason: "Servicio no cubierto por póliza.",
       }).success,
     ).toBe(true));
+});
+
+describe("b14: checkCoverageInput", () => {
+  it("acepta planId uuid + procedureCode", () =>
+    expect(
+      checkCoverageInput.safeParse({ planId: u, procedureCode: "MRI" }).success,
+    ).toBe(true));
+
+  it("rechaza planId no-uuid", () =>
+    expect(
+      checkCoverageInput.safeParse({ planId: "bad", procedureCode: "MRI" }).success,
+    ).toBe(false));
+
+  it("rechaza procedureCode vacío", () =>
+    expect(
+      checkCoverageInput.safeParse({ planId: u, procedureCode: "" }).success,
+    ).toBe(false));
+});
+
+describe("b14: getExpiringAuthorizationsInput", () => {
+  it("daysAhead default 7", () => {
+    const r = getExpiringAuthorizationsInput.safeParse({});
+    if (r.success) expect(r.data.daysAhead).toBe(7);
+  });
+
+  it("acepta daysAhead=30", () =>
+    expect(
+      getExpiringAuthorizationsInput.safeParse({ daysAhead: 30 }).success,
+    ).toBe(true));
+
+  it("rechaza daysAhead > 90", () =>
+    expect(
+      getExpiringAuthorizationsInput.safeParse({ daysAhead: 91 }).success,
+    ).toBe(false));
+
+  it("rechaza daysAhead < 1", () =>
+    expect(
+      getExpiringAuthorizationsInput.safeParse({ daysAhead: 0 }).success,
+    ).toBe(false));
 });
