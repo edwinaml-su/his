@@ -295,21 +295,26 @@ model Organization {
   updatedAt          DateTime @updatedAt @db.Timestamptz()
   updatedBy          String?  @db.Uuid
 
-  country                Country                 @relation(fields: [countryId], references: [id], onDelete: Restrict)
-  parent                 Organization?           @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
-  children               Organization[]          @relation("OrgTree")
-  functionalCurr         Currency                @relation("OrgFunctional", fields: [functionalCurrency], references: [id], onDelete: Restrict)
-  reportingCurr          Currency?               @relation("OrgReporting", fields: [reportingCurrency], references: [id], onDelete: Restrict)
-  establishments         Establishment[]
-  ledgers                Ledger[]
-  userRoles              UserOrganizationRole[]
-  patients               Patient[]
-  encounters             Encounter[]
-  triages                TriageEvaluation[]
-  beds                   Bed[]
-  services               ServiceUnit[]
-  vaccinations           PatientVaccination[]
-  outpatientAppointments OutpatientAppointment[] @relation("OrgAppointments")
+  country                   Country                    @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  parent                    Organization?              @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children                  Organization[]             @relation("OrgTree")
+  functionalCurr            Currency                   @relation("OrgFunctional", fields: [functionalCurrency], references: [id], onDelete: Restrict)
+  reportingCurr             Currency?                  @relation("OrgReporting", fields: [reportingCurrency], references: [id], onDelete: Restrict)
+  establishments            Establishment[]
+  ledgers                   Ledger[]
+  userRoles                 UserOrganizationRole[]
+  patients                  Patient[]
+  encounters                Encounter[]
+  triages                   TriageEvaluation[]
+  beds                      Bed[]
+  services                  ServiceUnit[]
+  vaccinations              PatientVaccination[]
+  outpatientAppointments    OutpatientAppointment[]    @relation("OrgAppointments")
+  inpatientAdmissions       InpatientAdmission[]       @relation("OrgInpatientAdmissions")
+  emergencyVisits           EmergencyVisit[]           @relation("OrgEmergencyVisits")
+  surgeryCases              SurgeryCase[]              @relation("OrgSurgeryCases")
+  medicationAdministrations MedicationAdministration[] @relation("OrgMedAdmins")
+  imagingOrders             ImagingOrder[]             @relation("OrgImagingOrders")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -337,6 +342,12 @@ model Establishment {
   encounters             Encounter[]
   triages                TriageEvaluation[]
   outpatientAppointments OutpatientAppointment[] @relation("EstAppointments")
+  inpatientAdmissions    InpatientAdmission[]    @relation("EstInpatientAdmissions")
+  emergencyVisits        EmergencyVisit[]        @relation("EstEmergencyVisits")
+  surgeryCases           SurgeryCase[]           @relation("EstSurgeryCases")
+  imagingOrders          ImagingOrder[]          @relation("EstImagingOrders")
+  operatingRooms         OperatingRoom[]
+  imagingModalities      ImagingModality[]
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -382,12 +393,18 @@ model User {
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
   updatedBy      String?   @db.Uuid
 
-  credentials            UserCredential[]
-  externalIdentities     UserExternalIdentity[]
-  roles                  UserOrganizationRole[]
-  sessions               Session[]
-  patientConsentsGranted PatientConsent[]        @relation("ConsentAuthor")
-  outpatientAppointments OutpatientAppointment[] @relation("ProviderAppointments")
+  credentials               UserCredential[]
+  externalIdentities        UserExternalIdentity[]
+  roles                     UserOrganizationRole[]
+  sessions                  Session[]
+  patientConsentsGranted    PatientConsent[]           @relation("ConsentAuthor")
+  outpatientAppointments    OutpatientAppointment[]    @relation("ProviderAppointments")
+  attendingInpatient        InpatientAdmission[]       @relation("InpatientAttending")
+  treatingEmergency         EmergencyVisit[]           @relation("EmergencyTreating")
+  primarySurgeon            SurgeryCase[]              @relation("SurgeryPrimarySurgeon")
+  medicationAdministrations MedicationAdministration[] @relation("MedAdminAdministrator")
+  imagingOrdered            ImagingOrder[]             @relation("ImagingOrderingProvider")
+  imagingReported           ImagingReport[]            @relation("ImagingRadiologist")
 
   @@schema("public")
 }
@@ -896,6 +913,10 @@ model Patient {
   vaccinations           PatientVaccination[]
   deathCertificate       DeathCertificate?
   outpatientAppointments OutpatientAppointment[]   @relation("PatAppointments")
+  inpatientAdmissions    InpatientAdmission[]      @relation("PatInpatientAdmissions")
+  emergencyVisits        EmergencyVisit[]          @relation("PatEmergencyVisits")
+  surgeryCases           SurgeryCase[]             @relation("PatSurgeryCases")
+  imagingOrders          ImagingOrder[]            @relation("PatImagingOrders")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1232,6 +1253,10 @@ model Encounter {
   deathCertificates      DeathCertificate[]
   outpatientConsultation OutpatientConsultation? @relation("EncOutpatientConsult")
   diagnoses              EncounterDiagnosis[]    @relation("EncDiagnoses")
+  inpatientAdmission     InpatientAdmission?     @relation("EncInpatientAdmission")
+  emergencyVisit         EmergencyVisit?         @relation("EncEmergencyVisit")
+  surgeryCases           SurgeryCase[]           @relation("EncSurgeryCases")
+  imagingOrders          ImagingOrder[]          @relation("EncImagingOrders")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -1626,9 +1651,10 @@ model PrescriptionItem {
   prnAsNeeded    Boolean    @default(false)
   notes          String?    @db.Text
 
-  prescription Prescription         @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
-  drug         Drug                 @relation(fields: [drugId], references: [id], onDelete: Restrict)
-  dispenses    MedicationDispense[]
+  prescription    Prescription               @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  drug            Drug                       @relation(fields: [drugId], references: [id], onDelete: Restrict)
+  dispenses       MedicationDispense[]
+  administrations MedicationAdministration[] @relation("MedAdminItem")
 
   @@index([prescriptionId])
   @@schema("public")
@@ -1925,5 +1951,464 @@ model EncounterDiagnosis {
 
   @@index([encounterId])
   @@index([conceptId])
+  @@schema("public")
+}
+
+// =============================================================================
+// §11 Inpatient — Hospitalización (Wave 7 / Phase 2 entry)
+// =============================================================================
+
+enum InpatientStatus {
+  ACTIVE
+  ON_LEAVE
+  DISCHARGED
+  TRANSFERRED_OUT
+
+  @@schema("public")
+}
+
+enum CarePlanStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// TDR §11.1 — admisión hospitalaria (encuentro INPATIENT). 1:1 con Encounter.
+model InpatientAdmission {
+  id              String          @id @default(uuid()) @db.Uuid
+  organizationId  String          @db.Uuid
+  establishmentId String          @db.Uuid
+  encounterId     String          @unique @db.Uuid /// Encounter INPATIENT.
+  patientId       String          @db.Uuid
+  attendingId     String          @db.Uuid /// User (médico tratante).
+  admittedAt      DateTime        @default(now()) @db.Timestamptz()
+  expectedLos     Int? /// estancia esperada en días.
+  reason          String          @db.VarChar(400)
+  status          InpatientStatus @default(ACTIVE)
+  dischargedAt    DateTime?       @db.Timestamptz()
+  notes           String?         @db.Text
+  createdAt       DateTime        @default(now()) @db.Timestamptz()
+  createdBy       String?         @db.Uuid
+  updatedAt       DateTime        @updatedAt @db.Timestamptz()
+  updatedBy       String?         @db.Uuid
+  deletedAt       DateTime?       @db.Timestamptz()
+
+  organization  Organization  @relation("OrgInpatientAdmissions", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment @relation("EstInpatientAdmissions", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter     Encounter     @relation("EncInpatientAdmission", fields: [encounterId], references: [id], onDelete: Cascade)
+  patient       Patient       @relation("PatInpatientAdmissions", fields: [patientId], references: [id], onDelete: Restrict)
+  attending     User          @relation("InpatientAttending", fields: [attendingId], references: [id], onDelete: Restrict)
+
+  vitalsLog InpatientVitals[]
+  kardexLog InpatientKardex[]
+  carePlans InpatientCarePlan[]
+
+  @@index([organizationId, admittedAt])
+  @@index([patientId])
+  @@index([attendingId])
+  @@index([status])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §11.2 — signos vitales registrados por enfermería durante la hospitalización.
+model InpatientVitals {
+  id              String   @id @default(uuid()) @db.Uuid
+  admissionId     String   @db.Uuid
+  recordedAt      DateTime @default(now()) @db.Timestamptz()
+  recordedById    String   @db.Uuid /// User (enfermero/a).
+  temperatureC    Decimal? @db.Decimal(4, 1)
+  heartRate       Int?
+  respiratoryRate Int?
+  systolicBp      Int?
+  diastolicBp     Int?
+  spo2            Int?
+  painScale       Int? /// 0-10 escala visual.
+  notes           String?  @db.Text
+
+  admission InpatientAdmission @relation(fields: [admissionId], references: [id], onDelete: Cascade)
+
+  @@index([admissionId, recordedAt])
+  @@index([recordedById])
+  @@schema("public")
+}
+
+/// TDR §11.3 — kardex de enfermería: indicaciones y eventos por turno.
+model InpatientKardex {
+  id           String   @id @default(uuid()) @db.Uuid
+  admissionId  String   @db.Uuid
+  recordedAt   DateTime @default(now()) @db.Timestamptz()
+  recordedById String   @db.Uuid
+  category     String   @db.VarChar(40) /// "DIET", "ACTIVITY", "OBSERVATION", "PROCEDURE"
+  entry        String   @db.Text
+  shift        String?  @db.VarChar(20) /// "MORNING", "AFTERNOON", "NIGHT".
+
+  admission InpatientAdmission @relation(fields: [admissionId], references: [id], onDelete: Cascade)
+
+  @@index([admissionId, recordedAt])
+  @@index([recordedById])
+  @@schema("public")
+}
+
+/// TDR §11.4 — plan de cuidados de enfermería (NANDA / NIC / NOC simplificado).
+model InpatientCarePlan {
+  id            String         @id @default(uuid()) @db.Uuid
+  admissionId   String         @db.Uuid
+  title         String         @db.VarChar(200)
+  goal          String?        @db.Text
+  interventions String?        @db.Text
+  status        CarePlanStatus @default(DRAFT)
+  startedAt     DateTime       @default(now()) @db.Timestamptz()
+  completedAt   DateTime?      @db.Timestamptz()
+  createdById   String         @db.Uuid
+  createdAt     DateTime       @default(now()) @db.Timestamptz()
+  updatedAt     DateTime       @updatedAt @db.Timestamptz()
+
+  admission InpatientAdmission @relation(fields: [admissionId], references: [id], onDelete: Cascade)
+
+  @@index([admissionId])
+  @@index([createdById])
+  @@index([status])
+  @@schema("public")
+}
+
+// =============================================================================
+// §12 Emergency — Urgencias (Wave 7 / Phase 2 entry)
+// =============================================================================
+
+enum EmergencyDisposition {
+  PENDING
+  DISCHARGED
+  ADMITTED
+  TRANSFERRED
+  LWBS /// Left Without Being Seen.
+  AMA /// Against Medical Advice.
+  DECEASED
+
+  @@schema("public")
+}
+
+enum EmergencyArrivalMode {
+  WALK_IN
+  AMBULANCE
+  POLICE
+  REFERRAL
+  PRIVATE_VEHICLE
+  OTHER
+
+  @@schema("public")
+}
+
+/// TDR §12.1 — visita de urgencias. Vinculado a Encounter EMERGENCY 1:1.
+model EmergencyVisit {
+  id                   String               @id @default(uuid()) @db.Uuid
+  organizationId       String               @db.Uuid
+  establishmentId      String               @db.Uuid
+  encounterId          String               @unique @db.Uuid
+  patientId            String               @db.Uuid
+  treatingId           String?              @db.Uuid /// User (médico de urgencias).
+  arrivedAt            DateTime             @default(now()) @db.Timestamptz()
+  arrivalMode          EmergencyArrivalMode @default(WALK_IN)
+  chiefComplaint       String               @db.VarChar(400)
+  disposition          EmergencyDisposition @default(PENDING)
+  dispositionAt        DateTime?            @db.Timestamptz()
+  observationStartedAt DateTime?            @db.Timestamptz()
+  observationEndedAt   DateTime?            @db.Timestamptz()
+  notes                String?              @db.Text
+  createdAt            DateTime             @default(now()) @db.Timestamptz()
+  createdBy            String?              @db.Uuid
+  updatedAt            DateTime             @updatedAt @db.Timestamptz()
+  updatedBy            String?              @db.Uuid
+  deletedAt            DateTime?            @db.Timestamptz()
+
+  organization  Organization  @relation("OrgEmergencyVisits", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment @relation("EstEmergencyVisits", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter     Encounter     @relation("EncEmergencyVisit", fields: [encounterId], references: [id], onDelete: Cascade)
+  patient       Patient       @relation("PatEmergencyVisits", fields: [patientId], references: [id], onDelete: Restrict)
+  treating      User?         @relation("EmergencyTreating", fields: [treatingId], references: [id], onDelete: SetNull)
+
+  notesLog EmergencyNote[]
+
+  @@index([organizationId, arrivedAt])
+  @@index([patientId])
+  @@index([treatingId])
+  @@index([disposition])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §12.2 — notas de evolución durante la visita de urgencias.
+model EmergencyNote {
+  id           String   @id @default(uuid()) @db.Uuid
+  visitId      String   @db.Uuid
+  recordedAt   DateTime @default(now()) @db.Timestamptz()
+  recordedById String   @db.Uuid
+  category     String   @db.VarChar(40) /// "OBSERVATION", "TREATMENT", "REASSESSMENT".
+  body         String   @db.Text
+
+  visit EmergencyVisit @relation(fields: [visitId], references: [id], onDelete: Cascade)
+
+  @@index([visitId, recordedAt])
+  @@index([recordedById])
+  @@schema("public")
+}
+
+// =============================================================================
+// §13 Surgery — Quirófano (Wave 7 / Phase 2 entry)
+// =============================================================================
+
+enum SurgeryCaseStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  POSTPONED
+
+  @@schema("public")
+}
+
+enum AsaClass {
+  ASA_I
+  ASA_II
+  ASA_III
+  ASA_IV
+  ASA_V
+  ASA_VI
+
+  @@schema("public")
+}
+
+/// TDR §13.1 — quirófano físico (Operating Room).
+model OperatingRoom {
+  id              String   @id @default(uuid()) @db.Uuid
+  establishmentId String   @db.Uuid
+  code            String   @db.VarChar(40)
+  name            String   @db.VarChar(120)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @db.Timestamptz()
+
+  establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  cases         SurgeryCase[]
+
+  @@unique([establishmentId, code])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §13.2 — caso quirúrgico programado/intervenido.
+model SurgeryCase {
+  id                   String            @id @default(uuid()) @db.Uuid
+  organizationId       String            @db.Uuid
+  establishmentId      String            @db.Uuid
+  encounterId          String            @db.Uuid
+  patientId            String            @db.Uuid
+  operatingRoomId      String?           @db.Uuid
+  primarySurgeonId     String            @db.Uuid /// User.
+  scheduledStart       DateTime          @db.Timestamptz()
+  scheduledEnd         DateTime          @db.Timestamptz()
+  actualStart          DateTime?         @db.Timestamptz()
+  actualEnd            DateTime?         @db.Timestamptz()
+  procedureDescription String            @db.VarChar(400)
+  procedureCode        String?           @db.VarChar(40) /// CIE-9-CM / CPT.
+  asaClass             AsaClass?
+  timeOutAt            DateTime?         @db.Timestamptz()
+  timeOutById          String?           @db.Uuid
+  status               SurgeryCaseStatus @default(SCHEDULED)
+  preopNotes           String?           @db.Text
+  intraopNotes         String?           @db.Text
+  postopNotes          String?           @db.Text
+  cancelReason         String?           @db.VarChar(400)
+  createdAt            DateTime          @default(now()) @db.Timestamptz()
+  createdBy            String?           @db.Uuid
+  updatedAt            DateTime          @updatedAt @db.Timestamptz()
+  updatedBy            String?           @db.Uuid
+  deletedAt            DateTime?         @db.Timestamptz()
+
+  organization   Organization   @relation("OrgSurgeryCases", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment  Establishment  @relation("EstSurgeryCases", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter      Encounter      @relation("EncSurgeryCases", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient        Patient        @relation("PatSurgeryCases", fields: [patientId], references: [id], onDelete: Restrict)
+  operatingRoom  OperatingRoom? @relation(fields: [operatingRoomId], references: [id], onDelete: SetNull)
+  primarySurgeon User           @relation("SurgeryPrimarySurgeon", fields: [primarySurgeonId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, scheduledStart])
+  @@index([patientId])
+  @@index([primarySurgeonId])
+  @@index([operatingRoomId])
+  @@index([status])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+// =============================================================================
+// §16 eMAR — Electronic Medication Administration Record (Wave 7 / Phase 2 entry)
+// =============================================================================
+
+enum MedAdminStatus {
+  GIVEN
+  HELD
+  REFUSED
+  MISSED
+  DOCUMENTED_LATE
+
+  @@schema("public")
+}
+
+/// TDR §16.1 — administración de medicamento (BCMA: barcode + doble check).
+/// Consume PrescriptionItem firmados; el doble-check es metadato declarativo.
+model MedicationAdministration {
+  id                      String         @id @default(uuid()) @db.Uuid
+  organizationId          String         @db.Uuid
+  prescriptionItemId      String         @db.Uuid
+  administeredAt          DateTime       @default(now()) @db.Timestamptz()
+  administeredById        String         @db.Uuid /// User (enfermero/a).
+  doubleCheckById         String?        @db.Uuid /// segundo verificador (alto riesgo).
+  status                  MedAdminStatus @default(GIVEN)
+  doseAmount              Decimal?       @db.Decimal(12, 4)
+  doseUnit                String?        @db.VarChar(20)
+  route                   AdminRoute?
+  site                    String?        @db.VarChar(80) /// "brazo izq", "abdomen", etc.
+  barcodeScannedAt        DateTime?      @db.Timestamptz()
+  patientWristbandScanned Boolean        @default(false)
+  notes                   String?        @db.Text
+  createdAt               DateTime       @default(now()) @db.Timestamptz()
+  updatedAt               DateTime       @updatedAt @db.Timestamptz()
+
+  organization     Organization     @relation("OrgMedAdmins", fields: [organizationId], references: [id], onDelete: Restrict)
+  prescriptionItem PrescriptionItem @relation("MedAdminItem", fields: [prescriptionItemId], references: [id], onDelete: Restrict)
+  administeredBy   User             @relation("MedAdminAdministrator", fields: [administeredById], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, administeredAt])
+  @@index([prescriptionItemId])
+  @@index([administeredById])
+  @@index([status])
+  @@schema("public")
+}
+
+// =============================================================================
+// §18 RIS/PACS — Imaging Orders & Modalities (Wave 7 / Phase 2 entry)
+// =============================================================================
+
+enum ImagingModalityType {
+  CR /// Computed Radiography
+  CT /// Computed Tomography
+  MR /// Magnetic Resonance
+  US /// Ultrasound
+  XA /// X-ray Angiography
+  MG /// Mammography
+  NM /// Nuclear Medicine
+  PT /// PET
+  OTHER
+
+  @@schema("public")
+}
+
+enum ImagingOrderStatus {
+  ORDERED
+  SCHEDULED
+  IN_PROGRESS
+  ACQUIRED
+  REPORTED
+  CANCELLED
+
+  @@schema("public")
+}
+
+enum ImagingPriority {
+  ROUTINE
+  URGENT
+  STAT
+
+  @@schema("public")
+}
+
+/// TDR §18.1 — modalidad/equipo de imagen físico (RIS/DICOM).
+model ImagingModality {
+  id              String              @id @default(uuid()) @db.Uuid
+  establishmentId String              @db.Uuid
+  code            String              @db.VarChar(40)
+  name            String              @db.VarChar(120)
+  modalityType    ImagingModalityType
+  aeTitle         String?             @db.VarChar(40) /// DICOM AE Title.
+  active          Boolean             @default(true)
+  createdAt       DateTime            @default(now()) @db.Timestamptz()
+  updatedAt       DateTime            @updatedAt @db.Timestamptz()
+
+  establishment Establishment  @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  orders        ImagingOrder[]
+
+  @@unique([establishmentId, code])
+  @@index([establishmentId])
+  @@index([modalityType])
+  @@schema("public")
+}
+
+/// TDR §18.2 — orden de estudio de imagen.
+model ImagingOrder {
+  id                 String              @id @default(uuid()) @db.Uuid
+  organizationId     String              @db.Uuid
+  establishmentId    String              @db.Uuid
+  encounterId        String              @db.Uuid
+  patientId          String              @db.Uuid
+  modalityId         String?             @db.Uuid
+  orderingProviderId String              @db.Uuid /// User.
+  modalityType       ImagingModalityType
+  studyDescription   String              @db.VarChar(400)
+  bodySite           String?             @db.VarChar(120)
+  clinicalIndication String              @db.Text
+  priority           ImagingPriority     @default(ROUTINE)
+  status             ImagingOrderStatus  @default(ORDERED)
+  scheduledAt        DateTime?           @db.Timestamptz()
+  acquiredAt         DateTime?           @db.Timestamptz()
+  accessionNumber    String?             @db.VarChar(80) /// DICOM accession.
+  notes              String?             @db.Text
+  createdAt          DateTime            @default(now()) @db.Timestamptz()
+  createdBy          String?             @db.Uuid
+  updatedAt          DateTime            @updatedAt @db.Timestamptz()
+  updatedBy          String?             @db.Uuid
+  deletedAt          DateTime?           @db.Timestamptz()
+
+  organization     Organization     @relation("OrgImagingOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment    Establishment    @relation("EstImagingOrders", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter        Encounter        @relation("EncImagingOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient          Patient          @relation("PatImagingOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  modality         ImagingModality? @relation(fields: [modalityId], references: [id], onDelete: SetNull)
+  orderingProvider User             @relation("ImagingOrderingProvider", fields: [orderingProviderId], references: [id], onDelete: Restrict)
+
+  report ImagingReport?
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@index([orderingProviderId])
+  @@index([modalityId])
+  @@index([modalityType])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §18.3 — reporte radiológico de una orden de imagen.
+model ImagingReport {
+  id             String    @id @default(uuid()) @db.Uuid
+  orderId        String    @unique @db.Uuid
+  radiologistId  String    @db.Uuid /// User.
+  findings       String    @db.Text
+  impression     String    @db.Text
+  recommendation String?   @db.Text
+  reportedAt     DateTime  @default(now()) @db.Timestamptz()
+  signedAt       DateTime? @db.Timestamptz()
+  amendedAt      DateTime? @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+
+  order       ImagingOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  radiologist User         @relation("ImagingRadiologist", fields: [radiologistId], references: [id], onDelete: Restrict)
+
+  @@index([radiologistId])
   @@schema("public")
 }

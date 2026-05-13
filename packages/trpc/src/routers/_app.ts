@@ -30,6 +30,11 @@ import { outpatientRouter } from "./outpatient.router";
 import { pharmacyRouter } from "./pharmacy.router";
 import { lisRouter } from "./lis.router";
 import { ehrNotesRouter } from "./ehr-notes.router";
+import { inpatientRouter } from "./inpatient.router";
+import { emergencyRouter } from "./emergency.router";
+import { surgeryRouter } from "./surgery.router";
+import { medicationAdminRouter } from "./medication-admin.router";
+import { imagingRouter } from "./imaging.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -63,6 +68,11 @@ export const appRouter = router({
   pharmacy: pharmacyRouter,
   lis: lisRouter,
   ehrNotes: ehrNotesRouter,
+  inpatient: inpatientRouter,
+  emergency: emergencyRouter,
+  surgery: surgeryRouter,
+  medicationAdmin: medicationAdminRouter,
+  imaging: imagingRouter,
 });
 
 export type AppRouter = typeof appRouter;
