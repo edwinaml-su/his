@@ -2543,7 +2543,8 @@ enum InsurerKind {
 }
 
 enum AuthorizationStatus {
-  REQUESTED
+  PENDING    /// b14: canonical start state for new records.
+  REQUESTED  /// legacy treated as PENDING in state machine; kept for backward compat.
   APPROVED
   PARTIAL
   DENIED
