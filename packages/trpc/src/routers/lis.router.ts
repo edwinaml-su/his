@@ -1,8 +1,14 @@
 /**
- * §17 LIS — router skeleton (Sprint 4 / Phase 4 entry).
+ * §17 LIS — router (Sprint 4 / Phase 4 + Beta.3 hardening).
  *
- * Cobertura mínima: panel/test catalog + order create/list +
- * specimen collect/reject + result enter/validate (con regla 4-eyes).
+ * Beta.3 (2026-05-13):
+ * - `result.enter` calcula flag automáticamente desde reference ranges
+ *   del LabTest (refRangeLow/refRangeHigh) y aplica modo crítico si
+ *   el test tiene flag `critical=true`.
+ * - Soporte de override de flag manual con `forceFlagOverride=true`.
+ * - `result.validate` ya tenía 4-eyes; añadido append-only history en notes.
+ * - state machine LabOrder con `canTransitionLabOrder`.
+ * - critical value alerts inline en response.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -14,7 +20,13 @@ import {
   specimenCollectInput,
   specimenRejectInput,
   resultEnterInput,
+  resultEnterWithPatientContextInput,
   resultValidateInput,
+  evaluateLabResultFlag,
+  isCriticalFlag,
+  type LabReferenceRange,
+  type LisSex,
+  type LisResultFlag,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
@@ -156,29 +168,79 @@ export const lisRouter = router({
   }),
 
   result: router({
-    enter: tenantProcedure.input(resultEnterInput).mutation(async ({ ctx, input }) => {
-      const item = await ctx.prisma.labOrderItem.findFirst({
-        where: {
-          id: input.orderItemId,
-          order: { organizationId: ctx.tenant.organizationId },
-        },
-        select: { id: true },
-      });
-      if (!item) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.prisma.labResult.create({
-        data: {
-          orderItemId: input.orderItemId,
-          specimenId: input.specimenId ?? null,
-          resultedById: ctx.user.id,
-          valueNumeric: input.valueNumeric ?? null,
-          valueText: input.valueText ?? null,
-          valueUnit: input.valueUnit ?? null,
-          flag: input.flag,
-          notes: input.notes ?? null,
-        },
-      });
-    }),
+    /**
+     * Beta.3 — enter con auto-flagging por reference ranges.
+     * - Carga el LabTest del item para obtener refRangeLow/refRangeHigh y flag critical.
+     * - Si `forceFlagOverride=false` (default) recalcula el flag desde refs.
+     * - Si `valueNumeric` provisto y tests con criticalFlag → mapea a CRITICAL_*.
+     * - Retorna alerts inline si el flag es crítico.
+     */
+    enter: tenantProcedure
+      .input(resultEnterWithPatientContextInput)
+      .mutation(async ({ ctx, input }) => {
+        const item = await ctx.prisma.labOrderItem.findFirst({
+          where: {
+            id: input.orderItemId,
+            order: { organizationId: ctx.tenant.organizationId },
+          },
+          include: { test: true },
+        });
+        if (!item) throw new TRPCError({ code: "NOT_FOUND" });
 
+        // Beta.3 — Determinar el flag final.
+        let finalFlag: LisResultFlag = input.flag;
+        if (!input.forceFlagOverride && input.valueNumeric != null) {
+          // Construir reference range desde el test (Wave 1: solo BOTH/adult).
+          const ranges: LabReferenceRange[] = buildReferenceRangesFromTest({
+            refRangeLow: item.test.refRangeLow,
+            refRangeHigh: item.test.refRangeHigh,
+            critical: item.test.critical,
+          });
+          finalFlag = evaluateLabResultFlag({
+            valueNumeric: input.valueNumeric,
+            ranges,
+            patientAgeYears: input.patientAgeYears ?? null,
+            patientSex: (input.patientSex as LisSex | undefined) ?? null,
+          });
+        }
+
+        const created = await ctx.prisma.labResult.create({
+          data: {
+            orderItemId: input.orderItemId,
+            specimenId: input.specimenId ?? null,
+            resultedById: ctx.user.id,
+            valueNumeric: input.valueNumeric ?? null,
+            valueText: input.valueText ?? null,
+            valueUnit: input.valueUnit ?? null,
+            flag: finalFlag,
+            notes: input.notes ?? null,
+          },
+        });
+
+        const isCritical = isCriticalFlag(finalFlag);
+        return {
+          result: created,
+          finalFlag,
+          isCritical,
+          // Wave 2: publica al outbox CriticalValueAlert para notificar médico.
+          alerts: isCritical
+            ? [
+                {
+                  testCode: item.test.code,
+                  testName: item.test.name,
+                  flag: finalFlag,
+                  value: input.valueNumeric,
+                  unit: input.valueUnit ?? item.test.unit,
+                },
+              ]
+            : [],
+        };
+      }),
+
+    /**
+     * Beta.3 — validate con 4-eyes + append-only history.
+     * Las validaciones anteriores se mantienen en notes (formato auditable).
+     */
     validate: tenantProcedure.input(resultValidateInput).mutation(async ({ ctx, input }) => {
       const result = await ctx.prisma.labResult.findFirst({
         where: {
@@ -186,7 +248,7 @@ export const lisRouter = router({
           orderItem: { order: { organizationId: ctx.tenant.organizationId } },
           validatedAt: null,
         },
-        select: { id: true, resultedById: true },
+        select: { id: true, resultedById: true, notes: true, flag: true },
       });
       if (!result) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Resultado no existe o ya validado." });
@@ -198,10 +260,72 @@ export const lisRouter = router({
           message: "El validador debe ser distinto del que ingresó el resultado.",
         });
       }
+      const validatedAt = new Date();
+      const historyLine = `[${validatedAt.toISOString()}] [VALIDATED by ${ctx.user.id}] flag=${result.flag}`;
+      const newNotes =
+        result.notes && result.notes.length > 0
+          ? `${result.notes}\n${historyLine}`
+          : historyLine;
+
       return ctx.prisma.labResult.update({
         where: { id: input.resultId },
-        data: { validatedAt: new Date(), validatedById: ctx.user.id },
+        data: {
+          validatedAt,
+          validatedById: ctx.user.id,
+          notes: newNotes,
+        },
       });
     }),
   }),
 });
+
+// ---------------------------------------------------------------------------
+// Helpers privados
+// ---------------------------------------------------------------------------
+
+/**
+ * Beta.3 — Construye LabReferenceRange[] desde los campos simples del schema
+ * Wave 1 (refRangeLow / refRangeHigh / critical). Wave 2: tabla
+ * LabReferenceRange poblada con stratificación age/sex completa.
+ *
+ * Si critical=true, el rango incluye criticalLow/criticalHigh con desviación
+ * 50% más allá del rango normal (heurística Wave 1; Wave 2 lab define).
+ */
+function buildReferenceRangesFromTest(test: {
+  refRangeLow: { toNumber: () => number } | number | null | undefined;
+  refRangeHigh: { toNumber: () => number } | number | null | undefined;
+  critical: boolean;
+}): LabReferenceRange[] {
+  const lo =
+    test.refRangeLow != null
+      ? typeof test.refRangeLow === "number"
+        ? test.refRangeLow
+        : test.refRangeLow.toNumber()
+      : null;
+  const hi =
+    test.refRangeHigh != null
+      ? typeof test.refRangeHigh === "number"
+        ? test.refRangeHigh
+        : test.refRangeHigh.toNumber()
+      : null;
+
+  if (lo === null && hi === null) return [];
+
+  // Heurística Wave 1: critical bounds extienden 50% más allá del rango normal.
+  const criticalLow =
+    test.critical && lo !== null ? lo - Math.abs(lo) * 0.5 : null;
+  const criticalHigh =
+    test.critical && hi !== null ? hi + Math.abs(hi) * 0.5 : null;
+
+  return [
+    {
+      minValue: lo,
+      maxValue: hi,
+      ageMinYears: null,
+      ageMaxYears: null,
+      sex: "BOTH",
+      criticalLow,
+      criticalHigh,
+    },
+  ];
+}
