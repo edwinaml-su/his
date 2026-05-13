@@ -572,7 +572,137 @@ graph TB
 
 ---
 
-## 9. ADRs Clave
+## 9. Patrones Arquitectonicos — Phase 2 Hardening
+
+Los tres patrones que siguen emergieron de forma recurrente durante el hardening Layer 1 de los módulos Phase 2 (SQLs 25–27, PRs #23 #24 #25). Se documentan aquí como decisiones de diseño establecidas, no como ADRs nuevos (ya existen ADR-001 a ADR-015 en `docs/adr/`).
+
+---
+
+### 9.1 State Machine Pattern
+
+**Problema:** los estados de agregados clínicos (InpatientAdmission, Prescription, LabOrder, EmergencyVisit, SurgeryCase, ImagingOrder) deben seguir transiciones válidas definidas por el dominio. La validación solo en el router de aplicación es insuficiente: accesos directos a la DB (migrations, scripts administrativos, jobs) pueden violar el grafo de estados.
+
+**Decision:** toda transición de estado se valida en dos capas:
+1. **Router/Use case:** función `canTransitionTo(currentStatus, newStatus)` exportada por `packages/contracts`.
+2. **DB trigger BEFORE UPDATE:** replica la misma tabla de transiciones, bloqueando la operacion con `RAISE EXCEPTION USING ERRCODE = 'check_violation'` si la transición no está permitida.
+
+**Diagrama generico:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> INITIAL : INSERT
+    INITIAL --> STATE_A : evento_1
+    INITIAL --> CANCELLED : cancelacion
+    STATE_A --> STATE_B : evento_2
+    STATE_A --> CANCELLED : cancelacion
+    STATE_B --> TERMINAL : evento_3
+    TERMINAL --> [*]
+    CANCELLED --> [*]
+    note right of TERMINAL : estado terminal\nno permite UPDATE de status
+```
+
+**Instancias en el sistema:**
+
+| Agregado | Estados | Trigger DB | SQL |
+|---|---|---|---|
+| `InpatientAdmission.status` | ACTIVE → ON_LEAVE \| DISCHARGED \| TRANSFERRED_OUT | `tr_inpatient_status_transition` | `25_inpatient_hardening.sql` |
+| `Prescription.status` | DRAFT → SIGNED → DISPENSED \| PARTIALLY_DISPENSED → DISPENSED | `tr_prescription_status_transition` | `26_pharmacy_hardening.sql` |
+| `LabOrder.status` | DRAFT → ORDERED → COLLECTED → IN_PROCESS → RESULTED → VALIDATED | `tr_lab_order_status_transition` | `27_lis_hardening.sql` |
+| `EmergencyVisit.disposition` | PENDING → DISCHARGED \| ADMITTED \| TRANSFERRED \| LWBS \| AMA \| DECEASED | pendiente PR #26 | `28_emergency_hardening.sql` |
+| `SurgeryCase.status` | SCHEDULED → CONFIRMED → IN_PROGRESS → COMPLETED | hardening pendiente | — |
+| `ImagingOrder.status` | ORDERED → SCHEDULED → IN_PROGRESS → ACQUIRED → REPORTED | hardening pendiente | — |
+| `OutpatientAppointment.status` | SCHEDULED → CONFIRMED → CHECKED_IN → COMPLETED \| NO_SHOW | hardening pendiente | — |
+
+**Convencion de implementacion del trigger:**
+
+```sql
+CREATE OR REPLACE FUNCTION public.fn_validate_<entity>_status_transition()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE v_allowed BOOLEAN := FALSE;
+BEGIN
+  IF TG_OP = 'INSERT' THEN RETURN NEW; END IF;
+  IF OLD.status = NEW.status THEN RETURN NEW; END IF;
+  v_allowed := (OLD.status = 'STATE_A' AND NEW.status IN ('STATE_B', 'CANCELLED'))
+            OR (OLD.status = 'STATE_B' AND NEW.status IN ('TERMINAL', 'CANCELLED'));
+  IF NOT v_allowed THEN
+    RAISE EXCEPTION 'Transición inválida: % -> %', OLD.status, NEW.status
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END; $$;
+```
+
+**Consecuencias:** mayor seguridad de invariantes; coste de mantenimiento al agregar estados (requiere actualizar ambas capas); idempotencia obligatoria en los SQL (`DROP TRIGGER IF EXISTS` antes del `CREATE`).
+
+---
+
+### 9.2 Business Rule Enforcement en DB Triggers
+
+**Problema:** ciertas invariantes de negocio son suficientemente críticas como para que su violación a través de cualquier ruta de acceso (aplicacion, scripts, replicacion) sea inaceptable. Para estas reglas, el trigger de DB es la ultima linea de defensa.
+
+**Decision:** se aplican CHECK constraints y triggers adicionales en tablas cuyas invariantes son criticas para seguridad clinica o integridad financiera. Los CHECK constraints son preferidos para reglas de rango/formato; los triggers son necesarios para reglas que involucran otras filas o logica condicional.
+
+**Inventario de triggers y constraints de business rules aplicados:**
+
+| Tabla | Regla de negocio | Mecanismo | SQL |
+|---|---|---|---|
+| `medication_dispense` | `quantity > 0` siempre | CHECK constraint | `26_pharmacy_hardening.sql` |
+| `drug` | `strength_value > 0` | CHECK constraint | `26_pharmacy_hardening.sql` |
+| `drug` | `atc_code` formato alfanumérico uppercase 1–10 chars | CHECK constraint | `26_pharmacy_hardening.sql` |
+| `prescription_item` | `duration_days ∈ [1, 365]` si presente | CHECK constraint | `26_pharmacy_hardening.sql` |
+| `inpatient_vitals` | `temperature_c ∈ [25.0, 45.0]`, `heart_rate ∈ [20, 250]`, `spo2 ∈ [40, 100]` | CHECK constraints | `25_inpatient_hardening.sql` |
+| `inpatient_admission` | `reason` no vacío, `expected_los ∈ [1, 365]` | CHECK constraints | `25_inpatient_hardening.sql` |
+| `inpatient_kardex` | `entry` no es texto vacío o whitespace | CHECK constraint | `25_inpatient_hardening.sql` |
+| `lab_result` | `value_numeric ∈ [-99999, 99999]` si presente | CHECK constraint | `27_lis_hardening.sql` |
+| `lab_specimen` | `barcode` no vacío | CHECK constraint | `27_lis_hardening.sql` |
+| `lab_order` | `clinical_indication` no vacío si presente | CHECK constraint | `27_lis_hardening.sql` |
+| `lab_reference_range` | `min_value < max_value` si ambos presentes | CHECK constraint | `27_lis_hardening.sql` |
+
+**Convenciones:**
+- Todos los constraints son idempotentes: wrapped en `DO $$ IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '...') THEN ALTER TABLE ... ADD CONSTRAINT ... END IF; $$`.
+- Los nombres de constraint siguen el patron `<tabla>_<campo>_<tipo>_chk`.
+- Esta capa es complementaria — no sustituye — la validacion Zod en `packages/contracts` ni la validacion del router tRPC.
+
+---
+
+### 9.3 Append-Only Audit Chains
+
+**Problema:** ciertos registros clínicos deben mantener un historial de mutaciones antes de ser firmados, garantizando trazabilidad completa de cada modificacion y la identidad de quien la realizo. Una vez firmados, deben ser inmutables. Los triggers de auditoría general en `audit.AuditLog` capturan todos los cambios, pero algunos agregados necesitan adicionalmente un historial embebido para acceso rapido y evidencia forense.
+
+**Decision:** el patron combina dos mecanismos:
+
+1. **`audit.AuditLog` (tabla maestra append-only):** captura BEFORE/AFTER JSON en cada INSERT/UPDATE/DELETE mediante `22_audit_triggers_phase2.sql`. No puede ser modificado (REVOKE UPDATE/DELETE incluso al service_role).
+
+2. **Historial embebido en JSONB para mutaciones pre-firma:** en agregados donde el usuario puede editar antes de firmar, se mantiene una columna `editHistory JSONB[]` (o similar) que acumula snapshots de edicion hasta la firma. Esto permite al auditor ver la evolucion de la nota sin consultar `audit.AuditLog` completo.
+
+**Aplicaciones en el sistema:**
+
+| Modelo | Patron aplicado | Descripcion |
+|---|---|---|
+| `ClinicalNote` | Addendum chain via `addendumOfId` | Notas firmadas son inmutables; correcciones crean un nuevo registro hijo encadenado. `signatureHash` sella la nota. |
+| `InpatientKardex` | Entries son append-only por diseño | Cada kardex es una nueva entrada, nunca se modifica la anterior. La secuencia temporal es el historial. |
+| `LabResult` | Inmutabilidad post-validacion | Una vez `validatedAt IS NOT NULL`, el resultado no debe ser modificado. El trigger de state machine LIS bloquea retrocesos desde VALIDATED. |
+| `ImagingReport` | Inmutabilidad post-firma | `signedAt IS NOT NULL` implica reporte sellado. `amendedAt` registra la enmienda; la enmienda crea un nuevo reporte, no modifica el original. |
+| `Prescription` | `signedHash` sella la prescripcion | Una vez en status SIGNED, el hash registra el contenido firmado. El state machine trigger bloquea retroceso a DRAFT. |
+
+**Diagrama del patron ClinicalNote (addendum chain):**
+
+```mermaid
+flowchart LR
+    N1[ClinicalNote\n id=A\n signedAt=T1\n addendumOfId=null] -->|addendumOfId| N2[ClinicalNote\n id=B\n signedAt=T2\n addendumOfId=A]
+    N2 -->|addendumOfId| N3[ClinicalNote\n id=C\n signedAt=null\n addendumOfId=B]
+    style N1 fill:#d4edda
+    style N2 fill:#d4edda
+    style N3 fill:#fff3cd
+```
+
+> Verde = firmado (inmutable). Amarillo = borrador (editable).
+
+**Consecuencias:** la inmutabilidad post-firma requiere un trigger de bloqueo de UPDATE en cada tabla afectada (hardening pendiente para ClinicalNote e ImagingReport). El patron de addendum-chain requiere que el UI siempre presente la cadena ordenada por `addendumOfId` → id, no por `createdAt` puro.
+
+---
+
+## 10. ADRs Clave
 
 | # | Decisión | Estado | Justificación corta | Trade-off aceptado |
 |---|----------|--------|---------------------|--------------------|
@@ -594,10 +724,11 @@ graph TB
 
 ---
 
-## 10. Lo Que Sigue
+## 11. Lo Que Sigue
 
 - @SRE: traduce este blueprint a IaC (Terraform Vercel + Supabase + Inngest + Sentry) — `docs/04_infraestructura.md`.
-- @DBA: schema Prisma completo y políticas RLS — `docs/05_modelo_datos.md`.
+- @DBA: schema Prisma completo y políticas RLS — `docs/04_modelo_datos.md`.
 - @Dev + @AS: implementar BC `identity` + `adt` + `triage` como vertical slice MVP.
-- @QA: suite de tests RLS y de invariantes de dominio.
+- @QA: suite de tests RLS y de invariantes de dominio; cobertura de state machine transitions para todos los agregados Phase 2.
+- @Dev: aplicar hardening pendiente (§10 §13 §14 §16 §18 §19 §20 §21 §22 §25) usando el mismo patron documentado en §9.1–9.3 de este documento.
 - @PO: validar el alcance Fase 1 contra blueprints en `03_blueprints_modulos.md`.
