@@ -1936,6 +1936,8 @@ model ClinicalNote {
   addendumOfId   String?   @db.Uuid /// FK self-ref para chain de addenda.
   signedAt       DateTime? @db.Timestamptz()
   signatureHash  String?   @db.VarChar(120)
+  /// Historial de cambios pre-firma. Array [{at, by, action, diff}]. Max 50 entries (oldest dropped).
+  editHistory    Json?
   createdAt      DateTime  @default(now()) @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
 
