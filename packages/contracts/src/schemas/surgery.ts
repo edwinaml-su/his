@@ -1,7 +1,7 @@
 /**
  * §13 Surgery (Quirófano) — schemas de input.
- * Skeleton mínimo. Detección de solape de OR, validación de personal
- * y time-out workflow exhaustivo viven en el router.
+ * Beta.6 hardening layer 1: WHO checklist, state machine, OR conflict,
+ * anesthesia tracking.
  */
 import { z } from "zod";
 
@@ -9,6 +9,7 @@ const SURGERY_STATUS = [
   "SCHEDULED",
   "CONFIRMED",
   "IN_PROGRESS",
+  "POST_OP",
   "COMPLETED",
   "CANCELLED",
   "POSTPONED",
@@ -23,10 +24,20 @@ const ASA_CLASS = [
   "ASA_VI",
 ] as const;
 
+const ANESTHESIA_TYPE = [
+  "GENERAL",
+  "REGIONAL",
+  "LOCAL",
+  "SEDATION",
+  "NONE",
+] as const;
+
 export const surgeryCaseStatusEnum = z.enum(SURGERY_STATUS);
 export const asaClassEnum = z.enum(ASA_CLASS);
+export const anesthesiaTypeEnum = z.enum(ANESTHESIA_TYPE);
 
 export type SurgeryCaseStatusType = z.infer<typeof surgeryCaseStatusEnum>;
+export type AnesthesiaTypeType = z.infer<typeof anesthesiaTypeEnum>;
 
 export const operatingRoomCreateInput = z.object({
   establishmentId: z.string().uuid(),
@@ -69,7 +80,16 @@ export const surgeryCaseListInput = z.object({
   limit: z.number().int().min(1).max(200).default(50),
 });
 
+// WHO checklist inputs — each phase records who performed it (user from ctx)
+export const surgeryCaseSignInInput = z.object({
+  id: z.string().uuid(),
+});
+
 export const surgeryCaseTimeOutInput = z.object({
+  id: z.string().uuid(),
+});
+
+export const surgeryCaseSignOutInput = z.object({
   id: z.string().uuid(),
 });
 
@@ -77,9 +97,13 @@ export const surgeryCaseStartInput = z.object({
   id: z.string().uuid(),
 });
 
-export const surgeryCaseCompleteInput = z.object({
+export const surgeryCasePostOpInput = z.object({
   id: z.string().uuid(),
   intraopNotes: z.string().trim().max(8000).optional(),
+});
+
+export const surgeryCaseCompleteInput = z.object({
+  id: z.string().uuid(),
   postopNotes: z.string().trim().max(8000).optional(),
 });
 
@@ -88,8 +112,31 @@ export const surgeryCaseCancelInput = z.object({
   cancelReason: z.string().trim().min(1).max(400),
 });
 
+export const surgeryCasePostponeInput = z.object({
+  id: z.string().uuid(),
+  cancelReason: z.string().trim().min(1).max(400),
+  newScheduledStart: z.coerce.date(),
+  newScheduledEnd: z.coerce.date(),
+});
+
+export const surgeryCaseAnesthesiaInput = z
+  .object({
+    id: z.string().uuid(),
+    anesthesiaType: anesthesiaTypeEnum,
+    anesthesiaStartAt: z.coerce.date(),
+    anesthesiaEndAt: z.coerce.date().optional(),
+  })
+  .refine(
+    (d) => d.anesthesiaEndAt === undefined || d.anesthesiaEndAt > d.anesthesiaStartAt,
+    {
+      message: "anesthesiaEndAt debe ser posterior a anesthesiaStartAt",
+      path: ["anesthesiaEndAt"],
+    },
+  );
+
 export type OperatingRoomCreateInput = z.infer<typeof operatingRoomCreateInput>;
 export type SurgeryCaseCreateInput = z.infer<typeof surgeryCaseCreateInput>;
 export type SurgeryCaseListInput = z.infer<typeof surgeryCaseListInput>;
 export type SurgeryCaseCancelInput = z.infer<typeof surgeryCaseCancelInput>;
 export type SurgeryCaseCompleteInput = z.infer<typeof surgeryCaseCompleteInput>;
+export type SurgeryCaseAnesthesiaInput = z.infer<typeof surgeryCaseAnesthesiaInput>;
