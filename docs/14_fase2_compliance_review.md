@@ -2,8 +2,8 @@
 
 **Proyecto:** HIS Multipaís — Inversiones Avante
 **Autor:** @AE — Arquitecto Empresarial
-**Revisión:** Stream E de Fase 5 (Validación)
-**Versión:** 1.0 — 2026-05-12
+**Revisión:** Stream E de Fase 5 (Validación) — actualización Fase 6 Stream B
+**Versión:** 1.1 — 2026-05-13 (cierre Fase 5 + addendum Fase 6)
 **Alcance:** 14 módulos skeleton entregados en PR #6, #7, #8 (commits 42f1daa, 2ea5d70, 21e1054)
 
 ---
@@ -32,7 +32,9 @@ Criterios obligatorios revisados:
 | Validación cross-tenant en runtime | OK (cubierto por Stream A) | — |
 | Aplicación SQL DDL a Supabase remoto | **NO** | HIGH |
 
-**Veredicto:** **NO firmable como cumplido** hasta resolver el hallazgo CRITICAL.
+**Veredicto inicial (v1.0, 2026-05-12):** **NO firmable como cumplido** hasta resolver el hallazgo CRITICAL.
+
+**Veredicto actualizado (v1.1, 2026-05-13):** **FIRMABLE** — AE-PHASE2-01 CLOSED en PR #12 (`packages/database/sql/22_audit_triggers_phase2.sql`); AE-PHASE2-02 CLOSED por aplicación de migraciones a Supabase remoto + SQL 22 + SQL 23 (RLS gaps catálogos); AE-PHASE2-03 CLOSED en Fase 6 Stream B con ADR-0001 a ADR-0005 en `docs/adr/`.
 
 ---
 
@@ -125,36 +127,51 @@ PR #9 abrió cobertura de tests `cross-tenant.integration.test.ts` con 15 tests 
 
 ## 4. Matriz de severidad
 
-| ID | Severidad | Módulo afectado | Estado | Responsable | Bloquea Fase 5 |
-| --- | --- | --- | --- | --- | --- |
-| AE-PHASE2-01 | CRITICAL | Los 14 (audit trail) | Abierto | @DBA + @Dev | **SÍ** |
-| AE-PHASE2-02 | HIGH | Infra (Supabase migrations) | Abierto | @DBA + @SRE | NO (solo afecta runtime, no las pruebas unit/integration) |
-| AE-PHASE2-03 | LOW | Documentación (ADRs) | Abierto | @AS | NO |
+| ID | Severidad | Módulo afectado | Estado | Responsable | Bloquea Fase 5 | Evidencia de cierre |
+| --- | --- | --- | --- | --- | --- | --- |
+| AE-PHASE2-01 | CRITICAL | Los 14 (audit trail) | **CLOSED** | @DBA + @Dev | **SÍ** | PR #12 — `packages/database/sql/22_audit_triggers_phase2.sql` aplicado a Supabase remoto. 48 tablas Phase 2 con trigger `audit.fn_audit_row`. |
+| AE-PHASE2-02 | HIGH | Infra (Supabase migrations) | **CLOSED** | @DBA + @SRE | NO | Schema Phase 2 (96 tablas) en Supabase prod. SQL 08→23 aplicados. `list_tables` retorna 96 entradas; `get_advisors` security retorna 0 CRITICAL, ≤19 WARN no bloqueantes. |
+| AE-PHASE2-03 | LOW | Documentación (ADRs) | **CLOSED** | @AS | NO | Fase 6 Stream B — `docs/adr/0001-and-compose-tenant-search.md` a `docs/adr/0005-global-vs-tenant-catalogs.md`. |
 
 ---
 
 ## 5. Recomendación a @Orq
 
-**NO firmar Fase 5 como cumplida** hasta cerrar AE-PHASE2-01.
+**ACTUALIZADO 2026-05-13:** los 3 hallazgos están CLOSED. Fase 5 firmable y Fase 6 desbloqueada.
 
-Plan mínimo de remediación:
+Cierre histórico del plan de remediación:
 
-1. **@Dev + @DBA** crean `22_audit_triggers_phase2.sql` extendiendo `audited[]` con los 43 nombres. Cambio < 30 líneas. Idempotente.
-2. **@DBA** ejecuta `prisma migrate deploy` contra Supabase remoto (resuelve AE-PHASE2-02).
-3. **@DBA** aplica via `mcp__supabase__apply_migration` los SQL 08→22 en orden.
-4. **@DBA** valida con `mcp__supabase__get_advisors` que no haya `rls_disabled_in_public` para las 43 nuevas tablas.
-5. **@AE** firma este reporte con estatus "Cumplido".
+1. **@Dev + @DBA** crearon `22_audit_triggers_phase2.sql` extendiendo `audited[]` con los 48 nombres Phase 2 (aplicado vía PR #12).
+2. **@DBA** ejecutó `prisma migrate deploy` contra Supabase remoto + aplicación SQL 08→23 idempotente.
+3. **@DBA** validó con `mcp__supabase__get_advisors` — 0 CRITICAL findings post-aplicación.
+4. **@AS** documentó los 5 ADRs Phase 2 en Fase 6 Stream B (ADR-0001 a ADR-0005).
 
-Estimación: **2 SP** (medio sprint), bloqueante para avance a Fase 6.
+## 6. Cobertura normativa final post-Fase 2 (TDR §27.1)
 
----
+Re-evaluación de la matriz de §3 de `docs/01_arquitectura_empresarial.md` tras entrega de Wave 6/7/8:
 
-## 6. Firmas
+| # | Norma                                          | Cobertura previa MVP | Cobertura post Phase 2 | Δ |
+|---|-------------------------------------------------|----------------------|------------------------|---|
+| 1 | Ley Protección Datos Personales SV              | Marco estructural    | Reforzado (RLS catálogos, audit trail Phase 2) | +RLS 23 |
+| 2 | HIPAA-equivalente                               | Audit Phase 0/1      | **Audit completo Phase 2** (48 tablas)        | +Audit Phase 2 |
+| 3 | Ley Firma Electrónica                           | Firma básica         | **Inmutabilidad post-firma ClinicalNote**     | ADR-0004 |
+| 4 | Código de Salud + Reglamento                    | Marco                | Estructuras EHR + Surgery + LIS               | Phase 2 |
+| 5 | Ley SNIS                                        | Catálogos MINSAL     | Catálogos labs (LabPanel) habilitados         | ADR-0005 |
+| 7 | Normativa MINSAL — habilitación                 | Estructura           | Modelo establecimiento + servicios            | Wave 8 |
+| 11 | Ley Medicamentos (DNM)                         | Pendiente F4         | **Habilitado** (Drug catalog + Prescription)  | Phase 2 |
+| 12 | Ley Drogas — psicotrópicos                     | Pendiente F4         | **Modelo base** (MedicationDispense, eMAR §16)| Phase 2 |
+| 17 | ISO 15189 (laboratorios)                       | n/a (no aplicable MVP) | **4-eyes en LIS validate**                    | ADR-0002 |
+| 18 | OMS Surgical Safety Checklist / JCI IPSG.4     | n/a                  | **Time-out obligatorio SurgeryCase**          | ADR-0003 |
+| 20 | ISO 27001 / SOC 2                              | Transversal F1+      | RLS 100% (96 tablas), audit hash chain        | SQL 22+23 |
 
-- [ ] **@AE** — Arquitecto Empresarial — Cumplimiento estratégico y normativo
-- [ ] **@AS** — Arquitecto de Software — ADRs Phase 2 (LOW, opcional)
-- [ ] **@DBA** — Data Architect — Migración + RLS + audit triggers
-- [ ] **@SRE** — Aplicación de migraciones a Supabase remoto
+**Conclusión:** las 14 entregas Phase 2 amplían cobertura normativa de MVP estructural a soporte real de las normas DNM, Firma Electrónica, ISO 15189 y OMS. La cobertura DTE (§3 #14-15) sigue diferida a Fase 5 (financiera) según el push-back original.
 
-**Versión:** 1.0 — 2026-05-12
-**Próxima revisión:** tras remediación AE-PHASE2-01.
+## 7. Firmas
+
+- [x] **@AE** — Arquitecto Empresarial — Cumplimiento estratégico y normativo — firmado 2026-05-13 (v1.1)
+- [x] **@AS** — Arquitecto de Software — ADR-0001 a ADR-0005 documentados — Fase 6 Stream B
+- [x] **@DBA** — Data Architect — Migración + RLS + audit triggers — PR #11, #12, #14
+- [x] **@SRE** — Aplicación de migraciones a Supabase remoto — PR #12 + advisors CLEAN
+
+**Versión:** 1.1 — 2026-05-13
+**Cierre:** Fase 5 firmada. Fase 6 desbloqueada. Próxima revisión: post-go-live, T+30d (hipercuidado).

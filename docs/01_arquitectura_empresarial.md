@@ -75,6 +75,8 @@ Prioridad: **MVP** = Fase 0+1, **F2-F5** = fases asistenciales y financieras, **
 
 > **Push back @AE:** marcar 20 normas como "MVP" rompería el cronograma. El MVP debe cubrir el **marco de cumplimiento estructural** (datos, seguridad, identidad, catálogos, auditoría) y dejar la materia normativa específica (DTE, LEIV, LEPINA, programas verticales) a sus fases asistencial/financiera correspondientes. Este desfase debe quedar **explícito en el contrato y aceptado por el sponsor**.
 
+> **Addendum 2026-05-13 (Fase 6 Stream B):** la entrega Phase 2 (Wave 6/7/8, 14 módulos) amplió la cobertura efectiva más allá del marco estructural. La matriz de cobertura actualizada vive en `docs/14_fase2_compliance_review.md` §6 e incluye normas adicionales fuera de la lista original (ISO 15189 labs, OMS Surgical Safety Checklist / JCI IPSG.4). Los patrones técnicos que sostienen cada norma están documentados en `docs/adr/0001-and-compose-tenant-search.md` a `docs/adr/0005-global-vs-tenant-catalogs.md`.
+
 ---
 
 ## 4. Modelo de Gobernanza TI / RACI
