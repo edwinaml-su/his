@@ -315,6 +315,17 @@ model Organization {
   surgeryCases              SurgeryCase[]              @relation("OrgSurgeryCases")
   medicationAdministrations MedicationAdministration[] @relation("OrgMedAdmins")
   imagingOrders             ImagingOrder[]             @relation("OrgImagingOrders")
+  insurers                  Insurer[]                  @relation("OrgInsurers")
+  patientCoverages          PatientCoverage[]          @relation("OrgPatientCoverages")
+  authorizationRequests     AuthorizationRequest[]     @relation("OrgAuthRequests")
+  stockItems                StockItem[]                @relation("OrgStockItems")
+  stockLots                 StockLot[]                 @relation("OrgStockLots")
+  stockMovements            StockMovement[]            @relation("OrgStockMovements")
+  biomedicalEquipment       BiomedicalEquipment[]      @relation("OrgEquipment")
+  respiratoryOrders         RespiratoryOrder[]         @relation("OrgRespiratoryOrders")
+  dietPlans                 DietPlan[]                 @relation("OrgDietPlans")
+  nutritionAssessments      NutritionAssessment[]      @relation("OrgNutritionAssessments")
+  nutritionOrders           NutritionOrder[]           @relation("OrgNutritionOrders")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -348,6 +359,9 @@ model Establishment {
   imagingOrders          ImagingOrder[]          @relation("EstImagingOrders")
   operatingRooms         OperatingRoom[]
   imagingModalities      ImagingModality[]
+  stockLots              StockLot[]              @relation("EstStockLots")
+  stockMovements         StockMovement[]         @relation("EstStockMovements")
+  biomedicalEquipment    BiomedicalEquipment[]   @relation("EstEquipment")
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -405,6 +419,8 @@ model User {
   medicationAdministrations MedicationAdministration[] @relation("MedAdminAdministrator")
   imagingOrdered            ImagingOrder[]             @relation("ImagingOrderingProvider")
   imagingReported           ImagingReport[]            @relation("ImagingRadiologist")
+  respiratoryPrescribed     RespiratoryOrder[]         @relation("RespiratoryPrescriber")
+  nutritionPrescribed       NutritionOrder[]           @relation("NutritionPrescriber")
 
   @@schema("public")
 }
@@ -917,6 +933,11 @@ model Patient {
   emergencyVisits        EmergencyVisit[]          @relation("PatEmergencyVisits")
   surgeryCases           SurgeryCase[]             @relation("PatSurgeryCases")
   imagingOrders          ImagingOrder[]            @relation("PatImagingOrders")
+  coverages              PatientCoverage[]         @relation("PatCoverages")
+  respiratoryOrders      RespiratoryOrder[]        @relation("PatRespiratoryOrders")
+  dietPlans              DietPlan[]                @relation("PatDietPlans")
+  nutritionAssessments   NutritionAssessment[]     @relation("PatNutritionAssessments")
+  nutritionOrders        NutritionOrder[]          @relation("PatNutritionOrders")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1257,6 +1278,11 @@ model Encounter {
   emergencyVisit         EmergencyVisit?         @relation("EncEmergencyVisit")
   surgeryCases           SurgeryCase[]           @relation("EncSurgeryCases")
   imagingOrders          ImagingOrder[]          @relation("EncImagingOrders")
+  authorizationRequests  AuthorizationRequest[]  @relation("EncAuthRequests")
+  respiratoryOrders      RespiratoryOrder[]      @relation("EncRespiratoryOrders")
+  dietPlans              DietPlan[]              @relation("EncDietPlans")
+  nutritionAssessments   NutritionAssessment[]   @relation("EncNutritionAssessments")
+  nutritionOrders        NutritionOrder[]        @relation("EncNutritionOrders")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -2410,5 +2436,562 @@ model ImagingReport {
   radiologist User         @relation("ImagingRadiologist", fields: [radiologistId], references: [id], onDelete: Restrict)
 
   @@index([radiologistId])
+  @@schema("public")
+}
+
+// =============================================================================
+// §25 Insurer Agreements — Convenios de aseguradoras (Wave 8 / Phase 2 entry)
+// =============================================================================
+
+enum InsurerKind {
+  PUBLIC /// ISSS, Bienestar Magisterial, Fosalud.
+  PRIVATE /// SISA, Pan-American Life, etc.
+  SELF_INSURED /// auto-asegurado / empresa.
+
+  @@schema("public")
+}
+
+enum AuthorizationStatus {
+  REQUESTED
+  APPROVED
+  PARTIAL
+  DENIED
+  EXPIRED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// TDR §25.1 — aseguradora (carrier). Catálogo global (organizationId null)
+/// o tenant-específico para convenios cerrados.
+model Insurer {
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String?     @db.Uuid /// null = catálogo global.
+  code           String      @db.VarChar(40)
+  name           String      @db.VarChar(200)
+  taxId          String?     @db.VarChar(40)
+  kind           InsurerKind @default(PRIVATE)
+  contactPhone   String?     @db.VarChar(40)
+  contactEmail   String?     @db.VarChar(200)
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now()) @db.Timestamptz()
+  createdBy      String?     @db.Uuid
+  updatedAt      DateTime    @updatedAt @db.Timestamptz()
+  updatedBy      String?     @db.Uuid
+
+  organization Organization?   @relation("OrgInsurers", fields: [organizationId], references: [id], onDelete: Restrict)
+  plans        InsurancePlan[]
+
+  @@unique([organizationId, code])
+  @@index([active])
+  @@schema("public")
+}
+
+/// TDR §25.2 — plan/producto comercial de una aseguradora.
+model InsurancePlan {
+  id          String   @id @default(uuid()) @db.Uuid
+  insurerId   String   @db.Uuid
+  code        String   @db.VarChar(40)
+  name        String   @db.VarChar(200)
+  description String?  @db.VarChar(400)
+  copayPct    Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @db.Timestamptz()
+
+  insurer   Insurer           @relation(fields: [insurerId], references: [id], onDelete: Restrict)
+  coverages PatientCoverage[]
+
+  @@unique([insurerId, code])
+  @@index([insurerId])
+  @@schema("public")
+}
+
+/// TDR §25.3 — vinculación paciente↔plan (póliza vigente).
+model PatientCoverage {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  patientId      String    @db.Uuid
+  planId         String    @db.Uuid
+  policyNumber   String    @db.VarChar(80)
+  validFrom      DateTime  @db.Timestamptz()
+  validTo        DateTime? @db.Timestamptz()
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  createdBy      String?   @db.Uuid
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+  updatedBy      String?   @db.Uuid
+
+  organization   Organization           @relation("OrgPatientCoverages", fields: [organizationId], references: [id], onDelete: Restrict)
+  patient        Patient                @relation("PatCoverages", fields: [patientId], references: [id], onDelete: Restrict)
+  plan           InsurancePlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  authorizations AuthorizationRequest[]
+
+  @@unique([organizationId, patientId, policyNumber])
+  @@index([organizationId, patientId])
+  @@index([planId])
+  @@index([active])
+  @@schema("public")
+}
+
+/// TDR §25.4 — solicitud de autorización de servicio ante la aseguradora.
+model AuthorizationRequest {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  coverageId     String              @db.Uuid
+  encounterId    String?             @db.Uuid
+  serviceCode    String              @db.VarChar(40)
+  serviceDesc    String              @db.VarChar(400)
+  requestedAt    DateTime            @default(now()) @db.Timestamptz()
+  requestedById  String?             @db.Uuid /// User.
+  status         AuthorizationStatus @default(REQUESTED)
+  externalRef    String?             @db.VarChar(80) /// número de la aseguradora.
+  approvedAmount Decimal?            @db.Decimal(18, 2)
+  denialReason   String?             @db.VarChar(400)
+  validFrom      DateTime?           @db.Timestamptz()
+  validTo        DateTime?           @db.Timestamptz()
+  createdAt      DateTime            @default(now()) @db.Timestamptz()
+  updatedAt      DateTime            @updatedAt @db.Timestamptz()
+
+  organization Organization    @relation("OrgAuthRequests", fields: [organizationId], references: [id], onDelete: Restrict)
+  coverage     PatientCoverage @relation(fields: [coverageId], references: [id], onDelete: Restrict)
+  encounter    Encounter?      @relation("EncAuthRequests", fields: [encounterId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([coverageId])
+  @@index([encounterId])
+  @@index([requestedAt])
+  @@schema("public")
+}
+
+// =============================================================================
+// §19 Inventory — Stock multi-bodega con lotes FEFO (Wave 8 / Phase 2 entry)
+// =============================================================================
+
+enum StockMovementType {
+  IN /// ingreso (compra, donación, devolución a bodega).
+  OUT /// salida (consumo, despacho).
+  TRANSFER /// traslado entre bodegas.
+  ADJUST /// ajuste de inventario (conteo físico).
+
+  @@schema("public")
+}
+
+/// TDR §19.1 — item inventariable. Catálogo global (organizationId null) o tenant.
+model StockItem {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid /// null = catálogo global.
+  sku            String   @db.VarChar(60)
+  name           String   @db.VarChar(200)
+  description    String?  @db.VarChar(400)
+  unitOfMeasure  String   @db.VarChar(20) /// UN, ML, MG, BOX, etc.
+  category       String?  @db.VarChar(80) /// "MEDICAMENTO", "INSUMO", "REACTIVO", etc.
+  trackLots      Boolean  @default(true) /// si requiere control de lote+expiry.
+  reorderLevel   Decimal? @db.Decimal(18, 4)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  createdBy      String?  @db.Uuid
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+  updatedBy      String?  @db.Uuid
+
+  organization Organization?   @relation("OrgStockItems", fields: [organizationId], references: [id], onDelete: Restrict)
+  lots         StockLot[]
+  movements    StockMovement[]
+
+  @@unique([organizationId, sku])
+  @@index([active])
+  @@schema("public")
+}
+
+/// TDR §19.2 — lote de un item (control FEFO: First Expired First Out).
+model StockLot {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  establishmentId String    @db.Uuid /// bodega física.
+  itemId          String    @db.Uuid
+  lotNumber       String    @db.VarChar(80)
+  expiryDate      DateTime? @db.Date
+  quantityOnHand  Decimal   @default(0) @db.Decimal(18, 4)
+  costPerUnit     Decimal?  @db.Decimal(18, 4)
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now()) @db.Timestamptz()
+  createdBy       String?   @db.Uuid
+  updatedAt       DateTime  @updatedAt @db.Timestamptz()
+
+  organization  Organization    @relation("OrgStockLots", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment   @relation("EstStockLots", fields: [establishmentId], references: [id], onDelete: Restrict)
+  item          StockItem       @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  movements     StockMovement[]
+
+  @@unique([organizationId, establishmentId, itemId, lotNumber])
+  @@index([organizationId, expiryDate])
+  @@index([itemId])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §19.3 — movimiento de inventario (auditoría inmutable).
+model StockMovement {
+  id              String            @id @default(uuid()) @db.Uuid
+  organizationId  String            @db.Uuid
+  establishmentId String            @db.Uuid
+  itemId          String            @db.Uuid
+  lotId           String?           @db.Uuid
+  type            StockMovementType
+  quantity        Decimal           @db.Decimal(18, 4) /// positivo siempre; el signo lo da `type`.
+  reason          String?           @db.VarChar(200)
+  referenceCode   String?           @db.VarChar(80) /// nro factura, dispense, ajuste, etc.
+  performedAt     DateTime          @default(now()) @db.Timestamptz()
+  performedById   String?           @db.Uuid
+  createdAt       DateTime          @default(now()) @db.Timestamptz()
+
+  organization  Organization  @relation("OrgStockMovements", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment @relation("EstStockMovements", fields: [establishmentId], references: [id], onDelete: Restrict)
+  item          StockItem     @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  lot           StockLot?     @relation(fields: [lotId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, performedAt])
+  @@index([itemId])
+  @@index([lotId])
+  @@index([type])
+  @@schema("public")
+}
+
+// =============================================================================
+// §20 Services & Equipment — Equipos biomédicos + PM + calibración (Wave 8)
+// =============================================================================
+
+enum EquipmentStatus {
+  OPERATIONAL
+  UNDER_MAINTENANCE
+  OUT_OF_SERVICE
+  RETIRED
+
+  @@schema("public")
+}
+
+enum PmScheduleStatus {
+  PLANNED
+  COMPLETED
+  OVERDUE
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// TDR §20.1 — equipo biomédico inventariado (activo fijo trazable).
+model BiomedicalEquipment {
+  id              String          @id @default(uuid()) @db.Uuid
+  organizationId  String          @db.Uuid
+  establishmentId String          @db.Uuid
+  assetTag        String          @db.VarChar(60) /// código interno (etiqueta).
+  name            String          @db.VarChar(200)
+  manufacturer    String?         @db.VarChar(120)
+  model           String?         @db.VarChar(120)
+  serialNumber    String?         @db.VarChar(120)
+  category        String?         @db.VarChar(80) /// "VENTILADOR", "MONITOR", etc.
+  location        String?         @db.VarChar(120) /// sala/área dentro del establecimiento.
+  installDate     DateTime?       @db.Date
+  status          EquipmentStatus @default(OPERATIONAL)
+  active          Boolean         @default(true)
+  createdAt       DateTime        @default(now()) @db.Timestamptz()
+  createdBy       String?         @db.Uuid
+  updatedAt       DateTime        @updatedAt @db.Timestamptz()
+
+  organization    Organization     @relation("OrgEquipment", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment   Establishment    @relation("EstEquipment", fields: [establishmentId], references: [id], onDelete: Restrict)
+  pmSchedules     PmSchedule[]
+  calibrationLogs CalibrationLog[]
+
+  @@unique([organizationId, assetTag])
+  @@index([organizationId, status])
+  @@index([establishmentId])
+  @@schema("public")
+}
+
+/// TDR §20.2 — calendario de mantenimiento preventivo por equipo.
+model PmSchedule {
+  id          String           @id @default(uuid()) @db.Uuid
+  equipmentId String           @db.Uuid
+  scheduledAt DateTime         @db.Timestamptz()
+  performedAt DateTime?        @db.Timestamptz()
+  performedBy String?          @db.Uuid /// User.
+  status      PmScheduleStatus @default(PLANNED)
+  taskNotes   String?          @db.Text
+  createdAt   DateTime         @default(now()) @db.Timestamptz()
+  updatedAt   DateTime         @updatedAt @db.Timestamptz()
+
+  equipment BiomedicalEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@index([equipmentId, scheduledAt])
+  @@index([status])
+  @@schema("public")
+}
+
+/// TDR §20.3 — bitácora de calibración (cumplimiento metrológico).
+model CalibrationLog {
+  id             String    @id @default(uuid()) @db.Uuid
+  equipmentId    String    @db.Uuid
+  calibratedAt   DateTime  @db.Timestamptz()
+  calibratedBy   String?   @db.Uuid /// User (o externo si null).
+  externalAgency String?   @db.VarChar(200)
+  certificateRef String?   @db.VarChar(80)
+  result         String    @db.VarChar(40) /// "PASS", "FAIL", "CONDITIONAL".
+  nextDueAt      DateTime? @db.Timestamptz()
+  notes          String?   @db.Text
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+
+  equipment BiomedicalEquipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@index([equipmentId, calibratedAt])
+  @@schema("public")
+}
+
+// =============================================================================
+// §21 Respiratory — Órdenes respiratorias + ventilador + gases (Wave 8)
+// =============================================================================
+
+enum RespiratoryOrderType {
+  OXYGEN_THERAPY
+  MECHANICAL_VENT
+  NEBULIZATION
+  AEROSOL
+  CPAP_BIPAP
+  CHEST_PHYSIO
+
+  @@schema("public")
+}
+
+enum RespiratoryOrderStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+
+  @@schema("public")
+}
+
+enum VentilatorMode {
+  AC /// Assist-Control.
+  SIMV /// Synchronized Intermittent Mandatory Ventilation.
+  PSV /// Pressure Support.
+  CPAP
+  BIPAP
+  PRVC /// Pressure-Regulated Volume Control.
+  OTHER
+
+  @@schema("public")
+}
+
+enum MedicalGasType {
+  O2 /// oxígeno.
+  AIR
+  N2O /// óxido nitroso.
+  CO2
+  HELIOX
+
+  @@schema("public")
+}
+
+/// TDR §21.1 — orden respiratoria emitida por médico.
+model RespiratoryOrder {
+  id             String                 @id @default(uuid()) @db.Uuid
+  organizationId String                 @db.Uuid
+  encounterId    String                 @db.Uuid
+  patientId      String                 @db.Uuid
+  prescriberId   String                 @db.Uuid
+  type           RespiratoryOrderType
+  status         RespiratoryOrderStatus @default(ACTIVE)
+  flowRate       Decimal?               @db.Decimal(8, 2) /// L/min para O2.
+  fio2           Decimal?               @db.Decimal(5, 2) /// fracción inspirada de O2 0–100.
+  notes          String?                @db.Text
+  startedAt      DateTime               @default(now()) @db.Timestamptz()
+  endedAt        DateTime?              @db.Timestamptz()
+  createdAt      DateTime               @default(now()) @db.Timestamptz()
+  createdBy      String?                @db.Uuid
+  updatedAt      DateTime               @updatedAt @db.Timestamptz()
+  updatedBy      String?                @db.Uuid
+
+  organization       Organization        @relation("OrgRespiratoryOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter          Encounter           @relation("EncRespiratoryOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient            Patient             @relation("PatRespiratoryOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  prescriber         User                @relation("RespiratoryPrescriber", fields: [prescriberId], references: [id], onDelete: Restrict)
+  ventilatorSessions VentilatorSession[]
+  gasUsages          MedicalGasUsage[]
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §21.2 — sesión de ventilación mecánica vinculada a una orden.
+model VentilatorSession {
+  id          String         @id @default(uuid()) @db.Uuid
+  orderId     String         @db.Uuid
+  mode        VentilatorMode
+  startedAt   DateTime       @default(now()) @db.Timestamptz()
+  endedAt     DateTime?      @db.Timestamptz()
+  tidalVolume Decimal?       @db.Decimal(8, 2) /// mL.
+  rrSet       Int? /// respiraciones por minuto programadas.
+  peep        Decimal?       @db.Decimal(6, 2) /// cmH2O.
+  fio2        Decimal?       @db.Decimal(5, 2)
+  notes       String?        @db.Text
+  createdAt   DateTime       @default(now()) @db.Timestamptz()
+  updatedAt   DateTime       @updatedAt @db.Timestamptz()
+
+  order RespiratoryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, startedAt])
+  @@schema("public")
+}
+
+/// TDR §21.3 — consumo de gas médico (auditoría + costo).
+model MedicalGasUsage {
+  id           String         @id @default(uuid()) @db.Uuid
+  orderId      String         @db.Uuid
+  gasType      MedicalGasType
+  volumeLiters Decimal        @db.Decimal(12, 2)
+  measuredAt   DateTime       @default(now()) @db.Timestamptz()
+  recordedById String?        @db.Uuid
+  notes        String?        @db.VarChar(400)
+  createdAt    DateTime       @default(now()) @db.Timestamptz()
+
+  order RespiratoryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, measuredAt])
+  @@index([gasType])
+  @@schema("public")
+}
+
+// =============================================================================
+// §22 Nutrition — Dietas + valoración + ordenes enteral/parenteral (Wave 8)
+// =============================================================================
+
+enum DietType {
+  REGULAR
+  SOFT
+  LIQUID_CLEAR
+  LIQUID_FULL
+  DIABETIC
+  LOW_SODIUM
+  RENAL
+  HYPOPROTEIC
+  HYPERPROTEIC
+  HYPOCALORIC
+  HIPERCALORIC
+  ENTERAL_ONLY
+  NPO /// nada por boca.
+  OTHER
+
+  @@schema("public")
+}
+
+enum DietPlanStatus {
+  ACTIVE
+  DISCONTINUED
+  COMPLETED
+
+  @@schema("public")
+}
+
+enum NutritionOrderRoute {
+  ENTERAL
+  PARENTERAL
+
+  @@schema("public")
+}
+
+enum NutritionOrderStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+
+  @@schema("public")
+}
+
+/// TDR §22.1 — plan dietético asignado durante un encuentro.
+model DietPlan {
+  id             String         @id @default(uuid()) @db.Uuid
+  organizationId String         @db.Uuid
+  encounterId    String         @db.Uuid
+  patientId      String         @db.Uuid
+  dietType       DietType
+  status         DietPlanStatus @default(ACTIVE)
+  caloriesTarget Int? /// kcal/día.
+  proteinTarget  Decimal?       @db.Decimal(8, 2) /// g/día.
+  notes          String?        @db.Text
+  startedAt      DateTime       @default(now()) @db.Timestamptz()
+  endedAt        DateTime?      @db.Timestamptz()
+  createdAt      DateTime       @default(now()) @db.Timestamptz()
+  createdBy      String?        @db.Uuid
+  updatedAt      DateTime       @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgDietPlans", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter    Encounter    @relation("EncDietPlans", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient      Patient      @relation("PatDietPlans", fields: [patientId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §22.2 — valoración nutricional (Mini Nutritional Assessment u otra).
+model NutritionAssessment {
+  id               String   @id @default(uuid()) @db.Uuid
+  organizationId   String   @db.Uuid
+  encounterId      String   @db.Uuid
+  patientId        String   @db.Uuid
+  assessedAt       DateTime @default(now()) @db.Timestamptz()
+  assessedById     String   @db.Uuid /// User (nutricionista/médico).
+  weightKg         Decimal? @db.Decimal(6, 2)
+  heightCm         Decimal? @db.Decimal(6, 2)
+  bmi              Decimal? @db.Decimal(5, 2)
+  malnutritionRisk String?  @db.VarChar(40) /// "LOW", "MODERATE", "HIGH".
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now()) @db.Timestamptz()
+  updatedAt        DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgNutritionAssessments", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter    Encounter    @relation("EncNutritionAssessments", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient      Patient      @relation("PatNutritionAssessments", fields: [patientId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, assessedAt])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §22.3 — orden de nutrición enteral o parenteral.
+model NutritionOrder {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  encounterId    String               @db.Uuid
+  patientId      String               @db.Uuid
+  prescriberId   String               @db.Uuid
+  route          NutritionOrderRoute
+  status         NutritionOrderStatus @default(ACTIVE)
+  formula        String?              @db.VarChar(200) /// nombre comercial / composición.
+  ratePerHour    Decimal?             @db.Decimal(8, 2) /// mL/h.
+  totalVolume    Decimal?             @db.Decimal(10, 2) /// mL/día.
+  caloriesPerDay Int?
+  notes          String?              @db.Text
+  startedAt      DateTime             @default(now()) @db.Timestamptz()
+  endedAt        DateTime?            @db.Timestamptz()
+  createdAt      DateTime             @default(now()) @db.Timestamptz()
+  createdBy      String?              @db.Uuid
+  updatedAt      DateTime             @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgNutritionOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter    Encounter    @relation("EncNutritionOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient      Patient      @relation("PatNutritionOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  prescriber   User         @relation("NutritionPrescriber", fields: [prescriberId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@index([route])
   @@schema("public")
 }
