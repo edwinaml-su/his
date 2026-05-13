@@ -44,6 +44,19 @@ export const MOCK_TENANT_NO_ESTABLISHMENT: TenantContext = {
   establishmentId: undefined,
 };
 
+/**
+ * Tenant de "otra organización" para tests de cross-tenant isolation.
+ * Tiene organizationId/establishmentId distintos para validar que routers
+ * nunca permitan a un caller de OrgA leer/mutar registros de OrgB.
+ */
+export const MOCK_TENANT_OTHER_ORG: TenantContext = {
+  userId: "00000000-0000-0000-0000-0000000000a2",
+  organizationId: "00000000-0000-0000-0000-0000000000bb",
+  countryId: "00000000-0000-0000-0000-0000000000bb",
+  establishmentId: "00000000-0000-0000-0000-0000000000dd",
+  roleCodes: ["ADMIN", "PHYSICIAN"],
+};
+
 /** Helper de conveniencia para construir un contexto tRPC mínimo en tests. */
 export function makeMockSession(overrides: {
   user?: MockSessionUser | null;
