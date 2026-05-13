@@ -2585,7 +2585,8 @@ model InsurancePlan {
   code        String   @db.VarChar(40)
   name        String   @db.VarChar(200)
   description String?  @db.VarChar(400)
-  copayPct    Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
+  copayPct            Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
+  coveredProcedures   Json?    /// b14: JSONB [{"code": "MRI", "maxCoverage": 1500.00}] estructura.
   active      Boolean  @default(true)
   createdAt   DateTime @default(now()) @db.Timestamptz()
   updatedAt   DateTime @updatedAt @db.Timestamptz()
@@ -2746,6 +2747,7 @@ model StockMovement {
   @@index([organizationId, performedAt])
   @@index([itemId])
   @@index([lotId])
+  @@index([transferGroupId])
   @@index([type])
   @@index([transferGroupId])
   @@schema("public")
@@ -2760,6 +2762,16 @@ enum EquipmentStatus {
   UNDER_MAINTENANCE
   OUT_OF_SERVICE
   RETIRED
+  BROKEN
+
+  @@schema("public")
+}
+
+enum CriticalityLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
 
   @@schema("public")
 }
@@ -2785,12 +2797,15 @@ model BiomedicalEquipment {
   serialNumber    String?         @db.VarChar(120)
   category        String?         @db.VarChar(80) /// "VENTILADOR", "MONITOR", etc.
   location        String?         @db.VarChar(120) /// sala/área dentro del establecimiento.
-  installDate     DateTime?       @db.Date
-  status          EquipmentStatus @default(OPERATIONAL)
-  active          Boolean         @default(true)
-  createdAt       DateTime        @default(now()) @db.Timestamptz()
-  createdBy       String?         @db.Uuid
-  updatedAt       DateTime        @updatedAt @db.Timestamptz()
+  installDate              DateTime?        @db.Date
+  status                   EquipmentStatus  @default(OPERATIONAL)
+  criticality              CriticalityLevel @default(MEDIUM)
+  certificationExpiresAt   DateTime?        @db.Timestamptz() /// vencimiento de certificación regulatoria.
+  maintenanceReason        String?          @db.VarChar(500) /// obligatorio cuando criticality=CRITICAL y status=UNDER_MAINTENANCE.
+  active                   Boolean          @default(true)
+  createdAt                DateTime         @default(now()) @db.Timestamptz()
+  createdBy                String?          @db.Uuid
+  updatedAt                DateTime         @updatedAt @db.Timestamptz()
 
   organization    Organization     @relation("OrgEquipment", fields: [organizationId], references: [id], onDelete: Restrict)
   establishment   Establishment    @relation("EstEquipment", fields: [establishmentId], references: [id], onDelete: Restrict)
@@ -2800,6 +2815,7 @@ model BiomedicalEquipment {
   @@unique([organizationId, assetTag])
   @@index([organizationId, status])
   @@index([establishmentId])
+  @@index([organizationId, certificationExpiresAt])
   @@schema("public")
 }
 
