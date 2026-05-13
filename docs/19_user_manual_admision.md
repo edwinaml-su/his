@@ -1,8 +1,9 @@
 # Manual de Usuario — Módulo de Admisión
 
 **Audiencia:** ADMISSION_CLERK (admisionista) — también útil para Ops Lead.
-**Versión:** 1.0 (MVP)
+**Versión:** 1.1 (extendida con secciones Phase 2)
 **Pre-requisito:** capacitación rol completada (`docs/16_capacitacion_plan.md`).
+**Nota v1.1:** se añaden anexos B (verificación elegibilidad aseguradora §25), C (asignación de cama hospitalización §11) y D (flujo programado vs urgencia §10/§12). Screenshots placeholders pendientes de captura final en T-7d.
 
 > **Nota sobre screenshots:** este manual usa anotaciones `[Screenshot: …]` describiendo qué muestra cada captura. Las imágenes finales se incrustarán durante la fase F3 de e-learning antes del Go-Live.
 
@@ -142,3 +143,101 @@ Marca "Sin acompañante al ingreso" + nota libre + escala a Trabajo Social autom
 - L1 (super-usuario de turno): extensión interna 5050.
 - L2 (Ops Lead): WhatsApp grupo "HIS Hipercuidado".
 - L3 (técnico): canal Slack `#his-hipercuidado` o ticket en helpdesk.
+
+---
+
+## Anexo B — Verificación de elegibilidad de aseguradora (§25 Insurance)
+
+`[Screenshot B.1: Modal "Verificar elegibilidad" mostrando aseguradora, número de afiliado, fecha consulta. Botón "Consultar" dispara llamada a servicio externo (mock Wave 1).]`
+
+### B.1 Flujo durante la admisión
+
+1. Tras seleccionar aseguradora en Paso 3, pulsar **"Verificar elegibilidad"**.
+2. El sistema consulta el servicio (mock Wave 1; real Wave 2 ISSS/aseguradoras).
+3. Resultado:
+   - **Elegible:** se muestra plan, coberturas activas, copago. Continuar admisión.
+   - **No elegible:** mostrar motivo (suspendido, cancelado, no cubre el servicio). El admisionista debe registrar episodio como **PARTICULAR** o solicitar autorización (Anexo B.2).
+4. El resultado se guarda en `EligibilityCheck` ligado al episodio (auditado).
+
+`[Screenshot B.2: Resultado positivo con detalle de plan, copago $5, cobertura activa hasta DD/MM/AAAA, lista de servicios cubiertos.]`
+
+### B.2 Solicitud de autorización previa
+
+Para procedimientos programados que requieren autorización:
+
+1. En la pantalla del episodio, sección Aseguradora, pulsar **"Solicitar autorización"**.
+2. Llenar formulario: procedimiento (CUPS), diagnóstico (CIE-10), justificación clínica, fecha programada.
+3. Adjuntar documentos solicitados (imágenes, resultados previos).
+4. El sistema genera `AuthorizationRequest` y la envía al canal de la aseguradora.
+5. Estado se actualiza vía webhook (Pending → Approved/Denied).
+
+`[Screenshot B.3: Lista de autorizaciones en seguimiento con estado, fecha solicitud, fecha respuesta esperada.]`
+
+### B.3 Errores comunes Anexo B
+
+| Mensaje | Causa | Acción |
+|---|---|---|
+| "Servicio aseguradora no responde" | Outage del servicio externo | Reintentar 3 veces; si persiste registrar manualmente "verificación papel" |
+| "Afiliado no encontrado" | Número erróneo o aseguradora errónea | Validar con paciente; revisar carné físico |
+| "Procedimiento no cubierto" | Plan no incluye el CUPS | Informar al paciente; ofrecer registro como particular |
+
+---
+
+## Anexo C — Admisión con asignación de cama (§11 Inpatient)
+
+`[Screenshot C.1: Paso 4 ampliado mostrando selector de unidad (Med Interna, UCI, Pediatría, Ginecobs, Cirugía) y mapa de camas disponibles.]`
+
+### C.1 Cuando aplica
+
+- Episodio tipo **Hospitalización**.
+- Requiere asignación de cama antes de generar pulsera.
+
+### C.2 Flujo
+
+1. En Paso 3, seleccionar tipo episodio **Hospitalización**.
+2. El Paso 4 se amplía con sección "Asignación de cama":
+   - Unidad / servicio de hospitalización (desplegable).
+   - Mapa visual de camas disponibles, con código y estado (Libre, Ocupada, Limpieza, Mantenimiento).
+   - Restricciones por aislamiento (paciente con MRSA → camas individuales).
+3. Confirmar selección → `BedAssignment` creado, cama pasa a `Ocupada`.
+4. Pulsera se imprime con código de cama incluido.
+5. El sistema notifica a Enfermería de la unidad la nueva admisión.
+
+`[Screenshot C.2: Mapa de camas con colores: verde=libre, rojo=ocupada, amarillo=limpieza, gris=mantenimiento. Camas con icono de aislamiento marcadas.]`
+
+### C.3 Manejo de "no hay cama disponible"
+
+- Si la unidad solicitada está full, sistema sugiere unidades alternas según afinidad clínica.
+- Coordinar con Jefatura de Hospitalización antes de admitir.
+- En contingencia, registrar como **"Pendiente de cama"** (LWB = Lying Without Bed) y dejar paciente en sala de observación.
+
+---
+
+## Anexo D — Diferencias programado vs urgencia (§10/§12)
+
+| Atributo | Programado (§10) | Urgencia (§12) |
+|---|---|---|
+| Pre-requisito | Cita previa en Schedule | Llegada espontánea |
+| Verificación elegibilidad | Anticipada (T-1d a T-3d) | En el momento, opcional |
+| Autorización previa | Obligatoria si aplica | No bloqueante (post-atención) |
+| Asignación servicio | Pre-asignado en la cita | Definido por Triage |
+| Flujo post-admisión | Check-in → In-Consult | Triage → Box atención |
+
+### D.1 Admisión de paciente con cita programada (§10 Outpatient)
+
+1. Buscar paciente.
+2. En vez de "Nueva admisión", buscar **"Check-in cita"**.
+3. Sistema muestra citas del día para ese paciente.
+4. Confirmar cita, validar identificación, marcar **CheckedIn**.
+5. Paciente queda visible en cola del médico (`OutpatientEncounter`).
+
+`[Screenshot D.1: Pantalla de check-in mostrando cita 10:30 con Dr. González, motivo "Control DM2", aseguradora ISSS, estado "Booked → CheckedIn".]`
+
+### D.2 Admisión de urgencias (§12)
+
+1. Admisión rápida (datos mínimos obligatorios: identificación + motivo).
+2. Sistema genera episodio Urgencias.
+3. Paciente pasa automáticamente a la cola de Triage.
+4. Datos demográficos y aseguradora se completan en paralelo o al alta.
+
+`[Screenshot D.2: Pantalla admisión rápida con 4 campos: tipo doc + número + motivo en palabras del paciente + acompañante. Tiempo objetivo < 90s.]`
