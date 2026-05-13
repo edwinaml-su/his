@@ -1,3 +1,124 @@
+# Release Notes — HIS Multipaís
+
+> **Inversiones Avante — Sistema de Información Hospitalaria Multipaís**
+
+Releases en orden cronológico inverso. El proyecto sigue forward-only: nunca se revierte una versión publicada.
+
+---
+
+# Release v0.2.0 — Phase 2 Skeletons + Production Readiness
+
+> **Tag recomendado:** `v0.2.0-phase2-skeletons`
+> **Commit base:** `c1e2dd6` (merge PR #14)
+> **Fecha:** 2026-05-13
+> **Tipo:** Phase 2 skeletons release — apto para staging + UAT. Producción pendiente firma G6.
+
+## Resumen ejecutivo
+
+Esta entrega cierra **Fase 4 (Construcción Wave 6/7/8)** + **Fase 5 (Validación con remediación CRITICAL)** + entrega **Fase 6 (Entrega y Observabilidad)** en formato 6-streams paralelos sobre Vercel + Supabase + Sentry. Mueve el proyecto de "MVP Foundation entregable" (v0.1.0) a "**14 módulos Phase 2 skeletonizados, infra de producción documentada, 5 ADRs y UAT scenarios listos**".
+
+| Métrica                       | v0.1.0 (2026-04-30) | v0.2.0 (2026-05-13) | Δ                |
+|-------------------------------|---------------------|---------------------|------------------|
+| Tablas BD (Supabase prod)     | 0 (solo schema)     | **96**              | +96              |
+| Tablas con RLS habilitada     | n/a                 | **96/96 (100%)**    | +96              |
+| Tablas con audit triggers     | 34 schema           | **82 (34+48)**      | +48 Phase 2      |
+| Módulos Phase 2 skeleton      | 0                   | **14**              | +14              |
+| Tests automatizados passing   | ~442                | **1011+**           | +569             |
+| ADRs documentados             | 15 implícitos       | **5 explícitos**    | +5 MADR formales |
+| Advisor security CRITICAL     | n/a                 | **0**               | 0                |
+| Advisor security WARN         | n/a                 | 19 → 1 (post SQL 24) | -18            |
+| Vercel build estable          | preview only        | **production verde**| OK               |
+| Production runbook            | falta               | **`docs/15`**       | nuevo            |
+
+## Lo nuevo en v0.2.0
+
+### Wave 6 — Construcción (PR #6)
+- **§10 Outpatient** — Agenda + consulta externa.
+- **§14 EHR Notes** — Notas clínicas con inmutabilidad post-firma.
+- **§15 Pharmacy** — Prescription + dispensación + catálogo Drug.
+- **§17 LIS** — Laboratory Information System con 4-eyes validate.
+
+### Wave 7 — Construcción (PR #7)
+- **§11 Inpatient** — Admisión, kardex, care plan, vitals.
+- **§12 Emergency** — Visita ER con triage previo obligatorio.
+- **§13 Surgery** — Ciclo quirúrgico con time-out OMS (JCI IPSG.4).
+- **§16 eMAR** — Administración con BCMA (5 rights).
+- **§18 Imaging** — RIS/PACS lite con preparación paciente.
+
+### Wave 8 — Construcción (PR #8)
+- **§19 Inventory** — StockItem/Lot/Movement con trazabilidad DNM.
+- **§20 Services & Equipment** — Biomédicos con PM scheduling.
+- **§21 Respiratory** — VentilatorSession + gas medicinal.
+- **§22 Nutrition** — DietPlan con bloqueo por alergia.
+- **§25 Insurance** — Cobertura + autorización aseguradora.
+
+### Fase 5 — Validación (PRs #9, #10, #11)
+- **PR #9** — Stream A: cross-tenant isolation suite (15 tests cubriendo los 14 módulos).
+- **PR #10** — Stream B: BDD Gherkin features Phase 2.
+- **PR #11** — Stream E: compliance review Fase 2 (`docs/14_fase2_compliance_review.md`) — identificó **AE-PHASE2-01 CRITICAL**.
+
+### Fase 5 — Remediación CRITICAL (PRs #12, #13, #14)
+- **PR #12** — Wires audit triggers para 48 tablas Phase 2 (`packages/database/sql/22_audit_triggers_phase2.sql`). **Cierra AE-PHASE2-01**.
+- **PR #13** — Fix Vercel outputDirectory `.next` relativo a rootDirectory. **Cierra incidente persistente Vercel build**.
+- **PR #14** — Cierre 23 RLS gaps en catálogos detectados por advisor (`packages/database/sql/23_rls_catalog_gaps.sql`). **Cierra advisor CRITICAL → 0**.
+
+### Fase 6 — Entrega (PRs #15, #16, #17, #18, #19, #20 — esta release)
+- **PR #15** — @SRE: `docs/15_production_runbook.md` (Vercel+Supabase+Sentry, 408 líneas, env vars + rollback + escalation).
+- **PR #16** — @AE: 5 ADRs (`docs/adr/0001-0005`) + compliance review v1.1 firmado.
+- **PR #17** — @DBA: `packages/database/sql/24_security_hardening.sql` + `docs/21_db_operations.md` (cierra 18/19 WARN advisor).
+- **PR #18** — @QAF: `docs/uat/phase2_uat_scenarios.md` (16 scenarios Gherkin es-SV) + checklist go-live actualizado.
+- **PR #19** — @PO: estas release notes + sprint review (este PR).
+- **PR #20** — @QA: smoke production Playwright suite (siguiente PR de la serie Fase 6).
+
+## Estado advisors Supabase post-v0.2.0
+
+| Categoría                              | v0.1.0  | v0.2.0 (post SQL 23) | v0.2.0 (post SQL 24, pending apply) |
+|----------------------------------------|---------|----------------------|--------------------------------------|
+| CRITICAL `rls_disabled_in_public`      | n/a     | **0**                | 0                                    |
+| WARN `function_search_path_mutable`    | n/a     | 16                   | **0**                                |
+| WARN `extension_in_public`             | n/a     | 2                    | **0**                                |
+| WARN `auth_leaked_password_protection` | n/a     | 1                    | 1 (acción manual dashboard)         |
+
+## Push-backs reafirmados
+
+Los push-backs originales del MVP se mantienen vigentes:
+
+1. **NO K8s/Terraform en Fase 6 MVP** — diferido a post-Fase 6. MVP entrega production readiness sobre Vercel + Supabase + Sentry.
+2. **SLO MVP = 99.5%** — subir a 99.9% es objetivo de Fase 7.
+3. **PACS/HL7/FHIR/DTE** — siguen postergados.
+4. **Trunk-based modificado** — sin cambios.
+5. **Migraciones forward-only** — sin cambios.
+6. **Sin Prometheus/Grafana en MVP** — sin cambios.
+
+## Acciones pendientes para firma G6
+
+Coordinadas por @Orq en este reporte. Las firmas vinculantes G6 son @AE + @QA + @QAF + @SRE.
+
+| Acción                                                          | Owner   | Status                       |
+|-----------------------------------------------------------------|---------|------------------------------|
+| Mergear PRs #15-#20 a `main`                                    | Edwin   | Pendiente review             |
+| Aplicar SQL 24 a Supabase prod via MCP                          | @SRE    | Pendiente (post-merge PR #17)|
+| Activar HIBP en Supabase Auth dashboard                         | @SRE    | Pendiente acción manual      |
+| Verificar env vars Vercel Production scope vs `docs/15` §2      | @SRE    | Pendiente acción manual      |
+| Smoke navegacional manual de `/api/health` y páginas críticas   | Edwin   | Pendiente acción manual      |
+| Rotación 5 credenciales (memoria sesión 1)                      | Edwin   | Pendiente (no bloqueante go-live) |
+| Tag `v0.2.0-phase2-skeletons` en commit final post-Fase 6       | Edwin   | Pendiente firma G6           |
+
+## Métricas de la sesión maratón 2026-05-12/13
+
+| Métrica                       | Valor                                                   |
+|-------------------------------|---------------------------------------------------------|
+| PRs mergeados en la sesión    | 9 (#6, #7, #8, #9, #10, #11, #12, #13, #14)            |
+| PRs en revisión (Fase 6)      | 6 (#15, #16, #17, #18, #19, #20)                       |
+| Commits totales               | 14 merge + 14 feature ≈ 28                              |
+| Líneas SQL agregadas          | ~600 (SQL 22, 23, 24)                                   |
+| Líneas TypeScript agregadas   | ~12 000 (14 routers + 14 schemas + 14 model files)      |
+| Líneas docs agregadas         | ~5 500 (ADRs + UAT + runbook + release notes + DB ops)  |
+| Tests nuevos                  | +569 (de 442 a 1011+)                                   |
+| Incidentes Vercel resueltos   | 3 (PR #5, #13, ajuste outputDir final)                  |
+
+---
+
 # Release v0.1.0 — MVP Foundation
 
 > **Inversiones Avante — Sistema de Información Hospitalaria Multipaís**
