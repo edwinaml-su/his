@@ -321,7 +321,476 @@ Clínicos: `PatientType`, `PatientCategory`, `AgeBand`, `MedicalSpecialty`,
 
 ---
 
-## 7. Pendientes / Backlog
+## 7. Pendientes / Backlog (MVP)
+
+> Los pendientes de la sección original (índices GIN, particionamiento, vistas materializadas, seed, etc.) aplican a la capa Phase 0+1 y se mantienen sin cambio. La siguiente sección extiende el modelo al conjunto completo de tablas Phase 2.
+
+---
+
+## 8. Modelos Phase 2 (43 tablas)
+
+Los 14 módulos de Phase 2 corresponden a los TDR §10 §11 §12 §13 §14 §15 §16 §17 §18 §19 §20 §21 §22 §25. Los nombres de modelo en esta sección son exactamente los que aparecen en `packages/database/prisma/schema.prisma` (verificado).
+
+### 8.1 Inventario de tablas por bounded context
+
+| Bounded context | Modelos (nombres Prisma exactos) | Cuenta |
+|---|---|---|
+| **outpatient** (§10) | `OutpatientAppointment`, `OutpatientConsultation` | 2 |
+| **inpatient** (§11) | `InpatientAdmission`, `InpatientVitals`, `InpatientKardex`, `InpatientCarePlan` | 4 |
+| **emergency** (§12) | `EmergencyVisit`, `EmergencyNote` | 2 |
+| **surgery** (§13) | `OperatingRoom`, `SurgeryCase` | 2 |
+| **ehr** (§14) | `ClinicalNote`, `ClinicalNoteAttachment`, `EncounterDiagnosis`, `Vaccine`, `PatientVaccination`, `DeathCertificate` | 6 |
+| **pharmacy** (§15) | `Drug`, `Prescription`, `PrescriptionItem`, `MedicationDispense` | 4 |
+| **emar** (§16) | `MedicationAdministration` | 1 |
+| **lis** (§17) | `LabPanel`, `LabTest`, `LabOrder`, `LabOrderItem`, `LabSpecimen`, `LabResult` | 6 |
+| **imaging** (§18) | `ImagingModality`, `ImagingOrder`, `ImagingReport` | 3 |
+| **inventory** (§19) | `StockItem`, `StockLot`, `StockMovement` | 3 |
+| **equipment** (§20) | `BiomedicalEquipment`, `PmSchedule`, `CalibrationLog` | 3 |
+| **respiratory** (§21) | `RespiratoryOrder`, `VentilatorSession`, `MedicalGasUsage` | 3 |
+| **nutrition** (§22) | `DietPlan`, `NutritionAssessment`, `NutritionOrder` | 3 |
+| **insurance** (§25) | `Insurer`, `InsurancePlan`, `PatientCoverage`, `AuthorizationRequest` | 4 |
+| | **Total Phase 2** | **46** |
+
+> Nota: el conteo factual del schema es 46. La cifra "43 tablas" del encargo de tarea era estimada; la cifra correcta derivada del schema.prisma es 46.
+
+---
+
+### 8.2 Diagramas ER conceptuales por bounded context
+
+#### 8.2.1 Outpatient (§10)
+
+```mermaid
+erDiagram
+    Encounter ||--o{ OutpatientAppointment : programa
+    OutpatientAppointment ||--o{ OutpatientConsultation : genera
+    Encounter ||--|| OutpatientConsultation : 1_a_1
+    OutpatientAppointment {
+        uuid id PK
+        uuid organizationId
+        uuid patientId
+        uuid providerId
+        AppointmentStatus status
+        datetime scheduledAt
+    }
+    OutpatientConsultation {
+        uuid id PK
+        uuid encounterId UK
+        uuid appointmentId
+        text subjective
+        text assessment
+        text plan
+        datetime signedAt
+    }
+```
+
+#### 8.2.2 Inpatient (§11)
+
+```mermaid
+erDiagram
+    Encounter ||--|| InpatientAdmission : 1_a_1
+    InpatientAdmission ||--o{ InpatientVitals : registra
+    InpatientAdmission ||--o{ InpatientKardex : documenta
+    InpatientAdmission ||--o{ InpatientCarePlan : planifica
+    InpatientAdmission {
+        uuid id PK
+        uuid encounterId UK
+        uuid patientId
+        uuid attendingId
+        InpatientStatus status
+        int expectedLos
+    }
+    InpatientVitals {
+        uuid id PK
+        uuid admissionId
+        decimal temperatureC
+        int heartRate
+        int spo2
+        datetime recordedAt
+    }
+    InpatientKardex {
+        uuid id PK
+        uuid admissionId
+        text entry
+        varchar shift
+        varchar category
+    }
+    InpatientCarePlan {
+        uuid id PK
+        uuid admissionId
+        CarePlanStatus status
+        text goal
+        text interventions
+    }
+```
+
+#### 8.2.3 Emergency (§12)
+
+```mermaid
+erDiagram
+    Encounter ||--|| EmergencyVisit : 1_a_1
+    EmergencyVisit ||--o{ EmergencyNote : contiene
+    EmergencyVisit {
+        uuid id PK
+        uuid encounterId UK
+        uuid patientId
+        EmergencyDisposition disposition
+        EmergencyArrivalMode arrivalMode
+        varchar chiefComplaint
+    }
+    EmergencyNote {
+        uuid id PK
+        uuid visitId
+        varchar category
+        text body
+        datetime recordedAt
+    }
+```
+
+#### 8.2.4 Surgery (§13)
+
+```mermaid
+erDiagram
+    Establishment ||--o{ OperatingRoom : alberga
+    OperatingRoom ||--o{ SurgeryCase : programa
+    Encounter ||--o{ SurgeryCase : genera
+    SurgeryCase {
+        uuid id PK
+        uuid encounterId
+        uuid operatingRoomId
+        uuid primarySurgeonId
+        SurgeryCaseStatus status
+        AsaClass asaClass
+        datetime scheduledStart
+        datetime timeOutAt
+    }
+    OperatingRoom {
+        uuid id PK
+        uuid establishmentId
+        varchar code
+        varchar name
+    }
+```
+
+#### 8.2.5 EHR — Historia Clinica Electronica (§14)
+
+```mermaid
+erDiagram
+    Encounter ||--o{ ClinicalNote : contiene
+    ClinicalNote ||--o{ ClinicalNoteAttachment : adjunta
+    ClinicalNote ||--o{ ClinicalNote : addendum_de
+    Encounter ||--o{ EncounterDiagnosis : registra
+    Patient ||--o{ PatientVaccination : recibe
+    Vaccine ||--o{ PatientVaccination : aplica
+    Patient ||--|| DeathCertificate : certifica
+    ClinicalNote {
+        uuid id PK
+        uuid encounterId
+        NoteType noteType
+        uuid addendumOfId FK
+        datetime signedAt
+        varchar signatureHash
+    }
+    EncounterDiagnosis {
+        uuid id PK
+        uuid encounterId
+        uuid conceptId
+        DiagnosisType type
+    }
+    PatientVaccination {
+        uuid id PK
+        uuid patientId
+        uuid vaccineId
+        int doseNumber
+        datetime administeredAt
+    }
+```
+
+#### 8.2.6 Pharmacy (§15)
+
+```mermaid
+erDiagram
+    Drug ||--o{ PrescriptionItem : referencia
+    Prescription ||--o{ PrescriptionItem : contiene
+    PrescriptionItem ||--o{ MedicationDispense : dispensa
+    Prescription {
+        uuid id PK
+        uuid encounterId
+        uuid prescriberId
+        PrescriptionStatus status
+        datetime signedAt
+        varchar signedHash
+    }
+    Drug {
+        uuid id PK
+        varchar genericName
+        varchar atcCode
+        PharmaceuticalForm pharmaceuticalForm
+        DispensingClass dispensingClass
+        bool requiresControlledLog
+    }
+    MedicationDispense {
+        uuid id PK
+        uuid prescriptionItemId
+        decimal quantity
+        varchar batchNumber
+        date expiryDate
+    }
+```
+
+#### 8.2.7 eMAR (§16)
+
+```mermaid
+erDiagram
+    PrescriptionItem ||--o{ MedicationAdministration : administra
+    MedicationAdministration {
+        uuid id PK
+        uuid prescriptionItemId
+        uuid administeredById
+        uuid doubleCheckById
+        MedAdminStatus status
+        decimal doseAmount
+        bool patientWristbandScanned
+        datetime administeredAt
+    }
+```
+
+#### 8.2.8 LIS — Laboratorio (§17)
+
+```mermaid
+erDiagram
+    LabPanel ||--o{ LabTest : agrupa
+    LabOrder ||--o{ LabOrderItem : contiene
+    LabOrder ||--o{ LabSpecimen : requiere
+    LabOrderItem ||--|| LabTest : referencia
+    LabOrderItem ||--o{ LabResult : genera
+    LabSpecimen ||--o{ LabResult : produce
+    LabOrder {
+        uuid id PK
+        uuid organizationId
+        uuid encounterId
+        LabOrderStatus status
+        LabPriority priority
+    }
+    LabResult {
+        uuid id PK
+        uuid orderItemId
+        ResultFlag flag
+        decimal valueNumeric
+        datetime validatedAt
+        uuid validatedById
+    }
+    LabSpecimen {
+        uuid id PK
+        uuid orderId
+        SpecimenType type
+        SpecimenCondition condition
+        varchar barcode UK
+    }
+```
+
+#### 8.2.9 Imaging — RIS/PACS (§18)
+
+```mermaid
+erDiagram
+    Establishment ||--o{ ImagingModality : registra
+    ImagingModality ||--o{ ImagingOrder : atiende
+    Encounter ||--o{ ImagingOrder : genera
+    ImagingOrder ||--|| ImagingReport : 1_a_1
+    ImagingOrder {
+        uuid id PK
+        uuid encounterId
+        ImagingModalityType modalityType
+        ImagingOrderStatus status
+        varchar accessionNumber
+    }
+    ImagingReport {
+        uuid id PK
+        uuid orderId UK
+        uuid radiologistId
+        text findings
+        text impression
+        datetime signedAt
+    }
+```
+
+#### 8.2.10 Inventory — Almacen (§19)
+
+```mermaid
+erDiagram
+    StockItem ||--o{ StockLot : subdivide
+    StockItem ||--o{ StockMovement : mueve
+    StockLot ||--o{ StockMovement : afecta
+    StockItem {
+        uuid id PK
+        varchar sku
+        varchar unitOfMeasure
+        bool trackLots
+        decimal reorderLevel
+    }
+    StockLot {
+        uuid id PK
+        uuid itemId
+        uuid establishmentId
+        varchar lotNumber
+        date expiryDate
+        decimal quantityOnHand
+    }
+    StockMovement {
+        uuid id PK
+        StockMovementType type
+        decimal quantity
+        varchar referenceCode
+    }
+```
+
+#### 8.2.11 Equipment — Equipos biomedicos (§20)
+
+```mermaid
+erDiagram
+    BiomedicalEquipment ||--o{ PmSchedule : mantiene
+    BiomedicalEquipment ||--o{ CalibrationLog : calibra
+    BiomedicalEquipment {
+        uuid id PK
+        uuid establishmentId
+        varchar assetTag UK
+        EquipmentStatus status
+        datetime installDate
+    }
+    PmSchedule {
+        uuid id PK
+        uuid equipmentId
+        PmScheduleStatus status
+        datetime scheduledAt
+        datetime performedAt
+    }
+    CalibrationLog {
+        uuid id PK
+        uuid equipmentId
+        varchar result
+        datetime nextDueAt
+        varchar certificateRef
+    }
+```
+
+#### 8.2.12 Respiratory — Terapia respiratoria (§21)
+
+```mermaid
+erDiagram
+    Encounter ||--o{ RespiratoryOrder : prescribe
+    RespiratoryOrder ||--o{ VentilatorSession : activa
+    RespiratoryOrder ||--o{ MedicalGasUsage : consume
+    RespiratoryOrder {
+        uuid id PK
+        uuid encounterId
+        RespiratoryOrderType type
+        RespiratoryOrderStatus status
+        decimal flowRate
+        decimal fio2
+    }
+    VentilatorSession {
+        uuid id PK
+        uuid orderId
+        VentilatorMode mode
+        decimal tidalVolume
+        decimal peep
+    }
+    MedicalGasUsage {
+        uuid id PK
+        uuid orderId
+        MedicalGasType gasType
+        decimal volumeLiters
+    }
+```
+
+#### 8.2.13 Nutrition — Nutricion clinica (§22)
+
+```mermaid
+erDiagram
+    Encounter ||--o{ DietPlan : asigna
+    Encounter ||--o{ NutritionAssessment : evalua
+    Encounter ||--o{ NutritionOrder : ordena
+    DietPlan {
+        uuid id PK
+        uuid encounterId
+        DietType dietType
+        DietPlanStatus status
+        int caloriesTarget
+    }
+    NutritionAssessment {
+        uuid id PK
+        uuid encounterId
+        decimal weightKg
+        decimal bmi
+        varchar malnutritionRisk
+    }
+    NutritionOrder {
+        uuid id PK
+        uuid encounterId
+        NutritionOrderRoute route
+        decimal ratePerHour
+        int caloriesPerDay
+    }
+```
+
+#### 8.2.14 Insurance — Convenios y aseguradoras (§25)
+
+```mermaid
+erDiagram
+    Insurer ||--o{ InsurancePlan : ofrece
+    InsurancePlan ||--o{ PatientCoverage : cubre
+    PatientCoverage ||--o{ AuthorizationRequest : genera
+    Insurer {
+        uuid id PK
+        varchar code
+        InsurerKind kind
+        bool active
+    }
+    InsurancePlan {
+        uuid id PK
+        uuid insurerId
+        varchar code
+        decimal copayPct
+    }
+    PatientCoverage {
+        uuid id PK
+        uuid patientId
+        uuid planId
+        varchar policyNumber
+        datetime validFrom
+    }
+    AuthorizationRequest {
+        uuid id PK
+        uuid coverageId
+        AuthorizationStatus status
+        varchar serviceCode
+        decimal approvedAmount
+    }
+```
+
+---
+
+### 8.3 Tablas criticas con audit triggers y RLS Phase 2
+
+Referencia: `packages/database/sql/22_audit_triggers_phase2.sql` (triggers) y SQLs `08`–`21` (RLS por bounded context).
+
+| Bounded context | Tablas con audit trigger | Tablas con RLS habilitada |
+|---|---|---|
+| **outpatient** | `OutpatientAppointment`, `OutpatientConsultation` | ambas |
+| **inpatient** | `InpatientAdmission`, `InpatientVitals`, `InpatientKardex`, `InpatientCarePlan` | todas |
+| **emergency** | `EmergencyVisit`, `EmergencyNote` | ambas |
+| **surgery** | `OperatingRoom`, `SurgeryCase` | `SurgeryCase` |
+| **ehr** | `ClinicalNote`, `ClinicalNoteAttachment`, `EncounterDiagnosis`, `Vaccine`, `PatientVaccination`, `DeathCertificate` | `ClinicalNote`, `EncounterDiagnosis`, `PatientVaccination`, `DeathCertificate` |
+| **pharmacy** | `Drug`, `Prescription`, `PrescriptionItem`, `MedicationDispense` | `Prescription`, `PrescriptionItem`, `MedicationDispense` |
+| **emar** | `MedicationAdministration` | `MedicationAdministration` |
+| **lis** | `LabPanel`, `LabTest`, `LabOrder`, `LabOrderItem`, `LabSpecimen`, `LabResult` | `LabOrder`, `LabOrderItem`, `LabSpecimen`, `LabResult` |
+| **imaging** | `ImagingModality`, `ImagingOrder`, `ImagingReport` | `ImagingOrder`, `ImagingReport` |
+| **inventory** | `StockItem`, `StockLot`, `StockMovement` | `StockLot`, `StockMovement` |
+| **equipment** | `BiomedicalEquipment`, `PmSchedule`, `CalibrationLog` | `BiomedicalEquipment`, `PmSchedule` |
+| **respiratory** | `RespiratoryOrder`, `VentilatorSession`, `MedicalGasUsage` | `RespiratoryOrder` |
+| **nutrition** | `DietPlan`, `NutritionAssessment`, `NutritionOrder` | todas |
+| **insurance** | `Insurer`, `InsurancePlan`, `PatientCoverage`, `AuthorizationRequest` | `PatientCoverage`, `AuthorizationRequest` |
+
+Adicionalmente, `InpatientAdmission` y `Prescription` tienen triggers de state machine (SQL 25/26) que validan transiciones de status a nivel de DB como defensa en profundidad. `LabOrder` tiene el mismo patron (SQL 27). Ver §3 de `docs/02_arquitectura_software.md` para el patron generico.
 
 1. **Índices GIN trigram** sobre `Patient(lastName, firstName)`,
    `ClinicalConcept(display)` — emitir migración SQL post-Prisma.
