@@ -1509,6 +1509,17 @@ enum AppointmentStatus {
   @@schema("public")
 }
 
+enum ReasonCategory {
+  ROUTINE
+  FOLLOWUP
+  ACUTE
+  PREVENTIVE
+  CHRONIC
+  OTHER
+
+  @@schema("public")
+}
+
 /// TDR §10.1 — citas de consulta externa programadas.
 model OutpatientAppointment {
   id              String            @id @default(uuid()) @db.Uuid
@@ -1521,7 +1532,8 @@ model OutpatientAppointment {
   scheduledAt     DateTime          @db.Timestamptz()
   durationMinutes Int               @default(20)
   status          AppointmentStatus @default(SCHEDULED)
-  reason          String?           @db.VarChar(400)
+  reason          String?           @db.VarChar(500)
+  reasonCategory  ReasonCategory?
   notes           String?           @db.Text
   createdAt       DateTime          @default(now()) @db.Timestamptz()
   createdBy       String?           @db.Uuid
@@ -1547,7 +1559,8 @@ model OutpatientConsultation {
   id            String    @id @default(uuid()) @db.Uuid
   appointmentId String?   @db.Uuid /// nullable para walk-ins sin cita.
   encounterId   String    @unique @db.Uuid /// Encounter de tipo OUTPATIENT.
-  reasonOfVisit String    @db.VarChar(400)
+  reasonOfVisit  String          @db.VarChar(500)
+  reasonCategory ReasonCategory?
   subjective    String?   @db.Text
   objective     String?   @db.Text
   assessment    String?   @db.Text
