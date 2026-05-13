@@ -1,13 +1,31 @@
 /**
- * §14 EHR Clinical Notes — schemas. Skeleton mínimo.
+ * §14 EHR Clinical Notes — schemas. Beta.5 hardening layer 1.
  */
-import { z } from "zod";
+import { z } from 'zod';
 
-const NOTE_TYPE = ["PROGRESS", "ADMISSION", "DISCHARGE_SUMMARY", "CONSULTATION", "NURSING", "EMERGENCY"] as const;
-const DIAGNOSIS_TYPE = ["PRINCIPAL", "SECONDARY", "RULE_OUT", "CHRONIC"] as const;
+const NOTE_TYPE = [
+  'PROGRESS',
+  'ADMISSION',
+  'DISCHARGE_SUMMARY',
+  'CONSULTATION',
+  'NURSING',
+  'EMERGENCY',
+] as const;
+const DIAGNOSIS_TYPE = ['PRINCIPAL', 'SECONDARY', 'RULE_OUT', 'CHRONIC'] as const;
 
 export const noteTypeEnum = z.enum(NOTE_TYPE);
 export const diagnosisTypeEnum = z.enum(DIAGNOSIS_TYPE);
+
+export const editHistoryActionEnum = z.enum(['create', 'update']);
+
+export const editHistoryEntrySchema = z.object({
+  at: z.string().datetime(),
+  by: z.string().uuid(),
+  action: editHistoryActionEnum,
+  diff: z.record(z.string().nullable()).optional(),
+});
+
+export type EditHistoryEntry = z.infer<typeof editHistoryEntrySchema>;
 
 export const clinicalNoteCreateInput = z.object({
   encounterId: z.string().uuid(),
@@ -25,7 +43,7 @@ export const clinicalNoteSignInput = z.object({
 
 export const clinicalNoteAddendumInput = z.object({
   addendumOfId: z.string().uuid(),
-  noteType: noteTypeEnum.default("PROGRESS"),
+  noteType: noteTypeEnum.default('PROGRESS'),
   subjective: z.string().trim().max(8000).optional(),
   objective: z.string().trim().max(8000).optional(),
   assessment: z.string().trim().max(8000).optional(),
@@ -62,3 +80,5 @@ export type ClinicalNoteSignInput = z.infer<typeof clinicalNoteSignInput>;
 export type ClinicalNoteAddendumInput = z.infer<typeof clinicalNoteAddendumInput>;
 export type ClinicalNoteListInput = z.infer<typeof clinicalNoteListInput>;
 export type EncounterDiagnosisCreateInput = z.infer<typeof encounterDiagnosisCreateInput>;
+export type EncounterDiagnosisListInput = z.infer<typeof encounterDiagnosisListInput>;
+export type EncounterDiagnosisResolveInput = z.infer<typeof encounterDiagnosisResolveInput>;
