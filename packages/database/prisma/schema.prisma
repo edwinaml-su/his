@@ -417,6 +417,7 @@ model User {
   treatingEmergency         EmergencyVisit[]           @relation("EmergencyTreating")
   primarySurgeon            SurgeryCase[]              @relation("SurgeryPrimarySurgeon")
   medicationAdministrations MedicationAdministration[] @relation("MedAdminAdministrator")
+  medAdminSecondVerify      MedicationAdministration[] @relation("MedAdminSecondVerifier")
   imagingOrdered            ImagingOrder[]             @relation("ImagingOrderingProvider")
   imagingReported           ImagingReport[]            @relation("ImagingRadiologist")
   respiratoryPrescribed     RespiratoryOrder[]         @relation("RespiratoryPrescriber")
@@ -1666,16 +1667,21 @@ model Prescription {
 }
 
 /// TDR §15.2 — ítem de receta (un medicamento por línea con dosificación).
+/// Beta.8: prescribedQty + administeredQty para cumulative-qty enforcement.
 model PrescriptionItem {
-  id             String     @id @default(uuid()) @db.Uuid
-  prescriptionId String     @db.Uuid
-  drugId         String     @db.Uuid
-  dosage         String     @db.VarChar(120) /// "500mg cada 8h"
-  route          AdminRoute
-  frequency      String     @db.VarChar(80) /// "QID", "BID", "PRN"
-  durationDays   Int?
-  prnAsNeeded    Boolean    @default(false)
-  notes          String?    @db.Text
+  id              String     @id @default(uuid()) @db.Uuid
+  prescriptionId  String     @db.Uuid
+  drugId          String     @db.Uuid
+  dosage          String     @db.VarChar(120) /// "500mg cada 8h"
+  route           AdminRoute
+  frequency       String     @db.VarChar(80) /// "QID", "BID", "PRN"
+  durationDays    Int?
+  prnAsNeeded     Boolean    @default(false)
+  notes           String?    @db.Text
+  /// Cantidad total prescrita (unidades de dosis) — base para enforcement de qty.
+  prescribedQty   Decimal    @default(0) @db.Decimal(12, 4)
+  /// Qty acumulada de administraciones con status=ADMINISTERED. Actualizada por trigger.
+  administeredQty Decimal    @default(0) @db.Decimal(12, 4)
 
   prescription    Prescription               @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
   drug            Drug                       @relation(fields: [drugId], references: [id], onDelete: Restrict)
@@ -2276,6 +2282,8 @@ model SurgeryCase {
 // =============================================================================
 
 enum MedAdminStatus {
+  SCHEDULED
+  ADMINISTERED
   GIVEN
   HELD
   REFUSED
@@ -2285,22 +2293,36 @@ enum MedAdminStatus {
   @@schema("public")
 }
 
-/// TDR §16.1 — administración de medicamento (BCMA: barcode + doble check).
-/// Consume PrescriptionItem firmados; el doble-check es metadato declarativo.
+/// TDR §16.1 — administración de medicamento.
+/// Beta.8 hardening layer 1: BCMA (3 scans), doble-check alto riesgo,
+/// timing-window ±N min, override con audit, qty acumulada en PrescriptionItem.
 model MedicationAdministration {
   id                      String         @id @default(uuid()) @db.Uuid
   organizationId          String         @db.Uuid
   prescriptionItemId      String         @db.Uuid
   administeredAt          DateTime       @default(now()) @db.Timestamptz()
   administeredById        String         @db.Uuid /// User (enfermero/a).
-  doubleCheckById         String?        @db.Uuid /// segundo verificador (alto riesgo).
-  status                  MedAdminStatus @default(GIVEN)
+  /// Doble-check requerido para alto riesgo (requiresControlledLog=true o RX_CONTROLLED).
+  secondVerifierId        String?        @db.Uuid
+  status                  MedAdminStatus @default(SCHEDULED)
   doseAmount              Decimal?       @db.Decimal(12, 4)
   doseUnit                String?        @db.VarChar(20)
   route                   AdminRoute?
-  site                    String?        @db.VarChar(80) /// "brazo izq", "abdomen", etc.
+  site                    String?        @db.VarChar(80)
+  /// BCMA — los tres scans deben ser true para STATUS=ADMINISTERED.
+  patientBarcodeScanned   Boolean        @default(false)
+  drugBarcodeScanned      Boolean        @default(false)
+  providerBadgeScanned    Boolean        @default(false)
+  scannedAt               DateTime?      @db.Timestamptz()
+  /// Campos legacy mantenidos por compatibilidad.
   barcodeScannedAt        DateTime?      @db.Timestamptz()
   patientWristbandScanned Boolean        @default(false)
+  doubleCheckById         String?        @db.Uuid
+  /// Timing-window enforcement.
+  scheduledTime           DateTime?      @db.Timestamptz()
+  timingWindowMinutes     Int            @default(30)
+  /// Override de timing o qty con audit.
+  overrideReason          String?        @db.VarChar(500)
   notes                   String?        @db.Text
   createdAt               DateTime       @default(now()) @db.Timestamptz()
   updatedAt               DateTime       @updatedAt @db.Timestamptz()
@@ -2308,16 +2330,20 @@ model MedicationAdministration {
   organization     Organization     @relation("OrgMedAdmins", fields: [organizationId], references: [id], onDelete: Restrict)
   prescriptionItem PrescriptionItem @relation("MedAdminItem", fields: [prescriptionItemId], references: [id], onDelete: Restrict)
   administeredBy   User             @relation("MedAdminAdministrator", fields: [administeredById], references: [id], onDelete: Restrict)
+  secondVerifier   User?            @relation("MedAdminSecondVerifier", fields: [secondVerifierId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, administeredAt])
   @@index([prescriptionItemId])
   @@index([administeredById])
   @@index([status])
+  @@index([scheduledTime])
   @@schema("public")
 }
 
 // =============================================================================
+// =============================================================================
 // §18 RIS/PACS — Imaging Orders & Modalities (Wave 7 / Phase 2 entry)
+// Beta.9 hardening layer 1: state machine, DICOM codes, urgency SLA, immutability
 // =============================================================================
 
 enum ImagingModalityType {
@@ -2334,21 +2360,39 @@ enum ImagingModalityType {
   @@schema("public")
 }
 
+/// DICOM standard modality codes (IOD C.7.3.1.1.1) for dicomCode validation.
+enum DicomModality {
+  CT
+  MR
+  US
+  XR
+  MG
+  NM
+  PT
+  DX
+  RF
+
+  @@schema("public")
+}
+
+/// State machine: ORDERED → SCHEDULED → IN_PROGRESS → COMPLETED → REPORTED → VALIDATED
+/// Branch: any cancellable status (ORDERED/SCHEDULED/IN_PROGRESS) → CANCELLED.
 enum ImagingOrderStatus {
   ORDERED
   SCHEDULED
   IN_PROGRESS
-  ACQUIRED
+  COMPLETED
   REPORTED
+  VALIDATED
   CANCELLED
 
   @@schema("public")
 }
 
 enum ImagingPriority {
-  ROUTINE
-  URGENT
-  STAT
+  STAT    /// Emergency: SLA 60 min
+  URGENT  /// Urgent: SLA 240 min
+  ROUTINE /// Routine: SLA 1440 min
 
   @@schema("public")
 }
@@ -2360,6 +2404,8 @@ model ImagingModality {
   code            String              @db.VarChar(40)
   name            String              @db.VarChar(120)
   modalityType    ImagingModalityType
+  /// DICOM standard modality code (2-4 chars, e.g. "CT", "MR"). Must match DicomModality enum.
+  dicomCode       DicomModality?
   aeTitle         String?             @db.VarChar(40) /// DICOM AE Title.
   active          Boolean             @default(true)
   createdAt       DateTime            @default(now()) @db.Timestamptz()
@@ -2389,9 +2435,14 @@ model ImagingOrder {
   clinicalIndication String              @db.Text
   priority           ImagingPriority     @default(ROUTINE)
   status             ImagingOrderStatus  @default(ORDERED)
+  orderedAt          DateTime            @default(now()) @db.Timestamptz() /// Base timestamp for SLA calculation.
   scheduledAt        DateTime?           @db.Timestamptz()
-  acquiredAt         DateTime?           @db.Timestamptz()
+  completedAt        DateTime?           @db.Timestamptz() /// Set on COMPLETED transition.
   accessionNumber    String?             @db.VarChar(80) /// DICOM accession.
+  /// Radiation dose — DAP in cGy·cm². Only for CT/XA/MG modalities.
+  radiationDoseDap   Decimal?            @db.Decimal(10, 4)
+  /// Radiation dose — CTDIvol in mGy. Only for CT/XA/MG modalities.
+  radiationDoseCtdi  Decimal?            @db.Decimal(10, 4)
   notes              String?             @db.Text
   createdAt          DateTime            @default(now()) @db.Timestamptz()
   createdBy          String?             @db.Uuid
@@ -2415,10 +2466,12 @@ model ImagingOrder {
   @@index([modalityId])
   @@index([modalityType])
   @@index([establishmentId])
+  @@index([orderedAt]) /// SLA/overdue queries.
   @@schema("public")
 }
 
 /// TDR §18.3 — reporte radiológico de una orden de imagen.
+/// Immutability: DB trigger blocks UPDATE/DELETE when validatedAt IS NOT NULL.
 model ImagingReport {
   id             String    @id @default(uuid()) @db.Uuid
   orderId        String    @unique @db.Uuid
@@ -2428,6 +2481,7 @@ model ImagingReport {
   recommendation String?   @db.Text
   reportedAt     DateTime  @default(now()) @db.Timestamptz()
   signedAt       DateTime? @db.Timestamptz()
+  validatedAt    DateTime? @db.Timestamptz() /// When set, report is immutable (enforced by DB trigger).
   amendedAt      DateTime? @db.Timestamptz()
   createdAt      DateTime  @default(now()) @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
