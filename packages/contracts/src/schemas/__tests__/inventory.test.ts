@@ -1,5 +1,5 @@
 /**
- * Tests del schema §19 Inventory (Wave 8 / Phase 2 entry).
+ * Tests del schema §19 Inventory (Beta.10 hardening layer 1).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -10,9 +10,12 @@ import {
   stockLotListInput,
   stockMovementCreateInput,
   stockMovementListInput,
+  stockTransferInput,
+  expiringLotsInput,
 } from "../inventory";
 
 const u = "00000000-0000-0000-0000-000000000001";
+const u2 = "00000000-0000-0000-0000-000000000002";
 
 describe("stockMovementTypeEnum", () => {
   it.each(["IN", "OUT", "TRANSFER", "ADJUST"])("type %s válido", (t) =>
@@ -144,6 +147,33 @@ describe("stockLotListInput", () => {
     ).toBe(true));
 });
 
+describe("expiringLotsInput", () => {
+  it("daysAhead defaults to 30", () => {
+    const r = expiringLotsInput.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.daysAhead).toBe(30);
+      expect(r.data.limit).toBe(50);
+    }
+  });
+
+  it("acepta daysAhead personalizado y filtros opcionales", () =>
+    expect(
+      expiringLotsInput.safeParse({
+        daysAhead: 7,
+        establishmentId: u,
+        itemId: u,
+        limit: 20,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza daysAhead = 0", () =>
+    expect(expiringLotsInput.safeParse({ daysAhead: 0 }).success).toBe(false));
+
+  it("rechaza daysAhead > 365", () =>
+    expect(expiringLotsInput.safeParse({ daysAhead: 366 }).success).toBe(false));
+});
+
 describe("stockMovementCreateInput", () => {
   it("acepta IN sin reference", () =>
     expect(
@@ -206,6 +236,51 @@ describe("stockMovementCreateInput", () => {
         quantity: 2,
         reason: "Conteo físico",
       }).success,
+    ).toBe(true));
+
+  it("acepta transferGroupId UUID opcional", () =>
+    expect(
+      stockMovementCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u,
+        type: "IN",
+        quantity: 5,
+        transferGroupId: u,
+      }).success,
+    ).toBe(true));
+});
+
+describe("stockTransferInput", () => {
+  const base = {
+    srcEstablishmentId: u,
+    dstEstablishmentId: u2,
+    itemId: u,
+    srcLotId: u,
+    quantity: 10,
+    referenceCode: "TRF-001",
+  };
+
+  it("acepta transfer válido", () =>
+    expect(stockTransferInput.safeParse(base).success).toBe(true));
+
+  it("rechaza cuando src === dst", () =>
+    expect(
+      stockTransferInput.safeParse({ ...base, dstEstablishmentId: u }).success,
+    ).toBe(false));
+
+  it("rechaza quantity 0", () =>
+    expect(
+      stockTransferInput.safeParse({ ...base, quantity: 0 }).success,
+    ).toBe(false));
+
+  it("rechaza sin referenceCode", () =>
+    expect(
+      stockTransferInput.safeParse({ ...base, referenceCode: undefined }).success,
+    ).toBe(false));
+
+  it("acepta dstLotId opcional", () =>
+    expect(
+      stockTransferInput.safeParse({ ...base, dstLotId: u2 }).success,
     ).toBe(true));
 });
 
