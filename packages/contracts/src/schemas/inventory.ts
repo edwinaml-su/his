@@ -1,8 +1,8 @@
 /**
- * §19 Inventory — schemas de input (Wave 8 / Phase 2 entry).
+ * §19 Inventory — schemas de input (Wave 8 / Beta.10 hardening layer 1).
  *
- * Skeleton mínimo. Reglas FEFO (First Expired First Out), reservas y
- * disparadores de reorden viven en el router. Aquí solo se valida el contrato.
+ * Reglas FEFO (First Expired First Out), expiry alerts y transfer atomicity
+ * validadas aquí y reforzadas por triggers DB en 34_inventory_hardening.sql.
  */
 import { z } from "zod";
 
@@ -56,6 +56,20 @@ export const stockLotListInput = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Expiry alerts — §19 rule 3
+// ---------------------------------------------------------------------------
+
+export const expiringLotsInput = z.object({
+  establishmentId: z.string().uuid().optional(),
+  itemId: z.string().uuid().optional(),
+  /** Days ahead to look for expiring lots (default 30). */
+  daysAhead: z.number().int().min(1).max(365).default(30),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+
+export type ExpiringLotsInput = z.infer<typeof expiringLotsInput>;
+
+// ---------------------------------------------------------------------------
 // StockMovement
 // ---------------------------------------------------------------------------
 
@@ -68,11 +82,37 @@ export const stockMovementCreateInput = z
     quantity: z.number().positive(),
     reason: z.string().trim().max(200).optional(),
     referenceCode: z.string().trim().max(80).optional(),
+    /**
+     * Required for TRANSFER type. Must be a UUID shared between the OUT
+     * movement (source establishment) and the IN movement (destination).
+     * The router generates this automatically; clients do not set it.
+     */
+    transferGroupId: z.string().uuid().optional(),
   })
   .refine((d) => d.type !== "TRANSFER" || d.referenceCode !== undefined, {
     message: "TRANSFER requiere referenceCode con destino.",
     path: ["referenceCode"],
   });
+
+/**
+ * Input for creating a TRANSFER pair atomically.
+ * The router validates that src and dst establishments differ and belong to the tenant.
+ */
+export const stockTransferInput = z.object({
+  srcEstablishmentId: z.string().uuid(),
+  dstEstablishmentId: z.string().uuid(),
+  itemId: z.string().uuid(),
+  srcLotId: z.string().uuid(),
+  dstLotId: z.string().uuid().optional(),
+  quantity: z.number().positive(),
+  reason: z.string().trim().max(200).optional(),
+  referenceCode: z.string().trim().max(80),
+}).refine(
+  (d) => d.srcEstablishmentId !== d.dstEstablishmentId,
+  { message: "TRANSFER requiere establecimientos distintos.", path: ["dstEstablishmentId"] },
+);
+
+export type StockTransferInput = z.infer<typeof stockTransferInput>;
 
 export const stockMovementListInput = z.object({
   itemId: z.string().uuid().optional(),
