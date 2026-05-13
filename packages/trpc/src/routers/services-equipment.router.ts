@@ -1,13 +1,12 @@
 /**
- * §20 Services & Equipment — router skeleton (Wave 8 / Phase 2 entry).
+ * §20 Services & Equipment — router (Wave 8 / Beta.11 hardening layer 1).
  *
- * Cobertura mínima:
- *   - BiomedicalEquipment registro + cambio de estado.
- *   - PmSchedule (mantenimiento preventivo) workflow plan → complete | cancel.
- *   - CalibrationLog inmutable.
- *
- * Programación recurrente de PM (RRULE-based) y notificaciones de calibración
- * vencida viven en iteraciones siguientes.
+ * Hardening layer 1:
+ *   - State machine validation on setStatus (ALLOWED_TRANSITIONS).
+ *   - CRITICAL equipment entering UNDER_MAINTENANCE requires maintenanceReason.
+ *   - equipment.getOverduePm — PM schedules with nextDueAt < now() on non-MAINTENANCE equipment.
+ *   - equipment.getExpiringCertifications — equipment whose certificationExpiresAt is within N days.
+ *   - CalibrationLog remains append-only at DB layer (trigger in 35_equipment_hardening.sql).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -15,12 +14,16 @@ import {
   equipmentCreateInput,
   equipmentListInput,
   equipmentSetStatusInput,
+  getOverduePmInput,
+  getExpiringCertificationsInput,
   pmScheduleCreateInput,
   pmScheduleListInput,
   pmScheduleCompleteInput,
   pmScheduleCancelInput,
   calibrationLogCreateInput,
   calibrationLogListInput,
+  isValidTransition,
+  type EquipmentStatusType,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
@@ -35,6 +38,7 @@ export const servicesEquipmentRouter = router({
         if (input.activeOnly) filters.push({ active: true });
         if (input.establishmentId) filters.push({ establishmentId: input.establishmentId });
         if (input.status) filters.push({ status: input.status });
+        if (input.criticality) filters.push({ criticality: input.criticality });
         if (input.category) filters.push({ category: input.category });
         if (input.search) {
           filters.push({
@@ -80,6 +84,8 @@ export const servicesEquipmentRouter = router({
             category: input.category ?? null,
             location: input.location ?? null,
             installDate: input.installDate ?? null,
+            criticality: input.criticality,
+            certificationExpiresAt: input.certificationExpiresAt ?? null,
             createdBy: ctx.user.id,
           },
         });
@@ -98,17 +104,107 @@ export const servicesEquipmentRouter = router({
     setStatus: tenantProcedure
       .input(equipmentSetStatusInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.biomedicalEquipment.updateMany({
+        const equipment = await ctx.prisma.biomedicalEquipment.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          data: { status: input.status },
+          select: { id: true, status: true, criticality: true },
         });
-        if (updated.count === 0) {
+        if (!equipment) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Equipo no existe en la organización.",
           });
         }
+
+        const from = equipment.status as EquipmentStatusType;
+        const to = input.status;
+
+        if (!isValidTransition(from, to)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Transición inválida: ${from} → ${to}.`,
+          });
+        }
+
+        // CRITICAL equipment entering UNDER_MAINTENANCE requires a reason.
+        if (equipment.criticality === "CRITICAL" && to === "UNDER_MAINTENANCE") {
+          if (!input.maintenanceReason?.trim()) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Equipos CRITICAL requieren maintenanceReason al pasar a UNDER_MAINTENANCE.",
+            });
+          }
+        }
+
+        await ctx.prisma.biomedicalEquipment.update({
+          where: { id: input.id },
+          data: {
+            status: to,
+            maintenanceReason:
+              to === "UNDER_MAINTENANCE" ? (input.maintenanceReason ?? null) : null,
+          },
+        });
+
         return { ok: true as const };
+      }),
+
+    getOverduePm: tenantProcedure
+      .input(getOverduePmInput)
+      .query(async ({ ctx, input }) => {
+        const now = new Date();
+        const filters: object[] = [
+          { organizationId: ctx.tenant.organizationId },
+          { active: true },
+          // Equipment not currently in UNDER_MAINTENANCE (those are being worked on).
+          { status: { not: "UNDER_MAINTENANCE" } },
+        ];
+        if (input.establishmentId) filters.push({ establishmentId: input.establishmentId });
+
+        return ctx.prisma.biomedicalEquipment.findMany({
+          where: {
+            AND: [
+              ...filters,
+              {
+                pmSchedules: {
+                  some: {
+                    status: { in: ["PLANNED", "OVERDUE"] },
+                    scheduledAt: { lt: now },
+                  },
+                },
+              },
+            ],
+          },
+          include: {
+            pmSchedules: {
+              where: {
+                status: { in: ["PLANNED", "OVERDUE"] },
+                scheduledAt: { lt: now },
+              },
+              orderBy: { scheduledAt: "asc" },
+            },
+          },
+          orderBy: { name: "asc" },
+          take: input.limit,
+        });
+      }),
+
+    getExpiringCertifications: tenantProcedure
+      .input(getExpiringCertificationsInput)
+      .query(async ({ ctx, input }) => {
+        const now = new Date();
+        const cutoff = new Date(now.getTime() + input.daysAhead * 24 * 60 * 60 * 1000);
+
+        const filters: object[] = [
+          { organizationId: ctx.tenant.organizationId },
+          { active: true },
+          { certificationExpiresAt: { not: null, lte: cutoff } },
+        ];
+        if (input.establishmentId) filters.push({ establishmentId: input.establishmentId });
+
+        return ctx.prisma.biomedicalEquipment.findMany({
+          where: { AND: filters },
+          orderBy: { certificationExpiresAt: "asc" },
+          take: input.limit,
+        });
       }),
   }),
 
