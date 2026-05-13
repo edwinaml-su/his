@@ -4,8 +4,24 @@
 **Owner:** SRE Lead + PO + Clinical Lead
 **Ventana de cutover prevista:** Día 0 — sábado 02:00 a 04:00 (2 horas)
 **Ambiente objetivo:** Producción — Vercel + Supabase region `sa-east-1`
+**Última revisión:** 2026-05-13 (Fase 6 — Stream D actualización con estado Phase 2)
 
 > El script `scripts/golive-checklist.sh` automatiza los ítems marcados con **[auto]**. Ejecutar antes de cada hito y adjuntar output al ticket de cambio.
+
+## Estado al 2026-05-13 (post Wave 6/7/8 + Fase 5)
+
+| Hito                              | Estado     | Evidencia                                                    |
+|-----------------------------------|------------|---------------------------------------------------------------|
+| Schema Phase 2 en prod            | OK         | 96 tablas Supabase, `list_tables` confirmado                  |
+| RLS 100% tenant-scoped            | OK         | Advisor 0 CRITICAL post SQL 23                                |
+| Audit triggers Phase 2            | OK         | 48 tablas wired via SQL 22 (PR #12)                           |
+| Vercel build estable              | OK         | `his-avante.vercel.app` (último commit `c1e2dd6`)             |
+| ADRs Phase 2                      | OK         | 5 ADRs (`docs/adr/0001-0005`) — Fase 6 Stream B               |
+| Production runbook                | OK         | `docs/15_production_runbook.md` — Fase 6 Stream A             |
+| SQL 24 security hardening         | Pendiente apply | `packages/database/sql/24_security_hardening.sql` listo  |
+| HIBP Supabase Auth                | Pendiente acción dashboard | Stream A doc 15 §2 + Stream C doc 21 §3.2     |
+| UAT scenarios Phase 2             | OK         | `docs/uat/phase2_uat_scenarios.md` — 16 scenarios Gherkin     |
+| Smoke test producción (Playwright) | Stream F  | Pendiente PR — `apps/web/e2e/smoke-production.spec.ts`        |
 
 ---
 
@@ -83,6 +99,30 @@
 ### D.3 T+1w (semana 1)
 50. [ ] Primer reporte ejecutivo (KPIs, incidentes, lecciones aprendidas).
 51. [ ] Decisión Go/No-Go para retirada parcial de hipercuidado en semana 2.
+
+### D.4 Plan de hipercuidado 2 semanas — checkpoints diarios
+
+Cadencia obligatoria post go-live (T+0 a T+14d). Detallado en `docs/17_hipercuidado_runbook.md` §5.
+
+| Día      | Checkpoint                                          | Hora     | Owner             | Output esperado                    |
+|----------|------------------------------------------------------|----------|-------------------|------------------------------------|
+| T+1 a 14 | Daily stand-up (semáforo KPIs)                       | 08:00    | SRE on-call       | Resumen en `#his-hipercuidado`     |
+| T+1 a 7  | Snapshot KPIs mediodía                               | 12:00    | SRE on-call       | Captura dashboard                  |
+| T+1 a 14 | Cierre día + handoff turno                           | 18:00    | SRE on-call       | Reporte en Slack                   |
+| T+1 a 14 | Verificación backup + handoff noche                  | 23:00    | SRE noche         | Confirmación log                   |
+| T+3      | Primera retro mini (3 días)                          | 17:00    | @QAF + @PO        | Notas en `docs/incidents/`         |
+| T+7      | Reporte semana 1 (KPIs, incidentes, NPS preliminar)  | 14:00    | @PO + Clinical    | `docs/golive-status/week-1.md`     |
+| T+10     | Decisión Go/No-Go retirada parcial soporte           | 10:00    | PO + Clinical + SRE | Acta firmada                     |
+| T+14     | Cierre hipercuidado + transferencia BAU              | 14:00    | Todos             | `docs/golive-status/closure.md`    |
+
+### D.5 Criterios de transición BAU (Día 14)
+
+- [ ] 0 incidentes P1 sin resolver.
+- [ ] ≥ 99% cumplimiento SLOs durante las 2 semanas.
+- [ ] Tickets/día < 20 en los últimos 3 días consecutivos.
+- [ ] NPS clínicos ≥ 30.
+- [ ] Audit chain íntegra todo el periodo (`audit.fn_verify_chain()` retorna 0).
+- [ ] Backups exitosos las 14 noches.
 
 ---
 
