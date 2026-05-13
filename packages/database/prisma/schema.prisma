@@ -2884,7 +2884,23 @@ enum MedicalGasType {
   @@schema("public")
 }
 
+/// Beta.12 §21 — state machine de destete del ventilador mecánico.
+/// Transiciones válidas:
+///   ACTIVE  → WEANING → EXTUBATED
+///   WEANING → ESCALATED → ACTIVE  (deterioro; retorna a ventilación completa)
+///   WEANING → FAILED_EXTUBATION   (intento de extubación fallido)
+enum VentilatorSessionStatus {
+  ACTIVE
+  WEANING
+  EXTUBATED
+  ESCALATED
+  FAILED_EXTUBATION
+
+  @@schema("public")
+}
+
 /// TDR §21.1 — orden respiratoria emitida por médico.
+/// Beta.12: expiresAt = startedAt + 24 h por defecto; renewedAt registra última renovación.
 model RespiratoryOrder {
   id             String                 @id @default(uuid()) @db.Uuid
   organizationId String                 @db.Uuid
@@ -2897,7 +2913,9 @@ model RespiratoryOrder {
   fio2           Decimal?               @db.Decimal(5, 2) /// fracción inspirada de O2 0–100.
   notes          String?                @db.Text
   startedAt      DateTime               @default(now()) @db.Timestamptz()
+  expiresAt      DateTime?              @db.Timestamptz() /// Beta.12: expiración (startedAt+24h); NULL = sin límite explícito.
   endedAt        DateTime?              @db.Timestamptz()
+  renewedAt      DateTime?              @db.Timestamptz() /// Beta.12: timestamp de la última renovación; NULL = nunca renovada.
   createdAt      DateTime               @default(now()) @db.Timestamptz()
   createdBy      String?                @db.Uuid
   updatedAt      DateTime               @updatedAt @db.Timestamptz()
@@ -2913,27 +2931,34 @@ model RespiratoryOrder {
   @@index([organizationId, status])
   @@index([encounterId])
   @@index([patientId])
+  @@index([expiresAt]) /// Beta.12: soporte para getExpiredOrders.
   @@schema("public")
 }
 
 /// TDR §21.2 — sesión de ventilación mecánica vinculada a una orden.
+/// Beta.12: statusSM (state machine destete), patientWeightKg (Vt/kg), outOfRangeSince, alertFiredAt.
 model VentilatorSession {
-  id          String         @id @default(uuid()) @db.Uuid
-  orderId     String         @db.Uuid
-  mode        VentilatorMode
-  startedAt   DateTime       @default(now()) @db.Timestamptz()
-  endedAt     DateTime?      @db.Timestamptz()
-  tidalVolume Decimal?       @db.Decimal(8, 2) /// mL.
-  rrSet       Int? /// respiraciones por minuto programadas.
-  peep        Decimal?       @db.Decimal(6, 2) /// cmH2O.
-  fio2        Decimal?       @db.Decimal(5, 2)
-  notes       String?        @db.Text
-  createdAt   DateTime       @default(now()) @db.Timestamptz()
-  updatedAt   DateTime       @updatedAt @db.Timestamptz()
+  id              String                  @id @default(uuid()) @db.Uuid
+  orderId         String                  @db.Uuid
+  mode            VentilatorMode
+  statusSM        VentilatorSessionStatus @default(ACTIVE) /// Beta.12: estado en la state machine de destete.
+  startedAt       DateTime                @default(now()) @db.Timestamptz()
+  endedAt         DateTime?               @db.Timestamptz()
+  tidalVolume     Decimal?                @db.Decimal(8, 2) /// mL; rango seguro 4–12 mL/kg.
+  rrSet           Int?                                      /// resp/min programadas; rango seguro 8–30.
+  peep            Decimal?                @db.Decimal(6, 2) /// cmH2O; rango seguro 5–20.
+  fio2            Decimal?                @db.Decimal(4, 3) /// fracción 0.21–1.0.
+  patientWeightKg Decimal?                @db.Decimal(6, 2) /// Beta.12: peso para derivar Vt/kg.
+  outOfRangeSince DateTime?               @db.Timestamptz() /// Beta.12: inicio del intervalo con parámetros fuera de rango.
+  alertFiredAt    DateTime?               @db.Timestamptz() /// Beta.12: momento en que se disparó la alerta crítica (>5 min fuera de rango).
+  notes           String?                 @db.Text
+  createdAt       DateTime                @default(now()) @db.Timestamptz()
+  updatedAt       DateTime                @updatedAt @db.Timestamptz()
 
   order RespiratoryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId, startedAt])
+  @@index([statusSM]) /// Beta.12: queries de destete por estado.
   @@schema("public")
 }
 
