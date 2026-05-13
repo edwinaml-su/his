@@ -26,6 +26,10 @@ import { patientHistoryRouter } from "./patient-history.router";
 import { triageDashboardRouter } from "./triage-dashboard.router";
 import { triageFlowchartRouter } from "./triage-flowchart.router";
 import { vaccinationRouter } from "./vaccination.router";
+import { outpatientRouter } from "./outpatient.router";
+import { pharmacyRouter } from "./pharmacy.router";
+import { lisRouter } from "./lis.router";
+import { ehrNotesRouter } from "./ehr-notes.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -55,6 +59,10 @@ export const appRouter = router({
   triageDashboard: triageDashboardRouter,
   triageFlowchart: triageFlowchartRouter,
   vaccination: vaccinationRouter,
+  outpatient: outpatientRouter,
+  pharmacy: pharmacyRouter,
+  lis: lisRouter,
+  ehrNotes: ehrNotesRouter,
 });
 
 export type AppRouter = typeof appRouter;

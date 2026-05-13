@@ -295,20 +295,21 @@ model Organization {
   updatedAt          DateTime @updatedAt @db.Timestamptz()
   updatedBy          String?  @db.Uuid
 
-  country        Country                @relation(fields: [countryId], references: [id], onDelete: Restrict)
-  parent         Organization?          @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
-  children       Organization[]         @relation("OrgTree")
-  functionalCurr Currency               @relation("OrgFunctional", fields: [functionalCurrency], references: [id], onDelete: Restrict)
-  reportingCurr  Currency?              @relation("OrgReporting", fields: [reportingCurrency], references: [id], onDelete: Restrict)
-  establishments Establishment[]
-  ledgers        Ledger[]
-  userRoles      UserOrganizationRole[]
-  patients       Patient[]
-  encounters     Encounter[]
-  triages        TriageEvaluation[]
-  beds           Bed[]
-  services       ServiceUnit[]
-  vaccinations   PatientVaccination[]
+  country                Country                 @relation(fields: [countryId], references: [id], onDelete: Restrict)
+  parent                 Organization?           @relation("OrgTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children               Organization[]          @relation("OrgTree")
+  functionalCurr         Currency                @relation("OrgFunctional", fields: [functionalCurrency], references: [id], onDelete: Restrict)
+  reportingCurr          Currency?               @relation("OrgReporting", fields: [reportingCurrency], references: [id], onDelete: Restrict)
+  establishments         Establishment[]
+  ledgers                Ledger[]
+  userRoles              UserOrganizationRole[]
+  patients               Patient[]
+  encounters             Encounter[]
+  triages                TriageEvaluation[]
+  beds                   Bed[]
+  services               ServiceUnit[]
+  vaccinations           PatientVaccination[]
+  outpatientAppointments OutpatientAppointment[] @relation("OrgAppointments")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -330,11 +331,12 @@ model Establishment {
   updatedAt      DateTime @updatedAt @db.Timestamptz()
   updatedBy      String?  @db.Uuid
 
-  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  serviceUnits ServiceUnit[]
-  beds         Bed[]
-  encounters   Encounter[]
-  triages      TriageEvaluation[]
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  serviceUnits           ServiceUnit[]
+  beds                   Bed[]
+  encounters             Encounter[]
+  triages                TriageEvaluation[]
+  outpatientAppointments OutpatientAppointment[] @relation("EstAppointments")
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -365,26 +367,27 @@ model Ledger {
 
 /// TDR §6.1 — usuario humano del sistema. Las credenciales viven en tablas separadas (4NF).
 model User {
-  id              String    @id @default(uuid()) @db.Uuid
-  email           String    @unique @db.Citext
-  fullName        String    @db.VarChar(200)
-  active          Boolean   @default(true)
-  mfaEnabled      Boolean   @default(false)
-  lastLoginAt     DateTime? @db.Timestamptz()
+  id             String    @id @default(uuid()) @db.Uuid
+  email          String    @unique @db.Citext
+  fullName       String    @db.VarChar(200)
+  active         Boolean   @default(true)
+  mfaEnabled     Boolean   @default(false)
+  lastLoginAt    DateTime? @db.Timestamptz()
   /// US-2.1 - intentos fallidos consecutivos de login (se resetea al login OK).
-  failedAttempts  Int       @default(0)
+  failedAttempts Int       @default(0)
   /// US-2.1 - bloqueo temporal por intentos fallidos. NULL = no bloqueado.
-  lockedUntil     DateTime? @db.Timestamptz()
-  createdAt       DateTime  @default(now()) @db.Timestamptz()
-  createdBy       String?   @db.Uuid
-  updatedAt       DateTime  @updatedAt @db.Timestamptz()
-  updatedBy       String?   @db.Uuid
+  lockedUntil    DateTime? @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  createdBy      String?   @db.Uuid
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+  updatedBy      String?   @db.Uuid
 
   credentials            UserCredential[]
   externalIdentities     UserExternalIdentity[]
   roles                  UserOrganizationRole[]
   sessions               Session[]
-  patientConsentsGranted PatientConsent[]       @relation("ConsentAuthor")
+  patientConsentsGranted PatientConsent[]        @relation("ConsentAuthor")
+  outpatientAppointments OutpatientAppointment[] @relation("ProviderAppointments")
 
   @@schema("public")
 }
@@ -876,22 +879,23 @@ model Patient {
   mother         Patient?        @relation("MotherChild", fields: [motherPatientId], references: [id], onDelete: SetNull)
   children       Patient[]       @relation("MotherChild")
 
-  identifiers       PatientIdentifier[]
-  addresses         PatientAddress[]
-  phones            PatientPhone[]
-  emails            PatientEmail[]
-  emergencyContacts PatientEmergencyContact[]
-  ethnicities       PatientEthnicity[]
-  religions         PatientReligion[]
-  languages         PatientLanguage[]
-  allergies         PatientAllergy[]
-  consents          PatientConsent[]
-  mergeHistoryFrom  PatientMerge[]            @relation("MergeFrom")
-  mergeHistoryTo    PatientMerge[]            @relation("MergeTo")
-  encounters        Encounter[]
-  triages           TriageEvaluation[]
-  vaccinations      PatientVaccination[]
-  deathCertificate  DeathCertificate?
+  identifiers            PatientIdentifier[]
+  addresses              PatientAddress[]
+  phones                 PatientPhone[]
+  emails                 PatientEmail[]
+  emergencyContacts      PatientEmergencyContact[]
+  ethnicities            PatientEthnicity[]
+  religions              PatientReligion[]
+  languages              PatientLanguage[]
+  allergies              PatientAllergy[]
+  consents               PatientConsent[]
+  mergeHistoryFrom       PatientMerge[]            @relation("MergeFrom")
+  mergeHistoryTo         PatientMerge[]            @relation("MergeTo")
+  encounters             Encounter[]
+  triages                TriageEvaluation[]
+  vaccinations           PatientVaccination[]
+  deathCertificate       DeathCertificate?
+  outpatientAppointments OutpatientAppointment[]   @relation("PatAppointments")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1222,10 +1226,12 @@ model Encounter {
   patientCategory PatientCategory? @relation(fields: [patientCategoryId], references: [id], onDelete: SetNull)
   currency        Currency         @relation("EncounterCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
 
-  bedAssignments     BedAssignment[]
-  transfers          EncounterTransfer[]
-  triages            TriageEvaluation[]
-  deathCertificates  DeathCertificate[]
+  bedAssignments         BedAssignment[]
+  transfers              EncounterTransfer[]
+  triages                TriageEvaluation[]
+  deathCertificates      DeathCertificate[]
+  outpatientConsultation OutpatientConsultation? @relation("EncOutpatientConsult")
+  diagnoses              EncounterDiagnosis[]    @relation("EncDiagnoses")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -1433,5 +1439,491 @@ model TriageDiscriminatorHit {
   discriminator TriageDiscriminator @relation(fields: [discriminatorId], references: [id], onDelete: Restrict)
 
   @@unique([evaluationId, discriminatorId])
+  @@schema("public")
+}
+
+// =============================================================================
+// §10 Outpatient — Consulta Externa (Sprint 4 / Phase 2 entry)
+// =============================================================================
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  CHECKED_IN
+  NO_SHOW
+  COMPLETED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// TDR §10.1 — citas de consulta externa programadas.
+model OutpatientAppointment {
+  id              String            @id @default(uuid()) @db.Uuid
+  organizationId  String            @db.Uuid
+  establishmentId String            @db.Uuid
+  patientId       String            @db.Uuid
+  providerId      String            @db.Uuid /// User (médico que atiende).
+  specialtyId     String?           @db.Uuid /// MedicalSpecialty.
+  serviceUnitId   String?           @db.Uuid
+  scheduledAt     DateTime          @db.Timestamptz()
+  durationMinutes Int               @default(20)
+  status          AppointmentStatus @default(SCHEDULED)
+  reason          String?           @db.VarChar(400)
+  notes           String?           @db.Text
+  createdAt       DateTime          @default(now()) @db.Timestamptz()
+  createdBy       String?           @db.Uuid
+  updatedAt       DateTime          @updatedAt @db.Timestamptz()
+  updatedBy       String?           @db.Uuid
+  deletedAt       DateTime?         @db.Timestamptz()
+
+  organization  Organization             @relation("OrgAppointments", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment            @relation("EstAppointments", fields: [establishmentId], references: [id], onDelete: Restrict)
+  patient       Patient                  @relation("PatAppointments", fields: [patientId], references: [id], onDelete: Restrict)
+  provider      User                     @relation("ProviderAppointments", fields: [providerId], references: [id], onDelete: Restrict)
+  consultations OutpatientConsultation[]
+
+  @@index([organizationId, scheduledAt])
+  @@index([providerId, scheduledAt])
+  @@index([patientId])
+  @@index([status])
+  @@schema("public")
+}
+
+/// TDR §10.2 — registro SOAP de la consulta externa (vinculada a appointment + Encounter OUTPATIENT).
+model OutpatientConsultation {
+  id            String    @id @default(uuid()) @db.Uuid
+  appointmentId String?   @db.Uuid /// nullable para walk-ins sin cita.
+  encounterId   String    @unique @db.Uuid /// Encounter de tipo OUTPATIENT.
+  reasonOfVisit String    @db.VarChar(400)
+  subjective    String?   @db.Text
+  objective     String?   @db.Text
+  assessment    String?   @db.Text
+  plan          String?   @db.Text
+  signedAt      DateTime? @db.Timestamptz()
+  signedById    String?   @db.Uuid
+  createdAt     DateTime  @default(now()) @db.Timestamptz()
+  updatedAt     DateTime  @updatedAt @db.Timestamptz()
+
+  appointment OutpatientAppointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  encounter   Encounter              @relation("EncOutpatientConsult", fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([appointmentId])
+  @@schema("public")
+}
+
+// =============================================================================
+// §15 Pharmacy — Drugs, Prescriptions, Dispense (Sprint 4 / Phase 4 entry)
+// =============================================================================
+
+enum PharmaceuticalForm {
+  TABLET
+  CAPSULE
+  SYRUP
+  INJECTION
+  CREAM
+  OINTMENT
+  DROPS
+  INHALER
+  SUPPOSITORY
+  PATCH
+  OTHER
+
+  @@schema("public")
+}
+
+enum DispensingClass {
+  OTC
+  RX
+  RX_CONTROLLED
+
+  @@schema("public")
+}
+
+enum PrescriptionStatus {
+  DRAFT
+  SIGNED
+  DISPENSED
+  PARTIALLY_DISPENSED
+  CANCELLED
+  EXPIRED
+
+  @@schema("public")
+}
+
+enum AdminRoute {
+  ORAL
+  IV
+  IM
+  SC
+  TOPICAL
+  INHALED
+  RECTAL
+  SUBLINGUAL
+  OPHTHALMIC
+  OTIC
+  NASAL
+
+  @@schema("public")
+}
+
+/// TDR §15.1 — catálogo de medicamentos. organizationId NULL = global; not-null = formulario propio.
+/// Ley Reguladora de Drogas SV: requiresControlledLog flag para psicotrópicos.
+model Drug {
+  id                    String             @id @default(uuid()) @db.Uuid
+  organizationId        String?            @db.Uuid
+  genericName           String             @db.VarChar(200)
+  brandName             String?            @db.VarChar(200)
+  atcCode               String?            @db.VarChar(20) /// ATC OMS clasificación.
+  pharmaceuticalForm    PharmaceuticalForm
+  strengthValue         Decimal            @db.Decimal(12, 4)
+  strengthUnit          String             @db.VarChar(20) /// mg, ml, mcg, UI, %.
+  dispensingClass       DispensingClass    @default(RX)
+  requiresControlledLog Boolean            @default(false)
+  active                Boolean            @default(true)
+  createdAt             DateTime           @default(now()) @db.Timestamptz()
+  updatedAt             DateTime           @updatedAt @db.Timestamptz()
+
+  prescriptionItems PrescriptionItem[]
+
+  @@index([genericName])
+  @@index([organizationId])
+  @@schema("public")
+}
+
+/// TDR §15.2 — receta médica. Cabecera; los ítems son hijos.
+model Prescription {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  encounterId    String             @db.Uuid
+  prescriberId   String             @db.Uuid /// User (médico).
+  patientId      String             @db.Uuid
+  prescribedAt   DateTime           @default(now()) @db.Timestamptz()
+  status         PrescriptionStatus @default(DRAFT)
+  notes          String?            @db.Text
+  signedAt       DateTime?          @db.Timestamptz()
+  signedHash     String?            @db.VarChar(120) /// firma electrónica futura.
+  createdAt      DateTime           @default(now()) @db.Timestamptz()
+  updatedAt      DateTime           @updatedAt @db.Timestamptz()
+
+  items PrescriptionItem[]
+
+  @@index([organizationId, prescribedAt])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §15.2 — ítem de receta (un medicamento por línea con dosificación).
+model PrescriptionItem {
+  id             String     @id @default(uuid()) @db.Uuid
+  prescriptionId String     @db.Uuid
+  drugId         String     @db.Uuid
+  dosage         String     @db.VarChar(120) /// "500mg cada 8h"
+  route          AdminRoute
+  frequency      String     @db.VarChar(80) /// "QID", "BID", "PRN"
+  durationDays   Int?
+  prnAsNeeded    Boolean    @default(false)
+  notes          String?    @db.Text
+
+  prescription Prescription         @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+  drug         Drug                 @relation(fields: [drugId], references: [id], onDelete: Restrict)
+  dispenses    MedicationDispense[]
+
+  @@index([prescriptionId])
+  @@schema("public")
+}
+
+/// TDR §15.3 — dispensación (registro por farmacéutico).
+model MedicationDispense {
+  id                 String    @id @default(uuid()) @db.Uuid
+  prescriptionItemId String    @db.Uuid
+  dispensedAt        DateTime  @default(now()) @db.Timestamptz()
+  dispensedById      String    @db.Uuid /// User (farmacéutico).
+  quantity           Decimal   @db.Decimal(12, 4)
+  batchNumber        String?   @db.VarChar(80)
+  expiryDate         DateTime? @db.Date
+  notes              String?   @db.Text
+
+  item PrescriptionItem @relation(fields: [prescriptionItemId], references: [id], onDelete: Restrict)
+
+  @@index([prescriptionItemId])
+  @@index([dispensedAt])
+  @@schema("public")
+}
+
+// =============================================================================
+// §17 LIS — Lab Information System (Sprint 4 / Phase 4 entry)
+// LOINC codes via ClinicalConcept existentes (no nuevos modelos para códigos).
+// =============================================================================
+
+enum SpecimenType {
+  BLOOD
+  URINE
+  STOOL
+  CSF
+  SWAB
+  TISSUE
+  SALIVA
+  OTHER
+
+  @@schema("public")
+}
+
+enum LabPriority {
+  ROUTINE
+  URGENT
+  STAT
+
+  @@schema("public")
+}
+
+enum LabOrderStatus {
+  DRAFT
+  ORDERED
+  COLLECTED
+  IN_PROCESS
+  RESULTED
+  VALIDATED
+  CANCELLED
+
+  @@schema("public")
+}
+
+enum SpecimenCondition {
+  ACCEPTABLE
+  REJECTED
+  HEMOLYZED
+  CLOTTED
+  INSUFFICIENT
+
+  @@schema("public")
+}
+
+enum ResultFlag {
+  NORMAL
+  LOW
+  HIGH
+  CRITICAL_LOW
+  CRITICAL_HIGH
+  ABNORMAL
+
+  @@schema("public")
+}
+
+/// TDR §17.1 — panel de lab (agrupa tests; ej. hemograma).
+model LabPanel {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid /// null = catálogo global.
+  code           String   @db.VarChar(20) /// LOINC.
+  name           String   @db.VarChar(200)
+  description    String?  @db.Text
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  tests LabTest[]
+
+  @@index([code])
+  @@schema("public")
+}
+
+/// TDR §17.1 — test individual de lab.
+model LabTest {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String?      @db.Uuid
+  panelId        String?      @db.Uuid /// null = test independiente sin panel.
+  code           String       @db.VarChar(20) /// LOINC.
+  name           String       @db.VarChar(200)
+  specimen       SpecimenType
+  unit           String?      @db.VarChar(40)
+  refRangeLow    Decimal?     @db.Decimal(18, 6)
+  refRangeHigh   Decimal?     @db.Decimal(18, 6)
+  refRangeText   String?      @db.VarChar(200) /// para resultados cualitativos.
+  critical       Boolean      @default(false)
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now()) @db.Timestamptz()
+  updatedAt      DateTime     @updatedAt @db.Timestamptz()
+
+  panel      LabPanel?      @relation(fields: [panelId], references: [id], onDelete: SetNull)
+  orderItems LabOrderItem[]
+
+  @@index([code])
+  @@index([panelId])
+  @@schema("public")
+}
+
+/// TDR §17.2 — orden de lab. Cabecera con items.
+model LabOrder {
+  id                 String         @id @default(uuid()) @db.Uuid
+  organizationId     String         @db.Uuid
+  encounterId        String         @db.Uuid
+  prescriberId       String         @db.Uuid /// User.
+  patientId          String         @db.Uuid
+  orderedAt          DateTime       @default(now()) @db.Timestamptz()
+  priority           LabPriority    @default(ROUTINE)
+  status             LabOrderStatus @default(DRAFT)
+  clinicalIndication String?        @db.Text
+  externalLabRef     String?        @db.VarChar(120) /// si se externaliza a un lab externo.
+  createdAt          DateTime       @default(now()) @db.Timestamptz()
+  updatedAt          DateTime       @updatedAt @db.Timestamptz()
+
+  items     LabOrderItem[]
+  specimens LabSpecimen[]
+
+  @@index([organizationId, orderedAt])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// TDR §17.2 — ítem de orden (un test por línea).
+model LabOrderItem {
+  id      String         @id @default(uuid()) @db.Uuid
+  orderId String         @db.Uuid
+  testId  String         @db.Uuid
+  status  LabOrderStatus @default(ORDERED)
+  notes   String?        @db.Text
+
+  order   LabOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  test    LabTest     @relation(fields: [testId], references: [id], onDelete: Restrict)
+  results LabResult[]
+
+  @@index([orderId])
+  @@schema("public")
+}
+
+/// TDR §17.3 — espécimen físico (una orden puede tener N especímenes).
+model LabSpecimen {
+  id              String            @id @default(uuid()) @db.Uuid
+  orderId         String            @db.Uuid
+  type            SpecimenType
+  collectedAt     DateTime?         @db.Timestamptz()
+  collectedById   String?           @db.Uuid
+  barcode         String            @unique @db.VarChar(80)
+  condition       SpecimenCondition @default(ACCEPTABLE)
+  rejectionReason String?           @db.VarChar(400)
+  createdAt       DateTime          @default(now()) @db.Timestamptz()
+
+  order   LabOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  results LabResult[]
+
+  @@index([orderId])
+  @@schema("public")
+}
+
+/// TDR §17.4 — resultado validado por lab tech (cuatro-ojos).
+model LabResult {
+  id            String     @id @default(uuid()) @db.Uuid
+  orderItemId   String     @db.Uuid
+  specimenId    String?    @db.Uuid
+  resultedAt    DateTime   @default(now()) @db.Timestamptz()
+  resultedById  String     @db.Uuid /// User que entró el resultado.
+  valueNumeric  Decimal?   @db.Decimal(18, 6)
+  valueText     String?    @db.VarChar(800)
+  valueUnit     String?    @db.VarChar(40)
+  flag          ResultFlag @default(NORMAL)
+  notes         String?    @db.Text
+  validatedAt   DateTime?  @db.Timestamptz()
+  validatedById String?    @db.Uuid /// User distinto de resultedById (regla 4-eyes).
+  createdAt     DateTime   @default(now()) @db.Timestamptz()
+  updatedAt     DateTime   @updatedAt @db.Timestamptz()
+
+  orderItem LabOrderItem @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  specimen  LabSpecimen? @relation(fields: [specimenId], references: [id], onDelete: SetNull)
+
+  @@index([orderItemId])
+  @@index([validatedAt])
+  @@schema("public")
+}
+
+// =============================================================================
+// §14 EHR Clinical Notes (Sprint 4 / Phase 4 entry)
+// Notas SOAP firmadas + diagnoses (CIE-10 via ClinicalConcept existente).
+// =============================================================================
+
+enum NoteType {
+  PROGRESS
+  ADMISSION
+  DISCHARGE_SUMMARY
+  CONSULTATION
+  NURSING
+  EMERGENCY
+
+  @@schema("public")
+}
+
+enum DiagnosisType {
+  PRINCIPAL
+  SECONDARY
+  RULE_OUT
+  CHRONIC
+
+  @@schema("public")
+}
+
+/// TDR §14.1 — nota clínica SOAP. Firmada = inmutable; addendum encadenado.
+model ClinicalNote {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  encounterId    String    @db.Uuid
+  authorId       String    @db.Uuid /// User.
+  authoredAt     DateTime  @default(now()) @db.Timestamptz()
+  noteType       NoteType
+  specialtyId    String?   @db.Uuid /// MedicalSpecialty.
+  subjective     String?   @db.Text
+  objective      String?   @db.Text
+  assessment     String?   @db.Text
+  plan           String?   @db.Text
+  addendumOfId   String?   @db.Uuid /// FK self-ref para chain de addenda.
+  signedAt       DateTime? @db.Timestamptz()
+  signatureHash  String?   @db.VarChar(120)
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+
+  addendumOf  ClinicalNote?            @relation("NoteAddendum", fields: [addendumOfId], references: [id], onDelete: Restrict)
+  addenda     ClinicalNote[]           @relation("NoteAddendum")
+  attachments ClinicalNoteAttachment[]
+
+  @@index([organizationId, encounterId])
+  @@index([authorId])
+  @@index([authoredAt])
+  @@schema("public")
+}
+
+/// TDR §14.1.b — adjuntos en Supabase Storage.
+model ClinicalNoteAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  noteId       String   @db.Uuid
+  fileName     String   @db.VarChar(200)
+  mimeType     String   @db.VarChar(100)
+  sizeBytes    Int
+  storageKey   String   @db.VarChar(400) /// path en bucket clinical-attachments.
+  uploadedAt   DateTime @default(now()) @db.Timestamptz()
+  uploadedById String   @db.Uuid
+
+  note ClinicalNote @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@index([noteId])
+  @@schema("public")
+}
+
+/// TDR §14.2 — diagnoses asociados al encuentro (CIE-10 via ClinicalConcept).
+model EncounterDiagnosis {
+  id            String        @id @default(uuid()) @db.Uuid
+  encounterId   String        @db.Uuid
+  conceptId     String        @db.Uuid /// FK a ClinicalConcept (CIE-10).
+  type          DiagnosisType
+  diagnosedAt   DateTime      @default(now()) @db.Timestamptz()
+  diagnosedById String        @db.Uuid
+  notes         String?       @db.Text
+  resolvedAt    DateTime?     @db.Timestamptz()
+  createdAt     DateTime      @default(now()) @db.Timestamptz()
+  updatedAt     DateTime      @updatedAt @db.Timestamptz()
+
+  encounter Encounter @relation("EncDiagnoses", fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId])
+  @@index([conceptId])
   @@schema("public")
 }
