@@ -3019,34 +3019,41 @@ enum NutritionOrderRoute {
 }
 
 enum NutritionOrderStatus {
+  /// Orden recibida, pendiente de inicio.
+  ORDERED
   ACTIVE
   COMPLETED
+  /// Suspendida temporalmente, puede reactivarse.
+  HELD
   CANCELLED
-  ON_HOLD
 
   @@schema("public")
 }
 
 /// TDR §22.1 — plan dietético asignado durante un encuentro.
 model DietPlan {
-  id             String         @id @default(uuid()) @db.Uuid
-  organizationId String         @db.Uuid
-  encounterId    String         @db.Uuid
-  patientId      String         @db.Uuid
-  dietType       DietType
-  status         DietPlanStatus @default(ACTIVE)
-  caloriesTarget Int? /// kcal/día.
-  proteinTarget  Decimal?       @db.Decimal(8, 2) /// g/día.
-  notes          String?        @db.Text
-  startedAt      DateTime       @default(now()) @db.Timestamptz()
-  endedAt        DateTime?      @db.Timestamptz()
-  createdAt      DateTime       @default(now()) @db.Timestamptz()
-  createdBy      String?        @db.Uuid
-  updatedAt      DateTime       @updatedAt @db.Timestamptz()
+  id                       String         @id @default(uuid()) @db.Uuid
+  organizationId           String         @db.Uuid
+  encounterId              String         @db.Uuid
+  patientId                String         @db.Uuid
+  dietType                 DietType
+  status                   DietPlanStatus @default(ACTIVE)
+  caloriesTarget           Int? /// kcal/día.
+  proteinTarget            Decimal?       @db.Decimal(8, 2) /// g/día.
+  /// Lista de códigos de diagnóstico (CIE-10/SNOMED) compatibles con este plan.
+  /// Usado por validateDietCompatibility() para validar NutritionOrder.dietPlanId.
+  compatibleWithDiagnoses  String[]       @default([])
+  notes                    String?        @db.Text
+  startedAt                DateTime       @default(now()) @db.Timestamptz()
+  endedAt                  DateTime?      @db.Timestamptz()
+  createdAt                DateTime       @default(now()) @db.Timestamptz()
+  createdBy                String?        @db.Uuid
+  updatedAt                DateTime       @updatedAt @db.Timestamptz()
 
-  organization Organization @relation("OrgDietPlans", fields: [organizationId], references: [id], onDelete: Restrict)
-  encounter    Encounter    @relation("EncDietPlans", fields: [encounterId], references: [id], onDelete: Restrict)
-  patient      Patient      @relation("PatDietPlans", fields: [patientId], references: [id], onDelete: Restrict)
+  organization    Organization     @relation("OrgDietPlans", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter       Encounter        @relation("EncDietPlans", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient         Patient          @relation("PatDietPlans", fields: [patientId], references: [id], onDelete: Restrict)
+  nutritionOrders NutritionOrder[]
 
   @@index([organizationId, status])
   @@index([encounterId])
@@ -3055,20 +3062,26 @@ model DietPlan {
 }
 
 /// TDR §22.2 — valoración nutricional (Mini Nutritional Assessment u otra).
+/// Append-only post-firma (signedAt NOT NULL): trigger fn_nutrition_assessment_immutability
+/// impide UPDATE/DELETE una vez firmada.
 model NutritionAssessment {
-  id               String   @id @default(uuid()) @db.Uuid
-  organizationId   String   @db.Uuid
-  encounterId      String   @db.Uuid
-  patientId        String   @db.Uuid
-  assessedAt       DateTime @default(now()) @db.Timestamptz()
-  assessedById     String   @db.Uuid /// User (nutricionista/médico).
-  weightKg         Decimal? @db.Decimal(6, 2)
-  heightCm         Decimal? @db.Decimal(6, 2)
-  bmi              Decimal? @db.Decimal(5, 2)
-  malnutritionRisk String?  @db.VarChar(40) /// "LOW", "MODERATE", "HIGH".
-  notes            String?  @db.Text
-  createdAt        DateTime @default(now()) @db.Timestamptz()
-  updatedAt        DateTime @updatedAt @db.Timestamptz()
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @db.Uuid
+  encounterId      String    @db.Uuid
+  patientId        String    @db.Uuid
+  assessedAt       DateTime  @default(now()) @db.Timestamptz()
+  assessedById     String    @db.Uuid /// User (nutricionista/médico).
+  weightKg         Decimal?  @db.Decimal(6, 2)
+  heightCm         Decimal?  @db.Decimal(6, 2)
+  bmi              Decimal?  @db.Decimal(5, 2)
+  malnutritionRisk String?   @db.VarChar(40) /// "LOW", "MODERATE", "HIGH".
+  /// Objetivo calórico diario expresado en kcal/día (600–4000 médicamente plausible).
+  targetCalories   Int?
+  notes            String?   @db.Text
+  /// Timestamp de firma clínica. Una vez establecido, el registro es inmutable.
+  signedAt         DateTime? @db.Timestamptz()
+  createdAt        DateTime  @default(now()) @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @db.Timestamptz()
 
   organization Organization @relation("OrgNutritionAssessments", fields: [organizationId], references: [id], onDelete: Restrict)
   encounter    Encounter    @relation("EncNutritionAssessments", fields: [encounterId], references: [id], onDelete: Restrict)
@@ -3081,6 +3094,8 @@ model NutritionAssessment {
 }
 
 /// TDR §22.3 — orden de nutrición enteral o parenteral.
+/// State machine: ORDERED → ACTIVE → COMPLETED | HELD (reversible a ACTIVE) | CANCELLED.
+/// Exclusividad: un encuentro activo no puede tener simultáneamente ENTERAL y PARENTERAL ORDERED/ACTIVE.
 model NutritionOrder {
   id             String               @id @default(uuid()) @db.Uuid
   organizationId String               @db.Uuid
@@ -3088,11 +3103,14 @@ model NutritionOrder {
   patientId      String               @db.Uuid
   prescriberId   String               @db.Uuid
   route          NutritionOrderRoute
-  status         NutritionOrderStatus @default(ACTIVE)
+  /// Estado inicial al crear: ORDERED. Transitions: ORDERED→ACTIVE, ACTIVE→COMPLETED|HELD|CANCELLED, HELD→ACTIVE|CANCELLED.
+  status         NutritionOrderStatus @default(ORDERED)
   formula        String?              @db.VarChar(200) /// nombre comercial / composición.
   ratePerHour    Decimal?             @db.Decimal(8, 2) /// mL/h.
   totalVolume    Decimal?             @db.Decimal(10, 2) /// mL/día.
   caloriesPerDay Int?
+  /// Plan dietético asociado. Si especificado, se valida compatibilidad de diagnósticos.
+  dietPlanId     String?              @db.Uuid
   notes          String?              @db.Text
   startedAt      DateTime             @default(now()) @db.Timestamptz()
   endedAt        DateTime?            @db.Timestamptz()
@@ -3104,6 +3122,7 @@ model NutritionOrder {
   encounter    Encounter    @relation("EncNutritionOrders", fields: [encounterId], references: [id], onDelete: Restrict)
   patient      Patient      @relation("PatNutritionOrders", fields: [patientId], references: [id], onDelete: Restrict)
   prescriber   User         @relation("NutritionPrescriber", fields: [prescriberId], references: [id], onDelete: Restrict)
+  dietPlan     DietPlan?    @relation(fields: [dietPlanId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, status])
   @@index([encounterId])
