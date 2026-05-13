@@ -183,6 +183,51 @@ Los `Esquema del escenario + Ejemplos` se usan para **matrices de equivalencia**
 
 ---
 
-**Versión:** 1.0 — 2026-04-30
+## 6. Fase 2 — 14 módulos skeleton (entrega Stream B, 2026-05-12)
+
+Entrega Wave 6/7/8 (PR #6, #7, #8). Cobertura BDD inicial: 1 `.feature` por
+módulo con 2-3 scenarios (happy + edge). UI aún no implementada (deferida a
+@Dev), por lo que la columna "UI covered" queda en TBD; la columna "Backend
+covered" lista el procedure tRPC asociado a cada feature (ya con tests
+unitarios y cross-tenant integration en `packages/trpc`).
+
+| § | Módulo | Feature file | Scenarios | Backend covered (procedure tRPC) | UI covered |
+|---|--------|--------------|-----------|----------------------------------|------------|
+| 10 | Outpatient (Ambulatoria) | `tests/features/phase2/10-ambulatoria.feature` | 2 | `outpatient.appointment.{create,list,get}` | TBD |
+| 11 | Inpatient (Hospitalización) | `tests/features/phase2/11-hospitalizacion.feature` | 2 | `inpatient.admission.{create,list}` | TBD |
+| 12 | Emergency (Emergencia) | `tests/features/phase2/12-emergencia.feature` | 2 | `emergency.visit.{create,setDisposition}` | TBD |
+| 13 | Surgery (Cirugía) | `tests/features/phase2/13-cirugia.feature` | 2 | `surgery.case.{create,timeOut,start}` | TBD |
+| 14 | EHR Clinical Notes | `tests/features/phase2/14-historia-clinica.feature` | 3 | `ehr-notes.note.{create,sign,addendum}` | TBD |
+| 15 | Pharmacy (Farmacia) | `tests/features/phase2/15-farmacia.feature` | 2 | `pharmacy.prescription.{create,sign}` | TBD |
+| 16 | eMAR | `tests/features/phase2/16-emar.feature` | 3 | `medication-admin.record` | TBD |
+| 17 | LIS (Laboratorio) | `tests/features/phase2/17-laboratorio.feature` | 2 | `lis.order.create`, `lis.result.validate` | TBD |
+| 18 | RIS/PACS (Imagenología) | `tests/features/phase2/18-imagenologia.feature` | 2 | `imaging.order.{create,updateStatus}`, `imaging.report.sign` | TBD |
+| 19 | Inventory (Inventario) | `tests/features/phase2/19-inventario.feature` | 2 | `inventory.movement.create`, `inventory.lot.create` | TBD |
+| 20 | Services & Equipment | `tests/features/phase2/20-servicios-equipos.feature` | 2 | `services-equipment.equipment.create`, `services-equipment.pmSchedule.create` | TBD |
+| 21 | Respiratory | `tests/features/phase2/21-respiratoria.feature` | 2 | `respiratory.order.{create,complete}`, `respiratory.ventilator.create` | TBD |
+| 22 | Nutrition | `tests/features/phase2/22-nutricion.feature` | 2 | `nutrition.diet.create` | TBD |
+| 25 | Insurance (Aseguradoras) | `tests/features/phase2/25-aseguradoras.feature` | 2 | `insurance.authorization.{create,approve,deny}` | TBD |
+
+**Totales Phase 2:** 14 features, 30 scenarios.
+
+### 6.1 Reglas de negocio pendientes (`@AE` por refinar)
+
+| Módulo | Regla pendiente | Marca en feature |
+|--------|-----------------|------------------|
+| §12 Emergency | Umbral de tiempo para LWBS automático (tras X minutos sin atención). | `# @AE: regla pendiente — definir umbral de tiempo automático para LWBS` |
+
+Resto de scenarios refleja únicamente comportamiento ya documentado en
+`docs/03_blueprints_modulos.md` y los routers ya entregados. No se inventaron
+reglas nuevas (principio /careful-coding).
+
+### 6.2 Próximo paso
+
+- @Dev entrega pages UI para los 14 módulos → Stream A Playwright reabre con E2E real.
+- @QAF refina scenarios con super-usuarios clínicos (enfermería, farmacia, biomédica).
+- @PO valida que cada feature mapea a una US del backlog Phase 2.
+
+---
+
+**Versión:** 1.1 — 2026-05-12 (Phase 2 skeleton coverage)
 **Autor:** @QAF — Quality Analyst (BDD)
-**Aprobaciones pendientes:** @PO (cobertura backlog), @Orq (alineación), super-usuario clínico (TODOs Manchester), super-usuario fiscal (TODOs NIT/MINSAL).
+**Aprobaciones pendientes:** @PO (cobertura backlog Phase 2), @Orq (alineación), super-usuario clínico (TODOs Manchester + LWBS), super-usuario fiscal (TODOs NIT/MINSAL).
