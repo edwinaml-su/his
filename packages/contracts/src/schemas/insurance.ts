@@ -1,12 +1,19 @@
 /**
- * §25 Insurer Agreements — schemas de input (Wave 8 / Phase 2 entry).
- * Skeleton mínimo. Lógica de pricing por copay/coaseguro y enlace con cargos
- * (charges) viven en el router. Aquí solo se valida el contrato Zod.
+ * §25 Insurer Agreements — schemas de input (Wave 8 / Beta.14 hardening layer 1).
+ *
+ * Cambios b14:
+ *   - PENDING añadido al estado canónico de la state machine.
+ *   - coveredProcedures JSONB — schema de validación + helper de parsing.
+ *   - checkCoverageInput / checkCoverageOutput — contrato para isProcedureCovered.
+ *   - getExpiringAuthorizationsInput — contrato para expiry alerts.
  */
 import { z } from "zod";
 
 const INSURER_KIND = ["PUBLIC", "PRIVATE", "SELF_INSURED"] as const;
+
+// b14: PENDING = canonical start state; REQUESTED kept for backward compat.
 const AUTHORIZATION_STATUS = [
+  "PENDING",
   "REQUESTED",
   "APPROVED",
   "PARTIAL",
@@ -20,6 +27,19 @@ export const authorizationStatusEnum = z.enum(AUTHORIZATION_STATUS);
 
 export type InsurerKindType = z.infer<typeof insurerKindEnum>;
 export type AuthorizationStatusType = z.infer<typeof authorizationStatusEnum>;
+
+// ---------------------------------------------------------------------------
+// coveredProcedures JSONB entry
+// ---------------------------------------------------------------------------
+
+/** Un procedimiento cubierto dentro del JSONB de InsurancePlan. */
+export const coveredProcedureEntry = z.object({
+  code: z.string().trim().min(1).max(40),
+  maxCoverage: z.number().min(0).optional(), // null = sin límite monetario explícito.
+  description: z.string().trim().max(200).optional(),
+});
+
+export type CoveredProcedureEntry = z.infer<typeof coveredProcedureEntry>;
 
 // ---------------------------------------------------------------------------
 // Insurer (catálogo)
@@ -53,6 +73,7 @@ export const insurancePlanCreateInput = z.object({
   name: z.string().trim().min(1).max(200),
   description: z.string().trim().max(400).optional(),
   copayPct: z.number().min(0).max(100).optional(),
+  coveredProcedures: z.array(coveredProcedureEntry).optional(),
 });
 
 export const insurancePlanListInput = z.object({
@@ -116,17 +137,59 @@ export const authorizationApproveInput = z
     approvedAmount: z.number().min(0).optional(),
     partial: z.boolean().default(false),
     validFrom: z.coerce.date().optional(),
+    /** b14 validUntil — maps to validTo on the DB model. */
+    validUntil: z.coerce.date().optional(),
+    /** @deprecated use validUntil. Kept for backward compat with callers using validTo. */
     validTo: z.coerce.date().optional(),
   })
-  .refine((d) => !d.validFrom || !d.validTo || d.validTo > d.validFrom, {
-    message: "validTo debe ser posterior a validFrom",
-    path: ["validTo"],
-  });
+  .refine(
+    (d) => {
+      const end = d.validUntil ?? d.validTo;
+      return !d.validFrom || !end || end > d.validFrom;
+    },
+    {
+      message: "validUntil debe ser posterior a validFrom",
+      path: ["validUntil"],
+    },
+  );
 
 export const authorizationDenyInput = z.object({
   id: z.string().uuid(),
+  /** b14: required — state machine enforces reason on DENIED. */
   denialReason: z.string().trim().min(1).max(400),
 });
+
+// ---------------------------------------------------------------------------
+// b14 — checkCoverage (plan-procedure coverage check)
+// ---------------------------------------------------------------------------
+
+export const checkCoverageInput = z.object({
+  planId: z.string().uuid(),
+  procedureCode: z.string().trim().min(1).max(40),
+});
+
+export const checkCoverageOutput = z.object({
+  covered: z.boolean(),
+  maxCoverage: z.number().nullable(),
+  procedureCode: z.string(),
+  planId: z.string(),
+});
+
+export type CheckCoverageOutput = z.infer<typeof checkCoverageOutput>;
+
+// ---------------------------------------------------------------------------
+// b14 — getExpiringAuthorizations
+// ---------------------------------------------------------------------------
+
+export const getExpiringAuthorizationsInput = z.object({
+  /** Number of days ahead to look for expirations. Default 7. */
+  daysAhead: z.number().int().min(1).max(90).default(7),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+
+// ---------------------------------------------------------------------------
+// Exported types
+// ---------------------------------------------------------------------------
 
 export type InsurerCreateInput = z.infer<typeof insurerCreateInput>;
 export type InsurancePlanCreateInput = z.infer<typeof insurancePlanCreateInput>;
@@ -134,3 +197,5 @@ export type PatientCoverageCreateInput = z.infer<typeof patientCoverageCreateInp
 export type AuthorizationRequestCreateInput = z.infer<typeof authorizationRequestCreateInput>;
 export type AuthorizationApproveInput = z.infer<typeof authorizationApproveInput>;
 export type AuthorizationDenyInput = z.infer<typeof authorizationDenyInput>;
+export type CheckCoverageInput = z.infer<typeof checkCoverageInput>;
+export type GetExpiringAuthorizationsInput = z.infer<typeof getExpiringAuthorizationsInput>;
