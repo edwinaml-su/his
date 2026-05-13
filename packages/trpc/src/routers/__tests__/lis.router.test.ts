@@ -127,7 +127,7 @@ describe("lisRouter", () => {
     });
   });
 
-  describe("result.enter", () => {
+  describe("result.enter (Beta.3 auto-flag)", () => {
     it("NOT_FOUND si orderItem no es del tenant", async () => {
       prisma.labOrderItem.findFirst.mockResolvedValue(null as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -140,25 +140,135 @@ describe("lisRouter", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
-    it("guarda resultedById del usuario", async () => {
-      prisma.labOrderItem.findFirst.mockResolvedValue({ id: u } as never);
+    it("guarda resultedById del usuario y respeta flag manual cuando no hay refs", async () => {
+      prisma.labOrderItem.findFirst.mockResolvedValue({
+        id: u,
+        test: {
+          code: "GLU",
+          name: "Glucosa",
+          refRangeLow: null,
+          refRangeHigh: null,
+          critical: false,
+          unit: "mg/dL",
+        },
+      } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
-      await caller.result.enter({
+      const r = await caller.result.enter({
         orderItemId: u,
         valueNumeric: 7.2,
         flag: "NORMAL",
       });
       const args = prisma.labResult.create.mock.calls[0]![0];
       expect(args.data.resultedById).toBeTruthy();
+      expect(r.finalFlag).toBe("NORMAL");
+      expect(r.isCritical).toBe(false);
+      expect(r.alerts).toEqual([]);
+    });
+
+    it("Beta.3 — calcula flag HIGH automáticamente desde refRange", async () => {
+      prisma.labOrderItem.findFirst.mockResolvedValue({
+        id: u,
+        test: {
+          code: "GLU",
+          name: "Glucosa",
+          refRangeLow: { toNumber: () => 70 },
+          refRangeHigh: { toNumber: () => 100 },
+          critical: false,
+          unit: "mg/dL",
+        },
+      } as never);
+      prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.result.enter({
+        orderItemId: u,
+        valueNumeric: 130,
+        flag: "NORMAL", // será sobreescrito por evaluateLabResultFlag
+      });
+      expect(r.finalFlag).toBe("HIGH");
+      expect(r.isCritical).toBe(false);
+    });
+
+    it("Beta.3 — calcula CRITICAL_HIGH para test marcado critical con valor extremo", async () => {
+      prisma.labOrderItem.findFirst.mockResolvedValue({
+        id: u,
+        test: {
+          code: "GLU",
+          name: "Glucosa",
+          refRangeLow: { toNumber: () => 70 },
+          refRangeHigh: { toNumber: () => 100 },
+          critical: true, // habilita criticalLow/High en heurística
+          unit: "mg/dL",
+        },
+      } as never);
+      prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      // criticalHigh heurística Wave 1: refRangeHigh + 50% = 100 + 50 = 150
+      const r = await caller.result.enter({
+        orderItemId: u,
+        valueNumeric: 200,
+        flag: "NORMAL",
+      });
+      expect(r.finalFlag).toBe("CRITICAL_HIGH");
+      expect(r.isCritical).toBe(true);
+      expect(r.alerts).toHaveLength(1);
+      expect(r.alerts[0]!.testCode).toBe("GLU");
+    });
+
+    it("Beta.3 — forceFlagOverride=true respeta el flag manual sin recalcular", async () => {
+      prisma.labOrderItem.findFirst.mockResolvedValue({
+        id: u,
+        test: {
+          code: "GLU",
+          name: "Glucosa",
+          refRangeLow: { toNumber: () => 70 },
+          refRangeHigh: { toNumber: () => 100 },
+          critical: true,
+          unit: "mg/dL",
+        },
+      } as never);
+      prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.result.enter({
+        orderItemId: u,
+        valueNumeric: 200, // sería CRITICAL_HIGH, pero forzamos NORMAL
+        flag: "NORMAL",
+        forceFlagOverride: true,
+      });
+      expect(r.finalFlag).toBe("NORMAL");
+      expect(r.isCritical).toBe(false);
+    });
+
+    it("Beta.3 — NORMAL si valueNumeric null (cualitativo via valueText)", async () => {
+      prisma.labOrderItem.findFirst.mockResolvedValue({
+        id: u,
+        test: {
+          code: "QUAL",
+          name: "Qualitativo",
+          refRangeLow: null,
+          refRangeHigh: null,
+          critical: false,
+          unit: null,
+        },
+      } as never);
+      prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.result.enter({
+        orderItemId: u,
+        valueText: "Positivo",
+        flag: "ABNORMAL",
+      });
+      expect(r.finalFlag).toBe("ABNORMAL");
     });
   });
 
-  describe("result.validate (4-eyes)", () => {
+  describe("result.validate (4-eyes + Beta.3 history)", () => {
     it("FORBIDDEN si el validador es el mismo que el resultador", async () => {
       prisma.labResult.findFirst.mockResolvedValue({
         id: u,
         resultedById: MOCK_USER_ADMIN.id,
+        notes: null,
+        flag: "NORMAL",
       } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await expect(
@@ -178,6 +288,8 @@ describe("lisRouter", () => {
       prisma.labResult.findFirst.mockResolvedValue({
         id: u,
         resultedById: "00000000-0000-0000-0000-000000000099",
+        notes: null,
+        flag: "HIGH",
       } as never);
       prisma.labResult.update.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -185,6 +297,39 @@ describe("lisRouter", () => {
       const args = prisma.labResult.update.mock.calls[0]![0];
       expect(args.data.validatedById).toBeTruthy();
       expect(args.data.validatedAt).toBeInstanceOf(Date);
+    });
+
+    it("Beta.3 — appendea history line en notes", async () => {
+      prisma.labResult.findFirst.mockResolvedValue({
+        id: u,
+        resultedById: "00000000-0000-0000-0000-000000000099",
+        notes: "Nota previa del tecnólogo",
+        flag: "CRITICAL_HIGH",
+      } as never);
+      prisma.labResult.update.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.result.validate({ resultId: u });
+      const args = prisma.labResult.update.mock.calls[0]![0];
+      const newNotes = (args.data as { notes: string }).notes;
+      expect(newNotes).toContain("Nota previa del tecnólogo");
+      expect(newNotes).toContain("[VALIDATED by");
+      expect(newNotes).toContain("flag=CRITICAL_HIGH");
+    });
+
+    it("Beta.3 — notes vacío genera la primera history line correctamente", async () => {
+      prisma.labResult.findFirst.mockResolvedValue({
+        id: u,
+        resultedById: "00000000-0000-0000-0000-000000000099",
+        notes: null,
+        flag: "NORMAL",
+      } as never);
+      prisma.labResult.update.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.result.validate({ resultId: u });
+      const args = prisma.labResult.update.mock.calls[0]![0];
+      const newNotes = (args.data as { notes: string }).notes;
+      expect(newNotes).toMatch(/^\[\d{4}/);
+      expect(newNotes).toContain("[VALIDATED by");
     });
   });
 });
