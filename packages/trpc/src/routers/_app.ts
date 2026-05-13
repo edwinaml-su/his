@@ -35,6 +35,11 @@ import { emergencyRouter } from "./emergency.router";
 import { surgeryRouter } from "./surgery.router";
 import { medicationAdminRouter } from "./medication-admin.router";
 import { imagingRouter } from "./imaging.router";
+import { insuranceRouter } from "./insurance.router";
+import { inventoryRouter } from "./inventory.router";
+import { nutritionRouter } from "./nutrition.router";
+import { respiratoryRouter } from "./respiratory.router";
+import { servicesEquipmentRouter } from "./services-equipment.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -73,6 +78,11 @@ export const appRouter = router({
   surgery: surgeryRouter,
   medicationAdmin: medicationAdminRouter,
   imaging: imagingRouter,
+  insurance: insuranceRouter,
+  inventory: inventoryRouter,
+  servicesEquipment: servicesEquipmentRouter,
+  respiratory: respiratoryRouter,
+  nutrition: nutritionRouter,
 });
 
 export type AppRouter = typeof appRouter;
