@@ -2198,9 +2198,21 @@ enum SurgeryCaseStatus {
   SCHEDULED
   CONFIRMED
   IN_PROGRESS
+  POST_OP
   COMPLETED
   CANCELLED
   POSTPONED
+
+  @@schema("public")
+}
+
+/// WHO Surgical Safety Checklist — anesthesia type for SurgeryCase.
+enum AnesthesiaType {
+  GENERAL
+  REGIONAL
+  LOCAL
+  SEDATION
+  NONE
 
   @@schema("public")
 }
@@ -2250,8 +2262,18 @@ model SurgeryCase {
   procedureDescription String            @db.VarChar(400)
   procedureCode        String?           @db.VarChar(40) /// CIE-9-CM / CPT.
   asaClass             AsaClass?
+  /// WHO Surgical Safety Checklist — Sign In (paciente identificado + consentimiento).
+  signInAt             DateTime?         @db.Timestamptz()
+  signInById           String?           @db.Uuid
   timeOutAt            DateTime?         @db.Timestamptz()
   timeOutById          String?           @db.Uuid
+  /// WHO Surgical Safety Checklist — Sign Out (count instrumentos, especímenes).
+  signOutAt            DateTime?         @db.Timestamptz()
+  signOutById          String?           @db.Uuid
+  /// Anestesia: tipo + duración tracking.
+  anesthesiaType       AnesthesiaType?
+  anesthesiaStartAt    DateTime?         @db.Timestamptz()
+  anesthesiaEndAt      DateTime?         @db.Timestamptz()
   status               SurgeryCaseStatus @default(SCHEDULED)
   preopNotes           String?           @db.Text
   intraopNotes         String?           @db.Text
