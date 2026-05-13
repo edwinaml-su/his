@@ -1,7 +1,13 @@
 /**
- * Tests del emergencyRouter (§12 — Wave 7 Phase 2 skeleton).
+ * Tests del emergencyRouter (§12 — Beta.4 hardening capa 1).
  *
- * Cubre tenant-isolation, NOT_FOUND, happy-path para visit/disposition/note.
+ * Cubre:
+ *  - skeleton previo (visit CRUD, observation start/end, notes).
+ *  - Beta.4: state machine enforcement en setDisposition.
+ *  - Beta.4: lwbsCheck dry-run + commit.
+ *  - Beta.4: recordVitalSnapshot con detección de re-triage.
+ *  - Beta.4: bloqueo de notas tras disposition terminal.
+ *  - Beta.4: getObservationStatus computed.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -61,6 +67,7 @@ describe("emergencyRouter", () => {
           establishmentId: u,
           patientId: u,
           chiefComplaint: "Dolor",
+          arrivalMode: "WALK_IN",
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
@@ -74,6 +81,7 @@ describe("emergencyRouter", () => {
           establishmentId: u,
           patientId: u,
           chiefComplaint: "Dolor",
+          arrivalMode: "WALK_IN",
         }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
@@ -87,28 +95,57 @@ describe("emergencyRouter", () => {
         establishmentId: u,
         patientId: u,
         chiefComplaint: "Dolor abdominal severo",
+        arrivalMode: "WALK_IN",
       });
       const args = prisma.emergencyVisit.create.mock.calls[0]![0];
       expect((args.data as { arrivalMode: string }).arrivalMode).toBe("WALK_IN");
     });
   });
 
-  describe("visit.setDisposition", () => {
-    it("setea LWBS y dispositionAt", async () => {
-      prisma.emergencyVisit.updateMany.mockResolvedValue({ count: 1 } as never);
-      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
-      await caller.visit.setDisposition({ id: u, disposition: "LWBS" });
-      const args = prisma.emergencyVisit.updateMany.mock.calls[0]![0];
-      expect((args.data as { disposition: string }).disposition).toBe("LWBS");
-      expect((args.data as { dispositionAt: Date }).dispositionAt).toBeInstanceOf(Date);
-    });
-
-    it("NOT_FOUND si count===0", async () => {
-      prisma.emergencyVisit.updateMany.mockResolvedValue({ count: 0 } as never);
+  describe("visit.setDisposition (Beta.4 state machine)", () => {
+    it("NOT_FOUND si visita no existe", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
       const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
       await expect(
         caller.visit.setDisposition({ id: u, disposition: "DISCHARGED" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("transición válida PENDING -> LWBS persiste y retorna transitioned=true", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        disposition: "PENDING",
+      } as never);
+      prisma.emergencyVisit.update.mockResolvedValue({ id: u } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.setDisposition({ id: u, disposition: "LWBS" });
+      expect(r.transitioned).toBe(true);
+      const args = prisma.emergencyVisit.update.mock.calls[0]![0];
+      expect((args.data as { disposition: string }).disposition).toBe("LWBS");
+      expect((args.data as { dispositionAt: Date }).dispositionAt).toBeInstanceOf(Date);
+    });
+
+    it("transición inválida DISCHARGED -> AMA arroja BAD_REQUEST", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        disposition: "DISCHARGED",
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.setDisposition({ id: u, disposition: "AMA" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.emergencyVisit.update).not.toHaveBeenCalled();
+    });
+
+    it("no-op si disposition idéntica (sin update)", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        disposition: "PENDING",
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.setDisposition({ id: u, disposition: "PENDING" });
+      expect(r.transitioned).toBe(false);
+      expect(prisma.emergencyVisit.update).not.toHaveBeenCalled();
     });
   });
 
@@ -129,6 +166,204 @@ describe("emergencyRouter", () => {
     });
   });
 
+  describe("visit.getObservationStatus (Beta.4 computed)", () => {
+    it("NOT_FOUND si no existe visita", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.getObservationStatus({ id: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("retorna minutos abiertos (started, no ended)", async () => {
+      const started = new Date(Date.now() - 30 * 60 * 1000);
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        observationStartedAt: started,
+        observationEndedAt: null,
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.getObservationStatus({ id: u });
+      expect(r.isOpen).toBe(true);
+      expect(r.minutes).toBeGreaterThanOrEqual(29);
+      expect(r.minutes).toBeLessThanOrEqual(31);
+    });
+
+    it("retorna minutos cerrados (started + ended)", async () => {
+      const started = new Date(Date.now() - 120 * 60 * 1000);
+      const ended = new Date(Date.now() - 30 * 60 * 1000);
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        observationStartedAt: started,
+        observationEndedAt: ended,
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.getObservationStatus({ id: u });
+      expect(r.isOpen).toBe(false);
+      expect(r.minutes).toBe(90);
+    });
+  });
+
+  describe("visit.lwbsCheck (Beta.4 LWBS detection)", () => {
+    it("dryRun=true retorna candidatos sin update", async () => {
+      const oldArrived = new Date(Date.now() - 300 * 60 * 1000);
+      prisma.emergencyVisit.findMany.mockResolvedValue([
+        {
+          id: u,
+          arrivedAt: oldArrived,
+          disposition: "PENDING",
+          treatingId: null,
+        },
+      ] as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.lwbsCheck({ dryRun: true, limit: 50 });
+      expect(r.dryRun).toBe(true);
+      expect(r.flagged).toBe(1);
+      expect(r.details[0]!.id).toBe(u);
+      expect(prisma.emergencyVisit.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("commit transiciona PENDING -> LWBS via updateMany", async () => {
+      const oldArrived = new Date(Date.now() - 300 * 60 * 1000);
+      prisma.emergencyVisit.findMany.mockResolvedValue([
+        {
+          id: u,
+          arrivedAt: oldArrived,
+          disposition: "PENDING",
+          treatingId: null,
+        },
+      ] as never);
+      prisma.emergencyVisit.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.lwbsCheck({ dryRun: false, limit: 50 });
+      expect(r.dryRun).toBe(false);
+      expect(r.flagged).toBe(1);
+      expect(prisma.emergencyVisit.updateMany).toHaveBeenCalled();
+      const args = prisma.emergencyVisit.updateMany.mock.calls[0]![0];
+      expect((args.data as { disposition: string }).disposition).toBe("LWBS");
+    });
+
+    it("ningún candidato si elapsed < timeout", async () => {
+      const recent = new Date(Date.now() - 10 * 60 * 1000);
+      prisma.emergencyVisit.findMany.mockResolvedValue([
+        {
+          id: u,
+          arrivedAt: recent,
+          disposition: "PENDING",
+          treatingId: null,
+        },
+      ] as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.lwbsCheck({ dryRun: false });
+      expect(r.flagged).toBe(0);
+      expect(prisma.emergencyVisit.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("acepta timeout override personalizado", async () => {
+      const arrived = new Date(Date.now() - 35 * 60 * 1000); // 35 min
+      prisma.emergencyVisit.findMany.mockResolvedValue([
+        {
+          id: u,
+          arrivedAt: arrived,
+          disposition: "PENDING",
+          treatingId: null,
+        },
+      ] as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.lwbsCheck({
+        dryRun: true,
+        timeoutMinutes: 30, // override
+        limit: 10,
+      });
+      expect(r.flagged).toBe(1);
+      expect(r.details[0]!.timeoutMinutes).toBe(30);
+    });
+  });
+
+  describe("visit.recordVitalSnapshot (Beta.4 re-triage)", () => {
+    it("NOT_FOUND si visita no pertenece a tenant", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.recordVitalSnapshot({ visitId: u, spo2: 90 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("BAD_REQUEST si visita ya terminal", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: v,
+        disposition: "DISCHARGED",
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.recordVitalSnapshot({ visitId: u, spo2: 95 }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("sin baseline: detecta SpO2 absoluto bajo y registra REASSESSMENT", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: v,
+        disposition: "PENDING",
+      } as never);
+      prisma.triageVitalSign.findMany.mockResolvedValue([] as never);
+      prisma.emergencyNote.create.mockResolvedValue({ id: u } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.recordVitalSnapshot({ visitId: u, spo2: 88 });
+      expect(r.retriageSuggested).toBe(true);
+      expect(r.reasons.length).toBeGreaterThan(0);
+      const noteArgs = prisma.emergencyNote.create.mock.calls[0]![0];
+      expect((noteArgs.data as { category: string }).category).toBe("REASSESSMENT");
+    });
+
+    it("con baseline estable: NO sugiere retriage", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: v,
+        disposition: "PENDING",
+      } as never);
+      prisma.triageVitalSign.findMany.mockResolvedValue([
+        { vitalCode: "HR", valueNumeric: 82, measuredAt: new Date() },
+        { vitalCode: "SpO2", valueNumeric: 98, measuredAt: new Date() },
+        { vitalCode: "RR", valueNumeric: 16, measuredAt: new Date() },
+      ] as never);
+      prisma.emergencyNote.create.mockResolvedValue({ id: u } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.recordVitalSnapshot({
+        visitId: u,
+        heartRate: 84,
+        spo2: 97,
+        respiratoryRate: 17,
+      });
+      expect(r.retriageSuggested).toBe(false);
+      // Nota igual se registra (audit trail).
+      expect(prisma.emergencyNote.create).toHaveBeenCalled();
+    });
+
+    it("con baseline deteriorado: sugiere retriage con razones múltiples", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: v,
+        disposition: "PENDING",
+      } as never);
+      // Decimal-like simulation con toNumber.
+      const dec = (n: number) => ({ toNumber: () => n });
+      prisma.triageVitalSign.findMany.mockResolvedValue([
+        { vitalCode: "HR", valueNumeric: dec(80), measuredAt: new Date() },
+        { vitalCode: "SpO2", valueNumeric: dec(98), measuredAt: new Date() },
+      ] as never);
+      prisma.emergencyNote.create.mockResolvedValue({ id: u } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.recordVitalSnapshot({
+        visitId: u,
+        heartRate: 130,
+        spo2: 88,
+      });
+      expect(r.retriageSuggested).toBe(true);
+      // Esperamos detección por al menos uno de SpO2 absoluto + delta y HR.
+      expect(r.reasons.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe("note.create / listByVisit", () => {
     it("note NOT_FOUND si visit no pertenece a tenant", async () => {
       prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
@@ -142,8 +377,27 @@ describe("emergencyRouter", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
-    it("crea nota OK", async () => {
-      prisma.emergencyVisit.findFirst.mockResolvedValue({ id: u } as never);
+    it("note BAD_REQUEST si visit ya finalizada (Beta.4)", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        disposition: "DISCHARGED",
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.note.create({
+          visitId: u,
+          category: "OBSERVATION",
+          body: "x",
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.emergencyNote.create).not.toHaveBeenCalled();
+    });
+
+    it("crea nota OK sobre visit PENDING", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        disposition: "PENDING",
+      } as never);
       prisma.emergencyNote.create.mockResolvedValue({ id: u } as never);
       const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
       await caller.note.create({
