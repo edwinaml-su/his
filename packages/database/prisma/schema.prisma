@@ -1556,19 +1556,19 @@ model OutpatientAppointment {
 
 /// TDR §10.2 — registro SOAP de la consulta externa (vinculada a appointment + Encounter OUTPATIENT).
 model OutpatientConsultation {
-  id            String    @id @default(uuid()) @db.Uuid
-  appointmentId String?   @db.Uuid /// nullable para walk-ins sin cita.
-  encounterId   String    @unique @db.Uuid /// Encounter de tipo OUTPATIENT.
+  id             String          @id @default(uuid()) @db.Uuid
+  appointmentId  String?         @db.Uuid /// nullable para walk-ins sin cita.
+  encounterId    String          @unique @db.Uuid /// Encounter de tipo OUTPATIENT.
   reasonOfVisit  String          @db.VarChar(500)
   reasonCategory ReasonCategory?
-  subjective    String?   @db.Text
-  objective     String?   @db.Text
-  assessment    String?   @db.Text
-  plan          String?   @db.Text
-  signedAt      DateTime? @db.Timestamptz()
-  signedById    String?   @db.Uuid
-  createdAt     DateTime  @default(now()) @db.Timestamptz()
-  updatedAt     DateTime  @updatedAt @db.Timestamptz()
+  subjective     String?         @db.Text
+  objective      String?         @db.Text
+  assessment     String?         @db.Text
+  plan           String?         @db.Text
+  signedAt       DateTime?       @db.Timestamptz()
+  signedById     String?         @db.Uuid
+  createdAt      DateTime        @default(now()) @db.Timestamptz()
+  updatedAt      DateTime        @updatedAt @db.Timestamptz()
 
   appointment OutpatientAppointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
   encounter   Encounter              @relation("EncOutpatientConsult", fields: [encounterId], references: [id], onDelete: Cascade)
@@ -1816,8 +1816,11 @@ model LabTest {
   createdAt      DateTime     @default(now()) @db.Timestamptz()
   updatedAt      DateTime     @updatedAt @db.Timestamptz()
 
-  panel      LabPanel?      @relation(fields: [panelId], references: [id], onDelete: SetNull)
-  orderItems LabOrderItem[]
+  panel           LabPanel?           @relation(fields: [panelId], references: [id], onDelete: SetNull)
+  orderItems      LabOrderItem[]
+  referenceRanges LabReferenceRange[]
+  triggersFor     LabReflexRule[]     @relation("LabReflexTrigger")
+  reflexesFor     LabReflexRule[]     @relation("LabReflexReflex")
 
   @@index([code])
   @@index([panelId])
@@ -1905,6 +1908,52 @@ model LabResult {
 
   @@index([orderItemId])
   @@index([validatedAt])
+  @@schema("public")
+}
+
+/// TDR §17 — rangos de referencia estratificados por sexo/edad (Wave 2 stratification).
+/// Creado vía SQL 27_lis_hardening_v2 (no por prisma migrate); RLS por tenant en SQL 41.
+model LabReferenceRange {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String?  @db.Uuid /// null = catálogo global.
+  labTestId      String   @db.Uuid
+  minValue       Decimal? @db.Decimal(18, 6)
+  maxValue       Decimal? @db.Decimal(18, 6)
+  ageMinYears    Int?
+  ageMaxYears    Int?
+  sex            String   @default("BOTH") @db.VarChar(10) /// CHECK enforced en DB: MALE | FEMALE | BOTH.
+  criticalLow    Decimal? @db.Decimal(18, 6)
+  criticalHigh   Decimal? @db.Decimal(18, 6)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @db.Timestamptz()
+
+  labTest LabTest @relation(fields: [labTestId], references: [id], onDelete: Cascade)
+
+  @@index([labTestId, sex, ageMinYears, ageMaxYears])
+  @@index([organizationId])
+  @@schema("public")
+}
+
+/// TDR §17 — reglas de reflex testing automation.
+/// Creado vía SQL 27_lis_hardening_v2 (no por prisma migrate); RLS por tenant en SQL 41.
+model LabReflexRule {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String?  @db.Uuid /// null = catálogo global.
+  triggerTestId    String   @db.Uuid
+  reflexTestId     String   @db.Uuid
+  triggerCondition String   @db.VarChar(20) /// CHECK enforced en DB: ABOVE | BELOW | POSITIVE | FLAGGED.
+  triggerThreshold Decimal? @db.Decimal(18, 6)
+  description      String?  @db.Text
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now()) @db.Timestamptz()
+  updatedAt        DateTime @default(now()) @db.Timestamptz()
+
+  triggerTest LabTest @relation("LabReflexTrigger", fields: [triggerTestId], references: [id], onDelete: Cascade)
+  reflexTest  LabTest @relation("LabReflexReflex", fields: [reflexTestId], references: [id], onDelete: Restrict)
+
+  @@index([triggerTestId])
+  @@index([organizationId])
   @@schema("public")
 }
 
@@ -2427,8 +2476,8 @@ enum ImagingOrderStatus {
 }
 
 enum ImagingPriority {
-  STAT    /// Emergency: SLA 60 min
-  URGENT  /// Urgent: SLA 240 min
+  STAT /// Emergency: SLA 60 min
+  URGENT /// Urgent: SLA 240 min
   ROUTINE /// Routine: SLA 1440 min
 
   @@schema("public")
@@ -2543,8 +2592,8 @@ enum InsurerKind {
 }
 
 enum AuthorizationStatus {
-  PENDING    /// b14: canonical start state for new records.
-  REQUESTED  /// legacy treated as PENDING in state machine; kept for backward compat.
+  PENDING /// b14: canonical start state for new records.
+  REQUESTED /// legacy treated as PENDING in state machine; kept for backward compat.
   APPROVED
   PARTIAL
   DENIED
@@ -2581,16 +2630,16 @@ model Insurer {
 
 /// TDR §25.2 — plan/producto comercial de una aseguradora.
 model InsurancePlan {
-  id          String   @id @default(uuid()) @db.Uuid
-  insurerId   String   @db.Uuid
-  code        String   @db.VarChar(40)
-  name        String   @db.VarChar(200)
-  description String?  @db.VarChar(400)
-  copayPct            Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
-  coveredProcedures   Json?    /// b14: JSONB [{"code": "MRI", "maxCoverage": 1500.00}] estructura.
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now()) @db.Timestamptz()
-  updatedAt   DateTime @updatedAt @db.Timestamptz()
+  id                String   @id @default(uuid()) @db.Uuid
+  insurerId         String   @db.Uuid
+  code              String   @db.VarChar(40)
+  name              String   @db.VarChar(200)
+  description       String?  @db.VarChar(400)
+  copayPct          Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
+  coveredProcedures Json? /// b14: JSONB [{"code": "MRI", "maxCoverage": 1500.00}] estructura.
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz()
+  updatedAt         DateTime @updatedAt @db.Timestamptz()
 
   insurer   Insurer           @relation(fields: [insurerId], references: [id], onDelete: Restrict)
   coverages PatientCoverage[]
@@ -2750,7 +2799,6 @@ model StockMovement {
   @@index([lotId])
   @@index([transferGroupId])
   @@index([type])
-  @@index([transferGroupId])
   @@schema("public")
 }
 
@@ -2788,25 +2836,25 @@ enum PmScheduleStatus {
 
 /// TDR §20.1 — equipo biomédico inventariado (activo fijo trazable).
 model BiomedicalEquipment {
-  id              String          @id @default(uuid()) @db.Uuid
-  organizationId  String          @db.Uuid
-  establishmentId String          @db.Uuid
-  assetTag        String          @db.VarChar(60) /// código interno (etiqueta).
-  name            String          @db.VarChar(200)
-  manufacturer    String?         @db.VarChar(120)
-  model           String?         @db.VarChar(120)
-  serialNumber    String?         @db.VarChar(120)
-  category        String?         @db.VarChar(80) /// "VENTILADOR", "MONITOR", etc.
-  location        String?         @db.VarChar(120) /// sala/área dentro del establecimiento.
-  installDate              DateTime?        @db.Date
-  status                   EquipmentStatus  @default(OPERATIONAL)
-  criticality              CriticalityLevel @default(MEDIUM)
-  certificationExpiresAt   DateTime?        @db.Timestamptz() /// vencimiento de certificación regulatoria.
-  maintenanceReason        String?          @db.VarChar(500) /// obligatorio cuando criticality=CRITICAL y status=UNDER_MAINTENANCE.
-  active                   Boolean          @default(true)
-  createdAt                DateTime         @default(now()) @db.Timestamptz()
-  createdBy                String?          @db.Uuid
-  updatedAt                DateTime         @updatedAt @db.Timestamptz()
+  id                     String           @id @default(uuid()) @db.Uuid
+  organizationId         String           @db.Uuid
+  establishmentId        String           @db.Uuid
+  assetTag               String           @db.VarChar(60) /// código interno (etiqueta).
+  name                   String           @db.VarChar(200)
+  manufacturer           String?          @db.VarChar(120)
+  model                  String?          @db.VarChar(120)
+  serialNumber           String?          @db.VarChar(120)
+  category               String?          @db.VarChar(80) /// "VENTILADOR", "MONITOR", etc.
+  location               String?          @db.VarChar(120) /// sala/área dentro del establecimiento.
+  installDate            DateTime?        @db.Date
+  status                 EquipmentStatus  @default(OPERATIONAL)
+  criticality            CriticalityLevel @default(MEDIUM)
+  certificationExpiresAt DateTime?        @db.Timestamptz() /// vencimiento de certificación regulatoria.
+  maintenanceReason      String?          @db.VarChar(500) /// obligatorio cuando criticality=CRITICAL y status=UNDER_MAINTENANCE.
+  active                 Boolean          @default(true)
+  createdAt              DateTime         @default(now()) @db.Timestamptz()
+  createdBy              String?          @db.Uuid
+  updatedAt              DateTime         @updatedAt @db.Timestamptz()
 
   organization    Organization     @relation("OrgEquipment", fields: [organizationId], references: [id], onDelete: Restrict)
   establishment   Establishment    @relation("EstEquipment", fields: [establishmentId], references: [id], onDelete: Restrict)
@@ -2965,7 +3013,7 @@ model VentilatorSession {
   startedAt       DateTime                @default(now()) @db.Timestamptz()
   endedAt         DateTime?               @db.Timestamptz()
   tidalVolume     Decimal?                @db.Decimal(8, 2) /// mL; rango seguro 4–12 mL/kg.
-  rrSet           Int?                                      /// resp/min programadas; rango seguro 8–30.
+  rrSet           Int? /// resp/min programadas; rango seguro 8–30.
   peep            Decimal?                @db.Decimal(6, 2) /// cmH2O; rango seguro 5–20.
   fio2            Decimal?                @db.Decimal(4, 3) /// fracción 0.21–1.0.
   patientWeightKg Decimal?                @db.Decimal(6, 2) /// Beta.12: peso para derivar Vt/kg.
@@ -3052,23 +3100,23 @@ enum NutritionOrderStatus {
 
 /// TDR §22.1 — plan dietético asignado durante un encuentro.
 model DietPlan {
-  id                       String         @id @default(uuid()) @db.Uuid
-  organizationId           String         @db.Uuid
-  encounterId              String         @db.Uuid
-  patientId                String         @db.Uuid
-  dietType                 DietType
-  status                   DietPlanStatus @default(ACTIVE)
-  caloriesTarget           Int? /// kcal/día.
-  proteinTarget            Decimal?       @db.Decimal(8, 2) /// g/día.
+  id                      String         @id @default(uuid()) @db.Uuid
+  organizationId          String         @db.Uuid
+  encounterId             String         @db.Uuid
+  patientId               String         @db.Uuid
+  dietType                DietType
+  status                  DietPlanStatus @default(ACTIVE)
+  caloriesTarget          Int? /// kcal/día.
+  proteinTarget           Decimal?       @db.Decimal(8, 2) /// g/día.
   /// Lista de códigos de diagnóstico (CIE-10/SNOMED) compatibles con este plan.
   /// Usado por validateDietCompatibility() para validar NutritionOrder.dietPlanId.
-  compatibleWithDiagnoses  String[]       @default([])
-  notes                    String?        @db.Text
-  startedAt                DateTime       @default(now()) @db.Timestamptz()
-  endedAt                  DateTime?      @db.Timestamptz()
-  createdAt                DateTime       @default(now()) @db.Timestamptz()
-  createdBy                String?        @db.Uuid
-  updatedAt                DateTime       @updatedAt @db.Timestamptz()
+  compatibleWithDiagnoses String[]       @default([])
+  notes                   String?        @db.Text
+  startedAt               DateTime       @default(now()) @db.Timestamptz()
+  endedAt                 DateTime?      @db.Timestamptz()
+  createdAt               DateTime       @default(now()) @db.Timestamptz()
+  createdBy               String?        @db.Uuid
+  updatedAt               DateTime       @updatedAt @db.Timestamptz()
 
   organization    Organization     @relation("OrgDietPlans", fields: [organizationId], references: [id], onDelete: Restrict)
   encounter       Encounter        @relation("EncDietPlans", fields: [encounterId], references: [id], onDelete: Restrict)
