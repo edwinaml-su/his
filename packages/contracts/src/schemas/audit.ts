@@ -22,6 +22,8 @@ export const auditActionSchema = z.enum([
   "LOGIN",
   "LOGOUT",
   "BREAK_GLASS",
+  /// Beta.15 — error sistémico (poller/dispatcher). justification trae SQLSTATE + msg.
+  "SYSTEM_ERROR",
 ]);
 
 export const auditEntityKindSchema = z.enum([

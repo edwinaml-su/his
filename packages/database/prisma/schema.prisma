@@ -73,6 +73,8 @@ enum AuditAction {
   LOGIN
   LOGOUT
   BREAK_GLASS
+  /// Beta.15 — error interno del sistema (poller, dispatcher, etc.). justification trae SQLSTATE + msg.
+  SYSTEM_ERROR
 
   @@schema("public")
 }
@@ -326,6 +328,8 @@ model Organization {
   dietPlans                 DietPlan[]                 @relation("OrgDietPlans")
   nutritionAssessments      NutritionAssessment[]      @relation("OrgNutritionAssessments")
   nutritionOrders           NutritionOrder[]           @relation("OrgNutritionOrders")
+  domainEvents              DomainEvent[]
+  notifications             Notification[]
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -411,17 +415,20 @@ model User {
   externalIdentities        UserExternalIdentity[]
   roles                     UserOrganizationRole[]
   sessions                  Session[]
-  patientConsentsGranted    PatientConsent[]           @relation("ConsentAuthor")
-  outpatientAppointments    OutpatientAppointment[]    @relation("ProviderAppointments")
-  attendingInpatient        InpatientAdmission[]       @relation("InpatientAttending")
-  treatingEmergency         EmergencyVisit[]           @relation("EmergencyTreating")
-  primarySurgeon            SurgeryCase[]              @relation("SurgeryPrimarySurgeon")
-  medicationAdministrations MedicationAdministration[] @relation("MedAdminAdministrator")
-  medAdminSecondVerify      MedicationAdministration[] @relation("MedAdminSecondVerifier")
-  imagingOrdered            ImagingOrder[]             @relation("ImagingOrderingProvider")
-  imagingReported           ImagingReport[]            @relation("ImagingRadiologist")
-  respiratoryPrescribed     RespiratoryOrder[]         @relation("RespiratoryPrescriber")
-  nutritionPrescribed       NutritionOrder[]           @relation("NutritionPrescriber")
+  patientConsentsGranted    PatientConsent[]             @relation("ConsentAuthor")
+  outpatientAppointments    OutpatientAppointment[]      @relation("ProviderAppointments")
+  attendingInpatient        InpatientAdmission[]         @relation("InpatientAttending")
+  treatingEmergency         EmergencyVisit[]             @relation("EmergencyTreating")
+  primarySurgeon            SurgeryCase[]                @relation("SurgeryPrimarySurgeon")
+  medicationAdministrations MedicationAdministration[]   @relation("MedAdminAdministrator")
+  medAdminSecondVerify      MedicationAdministration[]   @relation("MedAdminSecondVerifier")
+  imagingOrdered            ImagingOrder[]               @relation("ImagingOrderingProvider")
+  imagingReported           ImagingReport[]              @relation("ImagingRadiologist")
+  respiratoryPrescribed     RespiratoryOrder[]           @relation("RespiratoryPrescriber")
+  nutritionPrescribed       NutritionOrder[]             @relation("NutritionPrescriber")
+  domainEventsEmitted       DomainEvent[]                @relation("DomainEventEmitter")
+  notificationsReceived     Notification[]               @relation("NotificationRecipient")
+  notificationPreferences   UserNotificationPreference[]
 
   @@schema("public")
 }
@@ -486,8 +493,9 @@ model Role {
   createdAt      DateTime @default(now()) @db.Timestamptz()
   updatedAt      DateTime @updatedAt @db.Timestamptz()
 
-  permissions RolePermission[]
-  userRoles   UserOrganizationRole[]
+  permissions          RolePermission[]
+  userRoles            UserOrganizationRole[]
+  notificationDefaults RoleNotificationDefault[]
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -3196,5 +3204,140 @@ model NutritionOrder {
   @@index([encounterId])
   @@index([patientId])
   @@index([route])
+  @@schema("public")
+}
+
+// =============================================================================
+// Beta.15 — Alerts & Notifications (Outbox + Notification Engine)
+// Diseño: docs/blueprints/beta15_notifications.md + docs/adr/0008.
+// DBA review: docs/blueprints/beta15_notifications_dba_review.md (aplicado abajo).
+// SRE: docs/blueprints/beta15_notifications_sre_review.md (extensiones pg_cron/pg_net
+// + cron.schedule() y Resend account pendientes — los habilita @SRE post-merge).
+// =============================================================================
+
+/// Canal por el cual se entrega una notificación. Beta.15 cubre INBOX + EMAIL.
+/// SMS (Beta.16+) y WHATSAPP (Beta.17+) se añadirán después.
+enum NotificationChannel {
+  INBOX
+  EMAIL
+
+  @@schema("public")
+}
+
+/// Severidad clínica/operativa de la notificación. Drives routing + email-vs-inbox-only.
+enum NotificationSeverity {
+  CRITICAL
+  WARNING
+  INFO
+
+  @@schema("public")
+}
+
+/// Status forward-only: PENDING → SENT → DELIVERED → READ, ó PENDING → FAILED (terminal).
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+
+  @@schema("public")
+}
+
+/// Outbox pattern — eventos de dominio emitidos dentro de transacción del router.
+/// eventType es VARCHAR (no enum PG) para evolución sin ALTER TYPE; ver ADR 0008.
+/// Validado por Zod en `emitDomainEvent` antes del INSERT (catálogo en
+/// `@his/contracts/events/catalog.ts`). RLS: tenant-scoped por organizationId.
+/// Audit triggers + hash chain aplicados via SQL 43.
+model DomainEvent {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @db.Uuid
+  eventType      String    @db.VarChar(80)
+  aggregateType  String    @db.VarChar(60)
+  aggregateId    String    @db.Uuid
+  payload        Json
+  /// SHA-256 hex; opcional Beta.15. Beta.16 puede enforcear UNIQUE para dedup defensivo.
+  payloadHash    String?   @db.VarChar(64)
+  occurredAt     DateTime  @default(now()) @db.Timestamptz()
+  publishedAt    DateTime? @db.Timestamptz()
+  attempts       Int       @default(0)
+  /// Bounded a 2000 chars; mensajes largos se truncan en el dispatcher.
+  lastError      String?   @db.VarChar(2000)
+  emittedById    String?   @db.Uuid
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  emittedBy     User?          @relation("DomainEventEmitter", fields: [emittedById], references: [id], onDelete: SetNull)
+  notifications Notification[]
+
+  @@index([organizationId, eventType])
+  @@index([occurredAt])
+  /// Soporte queries forenses "qué eventos generó la admisión X".
+  @@index([aggregateType, aggregateId])
+  @@schema("public")
+}
+
+/// Envelope persistente de notificaciones — 1 row por (eventId, recipient, channel).
+/// UNIQUE garantiza idempotencia del dispatcher (ON CONFLICT DO NOTHING).
+/// Retención: 90 días en status=READ (purge vía pg_cron diario; SQL 42).
+/// AuditLog permanente para compliance (hash chain SKIP — write amplification @DBA §S8).
+model Notification {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId    String               @db.Uuid
+  eventId           String               @db.Uuid
+  recipientUserId   String               @db.Uuid
+  channel           NotificationChannel
+  severity          NotificationSeverity
+  subject           String               @db.VarChar(200)
+  body              String               @db.VarChar(5000)
+  status            NotificationStatus   @default(PENDING)
+  sentAt            DateTime?            @db.Timestamptz()
+  deliveredAt       DateTime?            @db.Timestamptz()
+  readAt            DateTime?            @db.Timestamptz()
+  failedAt          DateTime?            @db.Timestamptz()
+  failureReason     String?              @db.VarChar(2000)
+  /// Resend message ID típicamente ULID ~26 chars; 120 da margen para otros providers.
+  providerMessageId String?              @db.VarChar(120)
+  metadata          Json?
+  attempts          Int                  @default(0)
+  createdAt         DateTime             @default(now()) @db.Timestamptz()
+  updatedAt         DateTime             @updatedAt @db.Timestamptz()
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  event         DomainEvent  @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  recipientUser User         @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, recipientUserId, channel])
+  @@index([recipientUserId, status, createdAt(sort: Desc)])
+  @@index([organizationId, status])
+  @@schema("public")
+}
+
+/// Preferencias por usuario × severity × channel. UPSERT-friendly.
+/// CRITICAL+INBOX nunca se deshabilita (validado en dispatcher, no en BD).
+/// Si no hay row para una combinación → fallback a RoleNotificationDefault del rol.
+model UserNotificationPreference {
+  userId    String               @db.Uuid
+  severity  NotificationSeverity
+  channel   NotificationChannel
+  enabled   Boolean              @default(true)
+  updatedAt DateTime             @updatedAt @db.Timestamptz()
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, severity, channel])
+  @@schema("public")
+}
+
+/// Defaults por rol × severity × channel. Read-mostly, cambios via seed/migration.
+/// Seed inicial cubre Doctor/Nurse/Pharmacist/Admin Org (4 × 3 × 2 = 24 rows).
+model RoleNotificationDefault {
+  roleId   String               @db.Uuid
+  severity NotificationSeverity
+  channel  NotificationChannel
+  enabled  Boolean
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, severity, channel])
   @@schema("public")
 }

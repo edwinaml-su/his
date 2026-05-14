@@ -1,0 +1,31 @@
+import { z } from "zod";
+
+/**
+ * Catálogo canónico de `eventType` Beta.15.
+ *
+ * Patrón: `<domain>.<noun-or-verb>` (kebab-case dentro del segmento).
+ * Cada eventType DEBE tener un schema Zod registrado en `payloads.ts`
+ * (`domainEventPayloadSchema` — discriminated union sobre `eventType`).
+ *
+ * Por qué VARCHAR en BD y enum TS en lugar de enum PostgreSQL:
+ *   `ALTER TYPE ADD VALUE` no puede co-existir con uso del valor en la
+ *   misma transacción (caso `SurgeryCaseStatus.POST_OP` de Beta.6).
+ *   Añadir 1 eventType es 1 entrada acá + 1 schema; cero migración SQL.
+ *
+ * Ver ADR 0008 (§D3).
+ */
+export const EVENT_TYPES = [
+  "vital.critical",
+  "lab.criticalValue",
+  "drug.interaction",
+  "allergy.mismatch",
+  // Beta.16+ candidates (cuando se añadan, registrar schema en payloads.ts):
+  // "prescription.created",
+  // "med.missed",
+  // "coverage.expired",
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+/** Zod enum que valida que un string es un eventType conocido. */
+export const eventTypeSchema = z.enum(EVENT_TYPES);

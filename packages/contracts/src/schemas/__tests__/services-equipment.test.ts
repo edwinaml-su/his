@@ -19,7 +19,7 @@ import {
   calibrationLogCreateInput,
   calibrationLogListInput,
   isValidTransition,
-  ALLOWED_TRANSITIONS,
+  EQUIPMENT_STATUS_TRANSITIONS,
 } from "../services-equipment";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -56,7 +56,7 @@ describe("enums", () => {
     expect(calibrationResultEnum.safeParse("XYZ").success).toBe(false));
 });
 
-describe("isValidTransition / ALLOWED_TRANSITIONS", () => {
+describe("isValidTransition / EQUIPMENT_STATUS_TRANSITIONS", () => {
   it("OPERATIONAL → UNDER_MAINTENANCE permitido", () =>
     expect(isValidTransition("OPERATIONAL", "UNDER_MAINTENANCE")).toBe(true));
 
@@ -82,7 +82,7 @@ describe("isValidTransition / ALLOWED_TRANSITIONS", () => {
     expect(isValidTransition("OUT_OF_SERVICE", "OPERATIONAL")).toBe(false));
 
   it("RETIRED tiene lista vacía de transiciones", () =>
-    expect(ALLOWED_TRANSITIONS["RETIRED"]).toHaveLength(0));
+    expect(EQUIPMENT_STATUS_TRANSITIONS["RETIRED"]).toHaveLength(0));
 
   it("RETIRED → OPERATIONAL no permitido", () =>
     expect(isValidTransition("RETIRED", "OPERATIONAL")).toBe(false));
