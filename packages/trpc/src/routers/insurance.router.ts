@@ -10,6 +10,7 @@
  *   - Audit trail: append-only enforced by DB trigger (38_insurance_hardening.sql).
  */
 import { TRPCError } from "@trpc/server";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import {
   insurerCreateInput,
@@ -168,8 +169,8 @@ export const insuranceRouter = router({
             name: input.name,
             description: input.description ?? null,
             copayPct: input.copayPct ?? null,
-            // Store as JSON if provided; Prisma accepts plain JS array for Json fields.
-            coveredProcedures: input.coveredProcedures ?? null,
+            // Store as JSON if provided; Prisma requires Prisma.DbNull para NULL en columna Json?.
+            coveredProcedures: input.coveredProcedures ?? Prisma.DbNull,
           },
         });
       }),

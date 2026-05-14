@@ -46,7 +46,7 @@ export type PmScheduleStatusType = z.infer<typeof pmScheduleStatusEnum>;
 // RETIRED → (terminal)
 // ---------------------------------------------------------------------------
 
-export const ALLOWED_TRANSITIONS: Record<EquipmentStatusType, EquipmentStatusType[]> = {
+export const EQUIPMENT_STATUS_TRANSITIONS: Record<EquipmentStatusType, EquipmentStatusType[]> = {
   OPERATIONAL: ["UNDER_MAINTENANCE", "OUT_OF_SERVICE", "BROKEN"],
   UNDER_MAINTENANCE: ["OPERATIONAL", "OUT_OF_SERVICE"],
   BROKEN: ["UNDER_MAINTENANCE", "OUT_OF_SERVICE"],
@@ -58,7 +58,7 @@ export function isValidTransition(
   from: EquipmentStatusType,
   to: EquipmentStatusType,
 ): boolean {
-  return ALLOWED_TRANSITIONS[from].includes(to);
+  return EQUIPMENT_STATUS_TRANSITIONS[from].includes(to);
 }
 
 // ---------------------------------------------------------------------------

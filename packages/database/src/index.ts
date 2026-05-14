@@ -26,4 +26,6 @@ if (!isProd) {
 }
 
 export * from "@prisma/client";
+export { emitDomainEvent } from "./outbox/emit";
+export type { EmitDomainEventInput, EmitDomainEventTx } from "./outbox/emit";
 export default prisma;
