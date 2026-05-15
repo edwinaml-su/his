@@ -11,11 +11,24 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 const u = "00000000-0000-0000-0000-000000000001";
+const v = "00000000-0000-0000-0000-000000000002";
+const w = "00000000-0000-0000-0000-000000000003";
+
+/** Beta.15: `result.enter` envuelve el create + emit en $transaction. */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  prisma.$transaction.mockImplementation(async (cb: unknown) => {
+    if (typeof cb === "function") {
+      return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+    }
+    return cb;
+  });
+}
 
 describe("lisRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
   });
 
   describe("panel.list", () => {
@@ -151,6 +164,7 @@ describe("lisRouter", () => {
           critical: false,
           unit: "mg/dL",
         },
+        order: { prescriberId: v },
       } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -177,6 +191,7 @@ describe("lisRouter", () => {
           critical: false,
           unit: "mg/dL",
         },
+        order: { prescriberId: v },
       } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -200,8 +215,10 @@ describe("lisRouter", () => {
           critical: true, // habilita criticalLow/High en heurística
           unit: "mg/dL",
         },
+        order: { prescriberId: v },
       } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       // criticalHigh heurística Wave 1: refRangeHigh + 50% = 100 + 50 = 150
       const r = await caller.result.enter({
@@ -226,6 +243,7 @@ describe("lisRouter", () => {
           critical: true,
           unit: "mg/dL",
         },
+        order: { prescriberId: v },
       } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -250,6 +268,7 @@ describe("lisRouter", () => {
           critical: false,
           unit: null,
         },
+        order: { prescriberId: v },
       } as never);
       prisma.labResult.create.mockResolvedValue({ id: u } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -259,6 +278,104 @@ describe("lisRouter", () => {
         flag: "ABNORMAL",
       });
       expect(r.finalFlag).toBe("ABNORMAL");
+    });
+
+    /**
+     * Beta.15 (US.B15.4.2) — wiring outbox `lab.criticalValue`.
+     * AC backlog: flag final CRITICAL_LOW/CRITICAL_HIGH con valueNumeric
+     * presente dispara DomainEvent con payload { orderItemId, resultId,
+     * prescriberId, testCode, flag, value, unit?, referenceRange }.
+     */
+    describe("Beta.15 outbox emission (lab.criticalValue)", () => {
+      it("emite DomainEvent lab.criticalValue cuando flag es CRITICAL_HIGH", async () => {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: true,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 200,
+          flag: "NORMAL",
+          valueUnit: "mg/dL",
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        expect(args.data.eventType).toBe("lab.criticalValue");
+        expect(args.data.aggregateType).toBe("LabResult");
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.orderItemId).toBe(u);
+        expect(payload.resultId).toBe(u);
+        expect(payload.prescriberId).toBe(v);
+        expect(payload.testCode).toBe("GLU");
+        expect(payload.flag).toBe("CRITICAL_HIGH");
+        expect(payload.value).toBe(200);
+        expect(payload.unit).toBe("mg/dL");
+        expect(payload.referenceRange).toEqual({ low: 70, high: 100 });
+      });
+
+      it("NO emite DomainEvent si flag final es HIGH (no critical)", async () => {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: false,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 130,
+          flag: "NORMAL",
+        });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+
+      it("NO emite DomainEvent si forceFlagOverride hace NORMAL aún con valor extremo", async () => {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: true,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 200,
+          flag: "NORMAL",
+          forceFlagOverride: true,
+        });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
     });
   });
 

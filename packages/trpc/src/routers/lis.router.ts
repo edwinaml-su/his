@@ -27,8 +27,23 @@ import {
   type LabReferenceRange,
   type LisSex,
   type LisResultFlag,
+  type LabCriticalValuePayload,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+
+/**
+ * Beta.15 — convierte Prisma Decimal-or-null a number-or-null para el payload
+ * Zod del evento `lab.criticalValue`. Prisma serializa refRangeLow/High como
+ * `Decimal` (objeto con `.toNumber()`). El mock de tests respeta esa misma forma.
+ */
+function decimalToNullableNumber(
+  v: { toNumber: () => number } | number | null | undefined,
+): number | null {
+  if (v == null) return null;
+  if (typeof v === "number") return v;
+  return v.toNumber();
+}
 
 export const lisRouter = router({
   panel: router({
@@ -183,7 +198,12 @@ export const lisRouter = router({
             id: input.orderItemId,
             order: { organizationId: ctx.tenant.organizationId },
           },
-          include: { test: true },
+          include: {
+            test: true,
+            // Beta.15: prescriberId es el destinatario canónico del evento
+            // `lab.criticalValue` (backlog US.B15.4.2).
+            order: { select: { prescriberId: true } },
+          },
         });
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
 
@@ -204,25 +224,57 @@ export const lisRouter = router({
           });
         }
 
-        const created = await ctx.prisma.labResult.create({
-          data: {
-            orderItemId: input.orderItemId,
-            specimenId: input.specimenId ?? null,
-            resultedById: ctx.user.id,
-            valueNumeric: input.valueNumeric ?? null,
-            valueText: input.valueText ?? null,
-            valueUnit: input.valueUnit ?? null,
-            flag: finalFlag,
-            notes: input.notes ?? null,
-          },
+        const isCritical = isCriticalFlag(finalFlag);
+
+        // Beta.15 (US.B15.4.2): si flag final es CRITICAL_LOW/CRITICAL_HIGH
+        // y tenemos valueNumeric, emitimos `lab.criticalValue` dentro de la
+        // misma transacción que el create del LabResult (outbox transaccional).
+        // Sin valueNumeric el payload Zod no es válido — no se emite.
+        const shouldEmit = isCritical && input.valueNumeric != null;
+
+        const created = await ctx.prisma.$transaction(async (tx) => {
+          const result = await tx.labResult.create({
+            data: {
+              orderItemId: input.orderItemId,
+              specimenId: input.specimenId ?? null,
+              resultedById: ctx.user.id,
+              valueNumeric: input.valueNumeric ?? null,
+              valueText: input.valueText ?? null,
+              valueUnit: input.valueUnit ?? null,
+              flag: finalFlag,
+              notes: input.notes ?? null,
+            },
+          });
+          if (shouldEmit) {
+            const payload: LabCriticalValuePayload = {
+              orderItemId: input.orderItemId,
+              resultId: result.id,
+              prescriberId: item.order.prescriberId,
+              testCode: item.test.code,
+              flag: finalFlag as "CRITICAL_LOW" | "CRITICAL_HIGH",
+              value: input.valueNumeric as number,
+              unit: input.valueUnit ?? item.test.unit ?? undefined,
+              referenceRange: {
+                low: decimalToNullableNumber(item.test.refRangeLow),
+                high: decimalToNullableNumber(item.test.refRangeHigh),
+              },
+            };
+            await emitDomainEvent(tx, {
+              organizationId: ctx.tenant.organizationId,
+              eventType: "lab.criticalValue",
+              aggregateType: "LabResult",
+              aggregateId: result.id,
+              emittedById: ctx.user.id,
+              payload,
+            });
+          }
+          return result;
         });
 
-        const isCritical = isCriticalFlag(finalFlag);
         return {
           result: created,
           finalFlag,
           isCritical,
-          // Wave 2: publica al outbox CriticalValueAlert para notificar médico.
           alerts: isCritical
             ? [
                 {
