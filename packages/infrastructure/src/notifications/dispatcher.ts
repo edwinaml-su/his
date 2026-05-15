@@ -17,26 +17,21 @@
  *     deja la fila EMAIL en PENDING (retry futuro); `PermanentProviderError`
  *     la marca FAILED con `failureReason`.
  *
- * Track A coexistence:
- *   `EmailProvider` aquí vive en `./provider.ts` (port local). Cuando Track A
- *   (#58) mergee con la interface en `@his/contracts/notifications/provider`,
- *   este archivo y dispatcher deben dedup — el caller real seguirá usando el
- *   adapter Resend de Track A.
+ * Interface `EmailProvider` canónica vive en `@his/contracts` (Track A / #58).
+ * Adapter Resend concreto vive en `./resend.ts`.
  */
-import { domainEventPayloadSchema } from "@his/contracts";
-import type {
-  VitalCriticalPayload,
-  LabCriticalValuePayload,
-  DrugInteractionPayload,
-  AllergyMismatchPayload,
-} from "@his/contracts";
-import type { Prisma, PrismaClient } from "@prisma/client";
-
 import {
+  domainEventPayloadSchema,
   PermanentProviderError,
   TransientProviderError,
   type EmailProvider,
-} from "./provider";
+  type VitalCriticalPayload,
+  type LabCriticalValuePayload,
+  type DrugInteractionPayload,
+  type AllergyMismatchPayload,
+} from "@his/contracts";
+import type { Prisma, PrismaClient } from "@prisma/client";
+
 import {
   resolveChannels,
   type RoleSeverityMatrix,

@@ -18,14 +18,14 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 
 import {
-  dispatchDomainEvent,
-  type DispatchInputEvent,
-  type EmailProvider,
-} from "../index";
-import {
   PermanentProviderError,
   TransientProviderError,
-} from "../provider";
+  type EmailProvider,
+} from "@his/contracts";
+import {
+  dispatchDomainEvent,
+  type DispatchInputEvent,
+} from "../index";
 
 // UUIDs estables para tests — formato v4 estricto (validador Zod .uuid()
 // requiere version=4 nibble en posición 13 y variant=8-b en posición 17).
