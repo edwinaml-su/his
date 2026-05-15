@@ -1,6 +1,9 @@
 /**
  * Vitest config para `@his/infrastructure`.
  * Ambiente node — los adapters de infraestructura no requieren DOM.
+ *
+ * Cubre adapters externos (Resend, observability) y el dispatcher de
+ * notificaciones (Beta.15) con Prisma + EmailProvider mockeados.
  */
 import { defineConfig } from "vitest/config";
 
@@ -13,10 +16,8 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/notifications/**", "src/observability/**"],
-      exclude: ["**/index.ts"],
+      exclude: ["**/index.ts", "**/__tests__/**"],
       thresholds: {
-        // Sprint Beta.15 — solo `resend.ts` tiene tests dedicados; el logger
-        // se cubre indirecto. Subir umbrales cuando se añadan tests del logger.
         lines: 70,
         functions: 70,
         branches: 70,
