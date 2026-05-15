@@ -19,11 +19,24 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
 const w = "00000000-0000-0000-0000-000000000003";
+const drugA = "00000000-0000-0000-0000-0000000000a1";
+const drugB = "00000000-0000-0000-0000-0000000000b1";
+
+/** Beta.15: `prescription.sign` envuelve update + emit en $transaction. */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  prisma.$transaction.mockImplementation(async (cb: unknown) => {
+    if (typeof cb === "function") {
+      return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+    }
+    return cb;
+  });
+}
 
 describe("pharmacyRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
     _resetInteractionsDatasetForTesting([]);
   });
   afterEach(() => {
@@ -146,15 +159,17 @@ describe("pharmacyRouter", () => {
       prisma.prescription.findFirst.mockResolvedValue({
         id: u,
         status: "DRAFT",
+        prescriberId: v,
       } as never);
       prisma.prescriptionItem.findMany.mockResolvedValue([
-        { drug: { atcCode: "N02BE01", genericName: "Paracetamol" } },
+        { drug: { id: drugA, atcCode: "N02BE01", genericName: "Paracetamol" } },
       ] as never);
       prisma.prescription.update.mockResolvedValue({ id: u } as never);
       const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.prescription.sign({ id: u });
       expect(r.ok).toBe(true);
       expect(r.alerts).toEqual([]);
+      expect(prisma.domainEvent.create).not.toHaveBeenCalled();
     });
 
     it("Beta.2 — bloquea sign si hay interaction major sin override", async () => {
@@ -169,16 +184,18 @@ describe("pharmacyRouter", () => {
       prisma.prescription.findFirst.mockResolvedValue({
         id: u,
         status: "DRAFT",
+        prescriberId: v,
       } as never);
       prisma.prescriptionItem.findMany.mockResolvedValue([
-        { drug: { atcCode: "B01AA03", genericName: "Warfarina" } },
-        { drug: { atcCode: "M01AE01", genericName: "Ibuprofeno" } },
+        { drug: { id: drugA, atcCode: "B01AA03", genericName: "Warfarina" } },
+        { drug: { id: drugB, atcCode: "M01AE01", genericName: "Ibuprofeno" } },
       ] as never);
       const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.prescription.sign({ id: u })).rejects.toMatchObject({
         code: "PRECONDITION_FAILED",
       });
       expect(prisma.prescription.update).not.toHaveBeenCalled();
+      expect(prisma.domainEvent.create).not.toHaveBeenCalled();
     });
 
     it("Beta.2 — permite sign con override justification cuando hay major", async () => {
@@ -193,12 +210,14 @@ describe("pharmacyRouter", () => {
       prisma.prescription.findFirst.mockResolvedValue({
         id: u,
         status: "DRAFT",
+        prescriberId: v,
       } as never);
       prisma.prescriptionItem.findMany.mockResolvedValue([
-        { drug: { atcCode: "B01AA03", genericName: "Warfarina" } },
-        { drug: { atcCode: "M01AE01", genericName: "Ibuprofeno" } },
+        { drug: { id: drugA, atcCode: "B01AA03", genericName: "Warfarina" } },
+        { drug: { id: drugB, atcCode: "M01AE01", genericName: "Ibuprofeno" } },
       ] as never);
       prisma.prescription.update.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
       const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.prescription.sign({
         id: u,
@@ -225,17 +244,98 @@ describe("pharmacyRouter", () => {
       prisma.prescription.findFirst.mockResolvedValue({
         id: u,
         status: "DRAFT",
+        prescriberId: v,
       } as never);
       prisma.prescriptionItem.findMany.mockResolvedValue([
-        { drug: { atcCode: "N02BE01", genericName: "Paracetamol" } },
-        { drug: { atcCode: "B01AA03", genericName: "Warfarina" } },
+        { drug: { id: drugA, atcCode: "N02BE01", genericName: "Paracetamol" } },
+        { drug: { id: drugB, atcCode: "B01AA03", genericName: "Warfarina" } },
       ] as never);
       prisma.prescription.update.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
       const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.prescription.sign({ id: u });
       expect(r.ok).toBe(true);
       expect(r.alerts).toHaveLength(1);
       expect(r.alerts[0]!.severity).toBe("moderate");
+    });
+
+    /**
+     * Beta.15 (US.B15.4.3 — drug.interaction): emite DomainEvent cuando hay
+     * alerts y el sign procede. Severity payload: peor entre las alerts.
+     * AC: backlog menciona payload con prescriptionId + conflictingDrugIds.
+     */
+    describe("Beta.15 outbox emission (drug.interaction)", () => {
+      it("emite drug.interaction CRITICAL con override + major", async () => {
+        _resetInteractionsDatasetForTesting([
+          {
+            atcA: "B01AA03",
+            atcB: "M01AE01",
+            severity: "major",
+            description: "Warfarina + Ibuprofeno: riesgo hemorragia",
+          },
+        ]);
+        prisma.prescription.findFirst.mockResolvedValue({
+          id: u,
+          status: "DRAFT",
+          prescriberId: v,
+        } as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { drug: { id: drugA, atcCode: "B01AA03", genericName: "Warfarina" } },
+          { drug: { id: drugB, atcCode: "M01AE01", genericName: "Ibuprofeno" } },
+        ] as never);
+        prisma.prescription.update.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+        await caller.prescription.sign({
+          id: u,
+          forceOverrideJustification:
+            "Override aprobado por jefe de servicio para anticoagulación.",
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        expect(args.data.eventType).toBe("drug.interaction");
+        expect(args.data.aggregateType).toBe("Prescription");
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.prescriptionId).toBe(u);
+        expect(payload.prescriberId).toBe(v);
+        expect(payload.severity).toBe("CRITICAL");
+        expect(payload.conflictingDrugIds).toEqual(
+          expect.arrayContaining([drugA, drugB]),
+        );
+        expect(payload.description).toContain("Warfarina");
+      });
+
+      it("emite drug.interaction WARNING cuando sólo hay moderate (sin override)", async () => {
+        _resetInteractionsDatasetForTesting([
+          {
+            atcA: "N02BE01",
+            atcB: "B01AA03",
+            severity: "moderate",
+            description: "Paracetamol + Warfarina: ajustar dosis",
+          },
+        ]);
+        prisma.prescription.findFirst.mockResolvedValue({
+          id: u,
+          status: "DRAFT",
+          prescriberId: v,
+        } as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { drug: { id: drugA, atcCode: "N02BE01", genericName: "Paracetamol" } },
+          { drug: { id: drugB, atcCode: "B01AA03", genericName: "Warfarina" } },
+        ] as never);
+        prisma.prescription.update.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+        await caller.prescription.sign({ id: u });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const payload = prisma.domainEvent.create.mock.calls[0]![0].data
+          .payload as Record<string, unknown>;
+        expect(payload.severity).toBe("WARNING");
+      });
     });
   });
 

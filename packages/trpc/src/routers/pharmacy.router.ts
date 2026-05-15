@@ -35,8 +35,50 @@ import {
   type DrugInteractionEntry,
   type PrescriptionStatusType,
   type PharmacyInteractionAlert,
+  type DrugInteractionPayload,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+
+/**
+ * Beta.15 — mapea severities del helper Pharmacy (minor/moderate/major/
+ * contraindicated) al enum del payload Zod (`CRITICAL`/`WARNING`).
+ * Toma la "peor" severity entre las alertas detectadas como severity del evento.
+ */
+function worstInteractionSeverity(
+  alerts: PharmacyInteractionAlert[],
+): "CRITICAL" | "WARNING" {
+  for (const a of alerts) {
+    if (a.severity === "major" || a.severity === "contraindicated") {
+      return "CRITICAL";
+    }
+  }
+  return "WARNING";
+}
+
+/**
+ * Beta.15 — construye lista única de Drug.id en conflicto a partir de las
+ * alertas + items de la prescripción. El payload Zod exige `min(2)`. Si por
+ * cualquier razón el mapeo no llega a 2 IDs, retorna null y el caller no
+ * emite el evento (defensa contra payloads inválidos).
+ */
+function buildConflictingDrugIds(
+  alerts: PharmacyInteractionAlert[],
+  items: Array<{ drug: { id: string; atcCode: string | null } }>,
+): string[] | null {
+  const atcsInAlerts = new Set<string>();
+  for (const a of alerts) {
+    atcsInAlerts.add(a.atcA.toUpperCase());
+    atcsInAlerts.add(a.atcB.toUpperCase());
+  }
+  const ids = new Set<string>();
+  for (const it of items) {
+    const code = (it.drug.atcCode ?? "").toUpperCase();
+    if (code && atcsInAlerts.has(code)) ids.add(it.drug.id);
+  }
+  if (ids.size < 2) return null;
+  return Array.from(ids);
+}
 
 // ---------------------------------------------------------------------------
 // Dataset estático de interacciones (Wave 1)
@@ -206,8 +248,8 @@ export const pharmacyRouter = router({
       .mutation(async ({ ctx, input }) => {
         const presc = await ctx.prisma.prescription.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, status: true },
-          // include items+drug deeply below via second query for the alert calc
+          // Beta.15: prescriberId requerido para el payload del evento.
+          select: { id: true, status: true, prescriberId: true },
         });
         if (!presc) {
           throw new TRPCError({
@@ -229,7 +271,10 @@ export const pharmacyRouter = router({
 
         const items = await ctx.prisma.prescriptionItem.findMany({
           where: { prescriptionId: presc.id },
-          include: { drug: { select: { atcCode: true, genericName: true } } },
+          // Beta.15: drug.id requerido para `conflictingDrugIds` del payload.
+          include: {
+            drug: { select: { id: true, atcCode: true, genericName: true } },
+          },
         });
         const alerts = detectInteractionAlerts(
           items.map((it) => ({ atcCode: it.drug.atcCode, name: it.drug.genericName })),
@@ -245,16 +290,47 @@ export const pharmacyRouter = router({
           });
         }
 
-        await ctx.prisma.prescription.update({
-          where: { id: presc.id },
-          data: {
-            status: "SIGNED",
-            signedAt: new Date(),
-            // Cuando hay override, guardamos en notes con prefijo trazable.
-            ...(input.forceOverrideJustification && {
-              notes: appendOverrideNote(input.forceOverrideJustification, alerts),
-            }),
-          },
+        // Beta.15 (US.B15.4.3 — drug.interaction): si hay alerts y el sign
+        // procede (override o no-blocking), emitimos evento en la misma tx
+        // del update. `conflictingDrugIds` resuelto a partir de los items;
+        // si <2 IDs únicos, no emitimos (payload Zod requiere min 2).
+        const conflictingDrugIds = alerts.length > 0
+          ? buildConflictingDrugIds(alerts, items)
+          : null;
+        const shouldEmit = alerts.length > 0 && conflictingDrugIds !== null;
+
+        await ctx.prisma.$transaction(async (tx) => {
+          await tx.prescription.update({
+            where: { id: presc.id },
+            data: {
+              status: "SIGNED",
+              signedAt: new Date(),
+              ...(input.forceOverrideJustification && {
+                notes: appendOverrideNote(input.forceOverrideJustification, alerts),
+              }),
+            },
+          });
+          if (shouldEmit) {
+            const description = alerts
+              .map((a) => a.description)
+              .join("; ")
+              .slice(0, 500);
+            const payload: DrugInteractionPayload = {
+              prescriptionId: presc.id,
+              prescriberId: presc.prescriberId,
+              conflictingDrugIds: conflictingDrugIds!,
+              severity: worstInteractionSeverity(alerts),
+              description,
+            };
+            await emitDomainEvent(tx, {
+              organizationId: ctx.tenant.organizationId,
+              eventType: "drug.interaction",
+              aggregateType: "Prescription",
+              aggregateId: presc.id,
+              emittedById: ctx.user.id,
+              payload,
+            });
+          }
         });
         return { ok: true as const, alerts };
       }),
