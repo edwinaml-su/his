@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@his/database";
 import { AppShell } from "@/components/app-shell";
+import { NotificationsBadge } from "@/components/notifications-badge";
 import { OrgSwitcherClient } from "@/components/org-switcher-client";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 
@@ -38,7 +39,10 @@ export default async function ClinicalLayout({ children }: { children: React.Rea
               <span className="ml-2">— sin organización asignada</span>
             )}
           </span>
-          {tenant ? <OrgSwitcherClient currentOrgId={tenant.organizationId} /> : null}
+          <div className="flex items-center gap-2">
+            {tenant ? <NotificationsBadge /> : null}
+            {tenant ? <OrgSwitcherClient currentOrgId={tenant.organizationId} /> : null}
+          </div>
         </div>
       }
     >
