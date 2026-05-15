@@ -574,6 +574,40 @@ describe("inpatientRouter", () => {
         expect(severities).toContain("CRITICAL");
         expect(severities).toContain("WARNING");
       });
+
+      /**
+       * US.B15.1.4 — audit log wiring (emit).
+       * Cada inserción al outbox debe generar también una entrada en
+       * AuditLog con action=CREATE, entity=DomainEvent, entityId=eventId,
+       * y justification que incluye 'DOMAIN_EVENT_EMITTED:vital.critical'.
+       */
+      it("escribe AuditLog con action=CREATE tras emitir DomainEvent vital.critical", async () => {
+        prisma.inpatientAdmission.findFirst.mockResolvedValue({
+          id: u,
+          status: "ACTIVE",
+          patientId: v,
+        } as never);
+        prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+        await caller.vitals.record({ admissionId: u, spo2: 82 });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+        const auditArgs = prisma.auditLog.create.mock.calls[0]![0];
+        const data = auditArgs.data as {
+          action: string;
+          entity: string;
+          entityId: string;
+          justification: string;
+        };
+        expect(data.action).toBe("CREATE");
+        expect(data.entity).toBe("DomainEvent");
+        expect(data.entityId).toBe(w);
+        expect(data.justification).toContain("DOMAIN_EVENT_EMITTED");
+        expect(data.justification).toContain("vital.critical");
+      });
     });
   });
 

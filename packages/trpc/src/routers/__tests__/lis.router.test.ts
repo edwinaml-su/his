@@ -376,6 +376,52 @@ describe("lisRouter", () => {
 
         expect(prisma.domainEvent.create).not.toHaveBeenCalled();
       });
+
+      /**
+       * US.B15.1.4 — audit log wiring (emit).
+       * Cada inserción al outbox debe generar también una entrada en
+       * AuditLog con action=CREATE, entity=DomainEvent, entityId=eventId,
+       * y justification que incluye 'DOMAIN_EVENT_EMITTED:lab.criticalValue'.
+       */
+      it("escribe AuditLog con action=CREATE tras emitir DomainEvent lab.criticalValue", async () => {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: true,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 200,
+          flag: "NORMAL",
+          valueUnit: "mg/dL",
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+        const auditArgs = prisma.auditLog.create.mock.calls[0]![0];
+        const data = auditArgs.data as {
+          action: string;
+          entity: string;
+          entityId: string;
+          justification: string;
+        };
+        expect(data.action).toBe("CREATE");
+        expect(data.entity).toBe("DomainEvent");
+        expect(data.entityId).toBe(w);
+        expect(data.justification).toContain("DOMAIN_EVENT_EMITTED");
+        expect(data.justification).toContain("lab.criticalValue");
+      });
     });
   });
 

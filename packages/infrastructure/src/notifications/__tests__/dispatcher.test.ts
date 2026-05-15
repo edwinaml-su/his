@@ -461,4 +461,56 @@ describe("dispatchDomainEvent", () => {
     );
     expect(channels).toEqual(["INBOX", "EMAIL"]);
   });
+
+  // ---------------------------------------------------------------------------
+  // US.B15.1.4 — audit log wiring (publish)
+  // ---------------------------------------------------------------------------
+
+  it("audit log wiring: tras crear notifications llama auditLog.create con action=UPDATE y justification DOMAIN_EVENT_PUBLISHED", async () => {
+    prisma.inpatientAdmission.findUnique.mockResolvedValue(
+      stubAdmission({ email: "doc@his.test" }) as never,
+    );
+
+    const result = await dispatchDomainEvent(makeVitalEvent(), {
+      prisma,
+      emailProvider: provider,
+      fromEmail: "alerts@his.test",
+    });
+
+    // Sanity: el dispatch creó las dos notificaciones (INBOX + EMAIL).
+    expect(result.notificationsCreated).toBe(2);
+
+    // Audit log debe haberse escrito UNA vez con action=UPDATE.
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    const auditArg = (prisma.auditLog.create.mock.calls[0]![0] as {
+      data: {
+        action: string;
+        entity: string;
+        entityId: string;
+        organizationId: string;
+        justification: string;
+      };
+    }).data;
+    expect(auditArg.action).toBe("UPDATE");
+    expect(auditArg.entity).toBe("DomainEvent");
+    expect(auditArg.entityId).toBe(EVENT_ID);
+    expect(auditArg.organizationId).toBe(ORG);
+    expect(auditArg.justification).toContain("DOMAIN_EVENT_PUBLISHED");
+    expect(auditArg.justification).toContain("vital.critical");
+    expect(auditArg.justification).toContain("recipients=2");
+    expect(auditArg.justification).toMatch(/duration=\d+ms/);
+  });
+
+  it("audit log NO se escribe si dispatch hace short-circuit (already-dispatched)", async () => {
+    prisma.notification.findFirst.mockResolvedValueOnce({ id: NOTIF_ID } as never);
+
+    const result = await dispatchDomainEvent(makeVitalEvent(), {
+      prisma,
+      emailProvider: provider,
+      fromEmail: "alerts@his.test",
+    });
+
+    expect(result.skippedReason).toBe("already-dispatched");
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
 });
