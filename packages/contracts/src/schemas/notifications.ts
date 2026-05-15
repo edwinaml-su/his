@@ -53,6 +53,26 @@ export const notificationSchema = z.object({
 });
 export type Notification = z.infer<typeof notificationSchema>;
 
+/**
+ * Beta.15 (US.B15.3.1) — input schemas para `notificationsRouter`.
+ *
+ * `list`     → paginación cursor-based por `id` (más robusto que offset
+ *              cuando llegan notificaciones nuevas en background).
+ * `markRead` → idempotente: `updateMany` filtrando por recipientUserId
+ *              en el router evita escalar a otro user.
+ */
+export const notificationsListInput = z.object({
+  severity: notificationSeveritySchema.optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+  cursor: z.string().uuid().optional(),
+});
+export type NotificationsListInput = z.infer<typeof notificationsListInput>;
+
+export const notificationsMarkReadInput = z.object({
+  id: z.string().uuid(),
+});
+export type NotificationsMarkReadInput = z.infer<typeof notificationsMarkReadInput>;
+
 /** Una fila de `UserNotificationPreference`. PK = (userId, severity, channel). */
 export const userNotificationPreferenceSchema = z.object({
   userId: z.string().uuid(),
