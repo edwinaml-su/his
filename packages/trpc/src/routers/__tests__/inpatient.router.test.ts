@@ -429,6 +429,7 @@ describe("inpatientRouter", () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
+        patientId: v,
       } as never);
       prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
@@ -444,14 +445,17 @@ describe("inpatientRouter", () => {
       });
       expect(r.vitals).toBeDefined();
       expect(r.alerts).toEqual([]);
+      expect(prisma.domainEvent.create).not.toHaveBeenCalled();
     });
 
     it("genera alerta CRITICAL para spo2 ≤ 88", async () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
+        patientId: v,
       } as never);
       prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.vitals.record({
         admissionId: u,
@@ -466,6 +470,7 @@ describe("inpatientRouter", () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
+        patientId: v,
       } as never);
       prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
@@ -482,8 +487,10 @@ describe("inpatientRouter", () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
+        patientId: v,
       } as never);
       prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.vitals.record({
         admissionId: u,
@@ -493,6 +500,80 @@ describe("inpatientRouter", () => {
       });
       expect(r.alerts.length).toBeGreaterThanOrEqual(3);
       expect(r.alerts.some((a) => a.severity === "critical")).toBe(true);
+    });
+
+    /**
+     * Beta.15 (US.B15.4.1) — wiring outbox `vital.critical`.
+     * AC backlog: SPO2=82 dispara DomainEvent con eventType vital.critical
+     * y payload que incluye admissionId, patientId, sourceRowId, alerts.
+     */
+    describe("Beta.15 outbox emission (vital.critical)", () => {
+      it("emite DomainEvent vital.critical cuando hay alerta CRITICAL", async () => {
+        prisma.inpatientAdmission.findFirst.mockResolvedValue({
+          id: u,
+          status: "ACTIVE",
+          patientId: v,
+        } as never);
+        prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+        await caller.vitals.record({ admissionId: u, spo2: 82 });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        expect(args.data.eventType).toBe("vital.critical");
+        expect(args.data.aggregateType).toBe("InpatientVitals");
+        expect(args.data.aggregateId).toBe(u);
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.source).toBe("InpatientVitals");
+        expect(payload.admissionId).toBe(u);
+        expect(payload.patientId).toBe(v);
+        expect(payload.sourceRowId).toBe(u);
+        const alerts = payload.alerts as Array<Record<string, unknown>>;
+        expect(alerts.length).toBeGreaterThanOrEqual(1);
+        expect(alerts[0]!.parameter).toBe("SPO2");
+        expect(alerts[0]!.severity).toBe("CRITICAL");
+      });
+
+      it("NO emite DomainEvent si sólo hay alertas WARN", async () => {
+        prisma.inpatientAdmission.findFirst.mockResolvedValue({
+          id: u,
+          status: "ACTIVE",
+          patientId: v,
+        } as never);
+        prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+
+        const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+        await caller.vitals.record({ admissionId: u, heartRate: 115 });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+
+      it("incluye alertas WARN en el payload cuando coexisten con CRITICAL", async () => {
+        prisma.inpatientAdmission.findFirst.mockResolvedValue({
+          id: u,
+          status: "ACTIVE",
+          patientId: v,
+        } as never);
+        prisma.inpatientVitals.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+
+        const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+        await caller.vitals.record({
+          admissionId: u,
+          heartRate: 135, // critical
+          spo2: 90, // warn
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const payload = prisma.domainEvent.create.mock.calls[0]![0].data
+          .payload as Record<string, unknown>;
+        const alerts = payload.alerts as Array<Record<string, unknown>>;
+        const severities = alerts.map((a) => a.severity);
+        expect(severities).toContain("CRITICAL");
+        expect(severities).toContain("WARNING");
+      });
     });
   });
 
