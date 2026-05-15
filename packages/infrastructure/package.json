@@ -8,18 +8,24 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./observability/logger": "./src/observability/logger.ts"
+    "./observability/logger": "./src/observability/logger.ts",
+    "./notifications/resend": "./src/notifications/resend.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "echo 'no lint configured'",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@his/contracts": "*",
     "pino": "^9.5.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
-    "typescript": "^5.6.3"
+    "@vitest/coverage-v8": "^2.1.8",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
   }
 }

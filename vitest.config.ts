@@ -16,6 +16,7 @@ export default defineConfig({
     // Vitest 1.x: `projects` ejecuta cada subconfig en paralelo.
     projects: [
       "packages/contracts",
+      "packages/infrastructure",
       "packages/trpc",
       "apps/web",
     ],
