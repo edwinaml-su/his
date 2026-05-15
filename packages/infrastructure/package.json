@@ -2,13 +2,14 @@
   "name": "@his/infrastructure",
   "version": "0.1.0",
   "private": true,
-  "description": "Adaptadores de infraestructura HIS Multipaís: observabilidad, logging, supabase clients.",
+  "description": "Adaptadores de infraestructura HIS Multipaís: observabilidad, logging, dispatcher de notificaciones.",
   "license": "UNLICENSED",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./observability/logger": "./src/observability/logger.ts",
+    "./notifications": "./src/notifications/index.ts",
     "./notifications/resend": "./src/notifications/resend.ts"
   },
   "scripts": {
@@ -24,8 +25,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@prisma/client": "^5.22.0",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "vitest-mock-extended": "^2.0.2"
   }
 }
