@@ -108,5 +108,26 @@ export async function emitDomainEvent(
     select: { id: true },
   });
 
+  // US.B15.1.4 — audit log wiring (emit).
+  // El INSERT de audit corre en la MISMA transacción (atómico con el evento).
+  // Si la transacción hace rollback, el audit log NO existe — consistencia
+  // append-only entre outbox y auditoría. El trigger SQL
+  // `audit.fn_audit_log_chain` calcula prevHash + signatureHash
+  // automáticamente (ver packages/database/sql/05_audit_hash_chain.sql).
+  //
+  // Action: usamos `CREATE` del enum AuditAction existente (NO añadimos
+  // valor nuevo — fricción operativa con ALTER TYPE). El sentido semántico
+  // "DOMAIN_EVENT_EMITTED" + el eventType se preserva en `justification`.
+  await tx.auditLog.create({
+    data: {
+      organizationId: input.organizationId,
+      userId: input.emittedById ?? null,
+      action: "CREATE",
+      entity: "DomainEvent",
+      entityId: created.id,
+      justification: `DOMAIN_EVENT_EMITTED:${input.eventType}`,
+    },
+  });
+
   return created;
 }

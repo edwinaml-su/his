@@ -280,6 +280,10 @@ export async function dispatchDomainEvent(
     emailsSent: 0,
     emailsFailed: 0,
   };
+  // US.B15.1.4 — Timestamp para medir duración occurredAt → publishedAt.
+  // Capturamos `now()` al inicio del dispatch como aproximación de
+  // publishedAt; la duración se reporta en el justification del audit log.
+  const dispatchStartedAt = Date.now();
 
   // 1. Idempotencia: si ya hay Notification para este eventId+org → skip.
   const existing = await ctx.prisma.notification.findFirst({
@@ -431,6 +435,31 @@ export async function dispatchDomainEvent(
       }
     }
   }
+
+  // US.B15.1.4 — audit log wiring (publish).
+  // Tras procesar todos los recipients (INBOX + EMAIL filas creadas y
+  // eventualmente actualizadas con SENT/FAILED), registramos un audit log
+  // con action=UPDATE indicando que el DomainEvent fue publicado.
+  //
+  // Action: `UPDATE` del enum AuditAction existente (NO añadimos valor
+  // nuevo). El sentido semántico "DOMAIN_EVENT_PUBLISHED" + eventType +
+  // duración + recipients se preserva en `justification`.
+  //
+  // El insert corre en la misma `ctx.prisma` recibida — si el caller pasó
+  // una transacción, el audit es atómico con las creaciones de Notification.
+  // El trigger SQL `audit.fn_audit_log_chain` calcula prevHash + signatureHash
+  // automáticamente.
+  const durationMs = Date.now() - dispatchStartedAt;
+  await ctx.prisma.auditLog.create({
+    data: {
+      organizationId: event.organizationId,
+      userId: null,
+      action: "UPDATE",
+      entity: "DomainEvent",
+      entityId: event.id,
+      justification: `DOMAIN_EVENT_PUBLISHED:${event.eventType} duration=${durationMs}ms recipients=${result.notificationsCreated}`,
+    },
+  });
 
   return result;
 }
