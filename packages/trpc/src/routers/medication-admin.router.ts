@@ -15,7 +15,10 @@ import {
   medicationAdministrationRecordInput,
   medicationAdministrationListInput,
   medicationAdministrationGetInput,
+  detectAllergyMismatch,
+  type AllergyMismatchPayload,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 // ---------------------------------------------------------------------------
@@ -45,6 +48,9 @@ export const medicationAdminRouter = router({
     .input(medicationAdministrationRecordInput)
     .mutation(async ({ ctx, input }) => {
       // -- Cargar PrescriptionItem + Drug + cumulative qty --
+      // Beta.15: include `drug.id` + name fields + `prescription.patientId/
+      // prescriberId` para el wiring de allergy.mismatch. PatientAllergy se
+      // carga en query separada (no hay relación nominal Prescription→Patient).
       const item = await ctx.prisma.prescriptionItem.findFirst({
         where: {
           id: input.prescriptionItemId,
@@ -59,8 +65,18 @@ export const medicationAdminRouter = router({
           administeredQty: true,
           drug: {
             select: {
+              id: true,
+              atcCode: true,
+              genericName: true,
+              brandName: true,
               requiresControlledLog: true,
               dispensingClass: true,
+            },
+          },
+          prescription: {
+            select: {
+              patientId: true,
+              prescriberId: true,
             },
           },
         },
@@ -152,30 +168,145 @@ export const medicationAdminRouter = router({
         }
       }
 
-      // -- Persistir --
-      return ctx.prisma.medicationAdministration.create({
-        data: {
-          organizationId: ctx.tenant.organizationId,
-          prescriptionItemId: input.prescriptionItemId,
-          administeredById: ctx.user.id,
-          secondVerifierId: input.secondVerifierId ?? null,
-          status: targetStatus,
-          doseAmount: input.doseAmount ?? null,
-          doseUnit: input.doseUnit ?? null,
-          route: input.route ?? null,
-          site: input.site ?? null,
-          patientBarcodeScanned: input.patientBarcodeScanned,
-          drugBarcodeScanned: input.drugBarcodeScanned,
-          providerBadgeScanned: input.providerBadgeScanned,
-          scannedAt: input.scannedAt ?? null,
-          barcodeScannedAt: input.barcodeScannedAt ?? null,
-          patientWristbandScanned: input.patientWristbandScanned,
-          doubleCheckById: input.doubleCheckById ?? null,
-          scheduledTime: input.scheduledTime ?? null,
-          timingWindowMinutes: input.timingWindowMinutes,
-          overrideReason: input.overrideReason ?? null,
-          notes: input.notes ?? null,
-        },
+      // -- Beta.15 (US.B15.4.3b) — detectar allergy.mismatch en estados
+      // que representan administración real. SCHEDULED/HELD/REFUSED/MISSED
+      // son planificación o no-administración: no emiten. Decisión §5.4
+      // (vinculante 2026-05-14): NO bloquea — sólo emite + notifica.
+      const isAdministrationAttempt =
+        targetStatus === "ADMINISTERED" ||
+        targetStatus === "GIVEN" ||
+        targetStatus === "DOCUMENTED_LATE";
+
+      let allergyHits: ReturnType<typeof detectAllergyMismatch> = [];
+      if (isAdministrationAttempt) {
+        const allergies = await ctx.prisma.patientAllergy.findMany({
+          where: {
+            patientId: item.prescription.patientId,
+            active: true,
+          },
+          select: {
+            id: true,
+            substanceText: true,
+            severity: true,
+            substanceConceptId: true,
+          },
+        });
+
+        if (allergies.length > 0) {
+          // Resolver ATC code de cada allergy via ClinicalConcept (sólo cuando
+          // el codeSystem es ATC). Una sola query batched.
+          const conceptIds = allergies
+            .map((a) => a.substanceConceptId)
+            .filter((id): id is string => id !== null && id !== undefined);
+          const atcByConceptId = new Map<string, string>();
+          if (conceptIds.length > 0) {
+            const concepts = await ctx.prisma.clinicalConcept.findMany({
+              where: {
+                id: { in: conceptIds },
+                codeSystem: { code: "ATC" },
+              },
+              select: { id: true, code: true },
+            });
+            for (const c of concepts) atcByConceptId.set(c.id, c.code);
+          }
+
+          allergyHits = detectAllergyMismatch(
+            allergies.map((a) => ({
+              id: a.id,
+              substanceText: a.substanceText,
+              allergenAtcCode:
+                a.substanceConceptId !== null && a.substanceConceptId !== undefined
+                  ? (atcByConceptId.get(a.substanceConceptId) ?? null)
+                  : null,
+              severity: a.severity,
+            })),
+            {
+              id: item.drug.id,
+              atcCode: item.drug.atcCode,
+              genericName: item.drug.genericName,
+              brandName: item.drug.brandName,
+            },
+          );
+        }
+      }
+
+      // -- Persistir + emit DomainEvent (outbox transaccional) --
+      // Si no hay hits, el create se ejecuta sin transacción extra para evitar
+      // overhead (mismo path que pre-Beta.15).
+      if (allergyHits.length === 0) {
+        return ctx.prisma.medicationAdministration.create({
+          data: {
+            organizationId: ctx.tenant.organizationId,
+            prescriptionItemId: input.prescriptionItemId,
+            administeredById: ctx.user.id,
+            secondVerifierId: input.secondVerifierId ?? null,
+            status: targetStatus,
+            doseAmount: input.doseAmount ?? null,
+            doseUnit: input.doseUnit ?? null,
+            route: input.route ?? null,
+            site: input.site ?? null,
+            patientBarcodeScanned: input.patientBarcodeScanned,
+            drugBarcodeScanned: input.drugBarcodeScanned,
+            providerBadgeScanned: input.providerBadgeScanned,
+            scannedAt: input.scannedAt ?? null,
+            barcodeScannedAt: input.barcodeScannedAt ?? null,
+            patientWristbandScanned: input.patientWristbandScanned,
+            doubleCheckById: input.doubleCheckById ?? null,
+            scheduledTime: input.scheduledTime ?? null,
+            timingWindowMinutes: input.timingWindowMinutes,
+            overrideReason: input.overrideReason ?? null,
+            notes: input.notes ?? null,
+          },
+        });
+      }
+
+      // Con hits: create + un emit por match dentro de la misma tx.
+      const patientId = item.prescription.patientId;
+      const prescriberId = item.prescription.prescriberId;
+      return ctx.prisma.$transaction(async (tx) => {
+        const created = await tx.medicationAdministration.create({
+          data: {
+            organizationId: ctx.tenant.organizationId,
+            prescriptionItemId: input.prescriptionItemId,
+            administeredById: ctx.user.id,
+            secondVerifierId: input.secondVerifierId ?? null,
+            status: targetStatus,
+            doseAmount: input.doseAmount ?? null,
+            doseUnit: input.doseUnit ?? null,
+            route: input.route ?? null,
+            site: input.site ?? null,
+            patientBarcodeScanned: input.patientBarcodeScanned,
+            drugBarcodeScanned: input.drugBarcodeScanned,
+            providerBadgeScanned: input.providerBadgeScanned,
+            scannedAt: input.scannedAt ?? null,
+            barcodeScannedAt: input.barcodeScannedAt ?? null,
+            patientWristbandScanned: input.patientWristbandScanned,
+            doubleCheckById: input.doubleCheckById ?? null,
+            scheduledTime: input.scheduledTime ?? null,
+            timingWindowMinutes: input.timingWindowMinutes,
+            overrideReason: input.overrideReason ?? null,
+            notes: input.notes ?? null,
+          },
+        });
+
+        for (const hit of allergyHits) {
+          const payload: AllergyMismatchPayload = {
+            medicationAdministrationId: created.id,
+            patientId,
+            allergyId: hit.allergyId,
+            drugId: item.drug.id,
+            prescriberId: prescriberId ?? null,
+          };
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "allergy.mismatch",
+            aggregateType: "MedicationAdministration",
+            aggregateId: created.id,
+            emittedById: ctx.user.id,
+            payload,
+          });
+        }
+        return created;
       });
     }),
 

@@ -21,15 +21,28 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
+const patientId = "00000000-0000-0000-0000-0000000000bb";
+const prescriberId = "00000000-0000-0000-0000-0000000000cc";
+const drugId = "00000000-0000-0000-0000-0000000000d1";
+const allergyId = "00000000-0000-0000-0000-0000000000a1";
+const conceptId = "00000000-0000-0000-0000-0000000000e1";
 
 // -- Fixtures --
 
 const normalDrug = {
+  id: drugId,
+  atcCode: "N02BE01",
+  genericName: "Paracetamol",
+  brandName: null as string | null,
   requiresControlledLog: false,
   dispensingClass: "RX" as const,
 };
 
 const highRiskDrug = {
+  id: drugId,
+  atcCode: "N02AA01",
+  genericName: "Morfina",
+  brandName: null as string | null,
   requiresControlledLog: true,
   dispensingClass: "RX_CONTROLLED" as const,
 };
@@ -46,7 +59,18 @@ function makeItem(
     drug: overrides.drug ?? normalDrug,
     prescribedQty: overrides.prescribedQty ?? 0,
     administeredQty: overrides.administeredQty ?? 0,
+    prescription: { patientId, prescriberId },
   };
+}
+
+/** Beta.15: `record` envuelve create + emit en $transaction cuando hay hits. */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  prisma.$transaction.mockImplementation(async (cb: unknown) => {
+    if (typeof cb === "function") {
+      return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+    }
+    return cb;
+  });
 }
 
 const bcmaComplete = {
@@ -62,6 +86,10 @@ describe("medicationAdminRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
+    // Default: no allergies. Tests Beta.15 sobreescriben este mock.
+    prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+    prisma.clinicalConcept.findMany.mockResolvedValue([] as never);
   });
 
   // -- isWithinTimingWindow --
@@ -360,6 +388,193 @@ describe("medicationAdminRouter", () => {
         });
         const args = prisma.medicationAdministration.create.mock.calls[0]![0];
         expect((args.data as { doubleCheckById: string }).doubleCheckById).toBe(u);
+      });
+    });
+
+    /**
+     * Beta.15 (US.B15.4.3b — allergy.mismatch): cuando se administra un drug
+     * a un paciente con PatientAllergy que matchea, emite DomainEvent con
+     * payload válido. NO bloquea la administración (decisión §5.4).
+     */
+    describe("Beta.15 outbox emission (allergy.mismatch)", () => {
+      const createdId = "00000000-0000-0000-0000-0000000000ff";
+
+      it("emite allergy.mismatch cuando match por ATC", async () => {
+        prisma.prescriptionItem.findFirst.mockResolvedValue(makeItem() as never);
+        // Paciente con allergy a Paracetamol via ATC.
+        prisma.patientAllergy.findMany.mockResolvedValue([
+          {
+            id: allergyId,
+            substanceText: "paracetamol-text",
+            severity: "severe",
+            substanceConceptId: conceptId,
+          },
+        ] as never);
+        prisma.clinicalConcept.findMany.mockResolvedValue([
+          { id: conceptId, code: "N02BE01" },
+        ] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.record({
+          prescriptionItemId: u,
+          status: "ADMINISTERED",
+          ...bcmaComplete,
+        });
+
+        // NO bloquea — la administración se persiste.
+        expect((r as { id: string }).id).toBe(createdId);
+        expect(prisma.medicationAdministration.create).toHaveBeenCalledTimes(1);
+        // Emite evento dentro de la tx.
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const args = prisma.domainEvent.create.mock.calls[0]![0];
+        expect(args.data.eventType).toBe("allergy.mismatch");
+        expect(args.data.aggregateType).toBe("MedicationAdministration");
+        expect(args.data.aggregateId).toBe(createdId);
+        const payload = args.data.payload as Record<string, unknown>;
+        expect(payload.medicationAdministrationId).toBe(createdId);
+        expect(payload.patientId).toBe(patientId);
+        expect(payload.allergyId).toBe(allergyId);
+        expect(payload.drugId).toBe(drugId);
+        expect(payload.prescriberId).toBe(prescriberId);
+      });
+
+      it("emite allergy.mismatch cuando match por nombre (sin ATC en allergy)", async () => {
+        prisma.prescriptionItem.findFirst.mockResolvedValue(makeItem() as never);
+        prisma.patientAllergy.findMany.mockResolvedValue([
+          {
+            id: allergyId,
+            substanceText: "paracetamol",
+            severity: "moderate",
+            substanceConceptId: null,
+          },
+        ] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        await caller.record({
+          prescriptionItemId: u,
+          status: "ADMINISTERED",
+          ...bcmaComplete,
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        const payload = prisma.domainEvent.create.mock.calls[0]![0].data
+          .payload as Record<string, unknown>;
+        expect(payload.allergyId).toBe(allergyId);
+      });
+
+      it("NO emite cuando el paciente no tiene alergias activas", async () => {
+        prisma.prescriptionItem.findFirst.mockResolvedValue(makeItem() as never);
+        prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        await caller.record({
+          prescriptionItemId: u,
+          status: "ADMINISTERED",
+          ...bcmaComplete,
+        });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+        expect(prisma.medicationAdministration.create).toHaveBeenCalledTimes(1);
+      });
+
+      it("NO emite cuando drug sin atcCode y nombre no matchea", async () => {
+        const drugSinMatch = {
+          ...normalDrug,
+          atcCode: null,
+          genericName: "Ibuprofeno",
+          brandName: null,
+        };
+        prisma.prescriptionItem.findFirst.mockResolvedValue(
+          makeItem({ drug: drugSinMatch }) as never,
+        );
+        prisma.patientAllergy.findMany.mockResolvedValue([
+          {
+            id: allergyId,
+            substanceText: "paracetamol",
+            severity: "severe",
+            substanceConceptId: null,
+          },
+        ] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        await caller.record({
+          prescriptionItemId: u,
+          status: "ADMINISTERED",
+          ...bcmaComplete,
+        });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+
+      it("NO emite cuando status=SCHEDULED (no es intento de administración)", async () => {
+        prisma.prescriptionItem.findFirst.mockResolvedValue(makeItem() as never);
+        prisma.patientAllergy.findMany.mockResolvedValue([
+          {
+            id: allergyId,
+            substanceText: "paracetamol",
+            severity: "severe",
+            substanceConceptId: null,
+          },
+        ] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        await caller.record({ prescriptionItemId: u, status: "SCHEDULED" });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+        // tampoco se hace la query de alergias en SCHEDULED.
+        expect(prisma.patientAllergy.findMany).not.toHaveBeenCalled();
+      });
+
+      it("emite múltiples eventos cuando varias allergies matchean", async () => {
+        const allergyId2 = "00000000-0000-0000-0000-0000000000a2";
+        prisma.prescriptionItem.findFirst.mockResolvedValue(makeItem() as never);
+        prisma.patientAllergy.findMany.mockResolvedValue([
+          {
+            id: allergyId,
+            substanceText: "paracetamol",
+            severity: "severe",
+            substanceConceptId: null,
+          },
+          {
+            id: allergyId2,
+            substanceText: "no-match",
+            severity: "mild",
+            substanceConceptId: conceptId,
+          },
+        ] as never);
+        prisma.clinicalConcept.findMany.mockResolvedValue([
+          { id: conceptId, code: "N02BE01" },
+        ] as never);
+        prisma.medicationAdministration.create.mockResolvedValue({
+          id: createdId,
+        } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+
+        const caller = medicationAdminRouter.createCaller(makeCtx({ prisma }));
+        await caller.record({
+          prescriptionItemId: u,
+          status: "ADMINISTERED",
+          ...bcmaComplete,
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(2);
       });
     });
   });
