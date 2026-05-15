@@ -3263,6 +3263,12 @@ model DomainEvent {
   attempts       Int       @default(0)
   /// Bounded a 2000 chars; mensajes largos se truncan en el dispatcher.
   lastError      String?   @db.VarChar(2000)
+  /// Beta.15 (SQL 44 poller) — timestamp del último intento de procesamiento.
+  /// Usado por el poller para calcular backoff exponencial.
+  lastAttemptAt  DateTime? @db.Timestamptz()
+  /// Beta.15 (SQL 44 poller) — request_id devuelto por net.http_post (pg_net)
+  /// del último intento. Permite trazabilidad fin-a-fin pg_net → Edge Function.
+  lastNetRequestId BigInt?
   emittedById    String?   @db.Uuid
 
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
