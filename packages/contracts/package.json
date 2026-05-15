@@ -12,7 +12,8 @@
     "./schemas": "./src/schemas/index.ts",
     "./schemas/*": "./src/schemas/*.ts",
     "./types": "./src/types/index.ts",
-    "./events": "./src/events/index.ts"
+    "./events": "./src/events/index.ts",
+    "./notifications/provider": "./src/notifications/provider.ts"
   },
   "scripts": {
     "lint": "echo 'no lint configured'",
