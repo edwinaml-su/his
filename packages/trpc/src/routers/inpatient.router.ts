@@ -28,8 +28,47 @@ import {
   isTerminalInpatientStatus,
   evaluateVitalAlerts,
   type InpatientStatusType,
+  type InpatientVitalAlert,
+  type VitalCriticalPayload,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+
+/**
+ * Beta.15 — mapping del shape interno de `evaluateVitalAlerts`
+ * (`InpatientVitalAlert.field` en camelCase + severity lowercase) al shape
+ * del payload Zod del DomainEvent `vital.critical`
+ * (`parameter` enum uppercase + severity uppercase).
+ *
+ * `painScale` se mapea para coherencia, aunque el dispatcher típicamente
+ * lo ignora (informativo, no clínicamente crítico).
+ */
+const VITAL_FIELD_TO_PARAMETER = {
+  temperatureC: "TEMP",
+  heartRate: "HR",
+  respiratoryRate: "RR",
+  systolicBp: "BP_SYS",
+  diastolicBp: "BP_DIA",
+  spo2: "SPO2",
+  painScale: "PAIN",
+} as const satisfies Record<string, VitalCriticalPayload["alerts"][number]["parameter"]>;
+
+type MappableField = keyof typeof VITAL_FIELD_TO_PARAMETER;
+
+function toPayloadAlert(
+  alert: InpatientVitalAlert,
+): VitalCriticalPayload["alerts"][number] | null {
+  const parameter = VITAL_FIELD_TO_PARAMETER[alert.field as MappableField];
+  if (!parameter) return null;
+  // Payload solo admite CRITICAL/WARNING — INFO se descarta (no es crítico).
+  if (alert.severity === "info") return null;
+  return {
+    parameter,
+    value: alert.value,
+    severity: alert.severity === "critical" ? "CRITICAL" : "WARNING",
+    message: alert.reason,
+  };
+}
 
 export const inpatientRouter = router({
   admission: router({
@@ -334,9 +373,12 @@ export const inpatientRouter = router({
   vitals: router({
     /**
      * Beta.1 — registro de vitales con generación automática de alertas
-     * basadas en umbrales adulto. Las alertas se devuelven al cliente para
-     * ser mostradas inline; Wave 2 las publicará al outbox para notificación
-     * push al médico tratante.
+     * basadas en umbrales adulto. Las alertas se devuelven al cliente
+     * inline.
+     *
+     * Beta.15 (US.B15.4.1) — si alguna alerta es CRITICAL, se emite un
+     * `DomainEvent vital.critical` en la misma transacción que el create
+     * (outbox transaccional). El dispatcher resuelve al médico tratante.
      */
     record: tenantProcedure
       .input(inpatientVitalsRecordInput)
@@ -347,7 +389,7 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true },
+          select: { id: true, status: true, patientId: true },
         });
         if (!adm) {
           throw new TRPCError({
@@ -370,20 +412,49 @@ export const inpatientRouter = router({
           spo2: input.spo2 ?? null,
           painScale: input.painScale ?? null,
         });
-        const vitals = await ctx.prisma.inpatientVitals.create({
-          data: {
-            admissionId: input.admissionId,
-            recordedById: ctx.user.id,
-            temperatureC: input.temperatureC ?? null,
-            heartRate: input.heartRate ?? null,
-            respiratoryRate: input.respiratoryRate ?? null,
-            systolicBp: input.systolicBp ?? null,
-            diastolicBp: input.diastolicBp ?? null,
-            spo2: input.spo2 ?? null,
-            painScale: input.painScale ?? null,
-            notes: input.notes ?? null,
-          },
+        const hasCritical = alerts.some((a) => a.severity === "critical");
+
+        const vitals = await ctx.prisma.$transaction(async (tx) => {
+          const created = await tx.inpatientVitals.create({
+            data: {
+              admissionId: input.admissionId,
+              recordedById: ctx.user.id,
+              temperatureC: input.temperatureC ?? null,
+              heartRate: input.heartRate ?? null,
+              respiratoryRate: input.respiratoryRate ?? null,
+              systolicBp: input.systolicBp ?? null,
+              diastolicBp: input.diastolicBp ?? null,
+              spo2: input.spo2 ?? null,
+              painScale: input.painScale ?? null,
+              notes: input.notes ?? null,
+            },
+          });
+          if (hasCritical) {
+            const payloadAlerts = alerts
+              .map(toPayloadAlert)
+              .filter((a): a is NonNullable<typeof a> => a !== null);
+            // Defensa: si el mapeo no produce alerts (shouldn't, ya validamos
+            // hasCritical), no emitimos — el payload Zod exige min(1).
+            if (payloadAlerts.length > 0) {
+              await emitDomainEvent(tx, {
+                organizationId: ctx.tenant.organizationId,
+                eventType: "vital.critical",
+                aggregateType: "InpatientVitals",
+                aggregateId: created.id,
+                emittedById: ctx.user.id,
+                payload: {
+                  source: "InpatientVitals",
+                  admissionId: adm.id,
+                  patientId: adm.patientId,
+                  sourceRowId: created.id,
+                  alerts: payloadAlerts,
+                } satisfies VitalCriticalPayload,
+              });
+            }
+          }
+          return created;
         });
+
         return { vitals, alerts };
       }),
 
