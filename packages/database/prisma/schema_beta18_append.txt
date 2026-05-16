@@ -1,0 +1,199 @@
+
+// =============================================================================
+// 23. CONTABILIDAD MULTI-LIBRO  (TDR §23, Wave Beta.18)
+//
+// Modelo append-only conforme ADR 0007. Sin DTE Hacienda (ADR 0006).
+// Ledger ya existe arriba. Aqui se anaden las entidades transaccionales.
+// =============================================================================
+
+/// Tipo de cuenta contable. ADR 0007 D3.
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+  /// Solo para libro STATISTICAL.
+  STATISTICAL
+
+  @@schema("public")
+}
+
+/// Estado del periodo fiscal. ADR 0007 D6.
+enum PeriodStatus {
+  OPEN
+  PENDING_CLOSE
+  CLOSED
+  REOPENED
+
+  @@schema("public")
+}
+
+/// Estado del asiento contable. ADR 0007 D2.
+enum JournalStatus {
+  DRAFT
+  POSTED
+  REVERSED
+
+  @@schema("public")
+}
+
+/// Origen del asiento.
+enum JournalOrigin {
+  MANUAL
+  SISTEMA_FACTURACION
+  SISTEMA_NOMINA
+  AJUSTE
+  CIERRE
+
+  @@schema("public")
+}
+
+/// TDR §23 — plan de cuentas jerarquico por libro (ADR 0007 D3).
+/// Solo cuentas hoja (isLeaf=true) aceptan JournalLine.
+model Account {
+  id              String      @id @default(uuid()) @db.Uuid
+  organizationId  String      @db.Uuid
+  ledgerId        String      @db.Uuid
+  code            String      @db.VarChar(40)
+  name            String      @db.VarChar(200)
+  accountType     AccountType
+  isLeaf          Boolean     @default(true)
+  allowPosting    Boolean     @default(true)
+  parentAccountId String?     @db.Uuid
+  level           Int         @default(1)
+  currencyId      String      @db.Uuid
+  active          Boolean     @default(true)
+  createdAt       DateTime    @default(now()) @db.Timestamptz()
+  updatedAt       DateTime    @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("AccountOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  ledger       Ledger       @relation("LedgerAccounts", fields: [ledgerId], references: [id], onDelete: Restrict)
+  currency     Currency     @relation("AccountCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+  parent       Account?     @relation("AccountHierarchy", fields: [parentAccountId], references: [id])
+  children     Account[]    @relation("AccountHierarchy")
+  journalLines JournalLine[]
+
+  @@unique([ledgerId, code])
+  @@index([organizationId, accountType])
+  @@index([ledgerId, parentAccountId])
+  @@index([organizationId, active])
+  @@schema("public")
+}
+
+/// TDR §23 — periodo fiscal por libro (ADR 0007 D6).
+/// Solo periodos OPEN o REOPENED aceptan nuevos JournalEntry.
+model AccountingPeriod {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  ledgerId       String       @db.Uuid
+  periodYear     Int
+  periodMonth    Int
+  startDate      DateTime     @db.Date
+  endDate        DateTime     @db.Date
+  status         PeriodStatus @default(OPEN)
+  closingNote    String?      @db.VarChar(500)
+  closedAt       DateTime?    @db.Timestamptz()
+  closedById     String?      @db.Uuid
+  createdAt      DateTime     @default(now()) @db.Timestamptz()
+  updatedAt      DateTime     @updatedAt @db.Timestamptz()
+
+  organization   Organization   @relation("PeriodOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  ledger         Ledger         @relation("LedgerPeriods", fields: [ledgerId], references: [id], onDelete: Restrict)
+  closedBy       User?          @relation("PeriodClosedBy", fields: [closedById], references: [id])
+  journalEntries JournalEntry[]
+
+  @@unique([organizationId, ledgerId, periodYear, periodMonth])
+  @@index([organizationId, ledgerId, status])
+  @@schema("public")
+}
+
+/// TDR §23 — cabecera de asiento contable, append-only (ADR 0007 D2).
+/// POSTED es immutable. Correccion via contraasiento (reversalOfId).
+model JournalEntry {
+  id                String        @id @default(uuid()) @db.Uuid
+  organizationId    String        @db.Uuid
+  ledgerId          String        @db.Uuid
+  periodId          String        @db.Uuid
+  entryDate         DateTime      @db.Date
+  numeroCorrelativo Int
+  referencia        String?       @db.VarChar(120)
+  descripcion       String        @db.VarChar(500)
+  origen            JournalOrigin @default(MANUAL)
+  status            JournalStatus @default(DRAFT)
+  currencyId        String        @db.Uuid
+  fxRate            Decimal?      @db.Decimal(18, 8)
+  fxRateDate        DateTime?     @db.Date
+  documentRef       String?       @db.VarChar(120)
+  documentType      String?       @db.VarChar(60)
+  postedAt          DateTime?     @db.Timestamptz()
+  postedById        String?       @db.Uuid
+  createdById       String        @db.Uuid
+  reversalOfId      String?       @db.Uuid
+  createdAt         DateTime      @default(now()) @db.Timestamptz()
+  updatedAt         DateTime      @updatedAt @db.Timestamptz()
+
+  organization Organization     @relation("JournalOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  ledger       Ledger           @relation("LedgerJournals", fields: [ledgerId], references: [id], onDelete: Restrict)
+  period       AccountingPeriod @relation(fields: [periodId], references: [id], onDelete: Restrict)
+  currency     Currency         @relation("JournalCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+  createdBy    User             @relation("JournalCreatedBy", fields: [createdById], references: [id])
+  postedBy     User?            @relation("JournalPostedBy", fields: [postedById], references: [id])
+  reversalOf   JournalEntry?    @relation("JournalReversal", fields: [reversalOfId], references: [id])
+  reversedBy   JournalEntry[]   @relation("JournalReversal")
+  lines        JournalLine[]
+
+  @@unique([organizationId, ledgerId, periodId, numeroCorrelativo])
+  @@index([organizationId, ledgerId, entryDate])
+  @@index([organizationId, periodId, status])
+  @@index([documentType, documentRef])
+  @@schema("public")
+}
+
+/// TDR §23 — linea de asiento contable (partida doble).
+/// Invariante SQL: debit>=0, credit>=0, NOT(debit>0 AND credit>0).
+/// SUM(debit)==SUM(credit) por entry: trigger en 47_accounting_hardening.sql.
+model JournalLine {
+  id             String    @id @default(uuid()) @db.Uuid
+  journalEntryId String    @db.Uuid
+  lineNumber     Int
+  accountId      String    @db.Uuid
+  debit          Decimal   @db.Decimal(18, 2)
+  credit         Decimal   @db.Decimal(18, 2)
+  descripcion    String?   @db.VarChar(300)
+  costCenterId   String?   @db.Uuid
+  thirdPartyType String?   @db.VarChar(30)
+  thirdPartyId   String?   @db.Uuid
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Restrict)
+  account      Account      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  costCenter   CostCenter?  @relation(fields: [costCenterId], references: [id])
+
+  @@unique([journalEntryId, lineNumber])
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@index([costCenterId])
+  @@schema("public")
+}
+
+/// TDR §23 — centro de costos por organizacion (jerarquico).
+model CostCenter {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  code           String    @db.VarChar(20)
+  name           String    @db.VarChar(120)
+  parentId       String?   @db.Uuid
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("CostCenterOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  parent       CostCenter?  @relation("CostCenterHierarchy", fields: [parentId], references: [id])
+  children     CostCenter[] @relation("CostCenterHierarchy")
+  journalLines JournalLine[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
+  @@schema("public")
+}
