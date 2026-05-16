@@ -1,0 +1,32 @@
+################################################################################
+# configmap.yaml — Feature flags y configuración non-sensitive
+# Los valores sensitive van en secret-template.yaml (o External Secrets)
+################################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: his-web-config
+  namespace: his-avante
+  labels:
+    app.kubernetes.io/name: his-web
+    app.kubernetes.io/component: config
+data:
+  # Telemetría Next.js deshabilitada (GDPR + performance)
+  NEXT_TELEMETRY_DISABLED: "1"
+
+  # Feature flag: modo mantenimiento (activar durante cutover)
+  # Cambiar a "true" y aplicar con: kubectl apply -k infra/k8s/overlays/prod
+  MAINTENANCE_MODE: "false"
+
+  # Ambiente de Sentry (para logs/trazas correctas)
+  SENTRY_ENVIRONMENT: "production"
+  NEXT_PUBLIC_SENTRY_ENVIRONMENT: "production"
+
+  # Sampling Sentry — valores conservadores para MVP
+  SENTRY_TRACES_SAMPLE_RATE: "0.05"
+  NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: "0.1"
+  SENTRY_EDGE_TRACES_SAMPLE_RATE: "0.02"
+
+  # Session replays deshabilitados en MVP (riesgo PHI)
+  NEXT_PUBLIC_SENTRY_REPLAYS_SESSION: "0"
+  NEXT_PUBLIC_SENTRY_REPLAYS_ERROR: "0"

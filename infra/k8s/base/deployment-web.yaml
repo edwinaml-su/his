@@ -1,0 +1,121 @@
+################################################################################
+# deployment-web.yaml — Next.js app (self-hosted, opción futura)
+#
+# Imagen: ghcr.io/edwinaml-su/his-web:<SHA> (construida por CI)
+# Runtime: node:20-alpine (non-root, uid 1001)
+# Resources: 256Mi-512Mi RAM, 250m-500m CPU por pod
+################################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: his-web
+  namespace: his-avante
+  labels:
+    app.kubernetes.io/name: his-web
+    app.kubernetes.io/version: "latest"
+    app.kubernetes.io/component: web
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    # Renovar imagen automáticamente con Flux ImageUpdateAutomation o ArgoCD
+    his.avante.com/deploy-strategy: "rolling"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: his-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # Zero-downtime deploy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: his-web
+        app.kubernetes.io/version: "latest"
+      annotations:
+        # Prometheus scraping (si se despliega Prometheus en el cluster)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/api/metrics"
+    spec:
+      # Seguridad: no correr como root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+
+      # Distribuir pods en distintos nodos para HA
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: his-web
+
+      containers:
+        - name: his-web
+          image: ghcr.io/edwinaml-su/his-web:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          # Variables de entorno desde ConfigMap y Secret
+          envFrom:
+            - configMapRef:
+                name: his-web-config
+            - secretRef:
+                name: his-web-secrets
+
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+
+          # Liveness: si el proceso está muerto, reiniciar
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+
+          # Readiness: si no está listo, sacar del balanceo (no matar)
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 2
+            successThreshold: 1
+            timeoutSeconds: 3
+
+          # Startup: tiempo extra en el primer arranque (Next.js puede tardar)
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            failureThreshold: 12   # 12 × 10s = 120s máximo
+            periodSeconds: 10
+
+          # Seguridad del contenedor
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # Next.js escribe .next/cache
+            capabilities:
+              drop:
+                - ALL
+
+      # Graceful shutdown: esperar que las conexiones activas cierren (30s max)
+      terminationGracePeriodSeconds: 30

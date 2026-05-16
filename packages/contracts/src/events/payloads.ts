@@ -169,6 +169,32 @@ export const pathologyCriticalFindingPayloadSchema = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// accounting.periodClosed  (Beta.18)
+// -----------------------------------------------------------------------------
+
+export const accountingPeriodClosedPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  ledgerId:       z.string().uuid(),
+  periodId:       z.string().uuid(),
+  periodYear:     z.number().int(),
+  periodMonth:    z.number().int().min(0).max(12),
+  closedById:     z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// accounting.journalPostedHighValue  (Beta.18)
+// -----------------------------------------------------------------------------
+
+export const accountingJournalPostedHighValuePayloadSchema = z.object({
+  organizationId:    z.string().uuid(),
+  ledgerId:          z.string().uuid(),
+  journalEntryId:    z.string().uuid(),
+  totalDebit:        z.number(),
+  thresholdExceeded: z.number(),
+  postedById:        z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -206,6 +232,15 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("pathology.criticalFinding"),
     payload: pathologyCriticalFindingPayloadSchema,
   }),
+  // Beta.18 — Contabilidad
+  z.object({
+    eventType: z.literal("accounting.periodClosed"),
+    payload: accountingPeriodClosedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("accounting.journalPostedHighValue"),
+    payload: accountingJournalPostedHighValuePayloadSchema,
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;
@@ -217,3 +252,5 @@ export type TransfusionCrossmatchFailedPayload = z.infer<typeof transfusionCross
 export type TransfusionAdverseReactionPayload = z.infer<typeof transfusionAdverseReactionPayloadSchema>;
 export type PathologyReportSignedPayload = z.infer<typeof pathologyReportSignedPayloadSchema>;
 export type PathologyCriticalFindingPayload = z.infer<typeof pathologyCriticalFindingPayloadSchema>;
+export type AccountingPeriodClosedPayload = z.infer<typeof accountingPeriodClosedPayloadSchema>;
+export type AccountingJournalPostedHighValuePayload = z.infer<typeof accountingJournalPostedHighValuePayloadSchema>;

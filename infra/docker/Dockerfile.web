@@ -1,0 +1,98 @@
+################################################################################
+# Dockerfile.web — HIS Multipaís · Next.js App (multi-stage)
+#
+# ETAPAS:
+#   deps     → instala dependencias npm (cache layer)
+#   builder  → genera Prisma client + build Next.js
+#   runner   → imagen final non-root, solo artefactos necesarios
+#
+# BUILD (desde raíz del monorepo):
+#   docker build -f infra/docker/Dockerfile.web \
+#     --build-arg APP_VERSION=$(git rev-parse --short HEAD) \
+#     -t ghcr.io/edwinaml-su/his-web:<TAG> .
+#
+# REQUISITOS:
+#   - next.config.js debe tener output: 'standalone' habilitado para que
+#     Next.js genere el directorio .next/standalone (imagen mínima).
+#   - Si output: 'standalone' no está activo, el COPY final debe ajustarse.
+################################################################################
+
+# ── Etapa 1: dependencias base ──────────────────────────────────────────────
+FROM node:20-alpine AS deps
+
+# Herramientas mínimas para compilar dependencias nativas (bcrypt, etc.)
+RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+# Copiar manifiestos de dependencias (capas cacheables por separado)
+COPY package.json package-lock.json ./
+COPY packages/database/package.json ./packages/database/
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/trpc/package.json ./packages/trpc/
+COPY packages/ui/package.json ./packages/ui/
+COPY packages/infrastructure/package.json ./packages/infrastructure/
+COPY packages/test-utils/package.json ./packages/test-utils/
+COPY packages/config/package.json ./packages/config/
+COPY apps/web/package.json ./apps/web/
+
+# Instalar solo dependencias de producción en esta etapa
+# (devDependencies se necesitan para el build — instalar completo aquí)
+RUN npm ci --prefer-offline
+
+# ── Etapa 2: build ──────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+RUN apk add --no-cache libc6-compat openssl
+
+WORKDIR /app
+
+# Copiar node_modules de la etapa anterior (cacheado)
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copiar todo el código fuente del monorepo
+COPY . .
+
+# Prisma: generar el client tipado (requiere schema.prisma)
+RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
+
+# Build de Next.js (turbo build o directo)
+# Si hay workspace config de turbo, usar: RUN npx turbo run build --filter=@his/web
+RUN npm run build
+
+# ── Etapa 3: runner (imagen final mínima) ───────────────────────────────────
+FROM node:20-alpine AS runner
+
+# Usuario no-root (uid 1001 — no existe en alpine por defecto)
+RUN addgroup --system --gid 1001 nodejs \
+ && adduser  --system --uid 1001 nextjs
+
+# Variables de entorno base (el resto se inyecta en runtime vía K8s/Vercel)
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000
+
+ARG APP_VERSION=unknown
+ENV APP_VERSION=${APP_VERSION}
+
+WORKDIR /app
+
+# Copiar artefactos de Next.js standalone
+# Requiere output: 'standalone' en next.config.js
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
+
+# Prisma client generado (necesario en runtime para conectar a BD)
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=nextjs:nodejs /app/packages/database/prisma/schema.prisma ./packages/database/prisma/schema.prisma
+
+USER nextjs
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "fetch('http://localhost:3000/api/health').then(r=>r.ok||process.exit(1)).catch(()=>process.exit(1))"
+
+# Next.js standalone genera server.js en la raíz del directorio standalone
+CMD ["node", "apps/web/server.js"]
