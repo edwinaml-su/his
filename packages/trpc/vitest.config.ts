@@ -28,14 +28,40 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
+    alias: [
       // `@his/database` se resuelve al stub de tests, no al cliente real,
       // para evitar arrancar Prisma cuando los routers se importan.
-      "@his/database": path.resolve(__dirname, "src/__tests__/stubs/database.ts"),
-      // Workspace packages — necesarios en worktrees donde node_modules/@his
-      // no existe (el monorepo principal tiene los symlinks, la worktree no).
-      "@his/contracts": path.resolve(__dirname, "../../packages/contracts/src/index.ts"),
-      "@his/test-utils": path.resolve(__dirname, "../../packages/test-utils/src/index.ts"),
-    },
+      {
+        find: "@his/database",
+        replacement: path.resolve(__dirname, "src/__tests__/stubs/database.ts"),
+      },
+      // Sub-path exports de @his/contracts — van ANTES del alias raíz para
+      // que Vite los resuelva con prioridad (primer match gana).
+      {
+        find: "@his/contracts/events",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/events/index.ts"),
+      },
+      {
+        find: "@his/contracts/validators",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/validators/index.ts"),
+      },
+      {
+        find: "@his/contracts/schemas",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/schemas/index.ts"),
+      },
+      {
+        find: "@his/contracts/types",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/types/index.ts"),
+      },
+      // Alias raíz — al ser más general va al final.
+      {
+        find: "@his/contracts",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/index.ts"),
+      },
+      {
+        find: "@his/test-utils",
+        replacement: path.resolve(__dirname, "../../packages/test-utils/src/index.ts"),
+      },
+    ],
   },
 });
