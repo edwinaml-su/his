@@ -114,6 +114,37 @@ export const allergyMismatchPayloadSchema = z.object({
   prescriberId: z.string().uuid().nullable(),
 });
 
+// transfusion.crossmatchFailed  (Beta.16)
+// -----------------------------------------------------------------------------
+
+export const transfusionCrossmatchFailedPayloadSchema = z.object({
+  requestId: z.string().uuid(),
+  unitId: z.string().uuid(),
+  crossMatchId: z.string().uuid(),
+  result: z.enum(["INCOMPATIBLE", "INCONCLUSIVE"]),
+  /** UUID del médico solicitante — receptor primario de la alerta. */
+  requestedById: z.string().uuid(),
+  patientId: z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// transfusion.adverseReaction  (Beta.16)
+// -----------------------------------------------------------------------------
+
+export const adverseReactionSeveritySchema = z.enum(["MILD", "MODERATE", "SEVERE", "LIFE_THREATENING"]);
+
+export const transfusionAdverseReactionPayloadSchema = z.object({
+  transfusionId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  /** UUID del médico supervisor de la transfusión. */
+  supervisorId: z.string().uuid(),
+  /** UUID del enfermero que registró la reacción. */
+  nurseId: z.string().uuid(),
+  reactionType: z.string().min(1).max(120),
+  severity: adverseReactionSeveritySchema,
+});
+
 // -----------------------------------------------------------------------------
 // pathology.reportSigned / pathology.criticalFinding (Beta.17)
 // -----------------------------------------------------------------------------
@@ -135,32 +166,6 @@ export const pathologyCriticalFindingPayloadSchema = z.object({
   /** Jefe de servicio (si el router lo resuelve; opcional Beta.17). */
   serviceHeadId: z.string().uuid().optional(),
   primaryDiagnosis: z.string().min(1).max(1000),
-});
-
-// -----------------------------------------------------------------------------
-// accounting.periodClosed  (Beta.18)
-// -----------------------------------------------------------------------------
-
-export const accountingPeriodClosedPayloadSchema = z.object({
-  organizationId: z.string().uuid(),
-  ledgerId:       z.string().uuid(),
-  periodId:       z.string().uuid(),
-  periodYear:     z.number().int(),
-  periodMonth:    z.number().int().min(0).max(12),
-  closedById:     z.string().uuid(),
-});
-
-// -----------------------------------------------------------------------------
-// accounting.journalPostedHighValue  (Beta.18)
-// -----------------------------------------------------------------------------
-
-export const accountingJournalPostedHighValuePayloadSchema = z.object({
-  organizationId:    z.string().uuid(),
-  ledgerId:          z.string().uuid(),
-  journalEntryId:    z.string().uuid(),
-  totalDebit:        z.number(),
-  thresholdExceeded: z.number(),
-  postedById:        z.string().uuid(),
 });
 
 // -----------------------------------------------------------------------------
@@ -186,21 +191,20 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     payload: allergyMismatchPayloadSchema,
   }),
   z.object({
+    eventType: z.literal("transfusion.crossmatchFailed"),
+    payload: transfusionCrossmatchFailedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("transfusion.adverseReaction"),
+    payload: transfusionAdverseReactionPayloadSchema,
+  }),
+  z.object({
     eventType: z.literal("pathology.reportSigned"),
     payload: pathologyReportSignedPayloadSchema,
   }),
   z.object({
     eventType: z.literal("pathology.criticalFinding"),
     payload: pathologyCriticalFindingPayloadSchema,
-  }),
-  // Beta.18 — Contabilidad
-  z.object({
-    eventType: z.literal("accounting.periodClosed"),
-    payload: accountingPeriodClosedPayloadSchema,
-  }),
-  z.object({
-    eventType: z.literal("accounting.journalPostedHighValue"),
-    payload: accountingJournalPostedHighValuePayloadSchema,
   }),
 ]);
 
@@ -209,7 +213,7 @@ export type VitalCriticalPayload = z.infer<typeof vitalCriticalPayloadSchema>;
 export type LabCriticalValuePayload = z.infer<typeof labCriticalValuePayloadSchema>;
 export type DrugInteractionPayload = z.infer<typeof drugInteractionPayloadSchema>;
 export type AllergyMismatchPayload = z.infer<typeof allergyMismatchPayloadSchema>;
+export type TransfusionCrossmatchFailedPayload = z.infer<typeof transfusionCrossmatchFailedPayloadSchema>;
+export type TransfusionAdverseReactionPayload = z.infer<typeof transfusionAdverseReactionPayloadSchema>;
 export type PathologyReportSignedPayload = z.infer<typeof pathologyReportSignedPayloadSchema>;
 export type PathologyCriticalFindingPayload = z.infer<typeof pathologyCriticalFindingPayloadSchema>;
-export type AccountingPeriodClosedPayload = z.infer<typeof accountingPeriodClosedPayloadSchema>;
-export type AccountingJournalPostedHighValuePayload = z.infer<typeof accountingJournalPostedHighValuePayloadSchema>;
