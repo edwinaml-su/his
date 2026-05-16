@@ -6,8 +6,17 @@
  * notificaciones (Beta.15) con Prisma + EmailProvider mockeados.
  */
 import { defineConfig } from "vitest/config";
+import path from "path";
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      // Resuelve el workspace @his/contracts al source TS directamente.
+      // Necesario para vitest local (fuera de turbo) — en CI turbo compila
+      // el workspace y la resolución funciona por node_modules.
+      "@his/contracts": path.resolve(__dirname, "../contracts/src/index.ts"),
+    },
+  },
   test: {
     name: "infrastructure",
     environment: "node",
