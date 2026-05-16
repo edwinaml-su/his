@@ -1,5 +1,5 @@
 /**
- * Beta.15 (US.B15.3.1) — `notificationsRouter`.
+ * Beta.15 (US.B15.3.1 + US.B15.3.3) — `notificationsRouter`.
  *
  * Inbox personal de cada usuario. Aísla por `recipientUserId = ctx.user.id`
  * AND `organizationId = ctx.tenant.organizationId`. RLS en DB ya enforce
@@ -7,14 +7,21 @@
  * que un user vea notificaciones de otros dentro de su misma org.
  *
  * Procedures:
- *  - `list`        → paginación cursor-based (createdAt DESC, tiebreaker id).
- *  - `markRead`    → set status=READ + readAt=now si la notif es del user.
- *  - `unreadCount` → conteo de PENDING+SENT del user (alimenta US.B15.3.2 navbar badge).
+ *  - `list`           → paginación cursor-based (createdAt DESC, tiebreaker id).
+ *  - `markRead`       → set status=READ + readAt=now si la notif es del user.
+ *  - `unreadCount`    → conteo de PENDING+SENT del user (alimenta US.B15.3.2 navbar badge).
+ *  - `getPreferences` → prefs del user + defaults heredados del rol (US.B15.3.3).
+ *  - `setPreferences` → upsert de una fila UserNotificationPreference (US.B15.3.3).
+ *  - `resetPreferences` → elimina overrides → vuelve a defaults del rol (US.B15.3.3).
  */
 import { TRPCError } from "@trpc/server";
 import {
   notificationsListInput,
   notificationsMarkReadInput,
+  setPreferencesInput,
+  DEFAULT_PREFERENCES_BY_ROLE,
+  type NotificationSeverity,
+  type NotificationChannel,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 
@@ -111,5 +118,118 @@ export const notificationsRouter = router({
       },
     });
     return { count };
+  }),
+
+  /**
+   * US.B15.3.3 — Retorna las preferencias combinadas del usuario.
+   *
+   * Estrategia: carga filas de `UserNotificationPreference` del user y
+   * los defaults de su rol desde `RoleNotificationDefault`. Combina la
+   * matriz completa (severity × channel) marcando cada celda como override
+   * (isUserOverride=true) o heredada (isUserOverride=false).
+   *
+   * No usa withTenantContext porque solo lee del propio userId (RLS aísla
+   * automáticamente si la política está configurada; fallback explícito en
+   * el where userId=ctx.user.id).
+   */
+  getPreferences: tenantProcedure.query(async ({ ctx }) => {
+    const [userPrefs, roleDefaults] = await Promise.all([
+      ctx.prisma.userNotificationPreference.findMany({
+        where: { userId: ctx.user.id },
+      }),
+      ctx.prisma.roleNotificationDefault.findMany({
+        where: {
+          role: {
+            userRoles: {
+              some: {
+                userId: ctx.user.id,
+                organizationId: ctx.tenant.organizationId,
+              },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const SEVERITIES: NotificationSeverity[] = ["CRITICAL", "WARNING", "INFO"];
+    const CHANNELS: NotificationChannel[] = ["EMAIL", "INBOX"];
+
+    const userPrefMap = new Map(
+      userPrefs.map((p) => [`${p.severity}:${p.channel}`, p.enabled]),
+    );
+
+    // Primer rol con defaults disponible (puede haber múltiples roles asignados).
+    const roleDefaultMap = new Map(
+      roleDefaults.map((d) => [`${d.severity}:${d.channel}`, d.enabled]),
+    );
+
+    const preferences = SEVERITIES.flatMap((severity) =>
+      CHANNELS.map((channel) => {
+        const key = `${severity}:${channel}`;
+        const userValue = userPrefMap.get(key);
+        if (userValue !== undefined) {
+          return { severity, channel, enabled: userValue, isUserOverride: true };
+        }
+        return {
+          severity,
+          channel,
+          enabled: roleDefaultMap.get(key) ?? false,
+          isUserOverride: false,
+        };
+      }),
+    );
+
+    return { preferences };
+  }),
+
+  /**
+   * US.B15.3.3 — Upsert de una preferencia específica del usuario.
+   *
+   * Política CRITICAL+INBOX: nunca se puede deshabilitar (AC #3 del backlog).
+   * El check es en router (no en DB) para retornar un error útil a la UI.
+   */
+  setPreferences: tenantProcedure
+    .input(setPreferencesInput)
+    .mutation(async ({ ctx, input }) => {
+      // CRITICAL no se puede deshabilitar en ningún canal.
+      if (input.severity === "CRITICAL" && !input.enabled) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Las alertas CRITICAL no se pueden desactivar por política de cumplimiento.",
+        });
+      }
+
+      await ctx.prisma.userNotificationPreference.upsert({
+        where: {
+          userId_severity_channel: {
+            userId: ctx.user.id,
+            severity: input.severity,
+            channel: input.channel,
+          },
+        },
+        create: {
+          userId: ctx.user.id,
+          severity: input.severity,
+          channel: input.channel,
+          enabled: input.enabled,
+        },
+        update: {
+          enabled: input.enabled,
+        },
+      });
+
+      return { ok: true as const };
+    }),
+
+  /**
+   * US.B15.3.3 — Elimina todas las preferencias del usuario actual.
+   * Esto hace que el dispatcher use los defaults del rol nuevamente.
+   */
+  resetPreferences: tenantProcedure.mutation(async ({ ctx }) => {
+    await ctx.prisma.userNotificationPreference.deleteMany({
+      where: { userId: ctx.user.id },
+    });
+    return { ok: true as const };
   }),
 });
