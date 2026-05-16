@@ -330,6 +330,11 @@ model Organization {
   nutritionOrders           NutritionOrder[]           @relation("OrgNutritionOrders")
   domainEvents              DomainEvent[]
   notifications             Notification[]
+  bloodBanks                BloodBank[]
+  bloodUnits                BloodUnit[]
+  transfusionRequests       TransfusionRequest[]
+  crossMatches              CrossMatch[]
+  transfusions              Transfusion[]
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -366,6 +371,7 @@ model Establishment {
   stockLots              StockLot[]              @relation("EstStockLots")
   stockMovements         StockMovement[]         @relation("EstStockMovements")
   biomedicalEquipment    BiomedicalEquipment[]   @relation("EstEquipment")
+  bloodBank              BloodBank?
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -429,6 +435,10 @@ model User {
   domainEventsEmitted       DomainEvent[]                @relation("DomainEventEmitter")
   notificationsReceived     Notification[]               @relation("NotificationRecipient")
   notificationPreferences   UserNotificationPreference[]
+  transfusionRequests       TransfusionRequest[]         @relation("TransfusionRequestor")
+  crossMatchesPerformed     CrossMatch[]                 @relation("CrossMatchTechnician")
+  transfusionsAsNurse       Transfusion[]                @relation("TransfusionNurse")
+  transfusionsAsSupervior   Transfusion[]                @relation("TransfusionSupervisor")
 
   @@schema("public")
 }
@@ -947,6 +957,7 @@ model Patient {
   dietPlans              DietPlan[]                @relation("PatDietPlans")
   nutritionAssessments   NutritionAssessment[]     @relation("PatNutritionAssessments")
   nutritionOrders        NutritionOrder[]          @relation("PatNutritionOrders")
+  transfusionRequests    TransfusionRequest[]
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1292,6 +1303,8 @@ model Encounter {
   dietPlans              DietPlan[]              @relation("EncDietPlans")
   nutritionAssessments   NutritionAssessment[]   @relation("EncNutritionAssessments")
   nutritionOrders        NutritionOrder[]        @relation("EncNutritionOrders")
+  transfusionRequests    TransfusionRequest[]
+  transfusions           Transfusion[]           @relation("TransfusionEncounter")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -3345,5 +3358,250 @@ model RoleNotificationDefault {
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([roleId, severity, channel])
+  @@schema("public")
+}
+
+// =============================================================================
+// §15 Banco de Sangre / Hemoterapia — Beta.16
+// TDR §15: gestión de unidades, compatibilidad, transfusiones, reacciones.
+// =============================================================================
+
+/// Grupo sanguíneo ABO.
+enum BloodType {
+  A
+  B
+  AB
+  O
+
+  @@schema("public")
+}
+
+/// Factor Rh.
+enum RhFactor {
+  POSITIVE
+  NEGATIVE
+
+  @@schema("public")
+}
+
+/// Componentes hemáticos disponibles.
+/// WB=Sangre total, RBC=Glóbulos rojos, PLT=Plaquetas, FFP=PFC, CRYO=Crioprecipitado.
+enum BloodComponent {
+  WB
+  RBC
+  PLT
+  FFP
+  CRYO
+
+  @@schema("public")
+}
+
+/// Estado de la unidad en el ciclo de vida.
+enum BloodUnitStatus {
+  AVAILABLE
+  RESERVED
+  IN_USE
+  TRANSFUSED
+  DISCARDED
+  EXPIRED
+
+  @@schema("public")
+}
+
+/// Urgencia de la solicitud de transfusión.
+enum TransfusionUrgency {
+  ROUTINE
+  URGENT
+  EMERGENCY
+
+  @@schema("public")
+}
+
+/// Estado de la solicitud de transfusión.
+enum TransfusionRequestStatus {
+  REQUESTED
+  CROSSMATCHING
+  APPROVED
+  CANCELLED
+  FULFILLED
+
+  @@schema("public")
+}
+
+/// Resultado de la prueba cruzada.
+enum CrossMatchResult {
+  COMPATIBLE
+  INCOMPATIBLE
+  INCONCLUSIVE
+
+  @@schema("public")
+}
+
+/// Vía de administración de la transfusión.
+enum TransfusionRoute {
+  IV_PERIPHERAL
+  IV_CENTRAL
+  IO
+
+  @@schema("public")
+}
+
+/// Estado de la administración de la transfusión.
+enum TransfusionStatus {
+  STARTED
+  IN_PROGRESS
+  COMPLETED
+  ABORTED
+
+  @@schema("public")
+}
+
+/// Banco de sangre asociado a un establecimiento.
+/// Un establecimiento puede operar sin banco (null en FK); si opera con él, solo uno.
+model BloodBank {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId  String   @db.Uuid
+  establishmentId String   @unique @db.Uuid
+  name            String   @db.VarChar(200)
+  licenseNumber   String?  @db.VarChar(80)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+  updatedAt       DateTime @updatedAt @db.Timestamptz()
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  units         BloodUnit[]
+
+  @@index([organizationId])
+  @@schema("public")
+}
+
+/// Unidad de sangre / componente hemático en inventario.
+/// antigens: JSON tipado {"kell": bool, "duffy_a": bool, "duffy_b": bool, ...}.
+/// donorCode: anonimizado — nunca expone PII del donante.
+model BloodUnit {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String          @db.Uuid
+  bloodBankId    String          @db.Uuid
+  bloodType      BloodType
+  rhFactor       RhFactor
+  component      BloodComponent
+  status         BloodUnitStatus @default(AVAILABLE)
+  /// Antígenos extendidos (Kell, Duffy, Kidd…). Conservador: JSONB tipado en TS.
+  antigens       Json?
+  donorCode      String?         @db.VarChar(40)
+  collectionDate DateTime        @db.Date
+  expirationDate DateTime        @db.Timestamptz()
+  volume         Int?            /// ml
+  notes          String?         @db.VarChar(1000)
+  discardedAt    DateTime?       @db.Timestamptz()
+  discardReason  String?         @db.VarChar(500)
+  createdAt      DateTime        @default(now()) @db.Timestamptz()
+  updatedAt      DateTime        @updatedAt @db.Timestamptz()
+
+  organization   Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  bloodBank      BloodBank             @relation(fields: [bloodBankId], references: [id], onDelete: Restrict)
+  crossMatches   CrossMatch[]
+  transfusions   Transfusion[]
+
+  @@index([organizationId, status])
+  @@index([bloodBankId, status])
+  @@index([bloodType, rhFactor, status])
+  @@schema("public")
+}
+
+/// Solicitud médica de transfusión para un paciente/encuentro.
+model TransfusionRequest {
+  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String                   @db.Uuid
+  encounterId      String                   @db.Uuid
+  patientId        String                   @db.Uuid
+  requestedById    String                   @db.Uuid
+  urgency          TransfusionUrgency       @default(ROUTINE)
+  component        BloodComponent
+  bloodType        BloodType?
+  rhFactor         RhFactor?
+  unitsRequested   Int                      @default(1)
+  clinicalIndication String                 @db.VarChar(2000)
+  status           TransfusionRequestStatus @default(REQUESTED)
+  requestedAt      DateTime                 @default(now()) @db.Timestamptz()
+  cancelledAt      DateTime?                @db.Timestamptz()
+  cancelReason     String?                  @db.VarChar(500)
+  createdAt        DateTime                 @default(now()) @db.Timestamptz()
+  updatedAt        DateTime                 @updatedAt @db.Timestamptz()
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter    Encounter    @relation(fields: [encounterId], references: [id], onDelete: Restrict)
+  patient      Patient      @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  requestedBy  User         @relation("TransfusionRequestor", fields: [requestedById], references: [id], onDelete: Restrict)
+  crossMatches CrossMatch[]
+  transfusions Transfusion[]
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// Prueba cruzada (crossmatch) entre una unidad y una solicitud.
+/// método: mayor (plasma paciente + RBC donante), menor, coombs indirecto.
+model CrossMatch {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String        @db.Uuid
+  requestId   String           @db.Uuid
+  unitId      String           @db.Uuid
+  technicianId String          @db.Uuid
+  result      CrossMatchResult
+  method      String           @db.VarChar(60)
+  notes       String?          @db.VarChar(1000)
+  performedAt DateTime         @default(now()) @db.Timestamptz()
+  createdAt   DateTime         @default(now()) @db.Timestamptz()
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  request      TransfusionRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  unit         BloodUnit          @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  technician   User               @relation("CrossMatchTechnician", fields: [technicianId], references: [id], onDelete: Restrict)
+  transfusion  Transfusion?
+
+  @@index([organizationId])
+  @@index([requestId])
+  @@index([unitId])
+  @@schema("public")
+}
+
+/// Administración de la transfusión.
+/// adverseReactions: JSON tipado {"type": "...", "severity": "...", "management": "..."}.
+/// vitalSigns: JSON tipado {"pre": {...}, "intra": {...}, "post": {...}}.
+model Transfusion {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId   String           @db.Uuid
+  requestId        String           @db.Uuid
+  unitId           String           @db.Uuid
+  encounterId      String           @db.Uuid
+  crossMatchId     String           @unique @db.Uuid
+  nurseId          String           @db.Uuid
+  supervisorId     String           @db.Uuid
+  route            TransfusionRoute
+  status           TransfusionStatus @default(STARTED)
+  startedAt        DateTime          @default(now()) @db.Timestamptz()
+  completedAt      DateTime?         @db.Timestamptz()
+  vitalSigns       Json?
+  adverseReactions Json?
+  abortReason      String?           @db.VarChar(500)
+  createdAt        DateTime          @default(now()) @db.Timestamptz()
+  updatedAt        DateTime          @updatedAt @db.Timestamptz()
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  request      TransfusionRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  unit         BloodUnit          @relation(fields: [unitId], references: [id], onDelete: Restrict)
+  encounter    Encounter          @relation("TransfusionEncounter", fields: [encounterId], references: [id], onDelete: Restrict)
+  crossMatch   CrossMatch         @relation(fields: [crossMatchId], references: [id], onDelete: Restrict)
+  nurse        User               @relation("TransfusionNurse", fields: [nurseId], references: [id], onDelete: Restrict)
+  supervisor   User               @relation("TransfusionSupervisor", fields: [supervisorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([requestId])
+  @@index([encounterId])
+  @@index([unitId])
   @@schema("public")
 }

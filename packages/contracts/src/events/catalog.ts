@@ -19,10 +19,9 @@ export const EVENT_TYPES = [
   "lab.criticalValue",
   "drug.interaction",
   "allergy.mismatch",
-  // Beta.16+ candidates (cuando se añadan, registrar schema en payloads.ts):
-  // "prescription.created",
-  // "med.missed",
-  // "coverage.expired",
+  // Beta.16 — banco de sangre
+  "transfusion.crossmatchFailed",
+  "transfusion.adverseReaction",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
