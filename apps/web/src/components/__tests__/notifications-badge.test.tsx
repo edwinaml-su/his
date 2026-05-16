@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * Beta.15 (US.B15.3.2) — Tests del NotificationsBadge.
  *
