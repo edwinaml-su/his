@@ -93,6 +93,46 @@ export const roleNotificationDefaultSchema = z.object({
 export type RoleNotificationDefault = z.infer<typeof roleNotificationDefaultSchema>;
 
 /**
+ * US.B15.3.3 — input schema para `notifications.getPreferences`.
+ * Sin parámetros: devuelve las preferencias del usuario autenticado.
+ */
+export const getPreferencesInput = z.object({}).optional();
+export type GetPreferencesInput = z.infer<typeof getPreferencesInput>;
+
+/**
+ * US.B15.3.3 — input schema para `notifications.setPreferences`.
+ *
+ * Upsert de preferencias por (userId implícito de ctx, severity, channel).
+ * CRITICAL+INBOX nunca se puede deshabilitar — el router rechaza el intento.
+ */
+export const setPreferencesInput = z.object({
+  severity: notificationSeveritySchema,
+  channel: notificationChannelSchema,
+  enabled: z.boolean(),
+});
+export type SetPreferencesInput = z.infer<typeof setPreferencesInput>;
+
+/**
+ * US.B15.3.3 — input schema para `notifications.resetPreferences`.
+ * Elimina todas las filas de UserNotificationPreference del usuario actual.
+ */
+export const resetPreferencesInput = z.object({}).optional();
+export type ResetPreferencesInput = z.infer<typeof resetPreferencesInput>;
+
+/**
+ * Fila enriquecida que combina preferencia explícita del usuario con el
+ * fallback del rol. La UI la usa para mostrar "heredado" vs "personalizado".
+ */
+export const mergedPreferenceSchema = z.object({
+  severity: notificationSeveritySchema,
+  channel: notificationChannelSchema,
+  enabled: z.boolean(),
+  /** true → es una fila de UserNotificationPreference; false → fallback rol */
+  isUserOverride: z.boolean(),
+});
+export type MergedPreference = z.infer<typeof mergedPreferenceSchema>;
+
+/**
  * Defaults por rol (matriz @PO §6 del backlog). Valores codificados aquí para
  * que el seed JS los reutilice y la UI de preferencias renderice el fallback.
  *
