@@ -123,6 +123,10 @@ async function resolveRecipientsAndSeverity(
       return resolveDrugInteraction(parsed.payload, event.organizationId, prisma);
     case "allergy.mismatch":
       return resolveAllergyMismatch(parsed.payload, event.organizationId, prisma);
+    case "transfusion.crossmatchFailed":
+    case "transfusion.adverseReaction":
+      // Beta.16.1: routing pendiente — emite evento sin destinatarios.
+      return [];
   }
 }
 
