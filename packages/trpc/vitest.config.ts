@@ -34,6 +34,7 @@ export default defineConfig({
       "@his/database": path.resolve(__dirname, "src/__tests__/stubs/database.ts"),
       // Workspace packages — necesarios en worktrees donde node_modules/@his
       // no existe (el monorepo principal tiene los symlinks, la worktree no).
+      "@his/contracts/events": path.resolve(__dirname, "../../packages/contracts/src/events/index.ts"),
       "@his/contracts": path.resolve(__dirname, "../../packages/contracts/src/index.ts"),
       "@his/test-utils": path.resolve(__dirname, "../../packages/test-utils/src/index.ts"),
     },
