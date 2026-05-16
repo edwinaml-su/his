@@ -115,6 +115,38 @@ export const allergyMismatchPayloadSchema = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// transfusion.crossmatchFailed  (Beta.16)
+// -----------------------------------------------------------------------------
+
+export const transfusionCrossmatchFailedPayloadSchema = z.object({
+  requestId: z.string().uuid(),
+  unitId: z.string().uuid(),
+  crossMatchId: z.string().uuid(),
+  result: z.enum(["INCOMPATIBLE", "INCONCLUSIVE"]),
+  /** UUID del médico solicitante — receptor primario de la alerta. */
+  requestedById: z.string().uuid(),
+  patientId: z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// transfusion.adverseReaction  (Beta.16)
+// -----------------------------------------------------------------------------
+
+export const adverseReactionSeveritySchema = z.enum(["MILD", "MODERATE", "SEVERE", "LIFE_THREATENING"]);
+
+export const transfusionAdverseReactionPayloadSchema = z.object({
+  transfusionId: z.string().uuid(),
+  requestId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  /** UUID del médico supervisor de la transfusión. */
+  supervisorId: z.string().uuid(),
+  /** UUID del enfermero que registró la reacción. */
+  nurseId: z.string().uuid(),
+  reactionType: z.string().min(1).max(120),
+  severity: adverseReactionSeveritySchema,
+});
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -136,6 +168,14 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("allergy.mismatch"),
     payload: allergyMismatchPayloadSchema,
   }),
+  z.object({
+    eventType: z.literal("transfusion.crossmatchFailed"),
+    payload: transfusionCrossmatchFailedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("transfusion.adverseReaction"),
+    payload: transfusionAdverseReactionPayloadSchema,
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;
@@ -143,3 +183,5 @@ export type VitalCriticalPayload = z.infer<typeof vitalCriticalPayloadSchema>;
 export type LabCriticalValuePayload = z.infer<typeof labCriticalValuePayloadSchema>;
 export type DrugInteractionPayload = z.infer<typeof drugInteractionPayloadSchema>;
 export type AllergyMismatchPayload = z.infer<typeof allergyMismatchPayloadSchema>;
+export type TransfusionCrossmatchFailedPayload = z.infer<typeof transfusionCrossmatchFailedPayloadSchema>;
+export type TransfusionAdverseReactionPayload = z.infer<typeof transfusionAdverseReactionPayloadSchema>;

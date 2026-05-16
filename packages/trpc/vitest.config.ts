@@ -32,11 +32,11 @@ export default defineConfig({
       // `@his/database` se resuelve al stub de tests, no al cliente real,
       // para evitar arrancar Prisma cuando los routers se importan.
       "@his/database": path.resolve(__dirname, "src/__tests__/stubs/database.ts"),
-      // Workspace packages — necesarios en worktrees donde node_modules/@his
-      // no existe (el monorepo principal tiene los symlinks, la worktree no).
-      "@his/contracts/events": path.resolve(__dirname, "../../packages/contracts/src/events/index.ts"),
-      "@his/contracts": path.resolve(__dirname, "../../packages/contracts/src/index.ts"),
-      "@his/test-utils": path.resolve(__dirname, "../../packages/test-utils/src/index.ts"),
+      // Workspace packages: en el worktree de agente las symlinks de npm no
+      // existen. Resolución directa al fuente para que vitest los transforme.
+      "@his/contracts/events": path.resolve(__dirname, "../contracts/src/events/index.ts"),
+      "@his/contracts": path.resolve(__dirname, "../contracts/src/index.ts"),
+      "@his/test-utils": path.resolve(__dirname, "../test-utils/src/index.ts"),
     },
   },
 });
