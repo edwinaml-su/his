@@ -35,7 +35,7 @@ function validateDUI(value: string): boolean {
   const digits = clean.split("").map(Number);
   let sum = 0;
   for (let i = 0; i < 8; i++) {
-    sum += digits[i] * (10 - (i + 1));
+    sum += digits[i]! * (10 - (i + 1));
   }
   let calc = 10 - (sum % 10);
   if (calc === 10) calc = 0;
@@ -87,12 +87,12 @@ function generateTotp(secretBase32: string, window = 0): string {
   buf.writeUInt32BE(Math.floor(counter / 0x100000000), 0);
   buf.writeUInt32BE(counter >>> 0, 4);
   const hmac: Buffer = createHmac("sha1", key).update(buf).digest();
-  const offset = hmac[hmac.length - 1] & 0x0f;
+  const offset = hmac[hmac.length - 1]! & 0x0f;
   const code =
-    ((hmac[offset] & 0x7f) << 24) |
-    ((hmac[offset + 1] & 0xff) << 16) |
-    ((hmac[offset + 2] & 0xff) << 8) |
-    (hmac[offset + 3] & 0xff);
+    ((hmac[offset]! & 0x7f) << 24) |
+    ((hmac[offset + 1]! & 0xff) << 16) |
+    ((hmac[offset + 2]! & 0xff) << 8) |
+    (hmac[offset + 3]! & 0xff);
   return String(code % 1_000_000).padStart(6, "0");
 }
 
@@ -176,7 +176,7 @@ const accountRouter = router({
         where: {
           patientId: input.patientId,
           value: input.dui.replace(/[-\s]/g, ""),
-          type: { code: "DUI" },
+          kind: "DUI",
         },
         select: { id: true, patientId: true },
       });
