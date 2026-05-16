@@ -115,6 +115,55 @@ export const allergyMismatchPayloadSchema = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// pathology.reportSigned / pathology.criticalFinding (Beta.17)
+// -----------------------------------------------------------------------------
+
+export const pathologyReportSignedPayloadSchema = z.object({
+  reportId: z.string().uuid(),
+  orderId: z.string().uuid(),
+  /** prescriberId = médico solicitante; receptor canónico del evento. */
+  requestingPhysicianId: z.string().uuid(),
+  pathologistId: z.string().uuid(),
+  primaryDiagnosis: z.string().min(1).max(1000),
+});
+
+export const pathologyCriticalFindingPayloadSchema = z.object({
+  reportId: z.string().uuid(),
+  orderId: z.string().uuid(),
+  /** Receptor canónico: médico solicitante. */
+  requestingPhysicianId: z.string().uuid(),
+  /** Jefe de servicio (si el router lo resuelve; opcional Beta.17). */
+  serviceHeadId: z.string().uuid().optional(),
+  primaryDiagnosis: z.string().min(1).max(1000),
+});
+
+// -----------------------------------------------------------------------------
+// accounting.periodClosed  (Beta.18)
+// -----------------------------------------------------------------------------
+
+export const accountingPeriodClosedPayloadSchema = z.object({
+  organizationId: z.string().uuid(),
+  ledgerId:       z.string().uuid(),
+  periodId:       z.string().uuid(),
+  periodYear:     z.number().int(),
+  periodMonth:    z.number().int().min(0).max(12),
+  closedById:     z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// accounting.journalPostedHighValue  (Beta.18)
+// -----------------------------------------------------------------------------
+
+export const accountingJournalPostedHighValuePayloadSchema = z.object({
+  organizationId:    z.string().uuid(),
+  ledgerId:          z.string().uuid(),
+  journalEntryId:    z.string().uuid(),
+  totalDebit:        z.number(),
+  thresholdExceeded: z.number(),
+  postedById:        z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -136,6 +185,23 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("allergy.mismatch"),
     payload: allergyMismatchPayloadSchema,
   }),
+  z.object({
+    eventType: z.literal("pathology.reportSigned"),
+    payload: pathologyReportSignedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pathology.criticalFinding"),
+    payload: pathologyCriticalFindingPayloadSchema,
+  }),
+  // Beta.18 — Contabilidad
+  z.object({
+    eventType: z.literal("accounting.periodClosed"),
+    payload: accountingPeriodClosedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("accounting.journalPostedHighValue"),
+    payload: accountingJournalPostedHighValuePayloadSchema,
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;
@@ -143,3 +209,7 @@ export type VitalCriticalPayload = z.infer<typeof vitalCriticalPayloadSchema>;
 export type LabCriticalValuePayload = z.infer<typeof labCriticalValuePayloadSchema>;
 export type DrugInteractionPayload = z.infer<typeof drugInteractionPayloadSchema>;
 export type AllergyMismatchPayload = z.infer<typeof allergyMismatchPayloadSchema>;
+export type PathologyReportSignedPayload = z.infer<typeof pathologyReportSignedPayloadSchema>;
+export type PathologyCriticalFindingPayload = z.infer<typeof pathologyCriticalFindingPayloadSchema>;
+export type AccountingPeriodClosedPayload = z.infer<typeof accountingPeriodClosedPayloadSchema>;
+export type AccountingJournalPostedHighValuePayload = z.infer<typeof accountingJournalPostedHighValuePayloadSchema>;
