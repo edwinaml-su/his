@@ -2,9 +2,10 @@
 
 **Proyecto:** HIS Multipaís — Inversiones Avante
 **Autor:** @QA — QA Automation Engineer (SDET)
-**Versión:** 1.0 — 2026-05-16
+**Versión:** 1.1 — 2026-05-16 (Wave DoD.0 — coverage baseline medido)
 **Propósito:** Vincular requerimientos del TDR → User Stories → Casos de prueba → Evidencia ejecutada.
-**Contexto:** Entregable DoD-bridge. EV-físico ~70%, EV-DoD 0% — esta matriz identifica la brecha y propone plan de cierre.
+**Contexto:** Entregable DoD-bridge. EV-físico ~78 %, EV-DoD 0 % — esta matriz identifica la brecha y propone plan de cierre.
+**Coverage baseline:** contracts 78.82 % lines | trpc 78.11 % lines | infrastructure 86.26 % lines | web 5.97 % lines (ver `docs/27_coverage_baseline.md`)
 
 > Convenciones de estado:
 > - ✅ criterio cumplido con evidencia verificable en el repo
@@ -92,11 +93,11 @@
 | Beta.13 Nutrition | Nutrición hardening layer 1 | #42 | ✅ verdes (diet compatibility + exclusivity) | ❓ | ❓ | ❓ | ⚠️ |
 | Beta.14 Insurance | Aseguradoras hardening layer 1 | #44 | ✅ verdes (coverage check + expiry alerts) | ❓ | ❓ | ❓ | ⚠️ |
 | Beta.15 Notifications | Alertas y notificaciones (US.B15.1.1-4.3b) | #51-#63 | ✅ verdes (US.B15.3.3: 23 tests; coverage global ❓) | ❓ | ❓ | ❓ | ⚠️ |
-| Beta.16 Blood Bank | Banco de sangre (41 tests, 76.81% lines coverage) | — (rama feat/beta16-blood-bank) | ⏳ 41 tests en rama, no mergeada | 76.81% lines / 86.43% branches (en rama) | ❓ | ❓ | ⏳ |
-| Beta.17 Pathology | Patología / anatomía patológica | — (rama feat/beta17-pathology) | ⏳ solo US.B15.3.3 commit (rama apunta a beta15 base) | ❓ | ❓ | ❓ | ⏳ |
-| Beta.18 Accounting | Contabilidad multi-libro | — (rama feat/beta18-accounting) | ⏳ solo US.B15.3.3 commit (rama apunta a beta15 base) | ❓ | ❓ | ❓ | ⏳ |
+| Beta.16 Blood Bank | Banco de sangre (41 tests, blood-bank.router.ts) | PR #65 + PR #71 (mergeados al HEAD del worktree DoD.0) | ✅ 41 tests passing — blood-bank.test.ts (99.14% lines router) | 99.14 % lines (router) / global ~78 % | ❓ | ❓ | ⚠️ |
+| Beta.17 Pathology | Patología / anatomía patológica | PR #68 (mergeado al HEAD del worktree DoD.0) | ✅ 32 tests passing — pathology.router.test.ts (97.54% lines) | 97.54 % lines (router) / global ~78 % | ❓ | ❓ | ⚠️ |
+| Beta.18 Accounting | Contabilidad multi-libro | ledger.router.ts en HEAD (sin PR de tests mergeado) | ❌ 0 tests — ledger.router.ts (0% coverage, 473 LOC sin test) | 0 % lines (router) | ❓ | ❓ | ❌ |
 
-**Nota sobre coverage global:** El único número de coverage global verificable en el repo es de Beta.16 en rama (76.81% lines / 86.43% branches). Las waves anteriores tienen evidencia de "tests pasando" pero no de coverage porcentual documentado en commits o PR bodies accesibles.
+**Coverage baseline real (Wave DoD.0 — 2026-05-16):** Medido por workspace desde branch `dod/0-baseline-coverage-a11y` (HEAD = main + Beta.15/16/17 mergeados). contracts: 78.82 % lines / 95.88 % branches. trpc: 78.11 % lines / 86.93 % branches. infrastructure: 86.26 % lines / 76.07 % branches. apps/web: 5.97 % lines (intencional, thresholds rebajados). Coverage global estimado: ~72 % lines — BAJO el threshold CI de 80 %. Ver `docs/27_coverage_baseline.md` para análisis completo y plan de remediación. Dos bugs pre-existentes impiden que `npm run test:coverage` raíz termine con éxito (BUG-DOD-001: E2E specs incluidos por Vitest; BUG-DOD-002: ambiente jsdom/node en notifications-badge.test.tsx).
 
 ---
 
@@ -162,15 +163,15 @@
 
 Los siguientes gaps están ordenados por impacto regulatorio y riesgo.
 
-### GAP-1 — Coverage global nunca medido post-Wave 6 (CRÍTICO)
+### GAP-1 — Coverage global medido por primera vez en Wave DoD.0 (PARCIALMENTE RESUELTO)
 
-**Descripción:** El threshold CI es ≥80% líneas global. El único número verificable en el repo es Beta.16 en rama (76.81%). No hay registro de `npm run test:coverage` ejecutado exitosamente en main tras los 569 tests añadidos en Waves 6/7/8 (sprint review 05-13 dice "1011+ tests" pero no reporta porcentaje de coverage).
+**Descripción:** Medido el 2026-05-16 en branch `dod/0-baseline-coverage-a11y`. Coverage global estimado: ~72 % lines — **BAJO el threshold CI de 80 %**. El threshold de branches (75 %) sí se cumple (~88 %). Dos bugs impiden la medición desde la raíz (`npm run test:coverage`): BUG-DOD-001 (E2E specs incluidos por Vitest) y BUG-DOD-002 (ambiente jsdom en modo projects).
 
-**Riesgo:** Las waves Beta.1-15 podrían estar debajo del threshold sin saberlo. Si el CI no lo mide, no bloquea.
+**Riesgo:** CI actualmente no bloquea por coverage (el comando raíz falla antes de llegar al threshold). Merges pueden degradar coverage sin detección.
 
-**Acción:** Ejecutar `npm run test:coverage` en main. Publicar el número. Si < 80%, activar Wave DoD.0 antes de cualquier otra cosa.
+**Acción:** Wave DoD.1 — (1) Fix BUG-DOD-001 y BUG-DOD-002. (2) Agregar tests para mfa.router.ts, rbac.router.ts, audit.router.ts (los 3 routers sin tests de mayor criticidad). Meta: ≥ 80 % lines.
 
-**Evidencia faltante:** Salida de `npm run test:coverage` en cualquier estado post-PR #63.
+**Evidencia:** `docs/27_coverage_baseline.md` — snapshot 2026-05-16. Estado: ⚠️ medido, por debajo del threshold.
 
 ---
 
@@ -210,13 +211,13 @@ Los siguientes gaps están ordenados por impacto regulatorio y riesgo.
 
 ---
 
-### GAP-5 — Beta.16-18 no mergeadas a main, coverage sin verificar en CI (ALTO)
+### GAP-5 — Beta.16 y Beta.17 mergeadas, Beta.18 sin tests (PARCIALMENTE RESUELTO)
 
-**Descripción:** Tres ramas activas (`feat/beta16-blood-bank`, `feat/beta17-pathology`, `feat/beta18-accounting`) con código productivo no mergeado. Beta.16 tiene 41 tests y coverage 76.81% reportado en el commit, pero el CI de main no lo ha ejecutado. Beta.17 y Beta.18 en sus ramas no tienen commits propios (apuntan al base de beta15).
+**Descripción actualizada (Wave DoD.0 — 2026-05-16):** Beta.16 (PR #65, #71) y Beta.17 (PR #68) están mergeadas en el HEAD del worktree. Beta.16 tiene 41 tests con 99.14 % lines en blood-bank.router.ts. Beta.17 tiene 32 tests con 97.54 % lines en pathology.router.ts. Beta.18 tiene `ledger.router.ts` (473 LOC) en el HEAD pero sin ningún test — 0 % coverage, sin PR de tests.
 
-**Riesgo:** Si se mergean sin verificación, pueden bajar el coverage global por debajo del threshold. Beta.17 y Beta.18 parecen vacías (solo US.B15.3.3 en su historial).
+**Riesgo activo:** `ledger.router.ts` en 0 % es el archivo de mayor LOC sin cobertura. La contabilidad multi-libro no tiene verificación automatizada.
 
-**Acción:** (1) Verificar contenido real de feat/beta17-pathology y feat/beta18-accounting. (2) Mergear Beta.16 via PR normal con CI verde. (3) Aclarar si Beta.17 y Beta.18 tienen código propio o son branches huérfanas.
+**Acción:** Wave DoD.3 — crear `ledger.router.test.ts` con al menos los flujos críticos del libro mayor (creación de asiento, balance de cuenta, cierre de período). PR independiente.
 
 ---
 
@@ -354,4 +355,5 @@ Un ❓ en esta matriz es preferible a un ✅ sin evidencia. Si no hay evidencia 
 
 ---
 
-*Firma inicial: @QA — 2026-05-16 — Versión 1.0 snapshot. Próxima revisión: al completar Wave DoD.0.*
+*Versión 1.0: @QA — 2026-05-16 — Snapshot inicial.*
+*Versión 1.1: @QA — 2026-05-16 — Wave DoD.0: coverage baseline medido, Beta.16/17 actualizadas a mergeadas, Beta.18 marcada ❌ sin tests, GAP-1 y GAP-5 actualizados con datos reales. Próxima revisión: al completar Wave DoD.1 (fix BUG-DOD-001/002 + tests mfa/rbac/audit).*
