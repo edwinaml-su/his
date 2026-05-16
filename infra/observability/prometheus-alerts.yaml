@@ -1,0 +1,193 @@
+################################################################################
+# prometheus-alerts.yaml — Reglas de alerta Prometheus para HIS Multipaís
+#
+# Aplicar en un Prometheus self-hosted o Grafana Managed Alerting:
+#   kubectl apply -f infra/observability/prometheus-alerts.yaml   (si usa Prometheus Operator)
+# O importar vía Grafana → Alerting → Alert rules → Import from YAML.
+#
+# Métricas fuente: /api/metrics (his_* metrics) + kube-state-metrics + node-exporter
+# SLOs de referencia: docs/13_slos_kpis.md
+################################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: his-avante-alerts
+  namespace: his-avante
+  labels:
+    app.kubernetes.io/name: his-avante
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    # -------------------------------------------------------------------------
+    # Grupo 1: Disponibilidad y errores (SLO-1, SLO-4)
+    # -------------------------------------------------------------------------
+    - name: his.availability
+      interval: 30s
+      rules:
+        # 5xx spike: > 1% de requests en 5 minutos → P2 on-call
+        # SLO-4: target < 0.5% — alerta al doble del target
+        - alert: HIS5xxSpikeP2
+          expr: |
+            (
+              sum(rate(his_http_requests_total{status=~"5.."}[5m]))
+              /
+              sum(rate(his_http_requests_total{status!~"1.."}[5m]))
+            ) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+            team: sre-avante
+            slo: SLO-4
+          annotations:
+            summary: "HIS 5xx rate > 1% (5 min)"
+            description: "Tasa de errores 5xx es {{ $value | humanizePercentage }}. SLO-4 target < 0.5%. Canal: #his-alerts."
+            runbook_url: "https://github.com/edwinaml-su/his/blob/main/docs/28_infra_runbook.md#incidente-5xx-spike"
+
+        # 5xx crítico: > 5% sostenido → P1
+        - alert: HIS5xxSpikeP1
+          expr: |
+            (
+              sum(rate(his_http_requests_total{status=~"5.."}[5m]))
+              /
+              sum(rate(his_http_requests_total{status!~"1.."}[5m]))
+            ) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+            team: sre-avante
+            slo: SLO-4
+          annotations:
+            summary: "HIS 5xx CRITICO > 5% (2 min)"
+            description: "Tasa de errores 5xx es {{ $value | humanizePercentage }}. Declarar incidente P1. War room #his-alerts."
+            runbook_url: "https://github.com/edwinaml-su/his/blob/main/docs/28_infra_runbook.md#incidente-5xx-spike"
+
+        # DB down
+        - alert: HISDBDown
+          expr: his_db_up == 0
+          for: 1m
+          labels:
+            severity: critical
+            team: sre-avante
+          annotations:
+            summary: "HIS: base de datos no responde"
+            description: "his_db_up = 0 por > 1 min. Verificar Supabase Dashboard."
+            runbook_url: "https://github.com/edwinaml-su/his/blob/main/docs/28_infra_runbook.md#incidente-db-lock"
+
+        # Supabase down
+        - alert: HISSupabaseDown
+          expr: his_supabase_up == 0
+          for: 2m
+          labels:
+            severity: critical
+            team: sre-avante
+          annotations:
+            summary: "HIS: Supabase Auth no responde"
+            description: "his_supabase_up = 0 por > 2 min."
+
+    # -------------------------------------------------------------------------
+    # Grupo 2: Latencia (SLO-2, SLO-3)
+    # -------------------------------------------------------------------------
+    - name: his.latency
+      interval: 60s
+      rules:
+        # p95 > 500ms por 15 min → warning (SLO-2 alert threshold)
+        - alert: HISHealthLatencyHigh
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(his_db_latency_ms_bucket[15m])) by (le)
+            ) > 500
+          for: 15m
+          labels:
+            severity: warning
+            team: sre-avante
+            slo: SLO-2
+          annotations:
+            summary: "HIS /api/health p95 latencia > 500ms"
+            description: "p95 latencia DB = {{ $value }}ms. SLO-2 target < 500ms. Verificar Supabase slow queries."
+            runbook_url: "https://github.com/edwinaml-su/his/blob/main/docs/28_infra_runbook.md"
+
+        # p95 mutations > 2000ms por 15 min → warning (SLO-3 alert threshold)
+        - alert: HISMutationLatencyHigh
+          expr: |
+            histogram_quantile(0.95,
+              sum(rate(his_trpc_mutation_duration_ms_bucket[15m])) by (le)
+            ) > 2000
+          for: 15m
+          labels:
+            severity: warning
+            team: sre-avante
+            slo: SLO-3
+          annotations:
+            summary: "HIS tRPC mutations p95 > 2000ms"
+            description: "p95 mutations = {{ $value }}ms. SLO-3 target < 1500ms."
+
+    # -------------------------------------------------------------------------
+    # Grupo 3: Seguridad (RLS bypass attempt)
+    # -------------------------------------------------------------------------
+    - name: his.security
+      interval: 60s
+      rules:
+        # Cualquier intento de bypass RLS es crítico — log estructurado debe emitir esta métrica
+        - alert: HISRLSBypassAttempt
+          expr: increase(his_rls_bypass_attempts_total[5m]) > 0
+          for: 0m   # alerta inmediata — no esperar
+          labels:
+            severity: critical
+            team: sre-avante
+            category: security
+          annotations:
+            summary: "HIS: intento de bypass RLS detectado"
+            description: "{{ $value }} intento(s) de bypass RLS en los últimos 5 min. Revisar audit log inmediatamente."
+            runbook_url: "https://github.com/edwinaml-su/his/blob/main/docs/28_infra_runbook.md#seguridad"
+
+        # Muchos logins fallidos (posible brute force)
+        - alert: HISAuthFailureSpike
+          expr: increase(his_auth_failures_total[5m]) > 20
+          for: 2m
+          labels:
+            severity: warning
+            team: sre-avante
+            category: security
+          annotations:
+            summary: "HIS: > 20 auth failures en 5 min"
+            description: "{{ $value }} fallos de autenticación en 5 min. Posible brute-force."
+
+    # -------------------------------------------------------------------------
+    # Grupo 4: K8s (solo aplica en self-hosted)
+    # -------------------------------------------------------------------------
+    - name: his.kubernetes
+      interval: 60s
+      rules:
+        # Pods no disponibles — menos de 2 ready (PDB mínimo)
+        - alert: HISWebPodsLow
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="his-avante",
+              deployment="his-web"
+            } < 2
+          for: 5m
+          labels:
+            severity: warning
+            team: sre-avante
+          annotations:
+            summary: "HIS: menos de 2 pods web disponibles"
+            description: "Solo {{ $value }} pod(s) disponibles. Mínimo 2 (PDB). Verificar nodos."
+
+        # HPA ha escalado al máximo — posible saturación
+        - alert: HISHPAMaxReplicas
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{
+              namespace="his-avante",
+              horizontalpodautoscaler="his-web"
+            } >= kube_horizontalpodautoscaler_spec_max_replicas{
+              namespace="his-avante",
+              horizontalpodautoscaler="his-web"
+            }
+          for: 10m
+          labels:
+            severity: warning
+            team: sre-avante
+          annotations:
+            summary: "HIS: HPA en máximo de réplicas (10)"
+            description: "El autoscaler ha alcanzado el máximo. Posible saturación de tráfico o memory leak."

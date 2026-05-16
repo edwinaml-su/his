@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: his-avante-staging
+
+resources:
+  - ../../base
+
+# Staging: 2 réplicas (costo reducido, HA básica)
+patches:
+  - target:
+      kind: Deployment
+      name: his-web
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+  # HPA staging: min 2, max 5
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: his-web
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+
+  # Ingress: dominio staging
+  - target:
+      kind: Ingress
+      name: his-web
+    patch: |-
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: staging.avante-his.com
+      - op: replace
+        path: /spec/rules/0/host
+        value: staging.avante-his.com
+
+  # ConfigMap: ambiente staging
+  - target:
+      kind: ConfigMap
+      name: his-web-config
+    patch: |-
+      - op: replace
+        path: /data/SENTRY_ENVIRONMENT
+        value: staging
+      - op: replace
+        path: /data/NEXT_PUBLIC_SENTRY_ENVIRONMENT
+        value: staging
+
+# Prefijo para diferenciar recursos en el cluster
+namePrefix: staging-

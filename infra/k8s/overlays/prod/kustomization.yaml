@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: his-avante
+
+resources:
+  - ../../base
+
+# Producción: valores base (3 réplicas, HPA 3-10) ya están en base/
+# Solo sobreescribir lo que difiere.
+
+patches:
+  # Garantizar 3 réplicas explícitas en prod
+  - target:
+      kind: Deployment
+      name: his-web
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 3
+
+# Labels adicionales de producción
+commonLabels:
+  environment: production
+
+# Recursos adicionales solo en prod (PodDisruptionBudget)
+resources:
+  - ../../base
+  - pdb.yaml

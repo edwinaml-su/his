@@ -1,0 +1,18 @@
+################################################################################
+# pdb.yaml — PodDisruptionBudget (solo producción)
+# Garantiza que al menos 2 pods estén disponibles durante mantenimiento de nodo.
+# Evita que un kubectl drain dreje el servicio sin disponibilidad.
+################################################################################
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: his-web
+  namespace: his-avante
+  labels:
+    app.kubernetes.io/name: his-web
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: his-web

@@ -1,0 +1,95 @@
+################################################################################
+# docker-compose.yml — Stack local de desarrollo (sin Supabase)
+#
+# USO:
+#   docker compose -f infra/docker/docker-compose.yml up -d
+#
+# Reemplaza Supabase con Postgres local + pgAdmin. No incluye Supabase Auth.
+# Para desarrollo completo con Auth usar el CLI de Supabase:
+#   npx supabase start
+#
+# NOTA: Este compose es solo para testing de la imagen Docker de la app.
+# El flujo normal de desarrollo usa `npm run dev` (Next.js + Supabase managed).
+################################################################################
+
+services:
+  # --------------------------------------------------------------------------
+  # Postgres local (espejo de la versión en Supabase)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: his-postgres-local
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: his
+      POSTGRES_PASSWORD: his_local_password
+      POSTGRES_DB: his_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U his -d his_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Aplicación Next.js (imagen construida con Dockerfile.web)
+  # --------------------------------------------------------------------------
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.web
+    container_name: his-web-local
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      # BD local (no Supabase)
+      DATABASE_URL: postgresql://his:his_local_password@postgres:5432/his_dev?schema=public
+      DIRECT_URL: postgresql://his:his_local_password@postgres:5432/his_dev?schema=public
+      # Supabase URL: apuntar a Supabase local (supabase start) o dejar dummy para build
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: local-anon-key-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: local-service-role-placeholder
+      SUPABASE_JWT_SECRET: local-jwt-secret-placeholder
+      AUTH_SECRET: local-auth-secret-min-32-chars-placeholder
+      NEXTAUTH_URL: http://localhost:3000
+      AUDIT_HASH_SECRET: local-audit-hash-secret-min-32ch
+      NEXT_TELEMETRY_DISABLED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/health').then(r=>r.ok||process.exit(1)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # --------------------------------------------------------------------------
+  # pgAdmin (opcional — comentar si no se necesita UI de BD)
+  # --------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: his-pgadmin-local
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@avante.local
+      PGADMIN_DEFAULT_PASSWORD: admin_local
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    profiles:
+      - debug   # Solo se levanta con: docker compose --profile debug up
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  default:
+    name: his-local-network
