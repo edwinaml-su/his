@@ -127,6 +127,10 @@ async function resolveRecipientsAndSeverity(
     case "transfusion.adverseReaction":
       // Beta.16.1: routing pendiente — emite evento sin destinatarios.
       return [];
+    case "pathology.reportSigned":
+    case "pathology.criticalFinding":
+      // Beta.17.1: routing pendiente — emite evento sin destinatarios.
+      return [];
     case "accounting.periodClosed":
     case "accounting.journalPostedHighValue":
       // Beta.18.1: routing pendiente — emite evento sin destinatarios.

@@ -42,6 +42,7 @@ import { respiratoryRouter } from "./respiratory.router";
 import { servicesEquipmentRouter } from "./services-equipment.router";
 import { notificationsRouter } from "./notifications.router";
 import { bloodBankRouter } from "./blood-bank.router";
+import { pathologyRouter } from "./pathology.router";
 import { accountingRouter } from "./accounting.router";
 
 export const appRouter = router({
@@ -88,6 +89,7 @@ export const appRouter = router({
   nutrition: nutritionRouter,
   notifications: notificationsRouter,
   bloodBank: bloodBankRouter,
+  pathology: pathologyRouter,
   accounting: accountingRouter,
 });
 

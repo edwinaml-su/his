@@ -22,6 +22,9 @@ export const EVENT_TYPES = [
   // Beta.16 — banco de sangre
   "transfusion.crossmatchFailed",
   "transfusion.adverseReaction",
+  // Beta.17 — Patología
+  "pathology.reportSigned",
+  "pathology.criticalFinding",
   // Beta.18 — Contabilidad multi-libro (TDR §23, ADR 0007)
   "accounting.periodClosed",
   "accounting.journalPostedHighValue",
