@@ -43,6 +43,7 @@ import { servicesEquipmentRouter } from "./services-equipment.router";
 import { notificationsRouter } from "./notifications.router";
 import { bloodBankRouter } from "./blood-bank.router";
 import { pathologyRouter } from "./pathology.router";
+import { portalRouter } from "./portal.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -89,6 +90,7 @@ export const appRouter = router({
   notifications: notificationsRouter,
   bloodBank: bloodBankRouter,
   pathology: pathologyRouter,
+  portal: portalRouter,
 });
 
 export type AppRouter = typeof appRouter;

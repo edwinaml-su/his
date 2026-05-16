@@ -969,6 +969,9 @@ model Patient {
   transfusionRequests    TransfusionRequest[]
   // Beta.17 — Patología
   pathologyOrders        PathologyOrder[]          @relation("PatPathologyOrders")
+  // Beta.20 — Portal del Paciente
+  portalAccount          PortalAccount?
+  guardianRelationships  GuardianRelationship[]    @relation("GuardianWard")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -3802,5 +3805,132 @@ model PathologyReport {
 
   @@index([organizationId, status])
   @@index([orderId])
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Beta.20 — Portal del Paciente (E.B20.1)
+// RLS en `52_portal_hardening.sql` usa GUC `app.current_portal_account`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum PortalAccountStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+
+  @@schema("public")
+}
+
+enum MagicLinkPurpose {
+  LOGIN
+  REGISTER
+  RECOVERY
+
+  @@schema("public")
+}
+
+enum GuardianRelationshipType {
+  PARENT
+  LEGAL_GUARDIAN
+  TUTOR
+  OTHER
+
+  @@schema("public")
+}
+
+enum GuardianRelationshipStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+
+  @@schema("public")
+}
+
+/// Cuenta del paciente en el Portal del Paciente. 1:1 con Patient.
+/// Auth es passwordless vía magic link + TOTP opcional.
+/// mfaSecret almacenado cifrado (AES-256-GCM, clave derivada de AUTH_SECRET).
+model PortalAccount {
+  id                   String              @id @default(uuid()) @db.Uuid
+  patientId            String              @unique @db.Uuid
+  email                String              @unique @db.VarChar(254)
+  emailVerifiedAt      DateTime?           @db.Timestamptz()
+  status               PortalAccountStatus @default(PENDING_VERIFICATION)
+  mfaEnabled           Boolean             @default(false)
+  /// AES-256-GCM encrypted TOTP secret (null si MFA no configurado).
+  mfaSecret            String?             @db.VarChar(512)
+  lastLoginAt          DateTime?           @db.Timestamptz()
+  lastLoginIp          String?             @db.VarChar(45)
+  failedLoginAttempts  Int                 @default(0)
+  lockedUntil          DateTime?           @db.Timestamptz()
+  createdAt            DateTime            @default(now()) @db.Timestamptz()
+  updatedAt            DateTime            @updatedAt @db.Timestamptz()
+
+  patient       Patient               @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  sessions      PortalSession[]
+  magicLinks    PortalMagicLink[]
+  guardianships GuardianRelationship[] @relation("GuardianAccount")
+
+  @@schema("public")
+}
+
+/// Sesión activa del portal (token = SHA-256 del token real enviado al cliente).
+model PortalSession {
+  id         String    @id @default(uuid()) @db.Uuid
+  accountId  String    @db.Uuid
+  /// SHA-256 del bearer token. El token real solo vive en el cliente (httpOnly cookie).
+  token      String    @db.Char(64)
+  expiresAt  DateTime  @db.Timestamptz()
+  ip         String?   @db.VarChar(45)
+  userAgent  String?   @db.VarChar(512)
+  revokedAt  DateTime? @db.Timestamptz()
+  createdAt  DateTime  @default(now()) @db.Timestamptz()
+
+  account PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([accountId, expiresAt])
+  @@schema("public")
+}
+
+/// Magic link de un solo uso para login passwordless y verificación de email.
+/// Token es SHA-256 del token real enviado al correo.
+model PortalMagicLink {
+  id         String           @id @default(uuid()) @db.Uuid
+  accountId  String           @db.Uuid
+  /// SHA-256 del token enviado al correo.
+  token      String           @db.Char(64)
+  purpose    MagicLinkPurpose
+  expiresAt  DateTime         @db.Timestamptz()
+  consumedAt DateTime?        @db.Timestamptz()
+  createdAt  DateTime         @default(now()) @db.Timestamptz()
+
+  account PortalAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([token])
+  @@index([accountId, purpose, expiresAt])
+  @@schema("public")
+}
+
+/// Relación tutor/guardián → paciente menor o dependiente.
+/// Permite a un adulto gestionar citas y ver HCE de un paciente dependiente.
+model GuardianRelationship {
+  id                 String                     @id @default(uuid()) @db.Uuid
+  guardianAccountId  String                     @db.Uuid
+  wardPatientId      String                     @db.Uuid
+  relationship       GuardianRelationshipType
+  documentType       String?                    @db.VarChar(20)
+  documentNumber     String?                    @db.VarChar(40)
+  validFrom          DateTime                   @db.Date
+  validUntil         DateTime?                  @db.Date
+  status             GuardianRelationshipStatus @default(ACTIVE)
+  createdAt          DateTime                   @default(now()) @db.Timestamptz()
+  updatedAt          DateTime                   @updatedAt @db.Timestamptz()
+
+  guardianAccount PortalAccount @relation("GuardianAccount", fields: [guardianAccountId], references: [id], onDelete: Restrict)
+  wardPatient     Patient       @relation("GuardianWard", fields: [wardPatientId], references: [id], onDelete: Restrict)
+
+  @@unique([guardianAccountId, wardPatientId])
+  @@index([guardianAccountId, status])
   @@schema("public")
 }
