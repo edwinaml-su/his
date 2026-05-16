@@ -1,0 +1,28 @@
+# Terraform — ignorar artefactos locales y secretos
+
+# Estado local (NUNCA en git — usar backend remoto)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Override files (uso local temporal)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Vars con valores reales (solo plantilas en git, valores via TF_VAR_*)
+*.auto.tfvars
+*.auto.tfvars.json
+# Los envs/*.tfvars SÍ van en git (solo tienen valores no-secretos)
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Archivos generados por providers
+.terraform.d/
+
+# Plan files (pueden contener secrets en texto plano)
+*.tfplan

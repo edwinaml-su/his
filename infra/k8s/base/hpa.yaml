@@ -1,0 +1,53 @@
+################################################################################
+# hpa.yaml — HorizontalPodAutoscaler
+# Escala el deployment his-web entre 3 y 10 pods según CPU y memoria.
+# Pre-requisito: metrics-server instalado en el cluster.
+################################################################################
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: his-web
+  namespace: his-avante
+  labels:
+    app.kubernetes.io/name: his-web
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: his-web
+  minReplicas: 3   # HA mínimo: 3 pods en 3 nodos distintos
+  maxReplicas: 10
+
+  metrics:
+    # Escalar cuando CPU media supere 70%
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+    # Escalar cuando memoria media supere 80%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+  behavior:
+    # Scale-up agresivo (carga clínica puede subir de golpe al turno)
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    # Scale-down conservador (evitar flapping, esperar 5 min de calma)
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
