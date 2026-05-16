@@ -114,7 +114,6 @@ export const allergyMismatchPayloadSchema = z.object({
   prescriberId: z.string().uuid().nullable(),
 });
 
-// -----------------------------------------------------------------------------
 // transfusion.crossmatchFailed  (Beta.16)
 // -----------------------------------------------------------------------------
 
@@ -147,6 +146,29 @@ export const transfusionAdverseReactionPayloadSchema = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// pathology.reportSigned / pathology.criticalFinding (Beta.17)
+// -----------------------------------------------------------------------------
+
+export const pathologyReportSignedPayloadSchema = z.object({
+  reportId: z.string().uuid(),
+  orderId: z.string().uuid(),
+  /** prescriberId = médico solicitante; receptor canónico del evento. */
+  requestingPhysicianId: z.string().uuid(),
+  pathologistId: z.string().uuid(),
+  primaryDiagnosis: z.string().min(1).max(1000),
+});
+
+export const pathologyCriticalFindingPayloadSchema = z.object({
+  reportId: z.string().uuid(),
+  orderId: z.string().uuid(),
+  /** Receptor canónico: médico solicitante. */
+  requestingPhysicianId: z.string().uuid(),
+  /** Jefe de servicio (si el router lo resuelve; opcional Beta.17). */
+  serviceHeadId: z.string().uuid().optional(),
+  primaryDiagnosis: z.string().min(1).max(1000),
+});
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -176,6 +198,14 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("transfusion.adverseReaction"),
     payload: transfusionAdverseReactionPayloadSchema,
   }),
+  z.object({
+    eventType: z.literal("pathology.reportSigned"),
+    payload: pathologyReportSignedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pathology.criticalFinding"),
+    payload: pathologyCriticalFindingPayloadSchema,
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;
@@ -185,3 +215,5 @@ export type DrugInteractionPayload = z.infer<typeof drugInteractionPayloadSchema
 export type AllergyMismatchPayload = z.infer<typeof allergyMismatchPayloadSchema>;
 export type TransfusionCrossmatchFailedPayload = z.infer<typeof transfusionCrossmatchFailedPayloadSchema>;
 export type TransfusionAdverseReactionPayload = z.infer<typeof transfusionAdverseReactionPayloadSchema>;
+export type PathologyReportSignedPayload = z.infer<typeof pathologyReportSignedPayloadSchema>;
+export type PathologyCriticalFindingPayload = z.infer<typeof pathologyCriticalFindingPayloadSchema>;

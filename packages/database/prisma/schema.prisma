@@ -335,6 +335,9 @@ model Organization {
   transfusionRequests       TransfusionRequest[]
   crossMatches              CrossMatch[]
   transfusions              Transfusion[]
+  // Beta.17 — Patología
+  pathologyOrders           PathologyOrder[]    @relation("OrgPathologyOrders")
+  pathologyReports          PathologyReport[]   @relation("OrgPathologyReports")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -439,6 +442,12 @@ model User {
   crossMatchesPerformed     CrossMatch[]                 @relation("CrossMatchTechnician")
   transfusionsAsNurse       Transfusion[]                @relation("TransfusionNurse")
   transfusionsAsSupervior   Transfusion[]                @relation("TransfusionSupervisor")
+  // Beta.17 — Patología
+  pathologyOrdersRequested  PathologyOrder[]             @relation("PathologyOrderPhysician")
+  pathologySpecimensReceived PathologySpecimen[]         @relation("PathologySpecimenReceiver")
+  pathologyMacroDescriptions PathologyMacroDescription[] @relation("PathologyMacroPathologist")
+  pathologyMicroDescriptions PathologyMicroDescription[] @relation("PathologyMicroPathologist")
+  pathologyReportsSigned     PathologyReport[]           @relation("PathologyReportPathologist")
 
   @@schema("public")
 }
@@ -958,6 +967,8 @@ model Patient {
   nutritionAssessments   NutritionAssessment[]     @relation("PatNutritionAssessments")
   nutritionOrders        NutritionOrder[]          @relation("PatNutritionOrders")
   transfusionRequests    TransfusionRequest[]
+  // Beta.17 — Patología
+  pathologyOrders        PathologyOrder[]          @relation("PatPathologyOrders")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1305,6 +1316,8 @@ model Encounter {
   nutritionOrders        NutritionOrder[]        @relation("EncNutritionOrders")
   transfusionRequests    TransfusionRequest[]
   transfusions           Transfusion[]           @relation("TransfusionEncounter")
+  // Beta.17 — Patología
+  pathologyOrders        PathologyOrder[]        @relation("EncPathologyOrders")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -3361,7 +3374,6 @@ model RoleNotificationDefault {
   @@schema("public")
 }
 
-// =============================================================================
 // §15 Banco de Sangre / Hemoterapia — Beta.16
 // TDR §15: gestión de unidades, compatibilidad, transfusiones, reacciones.
 // =============================================================================
@@ -3603,5 +3615,192 @@ model Transfusion {
   @@index([requestId])
   @@index([encounterId])
   @@index([unitId])
+  @@schema("public")
+}
+
+// =============================================================================
+// Beta.17 — Patología / Anatomía Patológica (TDR §16)
+// State machines:
+//   PathologyOrder:   REQUESTED → COLLECTING → IN_PROCESS → REPORTED | CANCELLED
+//   PathologySpecimen: RECEIVED → GROSSING → PROCESSED → REPORTED | ARCHIVED | DISCARDED
+//   PathologyReport:  DRAFT → PRELIMINARY → FINAL (immutable post-sign) | AMENDED
+// ADR 0004: PathologyReport con status=FINAL es inmutable; AMENDED crea nueva fila.
+// Hash chain aplicado a PathologyReport (ver SQL 46_pathology_hardening.sql).
+// =============================================================================
+
+/// Tipo de estudio anatomopatológico solicitado.
+enum PathologyStudyType {
+  HISTOPATHOLOGY
+  CYTOLOGY
+  BIOPSY
+  IMMUNOHISTOCHEMISTRY
+  AUTOPSY
+
+  @@schema("public")
+}
+
+/// Estado de la solicitud de patología.
+enum PathologyOrderStatus {
+  REQUESTED
+  COLLECTING
+  IN_PROCESS
+  REPORTED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// Estado del espécimen recibido en el laboratorio de patología.
+enum SpecimenStatus {
+  RECEIVED
+  GROSSING
+  PROCESSED
+  REPORTED
+  ARCHIVED
+  DISCARDED
+
+  @@schema("public")
+}
+
+/// Estado del reporte de patología.
+/// FINAL → inmutable post-firma (ADR 0004). AMENDED → nueva fila, no update.
+enum ReportStatus {
+  DRAFT
+  PRELIMINARY
+  FINAL
+  AMENDED
+
+  @@schema("public")
+}
+
+/// TDR §16 — Solicitud médica de estudio de patología/anatomía patológica.
+/// State machine: REQUESTED → COLLECTING → IN_PROCESS → REPORTED | CANCELLED.
+model PathologyOrder {
+  id                    String               @id @default(uuid()) @db.Uuid
+  organizationId        String               @db.Uuid
+  encounterId           String               @db.Uuid
+  patientId             String               @db.Uuid
+  requestingPhysicianId String               @db.Uuid
+  studyType             PathologyStudyType
+  clinicalIndication    String?              @db.Text
+  suspectedDiagnosis    String?              @db.VarChar(500)
+  priority              String               @default("ROUTINE") @db.VarChar(20) /// ROUTINE | URGENT | STAT
+  status                PathologyOrderStatus @default(REQUESTED)
+  requestedAt           DateTime             @default(now()) @db.Timestamptz()
+  createdAt             DateTime             @default(now()) @db.Timestamptz()
+  updatedAt             DateTime             @updatedAt @db.Timestamptz()
+
+  organization       Organization        @relation("OrgPathologyOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter          Encounter           @relation("EncPathologyOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient            Patient             @relation("PatPathologyOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  requestingPhysician User               @relation("PathologyOrderPhysician", fields: [requestingPhysicianId], references: [id], onDelete: Restrict)
+  specimens          PathologySpecimen[]
+  report             PathologyReport[]
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@index([requestingPhysicianId])
+  @@schema("public")
+}
+
+/// TDR §16 — Muestra recibida en el laboratorio de patología.
+/// Condición de conservación al recibir: formalina, fresco, congelado, otro.
+model PathologySpecimen {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderId           String        @db.Uuid
+  anatomicSite      String        @db.VarChar(300) /// Descripción libre del sitio anatómico.
+  snomedCode        String?       @db.VarChar(20)  /// Código SNOMED CT opcional.
+  collectionMethod  String?       @db.VarChar(100) /// biopsia forceps, escisión, aspirado, etc.
+  fixative          String        @default("FORMALIN") @db.VarChar(40) /// FORMALIN | FRESH | FROZEN | OTHER
+  blockCount        Int           @default(0)
+  slideCount        Int           @default(0)
+  receivedAt        DateTime      @default(now()) @db.Timestamptz()
+  receivedById      String        @db.Uuid
+  status            SpecimenStatus @default(RECEIVED)
+  createdAt         DateTime      @default(now()) @db.Timestamptz()
+  updatedAt         DateTime      @updatedAt @db.Timestamptz()
+
+  order            PathologyOrder              @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  receivedBy       User                        @relation("PathologySpecimenReceiver", fields: [receivedById], references: [id], onDelete: Restrict)
+  macroDescription PathologyMacroDescription[]
+  microDescription PathologyMicroDescription[]
+
+  @@index([orderId])
+  @@schema("public")
+}
+
+/// TDR §16 — Descripción macroscópica del espécimen.
+model PathologyMacroDescription {
+  id           String   @id @default(uuid()) @db.Uuid
+  specimenId   String   @db.Uuid
+  pathologistId String  @db.Uuid
+  description  String   @db.Text
+  dimensions   String?  @db.VarChar(100) /// Ej. "3.5 x 2.0 x 1.5 cm"
+  weightGrams  Decimal? @db.Decimal(8, 2)
+  color        String?  @db.VarChar(100)
+  photoUrls    String[] /// Array de URLs a storage de fotos/anexos.
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+  updatedAt    DateTime @updatedAt @db.Timestamptz()
+
+  specimen    PathologySpecimen @relation(fields: [specimenId], references: [id], onDelete: Restrict)
+  pathologist User              @relation("PathologyMacroPathologist", fields: [pathologistId], references: [id], onDelete: Restrict)
+
+  @@index([specimenId])
+  @@schema("public")
+}
+
+/// TDR §16 — Descripción microscópica del espécimen.
+/// stains: array de tinciones usadas (HE, PAS, TRICROMICO, IHQ específicas, etc.).
+model PathologyMicroDescription {
+  id            String   @id @default(uuid()) @db.Uuid
+  specimenId    String   @db.Uuid
+  pathologistId String   @db.Uuid
+  description   String   @db.Text
+  stains        String[] /// ["HE","PAS","IHQ-ER","IHQ-PR"] etc.
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+  updatedAt     DateTime @updatedAt @db.Timestamptz()
+
+  specimen    PathologySpecimen @relation(fields: [specimenId], references: [id], onDelete: Restrict)
+  pathologist User              @relation("PathologyMicroPathologist", fields: [pathologistId], references: [id], onDelete: Restrict)
+
+  @@index([specimenId])
+  @@schema("public")
+}
+
+/// TDR §16 — Reporte final de patología firmado digitalmente.
+/// status=FINAL → inmutable (ADR 0004): NO se hacen UPDATE salvo triggers.
+/// AMENDED → nueva fila hija que referencia amendedFromId para trazabilidad.
+/// Hash chain: prevHash + signatureHash para inmutabilidad criptográfica (SQL 46).
+/// criticalFinding=true dispara evento pathology.criticalFinding al médico solicitante.
+model PathologyReport {
+  id               String       @id @default(uuid()) @db.Uuid
+  organizationId   String       @db.Uuid
+  orderId          String       @db.Uuid
+  pathologistId    String       @db.Uuid  /// Firmante del reporte.
+  primaryDiagnosis String       @db.Text
+  secondaryDiagnoses String[]            /// Diagnósticos secundarios en texto libre.
+  diagnosisCodes   String[]             /// CIE-O / SNOMED si aplica.
+  tnmStaging       String?      @db.VarChar(50)  /// Ej. "pT2N1M0".
+  tumorGrade       String?      @db.VarChar(20)  /// G1/G2/G3/GX etc.
+  criticalFinding  Boolean      @default(false)  /// Si true → evento pathology.criticalFinding.
+  status           ReportStatus @default(DRAFT)
+  signedAt         DateTime?    @db.Timestamptz()  /// Seteado al pasar a FINAL.
+  amendmentReason  String?      @db.Text           /// Obligatorio en status=AMENDED.
+  amendedFromId    String?      @db.Uuid           /// FK al reporte original que se enmendó.
+  /// Hash chain (SQL 46) — calculado por trigger BEFORE INSERT.
+  prevHash         String?      @db.VarChar(64)
+  signatureHash    String?      @db.VarChar(64)
+  createdAt        DateTime     @default(now()) @db.Timestamptz()
+  updatedAt        DateTime     @updatedAt @db.Timestamptz()
+
+  organization  Organization     @relation("OrgPathologyReports", fields: [organizationId], references: [id], onDelete: Restrict)
+  order         PathologyOrder   @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  pathologist   User             @relation("PathologyReportPathologist", fields: [pathologistId], references: [id], onDelete: Restrict)
+  amendedFrom   PathologyReport? @relation("PathologyAmendment", fields: [amendedFromId], references: [id])
+  amendments    PathologyReport[] @relation("PathologyAmendment")
+
+  @@index([organizationId, status])
+  @@index([orderId])
   @@schema("public")
 }

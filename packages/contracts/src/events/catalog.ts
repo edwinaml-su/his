@@ -22,6 +22,9 @@ export const EVENT_TYPES = [
   // Beta.16 — banco de sangre
   "transfusion.crossmatchFailed",
   "transfusion.adverseReaction",
+  // Beta.17 — Patología
+  "pathology.reportSigned",
+  "pathology.criticalFinding",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
