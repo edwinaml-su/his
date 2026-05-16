@@ -119,6 +119,7 @@ export default function SurgeryCaseDetailPage() {
   }
 
   async function handleAddComplication(text: string) {
+    if (!c) return;
     const line = serializeComplicationEntry(text);
     const updatedNotes = c.intraopNotes
       ? `${c.intraopNotes}\n${line}`
