@@ -20,6 +20,9 @@ export default defineConfig({
       "packages/trpc",
       "apps/web",
     ],
+    // BUG-DOD-001: excluir specs de Playwright para que `npm run test:coverage`
+    // no intente ejecutar archivos e2e con el runner de Vitest.
+    exclude: ["**/e2e/**", "**/node_modules/**", "**/dist/**", "**/.next/**"],
     // Cobertura agregada en el comando raíz.
     coverage: {
       provider: "v8",
