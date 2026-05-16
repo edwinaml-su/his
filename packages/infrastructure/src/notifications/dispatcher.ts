@@ -29,6 +29,12 @@ import {
   type LabCriticalValuePayload,
   type DrugInteractionPayload,
   type AllergyMismatchPayload,
+  type TransfusionCrossmatchFailedPayload,
+  type TransfusionAdverseReactionPayload,
+  type PathologyReportSignedPayload,
+  type PathologyCriticalFindingPayload,
+  type AccountingPeriodClosedPayload,
+  type AccountingJournalPostedHighValuePayload,
 } from "@his/contracts";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
@@ -42,6 +48,12 @@ import {
   buildDrugInteractionTemplate,
   buildLabCriticalValueTemplate,
   buildVitalCriticalTemplate,
+  buildTransfusionCrossmatchFailedTemplate,
+  buildTransfusionAdverseReactionTemplate,
+  buildPathologyReportSignedTemplate,
+  buildPathologyCriticalFindingTemplate,
+  buildAccountingPeriodClosedTemplate,
+  buildAccountingJournalPostedHighValueTemplate,
   type RenderedTemplate,
 } from "./templates";
 
@@ -124,8 +136,18 @@ async function resolveRecipientsAndSeverity(
     case "allergy.mismatch":
       return resolveAllergyMismatch(parsed.payload, event.organizationId, prisma);
     case "transfusion.crossmatchFailed":
+      return resolveTransfusionCrossmatchFailed(parsed.payload, event.organizationId, prisma);
     case "transfusion.adverseReaction":
-      // Beta.16.1: routing pendiente — emite evento sin destinatarios.
+      return resolveTransfusionAdverseReaction(parsed.payload, event.organizationId, prisma);
+    case "pathology.reportSigned":
+      return resolvePathologyReportSigned(parsed.payload, event.organizationId, prisma);
+    case "pathology.criticalFinding":
+      return resolvePathologyCriticalFinding(parsed.payload, event.organizationId, prisma);
+    case "accounting.periodClosed":
+      return resolveAccountingPeriodClosed(parsed.payload, event.organizationId, prisma);
+    case "accounting.journalPostedHighValue":
+      return resolveAccountingJournalPostedHighValue(parsed.payload, event.organizationId, prisma);
+    default:
       return [];
     case "pathology.reportSigned":
     case "pathology.criticalFinding":
@@ -238,6 +260,140 @@ async function resolveAllergyMismatch(
   ];
 }
 
+// -----------------------------------------------------------------------------
+// Beta.16.1 — Banco de sangre
+// -----------------------------------------------------------------------------
+
+async function resolveTransfusionCrossmatchFailed(
+  payload: TransfusionCrossmatchFailedPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.requestedById },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  const roleCode = await loadRoleCode(prisma, user.id, organizationId);
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode, severity: "CRITICAL" }];
+}
+
+async function resolveTransfusionAdverseReaction(
+  payload: TransfusionAdverseReactionPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const severity: Severity =
+    payload.severity === "LIFE_THREATENING" || payload.severity === "SEVERE"
+      ? "CRITICAL"
+      : "WARNING";
+
+  const [supervisor, nurse] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: payload.supervisorId },
+      select: { id: true, email: true, fullName: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: payload.nurseId },
+      select: { id: true, email: true, fullName: true },
+    }),
+  ]);
+
+  const recipients: ResolvedRecipient[] = [];
+
+  if (supervisor) {
+    const roleCode = await loadRoleCode(prisma, supervisor.id, organizationId);
+    recipients.push({ userId: supervisor.id, email: supervisor.email, fullName: supervisor.fullName, roleCode, severity });
+  }
+  if (nurse) {
+    const roleCode = await loadRoleCode(prisma, nurse.id, organizationId);
+    recipients.push({ userId: nurse.id, email: nurse.email, fullName: nurse.fullName, roleCode, severity });
+  }
+
+  return recipients;
+}
+
+// -----------------------------------------------------------------------------
+// Beta.17.1 — Patología
+// -----------------------------------------------------------------------------
+
+async function resolvePathologyReportSigned(
+  payload: PathologyReportSignedPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.requestingPhysicianId },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  const roleCode = await loadRoleCode(prisma, user.id, organizationId);
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode, severity: "WARNING" }];
+}
+
+async function resolvePathologyCriticalFinding(
+  payload: PathologyCriticalFindingPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const physicianPromise = prisma.user.findUnique({
+    where: { id: payload.requestingPhysicianId },
+    select: { id: true, email: true, fullName: true },
+  });
+  const serviceHeadPromise = payload.serviceHeadId
+    ? prisma.user.findUnique({
+        where: { id: payload.serviceHeadId },
+        select: { id: true, email: true, fullName: true },
+      })
+    : Promise.resolve(null);
+
+  const [physician, serviceHead] = await Promise.all([physicianPromise, serviceHeadPromise]);
+  const recipients: ResolvedRecipient[] = [];
+
+  if (physician) {
+    const roleCode = await loadRoleCode(prisma, physician.id, organizationId);
+    recipients.push({ userId: physician.id, email: physician.email, fullName: physician.fullName, roleCode, severity: "CRITICAL" });
+  }
+  if (serviceHead) {
+    const roleCode = await loadRoleCode(prisma, serviceHead.id, organizationId);
+    recipients.push({ userId: serviceHead.id, email: serviceHead.email, fullName: serviceHead.fullName, roleCode, severity: "CRITICAL" });
+  }
+
+  return recipients;
+}
+
+// -----------------------------------------------------------------------------
+// Beta.18.1 — Contabilidad
+// -----------------------------------------------------------------------------
+
+async function resolveAccountingPeriodClosed(
+  payload: AccountingPeriodClosedPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.closedById },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  const roleCode = await loadRoleCode(prisma, user.id, organizationId);
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode, severity: "WARNING" }];
+}
+
+async function resolveAccountingJournalPostedHighValue(
+  payload: AccountingJournalPostedHighValuePayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.postedById },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  const roleCode = await loadRoleCode(prisma, user.id, organizationId);
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode, severity: "WARNING" }];
+}
+
 async function loadRoleCode(
   prisma: DispatcherPrisma,
   userId: string,
@@ -269,6 +425,18 @@ function renderTemplate(
       return buildDrugInteractionTemplate(event.payload as DrugInteractionPayload, ctx);
     case "allergy.mismatch":
       return buildAllergyMismatchTemplate(event.payload as AllergyMismatchPayload, ctx);
+    case "transfusion.crossmatchFailed":
+      return buildTransfusionCrossmatchFailedTemplate(event.payload as TransfusionCrossmatchFailedPayload, ctx);
+    case "transfusion.adverseReaction":
+      return buildTransfusionAdverseReactionTemplate(event.payload as TransfusionAdverseReactionPayload, ctx);
+    case "pathology.reportSigned":
+      return buildPathologyReportSignedTemplate(event.payload as PathologyReportSignedPayload, ctx);
+    case "pathology.criticalFinding":
+      return buildPathologyCriticalFindingTemplate(event.payload as PathologyCriticalFindingPayload, ctx);
+    case "accounting.periodClosed":
+      return buildAccountingPeriodClosedTemplate(event.payload as AccountingPeriodClosedPayload, ctx);
+    case "accounting.journalPostedHighValue":
+      return buildAccountingJournalPostedHighValueTemplate(event.payload as AccountingJournalPostedHighValuePayload, ctx);
     default:
       return null;
   }

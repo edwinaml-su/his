@@ -214,11 +214,35 @@ Métricas RED por handler tRPC, histogramas de latencia, counters de mutations p
 
 ---
 
-## 6. Referencias cruzadas
+## 6. SLIs/SLOs oficiales — tabla consolidada (Wave SRE · Fase 6)
+
+> Fuente de verdad para alertas Prometheus (`infra/observability/prometheus-alerts.yaml`) y dashboard Grafana (`infra/observability/grafana-dashboard-api-latency.json`).
+
+| ID | Nombre | SLI (métrica) | Target | Ventana | Alert threshold | Severidad alert |
+|---|---|---|---|---|---|---|
+| SLO-1 | Disponibilidad | `avg_over_time(his_db_up[30d])` | ≥ 99.5% | 30d | < 99.0% en 1h | P2 |
+| SLO-2 | Latencia health p95 | `histogram_quantile(0.95, his_db_latency_ms_bucket[15m])` | < 500ms | 28d | > 700ms / 15min | warning |
+| SLO-3 | Latencia mutations p95 | `histogram_quantile(0.95, his_trpc_mutation_duration_ms_bucket[15m])` | < 1500ms | 28d | > 2000ms / 15min | warning |
+| SLO-4 | Error rate 5xx | `rate(his_http_requests_total{status=~"5.."}[5m]) / rate(his_http_requests_total[5m])` | < 0.5% | 28d | > 1.0% / 5min | P2; > 5% / 2min = P1 |
+| SLO-5 | Override triage | DB: `wasOverride / total_triages` | < 10% | 28d | > 15% / 7d | KPI clínico |
+| SLO-6 | Tiempo admisión | DB: mediana minutos admisión | ≤ 3 min | 28d | > 5 min / 3d | KPI proceso |
+| SLO-7 | MPI search p95 | Sentry span `mpi.search` p95 | < 300ms | 28d | > 500ms / 15min | warning |
+| SLO-8 | RPO | Min desde último backup | ≤ 15 min | Continuo | > 30 min sin backup | P2 |
+| SLO-9 | RTO | Horas para restaurar (DR drill) | ≤ 4 h | 90d | DR drill > 6h | revisión arq. |
+
+**Prometheus alerts implementadas:** SLO-1 (`HISDBDown`), SLO-4 (`HIS5xxSpikeP2/P1`), Seguridad (`HISRLSBypassAttempt`).
+**Métricas pendientes (Sprint 6):** `his_http_requests_total`, `his_trpc_mutation_duration_ms`, `his_rls_bypass_attempts_total` — ver `infra/observability/README.md`.
+
+---
+
+## 7. Referencias cruzadas
 
 - `docs/08_devops.md` — runbooks, branching, RPO/RTO operativo.
 - `docs/02_arquitectura_software.md` §29 — restricciones de TDR.
+- `docs/28_infra_runbook.md` — runbook IaC + incidentes infra (Wave SRE Fase 6).
 - `apps/web/sentry.shared.ts` — implementación `tracesSampler` y filtros.
 - `apps/web/src/lib/observability/slo-checks.ts` — funciones SLI puras.
 - `apps/web/src/app/(admin)/slos/page.tsx` — dashboard.
 - `apps/web/src/app/api/metrics/route.ts` — endpoint Prometheus.
+- `infra/observability/prometheus-alerts.yaml` — reglas de alerta.
+- `infra/observability/grafana-dashboard-api-latency.json` — dashboard Grafana.
