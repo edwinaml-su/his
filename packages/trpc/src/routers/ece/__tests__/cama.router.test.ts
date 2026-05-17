@@ -152,4 +152,39 @@ describe("eceCamaRouter", () => {
       caller.cambiarEstado({ camaId: CAMA_ID, nuevoEstado: "libre" }),
     ).rejects.toThrow("no encontrada");
   });
+
+  // 8 — mapCompleto happy-path
+  it("mapCompleto: agrupa camas por servicio con estado derivado", async () => {
+    // Primera query: servicios
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { servicio_id: SERVICIO_ID, servicio_nombre: "Medicina Interna" },
+    ]);
+    // Segunda query: todas las camas
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { ...CAMA_RAW_LIBRE,   ward_id: SERVICIO_ID },
+      { ...CAMA_RAW_OCUPADA, ward_id: SERVICIO_ID },
+    ]);
+
+    const caller = eceCamaRouter.createCaller(makeCtx({ prisma, tenant: NURSE_TENANT }));
+    const result = await caller.mapCompleto();
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      servicioId: SERVICIO_ID,
+      servicioNombre: "Medicina Interna",
+    });
+    expect(result[0]!.camas).toHaveLength(2);
+    expect(result[0]!.camas[0]).toMatchObject({ estado: "libre" });
+    expect(result[0]!.camas[1]).toMatchObject({ estado: "ocupada", pacienteNombre: "Ana García" });
+  });
+
+  // 9 — mapCompleto sin camas
+  it("mapCompleto: retorna array vacío si no hay wards con camas activas", async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([]); // sin servicios
+
+    const caller = eceCamaRouter.createCaller(makeCtx({ prisma, tenant: NURSE_TENANT }));
+    const result = await caller.mapCompleto();
+
+    expect(result).toEqual([]);
+  });
 });

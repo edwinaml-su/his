@@ -91,6 +91,10 @@ import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.route
 import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 // Fase 2 — Bridge Admisión Hospitalaria
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
+// ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
+import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
+// ECE — Sala de Expulsión (Doc 14 NTEC)
+import { eceSalaExpulsionRouter } from "./ece/sala-expulsion.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -185,6 +189,10 @@ export const appRouter = router({
   eceCertDef: eceCertDefRouter,
   // Fase 2 — Bridge Admisión Hospitalaria
   eceBridgeAdmision: eceBridgeAdmisionRouter,
+  // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
+  eceActoQx: eceActoQuirurgicoRouter,
+  // ECE — Sala de Expulsión (Doc 14 NTEC)
+  eceSalaExpulsion: eceSalaExpulsionRouter,
 });
 
 export type AppRouter = typeof appRouter;

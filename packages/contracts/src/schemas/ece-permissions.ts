@@ -17,17 +17,30 @@ export type EcePermission =
   | "ece.bitacora.read"
   | "ece.rectificacion.solicitar"
   | "ece.rectificacion.aprobar"
-  | "ece.workflow.designer";
+  | "ece.workflow.designer"
+  // Permisos quirúrgicos / obstétricos / neonatales (75_specialized_roles.sql)
+  | "ece.cirugia.programar"      // MC, ESP (cualquier especialista quirúrgico)
+  | "ece.cirugia.firmar_acto"   // ESP cirujano — firma el acto quirúrgico
+  | "ece.anestesia.administrar"  // ANEST — registro de anestesia
+  | "ece.urpa.dar_alta"          // ENF con autorización MD (MD = PHYSICIAN/ESP/ANEST)
+  | "ece.partograma.registrar"   // ENF, MC, GO
+  | "ece.rn.firmar"              // MC pediatra (PEDIA)
+  | "ece.reanimacion.ejecutar";  // MC pediatra (PEDIA), ENF NRP-cert (ENF_NRP)
 
 // Roles HIS normalizados (ambas familias en/es para suavizar la transición).
-const ADMIN_CODES    = new Set(["ADMIN", "ADMIN_GLOBAL", "super_admin", "admin_clinico"]);
-const DIR_CODES      = new Set(["DIR"]);
-const ARCH_CODES     = new Set(["ARCH"]);
+const ADMIN_CODES     = new Set(["ADMIN", "ADMIN_GLOBAL", "super_admin", "admin_clinico"]);
+const DIR_CODES       = new Set(["DIR"]);
+const ARCH_CODES      = new Set(["ARCH"]);
 // PHYSICIAN incluye MC (médico cirujano) y MT (médico técnico) del esquema ece.rol.
 const PHYSICIAN_CODES = new Set(["PHYSICIAN", "medico", "MC", "MT"]);
 const NURSE_CODES     = new Set(["NURSE", "enfermeria", "ENF"]);
-// ESP: especialistas con capacidad quirúrgica / obstétrica.
-const ESP_CODES      = new Set(["ESP"]);
+// ESP: especialistas con capacidad quirúrgica / obstétrica (incluye GO como subespecialidad).
+const ESP_CODES       = new Set(["ESP"]);
+// Roles especializados (75_specialized_roles.sql).
+const ANEST_CODES     = new Set(["ANEST"]);
+const GO_CODES        = new Set(["GO"]);
+const PEDIA_CODES     = new Set(["PEDIA"]);
+const ENF_NRP_CODES   = new Set(["ENF_NRP"]);
 
 function hasAny(roleCodes: readonly string[], set: Set<string>): boolean {
   return roleCodes.some((c) => set.has(c));
@@ -85,6 +98,43 @@ export function hasEcePermission(
     case "ece.workflow.designer":
       // Solo DIR diseña workflows ECE.
       return hasAny(roleCodes, DIR_CODES);
+
+    case "ece.cirugia.programar":
+      // MC, ESP (incluye GO) programan cirugías.
+      return (
+        hasAny(roleCodes, PHYSICIAN_CODES) ||
+        hasAny(roleCodes, ESP_CODES) ||
+        hasAny(roleCodes, GO_CODES)
+      );
+
+    case "ece.cirugia.firmar_acto":
+      // Solo ESP cirujano firma el acto quirúrgico (separación con anestesia).
+      return hasAny(roleCodes, ESP_CODES);
+
+    case "ece.anestesia.administrar":
+      // Solo ANEST administra y registra la anestesia.
+      return hasAny(roleCodes, ANEST_CODES);
+
+    case "ece.urpa.dar_alta":
+      // ENF da el alta URPA — solo con autorización médica (MC/ESP/ANEST).
+      // La autorización previa (MD order) la valida el router; aquí solo el rol.
+      return hasAny(roleCodes, NURSE_CODES) || hasAny(roleCodes, ENF_NRP_CODES);
+
+    case "ece.partograma.registrar":
+      // ENF, MC y GO registran el partograma.
+      return (
+        hasAny(roleCodes, NURSE_CODES) ||
+        hasAny(roleCodes, PHYSICIAN_CODES) ||
+        hasAny(roleCodes, GO_CODES)
+      );
+
+    case "ece.rn.firmar":
+      // Solo pediatra firma el acta de recién nacido.
+      return hasAny(roleCodes, PEDIA_CODES);
+
+    case "ece.reanimacion.ejecutar":
+      // Pediatra o enfermera NRP-certificada ejecutan protocolo NRP.
+      return hasAny(roleCodes, PEDIA_CODES) || hasAny(roleCodes, ENF_NRP_CODES);
 
     default: {
       // Garantiza exhaustividad en tiempo de compilación.

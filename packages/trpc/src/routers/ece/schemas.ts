@@ -48,3 +48,28 @@ export const eceConsentimientoValidarSchema = z.object({
   consentimientoId: z.string().uuid(),
   observacion: z.string().max(1000).optional(),
 });
+
+// ─── Consentimiento Quirúrgico (CONS_QX) ─────────────────────────────────────
+// Extiende CONS_INF con campos específicos NTEC quirófano.
+
+export const tipoAnestesiaSchema = z.enum([
+  "general",
+  "regional",
+  "local",
+  "sedacion",
+  "combinada",
+]);
+
+export type TipoAnestesia = z.infer<typeof tipoAnestesiaSchema>;
+
+export const eceConsentimientoQxCreateSchema = eceConsentimientoCreateSchema
+  .extend({
+    // Fuerza tipo quirúrgico; el caller siempre envía 'quirurgico'
+    tipoConsentimiento: z.literal("quirurgico"),
+    tipoAnestesia: tipoAnestesiaSchema,
+    transfusionAutorizada: z.boolean(),
+    ampliacionQuirurgicaAutorizada: z.boolean(),
+    fotografiaGrabacionAutorizada: z.boolean(),
+  });
+
+export type EceConsentimientoQxCreate = z.infer<typeof eceConsentimientoQxCreateSchema>;
