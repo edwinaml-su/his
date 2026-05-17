@@ -46,6 +46,7 @@ import {
   GitBranch,
   Thermometer,
   NotebookPen,
+  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -90,9 +91,10 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
+      { href: "/ece/camas", label: "Mapa de Camas", icon: LayoutGrid },
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
       {
         href: "/ece/indicaciones",
