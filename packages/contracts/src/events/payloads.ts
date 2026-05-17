@@ -237,6 +237,36 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.paciente.linked  (Fase 2 — bridge ECE↔HIS)
+// Emitido cuando se establece el vínculo ece.paciente ↔ public.Patient.
+// -----------------------------------------------------------------------------
+
+export const ecePacienteLinkedPayloadSchema = z.object({
+  ecePacienteId: z.string().uuid(),
+  publicPatientId: z.string().uuid(),
+  linkedById: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// ece.paciente.synced  (Fase 2 — bridge ECE↔HIS)
+// Emitido tras sincronización de campos demográficos NTEC Art. 15 en cualquier
+// dirección (fromHis | toHis).
+// -----------------------------------------------------------------------------
+
+export const ecePacienteSyncedPayloadSchema = z.object({
+  ecePacienteId: z.string().uuid(),
+  publicPatientId: z.string().uuid(),
+  direction: z.enum(["fromHis", "toHis"]),
+  syncedById: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  fieldsUpdated: z.array(z.string().min(1)).min(1),
+});
+
+export type EcePacienteLinkedPayload = z.infer<typeof ecePacienteLinkedPayloadSchema>;
+export type EcePacienteSyncedPayload = z.infer<typeof ecePacienteSyncedPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +322,15 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — Bridge ECE↔HIS
+  z.object({
+    eventType: z.literal("ece.paciente.linked"),
+    payload: ecePacienteLinkedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.paciente.synced"),
+    payload: ecePacienteSyncedPayloadSchema,
   }),
 ]);
 
