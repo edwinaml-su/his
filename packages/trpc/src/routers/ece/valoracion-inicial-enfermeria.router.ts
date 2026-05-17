@@ -1,15 +1,43 @@
 /**
  * ECE — Valoración Inicial de Enfermería (maestro one-per-episodio).
  *
- * Tabla operada (raw SQL — schema ece):
- *   ece.valoracion_inicial_enfermeria
+ * Documento NTEC: VAL_INI_ENF — Valoración Inicial de Enfermería al Ingreso.
+ * Norma: TDR §4 / MINSAL Acuerdo n.° 1616 (2024).
+ * Cardinalidad: exactamente 1 valoración por episodio_hospitalario (1:1).
+ *   La restricción se aplica a nivel de aplicación; el router rechaza creación
+ *   si ya existe una valoración para el mismo episodio_hospitalario_id.
  *
- * Workflow: código VAL_INI_ENF, estados borrador → firmado → validado.
- * Rol requerido: NURSE en todas las procedures.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: VAL_INI_ENF)
+ * ---------------------------------------------------------------------------
+ *   borrador  → firmado   (NURSE firma — sin PIN; solo la sesión activa)
+ *   firmado   → validado  (NURSE superiora / coordinadora de enfermería)
  *
- * Outbox: firmar emite `ece.valoracion_inicial.firmada`.
+ *   No existe estado anulado: la valoración es inmutable post-firma per NTEC.
  *
- * Spec: TDR §4 NTEC / Acuerdo n.° 1616 (MINSAL, 2024).
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.valoracion_inicial.firmada'  — payload: { valoracionId, episodioId,
+ *                                         enfermeroId, organizationId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.valoracion_inicial_enfermeria  — fila principal; columnas clave:
+ *     id, episodio_hospitalario_id, escala_braden, escala_morse, escala_dolor,
+ *     estado_consciencia, dispositivos_invasivos, plan_cuidados_inicial,
+ *     estado (borrador|firmado|validado), firmado_por uuid, firmado_en timestamptz
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC (todas las procedures: requireRole(["NURSE"]))
+ * ---------------------------------------------------------------------------
+ *   list, get, create, update → NURSE
+ *   firmar, validar           → NURSE
+ *
+ * Raw SQL es obligatorio porque el schema ece usa un schema Postgres separado
+ * (opción B) y no está mapeado en schema.prisma. Se usa prisma.$queryRaw
+ * con Prisma.sql para prevención de SQL injection.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

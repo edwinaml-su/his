@@ -1,15 +1,46 @@
 /**
- * eceResultadoEstudio — Router tRPC para Resultado de Estudio ECE (Doc 18 NTEC).
+ * eceResultadoEstudio — Router tRPC para Resultado de Estudio ECE.
  *
- * Precondición: la solicitud referenciada debe estar en estado 'firmado' o 'validado'.
+ * Documento NTEC: Doc 18 (Resultado de Estudio Diagnóstico / de Laboratorio).
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.18.
+ * Código de tipo_documento: RES_EST.
  *
- * Flujo:
- *   - TEC/profesional diagnóstico registra resultado (registrar).
- *   - MC aprueba el resultado (aprobar).
+ * ---------------------------------------------------------------------------
+ * WORKFLOW (dos pasos — no usa ece.flujo_estado genérico)
+ * ---------------------------------------------------------------------------
+ *   Paso 1 — registrar (estado: 'pendiente_aprobacion')
+ *     Roles permitidos: TEC (técnico de diagnóstico), PROF_DX (profesional diagnóstico).
+ *     Precondición: ece.solicitud_estudio.estado IN ('firmado','validado').
+ *     Acción: INSERT en ece.resultado_estudio con el contenido del resultado,
+ *             interpretación opcional y URI de archivo adjunto.
  *
- * Outbox emite:
- *   - 'ece.resultado_estudio.registrado'  al registrar
- *   - 'ece.resultado_estudio.aprobado'    al aprobar
+ *   Paso 2 — aprobar (estado: 'aprobado')
+ *     Roles permitidos: MC | PHYSICIAN (médico certificador).
+ *     Acción: UPDATE estado + comentario_medico.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (domainEvent vía emitDomainEvent inside Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.resultado_estudio.registrado'  — emitido por registrar()
+ *   'ece.resultado_estudio.aprobado'    — emitido por aprobar()
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.resultado_estudio   — fila principal: resultado, interpretacion, adjunto_uri,
+ *                             estado, comentario_medico, solicitud_id (FK)
+ *   ece.solicitud_estudio   — consultada para validar precondición de estado
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get   → cualquier rol autenticado con tenant (tenantProcedure)
+ *   registrar   → requireRole(["TEC","PROF_DX"])
+ *   aprobar     → requireRole(["MC","PHYSICIAN"])
+ *
+ * Raw SQL es obligatorio porque ece.* vive fuera del modelo Prisma (opción B,
+ * schema separado). Todas las queries usan prisma.$queryRaw / $executeRaw con
+ * Prisma.sql para evitar interpolación directa (sql injection prevention).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

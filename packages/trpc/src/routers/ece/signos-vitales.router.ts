@@ -1,29 +1,58 @@
 /**
- * eceSignosVitales — router tRPC para tomas de signos vitales (ECE §SIG_VIT).
+ * Router tRPC — ECE Signos Vitales (SIG_VIT).
  *
- * Workflow: borrador → en_revision → firmado → validado → anulado
- * Código de tipo de documento: SIG_VIT
+ * Documento NTEC: SIG_VIT — Toma y Registro de Signos Vitales.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024) — documento clínico de enfermería
+ *   de alta frecuencia (múltiples tomas por turno durante hospitalización).
+ * Código de tipo_documento: SIG_VIT.
  *
- * Tablas ECE (raw SQL — sin modelo Prisma):
- *   ece.signos_vitales            — datos clínicos de la toma
- *   ece.documento_instancia       — instancia del documento en workflow
- *   ece.documento_instancia_historial — bitácora con hash de payload
- *   ece.tipo_documento            — resolución del tipoDocumentoId por código
- *   ece.flujo_estado              — estado inicial + estados por código
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: SIG_VIT)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (NURSE: completar toma)
+ *   en_revision → firmado      (NURSE: firma — inmutable post-firma)
+ *   firmado     → validado     (NURSE: validación por supervisora)
+ *   cualquiera  → anulado      (NURSE/PHYSICIAN: corrección de toma errónea)
  *
- * Autorización: requireRole(["NURSE","PHYSICIAN"])
- * Contexto ECE: withEceContext(prisma, personalId, establecimientoId, fn)
+ *   Al firmar, si no existe ece.documento_instancia para la toma, se crea
+ *   automáticamente. La inmutabilidad se logra rechazando UPDATE en el router
+ *   (no hay trigger dedicado — la lógica vive en JS).
  *
- * Firmar / validar:
- *   - Ambas acciones crean/actualizan la instancia en ece.documento_instancia
- *     (si no existe, se crea al firmar).
- *   - Insertan fila en ece.documento_instancia_historial con hash SHA-256 del
- *     payload JSON (inmutabilidad de auditoría, análogo al audit chain §6.3).
+ *   Cada transición inserta fila en ece.documento_instancia_historial con
+ *   hash SHA-256 del payload JSON (cadena de auditoría, análogo a §6.3 TDR).
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX
+ * ---------------------------------------------------------------------------
+ *   No emite eventos de dominio propios. Los signos vitales son consumidos
+ *   directamente por la UI de enfermería; el event outbox no es necesario
+ *   para el flujo de alta frecuencia (trade-off: latencia vs. consistencia).
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.signos_vitales                — fila principal: episodio_id, fecha_hora,
+ *                                       temperatura, presion_sistolica,
+ *                                       presion_diastolica, frecuencia_cardiaca,
+ *                                       frecuencia_respiratoria, spo2, peso, talla
+ *   ece.documento_instancia           — instancia de workflow del documento
+ *   ece.documento_instancia_historial — log de transiciones + SHA-256 payload
+ *   ece.tipo_documento                — resolución de tipoDocumentoId por código 'SIG_VIT'
+ *   ece.flujo_estado                  — estado inicial configurado para SIG_VIT
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get      → requireRole(["NURSE","PHYSICIAN"])
+ *   create, update → requireRole(["NURSE"])
+ *   firmar         → requireRole(["NURSE"])
+ *   validar        → requireRole(["NURSE"])
+ *   anular         → requireRole(["NURSE","PHYSICIAN"])
  *
  * @QA E2E a cubrir:
  *   - Flujo completo create → firmar → validar con credenciales NURSE.
- *   - Intentar update de registro firmado → 400.
- *   - PHYSICIAN puede listar pero no firmar (403).
+ *   - Intentar update de registro firmado → 400 PRECONDITION_FAILED.
+ *   - PHYSICIAN intenta firmar → 403 FORBIDDEN.
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";

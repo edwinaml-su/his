@@ -1,31 +1,51 @@
 /**
- * Bridge ECE ↔ HIS Triage (Fase 2, Stream 18-ext).
+ * Router tRPC — Bridge ECE ↔ HIS Triage (Stream 18-ext).
  *
- * Norma técnica: NTEC Doc 4 (MINSAL) — Hoja de Triaje ECE formal.
- * Gestiona el vínculo entre TriageEvaluation HIS (Manchester) y ece.triaje
- * (hoja formal ECE), con firma electrónica del enfermero (ENF) opcional.
+ * Documento NTEC: Doc 4 — Hoja de Triaje ECE formal (MINSAL Acuerdo n.° 1616-2024).
+ * Código de operación: ECE-BRIDGE-TRIAGE.
+ * Gestiona el vínculo bidireccional entre TriageEvaluation HIS (schema public,
+ *   escala Manchester) y ece.hoja_triaje (documento ECE formal en schema ece).
+ * Coexistencia planificada: en la transición HIS→ECE, el triaje puede registrarse
+ *   en el sistema HIS y luego promovido al expediente ECE formal.
  *
- * Procedures:
- *   eceBridgeTriage.linkTriage          — vincula Triage HIS ↔ EceTriaje existente.
- *   eceBridgeTriage.unlinkTriage        — elimina el vínculo (borra el campo en data JSON).
- *   eceBridgeTriage.createEceFromTriage — crea EceTriaje desde TriageEvaluation HIS completada.
- *   eceBridgeTriage.syncCompletedTriages — job manual: procesa Triages COMPLETED sin ECE.
+ * ---------------------------------------------------------------------------
+ * OPERACIONES
+ * ---------------------------------------------------------------------------
+ *   linkTriage            — vincula TriageEvaluation HIS existente ↔ EceTriaje existente.
+ *   unlinkTriage          — elimina el vínculo (SET NULL en ece.triaje.data JSONB).
+ *   createEceFromTriage   — crea ece.hoja_triaje desde TriageEvaluation HIS completada.
+ *                           Si firmarInmediatamente=true y rol incluye ENF →
+ *                           estado_registro='firmado'. Sino → 'borrador'.
+ *   syncCompletedTriages  — job manual: procesa todas las TriageEvaluation COMPLETED
+ *                           que no tienen ece.hoja_triaje asociada (backfill).
  *
- * Estrategia de vínculo:
- *   EceTriaje no tiene FK directa a TriageEvaluation (esquemas distintos,
- *   evolución independiente). El vínculo se guarda en:
- *     - ece.triaje.data->>'hisTriageEvalId'  (persistido en ECE)
- *   La consulta inversa usa este campo JSON para lookups.
+ * ---------------------------------------------------------------------------
+ * ESTRATEGIA DE VÍNCULO
+ * ---------------------------------------------------------------------------
+ *   ece.hoja_triaje NO tiene FK directa a public."TriageEvaluation" (schemas
+ *   de evolución independiente). El vínculo se persiste como JSONB:
+ *     ece.hoja_triaje.data->>'hisTriageEvalId'
+ *   La consulta inversa usa el operador @> de JSONB o extracción por campo.
+ *   Decisión deliberada: flexibilidad ante cambios de schema HIS sin migración ECE.
  *
- * Firma electrónica:
- *   Si firmarInmediatamente=true y el rol del usuario incluye ENF,
- *   estado_registro = 'firmado'. En cualquier otro caso: 'borrador'.
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.triaje.linkedToHisTriage'  — emitido por linkTriage y createEceFromTriage.
+ *     Payload: { eceTriajeId, hisTriageEvalId, enfermeroId, orgId }
  *
- * Outbox:
- *   emite ece.triaje.linkedToHisTriage dentro de la transacción Prisma.
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* + Prisma para public.*)
+ * ---------------------------------------------------------------------------
+ *   ece.hoja_triaje (via raw SQL)        — data JSONB contiene hisTriageEvalId
+ *   public."TriageEvaluation" (via Prisma ORM) — evaluación HIS de origen
  *
- * Roles:
- *   requireRole(["NURSE","PHYSICIAN"])
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   linkTriage, unlinkTriage          → requireRole(["NURSE","PHYSICIAN"])
+ *   createEceFromTriage               → requireRole(["NURSE","PHYSICIAN"])
+ *   syncCompletedTriages              → requireRole(["NURSE","PHYSICIAN"])
  */
 import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";

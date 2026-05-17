@@ -1,22 +1,55 @@
 /**
- * Router tRPC — Hoja de Ingreso Hospitalario (Doc 12 NTEC, §3.12).
+ * Router tRPC — Hoja de Ingreso Hospitalario.
  *
- * Workflow HOJA_ING (código de tipo_documento):
- *   borrador → en_revision → firmado → validado
- *                        ↘ anulado (desde borrador/en_revision/firmado, rol DIR)
+ * Documento NTEC: Doc 12 — Hoja de Ingreso Hospitalario, §3.12.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024).
+ * Código de tipo_documento: HOJA_ING.
  *
- * Roles:
- *   ADM  → create, update (borrador), firmar (PIN electrónico)
- *   ARCH → validar
- *   DIR  → anular
- *   MC / ENF / ESP / ARCH / DIR → list, get
+ * La hoja de ingreso es el documento administrativo-clínico que formaliza
+ * el ingreso del paciente al establecimiento hospitalario. Vincula la orden
+ * de ingreso (emitida por médico) con el episodio hospitalario y la cama
+ * asignada. Requiere firma del personal administrativo (ADM) y validación
+ * del archivista (ARCH) para quedar en estado oficial.
  *
- * Outbox events:
- *   ece.hoja_ingreso.firmada   — emitido al firmar (ADM)
- *   ece.hoja_ingreso.validada  — emitido al validar (ARCH)
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: HOJA_ING)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (ADM: completar datos administrativos)
+ *   en_revision → firmado      (ADM: firma electrónica con PIN argon2id)
+ *   firmado     → validado     (ARCH: archivista valida documentación)
+ *   borrador|en_revision|firmado → anulado (DIR: solo pre-validado)
  *
- * Tabla física: ece.hoja_ingreso (raw SQL, fuera del modelo Prisma).
- * Vinculada con ece.orden_ingreso y ece.episodio_hospitalario.
+ *   El PIN se verifica contra ece.firma_electronica.pin_hash (argon2id).
+ *   Lockout automático tras 3 intentos fallidos (locked_until timestamptz).
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.hoja_ingreso.firmada'   — emitido por firmar(). Disparador para
+ *     que el módulo de camas confirme la asignación oficial.
+ *     Payload: { hojaIngresoId, episodioHospitalarioId, admId, orgId }
+ *   'ece.hoja_ingreso.validada'  — emitido por validar().
+ *     Payload: { hojaIngresoId, archId, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.hoja_ingreso              — fila principal: episodio_hospitalario_id,
+ *                                   orden_ingreso_id (FK nullable),
+ *                                   fecha_ingreso, motivo_ingreso, estado,
+ *                                   firmado_por, firmado_en, validado_por
+ *   ece.orden_ingreso             — consultada para validar la orden médica
+ *   ece.documento_instancia       — instancia de flujo vinculada
+ *   ece.firma_electronica         — credencial de firma del ADM
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get           → requireRole(["MC","ENF","ESP","ARCH","DIR","ADM"])
+ *   create, update      → requireRole(["ADM"])
+ *   firmar              → requireRole(["ADM"])    — requiere PIN
+ *   validar             → requireRole(["ARCH"])
+ *   anular              → requireRole(["DIR"])
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
