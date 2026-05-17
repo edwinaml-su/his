@@ -237,6 +237,30 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.documento.certificado  (Fase 2 — Certificación DIR, Art. 21 NTEC)
+// Emitido cuando el Director certifica formalmente una instancia de documento
+// (FICHA_ID, EPICRISIS o CERT_DEF) avanzando su estado a 'certificado'.
+// -----------------------------------------------------------------------------
+
+export const eceDocumentoCertificadoPayloadSchema = z.object({
+  instanciaId: z.string().uuid(),
+  tipoDocumentoCodigo: z.string().min(1).max(64),
+  /** Estado anterior (debe ser 'validado'). */
+  fromEstadoCodigo: z.string().min(1).max(64),
+  /** UUID de la fila ece.firma_electronica del DIR. */
+  firmaId: z.string().uuid(),
+  /** SHA-256 del payload clínico serializado (para cadena de integridad). */
+  payloadHash: z.string().length(64),
+  /** UUID del usuario DIR que certifica. */
+  dirUserId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+});
+
+export type EceDocumentoCertificadoPayload = z.infer<
+  typeof eceDocumentoCertificadoPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +316,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — Certificación DIR (Art. 21 NTEC)
+  z.object({
+    eventType: z.literal("ece.documento.certificado"),
+    payload: eceDocumentoCertificadoPayloadSchema,
   }),
 ]);
 

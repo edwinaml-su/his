@@ -39,6 +39,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  BadgeCheck,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -46,6 +47,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Si se especifica, el item solo aparece si el usuario tiene alguno de estos roles. */
+  requiredRoles?: string[];
 }
 
 interface NavSection {
@@ -120,14 +123,35 @@ const SECTIONS: NavSection[] = [
       { href: "/sso-config", label: "SSO", icon: KeyRound },
       { href: "/slos", label: "SLOs", icon: Gauge },
       { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+      {
+        href: "/ece/certificacion",
+        label: "Certificación DIR",
+        icon: BadgeCheck,
+        requiredRoles: ["DIR"],
+      },
     ],
   },
 ];
 
-function SectionGroup({ section, pathname }: { section: NavSection; pathname: string | null }) {
+function SectionGroup({
+  section,
+  pathname,
+  roleCodes,
+}: {
+  section: NavSection;
+  pathname: string | null;
+  roleCodes: string[];
+}) {
+  const visibleItems = section.items.filter((item) =>
+    !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
+  );
+
   const [open, setOpen] = React.useState(section.defaultOpen ?? true);
-  const sectionHasActive = section.items.some((i) => pathname?.startsWith(i.href));
+  const sectionHasActive = visibleItems.some((i) => pathname?.startsWith(i.href));
   const expanded = open || sectionHasActive;
+
+  if (visibleItems.length === 0) return null;
+
   return (
     <div className="mb-1">
       <button
@@ -145,7 +169,7 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
       </button>
       {expanded && (
         <ul className="mt-0.5 space-y-0.5">
-          {section.items.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             const active = pathname?.startsWith(item.href);
             return (
@@ -174,9 +198,12 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
 export function AppShell({
   children,
   topbar,
+  roleCodes = [],
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
+  /** Roles del usuario activo — usados para filtrar items con requiredRoles. */
+  roleCodes?: string[];
 }) {
   const pathname = usePathname();
   return (
@@ -201,7 +228,7 @@ export function AppShell({
         </div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
           {SECTIONS.map((section) => (
-            <SectionGroup key={section.label} section={section} pathname={pathname} />
+            <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
           ))}
         </nav>
       </aside>
