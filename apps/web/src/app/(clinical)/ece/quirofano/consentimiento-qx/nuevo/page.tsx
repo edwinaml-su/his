@@ -307,7 +307,7 @@ export default function NuevoConsentimientoQxPage() {
       procedimientoDescrito: s0.procedimiento,
       riesgos: s0.riesgos,
       alternativas: s0.alternativas,
-      tipoAnestesia: s1.tipoAnestesia as NonNullable<typeof s1.tipoAnestesia>,
+      tipoAnestesia: s1.tipoAnestesia as TipoAnestesia,
       transfusionAutorizada: s1.transfusionAutorizada,
       ampliacionQuirurgicaAutorizada: s1.ampliacionQuirurgicaAutorizada,
       fotografiaGrabacionAutorizada: s1.fotografiaGrabacionAutorizada,

@@ -54,7 +54,6 @@ import {
   UserCheck,
   Zap,
   Baby,
-  LayoutGrid,
   HeartHandshake,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";

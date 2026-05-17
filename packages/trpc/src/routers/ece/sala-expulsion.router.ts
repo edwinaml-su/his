@@ -53,7 +53,7 @@ const firmarInput = z.object({ id: z.string().uuid() });
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
 
-interface SalaExpulsionRow {
+export interface SalaExpulsionRow {
   id: string;
   episodio_hospitalario_id: string;
   tipo_parto: string;

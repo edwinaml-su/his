@@ -344,7 +344,7 @@ export default function SalaExpulsionPage() {
     onSuccess: () => utils.eceSalaExpulsion.list.invalidate(),
   });
 
-  const faseCfg = FASES.find((f) => f.key === cronometro.fase) ?? FASES[0];
+  const faseCfg = FASES.find((f) => f.key === cronometro.fase) ?? FASES[0]!;
   const tieneNacimiento = Boolean(cronometro.timestamps.expulsiva);
 
   return (
