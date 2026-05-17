@@ -2,12 +2,22 @@
  * Helpers de autenticación para E2E.
  * En tests E2E reales, debe usar Supabase test users sembrados o un endpoint
  * `/api/test/login` habilitado solo en NODE_ENV=test.
+ *
+ * Usuarios disponibles (sembrados por packages/database/scripts/seed-test-users.mjs):
+ *   qa.admin@his.test      / TestPass123!  → rol ADMIN
+ *   qa.triagist@his.test   / TestPass123!  → rol TRIAGIST
+ *   qa.physician@his.test  / TestPass123!  → rol PHYSICIAN (MC)
+ *   qa.nurse@his.test      / TestPass123!  → rol NURSE (ENF)
+ *   qa.director@his.test   / TestPass123!  → rol DIRECTOR (DIR)
  */
 import type { Page } from "@playwright/test";
 
 export const TEST_CREDENTIALS = {
-  admin: { email: "qa.admin@his.test", password: "TestPass123!" },
-  triagist: { email: "qa.triagist@his.test", password: "TestPass123!" },
+  admin:     { email: "qa.admin@his.test",     password: "TestPass123!" },
+  triagist:  { email: "qa.triagist@his.test",  password: "TestPass123!" },
+  physician: { email: "qa.physician@his.test", password: "TestPass123!" },
+  nurse:     { email: "qa.nurse@his.test",     password: "TestPass123!" },
+  director:  { email: "qa.director@his.test",  password: "TestPass123!" },
 };
 
 export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "admin") {
