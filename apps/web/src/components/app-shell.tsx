@@ -42,6 +42,7 @@ import {
   ChevronRight,
   FilePenLine,
   BadgeCheck,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -134,6 +135,7 @@ const SECTIONS: NavSection[] = [
         icon: BadgeCheck,
         requiredRoles: ["DIR"],
       },
+      { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
     ],
   },
 ];

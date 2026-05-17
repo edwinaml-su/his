@@ -50,6 +50,8 @@ import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { evolucionMedicaRouter } from "./evolucion-medica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
+import { workflowTransicionRouter } from "./workflow-transicion.router";
+import { workflowRolRouter } from "./workflow-rol.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
 import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
@@ -117,6 +119,8 @@ export const appRouter = router({
   eceEvolucion: evolucionMedicaRouter,
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
+  workflowTransicion: workflowTransicionRouter,
+  workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,

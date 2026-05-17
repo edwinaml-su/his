@@ -61,3 +61,4 @@ export * from "./ece-evolucion";
 export * from "./ece-episodio";
 export * from "./ece-epicrisis";
 export * from "./ece-rectificacion";
+export * from "./ece-workflow";
