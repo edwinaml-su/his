@@ -440,6 +440,25 @@ export const eceEpisodioCerradoPayloadSchema = z.object({
 export type EceEpisodioCerradoPayload = z.infer<typeof eceEpisodioCerradoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// ece.atencion_emergencia.firmada  (Fase 2 — NTEC Doc 5, ATN_EMERG)
+// Emitido cuando el MT firma una atención de emergencia (borrador|en_revision → firmado).
+// -----------------------------------------------------------------------------
+
+export const eceAtencionEmergenciaFirmadaPayloadSchema = z.object({
+  atencionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  /** SHA-256 hex del payload clínico concatenado. */
+  contentHash: z.string().length(64),
+  firmadoPor: z.string().uuid(),
+  firmadaEn: z.string().datetime(),
+  organizationId: z.string().uuid(),
+});
+
+export type EceAtencionEmergenciaFirmadaPayload = z.infer<
+  typeof eceAtencionEmergenciaFirmadaPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -553,6 +572,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.episodio.cerrado"),
     payload: eceEpisodioCerradoPayloadSchema,
+  }),
+  // Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
+  z.object({
+    eventType: z.literal("ece.atencion_emergencia.firmada"),
+    payload: eceAtencionEmergenciaFirmadaPayloadSchema,
   }),
 ]);
 

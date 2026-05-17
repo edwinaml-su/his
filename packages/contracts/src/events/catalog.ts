@@ -54,6 +54,8 @@ export const EVENT_TYPES = [
   // Fase 2 — ECE Episodio de Atención (apertura / cierre)
   "ece.episodio.abierto",
   "ece.episodio.cerrado",
+  // Fase 2 — ECE Atención de Emergencia (NTEC Doc 5, ATN_EMERG)
+  "ece.atencion_emergencia.firmada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
