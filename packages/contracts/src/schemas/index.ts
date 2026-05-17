@@ -1,4 +1,5 @@
 export * from "./abac";
+export * from "./ece-bitacora";
 export * from "./allergy";
 export * from "./audit";
 export * from "./audit-integrity";

@@ -37,6 +37,7 @@ import {
   Gauge,
   BarChart3,
   Layers,
+  ClipboardCheck,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
@@ -120,6 +121,7 @@ const SECTIONS: NavSection[] = [
       { href: "/sso-config", label: "SSO", icon: KeyRound },
       { href: "/slos", label: "SLOs", icon: Gauge },
       { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+      { href: "/ece/bitacora", label: "Bitácora ECE", icon: ClipboardCheck },
     ],
   },
 ];

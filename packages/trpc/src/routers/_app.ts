@@ -50,6 +50,8 @@ import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+// ECE
+import { bitacoraRouter } from "./ece/bitacora.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -103,6 +105,8 @@ export const appRouter = router({
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
   workflowInstance: workflowInstanceRouter,
+  // ECE
+  bitacora: bitacoraRouter,
 });
 
 export type AppRouter = typeof appRouter;
