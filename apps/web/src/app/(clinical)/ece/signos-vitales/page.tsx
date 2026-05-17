@@ -177,7 +177,7 @@ export default function SignosVitalesPage() {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
-                  Sin registros. Use "Nuevo registro" para capturar signos vitales.
+                  Sin registros. Use &quot;Nuevo registro&quot; para capturar signos vitales.
                 </td>
               </tr>
             ) : (

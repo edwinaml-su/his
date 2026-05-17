@@ -30,6 +30,18 @@ module.exports = {
     ],
     "@typescript-eslint/consistent-type-imports": "warn",
     "no-console": ["warn", { allow: ["warn", "error", "info"] }],
+    // Permite `@ts-nocheck` con descripción ≥10 chars (migraciones progresivas).
+    // El equipo debe documentar por qué se suspende el typecheck en un archivo.
+    "@typescript-eslint/ban-ts-comment": [
+      "error",
+      {
+        "ts-nocheck": "allow-with-description",
+        "ts-expect-error": "allow-with-description",
+        "ts-ignore": true,
+        "ts-check": false,
+        minimumDescriptionLength: 10,
+      },
+    ],
   },
   ignorePatterns: ["dist", "node_modules", ".next", "*.config.*"],
 };

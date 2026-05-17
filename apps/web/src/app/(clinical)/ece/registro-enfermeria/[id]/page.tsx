@@ -332,7 +332,7 @@ function BcmaModal({
           {!bcmaComplete && (
             <p role="status" className="text-sm text-amber-600">
               Faltan verificaciones BCMA. Los 3 scans son obligatorios para
-              registrar como "Administrado".
+              registrar como &quot;Administrado&quot;.
             </p>
           )}
 
@@ -478,7 +478,7 @@ export default function MarPage() {
                 </p>
                 <p className="text-xs text-muted-foreground">
                   La integración con indicacion_item ECE se completa en la
-                  siguiente iteración. Use el botón "Administrar manual" para
+                  siguiente iteración. Use el botón &quot;Administrar manual&quot; para
                   registrar una administración con prescriptionItemId conocido.
                 </p>
                 <Button

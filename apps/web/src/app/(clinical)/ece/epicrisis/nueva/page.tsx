@@ -93,7 +93,7 @@ export default function NuevaEpicrisisPage() {
         <h1 className="text-2xl font-bold">Nueva epicrisis</h1>
         <p className="text-sm text-muted-foreground">
           Complete el resumen de egreso. Al guardar, el documento quedará en estado
-          "Borrador" listo para firma MC.
+          &quot;Borrador&quot; listo para firma MC.
         </p>
       </div>
 
