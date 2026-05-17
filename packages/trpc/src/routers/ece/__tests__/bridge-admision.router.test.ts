@@ -49,7 +49,7 @@ const HASH_FAKE = "$2a$06$fakeHashForTestPurposesOnly....";
 // ─── Fixtures raw SQL ────────────────────────────────────────────────────────
 
 const PERSONAL_ROW = { id: PERSONAL_ID, nombre_completo: "María Admisión" };
-const FIRMA_ROW    = { id: FIRMA_ID, personal_id: PERSONAL_ID, hash_credencial: HASH_FAKE, vigente: true };
+const FIRMA_ROW    = { id: FIRMA_ID, personal_id: PERSONAL_ID, pin_hash: HASH_FAKE, revoked_at: null, locked_until: null };
 const ORDEN_ROW    = {
   id: ORDEN_ID,
   paciente_id: PACIENTE_ID,

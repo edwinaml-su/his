@@ -78,8 +78,10 @@ type OrdenIngresoRow = {
 type FirmaElectronicaRow = {
   id: string;
   personal_id: string;
-  hash_credencial: string;
-  vigente: boolean;
+  pin_hash: string;
+  // `vigente` se deriva en runtime: !revoked_at (la BD no tiene la columna).
+  revoked_at: Date | null;
+  locked_until: Date | null;
 };
 
 type PersonalSaludRow = {
@@ -133,14 +135,16 @@ async function findFirmaElectronica(
   prisma: RawClient,
   personalId: string,
 ): Promise<FirmaElectronicaRow | null> {
+  // "Vigente" = revoked_at IS NULL AND (locked_until IS NULL OR locked_until < now()).
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<FirmaElectronicaRow[]>)`
-    SELECT id, personal_id, hash_credencial, vigente
+    SELECT id, personal_id, pin_hash, revoked_at, locked_until
     FROM ece.firma_electronica
     WHERE personal_id = ${personalId}::uuid
-      AND vigente = true
+      AND revoked_at IS NULL
+      AND (locked_until IS NULL OR locked_until < now())
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -167,7 +171,7 @@ async function findPersonalSaludPorAuthUser(
 async function verificarPin(
   prisma: RawClient,
   pin: string,
-  hashCredencial: string,
+  pinHash: string,
 ): Promise<boolean> {
   // Usamos crypt de pgcrypto disponible en Supabase.
   // Retorna true si el hash coincide.
@@ -175,7 +179,7 @@ async function verificarPin(
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<Array<{ ok: boolean }>>)`
-    SELECT (crypt(${pin}, ${hashCredencial}) = ${hashCredencial}) AS ok
+    SELECT (crypt(${pin}, ${pinHash}) = ${pinHash}) AS ok
   `;
   return rows[0]?.ok === true;
 }
@@ -213,7 +217,7 @@ export const eceBridgeAdmisionRouter = router({
           message: "El ADM no tiene firma electrónica vigente registrada.",
         });
       }
-      const pinValido = await verificarPin(ctx.prisma, input.pinAdm, firma.hash_credencial);
+      const pinValido = await verificarPin(ctx.prisma, input.pinAdm, firma.pin_hash);
       if (!pinValido) {
         throw new TRPCError({
           code: "UNAUTHORIZED",
