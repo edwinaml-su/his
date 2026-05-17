@@ -250,6 +250,20 @@ export const eceTriajeFirmadoPayloadSchema = z.object({
 });
 
 export type EceTriajeFirmadoPayload = z.infer<typeof eceTriajeFirmadoPayloadSchema>;
+// ece.indicaciones.firmadas  (Fase 2 — IND_MED ECE)
+// Emitido cuando MC firma una indicación médica (borrador|en_revision → firmado).
+// -----------------------------------------------------------------------------
+
+export const eceIndicacionesFirmadasPayloadSchema = z.object({
+  indicacionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  firmadoPor: z.string().uuid(),
+  estadoAnterior: z.string().min(1).max(50),
+});
+
+export type EceIndicacionesFirmadasPayload = z.infer<
+  typeof eceIndicacionesFirmadasPayloadSchema
+>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -312,6 +326,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.triaje.firmado"),
     payload: eceTriajeFirmadoPayloadSchema,
+  // Fase 2 — Indicaciones Médicas ECE (IND_MED)
+  z.object({
+    eventType: z.literal("ece.indicaciones.firmadas"),
+    payload: eceIndicacionesFirmadasPayloadSchema,
   }),
 ]);
 
