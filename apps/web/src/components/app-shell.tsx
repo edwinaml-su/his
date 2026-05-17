@@ -155,6 +155,13 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "GS1 Logística",
+    defaultOpen: false,
+    items: [
+      { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
+    ],
+  },
+  {
     label: "Soporte clínico",
     defaultOpen: false,
     items: [

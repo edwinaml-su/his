@@ -78,6 +78,9 @@ export const EVENT_TYPES = [
   // Fase 2 (S4) — ECE Certificado de Defunción (MC firma → DIR certifica)
   "ece.certificado_defuncion.firmado",
   "ece.certificado_defuncion.certificado",
+  // Proceso C GS1 — Preparación Unidosis farmacia
+  "gs1.unidosis.preparada",
+  "gs1.unidosis.verificada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

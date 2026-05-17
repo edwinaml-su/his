@@ -75,3 +75,4 @@ export * from "./ece-episodio-hospitalario";
 export * from "./ece-certificado-defuncion";
 export * from "./ece-bridge-admision";
 export * from "./ece-hoja-ingreso";
+export * from "./gs1-proceso-c";
