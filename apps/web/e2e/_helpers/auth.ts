@@ -6,8 +6,11 @@
 import type { Page } from "@playwright/test";
 
 export const TEST_CREDENTIALS = {
-  admin: { email: "qa.admin@his.test", password: "TestPass123!" },
-  triagist: { email: "qa.triagist@his.test", password: "TestPass123!" },
+  admin:     { email: "qa.admin@his.test",     password: "TestPass123!" },
+  triagist:  { email: "qa.triagist@his.test",  password: "TestPass123!" },
+  physician: { email: "qa.physician@his.test", password: "TestPass123!" },
+  nurse:     { email: "qa.nurse@his.test",     password: "TestPass123!" },
+  director:  { email: "qa.director@his.test",  password: "TestPass123!" },
 };
 
 export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "admin") {
