@@ -21,6 +21,9 @@ import {
   stockMovementListInput,
   stockTransferInput,
   expiringLotsInput,
+  configurarThresholdInput,
+  listAlertasInput,
+  type AlertaTipo,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { randomUUID } from "crypto";
@@ -444,10 +447,274 @@ export const inventoryRouter = router({
         return item;
       }),
   }),
+
+  // ---------------------------------------------------------------------------
+  // GS1 Threshold management (SQL 83)
+  // ---------------------------------------------------------------------------
+  gs1: router({
+    /**
+     * Upsert threshold para un par GTIN+GLN.
+     * Requiere rol ADMIN o INVENTORY_MANAGER (RLS lo enforce en BD).
+     */
+    configurarThreshold: tenantProcedure
+      .input(configurarThresholdInput)
+      .mutation(async ({ ctx, input }) => {
+        // Verificar que el GTIN existe
+        const gtinRow = await ctx.prisma.$queryRaw<{ id: string }[]>`
+          SELECT id FROM ece.gs1_gtin WHERE id = ${input.gtinId}::uuid LIMIT 1
+        `;
+        if (gtinRow.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "GTIN no encontrado." });
+        }
+        // Verificar que el GLN existe
+        const glnRow = await ctx.prisma.$queryRaw<{ codigo: string }[]>`
+          SELECT codigo FROM ece.gs1_gln WHERE codigo = ${input.ubicacionGln} LIMIT 1
+        `;
+        if (glnRow.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "GLN no encontrado." });
+        }
+
+        await ctx.prisma.$executeRaw`
+          INSERT INTO ece.inventory_threshold
+            (gtin_id, ubicacion_gln, organization_id, stock_minimo, stock_critico,
+             reorder_point, dias_caducidad_alerta, configurado_por)
+          VALUES (
+            ${input.gtinId}::uuid,
+            ${input.ubicacionGln},
+            ${ctx.tenant.organizationId}::uuid,
+            ${input.stockMinimo},
+            ${input.stockCritico},
+            ${input.reorderPoint},
+            ${input.diasCaducidadAlerta},
+            ${ctx.user.id}::uuid
+          )
+          ON CONFLICT (gtin_id, ubicacion_gln) DO UPDATE SET
+            stock_minimo          = EXCLUDED.stock_minimo,
+            stock_critico         = EXCLUDED.stock_critico,
+            reorder_point         = EXCLUDED.reorder_point,
+            dias_caducidad_alerta = EXCLUDED.dias_caducidad_alerta,
+            configurado_por       = EXCLUDED.configurado_por
+        `;
+
+        return { ok: true };
+      }),
+
+    /**
+     * Lista alertas activas cruzando inventory_threshold con StockLot.
+     *
+     * Estrategia de join:
+     *   ece.inventory_threshold.gtin_id → ece.gs1_gtin.id
+     *   ece.gs1_gtin.codigo             → StockItem.sku  (convención: SKU = GTIN código)
+     *   StockItem.id                    → StockLot.itemId
+     *   ece.inventory_threshold.ubicacion_gln → mapeado a Establishment via slug/external_id
+     *     (fallback: agrupa todos los lotes del item por org si no hay mapa directo)
+     *
+     * Retorna: stock_bajo | stock_critico | proximo_vencer | vencido
+     */
+    listAlertas: tenantProcedure
+      .input(listAlertasInput)
+      .query(async ({ ctx, input }) => {
+        // Cargar thresholds del org con filtros opcionales.
+        // Prisma $queryRaw tagged template: construimos la query base y añadimos
+        // fragmentos condicionales como parámetros posicionales seguros.
+        type ThresholdRow = {
+          gtin_id: string;
+          ubicacion_gln: string;
+          stock_minimo: number;
+          stock_critico: number;
+          reorder_point: number;
+          dias_caducidad_alerta: number;
+          gtin_codigo: string;
+          gtin_descripcion: string;
+          gln_descripcion: string;
+        };
+
+        // Filtramos en JS post-fetch para evitar SQL dinámico con fragmentos no
+        // soportados por Prisma tagged template. El volumen de thresholds por org
+        // es acotado (< 10k filas típico) — aceptable.
+        const allThresholds = await ctx.prisma.$queryRaw<ThresholdRow[]>`
+          SELECT
+            t.gtin_id::text,
+            t.ubicacion_gln,
+            t.stock_minimo,
+            t.stock_critico,
+            t.reorder_point,
+            t.dias_caducidad_alerta,
+            g.codigo        AS gtin_codigo,
+            g.descripcion   AS gtin_descripcion,
+            l.descripcion   AS gln_descripcion
+          FROM ece.inventory_threshold t
+          JOIN ece.gs1_gtin g ON g.id = t.gtin_id
+          JOIN ece.gs1_gln  l ON l.codigo = t.ubicacion_gln
+          WHERE t.organization_id = ${ctx.tenant.organizationId}::uuid
+          LIMIT ${input.limit}
+        `;
+
+        const thresholds = allThresholds.filter((t) => {
+          if (input.gtinId && t.gtin_id !== input.gtinId) return false;
+          if (input.ubicacionGln && t.ubicacion_gln !== input.ubicacionGln) return false;
+          return true;
+        });
+
+        if (thresholds.length === 0) return [];
+
+        // Para cada threshold: calcular stock actual y lotes vencidos/próximos
+        const alertas: {
+          tipo: AlertaTipo;
+          gtinId: string;
+          gtinCodigo: string;
+          gtinDescripcion: string;
+          ubicacionGln: string;
+          glnDescripcion: string;
+          stockActual: number;
+          stockMinimo: number;
+          stockCritico: number;
+          reorderPoint: number;
+          loteId?: string;
+          loteNumero?: string;
+          expiryDate?: Date;
+          diasRestantes?: number;
+        }[] = [];
+
+        const today = new Date();
+
+        for (const th of thresholds) {
+          // Buscar StockItem cuyo SKU coincida con el código GTIN
+          const items = await ctx.prisma.stockItem.findMany({
+            where: {
+              sku: th.gtin_codigo.trim(),
+              OR: [
+                { organizationId: null },
+                { organizationId: ctx.tenant.organizationId },
+              ],
+            },
+            select: { id: true },
+          });
+
+          if (items.length === 0) continue;
+
+          const itemIds = items.map((i) => i.id);
+
+          // Stock total activo en org para este GTIN
+          const lots = await ctx.prisma.stockLot.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              itemId: { in: itemIds },
+              active: true,
+            },
+            select: {
+              id: true,
+              lotNumber: true,
+              quantityOnHand: true,
+              expiryDate: true,
+            },
+          });
+
+          const stockTotal = lots.reduce(
+            (acc, l) => acc + Number(l.quantityOnHand),
+            0,
+          );
+
+          const tiposFiltro = input.tipos;
+
+          const emitirSi = (tipo: AlertaTipo) =>
+            !tiposFiltro || tiposFiltro.includes(tipo);
+
+          // Alertas de nivel de stock
+          if (stockTotal <= th.stock_critico && emitirSi("stock_critico")) {
+            alertas.push({
+              tipo: "stock_critico",
+              gtinId: th.gtin_id,
+              gtinCodigo: th.gtin_codigo,
+              gtinDescripcion: th.gtin_descripcion,
+              ubicacionGln: th.ubicacion_gln,
+              glnDescripcion: th.gln_descripcion,
+              stockActual: stockTotal,
+              stockMinimo: th.stock_minimo,
+              stockCritico: th.stock_critico,
+              reorderPoint: th.reorder_point,
+            });
+          } else if (stockTotal <= th.stock_minimo && emitirSi("stock_bajo")) {
+            alertas.push({
+              tipo: "stock_bajo",
+              gtinId: th.gtin_id,
+              gtinCodigo: th.gtin_codigo,
+              gtinDescripcion: th.gtin_descripcion,
+              ubicacionGln: th.ubicacion_gln,
+              glnDescripcion: th.gln_descripcion,
+              stockActual: stockTotal,
+              stockMinimo: th.stock_minimo,
+              stockCritico: th.stock_critico,
+              reorderPoint: th.reorder_point,
+            });
+          }
+
+          // Alertas de caducidad por lote
+          for (const lot of lots) {
+            if (!lot.expiryDate || Number(lot.quantityOnHand) <= 0) continue;
+
+            const expiry = new Date(lot.expiryDate);
+            const msRestantes = expiry.getTime() - today.getTime();
+            const diasRestantes = Math.ceil(msRestantes / (1000 * 60 * 60 * 24));
+
+            if (diasRestantes < 0 && emitirSi("vencido")) {
+              alertas.push({
+                tipo: "vencido",
+                gtinId: th.gtin_id,
+                gtinCodigo: th.gtin_codigo,
+                gtinDescripcion: th.gtin_descripcion,
+                ubicacionGln: th.ubicacion_gln,
+                glnDescripcion: th.gln_descripcion,
+                stockActual: stockTotal,
+                stockMinimo: th.stock_minimo,
+                stockCritico: th.stock_critico,
+                reorderPoint: th.reorder_point,
+                loteId: lot.id,
+                loteNumero: lot.lotNumber,
+                expiryDate: expiry,
+                diasRestantes,
+              });
+            } else if (
+              diasRestantes >= 0 &&
+              diasRestantes <= th.dias_caducidad_alerta &&
+              emitirSi("proximo_vencer")
+            ) {
+              alertas.push({
+                tipo: "proximo_vencer",
+                gtinId: th.gtin_id,
+                gtinCodigo: th.gtin_codigo,
+                gtinDescripcion: th.gtin_descripcion,
+                ubicacionGln: th.ubicacion_gln,
+                glnDescripcion: th.gln_descripcion,
+                stockActual: stockTotal,
+                stockMinimo: th.stock_minimo,
+                stockCritico: th.stock_critico,
+                reorderPoint: th.reorder_point,
+                loteId: lot.id,
+                loteNumero: lot.lotNumber,
+                expiryDate: expiry,
+                diasRestantes,
+              });
+            }
+          }
+        }
+
+        // Ordenar: vencido > stock_critico > proximo_vencer > stock_bajo
+        const PRIORIDAD = {
+          vencido: 0,
+          stock_critico: 1,
+          proximo_vencer: 2,
+          stock_bajo: 3,
+        } as const satisfies Record<AlertaTipo, number>;
+        alertas.sort((a, b) => PRIORIDAD[a.tipo] - PRIORIDAD[b.tipo]);
+
+        return alertas;
+      }),
+  }),
 });
 
 // ---------------------------------------------------------------------------
-// Internal helpers
+// Internal helpers — FEFO
 // ---------------------------------------------------------------------------
 
 type RouterCtx = Parameters<Parameters<typeof tenantProcedure.query>[0]>[0]["ctx"];
