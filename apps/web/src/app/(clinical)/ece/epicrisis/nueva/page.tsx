@@ -7,8 +7,9 @@
  * Post-creación → redirect a /ece/epicrisis/[id] para firmar.
  */
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Lock } from "lucide-react";
+import { Lock, ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Form, FormField, FormError } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
@@ -19,6 +20,7 @@ import { trpc } from "@/lib/trpc/react";
 interface EpicrisisForm {
   pacienteId: string;
   episodioId: string;
+  motivoEgreso: "alta_medica" | "alta_voluntaria" | "traslado" | "fallecido" | "otro";
   // Secciones clínicas
   resumenIngreso: string;
   evolucion: string;
@@ -31,6 +33,7 @@ interface EpicrisisForm {
 const INITIAL: EpicrisisForm = {
   pacienteId: "",
   episodioId: "",
+  motivoEgreso: "alta_medica",
   resumenIngreso: "",
   evolucion: "",
   diagnosticoEgresoCie10: "",
@@ -58,6 +61,7 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 export default function NuevaEpicrisisPage() {
   const router = useRouter();
   const [form, setForm] = React.useState<EpicrisisForm>(INITIAL);
+  const [createdEpisodioId, setCreatedEpisodioId] = React.useState<string | null>(null);
   const [clientError, setClientError] = React.useState<string | null>(null);
 
   function update<K extends keyof EpicrisisForm>(key: K, value: string) {
@@ -66,8 +70,12 @@ export default function NuevaEpicrisisPage() {
 
   const create = trpc.workflowInstance.create.useMutation({
     onSuccess: (data) => {
-      // Redirige al detalle para que el MC firme
-      router.push(`/ece/epicrisis/${data.id}`);
+      if (form.motivoEgreso === "fallecido" && form.episodioId.trim()) {
+        // Motivo defunción: mostrar link al certificado antes de redirigir.
+        setCreatedEpisodioId(form.episodioId.trim());
+      } else {
+        router.push(`/ece/epicrisis/${data.id}`);
+      }
     },
   });
 
@@ -86,6 +94,45 @@ export default function NuevaEpicrisisPage() {
 
   const errorMessage = clientError ?? create.error?.message ?? null;
   const isSubmitting = create.isPending;
+
+  // Pantalla de confirmación cuando el egreso es por defunción
+  if (createdEpisodioId) {
+    return (
+      <div className="mx-auto max-w-lg space-y-4">
+        <h1 className="text-2xl font-bold">Epicrisis guardada</h1>
+        <div
+          role="note"
+          className="flex items-start gap-3 rounded-md border border-amber-400/50 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300"
+        >
+          <ExternalLink className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <div>
+            <p className="font-semibold">Egreso por defunción — acción requerida</p>
+            <p className="mt-1">
+              El motivo de egreso registrado es <strong>fallecido</strong>. Para cumplir con
+              la NTEC y el Acuerdo MINSAL 1616-2024, debe emitir el{" "}
+              <strong>Certificado de Defunción</strong>.
+            </p>
+            <div className="mt-3 flex gap-2">
+              <Link
+                href={`/ece/defuncion/nueva?episodioId=${createdEpisodioId}`}
+                className="inline-flex items-center gap-1.5 rounded-md bg-amber-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-800"
+              >
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                Crear Certificado de Defunción
+              </Link>
+              <button
+                type="button"
+                onClick={() => router.push("/ece/epicrisis")}
+                className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-accent"
+              >
+                Ir a Epicrisis
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -134,6 +181,36 @@ export default function NuevaEpicrisisPage() {
                   value={form.episodioId}
                   onChange={(e) => update("episodioId", e.target.value)}
                 />
+              </FormField>
+            </div>
+
+            {/* Motivo de egreso */}
+            <div className="mt-6">
+              <SectionTitle>Motivo de egreso</SectionTitle>
+              <FormField>
+                <Label htmlFor="motivoEgreso">Motivo de egreso</Label>
+                <select
+                  id="motivoEgreso"
+                  value={form.motivoEgreso}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      motivoEgreso: e.target.value as EpicrisisForm["motivoEgreso"],
+                    }))
+                  }
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                >
+                  <option value="alta_medica">Alta médica</option>
+                  <option value="alta_voluntaria">Alta voluntaria</option>
+                  <option value="traslado">Traslado</option>
+                  <option value="fallecido">Fallecido</option>
+                  <option value="otro">Otro</option>
+                </select>
+                {form.motivoEgreso === "fallecido" && (
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                    Al guardar, se solicitará crear el Certificado de Defuncion ECE (NTEC Art. 21).
+                  </p>
+                )}
               </FormField>
             </div>
 

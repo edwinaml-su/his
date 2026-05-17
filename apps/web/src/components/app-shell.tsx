@@ -136,6 +136,7 @@ const SECTIONS: NavSection[] = [
       },
       { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
+      { href: "/ece/defuncion", label: "Defunción", icon: Skull },
     ],
   },
   {
