@@ -237,6 +237,209 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.triaje.firmado  (Fase 2 — ECE Triaje NTEC, Stream 02)
+// Emitido cuando ENF firma la hoja de triaje ECE.
+// -----------------------------------------------------------------------------
+
+export const eceTriajeFirmadoPayloadSchema = z.object({
+  hojaTriajeId: z.string().uuid(),
+  instanciaId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  manchesterNivel: z.number().int().min(1).max(5),
+  firmadoPorId: z.string().uuid(),
+});
+
+export type EceTriajeFirmadoPayload = z.infer<typeof eceTriajeFirmadoPayloadSchema>;
+// ece.indicaciones.firmadas  (Fase 2 — IND_MED ECE)
+// Emitido cuando MC firma una indicación médica (borrador|en_revision → firmado).
+// -----------------------------------------------------------------------------
+
+export const eceIndicacionesFirmadasPayloadSchema = z.object({
+  indicacionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  firmadoPor: z.string().uuid(),
+  estadoAnterior: z.string().min(1).max(50),
+});
+
+export type EceIndicacionesFirmadasPayload = z.infer<
+  typeof eceIndicacionesFirmadasPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.administracion.registrada  (Fase 2 — ECE Registro Enfermería, Stream 30)
+// Emitido cuando se agrega una fila a ece.administracion_medicamento.
+// -----------------------------------------------------------------------------
+
+export const eceAdministracionRegistradaPayloadSchema = z.object({
+  administracionId: z.string().uuid(),
+  registroId: z.string().uuid(),
+  indicacionItemId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  enfermeraId: z.string().uuid(),
+});
+
+export type EceAdministracionRegistradaPayload = z.infer<
+  typeof eceAdministracionRegistradaPayloadSchema
+>;
+// ece.evolucion.firmada  (Fase 2 — ECE Evolución Médica, Stream 11)
+// Emitido cuando un MC/MT firma una evolución médica.
+// -----------------------------------------------------------------------------
+
+export const eceEvolucionFirmadaPayloadSchema = z.object({
+  evolucionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  firmadaPor: z.string().uuid(),
+  /** SHA-256 hex del payload SOAP concatenado (subjetivo||objetivo||analisis||plan). */
+  contentHash: z.string().length(64),
+  firmadaEn: z.string().datetime(),
+});
+
+export type EceEvolucionFirmadaPayload = z.infer<typeof eceEvolucionFirmadaPayloadSchema>;
+// ece.epicrisis.certificada  (Fase 2 — ECE §3.15, Art. 21)
+// Emitido cuando el Director certifica la epicrisis de egreso.
+// -----------------------------------------------------------------------------
+
+export const eceEpicrisisCertificadaPayloadSchema = z.object({
+  epicrisisId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  /** Hash SHA-256 del documento de epicrisis en el momento de certificación. */
+  documentHash: z.string().min(64).max(64),
+  /** userId del Director que certifica (Art. 21). */
+  directorId: z.string().uuid(),
+  firmaId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+export type EceEpicrisisCertificadaPayload = z.infer<typeof eceEpicrisisCertificadaPayloadSchema>;
+// ece.documento.certificado  (Fase 2 — Certificación DIR, Art. 21 NTEC)
+// Emitido cuando el Director certifica formalmente una instancia de documento
+// (FICHA_ID, EPICRISIS o CERT_DEF) avanzando su estado a 'certificado'.
+// -----------------------------------------------------------------------------
+
+export const eceDocumentoCertificadoPayloadSchema = z.object({
+  instanciaId: z.string().uuid(),
+  tipoDocumentoCodigo: z.string().min(1).max(64),
+  /** Estado anterior (debe ser 'validado'). */
+  fromEstadoCodigo: z.string().min(1).max(64),
+  /** UUID de la fila ece.firma_electronica del DIR. */
+  firmaId: z.string().uuid(),
+  /** SHA-256 del payload clínico serializado (para cadena de integridad). */
+  payloadHash: z.string().length(64),
+  /** UUID del usuario DIR que certifica. */
+  dirUserId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+});
+
+export type EceDocumentoCertificadoPayload = z.infer<
+  typeof eceDocumentoCertificadoPayloadSchema
+>;
+// ece.paciente.linked  (Fase 2 — bridge ECE↔HIS)
+// Emitido cuando se establece el vínculo ece.paciente ↔ public.Patient.
+// -----------------------------------------------------------------------------
+
+export const ecePacienteLinkedPayloadSchema = z.object({
+  ecePacienteId: z.string().uuid(),
+  publicPatientId: z.string().uuid(),
+  linkedById: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// ece.paciente.synced  (Fase 2 — bridge ECE↔HIS)
+// Emitido tras sincronización de campos demográficos NTEC Art. 15 en cualquier
+// dirección (fromHis | toHis).
+// -----------------------------------------------------------------------------
+
+export const ecePacienteSyncedPayloadSchema = z.object({
+  ecePacienteId: z.string().uuid(),
+  publicPatientId: z.string().uuid(),
+  direction: z.enum(["fromHis", "toHis"]),
+  syncedById: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  fieldsUpdated: z.array(z.string().min(1)).min(1),
+});
+
+export type EcePacienteLinkedPayload = z.infer<typeof ecePacienteLinkedPayloadSchema>;
+export type EcePacienteSyncedPayload = z.infer<typeof ecePacienteSyncedPayloadSchema>;
+// ece.episodio.linkedToEncounter  (Fase 2 — Bridge ECE↔HIS, Stream 22b)
+// Emitido cuando un episodio ECE se vincula (o crea) desde un Encounter HIS.
+// -----------------------------------------------------------------------------
+
+export const eceEpisodioLinkedToEncounterPayloadSchema = z.object({
+  episodioId: z.string().uuid(),
+  encounterId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  /** Quién ejecutó la operación — puede ser null para vínculos automáticos. */
+  linkedById: z.string().uuid().nullable(),
+});
+
+export type EceEpisodioLinkedToEncounterPayload = z.infer<
+  typeof eceEpisodioLinkedToEncounterPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.triaje.linkedToHisTriage  (Fase 2 — Bridge ECE-HIS, Stream 18-ext)
+// Emitido cuando una EceTriaje queda vinculada a una TriageEvaluation HIS.
+// -----------------------------------------------------------------------------
+
+export const eceTriajeLinkedToHisTriagePayloadSchema = z.object({
+  /** UUID de la TriageEvaluation HIS (public.TriageEvaluation). */
+  hisTriageId: z.string().uuid(),
+  /** UUID de la EceTriaje (ece.triaje). */
+  eceTriajeId: z.string().uuid(),
+  /** UUID del paciente HIS. */
+  patientId: z.string().uuid(),
+  /** Nivel Manchester 1-5 mapeado al nivelPrioridad ECE. */
+  manchesterLevel: z.number().int().min(1).max(5),
+  /** true si el triajista firmó electrónicamente en el mismo acto. */
+  firmadoInmediatamente: z.boolean(),
+  /** UUID del profesional que ejecutó la operación. */
+  byUserId: z.string().uuid(),
+});
+
+export type EceTriajeLinkedToHisTriagePayload = z.infer<
+  typeof eceTriajeLinkedToHisTriagePayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.episodio.abierto / ece.episodio.cerrado (Fase 2 — Episodio de atención)
+// Emitidos al abrir un episodio (ambulatorio u hospitalario) y al cerrarlo.
+// -----------------------------------------------------------------------------
+
+export const eceEpisodioAbiertoPayloadSchema = z.object({
+  /** UUID del episodio (ece.episodio_atencion). */
+  episodioId: z.string().uuid(),
+  /** UUID del paciente ECE (ece.paciente). */
+  ecePacienteId: z.string().uuid(),
+  /** Modalidad del episodio. */
+  modalidad: z.enum(["ambulatorio", "hospitalario"]),
+  /** Fecha/hora de apertura. */
+  fechaApertura: z.string(),
+  /** UUID del profesional que abrió el episodio. */
+  byUserId: z.string().uuid(),
+  /** UUID del Encounter HIS si fue creado desde uno (opcional). */
+  encounterId: z.string().uuid().optional(),
+});
+
+export type EceEpisodioAbiertoPayload = z.infer<typeof eceEpisodioAbiertoPayloadSchema>;
+
+export const eceEpisodioCerradoPayloadSchema = z.object({
+  /** UUID del episodio (ece.episodio_atencion). */
+  episodioId: z.string().uuid(),
+  /** UUID del paciente ECE. */
+  ecePacienteId: z.string().uuid(),
+  /** Fecha/hora de cierre. */
+  fechaCierre: z.string(),
+  /** Motivo de cierre (alta, transferencia, cancelación). */
+  motivo: z.string().min(1).max(200).optional(),
+  /** UUID del profesional que cerró el episodio. */
+  byUserId: z.string().uuid(),
+});
+
+export type EceEpisodioCerradoPayload = z.infer<typeof eceEpisodioCerradoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +495,64 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  z.object({
+    eventType: z.literal("ece.triaje.firmado"),
+    payload: eceTriajeFirmadoPayloadSchema,
+  }),
+  // Fase 2 — Indicaciones Médicas ECE (IND_MED)
+  z.object({
+    eventType: z.literal("ece.indicaciones.firmadas"),
+    payload: eceIndicacionesFirmadasPayloadSchema,
+  }),
+  // Fase 2 — ECE Registro Enfermería (Stream 30)
+  z.object({
+    eventType: z.literal("ece.administracion.registrada"),
+    payload: eceAdministracionRegistradaPayloadSchema,
+  }),
+  // Fase 2 — ECE Evolución Médica (Stream 11)
+  z.object({
+    eventType: z.literal("ece.evolucion.firmada"),
+    payload: eceEvolucionFirmadaPayloadSchema,
+  }),
+  // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
+  z.object({
+    eventType: z.literal("ece.epicrisis.certificada"),
+    payload: eceEpicrisisCertificadaPayloadSchema,
+  }),
+  // Fase 2 — Certificación DIR (Art. 21 NTEC)
+  z.object({
+    eventType: z.literal("ece.documento.certificado"),
+    payload: eceDocumentoCertificadoPayloadSchema,
+  }),
+  // Fase 2 — Bridge ECE↔HIS
+  z.object({
+    eventType: z.literal("ece.paciente.linked"),
+    payload: ecePacienteLinkedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.paciente.synced"),
+    payload: ecePacienteSyncedPayloadSchema,
+  }),
+  // Fase 2 — Bridge ECE↔HIS Encounter (Stream 22b)
+  z.object({
+    eventType: z.literal("ece.episodio.linkedToEncounter"),
+    payload: eceEpisodioLinkedToEncounterPayloadSchema,
+  }),
+  // Fase 2 — Bridge ECE-HIS (Stream 18-ext)
+  z.object({
+    eventType: z.literal("ece.triaje.linkedToHisTriage"),
+    payload: eceTriajeLinkedToHisTriagePayloadSchema,
+  }),
+  // Fase 2 — ECE Episodio de Atención (apertura / cierre)
+  z.object({
+    eventType: z.literal("ece.episodio.abierto"),
+    payload: eceEpisodioAbiertoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.episodio.cerrado"),
+    payload: eceEpisodioCerradoPayloadSchema,
   }),
 ]);
 

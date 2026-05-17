@@ -37,8 +37,15 @@ import {
   Gauge,
   BarChart3,
   Layers,
+  ClipboardCheck,
+  FileText,
   ChevronDown,
   ChevronRight,
+  FilePenLine,
+  BadgeCheck,
+  GitBranch,
+  Thermometer,
+  NotebookPen,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -46,6 +53,8 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  /** Si se especifica, el item solo aparece si el usuario tiene alguno de estos roles. */
+  requiredRoles?: string[];
 }
 
 interface NavSection {
@@ -73,9 +82,35 @@ const SECTIONS: NavSection[] = [
       { href: "/census", label: "Censo", icon: Activity },
       { href: "/transfers", label: "Traslados", icon: Layers },
       { href: "/triage", label: "Triage", icon: Stethoscope },
+      { href: "/ece/triaje", label: "Triaje ECE", icon: HeartPulse },
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
+      {
+        href: "/ece/indicaciones",
+        label: "Indicaciones Médicas",
+        icon: ClipboardCheck,
+      },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: false,
+    items: [
+      {
+        href: "/ece/registro-enfermeria",
+        label: "Registro Enfermería",
+        icon: ClipboardCheck,
+      },
+      { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
     ],
   },
   {
@@ -88,6 +123,19 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/historia-clinica",
+        label: "Historia Clínica",
+        icon: FileText,
+      },
+      { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
+      { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
     ],
   },
   {
@@ -120,14 +168,38 @@ const SECTIONS: NavSection[] = [
       { href: "/sso-config", label: "SSO", icon: KeyRound },
       { href: "/slos", label: "SLOs", icon: Gauge },
       { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+      { href: "/ece/bitacora", label: "Bitácora ECE", icon: ClipboardCheck },
+      { href: "/ece/rectificaciones/cola", label: "ECE Cola DIR", icon: FilePenLine },
+      {
+        href: "/ece/certificacion",
+        label: "Certificación DIR",
+        icon: BadgeCheck,
+        requiredRoles: ["DIR"],
+      },
+      { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
     ],
   },
 ];
 
-function SectionGroup({ section, pathname }: { section: NavSection; pathname: string | null }) {
+function SectionGroup({
+  section,
+  pathname,
+  roleCodes,
+}: {
+  section: NavSection;
+  pathname: string | null;
+  roleCodes: string[];
+}) {
+  const visibleItems = section.items.filter((item) =>
+    !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
+  );
+
   const [open, setOpen] = React.useState(section.defaultOpen ?? true);
-  const sectionHasActive = section.items.some((i) => pathname?.startsWith(i.href));
+  const sectionHasActive = visibleItems.some((i) => pathname?.startsWith(i.href));
   const expanded = open || sectionHasActive;
+
+  if (visibleItems.length === 0) return null;
+
   return (
     <div className="mb-1">
       <button
@@ -145,7 +217,7 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
       </button>
       {expanded && (
         <ul className="mt-0.5 space-y-0.5">
-          {section.items.map((item) => {
+          {visibleItems.map((item) => {
             const Icon = item.icon;
             const active = pathname?.startsWith(item.href);
             return (
@@ -174,9 +246,12 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
 export function AppShell({
   children,
   topbar,
+  roleCodes = [],
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
+  /** Roles del usuario activo — usados para filtrar items con requiredRoles. */
+  roleCodes?: string[];
 }) {
   const pathname = usePathname();
   return (
@@ -201,7 +276,7 @@ export function AppShell({
         </div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
           {SECTIONS.map((section) => (
-            <SectionGroup key={section.label} section={section} pathname={pathname} />
+            <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
           ))}
         </nav>
       </aside>

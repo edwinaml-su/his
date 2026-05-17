@@ -1,0 +1,5 @@
+packages/trpc/src/routers/_app.ts merge=union
+packages/contracts/src/schemas/index.ts merge=union
+packages/contracts/src/events/catalog.ts merge=union
+packages/contracts/src/events/payloads.ts merge=union
+apps/web/src/components/app-shell.tsx merge=union

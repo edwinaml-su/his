@@ -32,6 +32,28 @@ export const EVENT_TYPES = [
   "nutrition.allergyOverride",
   // Fase 2 — Motor de Workflow ECE (Stream 15)
   "workflow.transitionExecuted",
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  "ece.triaje.firmado",
+  // Fase 2 — Indicaciones Médicas ECE (IND_MED)
+  "ece.indicaciones.firmadas",
+  // Fase 2 — ECE Registro de Enfermería (Stream 30)
+  "ece.administracion.registrada",
+  // Fase 2 — ECE Evolución Médica (Stream 11)
+  "ece.evolucion.firmada",
+  // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
+  "ece.epicrisis.certificada",
+  // Fase 2 — Certificación DIR (Art. 21 NTEC)
+  "ece.documento.certificado",
+  // Fase 2 — Bridge ECE↔HIS (Stream bridge-patient)
+  "ece.paciente.linked",
+  "ece.paciente.synced",
+  // Fase 2 — Bridge ECE↔HIS Encounter (Stream 22b)
+  "ece.episodio.linkedToEncounter",
+  // Fase 2 — Bridge Triage HIS ↔ ECE (Stream 18-ext)
+  "ece.triaje.linkedToHisTriage",
+  // Fase 2 — ECE Episodio de Atención (apertura / cierre)
+  "ece.episodio.abierto",
+  "ece.episodio.cerrado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

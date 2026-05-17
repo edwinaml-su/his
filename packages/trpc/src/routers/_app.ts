@@ -47,9 +47,30 @@ import { accountingRouter } from "./accounting.router";
 import { portalRouter } from "./portal.router";
 // Fase 2 — Sprint F2-S1 gate
 import { firmaElectronicaRouter } from "./firma-electronica.router";
+import { evolucionMedicaRouter } from "./evolucion-medica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
+import { workflowTransicionRouter } from "./workflow-transicion.router";
+import { workflowRolRouter } from "./workflow-rol.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
+import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
+// Fase 2 — ECE Triaje NTEC (Stream 02)
+import { triajeEceRouter } from "./ece/triaje-ece.router";
+import { indicacionesMedicasRouter } from "./ece/indicaciones-medicas.router";
+import { registroEnfermeriaRouter } from "./ece/registro-enfermeria.router";
+import { eceEpisodioRouter } from "./ece/episodio.router";
+import { eceConsentimientoRouter } from "./ece/consentimiento.router";
+import { epicrisisRouter } from "./ece/epicrisis.router";
+// ECE
+import { bitacoraRouter } from "./ece/bitacora.router";
+import { eceRectificacionRouter } from "./ece-rectificacion.router";
+import { eceCertificacionRouter } from "./ece/certificacion.router";
+import { eceBridgePatientRouter } from "./ece-bridge-patient.router";
+// Fase 2 — Bridge ECE↔HIS (Stream 22b)
+import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
+// Fase 2 — Bridge ECE-HIS Triage (Stream 18-ext)
+import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -100,9 +121,30 @@ export const appRouter = router({
   portal: portalRouter,
   // Fase 2 — F2-S1
   firma: firmaElectronicaRouter,
+  eceEvolucion: evolucionMedicaRouter,
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
+  workflowTransicion: workflowTransicionRouter,
+  workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
+  eceHistoriaClinica: eceHistoriaClinicaRouter,
+  eceSignosVitales: eceSignosVitalesRouter,
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  eceTriaje: triajeEceRouter,
+  eceIndicaciones: indicacionesMedicasRouter,
+  eceRegistroEnfermeria: registroEnfermeriaRouter,
+  eceEpisodio: eceEpisodioRouter,
+  eceConsentimiento: eceConsentimientoRouter,
+  eceEpicrisis: epicrisisRouter,
+  // ECE
+  bitacora: bitacoraRouter,
+  eceRectificacion: eceRectificacionRouter,
+  eceCertificacion: eceCertificacionRouter,
+  eceBridge: eceBridgePatientRouter,
+  // Fase 2 — Bridge ECE↔HIS (Stream 22b)
+  eceBridgeEncounter: bridgeEncounterRouter,
+  // Fase 2 — Bridge ECE-HIS Triage
+  eceBridgeTriage: eceBridgeTriageRouter,
 });
 
 export type AppRouter = typeof appRouter;
