@@ -49,6 +49,7 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  Baby,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -125,6 +126,13 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
     ],
   },
   {
