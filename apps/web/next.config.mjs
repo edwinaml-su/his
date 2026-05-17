@@ -3,6 +3,7 @@ const nextConfig = {
   reactStrictMode: true,
   experimental: {
     typedRoutes: true,
+    optimizePackageImports: ["lucide-react", "@his/ui"],
   },
   // Permitir importar paquetes del monorepo en src.
   transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database"],
