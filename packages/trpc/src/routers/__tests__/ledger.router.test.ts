@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { ledgerRouter } from "../ledger.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
@@ -220,6 +220,47 @@ describe("ledgerRouter", () => {
       const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.create(createInput)).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
+
+    it("CONFLICT via rethrowPrisma cuando Prisma lanza P2002 en create", async () => {
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      prisma.currency.findUnique.mockResolvedValue(activeCurrency as never);
+      prisma.ledger.findFirst.mockResolvedValue(null as never);
+      prisma.ledger.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+          code: "P2002",
+          clientVersion: "5.0.0",
+        }),
+      );
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.create(createInput)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("BAD_REQUEST via rethrowPrisma cuando Prisma lanza P2003 en create (FK violation)", async () => {
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      prisma.currency.findUnique.mockResolvedValue(activeCurrency as never);
+      prisma.ledger.findFirst.mockResolvedValue(null as never);
+      prisma.ledger.create.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("Foreign key constraint failed", {
+          code: "P2003",
+          clientVersion: "5.0.0",
+        }),
+      );
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.create(createInput)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("re-lanza error desconocido tal cual desde create", async () => {
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      prisma.currency.findUnique.mockResolvedValue(activeCurrency as never);
+      prisma.ledger.findFirst.mockResolvedValue(null as never);
+      const unexpected = new Error("DB timeout");
+      prisma.ledger.create.mockRejectedValue(unexpected);
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.create(createInput)).rejects.toThrow("DB timeout");
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -271,6 +312,43 @@ describe("ledgerRouter", () => {
       expect(result.name).toBe("Libro Actualizado");
       // No debe haber buscado moneda (no se cambió)
       expect(prisma.currency.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("BAD_REQUEST si moneda nueva no existe (currency=null)", async () => {
+      prisma.ledger.findUnique.mockResolvedValue({ id: ledgerId, organizationId: orgId } as never);
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      prisma.currency.findUnique.mockResolvedValue(null as never);
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.update({ id: ledgerId, functionalCurrencyId: currencyId }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("CONFLICT via rethrowPrisma cuando Prisma lanza P2002 en update", async () => {
+      prisma.ledger.findUnique.mockResolvedValue({ id: ledgerId, organizationId: orgId } as never);
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      prisma.ledger.update.mockRejectedValue(
+        new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+          code: "P2002",
+          clientVersion: "5.0.0",
+        }),
+      );
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.update({ id: ledgerId, name: "Nombre válido" })).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+    });
+
+    it("re-lanza error desconocido tal cual desde update", async () => {
+      prisma.ledger.findUnique.mockResolvedValue({ id: ledgerId, organizationId: orgId } as never);
+      prisma.userOrganizationRole.findFirst.mockResolvedValue(adminMembership as never);
+      const unexpected = new Error("Network error");
+      prisma.ledger.update.mockRejectedValue(unexpected);
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.update({ id: ledgerId, name: "Nombre válido" })).rejects.toThrow("Network error");
     });
   });
 
