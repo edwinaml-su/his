@@ -189,6 +189,34 @@ diff <(vercel env ls production | awk '{print $1}' | sort) docs/15_production_ru
 | Smoke + verify       | 1 min             |
 | **Total normal**     | **~10 min**       |
 
+### 4.5 Configuración de build y targets
+
+**next.config.mjs — optimizaciones activas:**
+
+| Setting | Valor | Efecto |
+|---------|-------|--------|
+| `experimental.optimizePackageImports` | `["lucide-react", "@his/ui"]` | Tree-shaking de barrel imports; reduce módulos cargados en compile-time. Target: -10–20 s en build Vercel (warmup). |
+| `transpilePackages` | `["@his/ui","@his/contracts","@his/trpc","@his/database"]` | Compila monorepo packages desde source en build. Requerido para resolver imports desde `packages/`. |
+| `NEXT_TELEMETRY_DISABLED=1` | vercel.json env | Evita round-trip de telemetría durante build. |
+
+**vercel.json — estado:**
+- Build cache: habilitado por defecto (framework=nextjs). No requiere configuración explícita.
+- Turbopack: NO habilitado en `buildCommand` — `next build --turbo` no soportado en producción (Next.js 14 estable). Habilitar solo cuando Next.js 15 sea adoptado.
+- `outputDirectory`: `.next` (correcto para Vercel Next.js).
+
+**Targets de build time (Vercel, rama main):**
+
+| Métrica | Baseline | Target post-opt |
+|---------|----------|-----------------|
+| Vercel build (cold, sin cache) | ~180 s | < 150 s |
+| Vercel build (warm cache) | ~90 s | < 70 s |
+| CI `npm run build` (local, cold) | ~38 s (fail por deps faltantes en worktree) | < 30 s (build verde) |
+
+> **Nota:** baseline medido 2026-05-17 en worktree `feat/fase2-s1-gate`. El build local falla por `reactflow` no instalado y componentes `@his/ui` (skeleton/switch/textarea) no sincronizados en `node_modules` del worktree. Estos son problemas de worktree, no de producción. Ver §"Gotcha: worktree node_modules drift" abajo.
+
+**Gotcha: worktree node_modules drift**
+Los worktrees git comparten `node_modules` con el repo principal. Si un branch agrega componentes a `packages/ui/src/` pero el `node_modules/@his/ui/src/` no se actualiza (npm workspace hoisting apunta al source del checkout default), el build falla en el worktree pero pasa en CI/Vercel (que hace `npm ci` limpio). Solución: ejecutar `npm install` desde la raíz del worktree o verificar que `node_modules/@his/ui` sea un symlink al workspace source.
+
 ---
 
 ## 5. Rollback de aplicación (sin pérdida de datos)
