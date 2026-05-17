@@ -77,3 +77,5 @@ export * from "./ece-bridge-admision";
 export * from "./ece-hoja-ingreso";
 export * from "./ece-registro-anestesico";
 export * from "./ece-urpa";
+// Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+export * from "./gs1-inbound";

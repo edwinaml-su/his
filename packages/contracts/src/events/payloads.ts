@@ -673,6 +673,38 @@ export type EceCertificadoDefuncionCertificadoPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// gs1.inbound.recibido  (Fase 2 S7 — GS1 Proceso A)
+// Emitido cuando un operador registra la recepción de mercancía en muelle.
+// -----------------------------------------------------------------------------
+
+export const gs1InboundRecibidoPayloadSchema = z.object({
+  recepcionId: z.string().uuid(),
+  numeroDocumentoRecepcion: z.string().min(1),
+  proveedorGln: z.string().length(13),
+  establecimientoId: z.string().uuid(),
+  cantidadProductos: z.number().int().nonnegative(),
+  registradoPorId: z.string().uuid(),
+});
+
+export type Gs1InboundRecibidoPayload = z.infer<typeof gs1InboundRecibidoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// gs1.inbound.rechazado  (Fase 2 S7 — GS1 Proceso A)
+// Emitido cuando un supervisor rechaza una recepción pendiente.
+// -----------------------------------------------------------------------------
+
+export const gs1InboundRechazadoPayloadSchema = z.object({
+  recepcionId: z.string().uuid(),
+  numeroDocumentoRecepcion: z.string().min(1),
+  proveedorGln: z.string().length(13),
+  establecimientoId: z.string().uuid(),
+  motivoRechazo: z.string().min(5),
+  rechazadoPorId: z.string().uuid(),
+});
+
+export type Gs1InboundRechazadoPayload = z.infer<typeof gs1InboundRechazadoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -858,6 +890,15 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.certificado_defuncion.certificado"),
     payload: eceCertificadoDefuncionCertificadoPayloadSchema,
+  }),
+  // Fase 2 (S7) — GS1 Proceso A: Inbound
+  z.object({
+    eventType: z.literal("gs1.inbound.recibido"),
+    payload: gs1InboundRecibidoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.inbound.rechazado"),
+    payload: gs1InboundRechazadoPayloadSchema,
   }),
 ]);
 

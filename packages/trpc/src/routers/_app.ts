@@ -109,6 +109,8 @@ import { eceAtencionRnRouter } from "./ece/atencion-rn.router";
 import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router";
 // ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
 import { periodoExpulsivoRouter } from "./ece/periodo-expulsivo.router";
+// Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+import { gs1ProcesoARouter } from "./gs1-proceso-a.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -221,6 +223,8 @@ export const appRouter = router({
   eceReanimacionNeonatal: eceReanimacionNeonatalRouter,
   // ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
   ecePeriodoExpulsivo: periodoExpulsivoRouter,
+  // Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+  gs1ProcesoA: gs1ProcesoARouter,
 });
 
 export type AppRouter = typeof appRouter;
