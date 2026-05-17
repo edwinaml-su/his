@@ -27,6 +27,7 @@ import {
   surgeryCaseCancelInput,
   surgeryCasePostponeInput,
   surgeryCaseAnesthesiaInput,
+  surgeryCaseUpdateIntraopNotesInput,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import type { PrismaClient } from "@prisma/client";
@@ -482,6 +483,49 @@ export const surgeryRouter = router({
             updatedBy: ctx.user.id,
           },
         });
+      }),
+
+    // ------------------------------------------------------------------
+    // Update intraop notes — append-only, only during IN_PROGRESS.
+    // No state transition. Audit covered by SurgeryCase UPDATE trigger.
+    // ------------------------------------------------------------------
+    updateIntraopNotes: tenantProcedure
+      .input(surgeryCaseUpdateIntraopNotesInput)
+      .mutation(async ({ ctx, input }) => {
+        // SELECT FOR UPDATE — idempotent guard, atomically verify status before append.
+        const existing = await ctx.prisma.surgeryCase.findFirst({
+          where: {
+            id: input.id,
+            organizationId: ctx.tenant.organizationId,
+            status: "IN_PROGRESS",
+            deletedAt: null,
+          },
+          select: { id: true, intraopNotes: true },
+        });
+        if (!existing) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Solo se pueden agregar notas durante IN_PROGRESS.",
+          });
+        }
+
+        // Format: [ISO-timestamp] [TYPE] texto
+        const ts = new Date().toISOString();
+        const line = `[${ts}] [${input.entryType}] ${input.appendText}`;
+        const updatedNotes = existing.intraopNotes
+          ? `${existing.intraopNotes}\n${line}`
+          : line;
+
+        const updated = await ctx.prisma.surgeryCase.update({
+          where: { id: existing.id },
+          data: {
+            intraopNotes: updatedNotes,
+            updatedBy: ctx.user.id,
+          },
+          select: { id: true, intraopNotes: true },
+        });
+
+        return updated;
       }),
 
     // ------------------------------------------------------------------

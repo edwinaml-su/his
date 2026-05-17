@@ -26,7 +26,6 @@ import { IntraOpTimeline } from "@/components/surgery/intra-op-timeline";
 import {
   ComplicationsLog,
   parseComplicationsFromNotes,
-  serializeComplicationEntry,
 } from "@/components/surgery/complications-log";
 import { PostOpForm } from "@/components/surgery/post-op-form";
 
@@ -68,6 +67,10 @@ export default function SurgeryCaseDetailPage() {
   });
 
   const complete = trpc.surgery.case.complete.useMutation({
+    onSuccess: () => utils.surgery.case.get.invalidate({ id: caseId }),
+  });
+
+  const updateIntraopNotes = trpc.surgery.case.updateIntraopNotes.useMutation({
     onSuccess: () => utils.surgery.case.get.invalidate({ id: caseId }),
   });
 
@@ -120,21 +123,11 @@ export default function SurgeryCaseDetailPage() {
 
   async function handleAddComplication(text: string) {
     if (!c) return;
-    const line = serializeComplicationEntry(text);
-    const updatedNotes = c.intraopNotes
-      ? `${c.intraopNotes}\n${line}`
-      : line;
-    // postOp mutation acepta intraopNotes, pero está restringida a IN_PROGRESS → POST_OP.
-    // Para actualizar notas mid-cirugía usamos postOp con preservación de estado.
-    // Si el router no lo permite en este estado, queda como BLOCKER documentado abajo.
-    // Por ahora las complicaciones se acumulan localmente (optimistic) y se persisten
-    // en la mutación de postOp cuando se cierra la cirugía.
-    // BLOCKER: no hay endpoint `surgery.case.updateIntraopNotes` para persistir
-    // complicaciones mid-IN_PROGRESS sin cambiar estado. Ver sección BLOCKERS.
-    void updatedNotes; // usado para acumulación futura
-    throw new Error(
-      "Para persistir complicaciones se requiere surgery.case.updateIntraopNotes (BLOCKER — ver wave separada).",
-    );
+    await updateIntraopNotes.mutateAsync({
+      id: caseId,
+      appendText: text,
+      entryType: "COMPLICATION",
+    });
   }
 
   async function handlePostOp(finalNotes: string) {
@@ -390,6 +383,7 @@ export default function SurgeryCaseDetailPage() {
                   entries={complicationEntries}
                   readOnly={!isInProgress}
                   onAdd={isInProgress ? handleAddComplication : undefined}
+                  isPending={updateIntraopNotes.isPending}
                 />
               </div>
             </CardContent>
