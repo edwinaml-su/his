@@ -43,6 +43,12 @@ export function AppShell({
   const pathname = usePathname();
   return (
     <div className="flex min-h-screen">
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
+      >
+        Saltar al contenido principal
+      </a>
       <aside className="hidden w-60 shrink-0 border-r bg-sidebar-background md:flex md:flex-col">
         <div className="border-b p-4">
           <p className="text-base font-bold">HIS Avante</p>
@@ -74,7 +80,9 @@ export function AppShell({
         <header className="flex h-14 items-center justify-between border-b bg-background px-4">
           <div className="text-sm text-muted-foreground">{topbar}</div>
         </header>
-        <main className="flex-1 p-6">{children}</main>
+        <main id="main-content" tabIndex={-1} className="flex-1 p-6">
+          {children}
+        </main>
       </div>
     </div>
   );
