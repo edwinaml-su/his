@@ -119,6 +119,7 @@ const SECTIONS: NavSection[] = [
     label: "Diagnóstico",
     defaultOpen: true,
     items: [
+      { href: "/ece/estudios", label: "Estudios ECE", icon: FlaskConical },
       { href: "/pharmacy", label: "Farmacia", icon: Pill },
       { href: "/emar", label: "eMAR", icon: ScanLine },
       { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical },

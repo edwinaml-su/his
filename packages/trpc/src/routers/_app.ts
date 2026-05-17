@@ -76,6 +76,9 @@ import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
 import { atencionEmergenciaRouter } from "./ece/atencion-emergencia.router";
 // ECE — RRI (Referencia / Retorno / Interconsulta, NTEC Doc 10)
 import { eceRriRouter } from "./ece/rri.router";
+// ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+import { eceSolicitudEstudioRouter } from "./ece/solicitud-estudio.router";
+import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -155,6 +158,9 @@ export const appRouter = router({
   eceAtencionEmergencia: atencionEmergenciaRouter,
   // ECE — RRI (NTEC Doc 10)
   eceRri: eceRriRouter,
+  // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+  eceSolicitudEstudio: eceSolicitudEstudioRouter,
+  eceResultadoEstudio: eceResultadoEstudioRouter,
 });
 
 export type AppRouter = typeof appRouter;
