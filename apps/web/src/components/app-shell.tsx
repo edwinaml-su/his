@@ -171,6 +171,14 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/obstetricia/partograma",
+        label: "Partograma",
+        icon: Activity,
+      },
     ],
   },
   {

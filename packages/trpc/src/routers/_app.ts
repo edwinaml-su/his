@@ -101,6 +101,8 @@ import { eceRegistroAnestesicoRouter } from "./ece/registro-anestesico.router";
 import { eceUrpaRecoveryRouter } from "./ece/urpa-recovery.router";
 // Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
 import { eceBridgeCirugiaRouter } from "./ece/bridge-cirugia.router";
+// ECE — Partograma OMS (NTEC Doc 14)
+import { ecePartogramaRouter } from "./ece/partograma.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -205,6 +207,8 @@ export const appRouter = router({
   eceUrpa: eceUrpaRecoveryRouter,
   // Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
   eceBridgeCirugia: eceBridgeCirugiaRouter,
+  // ECE — Partograma OMS (NTEC Doc 14)
+  ecePartograma: ecePartogramaRouter,
 });
 
 export type AppRouter = typeof appRouter;
