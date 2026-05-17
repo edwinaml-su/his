@@ -103,6 +103,8 @@ import { eceUrpaRecoveryRouter } from "./ece/urpa-recovery.router";
 import { eceBridgeCirugiaRouter } from "./ece/bridge-cirugia.router";
 // ECE — Partograma OMS (NTEC Doc 14)
 import { ecePartogramaRouter } from "./ece/partograma.router";
+// ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
+import { eceAtencionRnRouter } from "./ece/atencion-rn.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -209,6 +211,8 @@ export const appRouter = router({
   eceBridgeCirugia: eceBridgeCirugiaRouter,
   // ECE — Partograma OMS (NTEC Doc 14)
   ecePartograma: ecePartogramaRouter,
+  // ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
+  eceAtencionRn: eceAtencionRnRouter,
 });
 
 export type AppRouter = typeof appRouter;

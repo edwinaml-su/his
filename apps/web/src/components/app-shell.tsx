@@ -51,6 +51,7 @@ import {
   ArrowLeftRight,
   CheckSquare,
   UserCheck,
+  Baby,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -152,6 +153,10 @@ const SECTIONS: NavSection[] = [
         label: "Programación",
         icon: Scissors,
       },
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
     ],
   },
   {
