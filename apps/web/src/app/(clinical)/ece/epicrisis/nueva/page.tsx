@@ -614,7 +614,7 @@ export default function NuevaEpicrisisPage() {
     create.mutate({
       episodioHospitalarioId: form.episodioHospitalarioId.trim(),
       fechaEgreso: new Date(form.fechaEgreso),
-      motivoEgreso: form.motivoEgreso as NonNullable<typeof form.motivoEgreso>,
+      motivoEgreso: form.motivoEgreso as Exclude<typeof form.motivoEgreso, "">,
       diagnosticoEgresoCie10: form.diagnosticos,
       resumenIngreso: form.resumenIngreso,
       evolucionHospitalaria: form.evolucionHospitalaria,

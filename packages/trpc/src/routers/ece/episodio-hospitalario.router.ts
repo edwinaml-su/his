@@ -62,7 +62,7 @@ const confirmarAltaInput = z.object({
 
 // ─── Tipos de fila raw ────────────────────────────────────────────────────────
 
-interface EpisodioActivoRow {
+export interface EpisodioActivoRow {
   id: string;
   episodio_atencion_id: string;
   paciente_id: string;
@@ -78,7 +78,7 @@ interface EpisodioActivoRow {
   medico_nombre: string | null;
 }
 
-interface EpisodioDetalleRow extends EpisodioActivoRow {
+export interface EpisodioDetalleRow extends EpisodioActivoRow {
   motivo_ingreso: string;
   orden_ingreso_id: string;
   documentos_firmados_count: number;

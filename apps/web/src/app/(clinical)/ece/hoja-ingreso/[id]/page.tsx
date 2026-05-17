@@ -27,7 +27,7 @@ import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Textarea } from "@his/ui/components/textarea";
 import { trpc } from "@/lib/trpc/react";
-import type { EstadoHojaIngreso } from "@his/contracts/src/schemas/ece-hoja-ingreso";
+import type { EstadoHojaIngreso } from "@his/contracts";
 
 // ─── Presentación de estados ──────────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ function WorkflowBadges({ estadoActual }: { estadoActual: EstadoHojaIngreso }) {
     );
   }
 
-  const ordenActual = ORDEN_ESTADO[estadoActual];
+  const ordenActual = ORDEN_ESTADO[estadoActual] ?? 0;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">

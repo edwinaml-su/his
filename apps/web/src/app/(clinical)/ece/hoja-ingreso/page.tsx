@@ -31,7 +31,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
-import type { EstadoHojaIngreso } from "@his/contracts/src/schemas/ece-hoja-ingreso";
+import type { EstadoHojaIngreso } from "@his/contracts";
 
 // ─── Constantes de presentación ───────────────────────────────────────────────
 

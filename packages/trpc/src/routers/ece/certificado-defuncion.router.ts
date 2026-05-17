@@ -87,7 +87,7 @@ const anularCertDefInput = z.object({
 // Tipos de fila raw
 // ──────────────────────────────────────────────────────────────────────────────
 
-interface CertDefRow {
+export interface CertDefRow {
   id: string;
   episodio_id: string;
   paciente_id: string | null;
