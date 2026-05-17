@@ -105,6 +105,8 @@ import { eceBridgeCirugiaRouter } from "./ece/bridge-cirugia.router";
 import { ecePartogramaRouter } from "./ece/partograma.router";
 // ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
 import { eceAtencionRnRouter } from "./ece/atencion-rn.router";
+// ECE — Maternidad: Reanimación Neonatal NRP (AHA/AAP)
+import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -213,6 +215,8 @@ export const appRouter = router({
   ecePartograma: ecePartogramaRouter,
   // ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
   eceAtencionRn: eceAtencionRnRouter,
+  // ECE — Maternidad: Reanimación Neonatal NRP
+  eceReanimacionNeonatal: eceReanimacionNeonatalRouter,
 });
 
 export type AppRouter = typeof appRouter;

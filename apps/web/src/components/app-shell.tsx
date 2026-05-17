@@ -14,6 +14,7 @@ import {
   Settings,
   History,
   HeartPulse,
+  HeartHandshake,
   Pill,
   FlaskConical,
   Activity,
@@ -157,6 +158,14 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
+    label: "ECE — Maternidad",
+    defaultOpen: false,
+    items: [
+      {
+        href: "/ece/reanimacion-neonatal",
+        label: "Reanimación",
+        icon: HeartHandshake,
+      },
     ],
   },
   {
