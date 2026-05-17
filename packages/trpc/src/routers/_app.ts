@@ -95,6 +95,8 @@ import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 import { eceCirugiaPreopRouter } from "./ece/preop-checklist.router";
 // ECE — WHO Surgical Safety Checklist (OMS Cirugía Segura 2009)
 import { eceWhoChecklistRouter } from "./ece/who-checklist.router";
+// ECE — Registro Anestésico Intraoperatorio (REG_ANEST)
+import { eceRegistroAnestesicoRouter } from "./ece/registro-anestesico.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -193,6 +195,8 @@ export const appRouter = router({
   eceCirugiaPreop: eceCirugiaPreopRouter,
   // ECE — WHO Surgical Safety Checklist
   eceWhoChecklist: eceWhoChecklistRouter,
+  // ECE — Registro Anestésico Intraoperatorio
+  eceRegistroAnestesico: eceRegistroAnestesicoRouter,
 });
 
 export type AppRouter = typeof appRouter;
