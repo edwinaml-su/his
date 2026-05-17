@@ -111,6 +111,8 @@ import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router"
 import { periodoExpulsivoRouter } from "./ece/periodo-expulsivo.router";
 // Fase 2 (S7) — GS1 Logística: Proceso A Inbound
 import { gs1ProcesoARouter } from "./gs1-proceso-a.router";
+// GS1 Logística — Proceso B (Transferencias entre depósitos)
+import { gs1ProcesoBRouter } from "./gs1-proceso-b.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -225,6 +227,8 @@ export const appRouter = router({
   ecePeriodoExpulsivo: periodoExpulsivoRouter,
   // Fase 2 (S7) — GS1 Logística: Proceso A Inbound
   gs1ProcesoA: gs1ProcesoARouter,
+  // GS1 Logística — Proceso B (Transferencias entre depósitos GLN)
+  gs1ProcesoB: gs1ProcesoBRouter,
 });
 
 export type AppRouter = typeof appRouter;

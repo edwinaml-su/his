@@ -54,6 +54,7 @@ import {
   UserCheck,
   Baby,
   Package,
+  Truck,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -216,6 +217,7 @@ const SECTIONS: NavSection[] = [
     defaultOpen: false,
     items: [
       { href: "/gs1/inbound", label: "Inbound", icon: Package },
+      { href: "/gs1/transfers", label: "Transfers", icon: Truck },
     ],
   },
   {
