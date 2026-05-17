@@ -1,4 +1,3 @@
-// @ts-nocheck — UI shape mismatch con router F2-S2; refinar en F2-S3.
 "use client";
 
 /**
@@ -68,13 +67,18 @@ export default function ConsentimientoListPage() {
 
   // Filtro local por texto (tipo o paciente)
   const rows = React.useMemo(() => {
-    const data = query.data ?? [];
+    // El router devuelve paginated `{items, nextCursor}` o array vacío.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw = query.data as any;
+    const data: Array<Record<string, unknown>> = Array.isArray(raw)
+      ? raw
+      : (raw?.items ?? []);
     if (!search.trim()) return data;
     const lc = search.toLowerCase();
     return data.filter(
       (r) =>
-        r.tipo_nombre?.toLowerCase().includes(lc) ||
-        r.tipo_codigo?.toLowerCase().includes(lc),
+        String(r.tipo_nombre ?? "").toLowerCase().includes(lc) ||
+        String(r.tipo_codigo ?? "").toLowerCase().includes(lc),
     );
   }, [query.data, search]);
 
@@ -165,7 +169,8 @@ export default function ConsentimientoListPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((r) => {
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {(rows as any[]).map((r) => {
                   const estado = r.estado_codigo ?? "borrador";
                   const tipoLabel =
                     TIPO_LABEL[r.tipo_codigo ?? ""] ?? r.tipo_nombre ?? r.tipo_codigo ?? "—";

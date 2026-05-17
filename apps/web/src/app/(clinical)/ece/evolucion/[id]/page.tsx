@@ -1,4 +1,3 @@
-// @ts-nocheck — UI shape mismatch / dep faltante; refinar en F2-S3.
 "use client";
 
 /**
@@ -60,7 +59,11 @@ export default function EvolucionDetailPage() {
   const router = useRouter();
   const id = params.id;
 
-  const detail = trpc.eceEvolucion.getById.useQuery({ id });
+  // Router expone `get/firmar/validar` (no `getById/sign/validate` — naming
+  // legacy del cliente). Adaptamos vía cast quirúrgico.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const eceEvol = trpc.eceEvolucion as any;
+  const detail = eceEvol.get.useQuery({ id });
   const ev = detail.data as unknown as EvolucionDetail | null | undefined;
 
   const [confirmSign, setConfirmSign] = React.useState(false);
@@ -69,24 +72,26 @@ export default function EvolucionDetailPage() {
 
   const utils = trpc.useUtils();
 
-  const sign = trpc.eceEvolucion.sign.useMutation({
+  const sign = eceEvol.firmar.useMutation({
     onSuccess: () => {
       setConfirmSign(false);
-      utils.eceEvolucion.getById.invalidate({ id });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (utils.eceEvolucion as any).get.invalidate({ id });
       router.push(ev?.episodeId ? `/ece/evolucion?episodeId=${ev.episodeId}` : "/ece/evolucion");
     },
-    onError: (e) => {
+    onError: (e: { message: string }) => {
       setConfirmSign(false);
       setPageError(`Error al firmar: ${e.message}`);
     },
   });
 
-  const validate = trpc.eceEvolucion.validate.useMutation({
+  const validate = eceEvol.validar.useMutation({
     onSuccess: () => {
       setConfirmValidate(false);
-      utils.eceEvolucion.getById.invalidate({ id });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (utils.eceEvolucion as any).get.invalidate({ id });
     },
-    onError: (e) => {
+    onError: (e: { message: string }) => {
       setConfirmValidate(false);
       setPageError(`Error al validar: ${e.message}`);
     },

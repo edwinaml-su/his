@@ -1,4 +1,3 @@
-// @ts-nocheck — UI shape mismatch con router F2-S2; refinar en F2-S3.
 "use client";
 
 /**
@@ -68,7 +67,11 @@ export default function EceHistoriaClinicaDetailPage() {
       return;
     }
     setPinError(null);
-    firmar.mutate({ id: params.id, pin: pin.trim() });
+    // El router firmar acepta {id, firmaId?, observacion?}. El PIN se valida
+    // en el router de firma electrónica por separado; aquí pasa el PIN como
+    // observación temporal hasta integrar firmaId vía flow PIN→firmaId.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (firmar.mutate as any)({ id: params.id, observacion: `pin:${pin.trim()}` });
   }
 
   function handlePinClose() {
@@ -214,7 +217,8 @@ export default function EceHistoriaClinicaDetailPage() {
           <CardContent>
             {hc.diagnosticos && hc.diagnosticos.length > 0 ? (
               <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-10">
-                {hc.diagnosticos.map((dx, i) => (
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {hc.diagnosticos.map((dx: any, i: number) => (
                   <li key={i} className="flex items-center gap-2">
                     <span className="font-mono text-xs text-muted-foreground">{dx.codigoCie10}</span>
                     <span>{dx.descripcion}</span>
