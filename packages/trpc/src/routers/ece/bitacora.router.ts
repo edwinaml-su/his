@@ -11,8 +11,9 @@
  *   contexto text nullable, ip text nullable, registrado_en timestamptz NOT NULL.
  *
  * Procedures:
- *   bitacora.list     — query paginada (requireRole DIR|ARCH).
+ *   bitacora.list      — query paginada (requireRole DIR|ARCH).
  *   bitacora.exportCsv — genera CSV base64 (requireRole DIR|ARCH).
+ *   bitacora.metrics   — métricas del período (requireRole DIR|ARCH).
  *   bitacora.register  — mutation: log manual de evento (protectedProcedure).
  */
 import { z } from "zod";
@@ -24,9 +25,17 @@ import { requireEcePermission } from "../../middleware/ece-permission";
 // Schemas Zod (espejo de packages/contracts/src/schemas/ece-bitacora.ts)
 // ---------------------------------------------------------------------------
 
+/**
+ * Enum extendido para soportar flujos NTEC firma/certificación/anulación.
+ * Los valores legacy (verify/confirm/…) se mantienen por compatibilidad.
+ */
 const accionEnum = z.enum([
+  // Operaciones genéricas (legacy)
   "verify", "confirm", "view", "create",
   "update", "delete", "export", "print", "share",
+  // Operaciones ECE NTEC Arts. 45-52
+  "FIRMAR", "VALIDAR", "CERTIFICAR", "ANULAR",
+  "CREATE", "UPDATE",
 ]);
 
 const bitacoraListInput = z.object({
@@ -57,6 +66,15 @@ const bitacoraRegisterInput = z.object({
   ip:         z.string().max(45).optional(),
 });
 
+/**
+ * Input para el endpoint de métricas del período.
+ * Desde/hasta son ISO strings opcionales; sin filtro retorna todo el histórico.
+ */
+const bitacoraMetricsInput = z.object({
+  desde: z.string().datetime().optional(),
+  hasta: z.string().datetime().optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
@@ -74,6 +92,10 @@ type BitacoraDbRow = {
 };
 
 type CountRow = { total: bigint };
+
+type MetricCountRow = { count: bigint };
+type TopDocRow = { contexto: string; count: bigint };
+type TopUserRow = { user_id: string; count: bigint };
 
 // ---------------------------------------------------------------------------
 // Helpers de BD raw
@@ -236,6 +258,81 @@ export const bitacoraRouter = router({
       const base64 = Buffer.from(csv, "utf-8").toString("base64");
 
       return { base64, rowCount: rows.length };
+    }),
+
+  /**
+   * Métricas del período para el resumen de la bitácora.
+   * Retorna:
+   *   totalAccesos — total de eventos en el período.
+   *   totalFirmas  — eventos de acciones críticas (FIRMAR/CERTIFICAR/ANULAR/VALIDAR).
+   *   topDocumentos — top 5 contextos más frecuentes (proxy de documento).
+   *   topUsuarios   — top 5 user_id con más accesos.
+   */
+  metrics: requireRole(["DIR", "ARCH"])
+    .input(bitacoraMetricsInput)
+    .query(async ({ ctx, input }) => {
+      const conditions: string[] = ["1=1"];
+      const params: unknown[] = [];
+      let idx = 1;
+
+      if (input.desde) {
+        conditions.push(`b.registrado_en >= $${idx++}::timestamptz`);
+        params.push(input.desde);
+      }
+      if (input.hasta) {
+        conditions.push(`b.registrado_en <= $${idx++}::timestamptz`);
+        params.push(input.hasta);
+      }
+      const where = conditions.join(" AND ");
+
+      // Total accesos
+      const totalRows = await ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
+        `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where}`,
+        ...params,
+      );
+      const totalAccesos = Number(totalRows[0]?.count ?? 0);
+
+      // Total firmas (acciones críticas)
+      const accionesCriticas = ["FIRMAR", "CERTIFICAR", "ANULAR", "VALIDAR"];
+      const criticas = accionesCriticas.map((_, i) => `$${idx + i}`).join(", ");
+      const firmasParams = [...params, ...accionesCriticas];
+      const firmasRows = await ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
+        `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where} AND b.accion IN (${criticas})`,
+        ...firmasParams,
+      );
+      const totalFirmas = Number(firmasRows[0]?.count ?? 0);
+
+      // Top 5 documentos (por contexto)
+      const topDocRows = await ctx.prisma.$queryRawUnsafe<TopDocRow[]>(
+        `SELECT b.contexto, COUNT(*) AS count
+         FROM ece.bitacora_acceso b
+         WHERE ${where} AND b.contexto IS NOT NULL
+         GROUP BY b.contexto
+         ORDER BY count DESC
+         LIMIT 5`,
+        ...params,
+      );
+      const topDocumentos = topDocRows.map((r) => ({
+        documento: r.contexto,
+        accesos: Number(r.count),
+      }));
+
+      // Top 5 usuarios
+      const topUserRows = await ctx.prisma.$queryRawUnsafe<TopUserRow[]>(
+        `SELECT b.user_id, COUNT(*) AS count
+         FROM ece.bitacora_acceso b
+         WHERE ${where}
+         GROUP BY b.user_id
+         ORDER BY count DESC
+         LIMIT 5`,
+        ...params,
+      );
+      const topUsuarios = topUserRows.map((r) => ({
+        userId: r.user_id,
+        accesos: Number(r.count),
+      }));
+
+      return { totalAccesos, totalFirmas, topDocumentos, topUsuarios };
     }),
 
   /**

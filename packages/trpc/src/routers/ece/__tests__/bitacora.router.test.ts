@@ -156,6 +156,64 @@ describe("bitacoraRouter", () => {
   });
 
   // -------------------------------------------------------------------------
+  // metrics
+  // -------------------------------------------------------------------------
+  describe("metrics", () => {
+    it("retorna ceros cuando no hay filas en el periodo", async () => {
+      // totalAccesos
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      // totalFirmas
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      // topDocumentos
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      // topUsuarios
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
+      const result = await caller.metrics({});
+
+      expect(result.totalAccesos).toBe(0);
+      expect(result.totalFirmas).toBe(0);
+      expect(result.topDocumentos).toHaveLength(0);
+      expect(result.topUsuarios).toHaveLength(0);
+    });
+
+    it("retorna metricas correctas con filas existentes", async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(42) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(5) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { contexto: "historia::view", count: BigInt(10) },
+        { contexto: "epicrisis::view", count: BigInt(8) },
+      ]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { user_id: USER_ID, count: BigInt(20) },
+      ]);
+
+      const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
+      const result = await caller.metrics({
+        desde: "2026-01-01T00:00:00Z",
+        hasta:  "2026-01-31T23:59:59Z",
+      });
+
+      expect(result.totalAccesos).toBe(42);
+      expect(result.totalFirmas).toBe(5);
+      expect(result.topDocumentos).toHaveLength(2);
+      expect(result.topDocumentos[0]).toEqual({ documento: "historia::view", accesos: 10 });
+      expect(result.topUsuarios[0]).toEqual({ userId: USER_ID, accesos: 20 });
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(4);
+    });
+
+    it("devuelve FORBIDDEN sin rol DIR/ARCH", async () => {
+      const sinRol = makeCtx({
+        prisma,
+        tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] },
+      });
+      const caller = bitacoraRouter.createCaller(sinRol);
+      await expect(caller.metrics({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // register
   // -------------------------------------------------------------------------
   describe("register", () => {
