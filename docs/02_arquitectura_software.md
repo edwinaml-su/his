@@ -724,7 +724,49 @@ flowchart LR
 
 ---
 
-## 11. Lo Que Sigue
+## 11. ECE RLS Context
+
+El schema `ece` tiene su propio mecanismo de aislamiento multi-establecimiento, independiente del `withTenantContext` del HIS principal. Las policies RLS leen dos GUC:
+
+- `app.ece_personal_id` — uuid del personal sanitario activo.
+- `app.ece_establecimiento_id` — uuid del establecimiento activo.
+
+### 11.1 Función helper
+
+`withEceContext` vive en `packages/trpc/src/ece/rls-context.ts`. Firma:
+
+```ts
+withEceContext<T>(
+  prisma: PrismaClient,
+  personalId: string,
+  establecimientoId: string,
+  fn: (tx: PrismaClient) => Promise<T>,
+  options?: { demoteRole?: boolean },
+): Promise<T>
+```
+
+Internamente:
+1. Abre `prisma.$transaction`.
+2. Ejecuta `SELECT ece.set_ece_context($1::uuid, $2::uuid)` — usa tagged template de Prisma para parámetros seguros.
+3. Ejecuta `SET LOCAL ROLE authenticated` (salvo `demoteRole: false`) — fuerza que RLS aplique; sin esto el rol original de Supabase tiene BYPASSRLS.
+4. Pasa la `tx` al callback.
+
+### 11.2 Por qué SET LOCAL fuera de transacción es no-op
+
+`SET LOCAL` en Postgres solo persiste durante la transacción activa. Si se llama fuera de `BEGIN`, Postgres no lanza error pero la variable no persiste entre statements. Las policies que leen `current_setting('app.ece_personal_id', true)` verán `NULL` y ninguna fila pasará el filtro. Por eso `withEceContext` siempre wrappea en `$transaction` antes de setear el GUC.
+
+### 11.3 Opt-out
+
+```ts
+// Seeder/admin: no queremos RLS ECE
+await withEceContext(prisma, id, estId, async (tx) => {
+  await tx.pacienteEce.create({ data: ... });
+}, { demoteRole: false });
+```
+
+---
+
+## 12. Lo Que Sigue
 
 - @SRE: traduce este blueprint a IaC (Terraform Vercel + Supabase + Inngest + Sentry) — `docs/04_infraestructura.md`.
 - @DBA: schema Prisma completo y políticas RLS — `docs/04_modelo_datos.md`.
