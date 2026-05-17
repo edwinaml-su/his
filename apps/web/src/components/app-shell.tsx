@@ -56,6 +56,7 @@ import {
   Package,
   Truck,
   Undo2,
+  Search,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -221,6 +222,7 @@ const SECTIONS: NavSection[] = [
       { href: "/gs1/transfers", label: "Transfers", icon: Truck },
       { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
       { href: "/gs1/devoluciones", label: "Devoluciones", icon: Undo2 },
+      { href: "/gs1/trazabilidad", label: "Trazabilidad", icon: Search },
     ],
   },
   {

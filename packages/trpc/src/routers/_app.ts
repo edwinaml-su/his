@@ -117,6 +117,8 @@ import { gs1ProcesoBRouter } from "./gs1-proceso-b.router";
 import { gs1ProcesoCRouter } from "./gs1-proceso-c.router";
 // GS1 — Proceso F: Logística inversa devoluciones
 import { gs1ProcesoFRouter } from "./gs1-proceso-f.router";
+// GS1 Logística — EPCIS Query Layer (schema legacy)
+import { epcisQueryRouter } from "./epcis-query.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -237,6 +239,8 @@ export const appRouter = router({
   gs1ProcesoC: gs1ProcesoCRouter,
   // GS1 — Proceso F: Logística inversa devoluciones
   gs1ProcesoF: gs1ProcesoFRouter,
+  // GS1 Logística — EPCIS Query Layer
+  epcisQuery: epcisQueryRouter,
 });
 
 export type AppRouter = typeof appRouter;
