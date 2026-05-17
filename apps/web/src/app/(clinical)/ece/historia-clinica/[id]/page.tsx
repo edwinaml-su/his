@@ -98,33 +98,7 @@ export default function EceHistoriaClinicaDetailPage() {
     );
   }
 
-  // El router devuelve un subset minimal (`HistoriaClinicaRow` con campos
-  // snake_case). El detalle UI usa nombres expandidos (patient, signosVitales,
-  // diagnosticos, hallazgosAparato, etc.) que llegarán en iteraciones
-  // posteriores. El cast a `HCDetalleExtended` documenta el shape esperado
-  // sin perder type safety completo.
-  type HCDetalleExtended = {
-    estado: string;
-    motivoConsulta?: string;
-    createdAt?: string;
-    firmadoEn?: string;
-    validadoEn?: string;
-    antecedentesPersonales?: string;
-    antecedentesFamiliares?: string;
-    antecedentesSociales?: string;
-    hallazgosAparato?: string;
-    planTerapeutico?: string;
-    patient?: { firstName?: string; lastName?: string; mrn?: string };
-    signosVitales?: {
-      paSistolica?: number;
-      paDiastolica?: number;
-      frecuenciaCardiaca?: number;
-      frecuenciaRespiratoria?: number;
-      temperatura?: number;
-    };
-    diagnosticos?: Array<{ codigoCie10: string; descripcion: string }>;
-  };
-  const hc = query.data as unknown as HCDetalleExtended;
+  const hc = query.data;
   const esBorrador = hc.estado === "BORRADOR" || hc.estado === "borrador";
 
   return (
@@ -142,7 +116,7 @@ export default function EceHistoriaClinicaDetailPage() {
                 ? `${hc.patient.firstName} ${hc.patient.lastName} · MRN ${hc.patient.mrn ?? "—"}`
                 : "—"}
               {" · "}
-              Creada: {hc.createdAt ? dateFmt.format(new Date(hc.createdAt)) : "—"}
+              Creada: {hc.createdAt ? dateFmt.format(hc.createdAt) : "—"}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -171,19 +145,9 @@ export default function EceHistoriaClinicaDetailPage() {
               <p className="font-medium text-muted-foreground">Motivo de consulta</p>
               <p className="mt-0.5">{hc.motivoConsulta ?? "—"}</p>
             </div>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div>
-                <p className="font-medium text-muted-foreground">Antecedentes personales</p>
-                <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentesPersonales ?? "—"}</p>
-              </div>
-              <div>
-                <p className="font-medium text-muted-foreground">Antecedentes familiares</p>
-                <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentesFamiliares ?? "—"}</p>
-              </div>
-              <div>
-                <p className="font-medium text-muted-foreground">Antecedentes sociales</p>
-                <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentesSociales ?? "—"}</p>
-              </div>
+            <div>
+              <p className="font-medium text-muted-foreground">Antecedentes</p>
+              <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes ?? "—"}</p>
             </div>
           </CardContent>
         </Card>
@@ -270,12 +234,12 @@ export default function EceHistoriaClinicaDetailPage() {
             <CardContent className="text-sm">
               <p>
                 <span className="text-muted-foreground">Firmado: </span>
-                {dateFmt.format(new Date(hc.firmadoEn))}
+                {dateFmt.format(hc.firmadoEn)}
               </p>
               {hc.estado === "VALIDADO" && hc.validadoEn && (
                 <p className="mt-1">
                   <span className="text-muted-foreground">Validado: </span>
-                  {dateFmt.format(new Date(hc.validadoEn))}
+                  {dateFmt.format(hc.validadoEn)}
                 </p>
               )}
             </CardContent>

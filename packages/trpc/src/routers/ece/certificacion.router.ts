@@ -21,6 +21,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
+import { requireEcePermission } from "../../middleware/ece-permission";
 import { withWorkflowContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
 
@@ -142,7 +143,10 @@ async function checkPinDir(firmaRow: FirmaRow, pin: string): Promise<void> {
 // Base procedure
 // ---------------------------------------------------------------------------
 
+// requireRole sigue usado en listCola (sin cambio semántico).
+// certificar usa requireEcePermission para lógica granular ECE.
 const dirProcedure = requireRole(["DIR"]);
+const certificarProcedure = requireEcePermission("ece.documento.certificar");
 
 // ---------------------------------------------------------------------------
 // Router
@@ -246,7 +250,7 @@ export const eceCertificacionRouter = router({
    * Certifica un documento: avanza estado 'validado' → 'certificado',
    * valida PIN del DIR, registra historial e inserta evento outbox.
    */
-  certificar: dirProcedure
+  certificar: certificarProcedure
     .input(certificarInput)
     .mutation(async ({ ctx, input }) => {
       if (!ctx.tenant.establishmentId) {

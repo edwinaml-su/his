@@ -233,7 +233,27 @@ describe("workflowTransicionRouter", () => {
     });
 
     it("elimina la transición y devuelve snapshot en prev", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([TRANSICION_ROW] as never);
+      // Post-PR #98 + validator inyectado: delete invoca validateWorkflow para
+      // verificar que la eliminación no introduce errores. Mock necesita: (1)
+      // SELECT transición, (2)(3)(4) snapshot estados/transiciones/roles, (5)
+      // DELETE final RETURNING.
+      // Mock workflow válido post-delete: 2 estados (inicial → final) + 1
+      // transición restante que mantiene el flujo. El validator pasa porque:
+      // hay estado inicial, hay estado final, todos alcanzables, sin huérfanos.
+      const E_INI = "00000000-0000-0000-0000-000000000010";
+      const E_FIN = "00000000-0000-0000-0000-000000000011";
+      prisma.$queryRaw
+        .mockResolvedValueOnce([TRANSICION_ROW] as never) // (1) SELECT transicion a eliminar
+        .mockResolvedValueOnce([                          // (2) estados
+          { id: E_INI, nombre: "borrador", es_inicial: true,  es_final: false },
+          { id: E_FIN, nombre: "firmado",  es_inicial: false, es_final: true  },
+        ] as never)
+        .mockResolvedValueOnce([                          // (3) transiciones restantes (la que queda tras delete)
+          { id: "00000000-0000-0000-0000-000000000030", estado_origen_id: E_INI, estado_destino_id: E_FIN, accion: "completar" },
+        ] as never)
+        .mockResolvedValueOnce([{ id: "00000000-0000-0000-0000-000000000020" }] as never) // (4) roles
+        .mockResolvedValueOnce([TRANSICION_ROW] as never); // (5) DELETE RETURNING
+
       const caller = workflowTransicionRouter.createCaller(
         makeCtx({ prisma, tenant: WORKFLOW_TENANT }),
       );

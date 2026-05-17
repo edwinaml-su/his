@@ -71,36 +71,36 @@ Digitalizar íntegramente el ciclo de atención ambulatoria del Complejo Hospita
 
 ### Resumen de Épica
 
-| ID | Título | SP | MoSCoW | Documento ECE |
-|----|--------|----|--------|--------------|
-| US.F2.3.1 | Crear ficha de identificación — paciente nuevo | 8 | Must | 3.1 Ficha |
-| US.F2.3.2 | Buscar y recuperar expediente (NUI/DUI/nombre) | 5 | Must | 3.1 Ficha |
-| US.F2.3.3 | Actualizar datos demográficos con trazabilidad | 3 | Must | 3.1 Ficha |
-| US.F2.3.4 | Registrar paciente desconocido / sin documentos | 3 | Must | 3.1 Ficha |
-| US.F2.3.5 | Gestionar afiliación ISSS (derechohabiencia) | 5 | Must | 3.1 Ficha |
-| US.F2.3.6 | Detectar y unificar expedientes duplicados | 8 | Must | 3.1 Ficha |
-| US.F2.3.7 | Abrir episodio ambulatorio (consulta externa / emergencia) | 5 | Must | 04_episodios |
-| US.F2.3.8 | Registrar admisión administrativa MINSAL/ISSS | 3 | Must | 2.1 Proceso |
-| US.F2.3.9 | Registrar hoja de triaje Manchester en emergencia | 8 | Must | 3.4 Triaje |
-| US.F2.3.10 | Registrar signos vitales / preconsulta (serie temporal) | 5 | Must | 3.3 Signos |
-| US.F2.3.11 | Visualizar tendencias de signos vitales del episodio | 3 | Should | 3.3 Signos |
-| US.F2.3.12 | Crear historia clínica — primera vez | 8 | Must | 3.2 HC |
-| US.F2.3.13 | Registrar nota de evolución — consulta subsecuente | 5 | Must | 3.8 Evolución |
-| US.F2.3.14 | Firmar electrónicamente documento clínico | 5 | Must | Transversal |
-| US.F2.3.15 | Rectificar documento clínico con trazabilidad | 5 | Must | 3.2 / 3.8 |
-| US.F2.3.16 | Crear hoja de atención de emergencia | 8 | Must | 3.5 Emergencia |
-| US.F2.3.17 | Registrar hoja de observación en emergencia (< 24h) | 5 | Must | 3.5 / 3.8 |
-| US.F2.3.18 | Emitir hoja de indicaciones médicas (prescripción) | 8 | Must | 3.6 Indicaciones |
-| US.F2.3.19 | Versionar y suspender indicaciones médicas | 3 | Must | 3.6 Indicaciones |
-| US.F2.3.20 | Registrar notas de enfermería por turno | 5 | Must | 3.7 Enfermería |
-| US.F2.3.21 | Registrar administración de medicamento (kardex) | 8 | Must | 3.7 Kardex |
-| US.F2.3.22 | Registrar hoja de evolución médica (SOAP) ambulatoria | 5 | Must | 3.8 Evolución |
-| US.F2.3.23 | Emitir solicitud de laboratorio / gabinete (RELAB) | 5 | Must | 3.18 Estudios |
-| US.F2.3.24 | Registrar resultado de laboratorio / gabinete | 5 | Must | 3.18 Estudios |
-| US.F2.3.25 | Visualizar resultados adjuntos al episodio | 3 | Must | 3.18 Estudios |
-| US.F2.3.26 | Emitir hoja RRI — Referencia a otro nivel | 8 | Must | 3.10 RRI |
-| US.F2.3.27 | Emitir hoja RRI — Retorno / Interconsulta | 5 | Must | 3.10 RRI |
-| US.F2.3.28 | Registrar respuesta de interconsulta | 3 | Must | 3.10 RRI |
+| ID | Título | SP | MoSCoW | Documento ECE | Estado |
+|----|--------|----|--------|--------------|--------|
+| US.F2.3.1 | Crear ficha de identificación — paciente nuevo | 8 | Must | 3.1 Ficha | — |
+| US.F2.3.2 | Buscar y recuperar expediente (NUI/DUI/nombre) | 5 | Must | 3.1 Ficha | — |
+| US.F2.3.3 | Actualizar datos demográficos con trazabilidad | 3 | Must | 3.1 Ficha | — |
+| US.F2.3.4 | Registrar paciente desconocido / sin documentos | 3 | Must | 3.1 Ficha | — |
+| US.F2.3.5 | Gestionar afiliación ISSS (derechohabiencia) | 5 | Must | 3.1 Ficha | — |
+| US.F2.3.6 | Detectar y unificar expedientes duplicados | 8 | Must | 3.1 Ficha | — |
+| US.F2.3.7 | Abrir episodio ambulatorio (consulta externa / emergencia) | 5 | Must | 04_episodios | — |
+| US.F2.3.8 | Registrar admisión administrativa MINSAL/ISSS | 3 | Must | 2.1 Proceso | — |
+| US.F2.3.9 | Registrar hoja de triaje Manchester en emergencia | 8 | Must | 3.4 Triaje | ✅ F2-S2 |
+| US.F2.3.10 | Registrar signos vitales / preconsulta (serie temporal) | 5 | Must | 3.3 Signos | ✅ F2-S2 |
+| US.F2.3.11 | Visualizar tendencias de signos vitales del episodio | 3 | Should | 3.3 Signos | — |
+| US.F2.3.12 | Crear historia clínica — primera vez | 8 | Must | 3.2 HC | ✅ F2-S2 |
+| US.F2.3.13 | Registrar nota de evolución — consulta subsecuente | 5 | Must | 3.8 Evolución | ✅ F2-S2 |
+| US.F2.3.14 | Firmar electrónicamente documento clínico | 5 | Must | Transversal | ✅ F2-S1 |
+| US.F2.3.15 | Rectificar documento clínico con trazabilidad | 5 | Must | 3.2 / 3.8 | — |
+| US.F2.3.16 | Crear hoja de atención de emergencia | 8 | Must | 3.5 Emergencia | ✅ F2-S3 |
+| US.F2.3.17 | Registrar hoja de observación en emergencia (< 24h) | 5 | Must | 3.5 / 3.8 | ✅ F2-S3 |
+| US.F2.3.18 | Emitir hoja de indicaciones médicas (prescripción) | 8 | Must | 3.6 Indicaciones | ✅ F2-S2 |
+| US.F2.3.19 | Versionar y suspender indicaciones médicas | 3 | Must | 3.6 Indicaciones | — |
+| US.F2.3.20 | Registrar notas de enfermería por turno | 5 | Must | 3.7 Enfermería | ✅ F2-S2 |
+| US.F2.3.21 | Registrar administración de medicamento (kardex) | 8 | Must | 3.7 Kardex | — |
+| US.F2.3.22 | Registrar hoja de evolución médica (SOAP) ambulatoria | 5 | Must | 3.8 Evolución | ✅ F2-S2 |
+| US.F2.3.23 | Emitir solicitud de laboratorio / gabinete (RELAB) | 5 | Must | 3.18 Estudios | ✅ F2-S3 |
+| US.F2.3.24 | Registrar resultado de laboratorio / gabinete | 5 | Must | 3.18 Estudios | ✅ F2-S3 |
+| US.F2.3.25 | Visualizar resultados adjuntos al episodio | 3 | Must | 3.18 Estudios | ✅ F2-S3 |
+| US.F2.3.26 | Emitir hoja RRI — Referencia a otro nivel | 8 | Must | 3.10 RRI | ✅ F2-S3 |
+| US.F2.3.27 | Emitir hoja RRI — Retorno / Interconsulta | 5 | Must | 3.10 RRI | ✅ F2-S3 |
+| US.F2.3.28 | Registrar respuesta de interconsulta | 3 | Must | 3.10 RRI | ✅ F2-S3 |
 | US.F2.3.29 | Registrar consentimiento informado para procedimiento menor | 5 | Must | 3.9 Consent. |
 | US.F2.3.30 | Registrar hoja de procedimiento menor / curaciones | 5 | Must | Doc. 14 |
 | US.F2.3.31 | Dispensar medicamento desde farmacia (registro documental) | 3 | Must | 2.1 §8 |
@@ -116,7 +116,7 @@ Digitalizar íntegramente el ciclo de atención ambulatoria del Complejo Hospita
 | US.F2.3.41 | Buscar episodios por rango de fecha / servicio / estado | 3 | Should | Transversal |
 | US.F2.3.42 | Verificar integridad documental del episodio (checklist) | 5 | Should | Art. 19 NTEC |
 | US.F2.3.43 | Codificar diagnóstico CIE-10 al cierre del episodio | 5 | Must | Art. 16-17 NTEC |
-| US.F2.3.44 | Consultar bitácora de accesos al expediente | 3 | Must | Art. 55-56 NTEC |
+| US.F2.3.44 | Consultar bitácora de accesos al expediente | 3 | Must | Art. 55-56 NTEC | ✅ F2-S3 |
 | US.F2.3.45 | Configurar retención diferenciada por diagnóstico | 5 | Should | Art. 34-35 NTEC |
 | US.F2.3.46 | Solicitar cita de seguimiento post-alta ambulatoria | 3 | Should | 2.1 §12 |
 | US.F2.3.47 | Registrar captación por referencia externa (módulo RRI) | 3 | Should | 2.1 §1 |

@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { requireRole, router } from "../trpc";
+import { requireEcePermission } from "../middleware/ece-permission";
 
 // Nota: withTenantContext está disponible en rls-context para cuando se active
 // el hardening RLS completo (Fase 3). Los routers MVP filtran por organizationId
@@ -250,7 +251,7 @@ export const eceRectificacionRouter = router({
    * DIR aprueba una rectificación pendiente.
    * Marca estado APROBADA + fecha de aprobación.
    */
-  aprobar: requireRole(["DIR"])
+  aprobar: requireEcePermission("ece.rectificacion.aprobar")
     .input(aprobarInput)
     .mutation(async ({ ctx, input }) => {
       const rect = await findRectificacion(ctx.prisma, input.rectificacionId);

@@ -5,16 +5,14 @@
  *
  * Layout:
  *  - Sección superior: nombre y badges del tipo de documento.
- *  - Grafo SVG (fallback — react-flow no instalado):
- *      Nodos = estados (badge INICIAL / FINAL / INTERMEDIO, ordenados por `orden`).
- *      Aristas = transiciones (etiqueta = accion + rol_autoriza.codigo).
+ *  - Grafo ReactFlow: nodos custom por tipo, drag-drop, sidebar de detalles.
  *  - Panel lateral derecho: matriz documento_rol (LLENA/RESPONSABLE/AUTORIZA/FIRMA × rol).
  *  - Botón "Editar workflow" → /workflow-designer/[codigo]/editar.
  *
  * Accesibilidad (WCAG 2.2 AA):
- *  - El grafo SVG incluye <title> y role="img" con aria-label.
+ *  - Nodos con aria-label descriptivo.
  *  - La tabla de roles tiene encabezados apropiados.
- *  - Navegación por teclado: el botón Editar es enfocable y tiene label descriptivo.
+ *  - Navegación por teclado: nodos focusables con Enter/Space para abrir sidebar.
  */
 import * as React from "react";
 import Link from "next/link";
@@ -32,6 +30,143 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { WorkflowGraph } from "./_components/workflow-graph";
+
+// ─── Panel de validación ──────────────────────────────────────────────────────
+
+interface ValidationIssue {
+  code: string;
+  message: string;
+  severity: "error" | "warning";
+}
+
+/**
+ * Muestra el resultado del validator de integridad.
+ *
+ * Errores primero (rojo), warnings después (ámbar).
+ * Cada item incluye el código de regla y un link "Ir al item" cuando aplica.
+ */
+function ValidationPanel({
+  issues,
+  onValidate,
+  isLoading,
+  tipoDocCodigo,
+}: {
+  issues: ValidationIssue[] | undefined;
+  onValidate: () => void;
+  isLoading: boolean;
+  tipoDocCodigo: string;
+}) {
+  const errores = (issues ?? []).filter((i) => i.severity === "error");
+  const warnings = (issues ?? []).filter((i) => i.severity === "warning");
+
+  const badgeCount = errores.length + warnings.length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm">
+            Validación de integridad
+            {badgeCount > 0 && (
+              <Badge
+                variant={errores.length > 0 ? "destructive" : "outline"}
+                className="ml-2 text-xs"
+                aria-label={`${errores.length} errores, ${warnings.length} advertencias`}
+              >
+                {errores.length > 0 ? `${errores.length} error${errores.length > 1 ? "es" : ""}` : `${warnings.length} advertencia${warnings.length > 1 ? "s" : ""}`}
+              </Badge>
+            )}
+            {issues !== undefined && badgeCount === 0 && (
+              <Badge variant="secondary" className="ml-2 text-xs">
+                Valido
+              </Badge>
+            )}
+          </CardTitle>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onValidate}
+            disabled={isLoading}
+            aria-label="Validar integridad del workflow"
+          >
+            {isLoading ? "Validando..." : "Validar workflow"}
+          </Button>
+        </div>
+      </CardHeader>
+      {issues !== undefined && badgeCount > 0 && (
+        <CardContent className="space-y-2">
+          {errores.length > 0 && (
+            <details open>
+              <summary className="cursor-pointer select-none text-sm font-medium text-destructive">
+                Errores ({errores.length})
+              </summary>
+              <ul className="mt-2 space-y-1" role="list" aria-label="Lista de errores de validación">
+                {errores.map((issue) => (
+                  <li
+                    key={`${issue.code}-${issue.message}`}
+                    className="flex items-start justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs"
+                  >
+                    <span>
+                      <span className="mr-1 font-mono font-semibold text-destructive">
+                        [{issue.code}]
+                      </span>
+                      {issue.message}
+                    </span>
+                    {/* Link contextual: estados y transiciones se editan en /editar */}
+                    <Link
+                      href={`/workflow-designer/${tipoDocCodigo}/editar`}
+                      className="shrink-0 text-xs text-muted-foreground underline hover:text-foreground"
+                      aria-label={`Ir al editor para corregir: ${issue.message}`}
+                    >
+                      Ir al item
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {warnings.length > 0 && (
+            <details open>
+              <summary className="cursor-pointer select-none text-sm font-medium text-amber-600 dark:text-amber-400">
+                Advertencias ({warnings.length})
+              </summary>
+              <ul className="mt-2 space-y-1" role="list" aria-label="Lista de advertencias de validación">
+                {warnings.map((issue) => (
+                  <li
+                    key={`${issue.code}-${issue.message}`}
+                    className="flex items-start justify-between gap-2 rounded border border-amber-300/40 bg-amber-50/50 px-3 py-2 text-xs dark:border-amber-700/30 dark:bg-amber-900/10"
+                  >
+                    <span>
+                      <span className="mr-1 font-mono font-semibold text-amber-600 dark:text-amber-400">
+                        [{issue.code}]
+                      </span>
+                      {issue.message}
+                    </span>
+                    <Link
+                      href={`/workflow-designer/${tipoDocCodigo}/editar`}
+                      className="shrink-0 text-xs text-muted-foreground underline hover:text-foreground"
+                      aria-label={`Ir al editor para revisar: ${issue.message}`}
+                    >
+                      Ir al item
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </CardContent>
+      )}
+      {issues !== undefined && badgeCount === 0 && (
+        <CardContent>
+          <p className="text-xs text-muted-foreground">
+            El workflow cumple todas las reglas de integridad.
+          </p>
+        </CardContent>
+      )}
+    </Card>
+  );
+}
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -40,12 +175,6 @@ const FUNCION_LABELS: Record<string, string> = {
   RESPONSABLE: "Responsable",
   AUTORIZA: "Autoriza",
   FIRMA: "Firma",
-};
-
-const ESTADO_BADGE_VARIANT: Record<string, "default" | "secondary" | "outline"> = {
-  inicial: "default",
-  final: "secondary",
-  intermedio: "outline",
 };
 
 // ─── Tipos raw ────────────────────────────────────────────────────────────────
@@ -75,162 +204,6 @@ interface RolRow {
   obligatorio: boolean;
   rol_codigo?: string;
   rol_nombre?: string;
-}
-
-// ─── Grafo SVG ────────────────────────────────────────────────────────────────
-
-/**
- * Grafo SVG simple de estados y transiciones.
- *
- * Layout: nodos en columna izquierda, flechas curvas hacia la derecha.
- * No usa react-flow (no instalado) — implementación mínima legible.
- *
- * Justificación heurística (Nielsen #4 — consistencia): usamos SVG nativo
- * sin dependencia extra para no bloquear el PR con cambios en package.json.
- */
-function WorkflowGraph({
-  estados,
-  transiciones,
-}: {
-  estados: EstadoRow[];
-  transiciones: TransicionRow[];
-}) {
-  const NODE_W = 140;
-  const NODE_H = 44;
-  const GAP_Y = 28;
-  const MARGIN_X = 20;
-  const MARGIN_Y = 20;
-  const ARROW_X = MARGIN_X + NODE_W + 20; // espacio para etiquetas
-
-  const sortedEstados = [...estados].sort((a, b) => a.orden - b.orden);
-  const estadoPos: Record<string, { x: number; y: number }> = {};
-  sortedEstados.forEach((e, i) => {
-    estadoPos[e.id] = {
-      x: MARGIN_X,
-      y: MARGIN_Y + i * (NODE_H + GAP_Y),
-    };
-  });
-
-  const svgH = MARGIN_Y * 2 + sortedEstados.length * (NODE_H + GAP_Y);
-  const svgW = ARROW_X + 200;
-
-  return (
-    <svg
-      role="img"
-      aria-label="Grafo de estados y transiciones del workflow"
-      viewBox={`0 0 ${svgW} ${svgH}`}
-      width="100%"
-      style={{ maxHeight: 480 }}
-      className="overflow-visible"
-    >
-      <title>Grafo del workflow</title>
-
-      {/* Flechas de transición */}
-      {transiciones.map((t) => {
-        const origen = estadoPos[t.estado_origen_id];
-        const destino = estadoPos[t.estado_destino_id];
-        if (!origen || !destino) return null;
-
-        const x1 = origen.x + NODE_W;
-        const y1 = origen.y + NODE_H / 2;
-        const x2 = destino.x + NODE_W;
-        const y2 = destino.y + NODE_H / 2;
-        const mx = x1 + 40;
-        const label = t.rol_codigo ? `${t.accion} (${t.rol_codigo})` : t.accion;
-
-        return (
-          <g key={t.id}>
-            <path
-              d={`M ${x1} ${y1} C ${mx} ${y1} ${mx} ${y2} ${x2} ${y2}`}
-              fill="none"
-              stroke="hsl(var(--border))"
-              strokeWidth={1.5}
-              markerEnd="url(#arrow)"
-            />
-            <text
-              x={mx + 4}
-              y={(y1 + y2) / 2 - 4}
-              fontSize={10}
-              fill="hsl(var(--muted-foreground))"
-              className="select-none"
-            >
-              {label}
-              {t.requiere_firma ? " ✎" : ""}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* Nodos de estado */}
-      {sortedEstados.map((e) => {
-        const pos = estadoPos[e.id]!;
-        const kind = e.es_inicial ? "inicial" : e.es_final ? "final" : "intermedio";
-        const fill =
-          kind === "inicial"
-            ? "hsl(var(--primary))"
-            : kind === "final"
-              ? "hsl(var(--secondary))"
-              : "hsl(var(--card))";
-        const textColor =
-          kind === "inicial"
-            ? "hsl(var(--primary-foreground))"
-            : "hsl(var(--foreground))";
-
-        return (
-          <g key={e.id}>
-            <rect
-              x={pos.x}
-              y={pos.y}
-              width={NODE_W}
-              height={NODE_H}
-              rx={6}
-              fill={fill}
-              stroke="hsl(var(--border))"
-              strokeWidth={1}
-            />
-            <text
-              x={pos.x + NODE_W / 2}
-              y={pos.y + NODE_H / 2 - 4}
-              textAnchor="middle"
-              dominantBaseline="middle"
-              fontSize={11}
-              fontWeight="600"
-              fill={textColor}
-              className="select-none"
-            >
-              {e.nombre}
-            </text>
-            <text
-              x={pos.x + NODE_W / 2}
-              y={pos.y + NODE_H / 2 + 10}
-              textAnchor="middle"
-              fontSize={9}
-              fill={textColor}
-              opacity={0.75}
-              className="select-none"
-            >
-              {kind}
-            </text>
-          </g>
-        );
-      })}
-
-      {/* Marcador de flecha */}
-      <defs>
-        <marker
-          id="arrow"
-          viewBox="0 0 10 10"
-          refX="9"
-          refY="5"
-          markerWidth={6}
-          markerHeight={6}
-          orient="auto-start-reverse"
-        >
-          <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(var(--border))" />
-        </marker>
-      </defs>
-    </svg>
-  );
 }
 
 // ─── Matriz de roles ──────────────────────────────────────────────────────────
@@ -339,6 +312,13 @@ export default function WorkflowGrafoPage() {
     { enabled: !!tipoDoc?.id },
   );
 
+  // ── Validación de integridad ────────────────────────────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: validacion, isLoading: loadingValidacion, refetch: refetchValidacion } = (trpc as any).workflowValidator.validate.useQuery(
+    { tipDocumentoId: tipoDoc?.id ?? "" },
+    { enabled: !!tipoDoc?.id },
+  );
+
   const isLoading = loadingDoc || loadingEstados || loadingTransiciones || loadingRoles;
 
   if (isLoading) {
@@ -401,6 +381,14 @@ export default function WorkflowGrafoPage() {
         </Button>
       </div>
 
+      {/* Panel de validación */}
+      <ValidationPanel
+        issues={validacion?.errors}
+        onValidate={() => void refetchValidacion()}
+        isLoading={loadingValidacion}
+        tipoDocCodigo={codigo}
+      />
+
       {/* Grafo + Matriz */}
       <div className="flex flex-col gap-4 lg:flex-row">
         {/* Grafo de estados y transiciones */}
@@ -426,26 +414,12 @@ export default function WorkflowGrafoPage() {
                 para agregar estados.
               </p>
             ) : (
-              <>
-                {/* Leyenda de badges */}
-                <div className="mb-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  {(["inicial", "final", "intermedio"] as const).map((kind) => (
-                    <span key={kind} className="flex items-center gap-1">
-                      <Badge
-                        variant={ESTADO_BADGE_VARIANT[kind]}
-                        className="text-xs"
-                      >
-                        {kind}
-                      </Badge>
-                    </span>
-                  ))}
-                  <span>✎ = requiere firma</span>
-                </div>
-                <WorkflowGraph
-                  estados={estados ?? []}
-                  transiciones={transiciones ?? []}
-                />
-              </>
+              <WorkflowGraph
+                estados={estados ?? []}
+                transiciones={transiciones ?? []}
+                tipDocCodigo={codigo}
+                workflowEditHref={`/workflow-designer/${codigo}/editar`}
+              />
             )}
           </CardContent>
         </Card>
