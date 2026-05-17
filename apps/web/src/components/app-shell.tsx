@@ -49,6 +49,7 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  CheckSquare,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -87,7 +88,6 @@ const SECTIONS: NavSection[] = [
       { href: "/triage", label: "Triage", icon: Stethoscope },
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
-      { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
     ],
   },
@@ -125,6 +125,14 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
     ],
   },
   {
