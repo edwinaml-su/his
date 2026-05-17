@@ -1507,6 +1507,7 @@ model TriageEvaluation {
 
   vitalSigns        TriageVitalSign[]
   discriminatorHits TriageDiscriminatorHit[]
+  emergencyVisits   EmergencyVisit[]          @relation("EmergencyTriageEval")
 
   @@index([patientId])
   @@index([organizationId, startedAt])
@@ -2259,6 +2260,8 @@ model EmergencyVisit {
   encounterId          String               @unique @db.Uuid
   patientId            String               @db.Uuid
   treatingId           String?              @db.Uuid /// User (médico de urgencias).
+  /// TDR §12.4 — referencia al triage Manchester que habilita la admisión. Nullable para compatibilidad con registros anteriores.
+  triageEvaluationId   String?              @db.Uuid
   arrivedAt            DateTime             @default(now()) @db.Timestamptz()
   arrivalMode          EmergencyArrivalMode @default(WALK_IN)
   chiefComplaint       String               @db.VarChar(400)
@@ -2273,17 +2276,19 @@ model EmergencyVisit {
   updatedBy            String?              @db.Uuid
   deletedAt            DateTime?            @db.Timestamptz()
 
-  organization  Organization  @relation("OrgEmergencyVisits", fields: [organizationId], references: [id], onDelete: Restrict)
-  establishment Establishment @relation("EstEmergencyVisits", fields: [establishmentId], references: [id], onDelete: Restrict)
-  encounter     Encounter     @relation("EncEmergencyVisit", fields: [encounterId], references: [id], onDelete: Cascade)
-  patient       Patient       @relation("PatEmergencyVisits", fields: [patientId], references: [id], onDelete: Restrict)
-  treating      User?         @relation("EmergencyTreating", fields: [treatingId], references: [id], onDelete: SetNull)
+  organization      Organization      @relation("OrgEmergencyVisits", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment     Establishment     @relation("EstEmergencyVisits", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter         Encounter         @relation("EncEmergencyVisit", fields: [encounterId], references: [id], onDelete: Cascade)
+  patient           Patient           @relation("PatEmergencyVisits", fields: [patientId], references: [id], onDelete: Restrict)
+  treating          User?             @relation("EmergencyTreating", fields: [treatingId], references: [id], onDelete: SetNull)
+  triageEvaluation  TriageEvaluation? @relation("EmergencyTriageEval", fields: [triageEvaluationId], references: [id], onDelete: SetNull)
 
   notesLog EmergencyNote[]
 
   @@index([organizationId, arrivedAt])
   @@index([patientId])
   @@index([treatingId])
+  @@index([triageEvaluationId])
   @@index([disposition])
   @@index([establishmentId])
   @@schema("public")
