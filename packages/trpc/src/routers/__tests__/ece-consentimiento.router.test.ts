@@ -349,6 +349,122 @@ describe("eceConsentimientoRouter", () => {
     });
   });
 
+  // ─── crearQuirurgico ──────────────────────────────────────────────────────
+
+  describe("crearQuirurgico", () => {
+    const QX_INPUT = {
+      episodioId: EPISODIO_ID,
+      tipoConsentimiento: "quirurgico" as const,
+      procedimientoDescrito: "Colecistectomía laparoscópica",
+      riesgos: "Sangrado, lesión vías biliares",
+      alternativas: "Tratamiento conservador",
+      tipoAnestesia: "general" as const,
+      transfusionAutorizada: true,
+      ampliacionQuirurgicaAutorizada: true,
+      fotografiaGrabacionAutorizada: false,
+    };
+
+    it("happy-path: crea CONS_QX y devuelve ids con tipo CONS_QX", async () => {
+      prisma.$queryRaw
+        // tipo doc CONS_QX
+        .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INI_ID }] as never)
+        // paciente del episodio
+        .mockResolvedValueOnce([{ paciente_id: PACIENTE_ID }] as never)
+        // personal_salud del MC
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)
+        // RETURNING instanciaId
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }] as never)
+        // RETURNING consentimientoId
+        .mockResolvedValueOnce([{ id: CI_ID }] as never);
+      // INSERT consentimiento_quirurgico → executeRaw
+      prisma.$executeRaw.mockResolvedValueOnce(1 as never);
+
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      const result = await caller.crearQuirurgico(QX_INPUT);
+
+      expect(result.consentimientoId).toBe(CI_ID);
+      expect(result.estadoCodigo).toBe("borrador");
+      expect(result.tipo).toBe("CONS_QX");
+      // Debe haber llamado executeRaw para insertar la tabla satélite
+      expect(prisma.$executeRaw).toHaveBeenCalledOnce();
+    });
+
+    it("PRECONDITION_FAILED si CONS_QX no está en el catálogo ECE", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([] as never); // catálogo vacío
+
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      await expect(caller.crearQuirurgico(QX_INPUT)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    });
+
+    it("NOT_FOUND si el episodio no existe", async () => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INI_ID }] as never)
+        .mockResolvedValueOnce([] as never); // episodio vacío
+
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      await expect(caller.crearQuirurgico(QX_INPUT)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("PRECONDITION_FAILED si no hay personal_salud para el MC", async () => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INI_ID }] as never)
+        .mockResolvedValueOnce([{ paciente_id: PACIENTE_ID }] as never)
+        .mockResolvedValueOnce([] as never); // personal vacío
+
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      await expect(caller.crearQuirurgico(QX_INPUT)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    });
+
+    it("acepta fotografia_grabacion_autorizada:false y transfusion:false sin error", async () => {
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INI_ID }] as never)
+        .mockResolvedValueOnce([{ paciente_id: PACIENTE_ID }] as never)
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }] as never)
+        .mockResolvedValueOnce([{ id: CI_ID }] as never);
+      prisma.$executeRaw.mockResolvedValueOnce(1 as never);
+
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      const result = await caller.crearQuirurgico({
+        ...QX_INPUT,
+        transfusionAutorizada: false,
+        fotografiaGrabacionAutorizada: false,
+        ampliacionQuirurgicaAutorizada: false,
+      });
+
+      expect(result.consentimientoId).toBe(CI_ID);
+    });
+
+    it("rechaza input con tipoAnestesia inválido (schema Zod)", async () => {
+      const caller = eceConsentimientoRouter.createCaller(
+        makeCtx({ prisma, tenant: ECE_TENANT }),
+      );
+      await expect(
+        caller.crearQuirurgico({
+          ...QX_INPUT,
+          // @ts-expect-error a propósito: valor fuera del enum
+          tipoAnestesia: "epidural_desconocida",
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+  });
+
   // ─── validar (DIR) ────────────────────────────────────────────────────────
 
   describe("validar", () => {

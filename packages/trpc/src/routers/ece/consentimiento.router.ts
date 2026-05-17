@@ -39,11 +39,24 @@ import {
   eceConsentimientoFirmarPacienteSchema,
   eceConsentimientoFirmarMcSchema,
   eceConsentimientoValidarSchema,
+  eceConsentimientoQxCreateSchema,
 } from "./schemas";
 
 // =============================================================================
 // Tipos de fila raw
 // =============================================================================
+
+/**
+ * Campos extra que distinguen CONS_QX de CONS_INF.
+ * Se almacenan en ece.consentimiento_quirurgico (tabla satelite 1:1).
+ */
+export interface ConsentimientoQxRow {
+  consentimiento_id: string;
+  tipo_anestesia: string;
+  transfusion_autorizada: boolean;
+  ampliacion_quirurgica_autorizada: boolean;
+  fotografia_grabacion_autorizada: boolean;
+}
 
 export interface ConsentimientoRow {
   id: string;
@@ -675,6 +688,150 @@ export const eceConsentimientoRouter = router({
           ok: true as const,
           contenidoHash,
           firmadoEn: new Date().toISOString(),
+        };
+      });
+    }),
+
+  /**
+   * Crea un consentimiento QUIRÚRGICO (CONS_QX) en borrador.
+   *
+   * Extiende `create` con campos específicos de quirófano (NTEC §4.12):
+   *   - tipo_anestesia, transfusion_autorizada,
+   *     ampliacion_quirurgica_autorizada, fotografia_grabacion_autorizada.
+   *
+   * Pasos adicionales vs. create genérico:
+   *   5b. Inserta en ece.consentimiento_quirurgico (tabla satélite 1:1).
+   *
+   * El tipo de documento es CONS_QX. Si no existe en catálogo, falla con
+   * PRECONDITION_FAILED para que el DBA registre el catálogo primero.
+   *
+   * Require rol MC o ESP.
+   */
+  crearQuirurgico: physicianProc
+    .input(eceConsentimientoQxCreateSchema)
+    .mutation(async ({ ctx, input }) => {
+      const eceCtx = buildEceCtx(ctx);
+
+      return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+        // 1. Resolver tipo de documento CONS_QX
+        const tipoRows = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ tipo_doc_id: string; estado_inicial_id: string }>>)`
+          SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
+          FROM ece.tipo_documento td
+          JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+          WHERE td.codigo = 'CONS_QX'
+          LIMIT 1
+        `;
+
+        if (tipoRows.length === 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Tipo de documento CONS_QX no configurado en el catálogo ECE.",
+          });
+        }
+
+        const { tipo_doc_id, estado_inicial_id } = tipoRows[0]!;
+
+        // 2. Resolver paciente desde episodio
+        const pacienteRows = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ paciente_id: string }>>)`
+          SELECT paciente_id::text
+          FROM ece.episodio_atencion
+          WHERE id = ${input.episodioId}::uuid
+          LIMIT 1
+        `;
+
+        if (pacienteRows.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Episodio no encontrado: ${input.episodioId}`,
+          });
+        }
+        const pacienteId = pacienteRows[0]!.paciente_id;
+
+        // 3. Resolver personal_salud del MC creador
+        const personal = await findPersonal(tx, ctx.user.id);
+        if (!personal) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No se encontró un profesional de salud asociado a su cuenta.",
+          });
+        }
+
+        // 4. Crear instancia de workflow CONS_QX
+        const instanciaRows = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          INSERT INTO ece.documento_instancia
+            (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+          VALUES (
+            ${tipo_doc_id}::uuid,
+            ${input.episodioId}::uuid,
+            ${pacienteId}::uuid,
+            ${estado_inicial_id}::uuid,
+            ${eceCtx.personalId}::uuid
+          )
+          RETURNING id::text
+        `;
+        const instanciaId = instanciaRows[0]!.id;
+
+        // 5a. Insertar registro clínico base (ece.consentimiento_informado)
+        const ciRows = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          INSERT INTO ece.consentimiento_informado
+            (instancia_id, paciente_id, episodio_id, tipo,
+             procedimiento_descrito, riesgos_explicados, alternativas,
+             medico_que_informa,
+             firmante_rol, firmante_nombre, firmante_documento)
+          VALUES (
+            ${instanciaId}::uuid,
+            ${pacienteId}::uuid,
+            ${input.episodioId}::uuid,
+            ${"quirurgico"},
+            ${input.procedimientoDescrito},
+            ${input.riesgos ?? null},
+            ${input.alternativas ?? null},
+            ${personal.id}::uuid,
+            ${input.datosTestigo?.nombre ? "representante_legal" : null},
+            ${input.datosTestigo?.nombre ?? null},
+            ${input.datosTestigo?.documento ?? null}
+          )
+          RETURNING id::text
+        `;
+        const consentimientoId = ciRows[0]!.id;
+
+        // 5b. Insertar datos quirúrgicos específicos (tabla satélite)
+        await (tx.$executeRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<number>)`
+          INSERT INTO ece.consentimiento_quirurgico
+            (consentimiento_id,
+             tipo_anestesia,
+             transfusion_autorizada,
+             ampliacion_quirurgica_autorizada,
+             fotografia_grabacion_autorizada)
+          VALUES (
+            ${consentimientoId}::uuid,
+            ${input.tipoAnestesia},
+            ${input.transfusionAutorizada},
+            ${input.ampliacionQuirurgicaAutorizada},
+            ${input.fotografiaGrabacionAutorizada}
+          )
+        `;
+
+        return {
+          consentimientoId,
+          instanciaId,
+          estadoCodigo: "borrador",
+          tipo: "CONS_QX" as const,
         };
       });
     }),
