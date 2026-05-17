@@ -237,6 +237,24 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.epicrisis.certificada  (Fase 2 — ECE §3.15, Art. 21)
+// Emitido cuando el Director certifica la epicrisis de egreso.
+// -----------------------------------------------------------------------------
+
+export const eceEpicrisisCertificadaPayloadSchema = z.object({
+  epicrisisId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  /** Hash SHA-256 del documento de epicrisis en el momento de certificación. */
+  documentHash: z.string().min(64).max(64),
+  /** userId del Director que certifica (Art. 21). */
+  directorId: z.string().uuid(),
+  firmaId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+export type EceEpicrisisCertificadaPayload = z.infer<typeof eceEpicrisisCertificadaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +310,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
+  z.object({
+    eventType: z.literal("ece.epicrisis.certificada"),
+    payload: eceEpicrisisCertificadaPayloadSchema,
   }),
 ]);
 
