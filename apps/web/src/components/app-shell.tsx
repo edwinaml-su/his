@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Users,
   Bed,
+  BedDouble,
   Stethoscope,
   ClipboardList,
   Building2,
@@ -123,6 +124,17 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Hospitalario",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/episodio-hospitalario",
+        label: "Episodio Hospitalario",
+        icon: BedDouble,
+      },
     ],
   },
   {
