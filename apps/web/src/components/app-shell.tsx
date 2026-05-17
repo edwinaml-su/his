@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Users,
   Bed,
+  BedDouble,
   Stethoscope,
   ClipboardList,
   Building2,
@@ -132,6 +133,18 @@ const SECTIONS: NavSection[] = [
   {
     label: "ECE — Documentos",
     label: "ECE — Hospitalario",
+    label: "ECE — Hospitalario",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/episodio-hospitalario",
+        label: "Episodio Hospitalario",
+        icon: BedDouble,
+      },
+    ],
+  },
+  {
+    label: "ECE",
     defaultOpen: true,
     items: [
       { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList },

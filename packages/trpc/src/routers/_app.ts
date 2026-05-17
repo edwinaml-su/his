@@ -85,6 +85,8 @@ import { eceValoracionInicialRouter } from "./ece/valoracion-inicial-enfermeria.
 import { eceHojaIngresoRouter } from "./ece/hoja-ingreso.router";
 // ECE — Mapa de Camas
 import { eceCamaRouter } from "./ece/cama.router";
+// Fase 2 — ECE Episodio Hospitalario (ciclo hospitalario completo)
+import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -173,6 +175,8 @@ export const appRouter = router({
   eceHojaIngreso: eceHojaIngresoRouter,
   // ECE — Mapa de Camas
   eceCama: eceCamaRouter,
+  // Fase 2 — ECE Episodio Hospitalario (ciclo hospitalario completo)
+  eceEpisodioHospitalario: eceEpisodioHospitalarioRouter,
 });
 
 export type AppRouter = typeof appRouter;
