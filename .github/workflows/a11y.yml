@@ -1,0 +1,102 @@
+name: A11y Baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - '.github/workflows/a11y.yml'
+  schedule:
+    # Nightly 06:00 UTC = 00:00 America/El_Salvador (UTC-6)
+    - cron: '0 6 * * *'
+
+concurrency:
+  group: a11y-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  TURBO_TELEMETRY_DISABLED: 1
+
+jobs:
+  axe-baseline:
+    name: axe-core WCAG 2.1 AA — 5 páginas baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Variables de entorno para que Next.js y Prisma arranquen en modo CI.
+    # No se conecta a Supabase real — el spec usa /login y rutas autenticadas
+    # con test-users sembrados en la BD efímera.
+    env:
+      DATABASE_URL: postgresql://his:his@localhost:5432/his_a11y?schema=public
+      DIRECT_URL: postgresql://his:his@localhost:5432/his_a11y?schema=public
+      NEXT_PUBLIC_SUPABASE_URL: https://ci-dummy.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-dummy-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: ci-dummy-service-role
+      AUTH_SECRET: ci-dummy-secret-not-used-in-prod-ci-only
+      NODE_ENV: test
+      CI: true
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: his
+          POSTGRES_PASSWORD: his
+          POSTGRES_DB: his_a11y
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U his"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/database/prisma/schema.prisma
+
+      - name: Apply migrations to ephemeral DB
+        run: npx prisma migrate deploy --schema=packages/database/prisma/schema.prisma
+
+      - name: Seed minimal data (test users incluidos)
+        run: npm run db:seed
+        continue-on-error: true
+
+      - name: Install Playwright + Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Build app
+        run: npm run build
+
+      - name: Run a11y baseline spec
+        run: |
+          npx playwright test apps/web/e2e/dod/a11y-baseline.spec.ts \
+            --reporter=list,json \
+            --output=test-results/a11y
+        working-directory: apps/web
+
+      - name: Upload axe results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axe-results-${{ github.run_id }}
+          path: |
+            apps/web/test-results/a11y/
+            apps/web/playwright-report/
+          retention-days: 30
+          if-no-files-found: ignore
