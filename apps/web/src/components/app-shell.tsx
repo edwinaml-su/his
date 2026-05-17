@@ -14,6 +14,7 @@ import {
   Settings,
   History,
   HeartPulse,
+  HeartHandshake,
   Pill,
   FlaskConical,
   Activity,
@@ -125,6 +126,17 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Maternidad",
+    defaultOpen: false,
+    items: [
+      {
+        href: "/ece/reanimacion-neonatal",
+        label: "Reanimación",
+        icon: HeartHandshake,
+      },
     ],
   },
   {

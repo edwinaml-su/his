@@ -91,6 +91,8 @@ import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.route
 import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 // Fase 2 — Bridge Admisión Hospitalaria
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
+// ECE — Maternidad: Reanimación Neonatal NRP (AHA/AAP)
+import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -185,6 +187,8 @@ export const appRouter = router({
   eceCertDef: eceCertDefRouter,
   // Fase 2 — Bridge Admisión Hospitalaria
   eceBridgeAdmision: eceBridgeAdmisionRouter,
+  // ECE — Maternidad: Reanimación Neonatal NRP
+  eceReanimacionNeonatal: eceReanimacionNeonatalRouter,
 });
 
 export type AppRouter = typeof appRouter;
