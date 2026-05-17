@@ -140,6 +140,17 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/obstetricia/partograma",
+        label: "Partograma",
+        icon: Activity,
+      },
+    ],
+  },
+  {
     label: "ECE — Documentos",
     defaultOpen: true,
     items: [
