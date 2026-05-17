@@ -22,6 +22,12 @@ interface BedMapProps {
   groups: BedMapServiceGroup[];
   onBedClick?: (bed: BedCell) => void;
   className?: string;
+  /**
+   * Indica la fuente de datos del mapa. No afecta el render — es informativo
+   * para herramientas de testing y future-proofing de consumers no migrados.
+   * Default: "ece" (fuente canónica tras PR refactor /beds).
+   */
+  dataSource?: "legacy" | "ece";
 }
 
 const STATUS_STYLES: Record<BedStatus, string> = {
@@ -46,7 +52,8 @@ const STATUS_LABEL: Record<BedStatus, string> = {
  * Mapa visual de camas por servicio (TDR §8.6).
  * Grid responsivo; cada celda es un botón si onBedClick está provisto.
  */
-export function BedMap({ groups, onBedClick, className }: BedMapProps) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function BedMap({ groups, onBedClick, className, dataSource: _dataSource = "ece" }: BedMapProps) {
   return (
     <div className={cn("space-y-6", className)}>
       {groups.map((group) => (
