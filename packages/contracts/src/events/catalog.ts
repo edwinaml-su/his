@@ -54,6 +54,8 @@ export const EVENT_TYPES = [
   // Fase 2 — ECE Episodio de Atención (apertura / cierre)
   "ece.episodio.abierto",
   "ece.episodio.cerrado",
+  // Fase 2 — Bridge Admisión Hospitalaria (ADM completa orden→episodio)
+  "ece.admision.completada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

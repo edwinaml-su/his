@@ -440,6 +440,33 @@ export const eceEpisodioCerradoPayloadSchema = z.object({
 export type EceEpisodioCerradoPayload = z.infer<typeof eceEpisodioCerradoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// ece.admision.completada (Fase 2 — Bridge Admisión Hospitalaria)
+// Emitido cuando ADM ejecuta la admisión completa desde una orden de ingreso.
+// Crea atómicamente: episodio + episodio_hospitalario + hoja_ingreso + (cama).
+// -----------------------------------------------------------------------------
+
+export const eceAdmisionCompletadaPayloadSchema = z.object({
+  /** UUID del episodio_atencion creado. */
+  episodioId: z.string().uuid(),
+  /** UUID del episodio_hospitalario creado. */
+  episodioHospitalarioId: z.string().uuid(),
+  /** UUID de la hoja_ingreso creada. */
+  hojaIngresoId: z.string().uuid(),
+  /** UUID de la orden_ingreso que originó la admisión. */
+  ordenIngresoId: z.string().uuid(),
+  /** UUID del paciente ECE. */
+  ecePacienteId: z.string().uuid(),
+  /** UUID de la cama asignada, si se asignó una. */
+  camaAsignadaId: z.string().uuid().optional(),
+  /** UUID del ADM que ejecutó la admisión. */
+  admisionPorId: z.string().uuid(),
+  /** Organización (tenant). */
+  organizationId: z.string().uuid(),
+});
+
+export type EceAdmisionCompletadaPayload = z.infer<typeof eceAdmisionCompletadaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -553,6 +580,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.episodio.cerrado"),
     payload: eceEpisodioCerradoPayloadSchema,
+  }),
+  // Fase 2 — Bridge Admisión Hospitalaria
+  z.object({
+    eventType: z.literal("ece.admision.completada"),
+    payload: eceAdmisionCompletadaPayloadSchema,
   }),
 ]);
 
