@@ -38,6 +38,7 @@ import {
   BarChart3,
   Layers,
   ClipboardCheck,
+  FileText,
   ChevronDown,
   ChevronRight,
   FilePenLine,
@@ -95,6 +96,17 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/historia-clinica",
+        label: "Historia Clínica",
+        icon: FileText,
+      },
     ],
   },
   {
