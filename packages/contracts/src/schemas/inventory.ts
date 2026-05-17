@@ -127,3 +127,34 @@ export const stockMovementListInput = z.object({
 export type StockItemCreateInput = z.infer<typeof stockItemCreateInput>;
 export type StockLotCreateInput = z.infer<typeof stockLotCreateInput>;
 export type StockMovementCreateInput = z.infer<typeof stockMovementCreateInput>;
+
+// ---------------------------------------------------------------------------
+// GS1 Inventory Thresholds (SQL 83)
+// ---------------------------------------------------------------------------
+
+export const configurarThresholdInput = z.object({
+  gtinId: z.string().uuid(),
+  ubicacionGln: z.string().trim().min(1).max(13),
+  stockMinimo: z.number().int().nonnegative(),
+  stockCritico: z.number().int().nonnegative(),
+  reorderPoint: z.number().int().nonnegative(),
+  diasCaducidadAlerta: z.number().int().min(1).max(365).default(30),
+}).refine(
+  (d) => d.stockCritico <= d.stockMinimo,
+  { message: "stockCritico debe ser <= stockMinimo.", path: ["stockCritico"] },
+);
+
+export type ConfigurarThresholdInput = z.infer<typeof configurarThresholdInput>;
+
+export const ALERTA_TIPO = ["stock_bajo", "stock_critico", "proximo_vencer", "vencido"] as const;
+export const alertaTipoEnum = z.enum(ALERTA_TIPO);
+export type AlertaTipo = z.infer<typeof alertaTipoEnum>;
+
+export const listAlertasInput = z.object({
+  gtinId: z.string().uuid().optional(),
+  ubicacionGln: z.string().trim().max(13).optional(),
+  tipos: z.array(alertaTipoEnum).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+export type ListAlertasInput = z.infer<typeof listAlertasInput>;

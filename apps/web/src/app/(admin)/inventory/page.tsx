@@ -41,9 +41,14 @@ export default function InventoryPage() {
             Items de stock — catálogo global + tenant (§19).
           </p>
         </div>
-        <Button asChild>
-          <Link href="/inventory/new">Nuevo item</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/inventory/alertas">Alertas GS1</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/inventory/new">Nuevo item</Link>
+          </Button>
+        </div>
       </div>
 
       <Card>
