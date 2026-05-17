@@ -603,6 +603,76 @@ export const eceAdmisionCompletadaPayloadSchema = z.object({
 export type EceAdmisionCompletadaPayload = z.infer<typeof eceAdmisionCompletadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// ece.valoracion_inicial.firmada (Fase 2 S4 — NTEC §4)
+// -----------------------------------------------------------------------------
+
+export const eceValoracionInicialFirmadaPayloadSchema = z.object({
+  valoracionId: z.string().uuid(),
+  episodioHospitalarioId: z.string().uuid(),
+  enfermeraId: z.string().uuid(),
+});
+
+export type EceValoracionInicialFirmadaPayload = z.infer<
+  typeof eceValoracionInicialFirmadaPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.episodio.altaIniciada / altaConfirmada (Fase 2 S4 — wizard alta médica)
+// -----------------------------------------------------------------------------
+
+export const eceEpisodioAltaIniciadaPayloadSchema = z.object({
+  episodioId: z.string().uuid(),
+  epicrisisId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+  medicoAltaId: z.string().uuid(),
+  motivoAlta: z.string(),
+  fechaHoraAlta: z.string(),
+});
+
+export type EceEpisodioAltaIniciadaPayload = z.infer<
+  typeof eceEpisodioAltaIniciadaPayloadSchema
+>;
+
+export const eceEpisodioAltaConfirmadaPayloadSchema = z.object({
+  episodioId: z.string().uuid(),
+  epicrisisId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+  cerradoPor: z.string().uuid(),
+});
+
+export type EceEpisodioAltaConfirmadaPayload = z.infer<
+  typeof eceEpisodioAltaConfirmadaPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.certificado_defuncion.firmado / .certificado (Fase 2 S4 — NTEC Doc 13)
+// -----------------------------------------------------------------------------
+
+export const eceCertificadoDefuncionFirmadoPayloadSchema = z.object({
+  certDefId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+  payloadHash: z.string(),
+  medicoId: z.string().uuid(),
+});
+
+export type EceCertificadoDefuncionFirmadoPayload = z.infer<
+  typeof eceCertificadoDefuncionFirmadoPayloadSchema
+>;
+
+export const eceCertificadoDefuncionCertificadoPayloadSchema = z.object({
+  certDefId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  pacienteId: z.string().uuid(),
+  payloadHash: z.string(),
+  dirUserId: z.string().uuid(),
+});
+
+export type EceCertificadoDefuncionCertificadoPayload = z.infer<
+  typeof eceCertificadoDefuncionCertificadoPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -751,6 +821,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.resultado_estudio.aprobado"),
     payload: eceResultadoEstudioAprobadoPayloadSchema,
+  }),
   // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
   z.object({
     eventType: z.literal("ece.hoja_ingreso.firmada"),
@@ -759,10 +830,34 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.hoja_ingreso.validada"),
     payload: eceHojaIngresoValidadaPayloadSchema,
+  }),
   // Fase 2 — Bridge Admisión Hospitalaria
   z.object({
     eventType: z.literal("ece.admision.completada"),
     payload: eceAdmisionCompletadaPayloadSchema,
+  }),
+  // Fase 2 (S4) — ECE Valoración Inicial Enfermería
+  z.object({
+    eventType: z.literal("ece.valoracion_inicial.firmada"),
+    payload: eceValoracionInicialFirmadaPayloadSchema,
+  }),
+  // Fase 2 (S4) — ECE Episodio Hospitalario alta médica
+  z.object({
+    eventType: z.literal("ece.episodio.altaIniciada"),
+    payload: eceEpisodioAltaIniciadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.episodio.altaConfirmada"),
+    payload: eceEpisodioAltaConfirmadaPayloadSchema,
+  }),
+  // Fase 2 (S4) — ECE Certificado de Defunción
+  z.object({
+    eventType: z.literal("ece.certificado_defuncion.firmado"),
+    payload: eceCertificadoDefuncionFirmadoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.certificado_defuncion.certificado"),
+    payload: eceCertificadoDefuncionCertificadoPayloadSchema,
   }),
 ]);
 

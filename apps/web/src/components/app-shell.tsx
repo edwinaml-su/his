@@ -49,7 +49,6 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
-  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -94,10 +93,8 @@ const SECTIONS: NavSection[] = [
   },
   {
     label: "ECE — Atención",
-    label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
-      { href: "/ece/camas", label: "Mapa de Camas", icon: LayoutGrid },
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
       {
         href: "/ece/indicaciones",
@@ -131,11 +128,10 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE — Documentos",
-    label: "ECE — Hospitalario",
     label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
+      { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList },
       {
         href: "/ece/episodio-hospitalario",
         label: "Episodio Hospitalario",
@@ -144,10 +140,9 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Documentos",
     defaultOpen: true,
     items: [
-      { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList },
       {
         href: "/ece/historia-clinica",
         label: "Historia Clínica",
@@ -157,7 +152,6 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
-      { href: "/ece/defuncion", label: "Defunción", icon: Skull },
     ],
   },
   {

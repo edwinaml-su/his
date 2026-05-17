@@ -70,6 +70,14 @@ export const EVENT_TYPES = [
   "ece.hoja_ingreso.validada",
   // Fase 2 — Bridge Admisión Hospitalaria (ADM completa orden→episodio)
   "ece.admision.completada",
+  // Fase 2 (S4) — ECE Valoración Inicial Enfermería (NTEC §4)
+  "ece.valoracion_inicial.firmada",
+  // Fase 2 (S4) — ECE Episodio Hospitalario — Alta médica (wizard 2 pasos)
+  "ece.episodio.altaIniciada",
+  "ece.episodio.altaConfirmada",
+  // Fase 2 (S4) — ECE Certificado de Defunción (MC firma → DIR certifica)
+  "ece.certificado_defuncion.firmado",
+  "ece.certificado_defuncion.certificado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
