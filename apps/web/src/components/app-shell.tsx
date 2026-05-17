@@ -126,9 +126,10 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
+      { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList },
       {
         href: "/ece/historia-clinica",
         label: "Historia Clínica",

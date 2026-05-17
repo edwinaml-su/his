@@ -54,6 +54,9 @@ export const EVENT_TYPES = [
   // Fase 2 — ECE Episodio de Atención (apertura / cierre)
   "ece.episodio.abierto",
   "ece.episodio.cerrado",
+  // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
+  "ece.hoja_ingreso.firmada",
+  "ece.hoja_ingreso.validada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
