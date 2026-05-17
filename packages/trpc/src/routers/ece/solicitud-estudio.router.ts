@@ -1,17 +1,54 @@
 /**
- * eceSolicitudEstudio — Router tRPC para Solicitud de Estudio ECE (Doc 18 NTEC).
+ * Router tRPC — ECE Solicitud de Estudio Diagnóstico (SOL_EST).
  *
- * Workflow SOL_EST:
- *   borrador → en_revision → firmado → validado
- *   cualquier estado pre-validado → anulado
+ * Documento NTEC: Doc 18 (parte 1) — Solicitud de Estudio Diagnóstico.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.18.
+ * Código de tipo_documento: SOL_EST.
+ * La solicitud es el documento médico que autoriza la realización del estudio.
+ *   El resultado (RES_EST) se crea en resultado-estudio.router.ts referenciando
+ *   esta solicitud. Ambos forman el par Doc 18 NTEC.
  *
- * MC firma (con PIN electrónico), MC valida.
- * RLS habilitado en ece.solicitud_estudio (withWorkflowContext demota rol).
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: SOL_EST)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (MC: completar datos del estudio solicitado)
+ *   en_revision → firmado      (MC: firma con PIN argon2id — autoriza el estudio)
+ *   firmado     → validado     (MC: validación clínica — confirma la solicitud)
+ *   cualquiera  → anulado      (MC: pre-validado — cancelación o error)
  *
- * Outbox emite:
- *   - 'ece.solicitud_estudio.firmada'   al firmar
- *   - 'ece.solicitud_estudio.validada'  al validar
- *   - 'ece.solicitud_estudio.anulada'   al anular
+ *   MC firma y también valida (mismo rol). El PIN se verifica contra
+ *   ece.firma_electronica.pin_hash (argon2id). RLS habilitado en
+ *   ece.solicitud_estudio — withWorkflowContext demota el rol a 'authenticated'.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.solicitud_estudio.firmada'   — emitido por firmar(). Notifica al laboratorio
+ *     o servicio de imagenología que hay un estudio autorizado pendiente.
+ *     Payload: { solicitudId, episodioId, medicoId, tipoEstudio, prioridad, orgId }
+ *   'ece.solicitud_estudio.validada'  — emitido por validar().
+ *     Payload: { solicitudId, medicoId, orgId }
+ *   'ece.solicitud_estudio.anulada'   — emitido por anular().
+ *     Payload: { solicitudId, medicoId, motivo, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.solicitud_estudio   — fila principal: episodio_id, tipo_estudio
+ *                             ('laboratorio'|'imagenologia'|'otro'),
+ *                             prioridad ('rutina'|'urgente'|'stat'),
+ *                             descripcion, estado, firmado_por, firmado_en,
+ *                             instancia_id FK(ece.documento_instancia)
+ *   ece.documento_instancia — instancia de flujo vinculada
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get   → requireRole(["MC","PHYSICIAN","NURSE","TEC","PROF_DX"])
+ *   create      → requireRole(["MC","PHYSICIAN"])
+ *   firmar      → requireRole(["MC","PHYSICIAN"])  — requiere PIN argon2id
+ *   validar     → requireRole(["MC","PHYSICIAN"])
+ *   anular      → requireRole(["MC","PHYSICIAN"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

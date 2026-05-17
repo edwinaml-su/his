@@ -1,20 +1,52 @@
 /**
- * Stream ECE — Router tRPC: Bitácora de Acceso.
+ * Router tRPC — ECE Bitácora de Acceso al Expediente Clínico.
  *
- * Norma: NTEC Arts. 45-52 (Acuerdo n.° 1616, MINSAL 2024).
- * Registra y consulta accesos al expediente clínico electrónico (ECE).
+ * Norma: NTEC Arts. 45-52 (MINSAL Acuerdo n.° 1616, 2024).
+ * Requisito regulatorio: todo acceso al ECE —lectura, escritura, firma,
+ *   certificación, impresión, exportación— debe registrarse en la bitácora
+ *   con usuario, acción, resultado (éxito/fallo), IP y contexto.
+ *   Retención mínima legal: 10 años (Art. 51 NTEC).
+ * Código de módulo: ECE-BITACORA.
  *
- * Tabla raw SQL: ece.bitacora_acceso
- * Columnas esperadas:
- *   id uuid PK, firma_id uuid nullable, user_id uuid NOT NULL,
- *   paciente_id uuid nullable, accion text NOT NULL, exito boolean NOT NULL,
- *   contexto text nullable, ip text nullable, registrado_en timestamptz NOT NULL.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW
+ * ---------------------------------------------------------------------------
+ *   No aplica workflow de documento (NTEC). La bitácora es append-only:
+ *   INSERT únicamente, sin UPDATE ni DELETE permitidos desde la capa de aplicación.
+ *   La inmutabilidad se refuerza con RLS Postgres (rol authenticated solo puede
+ *   INSERT en ece.bitacora_acceso; SELECT requiere rol DIR o ARCH).
  *
- * Procedures:
- *   bitacora.list      — query paginada (requireRole DIR|ARCH).
- *   bitacora.exportCsv — genera CSV base64 (requireRole DIR|ARCH).
- *   bitacora.metrics   — métricas del período (requireRole DIR|ARCH).
- *   bitacora.register  — mutation: log manual de evento (protectedProcedure).
+ * ---------------------------------------------------------------------------
+ * OUTBOX
+ * ---------------------------------------------------------------------------
+ *   No emite eventos de dominio. Es en sí misma un log de consumo, no de producción.
+ *   Otros routers (certificacion, rri, consentimiento, etc.) invocan
+ *   `bitacora.register` post-transacción para registrar sus acciones.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.bitacora_acceso  — log inmutable append-only:
+ *     id uuid PK, firma_id uuid nullable FK(ece.firma_electronica),
+ *     user_id uuid NOT NULL, paciente_id uuid nullable,
+ *     accion text NOT NULL, exito boolean NOT NULL,
+ *     contexto text nullable, ip text nullable,
+ *     registrado_en timestamptz NOT NULL DEFAULT now()
+ *   ece.firma_electronica — referenciada para accesos con firma (firma_id)
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list        → requireRole(["DIR","ARCH"])   — paginada con filtros
+ *   exportCsv   → requireRole(["DIR","ARCH"])   — CSV base64 del período
+ *   metrics     → requireRole(["DIR","ARCH"])   — conteos por acción/período
+ *   register    → protectedProcedure           — cualquier usuario autenticado
+ *                 (los routers lo invocan internamente, no el cliente directamente)
+ *
+ * Accion enum (NTEC Arts. 45-52 + legacy genérico):
+ *   "FIRMAR" | "VALIDAR" | "CERTIFICAR" | "ANULAR" | "CREATE" | "UPDATE"
+ *   "verify" | "confirm" | "view" | "create" | "update" | "delete" |
+ *   "export" | "print" | "share"
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

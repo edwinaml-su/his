@@ -1,23 +1,55 @@
 /**
- * Bridge ECE↔HIS Encounter — Fase 2, Stream 22b.
+ * Router tRPC — Bridge ECE ↔ HIS Encounter (Stream 22b).
  *
- * Operaciones:
- *   bridge.linkEncounter              — vincula episodio ECE existente a Encounter HIS.
- *   bridge.unlinkEncounter            — elimina el vínculo (SET NULL en public_encounter_id).
- *   bridge.createEpisodioFromEncounter — crea ece.episodio_atencion desde un Encounter HIS.
- *   bridge.listEncountersWithoutEpisodio — Encounters HIS sin episodio ECE (paginado).
+ * Norma: MINSAL Acuerdo n.° 1616 (2024) — integración entre el expediente
+ *   clínico electrónico (schema ece) y el módulo de Encounters del HIS
+ *   (schema public). Los sistemas coexisten durante la migración gradual.
  *
- * Invariantes:
+ * Propósito: garantizar que cada Encounter HIS quede vinculado con exactamente
+ *   un ece.episodio_atencion. La vinculación permite que los documentos NTEC
+ *   (HIST_CLIN, SIG_VIT, IND_MED…) se asocien al episodio correcto.
+ *
+ * ---------------------------------------------------------------------------
+ * OPERACIONES
+ * ---------------------------------------------------------------------------
+ *   linkEncounter               — vincula episodio ECE existente a Encounter HIS.
+ *                                 Escribe public_encounter_id en ece.episodio_atencion.
+ *   unlinkEncounter             — elimina el vínculo (SET NULL en public_encounter_id).
+ *   createEpisodioFromEncounter — crea ece.episodio_atencion desde un Encounter HIS
+ *                                 ya existente (conversión unidireccional).
+ *   listEncountersWithoutEpisodio — Encounters HIS sin episodio ECE (paginado).
+ *
+ * ---------------------------------------------------------------------------
+ * INVARIANTES
+ * ---------------------------------------------------------------------------
  *   - Toda escritura ECE usa raw SQL ($queryRaw / $executeRaw) porque ece.*
  *     no está en schema.prisma (schema ECE separado, Opción B).
- *   - Toda lectura de public.Encounter usa Prisma para aprovechar tipos y RLS proxy.
- *   - createEpisodioFromEncounter resuelve ece.paciente vía public_patient_id = patientId.
- *     Si no existe fila ece.paciente para el paciente, lanza PRECONDITION_FAILED —
- *     el bridge de paciente (stream 22) debe correr primero.
- *   - El outbox (DomainEvent + AuditLog) se emite dentro de la misma transacción
- *     Prisma; si hay rollback, el evento NO existe (atomicidad garantizada).
- *   - requireRole(["PHYSICIAN","NURSE","ADM"]) aplica a todas las mutations.
- *     listEncountersWithoutEpisodio sólo requiere tenantProcedure (lectura).
+ *   - Toda lectura de public."Encounter" usa Prisma ORM (tipos tipados + RLS proxy).
+ *   - createEpisodioFromEncounter resuelve ece.paciente vía
+ *     public_patient_id = patientId. Si no existe ece.paciente, lanza
+ *     PRECONDITION_FAILED — el bridge de paciente (Stream 22) debe correr primero.
+ *   - Outbox emitido dentro de la misma transacción Prisma; rollback cancela evento.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.episodio.linkedToEncounter'  — emitido por linkEncounter y
+ *                                       createEpisodioFromEncounter.
+ *     Payload: { episodioId, encounterId, userId, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL + Prisma mixto)
+ * ---------------------------------------------------------------------------
+ *   ece.episodio_atencion    — public_encounter_id (FK nullable a public."Encounter")
+ *   ece.paciente             — public_patient_id (para resolver paciente ECE)
+ *   public."Encounter"       — leído via Prisma ORM
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   listEncountersWithoutEpisodio → tenantProcedure (lectura, sin restricción de rol)
+ *   linkEncounter, unlinkEncounter, createEpisodioFromEncounter
+ *                                 → requireRole(["PHYSICIAN","NURSE","ADM"])
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

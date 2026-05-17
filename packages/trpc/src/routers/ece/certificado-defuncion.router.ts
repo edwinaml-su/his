@@ -1,20 +1,54 @@
 /**
- * ECE — Router Certificado de Defunción (NTEC Art. 21 / MINSAL Acuerdo 1616-2024).
+ * Router tRPC — ECE Certificado de Defunción (CERT_DEF).
  *
- * Tabla física: ece.certificado_defuncion (raw SQL — no usa Prisma ORM directo).
- * Workflow (CERT_DEF): borrador → firmado (MC+PIN) → validado (MC) → certificado (DIR+PIN) → anulado.
- * INMUTABLE post-firma: trigger `trg_certdef_inmutable` en BD bloquea UPDATE/DELETE.
+ * Documento NTEC: Art. 21 — Certificado de Defunción.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024).
+ * Código de tipo_documento: CERT_DEF.
+ * Relevancia legal: el certificado es insumo del Registro del Estado Civil (RNPN).
  *
- * Outbox:
- *   firmar    → emite `ece.certificado_defuncion.firmado`
- *   certificar → emite `ece.certificado_defuncion.certificado`
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (CERT_DEF — triple firma con PIN)
+ * ---------------------------------------------------------------------------
+ *   borrador  → firmado     (MC / PHYSICIAN: firma con PIN argon2id verificado)
+ *   firmado   → validado    (MC / PHYSICIAN: revisión y validación clínica)
+ *   validado  → certificado (DIR: certificación formal con PIN argon2id)
+ *   cualquiera→ anulado     (DIR: solo si estado != certificado)
  *
- * Roles:
- *   list, get      → MC | DIR | PHYSICIAN
- *   create, firmar → MC | PHYSICIAN  (MC hace ambas, también valida)
- *   validar        → MC | PHYSICIAN
- *   certificar     → DIR
- *   anular         → DIR (solo si estado != certificado)
+ *   INMUTABILIDAD: trigger `trg_certdef_inmutable` en BD bloquea cualquier
+ *   UPDATE o DELETE sobre ece.certificado_defuncion una vez estado = 'firmado'.
+ *   El PIN se verifica contra ece.firma_electronica.pin_hash (argon2id) con
+ *   lockout automático tras 3 intentos fallidos (locked_until timestamptz).
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.certificado_defuncion.firmado'      — emitido por firmar().
+ *     Payload: { certDefId, pacienteId, medicoId, payloadHash, orgId }
+ *   'ece.certificado_defuncion.certificado'  — emitido por certificar().
+ *     Payload: { certDefId, directorId, payloadHash, orgId }
+ *   payloadHash = SHA-256({ causaDirecta, causasIntermedias, causaFundamental,
+ *                            muerteViolenta, fechaHoraMuerte })
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.certificado_defuncion   — fila principal: paciente_id, medico_id,
+ *                                 fecha_hora_muerte, causa_directa_cie10,
+ *                                 causas_intermedias_cie10 (JSONB), causa_fundamental_cie10,
+ *                                 muerte_violenta bool, estado, payload_hash
+ *   ece.firma_electronica       — credencial de firma: pin_hash, failed_attempts,
+ *                                 locked_until (lockout tras 3 intentos)
+ *   ece.personal_salud          — mapeo his_user_id → personal ECE id
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get   → requireRole(["MC","PHYSICIAN","DIR"])
+ *   create      → requireRole(["MC","PHYSICIAN"])
+ *   firmar      → requireRole(["MC","PHYSICIAN"])  — requiere PIN
+ *   validar     → requireRole(["MC","PHYSICIAN"])
+ *   certificar  → requireRole(["DIR"])             — requiere PIN
+ *   anular      → requireRole(["DIR"])
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";

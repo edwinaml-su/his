@@ -1,17 +1,54 @@
 /**
- * Router tRPC — ECE §3.15 Epicrisis de Egreso (NTEC / Art. 40-21).
+ * Router tRPC — ECE Epicrisis de Egreso.
  *
- * Tabla física: ece.epicrisis_egreso (raw SQL — fuera del schema Prisma).
- * Workflow INMUTABLE post-firma (Art. 40):
- *   borrador → firmado   (MC,  requireRole PHYSICIAN)
- *   firmado  → validado  (ESP, requireRole ESP)
- *   validado → certificado (DIR, requireRole DIR) → emite ece.epicrisis.certificada
- *   cualquier estado → anulado (DIR, solo antes de certificar)
+ * Documento NTEC: §3.15 Epicrisis / Resumen de Egreso Hospitalario.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), Arts. 40-21.
+ * Código de tipo_documento: EPICRISIS_EGRESO.
+ *
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (tres firmas progresivas — Art. 40 NTEC)
+ * ---------------------------------------------------------------------------
+ *   borrador    → firmado      (MC / PHYSICIAN: firma inicial con hash SHA-256)
+ *   firmado     → validado     (ESP: especialista revisa y valida)
+ *   validado    → certificado  (DIR: director médico certifica formalmente)
+ *   cualquiera  → anulado      (DIR: solo antes del estado certificado)
+ *
+ *   INMUTABILIDAD: el trigger `trg_epicrisis_inmutable` en BD bloquea cualquier
+ *   UPDATE o DELETE sobre ece.epicrisis_egreso una vez que estado = 'firmado'.
+ *   La anulación crea registro nuevo con estado 'anulado' (soft-delete).
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.epicrisis.certificada'  — emitido por certificar().
+ *     Payload: { epicrisisId, episodioHospitalarioId, directorId,
+ *                payloadHash, organizationId }
+ *     payloadHash = SHA-256({ diagnosticosEgreso, resumenIngreso,
+ *                              tratamientoEgreso, indicacionesEgreso })
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.epicrisis_egreso         — fila principal: episodio_hospitalario_id,
+ *                                  fecha_egreso, motivo_egreso,
+ *                                  diagnostico_egreso_cie10 (JSONB array),
+ *                                  resumen_ingreso, evolucion_hospitalaria,
+ *                                  tratamiento_egreso, indicaciones_egreso,
+ *                                  estado, firmado_por, validado_por,
+ *                                  certificado_por, payload_hash
+ *   ece.documento_instancia      — instancia de flujo vinculada (instancia_id)
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get           → requireRole(["PHYSICIAN","MC","ESP","DIR","NURSE"])
+ *   create, update      → requireRole(["MC","PHYSICIAN"])
+ *   firmar              → requireRole(["MC","PHYSICIAN"])
+ *   validar             → requireRole(["ESP"])
+ *   certificar          → requireRole(["DIR"])
+ *   anular              → requireRole(["DIR"])
  *
  * Raw SQL es obligatorio porque el schema Prisma no modela las tablas ECE.
- * La inmutabilidad se refuerza con el trigger `trg_epicrisis_inmutable` (SQL 61).
- *
- * Outbox: certificar emite `ece.epicrisis.certificada` con hash + directorId.
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";

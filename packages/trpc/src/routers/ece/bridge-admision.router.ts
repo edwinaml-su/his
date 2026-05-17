@@ -1,30 +1,64 @@
 /**
- * Bridge Admisión Hospitalaria (Fase 2).
+ * Router tRPC — Bridge Admisión Hospitalaria (Fase 2).
  *
- * Flujo: orden_ingreso (validada) → tx atómica:
- *   1. episodio_atencion       (modalidad=hospitalario, estado=abierto)
- *   2. episodio_hospitalario   (linked al episodio)
- *   3. hoja_ingreso            (linked a orden + episodio, estado=vigente)
- *   4. asignacion_cama         (si camaId provisto) + UPDATE cama.estado=ocupada
- *   5. documento_instancia     (hoja_ingreso como documento ECE firmado por ADM)
- *   6. documento_instancia_historial (traza de firma con hash)
- *   → emite ece.admision.completada en outbox
+ * Norma: MINSAL Acuerdo n.° 1616 (2024) — proceso formal de admisión hospitalaria.
+ * Código de operación: ECE-ADMISION (transversal — crea múltiples documentos en 1 tx).
+ * Stream: Stream 14 (Admisión hospitalaria completa).
  *
- * Si cualquier paso falla → rollback total (tx Prisma + raw SQL en mismo tx client).
+ * Este router es la pieza central del proceso de ingreso hospitalario: toma una
+ *   orden_ingreso validada y ejecuta una transacción atómica de 6 pasos que crea
+ *   todos los documentos ECE necesarios para que el paciente esté "admitido".
  *
- * Invariantes:
- *   - Orden debe estar estado_registro='validado' (firmada MT, validada MC).
- *   - Orden sin episodio previo (idempotencia: si ya tiene, retorna CONFLICT).
- *   - PIN ADM valida contra ece.firma_electronica del personal en sesión.
+ * ---------------------------------------------------------------------------
+ * FLUJO ATÓMICO (admitirDesdeOrden — 6 pasos en 1 Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   Paso 1: INSERT ece.episodio_atencion   (modalidad=hospitalario, estado=abierto)
+ *   Paso 2: INSERT ece.episodio_hospitalario (linked al episodio del paso 1)
+ *   Paso 3: INSERT ece.hoja_ingreso        (linked a orden + episodio, estado=vigente)
+ *   Paso 4: INSERT ece.asignacion_cama     (si camaId provisto)
+ *           + UPDATE public."Bed".estadoManual = 'ocupada'
+ *   Paso 5: INSERT ece.documento_instancia (instancia HOJA_ING firmada por ADM)
+ *   Paso 6: INSERT ece.documento_instancia_historial (traza de firma con hash SHA-256)
+ *   → emite 'ece.admision.completada' en outbox
+ *
+ *   Si cualquier paso falla → rollback total. El outbox NO se emite en rollback
+ *   (emitDomainEvent opera dentro del mismo tx client).
+ *
+ * ---------------------------------------------------------------------------
+ * INVARIANTES DE NEGOCIO
+ * ---------------------------------------------------------------------------
+ *   - Orden debe tener estado_registro='validado' (firmada MT, validada MC).
+ *   - Orden sin episodio previo: idempotencia — si ya tiene episodio, CONFLICT.
+ *   - PIN ADM verificado contra ece.firma_electronica.pin_hash (argon2id).
  *   - Toda escritura ECE usa raw SQL (ece.* fuera del schema Prisma principal).
- *   - withTenantContext NO se usa aquí porque la transacción Prisma ya garantiza
- *     la atomicidad; el RLS de ece.* aplica vía schema ece separado y las
- *     políticas son por establecimiento, no por org — el router verifica
- *     explícitamente que paciente y orden pertenecen al establecimiento del usuario.
+ *   - withTenantContext NO se usa: la tx Prisma garantiza atomicidad; el RLS
+ *     de ece.* aplica por schema separado y el router verifica pertenencia al
+ *     establecimiento explícitamente (no por org JWT).
  *
- * Roles:
- *   admitirDesdeOrden          → requireRole(["ADM"])
- *   listOrdenesPendientesAdmision → tenantProcedure
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * ---------------------------------------------------------------------------
+ *   'ece.admision.completada'  — emitido por admitirDesdeOrden().
+ *     Payload: { episodioId, hojaIngresoId, camaId, ordenId, pacienteId, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* + public.* mezclados)
+ * ---------------------------------------------------------------------------
+ *   ece.episodio_atencion          — creado (paso 1)
+ *   ece.episodio_hospitalario      — creado (paso 2)
+ *   ece.hoja_ingreso               — creado (paso 3)
+ *   ece.asignacion_cama            — creado opcional (paso 4)
+ *   public."Bed"                   — actualizado estadoManual (paso 4)
+ *   ece.documento_instancia        — creado (paso 5)
+ *   ece.documento_instancia_historial — creado (paso 6)
+ *   ece.firma_electronica          — leída para verificar PIN ADM
+ *   ece.orden_ingreso              — leída para validar precondición
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   admitirDesdeOrden             → requireRole(["ADM"])
+ *   listOrdenesPendientesAdmision → tenantProcedure (solo lectura)
  */
 import { TRPCError } from "@trpc/server";
 import { createHash } from "node:crypto";
