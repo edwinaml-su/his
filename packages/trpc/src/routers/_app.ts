@@ -47,6 +47,7 @@ import { accountingRouter } from "./accounting.router";
 import { portalRouter } from "./portal.router";
 // Fase 2 — Sprint F2-S1 gate
 import { firmaElectronicaRouter } from "./firma-electronica.router";
+import { evolucionMedicaRouter } from "./evolucion-medica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
@@ -106,6 +107,7 @@ export const appRouter = router({
   portal: portalRouter,
   // Fase 2 — F2-S1
   firma: firmaElectronicaRouter,
+  eceEvolucion: evolucionMedicaRouter,
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
   workflowInstance: workflowInstanceRouter,
