@@ -21,11 +21,12 @@
   },
   "dependencies": {
     "@his/contracts": "*",
+    "argon2": "^0.44.0",
     "pino": "^9.5.0"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
     "@prisma/client": "^5.22.0",
+    "@types/node": "^22.10.2",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",

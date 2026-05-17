@@ -30,6 +30,8 @@ export const EVENT_TYPES = [
   "accounting.journalPostedHighValue",
   // UAT-BUG-02 — Nutrición: override clínico de conflicto alérgico en orden
   "nutrition.allergyOverride",
+  // Fase 2 — Motor de Workflow ECE (Stream 15)
+  "workflow.transitionExecuted",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

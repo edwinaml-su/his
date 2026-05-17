@@ -62,6 +62,16 @@ export default defineConfig({
         find: "@his/test-utils",
         replacement: path.resolve(__dirname, "../test-utils/src/index.ts"),
       },
+      // Sub-path de @his/infrastructure no cubierto por exports map del paquete.
+      // El router firma-electronica.router.ts importa directamente desde src/.
+      {
+        find: "@his/infrastructure/src/firma/pin-hasher",
+        replacement: path.resolve(__dirname, "../infrastructure/src/firma/pin-hasher.ts"),
+      },
+      {
+        find: "@his/infrastructure",
+        replacement: path.resolve(__dirname, "../infrastructure/src/index.ts"),
+      },
     ],
   },
 });
