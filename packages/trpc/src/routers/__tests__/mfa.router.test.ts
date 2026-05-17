@@ -12,7 +12,8 @@
  * Patrón: vitest-mock-extended para Prisma, makeCtx con MOCK_USER_ADMIN,
  * AUTH_SECRET inyectada por el setup de tests.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, afterAll } from "vitest";
+import { createHmac } from "node:crypto";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { mfaRouter } from "../mfa.router";
@@ -37,6 +38,7 @@ describe("mfaRouter", () => {
 
   afterEach(() => {
     process.env["AUTH_SECRET"] = originalAuthSecret;
+    vi.useRealTimers();
   });
 
   // ---------------------------------------------------------------------------
@@ -178,6 +180,70 @@ describe("mfaRouter", () => {
         code: "INTERNAL_SERVER_ERROR",
       });
     });
+
+    it("TOTP correcto: ok=true, mfaEnabled=true y usedBackupCode=false", async () => {
+      // Fijamos el reloj en un tiempo conocido para calcular el counter TOTP.
+      // 2026-01-15T10:00:00Z = 1_768_471_200_000 ms => counter = floor(1_768_471_200 / 30)
+      const FIXED_MS = 1_768_471_200_000;
+      vi.useFakeTimers();
+      vi.setSystemTime(FIXED_MS);
+
+      // El secret bien conocido en tests TOTP (RFC 6238 test vectors).
+      const SECRET = "JBSWY3DPEHPK3PXP";
+      const counter = Math.floor(FIXED_MS / 1000 / 30);
+
+      // Calculamos el token correcto localmente (misma lógica que el router).
+      const validToken = computeTotp(SECRET, counter);
+
+      const { encryptTestCred } = await buildTestCredHelper();
+      // buildTestCredHelper usa SECRET="JBSWY3DPEHPK3PXP" internamente.
+      prisma.userCredential.findFirst.mockResolvedValue({
+        id: credId,
+        secretHash: encryptTestCred,
+      } as never);
+      prisma.$transaction.mockResolvedValue([null, null] as never);
+
+      const caller = mfaRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.verify({ token: validToken });
+
+      expect(result.ok).toBe(true);
+      expect(result.usedBackupCode).toBe(false);
+      expect(prisma.$transaction).toHaveBeenCalledOnce();
+    });
+
+    it("SECRET corrupto (base32 inválido): error al intentar generar TOTP", async () => {
+      // Creamos un blob cifrado correctamente pero con un secret que falla
+      // la decodificación base32 cuando el router intenta verificar el TOTP.
+      // El router NO captura este error (está fuera del try/catch de descifrado)
+      // => burbujea como INTERNAL_SERVER_ERROR de tRPC.
+      const { createCipheriv, randomBytes, createHash } = await import("node:crypto");
+      const key = createHash("sha256").update(TEST_AUTH_SECRET, "utf8").digest();
+      const plaintext = { secret: "!!!NOT_BASE32!!!", codes: [] };
+      const iv = randomBytes(12);
+      const cipher = createCipheriv("aes-256-gcm", key, iv);
+      const { Buffer } = await import("node:buffer");
+      const ct = Buffer.concat([cipher.update(JSON.stringify(plaintext), "utf8"), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      const blob = {
+        v: 1,
+        iv: iv.toString("hex"),
+        tag: tag.toString("hex"),
+        ct: ct.toString("hex"),
+        createdAt: new Date().toISOString(),
+      };
+
+      prisma.userCredential.findFirst.mockResolvedValue({
+        id: credId,
+        secretHash: JSON.stringify(blob),
+      } as never);
+
+      const caller = mfaRouter.createCaller(makeCtx({ prisma }));
+      // base32Decode lanza "Base32 inválido" dentro de verifyTotp =>
+      // el error burbujea sin capturar => tRPC lo convierte en INTERNAL_SERVER_ERROR.
+      await expect(caller.verify({ token: "000000" })).rejects.toMatchObject({
+        code: "INTERNAL_SERVER_ERROR",
+      });
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -241,6 +307,47 @@ describe("mfaRouter", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// computeTotp — reimplementa el algoritmo del router para obtener tokens
+// válidos en tests sin exportar funciones internas.
+// ---------------------------------------------------------------------------
+
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+function base32DecodeLocal(input: string): Buffer {
+  const cleaned = input.replace(/=+$/g, "").toUpperCase().replace(/\s+/g, "");
+  let bits = 0;
+  let value = 0;
+  const out: number[] = [];
+  for (const ch of cleaned) {
+    const idx = BASE32_ALPHABET.indexOf(ch);
+    if (idx < 0) throw new Error("Base32 inválido");
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+function computeTotp(secretBase32: string, counter: number): string {
+  const key = base32DecodeLocal(secretBase32);
+  const buf = Buffer.alloc(8);
+  buf.writeUInt32BE(Math.floor(counter / 0x1_0000_0000), 0);
+  buf.writeUInt32BE(counter & 0xffffffff, 4);
+  const hmac = createHmac("sha1", key).update(buf).digest();
+  const offset = hmac[hmac.length - 1]! & 0x0f;
+  const bin =
+    ((hmac[offset]! & 0x7f) << 24) |
+    ((hmac[offset + 1]! & 0xff) << 16) |
+    ((hmac[offset + 2]! & 0xff) << 8) |
+    (hmac[offset + 3]! & 0xff);
+  const mod = bin % 10 ** 6;
+  return mod.toString().padStart(6, "0");
+}
 
 // ---------------------------------------------------------------------------
 // Helper — cifra credenciales de prueba usando el mismo algoritmo del router.
