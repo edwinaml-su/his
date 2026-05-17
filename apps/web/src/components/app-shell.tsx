@@ -92,7 +92,7 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Atención",
     defaultOpen: true,
     items: [
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
@@ -101,12 +101,6 @@ const SECTIONS: NavSection[] = [
         label: "Indicaciones Médicas",
         icon: ClipboardCheck,
       },
-    ],
-  },
-  {
-    label: "ECE",
-    defaultOpen: false,
-    items: [
       {
         href: "/ece/registro-enfermeria",
         label: "Registro Enfermería",
@@ -129,7 +123,7 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Documentos",
     defaultOpen: true,
     items: [
       {

@@ -68,3 +68,5 @@ export * from "./ece-bridge-triage";
 export * from "./ece-permissions";
 export * from "./ece-atencion-emergencia";
 export * from "./ece-rri";
+export * from "./ece-solicitud-estudio";
+export * from "./ece-resultado-estudio";

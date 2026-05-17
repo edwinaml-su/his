@@ -63,7 +63,7 @@ const getSchema = z.object({ id: z.string().uuid() });
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
 
-interface SolicitudRow {
+export interface SolicitudRow {
   id: string;
   instancia_id: string;
   episodio_id: string;
