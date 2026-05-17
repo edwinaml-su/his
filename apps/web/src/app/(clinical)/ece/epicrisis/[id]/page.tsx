@@ -1,4 +1,3 @@
-// @ts-nocheck — UI shape mismatch / dep faltante; refinar en F2-S3.
 "use client";
 
 /**
@@ -398,12 +397,12 @@ export default function EpicrisisDetailPage({
               {historyQuery.error.message}
             </p>
           )}
-          {historyQuery.data && historyQuery.data.length === 0 && (
+          {historyQuery.data && historyQuery.data.items.length === 0 && (
             <p className="text-sm text-muted-foreground">Sin transiciones registradas.</p>
           )}
-          {historyQuery.data && historyQuery.data.length > 0 && (
+          {historyQuery.data && historyQuery.data.items.length > 0 && (
             <ol className="space-y-2 text-sm">
-              {historyQuery.data.map((h) => (
+              {historyQuery.data.items.map((h: typeof historyQuery.data.items[number]) => (
                 <li key={h.id} className="flex items-start gap-3">
                   <CheckCircle2
                     className="mt-0.5 h-4 w-4 shrink-0 text-green-600"

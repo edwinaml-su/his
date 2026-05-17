@@ -1,4 +1,3 @@
-// @ts-nocheck — UI shape mismatch con router F2-S2; refinar en F2-S3.
 "use client";
 
 import * as React from "react";
@@ -91,10 +90,10 @@ export default function BitacoraEcePage() {
 
   const queryInput = buildInput(committed, offset);
 
-  const { data, isLoading, isFetching } = trpc.bitacora.list.useQuery(
-    queryInput,
-    { keepPreviousData: true },
-  );
+  // `keepPreviousData` migró a `placeholderData: keepPreviousData()` en
+  // react-query v5. Aquí lo omitimos por simplicidad — el comportamiento
+  // por defecto (re-fetch al cambiar input) es aceptable para esta vista.
+  const { data, isLoading, isFetching } = trpc.bitacora.list.useQuery(queryInput);
 
   const exportCsvMutation = trpc.bitacora.exportCsv.useQuery(
     {
