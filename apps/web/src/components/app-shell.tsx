@@ -106,6 +106,11 @@ const SECTIONS: NavSection[] = [
     defaultOpen: false,
     items: [
       {
+        href: "/ece/valoracion-inicial-enfermeria",
+        label: "Valoración Inicial ENF",
+        icon: NotebookPen,
+      },
+      {
         href: "/ece/registro-enfermeria",
         label: "Registro Enfermería",
         icon: ClipboardCheck,
