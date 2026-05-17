@@ -20,6 +20,9 @@ import {
   calibrationLogListInput,
   isValidTransition,
   EQUIPMENT_STATUS_TRANSITIONS,
+  registrarGiaiInput,
+  actualizarUbicacionInput,
+  historialUbicacionesInput,
 } from "../services-equipment";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -241,6 +244,86 @@ describe("pmScheduleCreateInput / complete / cancel", () => {
 
   it("list filtra por status", () =>
     expect(pmScheduleListInput.safeParse({ status: "PLANNED" }).success).toBe(true));
+});
+
+describe("GS1 — registrarGiaiInput", () => {
+  it("acepta GIAI de 18 dígitos", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "123456789012345678" }).success,
+    ).toBe(true));
+
+  it("rechaza GIAI con 17 dígitos", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "12345678901234567" }).success,
+    ).toBe(false));
+
+  it("rechaza GIAI con letras", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "12345678901234AB18" }).success,
+    ).toBe(false));
+
+  it("rechaza GIAI con 19 dígitos", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "1234567890123456789" }).success,
+    ).toBe(false));
+
+  it("requiere equipmentId UUID", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: "no-uuid", giaiCode: "123456789012345678" })
+        .success,
+    ).toBe(false));
+});
+
+describe("GS1 — actualizarUbicacionInput", () => {
+  it("acepta GLN de 13 dígitos", () =>
+    expect(
+      actualizarUbicacionInput.safeParse({
+        equipmentId: u,
+        glnUbicacion: "7890000000001",
+      }).success,
+    ).toBe(true));
+
+  it("acepta GLN con bizStep opcional", () =>
+    expect(
+      actualizarUbicacionInput.safeParse({
+        equipmentId: u,
+        glnUbicacion: "7890000000001",
+        bizStep: "transporting",
+      }).success,
+    ).toBe(true));
+
+  it("rechaza GLN con 12 dígitos", () =>
+    expect(
+      actualizarUbicacionInput.safeParse({
+        equipmentId: u,
+        glnUbicacion: "789000000001",
+      }).success,
+    ).toBe(false));
+
+  it("rechaza GLN con letras", () =>
+    expect(
+      actualizarUbicacionInput.safeParse({
+        equipmentId: u,
+        glnUbicacion: "789ABC0000001",
+      }).success,
+    ).toBe(false));
+});
+
+describe("GS1 — historialUbicacionesInput", () => {
+  it("defaults limit=50", () => {
+    const r = historialUbicacionesInput.safeParse({ equipmentId: u });
+    if (r.success) expect(r.data.limit).toBe(50);
+  });
+
+  it("rechaza limit=0", () =>
+    expect(
+      historialUbicacionesInput.safeParse({ equipmentId: u, limit: 0 }).success,
+    ).toBe(false));
+
+  it("rechaza limit > 200", () =>
+    expect(
+      historialUbicacionesInput.safeParse({ equipmentId: u, limit: 201 }).success,
+    ).toBe(false));
 });
 
 describe("calibrationLogCreateInput", () => {
