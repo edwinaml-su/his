@@ -72,6 +72,41 @@ describe("workflowRolRouter", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  // ── listAvailableRoles ─────────────────────────────────────────────────────
+
+  describe("listAvailableRoles", () => {
+    it("retorna roles ECE ordenados por nombre", async () => {
+      prisma.$queryRaw.mockResolvedValue([
+        { id: ROL_ID, codigo: "MC", nombre: "Médico Clínico" },
+        { id: "00000000-0000-0000-0000-000000000006", codigo: "ENF", nombre: "Enfermero/a" },
+      ] as never);
+      const caller = workflowRolRouter.createCaller(
+        makeCtx({ prisma, tenant: WORKFLOW_TENANT }),
+      );
+      const result = await caller.listAvailableRoles();
+      expect(result).toHaveLength(2);
+      expect(result[0]!.codigo).toBe("MC");
+    });
+
+    it("retorna lista vacía si no hay roles configurados", async () => {
+      prisma.$queryRaw.mockResolvedValue([] as never);
+      const caller = workflowRolRouter.createCaller(
+        makeCtx({ prisma, tenant: WORKFLOW_TENANT }),
+      );
+      const result = await caller.listAvailableRoles();
+      expect(result).toEqual([]);
+    });
+
+    it("rechaza usuario sin DIR/WORKFLOW_DESIGNER", async () => {
+      const caller = workflowRolRouter.createCaller(
+        makeCtx({ prisma, tenant: UNPRIVILEGED_TENANT }),
+      );
+      await expect(caller.listAvailableRoles()).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+  });
+
   // ── list ───────────────────────────────────────────────────────────────────
 
   describe("list", () => {

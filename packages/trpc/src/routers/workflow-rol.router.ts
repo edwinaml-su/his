@@ -35,7 +35,7 @@ const revokeInput = z.object({
 
 // ─── Tipos raw ────────────────────────────────────────────────────────────────
 
-type DocumentoRolRow = {
+export type DocumentoRolRow = {
   id: string;
   tipo_documento_id: string;
   rol_id: string;
@@ -45,11 +45,30 @@ type DocumentoRolRow = {
   rol_nombre?: string;
 };
 
+export type RolDisponibleRow = {
+  id: string;
+  codigo: string;
+  nombre: string;
+};
+
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 const proc = requireRole(["DIR", "WORKFLOW_DESIGNER"]);
 
 export const workflowRolRouter = router({
+  /**
+   * Lista los roles ECE disponibles en `ece.rol` para poblar selects en la UI
+   * del Workflow Designer (alternativa a inputs UUID libres).
+   */
+  listAvailableRoles: proc.query(async ({ ctx }) => {
+    const rows = await ctx.prisma.$queryRaw<RolDisponibleRow[]>`
+      SELECT id::text, codigo, nombre
+        FROM ece.rol
+       ORDER BY nombre ASC
+    `;
+    return rows;
+  }),
+
   /**
    * Lista la matriz de roles funcionales de un tipo de documento,
    * enriquecida con codigo y nombre del rol ECE.

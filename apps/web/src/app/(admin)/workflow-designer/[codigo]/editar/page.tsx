@@ -85,6 +85,12 @@ interface TipoDocRow {
   activo: boolean;
 }
 
+interface RolDisponibleRow {
+  id: string;
+  codigo: string;
+  nombre: string;
+}
+
 // ─── Sección: CRUD Estados ────────────────────────────────────────────────────
 
 function SeccionEstados({
@@ -369,11 +375,13 @@ function SeccionTransiciones({
   tipoDocId,
   estados,
   transiciones,
+  rolesDisponibles,
   refetch,
 }: {
   tipoDocId: string;
   estados: EstadoRow[];
   transiciones: TransicionRow[];
+  rolesDisponibles: RolDisponibleRow[];
   refetch: () => void;
 }) {
   const [showForm, setShowForm] = React.useState(false);
@@ -385,10 +393,6 @@ function SeccionTransiciones({
     requiereFirma: true,
   });
   const [error, setError] = React.useState<string | null>(null);
-
-  // Para este MVP usamos IDs de estados disponibles como selectores.
-  // El campo rolAutorizaId acepta un UUID libre (en producción se reemplaza
-  // con un selector de ece.rol cargado por query separada).
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createMutation = (trpc as any).workflowTransicion.create.useMutation({
@@ -515,19 +519,24 @@ function SeccionTransiciones({
 
               <div>
                 <label htmlFor="tx-rol" className="block text-xs font-medium">
-                  Rol autorizador (UUID de ece.rol) *
+                  Rol autorizador *
                 </label>
-                <input
+                <select
                   id="tx-rol"
-                  type="text"
                   required
                   value={form.rolAutorizaId}
                   onChange={(e) =>
                     setForm((f) => ({ ...f, rolAutorizaId: e.target.value }))
                   }
-                  className="mt-0.5 w-full rounded border px-2 py-1 font-mono text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                />
+                  className="mt-0.5 w-full rounded border px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="">Seleccionar rol…</option>
+                  {rolesDisponibles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.codigo} — {r.nombre}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <label className="flex items-center gap-1.5 text-xs">
@@ -625,10 +634,12 @@ function SeccionTransiciones({
 function SeccionRoles({
   tipoDocId,
   roles,
+  rolesDisponibles,
   refetch,
 }: {
   tipoDocId: string;
   roles: RolRow[];
+  rolesDisponibles: RolDisponibleRow[];
   refetch: () => void;
 }) {
   const [showForm, setShowForm] = React.useState(false);
@@ -693,17 +704,22 @@ function SeccionRoles({
 
               <div>
                 <label htmlFor="rol-id" className="block text-xs font-medium">
-                  UUID del rol ECE *
+                  Rol ECE *
                 </label>
-                <input
+                <select
                   id="rol-id"
-                  type="text"
                   required
                   value={form.rolId}
                   onChange={(e) => setForm((f) => ({ ...f, rolId: e.target.value }))}
-                  className="mt-0.5 w-full rounded border px-2 py-1 font-mono text-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                />
+                  className="mt-0.5 w-full rounded border px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="">Seleccionar rol…</option>
+                  {rolesDisponibles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.codigo} — {r.nombre}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -851,6 +867,11 @@ export default function WorkflowEditorPage() {
     { enabled: !!tipoDoc?.id },
   );
 
+  // Roles ECE disponibles — cargados una vez para poblar los selects de
+  // Transiciones (rol autorizador) y Roles funcionales (rol asignado).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: rolesDisponibles } = (trpc as any).workflowRol.listAvailableRoles.useQuery();
+
   if (loadingDoc) {
     return (
       <div className="space-y-4">
@@ -903,11 +924,13 @@ export default function WorkflowEditorPage() {
           tipoDocId={tipoDoc.id}
           estados={estados ?? []}
           transiciones={transiciones ?? []}
+          rolesDisponibles={rolesDisponibles ?? []}
           refetch={refetchTransiciones}
         />
         <SeccionRoles
           tipoDocId={tipoDoc.id}
           roles={roles ?? []}
+          rolesDisponibles={rolesDisponibles ?? []}
           refetch={refetchRoles}
         />
       </div>
