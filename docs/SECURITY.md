@@ -4,13 +4,16 @@
 
 ---
 
-## Estado actual (2026-05-17)
+## Estado actual (2026-05-17, revisado)
 
 | Severity | Count |
 |----------|-------|
-| high | 4 |
-| moderate | 7 |
-| critical | 0 |
+| critical | 2 |
+| high | 6 |
+| moderate | 19 |
+| low | 16 |
+
+> `npm audit fix` ejecutado — 0 cambios aplicados: todas las moderate/high/critical requieren major semver upgrade.
 
 ---
 
@@ -71,11 +74,15 @@
 
 ## Vulnerabilidades MODERATE — sin fix sin major
 
-| Paquete | Advisory | Fix disponible | Observación |
-|---------|----------|----------------|-------------|
-| `vitest` / `vite` / `vite-node` / `@vitest/*` | GHSA-4w7w-66w2-5vf9, GHSA-67mh-4wv8-2f99 | vitest@4.x (major) | Solo devDep. No aplica en producción. |
-| `esbuild` | GHSA-67mh-4wv8-2f99 | via vitest@4.x | Bundler dev, no expuesto. |
-| `postcss` | GHSA-qx2v-qp2m-jg93 | via next@15+ | XSS en stringify; mitigado por CSP en prod. |
+| Paquete | Fix requerido | Observación |
+|---------|---------------|-------------|
+| `vitest` / `vite` / `vite-node` / `@vitest/coverage-v8` / `@vitest/mocker` / `esbuild` | vitest@4.x (major) | Solo devDep. No expuesto en producción. |
+| `postcss` | next@16+ (major) | XSS en stringify; mitigado por CSP en prod. |
+| `@cubejs-backend/cloud` / `cubestore` / `cubestore-driver` / `query-orchestrator` | @cubejs-backend/server@1.6.46 (major) | BI infra, no en runtime HIS. |
+| `@octokit/core` / `@octokit/request` / `@octokit/request-error` / `@octokit/graphql` | via @cubejs-backend/server@1.6.46 (major) | Dep transitiva de cubejs, no HIS directo. |
+| `qs` | via @cubejs-backend/server@1.6.46 (major) | Prototype pollution en qs <6.10.3; cubejs transitivo. |
+| `request-promise` / `request-promise-core` | via @cubejs-backend/server@1.6.46 (major) | Dep deprecada de cubejs. |
+| `tough-cookie` | via @cubejs-backend/server@1.6.46 (major) | GHSA-72xf-g2v4-qvf3 Prototype Pollution; cubejs transitivo. |
 
 ---
 
@@ -85,6 +92,7 @@
 |-------|---------|--------|-----------|
 | 2026-05-17 | glob (override) | Intentado `"overrides": {"glob":"10.5.0"}` | Inefectivo: versión exacta pinada en dep transitiva |
 | 2026-05-17 | todos | `npm audit fix` | No aplica: todos los fixes son major semver |
+| 2026-05-17 | moderate (19) | `npm audit fix` (revisión completa) | 0 fixes aplicables: todas requieren major upgrade |
 
 ---
 
