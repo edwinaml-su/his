@@ -130,6 +130,30 @@ export const emergencyRouter = router({
             message: "patientId no coincide con encounter.",
           });
         }
+
+        // TDR §12.4 — triage Manchester obligatorio antes de admisión a Urgencias.
+        // Ventana de 4 horas: triage completado recientemente sigue siendo válido para
+        // el encuentro actual (misma visita al servicio de urgencias).
+        const TRIAGE_WINDOW_MS = 4 * 60 * 60 * 1000;
+        const windowStart = new Date(Date.now() - TRIAGE_WINDOW_MS);
+        const completedTriage = await ctx.prisma.triageEvaluation.findFirst({
+          where: {
+            patientId: input.patientId,
+            organizationId: ctx.tenant.organizationId,
+            status: "COMPLETED",
+            completedAt: { gte: windowStart },
+          },
+          select: { id: true },
+          orderBy: { completedAt: "desc" },
+        });
+        if (!completedTriage) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Triage Manchester previo es obligatorio. Realice triage antes de admitir a Emergencias.",
+          });
+        }
+
         return ctx.prisma.emergencyVisit.create({
           data: {
             organizationId: ctx.tenant.organizationId,
@@ -139,6 +163,7 @@ export const emergencyRouter = router({
             chiefComplaint: input.chiefComplaint,
             arrivalMode: input.arrivalMode,
             treatingId: input.treatingId ?? null,
+            triageEvaluationId: completedTriage.id,
             createdBy: ctx.user.id,
           },
         });

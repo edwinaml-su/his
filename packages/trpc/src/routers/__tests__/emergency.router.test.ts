@@ -8,6 +8,7 @@
  *  - Beta.4: recordVitalSnapshot con detección de re-triage.
  *  - Beta.4: bloqueo de notas tras disposition terminal.
  *  - Beta.4: getObservationStatus computed.
+ *  - UAT-BUG-01 (TDR §12.4): triage Manchester obligatorio en visit.create.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -17,6 +18,7 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
+const w = "00000000-0000-0000-0000-000000000003";
 
 describe("emergencyRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
@@ -86,9 +88,74 @@ describe("emergencyRouter", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
-    it("crea visita con arrivalMode default WALK_IN", async () => {
+    // --- UAT-BUG-01: TDR §12.4 — triage Manchester obligatorio ---
+
+    it("PRECONDITION_FAILED si paciente no tiene triage COMPLETED", async () => {
       prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
-      prisma.emergencyVisit.create.mockResolvedValue({ id: u } as never);
+      prisma.triageEvaluation.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.create({
+          encounterId: u,
+          establishmentId: u,
+          patientId: u,
+          chiefComplaint: "Dolor torácico",
+          arrivalMode: "WALK_IN",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.emergencyVisit.create).not.toHaveBeenCalled();
+    });
+
+    it("PRECONDITION_FAILED si triage de OTRO paciente (no aplica al patientId actual)", async () => {
+      // Prisma retorna null porque la query filtra patientId=u y el triage pertenece a otro.
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.triageEvaluation.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.create({
+          encounterId: u,
+          establishmentId: u,
+          patientId: u,
+          chiefComplaint: "Dolor torácico",
+          arrivalMode: "WALK_IN",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      // Verifica que la query usa el patientId del input.
+      const triageArgs = prisma.triageEvaluation.findFirst.mock.calls[0]![0];
+      expect((triageArgs!.where as { patientId: string }).patientId).toBe(u);
+    });
+
+    it("PRECONDITION_FAILED si triage COMPLETED > 4h (fuera de ventana)", async () => {
+      // Prisma retorna null porque el filtro completedAt >= windowStart excluye el registro.
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.triageEvaluation.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.create({
+          encounterId: u,
+          establishmentId: u,
+          patientId: u,
+          chiefComplaint: "Fiebre alta",
+          arrivalMode: "WALK_IN",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      // Verifica que status=COMPLETED y ventana de 4h están presentes en la query.
+      const triageArgs = prisma.triageEvaluation.findFirst.mock.calls[0]![0];
+      const where = triageArgs!.where as {
+        completedAt: { gte: Date };
+        status: string;
+      };
+      expect(where.status).toBe("COMPLETED");
+      expect(where.completedAt.gte).toBeInstanceOf(Date);
+      const windowMs = Date.now() - where.completedAt.gte.getTime();
+      expect(windowMs).toBeGreaterThan(4 * 60 * 60 * 1000 - 5000);
+      expect(windowMs).toBeLessThan(4 * 60 * 60 * 1000 + 5000);
+    });
+
+    it("crea visita con triageEvaluationId cuando triage COMPLETED < 4h existe", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.triageEvaluation.findFirst.mockResolvedValue({ id: w } as never);
+      prisma.emergencyVisit.create.mockResolvedValue({ id: v } as never);
       const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
       await caller.visit.create({
         encounterId: u,
@@ -98,7 +165,9 @@ describe("emergencyRouter", () => {
         arrivalMode: "WALK_IN",
       });
       const args = prisma.emergencyVisit.create.mock.calls[0]![0];
-      expect((args.data as { arrivalMode: string }).arrivalMode).toBe("WALK_IN");
+      const data = args.data as { arrivalMode: string; triageEvaluationId: string };
+      expect(data.arrivalMode).toBe("WALK_IN");
+      expect(data.triageEvaluationId).toBe(w);
     });
   });
 
