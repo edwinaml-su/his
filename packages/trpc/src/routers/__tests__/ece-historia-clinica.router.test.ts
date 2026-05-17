@@ -23,7 +23,8 @@ vi.mock("../../ece/rls-context", () => ({
   withEceContext: vi.fn(
     async (
       _prisma: unknown,
-      _ctx: unknown,
+      _personalId: unknown,
+      _establecimientoId: unknown,
       fn: (tx: unknown) => Promise<unknown>,
     ) => fn(_prisma),
   ),

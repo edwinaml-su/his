@@ -155,18 +155,32 @@ export default function NuevaHistoriaClinicaPage() {
         }
       : undefined;
 
+    // Schema canónico v1 acepta motivo + antecedentes + planInicial.
+    // Antecedentes (personales/familiares/sociales) se concatenan; el detalle
+    // estructurado (signos vitales, diagnósticos CIE-10) se persistirá en
+    // documentos relacionados en iteraciones posteriores.
+    const antecedentes = [
+      form.antecedentesPersonales.trim(),
+      form.antecedentesFamiliares.trim() &&
+        `Familiares: ${form.antecedentesFamiliares.trim()}`,
+      form.antecedentesSociales.trim() &&
+        `Sociales: ${form.antecedentesSociales.trim()}`,
+      form.hallazgosAparato.trim() &&
+        `Hallazgos por aparato: ${form.hallazgosAparato.trim()}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+
     create.mutate({
       pacienteId: form.pacienteId.trim(),
-      encounterId: form.encounterId.trim() || undefined,
+      episodioId: form.encounterId.trim() || undefined,
       motivoConsulta: form.motivoConsulta.trim(),
-      antecedentesPersonales: form.antecedentesPersonales.trim() || undefined,
-      antecedentesFamiliares: form.antecedentesFamiliares.trim() || undefined,
-      antecedentesSociales: form.antecedentesSociales.trim() || undefined,
-      signosVitales: signosVitalesPayload,
-      hallazgosAparato: form.hallazgosAparato.trim() || undefined,
-      diagnosticos: diagnosticos.length > 0 ? diagnosticos : undefined,
-      planTerapeutico: form.planTerapeutico.trim() || undefined,
+      antecedentes: antecedentes || undefined,
+      planInicial: form.planTerapeutico.trim() || undefined,
     });
+    // Lint refs (eviten "unused") — TODO mover a documentos relacionados:
+    void signosVitalesPayload;
+    void diagnosticos;
   }
 
   const errorMessage = clientError ?? create.error?.message ?? null;

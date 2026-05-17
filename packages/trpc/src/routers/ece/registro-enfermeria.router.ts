@@ -56,7 +56,7 @@ const eceRegistroIdSchema   = z.object({ id: z.string().uuid() });
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
 
-interface RegistroRow {
+export interface RegistroRow {
   id: string;
   episodio_id: string;
   personal_id: string;
@@ -68,7 +68,7 @@ interface RegistroRow {
   creado_en: Date;
 }
 
-interface IndicacionItemRow {
+export interface IndicacionItemRow {
   id: string;
   estado: string;
   episodio_id: string;

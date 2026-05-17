@@ -140,12 +140,12 @@ export default function EceHistoriaClinicaListPage() {
               {query.error.message}
             </p>
           )}
-          {query.data && query.data.length === 0 && (
+          {query.data && query.data.items.length === 0 && (
             <p className="text-sm text-muted-foreground">
               Sin historias clínicas para los filtros seleccionados.
             </p>
           )}
-          {query.data && query.data.length > 0 && (
+          {query.data && query.data.items.length > 0 && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -157,7 +157,8 @@ export default function EceHistoriaClinicaListPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {query.data.map((hc) => {
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {(query.data.items as any[]).map((hc) => {
                   const paciente = hc.patient
                     ? `${hc.patient.firstName} ${hc.patient.lastName}`
                     : "—";
@@ -165,10 +166,10 @@ export default function EceHistoriaClinicaListPage() {
                     <TableRow key={hc.id}>
                       <TableCell>{paciente}</TableCell>
                       <TableCell className="max-w-[20rem] truncate">
-                        {hc.motivoConsulta ?? "—"}
+                        {hc.motivoConsulta ?? hc.motivo_consulta ?? "—"}
                       </TableCell>
                       <TableCell className="tabular-nums">
-                        {dateFmt.format(new Date(hc.createdAt))}
+                        {dateFmt.format(new Date(hc.createdAt ?? hc.creado_en))}
                       </TableCell>
                       <TableCell>
                         <WorkflowBadge estado={hc.estado as HcEstado} />

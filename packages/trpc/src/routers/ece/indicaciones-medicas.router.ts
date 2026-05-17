@@ -70,7 +70,7 @@ const ESTADOS_EDITABLE = new Set(["borrador", "en_revision"]);
 
 // ─── Tipos de fila raw ────────────────────────────────────────────────────────
 
-interface IndicacionRow {
+export interface IndicacionRow {
   id: string;
   episodio_id: string;
   estado: string;
@@ -83,7 +83,7 @@ interface IndicacionRow {
   validado_en: Date | null;
 }
 
-interface IndicacionItemRow {
+export interface IndicacionItemRow {
   id: string;
   indicacion_id: string;
   medicamento_codigo: string;

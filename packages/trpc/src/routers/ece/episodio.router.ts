@@ -106,7 +106,7 @@ function withEceContext(ctx: {
 
 // ─── Tipos de fila raw ───────────────────────────────────────────────────────
 
-interface EpisodioRow {
+export interface EpisodioRow {
   id: string;
   paciente_id: string;
   tipo: "ambulatorio" | "hospitalario";
@@ -119,7 +119,7 @@ interface EpisodioRow {
   actualizado_en: Date;
 }
 
-interface EpisodioHospitalarioRow extends EpisodioRow {
+export interface EpisodioHospitalarioRow extends EpisodioRow {
   orden_ingreso_id: string;
   sala_id: string;
   fecha_ingreso: Date;

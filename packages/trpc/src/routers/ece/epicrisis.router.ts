@@ -83,7 +83,7 @@ const eceEpicrisisAnularSchema = z.object({
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
 
-interface EpicrisisRow {
+export interface EpicrisisRow {
   id: string;
   instancia_id: string;
   episodio_id: string;

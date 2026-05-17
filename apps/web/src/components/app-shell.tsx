@@ -45,7 +45,6 @@ import {
   BadgeCheck,
   GitBranch,
   Thermometer,
-  ClipboardCheck,
   NotebookPen,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";

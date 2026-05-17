@@ -208,7 +208,7 @@ export const eceHistoriaClinicaRouter = router({
   list: readBase.input(historiaClinicaListInput).query(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           SELECT
@@ -245,7 +245,7 @@ export const eceHistoriaClinicaRouter = router({
   get: readBase.input(historiaClinicaGetInput).query(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           SELECT
@@ -277,7 +277,7 @@ export const eceHistoriaClinicaRouter = router({
   create: writeBase.input(historiaClinicaCreateInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           INSERT INTO ece.historia_clinica
@@ -317,7 +317,7 @@ export const eceHistoriaClinicaRouter = router({
   update: writeBase.input(historiaClinicaUpdateInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       // Verificar existencia y estado editable
       const current = await tx.$queryRaw<{ estado: string }[]>(
         Prisma.sql`SELECT estado FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1`,
@@ -371,7 +371,7 @@ export const eceHistoriaClinicaRouter = router({
     .mutation(async ({ ctx, input }) => {
       const eceCtx = buildEceCtx(ctx);
 
-      return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+      return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
         return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
           historiaId: input.id,
           estadoEsperado: "borrador",
@@ -394,7 +394,7 @@ export const eceHistoriaClinicaRouter = router({
 
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
         historiaId: input.id,
         estadoEsperado: "en_revision",
@@ -418,7 +418,7 @@ export const eceHistoriaClinicaRouter = router({
 
     const eceCtx = buildEceCtx(ctx);
 
-    return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
         historiaId: input.id,
         estadoEsperado: "firmado",
@@ -445,7 +445,7 @@ export const eceHistoriaClinicaRouter = router({
     .mutation(async ({ ctx, input }) => {
       const eceCtx = buildEceCtx(ctx);
 
-      return withEceContext(ctx.prisma, eceCtx, async (tx) => {
+      return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
         return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
           historiaId: input.id,
           estadoEsperado: input.estadoActual,

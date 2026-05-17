@@ -72,7 +72,7 @@ const linkToHisTriageInput = z.object({
 
 // ─── Tipos fila raw ──────────────────────────────────────────────────────────
 
-interface HojaTriajeRow {
+export interface HojaTriajeRow {
   id: string;
   instancia_id: string;
   episodio_id: string;

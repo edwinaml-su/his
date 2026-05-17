@@ -403,6 +403,43 @@ export type EceTriajeLinkedToHisTriagePayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.episodio.abierto / ece.episodio.cerrado (Fase 2 — Episodio de atención)
+// Emitidos al abrir un episodio (ambulatorio u hospitalario) y al cerrarlo.
+// -----------------------------------------------------------------------------
+
+export const eceEpisodioAbiertoPayloadSchema = z.object({
+  /** UUID del episodio (ece.episodio_atencion). */
+  episodioId: z.string().uuid(),
+  /** UUID del paciente ECE (ece.paciente). */
+  ecePacienteId: z.string().uuid(),
+  /** Modalidad del episodio. */
+  modalidad: z.enum(["ambulatorio", "hospitalario"]),
+  /** Fecha/hora de apertura. */
+  fechaApertura: z.string(),
+  /** UUID del profesional que abrió el episodio. */
+  byUserId: z.string().uuid(),
+  /** UUID del Encounter HIS si fue creado desde uno (opcional). */
+  encounterId: z.string().uuid().optional(),
+});
+
+export type EceEpisodioAbiertoPayload = z.infer<typeof eceEpisodioAbiertoPayloadSchema>;
+
+export const eceEpisodioCerradoPayloadSchema = z.object({
+  /** UUID del episodio (ece.episodio_atencion). */
+  episodioId: z.string().uuid(),
+  /** UUID del paciente ECE. */
+  ecePacienteId: z.string().uuid(),
+  /** Fecha/hora de cierre. */
+  fechaCierre: z.string(),
+  /** Motivo de cierre (alta, transferencia, cancelación). */
+  motivo: z.string().min(1).max(200).optional(),
+  /** UUID del profesional que cerró el episodio. */
+  byUserId: z.string().uuid(),
+});
+
+export type EceEpisodioCerradoPayload = z.infer<typeof eceEpisodioCerradoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -507,6 +544,15 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.triaje.linkedToHisTriage"),
     payload: eceTriajeLinkedToHisTriagePayloadSchema,
+  }),
+  // Fase 2 — ECE Episodio de Atención (apertura / cierre)
+  z.object({
+    eventType: z.literal("ece.episodio.abierto"),
+    payload: eceEpisodioAbiertoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.episodio.cerrado"),
+    payload: eceEpisodioCerradoPayloadSchema,
   }),
 ]);
 

@@ -36,7 +36,7 @@ import {
   createEceFromTriageInput,
   syncCompletedTriagesInput,
   MANCHESTER_TO_ECE_NIVEL,
-} from "../../../../contracts/src/schemas/ece-bridge-triage";
+} from "@his/contracts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos para filas raw SQL (ece.triaje)

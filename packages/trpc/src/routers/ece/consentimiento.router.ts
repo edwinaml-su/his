@@ -45,7 +45,7 @@ import {
 // Tipos de fila raw
 // =============================================================================
 
-interface ConsentimientoRow {
+export interface ConsentimientoRow {
   id: string;
   instancia_id: string;
   paciente_id: string;

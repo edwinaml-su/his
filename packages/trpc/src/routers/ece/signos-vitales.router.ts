@@ -30,18 +30,15 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
-// Importamos el schema por path relativo para que funcione en worktrees y en CI.
-// En el repo principal: packages/trpc/src/routers/ece/ → ../../../../contracts/src/schemas/...
-// El barrel @his/contracts re-exporta estos mismos tipos.
 import {
   eceSignosVitalesCreateSchema,
   eceSignosVitalesUpdateSchema,
   type EceSignosVitalesUpdateInput,
-} from "../../../../contracts/src/schemas/ece-signos-vitales";
+} from "@his/contracts";
 
 // ─── Tipos de fila raw ───────────────────────────────────────────────────────
 
-interface SignosVitalesRow {
+export interface SignosVitalesRow {
   id: string;
   paciente_id: string;
   episodio_id: string | null;

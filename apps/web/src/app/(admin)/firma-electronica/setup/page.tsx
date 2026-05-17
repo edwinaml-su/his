@@ -24,7 +24,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
-// @ts-expect-error — trpc.firma aún no registrado en _app.ts (Stream 18 pendiente).
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
@@ -167,7 +166,6 @@ function StepCreatePin({
   // Ref para el live-region de errores (WCAG SC 4.1.3).
   const liveRegionRef = React.useRef<HTMLDivElement>(null);
 
-  // @ts-expect-error — trpc.firma aún no registrado en _app.ts (Stream 18 pendiente).
   const setup = trpc.firma.setup.useMutation({
     onSuccess: () => {
       // Enmascarar: muestra primero 2 y últimos 2 dígitos.
@@ -195,7 +193,7 @@ function StepCreatePin({
 
     if (pinErr || confirmErr) return;
 
-    setup.mutate({ pin });
+    setup.mutate({ pin, confirmPin: pinConfirm });
   }
 
   // Todos los errores visibles — anunciados al live region.
