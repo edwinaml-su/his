@@ -49,6 +49,8 @@ import { portalRouter } from "./portal.router";
 import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
+import { workflowTransicionRouter } from "./workflow-transicion.router";
+import { workflowRolRouter } from "./workflow-rol.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
 
 export const appRouter = router({
@@ -102,6 +104,8 @@ export const appRouter = router({
   firma: firmaElectronicaRouter,
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
+  workflowTransicion: workflowTransicionRouter,
+  workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
 });
 

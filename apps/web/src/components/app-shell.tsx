@@ -39,6 +39,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  GitBranch,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -120,6 +121,7 @@ const SECTIONS: NavSection[] = [
       { href: "/sso-config", label: "SSO", icon: KeyRound },
       { href: "/slos", label: "SLOs", icon: Gauge },
       { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+      { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
     ],
   },
 ];
