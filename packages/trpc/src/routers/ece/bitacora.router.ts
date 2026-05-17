@@ -18,6 +18,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, requireRole, router } from "../../trpc";
+import { requireEcePermission } from "../../middleware/ece-permission";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod (espejo de packages/contracts/src/schemas/ece-bitacora.ts)
@@ -154,7 +155,7 @@ export const bitacoraRouter = router({
    * Lista paginada de accesos con filtros.
    * Solo roles DIR (director) y ARCH (archivo clínico).
    */
-  list: requireRole(["DIR", "ARCH"])
+  list: requireEcePermission("ece.bitacora.read")
     .input(bitacoraListInput)
     .query(async ({ ctx, input }) => {
       const { clause, params } = buildWhereClause(input);
