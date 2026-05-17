@@ -49,6 +49,9 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  Baby,
+  LayoutGrid,
+  HeartHandshake,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -152,6 +155,17 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
+    ],
+  },
+  {
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
+      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
+      { href: "/ece/obstetricia/sala-expulsion", label: "Sala Expulsión", icon: BedDouble },
+      { href: "/ece/obstetricia/atencion-rn", label: "Atención RN", icon: Baby },
+      { href: "/ece/obstetricia/reanimacion", label: "Reanimación", icon: HeartHandshake },
     ],
   },
   {
