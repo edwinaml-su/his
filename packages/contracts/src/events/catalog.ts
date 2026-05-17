@@ -28,6 +28,8 @@ export const EVENT_TYPES = [
   // Beta.18 — Contabilidad multi-libro (TDR §23, ADR 0007)
   "accounting.periodClosed",
   "accounting.journalPostedHighValue",
+  // UAT-BUG-02 — Nutrición: override clínico de conflicto alérgico en orden
+  "nutrition.allergyOverride",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

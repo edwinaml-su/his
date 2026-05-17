@@ -1,11 +1,13 @@
 /**
- * §22 Nutrition — router (Beta.13 hardening layer 1).
+ * §22 Nutrition — router (Beta.13 hardening layer 1 + UAT-BUG-02).
  *
  * Nuevas capacidades sobre el skeleton Wave 8:
  *  - State machine: ORDERED→ACTIVE→COMPLETED | HELD | CANCELLED. Transitions validadas.
  *  - validateDietCompatibility: dietPlanId vs encounterDiagnoses.
  *  - Exclusividad ENTERAL/PARENTERAL por encounter activo (ORDERED|ACTIVE).
  *  - NutritionAssessment append-only post-firma (sign mutation).
+ *  - UAT-BUG-02: order.create verifica PatientAllergy.substanceText vs DietPlan.allergens.
+ *    Override clínico opcional emite evento nutrition.allergyOverride (outbox transaccional).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -24,7 +26,9 @@ import {
   nutritionOrderActivateInput,
   NUTRITION_ORDER_TRANSITIONS,
   type NutritionOrderStatus,
+  type NutritionAllergyOverridePayload,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 // ---------------------------------------------------------------------------
@@ -147,6 +151,57 @@ async function assertEnteralParenteralExclusivity(
       message: `El encounter ya tiene una orden ${oppositeRoute} activa (${conflict.id}). Las rutas ENTERAL y PARENTERAL son mutuamente excluyentes por encounter.`,
     });
   }
+}
+
+/**
+ * Input opcional para override clínico de conflicto de alergias.
+ * Requerido SOLO cuando el médico autoriza a pesar del conflicto documentado.
+ */
+const overrideAllergyInput = z.object({
+  reason: z.string().min(1).max(1000),
+  acknowledgedBy: z.string().min(1).max(200),
+});
+
+/**
+ * UAT-BUG-02 — Verifica si los alergenos declarados en el DietPlan (allergens[])
+ * intersectan con las alergias activas del paciente (PatientAllergy.substanceText,
+ * comparación case-insensitive mediante uppercase).
+ *
+ * Retorna los alergenos en conflicto (desde DietPlan.allergens). Lista vacía = sin conflicto.
+ * No lanza: el caller decide qué hacer según override.
+ */
+async function findAllergyConflicts(
+  prisma: {
+    patientAllergy: {
+      findMany: (q: object) => Promise<{ substanceText: string }[]>;
+    };
+    dietPlan: {
+      findFirst: (q: object) => Promise<{ allergens: string[] } | null>;
+    };
+  },
+  patientId: string,
+  dietPlanId: string,
+  organizationId: string,
+): Promise<string[]> {
+  const [allergies, plan] = await Promise.all([
+    prisma.patientAllergy.findMany({
+      where: { patientId, active: true },
+      select: { substanceText: true },
+    }),
+    prisma.dietPlan.findFirst({
+      where: { id: dietPlanId, organizationId },
+      select: { allergens: true },
+    }),
+  ]);
+
+  if (!plan || plan.allergens.length === 0) return [];
+  if (allergies.length === 0) return [];
+
+  const patientAllergenSet = new Set(
+    allergies.map((a) => a.substanceText.toUpperCase()),
+  );
+
+  return plan.allergens.filter((a) => patientAllergenSet.has(a.toUpperCase()));
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +382,11 @@ export const nutritionRouter = router({
       }),
 
     create: tenantProcedure
-      .input(nutritionOrderCreateInput)
+      .input(
+        nutritionOrderCreateInput.extend({
+          overrideAllergy: overrideAllergyInput.optional(),
+        }),
+      )
       .mutation(async ({ ctx, input }) => {
         await ensureEncounterAndPatient(
           ctx.prisma,
@@ -354,22 +413,69 @@ export const nutritionRouter = router({
           );
         }
 
-        return ctx.prisma.nutritionOrder.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
+        // UAT-BUG-02 — Allergy conflict check: alergenos del plan vs PatientAllergy activas.
+        let allergyConflicts: string[] = [];
+        if (input.dietPlanId) {
+          allergyConflicts = await findAllergyConflicts(
+            ctx.prisma,
+            input.patientId,
+            input.dietPlanId,
+            ctx.tenant.organizationId,
+          );
+        }
+
+        if (allergyConflicts.length > 0 && !input.overrideAllergy) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Conflicto de alergias: el plan dietético contiene ${allergyConflicts.join(", ")}. Paciente alérgico a: ${allergyConflicts.join(", ")}.`,
+          });
+        }
+
+        const orderData = {
+          organizationId: ctx.tenant.organizationId,
+          encounterId: input.encounterId,
+          patientId: input.patientId,
+          prescriberId: input.prescriberId,
+          route: input.route,
+          status: "ORDERED" as const,
+          formula: input.formula ?? null,
+          ratePerHour: input.ratePerHour ?? null,
+          totalVolume: input.totalVolume ?? null,
+          caloriesPerDay: input.caloriesPerDay ?? null,
+          dietPlanId: input.dietPlanId ?? null,
+          notes: input.notes ?? null,
+          createdBy: ctx.user.id,
+        };
+
+        // Fast path: sin conflicto de alergia, no necesitamos transacción extra.
+        if (allergyConflicts.length === 0) {
+          return ctx.prisma.nutritionOrder.create({ data: orderData });
+        }
+
+        // Override clínico autorizado: create + emit evento dentro de tx atómica.
+        return ctx.prisma.$transaction(async (tx) => {
+          const created = await tx.nutritionOrder.create({ data: orderData });
+
+          const payload: NutritionAllergyOverridePayload = {
+            nutritionOrderId: created.id,
             patientId: input.patientId,
+            dietPlanId: input.dietPlanId!,
+            conflictingAllergens: allergyConflicts,
+            reason: input.overrideAllergy!.reason,
+            acknowledgedBy: input.overrideAllergy!.acknowledgedBy,
             prescriberId: input.prescriberId,
-            route: input.route,
-            status: "ORDERED",
-            formula: input.formula ?? null,
-            ratePerHour: input.ratePerHour ?? null,
-            totalVolume: input.totalVolume ?? null,
-            caloriesPerDay: input.caloriesPerDay ?? null,
-            dietPlanId: input.dietPlanId ?? null,
-            notes: input.notes ?? null,
-            createdBy: ctx.user.id,
-          },
+          };
+
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "nutrition.allergyOverride",
+            aggregateType: "NutritionOrder",
+            aggregateId: created.id,
+            emittedById: ctx.user.id,
+            payload,
+          });
+
+          return created;
         });
       }),
 
