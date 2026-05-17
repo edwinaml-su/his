@@ -32,6 +32,8 @@ export const EVENT_TYPES = [
   "nutrition.allergyOverride",
   // Fase 2 — Motor de Workflow ECE (Stream 15)
   "workflow.transitionExecuted",
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  "ece.triaje.firmado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
