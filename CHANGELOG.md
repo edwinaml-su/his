@@ -6,6 +6,50 @@ Versionado semántico según [SemVer](https://semver.org/lang/es/).
 
 ---
 
+## [Sprint F2-S5] — 2026-05-17
+
+### Agregado
+
+- **Ruta Quirúrgica cierre (US.F2.4.11–16):** preop checklist, consentimiento quirúrgico/anestésico,
+  WHO Checklist Cirugía Segura (3 fases), descripción operatoria, registro anestésico transanestésico
+  y hoja de recuperación URPA. Nuevas tablas: `ece.preop_checklist`, `ece.who_checklist`,
+  `ece.registro_anestesico`, `ece.urpa_recovery`. Archivos SQL `67_`–`70_*.sql`.
+
+- **Ruta Obstétrica (US.F2.4.18–21):** partograma con series temporales append-only
+  (`ece.partograma_registro`), hoja de sala de expulsión con eventos múltiples
+  (`ece.sala_expulsion_eventos`), atención del recién nacido con APGAR/somatometría/CUN
+  (`ece.atencion_recien_nacido`) y reanimación neonatal condicional (`ece.reanimacion_neonatal`).
+  Archivos SQL `71_`–`74_*.sql`.
+
+- **~12 routers tRPC nuevos:** `notaPreoperatoriaRouter`, `consentimientoQxRouter`,
+  `whoChecklistRouter`, `descripcionOperatoriaRouter`, `registroAnestesicoRouter`,
+  `urpaRecoveryRouter`, `partogramaRouter`, `laborPartoRouter`, `salaExpulsionRouter`,
+  `atencionRNRouter`, `reanimacionNeonatalRouter` y complementos.
+
+- **ADR `docs/adr/0015-ece-rutas-clinicas-criticas.md`:** decisión tablas separadas por
+  documento NTEC vs. `document_data jsonb`. Trade-offs type-safety, RLS, indexing series
+  temporales. Precedente Vernon DDD Cap. 8 (Aggregate Boundary).
+
+- **Sprint Review `docs/sprint-reviews/sprint_f2_s5_review.md`:** logros ~22 streams,
+  ~95 SP, 8 tablas nuevas, retroactiva 4/4, carry-over F2-S6 trazado.
+
+- **GS1 Deuda parcial (PR #105):** procesos A y D del estándar GS1 completados.
+
+### Cambios
+
+- **Consolidación regla "adecuar legacy":** routers de F2-S3/S4 sin `withTenantContext`
+  recibieron wrapper mínimo. Sin cambios de lógica — solo adición del contexto RLS faltante.
+
+- **Patrón series temporales estandarizado:** `UNIQUE (episodio_id, timestamp_utc)` con
+  `ON CONFLICT DO NOTHING` establecido como estándar para documentos append-only ECE
+  (partograma, registro anestésico). Ver ADR 0015.
+
+### Eliminados
+
+- Nada eliminado. Los streams de estancia general (US.F2.4.1–10, 22–25) permanecen intactos.
+
+---
+
 ## [Sprint F2-S4] — 2026-05-17
 
 ### Agregado
