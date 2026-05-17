@@ -14,7 +14,7 @@ export default defineConfig({
     setupFiles: ["src/__tests__/setup.ts"],
     coverage: {
       provider: "v8",
-      include: ["src/routers/**", "src/trpc.ts", "src/context.ts"],
+      include: ["src/routers/**", "src/middleware/**", "src/trpc.ts", "src/context.ts"],
       exclude: ["**/_app.ts", "**/index.ts"],
       thresholds: {
         // Sprint 4 agregó 9 routers WIP + skeletons (outpatient, pharmacy,
