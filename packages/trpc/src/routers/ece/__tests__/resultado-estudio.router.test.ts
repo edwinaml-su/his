@@ -213,7 +213,11 @@ describe("eceResultadoEstudioRouter", () => {
         .mockResolvedValueOnce([makeSolicitudEstadoRow("firmado")])  // findSolicitudEstado
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])                // findPersonal
         .mockResolvedValueOnce([{ id: RES_ID }])                    // INSERT resultado
-        .mockResolvedValue([]);                                       // emitDomainEvent
+        .mockResolvedValue([]);                                       // resto
+      // Mock del Prisma model usado por emitDomainEvent (mismo patrón que
+      // accounting.test.ts). Sin este mock, `tx.domainEvent.create({data})`
+      // retorna undefined y el desreferenciar `.id` lanza TypeError.
+      prisma.domainEvent.create.mockResolvedValue({ id: "ev-1" } as never);
 
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
@@ -234,6 +238,7 @@ describe("eceResultadoEstudioRouter", () => {
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])
         .mockResolvedValueOnce([{ id: RES_ID }])
         .mockResolvedValue([]);
+      prisma.domainEvent.create.mockResolvedValue({ id: "ev-2" } as never);
 
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
@@ -278,8 +283,9 @@ describe("eceResultadoEstudioRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([makeResultadoRow()])          // findResultado
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])         // findPersonal
-        .mockResolvedValue([]);                               // emitDomainEvent
+        .mockResolvedValue([]);                               // resto
       prisma.$executeRaw.mockResolvedValue(1);               // UPDATE
+      prisma.domainEvent.create.mockResolvedValue({ id: "ev-3" } as never);
 
       const ctx = makeMcCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);

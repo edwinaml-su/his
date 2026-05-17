@@ -303,8 +303,11 @@ describe("eceSolicitudEstudioRouter", () => {
       prisma.$executeRaw
         .mockResolvedValueOnce(1) // UPDATE documento_instancia
         .mockResolvedValueOnce(1); // INSERT historial
-      // emitDomainEvent usa Prisma también (outbox) — mock vacío
       prisma.$queryRaw.mockResolvedValue([]);
+      // Mock del Prisma model usado por emitDomainEvent (mismo patrón que
+      // accounting.test.ts). Sin esto, `tx.domainEvent.create({data})` retorna
+      // undefined y desreferenciar `.id` lanza TypeError.
+      prisma.domainEvent.create.mockResolvedValue({ id: "ev-1" } as never);
 
       const ctx = makeMcCtx(prisma);
       const caller = eceSolicitudEstudioRouter.createCaller(ctx);
