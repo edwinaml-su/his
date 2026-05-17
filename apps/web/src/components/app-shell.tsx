@@ -46,6 +46,7 @@ import {
   GitBranch,
   Thermometer,
   NotebookPen,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -136,6 +137,7 @@ const SECTIONS: NavSection[] = [
       },
       { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
+      { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
     ],
   },
   {
