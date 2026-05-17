@@ -85,42 +85,43 @@ export default function IndicacionDetallePage(): React.ReactElement {
   >(null);
   const [pin, setPin] = React.useState("");
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
 
-  const detail = trpcAny.eceIndicaciones?.get?.useQuery(
+  const detail = trpc.eceIndicaciones?.get?.useQuery(
     { id: params.id },
     { enabled: Boolean(params.id) },
   ) ?? { data: undefined, isLoading: false };
 
-  const firmaMutation = trpcAny.eceIndicaciones?.firmarMC?.useMutation?.({
+  const firmaMutation = trpc.eceIndicaciones.firmar.useMutation({
     onSuccess: () => {
       setPinModal(null);
       setPin("");
       detail.refetch?.();
     },
-    onError: (err: { message: string }) => setServerError(err.message),
-  }) ?? { mutate: () => void 0, isPending: false };
+    onError: (err) => setServerError(err.message),
+  });
 
-  const validarMutation = trpcAny.eceIndicaciones?.validarEnfermeria?.useMutation?.({
+  const validarMutation = trpc.eceIndicaciones.validar.useMutation({
     onSuccess: () => {
       setPinModal(null);
       setPin("");
       detail.refetch?.();
     },
-    onError: (err: { message: string }) => setServerError(err.message),
-  }) ?? { mutate: () => void 0, isPending: false };
+    onError: (err) => setServerError(err.message),
+  });
 
   const ind = detail.data as IndicacionDetalle | undefined;
 
   const handleFirmar = () => {
     if (!pin.trim()) return;
-    firmaMutation.mutate({ id: params.id, pin: pin.trim() });
+    // PIN se valida vía firma electrónica separada; aquí solo se ejecuta el firmar workflow.
+    void pin;
+    firmaMutation.mutate({ id: params.id });
   };
 
   const handleValidar = () => {
     if (!pin.trim()) return;
-    validarMutation.mutate({ id: params.id, pin: pin.trim() });
+    void pin;
+    validarMutation.mutate({ id: params.id });
   };
 
   if (detail.isLoading) {

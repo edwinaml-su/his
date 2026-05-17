@@ -67,12 +67,7 @@ export default function ConsentimientoListPage() {
 
   // Filtro local por texto (tipo o paciente)
   const rows = React.useMemo(() => {
-    // El router devuelve paginated `{items, nextCursor}` o array vacío.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const raw = query.data as any;
-    const data: Array<Record<string, unknown>> = Array.isArray(raw)
-      ? raw
-      : (raw?.items ?? []);
+    const data = query.data?.items ?? [];
     if (!search.trim()) return data;
     const lc = search.toLowerCase();
     return data.filter(
@@ -169,8 +164,7 @@ export default function ConsentimientoListPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {(rows as any[]).map((r) => {
+                {rows.map((r) => {
                   const estado = r.estado_codigo ?? "borrador";
                   const tipoLabel =
                     TIPO_LABEL[r.tipo_codigo ?? ""] ?? r.tipo_nombre ?? r.tipo_codigo ?? "—";

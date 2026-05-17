@@ -55,9 +55,7 @@ export default function EpicrisisListPage() {
     { enabled: true },
   );
 
-  // Router devuelve `{items, nextCursor}` paginated; aplanar a array.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rows: any[] = (query.data as any)?.items ?? [];
+  const rows = query.data?.items ?? [];
 
   return (
     <div className="space-y-4">

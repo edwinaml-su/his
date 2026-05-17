@@ -59,11 +59,7 @@ export default function EvolucionDetailPage() {
   const router = useRouter();
   const id = params.id;
 
-  // Router expone `get/firmar/validar` (no `getById/sign/validate` — naming
-  // legacy del cliente). Adaptamos vía cast quirúrgico.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const eceEvol = trpc.eceEvolucion as any;
-  const detail = eceEvol.get.useQuery({ id });
+  const detail = trpc.eceEvolucion.get.useQuery({ id });
   const ev = detail.data as unknown as EvolucionDetail | null | undefined;
 
   const [confirmSign, setConfirmSign] = React.useState(false);
@@ -72,26 +68,24 @@ export default function EvolucionDetailPage() {
 
   const utils = trpc.useUtils();
 
-  const sign = eceEvol.firmar.useMutation({
+  const sign = trpc.eceEvolucion.firmar.useMutation({
     onSuccess: () => {
       setConfirmSign(false);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils.eceEvolucion as any).get.invalidate({ id });
+      utils.eceEvolucion.get.invalidate({ id });
       router.push(ev?.episodeId ? `/ece/evolucion?episodeId=${ev.episodeId}` : "/ece/evolucion");
     },
-    onError: (e: { message: string }) => {
+    onError: (e) => {
       setConfirmSign(false);
       setPageError(`Error al firmar: ${e.message}`);
     },
   });
 
-  const validate = eceEvol.validar.useMutation({
+  const validate = trpc.eceEvolucion.validar.useMutation({
     onSuccess: () => {
       setConfirmValidate(false);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils.eceEvolucion as any).get.invalidate({ id });
+      utils.eceEvolucion.get.invalidate({ id });
     },
-    onError: (e: { message: string }) => {
+    onError: (e) => {
       setConfirmValidate(false);
       setPageError(`Error al validar: ${e.message}`);
     },

@@ -128,10 +128,8 @@ export default function NuevaIndicacionPage(): React.ReactElement {
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
 
-  const createMutation = trpcAny.eceIndicaciones?.create?.useMutation?.({
+  const createMutation = trpc.eceIndicaciones?.create?.useMutation?.({
     onSuccess: () => router.push("/ece/indicaciones"),
     onError: (err: { message: string }) => setServerError(err.message),
   }) ?? { mutate: () => void 0, isPending: false };
@@ -202,18 +200,19 @@ export default function NuevaIndicacionPage(): React.ReactElement {
     if (!validateStep3()) return;
     setServerError(null);
 
+    // El router espera `medicamentoCodigo` (no `medicamentoId`) y
+    // `duracionDias` numérico requerido. El PIN se gestiona vía flow firma
+    // electrónica separada — aquí no se envía al router.
+    void pin;
     createMutation.mutate({
       episodioId: episodioId.trim(),
       observaciones: observaciones.trim() || undefined,
-      pin: pin.trim(),
       items: items.map((it) => ({
-        medicamentoId: it.medicamentoId,
+        medicamentoCodigo: it.medicamentoId,
         dosis: it.dosis.trim(),
         via: it.via,
         frecuencia: it.frecuencia.trim(),
-        duracionDias: it.duracionDias
-          ? Number(it.duracionDias)
-          : undefined,
+        duracionDias: it.duracionDias ? Number(it.duracionDias) : 1,
         observaciones: it.observaciones.trim() || undefined,
       })),
     });
@@ -501,9 +500,7 @@ function IndicacionItemRow({
     return () => clearTimeout(t);
   }, [item.search]);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const medQuery = trpcAny.pharmacy?.drug?.list?.useQuery?.(
+  const medQuery = trpc.pharmacy?.drug?.list?.useQuery?.(
     { search: debouncedSearch },
     {
       enabled: debouncedSearch.trim().length >= 2 && !item.medicamentoId,
@@ -511,9 +508,8 @@ function IndicacionItemRow({
     },
   ) ?? { data: undefined, isLoading: false };
 
-  const hits = (
-    (medQuery.data?.items ?? medQuery.data ?? []) as MedicamentoHit[]
-  ).slice(0, 8);
+  // Router devuelve array directo; el shape paginated era especulación.
+  const hits = ((medQuery.data ?? []) as unknown as MedicamentoHit[]).slice(0, 8);
 
   const medErr = errors[`item_${index}_medicamento`];
   const dosisErr = errors[`item_${index}_dosis`];

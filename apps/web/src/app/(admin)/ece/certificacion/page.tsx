@@ -57,14 +57,9 @@ export default function CertificacionDirPage() {
   const [pin, setPin] = React.useState("");
   const [pinError, setPinError] = React.useState<string | null>(null);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const colaQuery = (trpc as any).eceCertificacion.listCola.useQuery(
-    { incluirCertificados },
-    { keepPreviousData: true },
-  );
+  const colaQuery = trpc.eceCertificacion.listCola.useQuery({ incluirCertificados });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const certificarMutation = (trpc as any).eceCertificacion.certificar.useMutation({
+  const certificarMutation = trpc.eceCertificacion.certificar.useMutation({
     onSuccess: () => {
       setDialogOpen(false);
       setPin("");
@@ -86,7 +81,7 @@ export default function CertificacionDirPage() {
   }
 
   function handleCerrarDialog() {
-    if (certificarMutation.isLoading) return;
+    if (certificarMutation.isPending) return;
     setDialogOpen(false);
     setPin("");
     setPinError(null);
@@ -214,7 +209,7 @@ export default function CertificacionDirPage() {
               placeholder="6-8 dígitos"
               aria-describedby={pinError ? "pin-error" : undefined}
               aria-invalid={pinError ? true : undefined}
-              disabled={certificarMutation.isLoading}
+              disabled={certificarMutation.isPending}
               autoComplete="current-password"
             />
             {pinError && (
@@ -228,16 +223,16 @@ export default function CertificacionDirPage() {
             <Button
               variant="outline"
               onClick={handleCerrarDialog}
-              disabled={certificarMutation.isLoading}
+              disabled={certificarMutation.isPending}
             >
               Cancelar
             </Button>
             <Button
               onClick={handleCertificar}
-              disabled={pin.length < 6 || certificarMutation.isLoading}
-              aria-busy={certificarMutation.isLoading}
+              disabled={pin.length < 6 || certificarMutation.isPending}
+              aria-busy={certificarMutation.isPending}
             >
-              {certificarMutation.isLoading ? "Certificando…" : "Certificar"}
+              {certificarMutation.isPending ? "Certificando…" : "Certificar"}
             </Button>
           </DialogFooter>
         </DialogContent>
