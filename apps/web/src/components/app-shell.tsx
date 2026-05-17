@@ -140,6 +140,13 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
+    ],
+  },
+  {
     label: "ECE — Documentos",
     defaultOpen: true,
     items: [
