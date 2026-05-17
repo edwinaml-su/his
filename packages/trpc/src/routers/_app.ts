@@ -99,6 +99,8 @@ import { eceWhoChecklistRouter } from "./ece/who-checklist.router";
 import { eceRegistroAnestesicoRouter } from "./ece/registro-anestesico.router";
 // ECE — URPA (Recuperación Post-Anestésica)
 import { eceUrpaRecoveryRouter } from "./ece/urpa-recovery.router";
+// Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
+import { eceBridgeCirugiaRouter } from "./ece/bridge-cirugia.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -201,6 +203,8 @@ export const appRouter = router({
   eceRegistroAnestesico: eceRegistroAnestesicoRouter,
   // ECE — URPA (Recuperación Post-Anestésica)
   eceUrpa: eceUrpaRecoveryRouter,
+  // Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
+  eceBridgeCirugia: eceBridgeCirugiaRouter,
 });
 
 export type AppRouter = typeof appRouter;

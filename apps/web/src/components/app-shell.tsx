@@ -147,6 +147,11 @@ const SECTIONS: NavSection[] = [
       { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
       { href: "/ece/urpa", label: "URPA", icon: UserCheck },
+      {
+        href: "/ece/quirofano/programacion",
+        label: "Programación",
+        icon: Scissors,
+      },
     ],
   },
   {
