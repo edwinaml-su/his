@@ -6,6 +6,85 @@ Versionado semántico según [SemVer](https://semver.org/lang/es/).
 
 ---
 
+## [Sprint F2-S3] — 2026-05-17
+
+### Agregado
+
+- **Atención de Emergencia (US.F2.3.16–17):** `atencionEmergenciaRouter` con procedures
+  `create`, `addEvolucion`, `sign`, `close`. Página Next.js `/ece/atencion-emergencia` con
+  formulario NTEC-compliant (anamnesis, examen físico, diagnóstico CIE-10, plan, firma).
+  Hoja de observación (< 24h) integrada como sub-documento del episodio de emergencia.
+
+- **RRI — Referencia, Retorno e Interconsulta (US.F2.3.26–28):** `rriRouter` con flujo
+  completo: emisión de referencia a nivel secundario, retorno al nivel de origen, registro
+  de respuesta de interconsulta. Página `/ece/rri` con selector de destino (establecimientos
+  de la red Avante), tipo de urgencia, y firma electrónica integrada.
+
+- **Estudios Lab/Gabinete (US.F2.3.23–25):** `estudiosRouter` con solicitud de estudio
+  (RELAB), carga de resultado estructurado + adjunto PDF, y visualización cronológica en el
+  episodio. Página `/ece/estudios` con tabla de estudios pendientes/completados y preview de
+  adjunto en modal.
+
+- **Seed demo ECE (`seed-ece-demo.mjs`):** script en `packages/database/scripts/` que siembra
+  5 pacientes, 10 episodios y 25 documentos demo representativos para QA/UAT. Aplicado en BD
+  de test E2E via `e2e.yml` job `seed-test-db`.
+
+- **Usuarios de test ECE:** `qa.nurse@his.test`, `qa.physician@his.test`, `qa.director@his.test`
+  agregados a `packages/database/scripts/seed-test-users.mjs` con roles ENF, MC, DIR en
+  el establecimiento de test.
+
+- **E2E specs sin stub (3 nuevos):**
+  - `e2e/fase2/ece-atencion-emergencia.spec.ts` — happy path apertura → evolución → firma → cierre.
+  - `e2e/fase2/ece-rri.spec.ts` — referencia, retorno, interconsulta con respuesta.
+  - `e2e/fase2/ece-estudios.spec.ts` — solicitud, resultado, adjunto PDF, visualización episodio.
+
+- **Workflow Designer drag-drop:** componente `<WorkflowDesigner>` en `apps/web/src/components/ece/`
+  usando react-flow. Permite visualizar y editar grafos de estado de tipos de documento.
+  Persistencia de posiciones de nodos. Validación visual de transiciones via
+  `workflowRouter.validateTransition`.
+
+- **Validador server-side de workflow (ADR 0013):** `workflowValidatorService` en
+  `packages/trpc/src/services/workflow-validator.ts`. Verifica integridad del grafo,
+  ABAC por rol, completitud de payload y sesion de firma activa antes de cada transición.
+  18 casos unitarios Vitest cubiertos.
+
+- **ABAC ECE granular:** `requireEceRole()` wrapper en `packages/trpc/src/trpc.ts` que
+  verifica rol del personal (`ece.personal_salud.rol`) contra la matriz de roles permitidos
+  por tipo de documento. Integrado en los 9 routers de documento.
+
+- **Bitácora viewer avanzado:** página `/ece/bitacora` con filtros por acción, personal,
+  rango de fecha y texto libre. Exportación CSV de resultados filtrados. Paginación server-side.
+
+- **ADR `docs/adr/0013-workflow-validation-rules.md`:** decision validador centralizado
+  server-side vs bpmn-validation lib vs solo client-side. Trade-offs y diseño documentados.
+
+- **Sprint Review `docs/sprint-reviews/sprint_f2_s3_review.md`:** logros, métricas,
+  retroactiva y carry-over F2-S3.
+
+### Cambios
+
+- **HC router shape extended:** `hcRouter` extendido con campos NTEC adicionales —
+  antecedentes familiares (familiar_dm, familiar_hta, familiar_cancer, etc.),
+  antecedente ginecobstétrico (gestas, partos, cesareas, abortos, fum), y Hábitos Biológicos
+  y Tóxicos (HBT). Zod schema actualizado, Prisma types regenerados.
+
+- **Bitácora viewer refactor:** reescritura del componente `<BitacoraViewer>` de tabla
+  estática a tabla con filtros server-driven, paginación y exportación. La API no cambió;
+  solo la capa de presentación y los query params del endpoint.
+
+### Eliminado
+
+- **`HCDetalleExtended` cast eliminado:** el tipo auxiliar `HCDetalleExtended` (cast interno
+  en el resolver de HC) fue eliminado. El shape correcto ahora viene directo del schema Zod
+  tipado — sin `as unknown as HCDetalleExtended`. Detectado y eliminado durante la extensión
+  del router shape.
+
+- **Casts `as any` residuales:** 4 instancias de `as any` restantes en routers de documento
+  (detectadas por `tsc --strict`) eliminadas. Cada una fue reemplazada por el tipo correcto
+  inferido del schema Prisma o del contrato Zod.
+
+---
+
 ## [Sprint F2-S2] — 2026-05-17
 
 ### Agregado
