@@ -50,3 +50,4 @@ export * from "./user";
 export * from "./user-admin";
 export * from "./vaccination";
 export * from "./ece-historia-clinica";
+export * from "./ece-signos-vitales";

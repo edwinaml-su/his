@@ -51,6 +51,7 @@ import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
+import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -105,6 +106,7 @@ export const appRouter = router({
   workflowEstado: workflowEstadoRouter,
   workflowInstance: workflowInstanceRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
+  eceSignosVitales: eceSignosVitalesRouter,
 });
 
 export type AppRouter = typeof appRouter;
