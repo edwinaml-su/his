@@ -168,3 +168,38 @@ export type CalibrationLogCreateInput = z.infer<typeof calibrationLogCreateInput
 export type EquipmentSetStatusInput = z.infer<typeof equipmentSetStatusInput>;
 export type GetOverduePmInput = z.infer<typeof getOverduePmInput>;
 export type GetExpiringCertificationsInput = z.infer<typeof getExpiringCertificationsInput>;
+
+// ---------------------------------------------------------------------------
+// GS1 — GIAI + GLN
+// ---------------------------------------------------------------------------
+
+/** GIAI GS1: 18 dígitos numéricos */
+const GIAI_REGEX = /^\d{18}$/;
+/** GLN GS1: 13 dígitos numéricos */
+const GLN_REGEX = /^\d{13}$/;
+
+export const registrarGiaiInput = z.object({
+  equipmentId: z.string().uuid(),
+  giaiCode: z
+    .string()
+    .trim()
+    .regex(GIAI_REGEX, "GIAI debe tener exactamente 18 dígitos numéricos"),
+});
+
+export const actualizarUbicacionInput = z.object({
+  equipmentId: z.string().uuid(),
+  glnUbicacion: z
+    .string()
+    .trim()
+    .regex(GLN_REGEX, "GLN debe tener exactamente 13 dígitos numéricos"),
+  bizStep: z.string().trim().max(80).optional(),
+});
+
+export const historialUbicacionesInput = z.object({
+  equipmentId: z.string().uuid(),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+
+export type RegistrarGiaiInput = z.infer<typeof registrarGiaiInput>;
+export type ActualizarUbicacionInput = z.infer<typeof actualizarUbicacionInput>;
+export type HistorialUbicacionesInput = z.infer<typeof historialUbicacionesInput>;
