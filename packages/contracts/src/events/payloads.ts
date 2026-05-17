@@ -218,6 +218,25 @@ export type NutritionAllergyOverridePayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// workflow.transitionExecuted  (Fase 2 — Motor Workflow ECE, Stream 15)
+// Emitido después de cada avance exitoso de estado en ece.documento_instancia.
+// -----------------------------------------------------------------------------
+
+export const workflowTransitionExecutedPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  tipoDocumentoCodigo: z.string().min(1).max(64),
+  fromStateId: z.string().uuid(),
+  toStateId: z.string().uuid(),
+  accion: z.string().min(1).max(128),
+  byUserId: z.string().uuid(),
+  firmaId: z.string().uuid().optional(),
+});
+
+export type WorkflowTransitionExecutedPayload = z.infer<
+  typeof workflowTransitionExecutedPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -268,6 +287,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("nutrition.allergyOverride"),
     payload: nutritionAllergyOverridePayloadSchema,
+  }),
+  // Fase 2 — Motor de Workflow ECE (Stream 15)
+  z.object({
+    eventType: z.literal("workflow.transitionExecuted"),
+    payload: workflowTransitionExecutedPayloadSchema,
   }),
 ]);
 
