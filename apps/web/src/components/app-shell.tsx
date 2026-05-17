@@ -50,11 +50,7 @@ import {
   Siren,
   ArrowLeftRight,
   LayoutGrid,
-  CheckSquare,
-  UserCheck,
   Zap,
-  Baby,
-  HeartHandshake,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -134,16 +130,15 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    // Solo items con páginas mergeadas. Preop/WHO/anestésico/URPA están
+    // pendientes de re-lanzamiento de agentes rate-limited y se agregarán
+    // en PR posterior.
     label: "ECE — Quirófano",
     defaultOpen: true,
     items: [
       { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
-      { href: "/surgery", label: "Programación", icon: Scissors },
-      { href: "/surgery/preop", label: "Preoperatorio", icon: ClipboardList },
-      { href: "/surgery/who-checklist", label: "WHO Checklist", icon: CheckSquare },
-      { href: "/surgery/intra", label: "Acto Quirúrgico", icon: Zap },
-      { href: "/surgery/anestesia", label: "Anestésico", icon: Wind },
-      { href: "/surgery/urpa", label: "URPA", icon: UserCheck },
+      { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap },
+      { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature },
     ],
   },
   {
@@ -174,14 +169,13 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    // Solo items con páginas mergeadas. Partograma/atención RN/reanimación
+    // pendientes de re-lanzamiento de agentes rate-limited.
     label: "ECE — Maternidad",
     defaultOpen: true,
     items: [
       { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
-      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
-      { href: "/ece/obstetricia/sala-expulsion", label: "Sala Expulsión", icon: BedDouble },
-      { href: "/ece/obstetricia/atencion-rn", label: "Atención RN", icon: Baby },
-      { href: "/ece/obstetricia/reanimacion", label: "Reanimación", icon: HeartHandshake },
+      { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble },
     ],
   },
   {
