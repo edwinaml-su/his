@@ -1,0 +1,109 @@
+erDiagram
+    INSTITUCION ||--o{ ESTABLECIMIENTO : tiene
+    ESTABLECIMIENTO ||--o{ SERVICIO : contiene
+    ESTABLECIMIENTO ||--o{ CAMA : contiene
+    SERVICIO ||--o{ CAMA : agrupa
+
+    INSTITUCION ||--o{ PERSONAL_SALUD : emplea
+    ESTABLECIMIENTO ||--o{ PERSONAL_SALUD : asigna
+    PERSONAL_SALUD ||--o| FIRMA_ELECTRONICA : posee
+    PERSONAL_SALUD ||--o{ ASIGNACION_ROL : tiene
+    ROL ||--o{ ASIGNACION_ROL : se_asigna
+    ROL ||--o{ PERFIL_ACCESO : define
+
+    PACIENTE ||--o{ IDENTIFICADOR_PACIENTE : posee
+    PACIENTE ||--o{ RESPONSABLE_PACIENTE : tiene
+    PACIENTE ||--o| AFILIACION_ISSS : puede_tener
+    PACIENTE ||--o{ EPISODIO_ATENCION : genera
+
+    EPISODIO_ATENCION ||--o| EPISODIO_HOSPITALARIO : especializa
+    EPISODIO_HOSPITALARIO ||--o{ ASIGNACION_CAMA : ocupa
+    CAMA ||--o{ ASIGNACION_CAMA : se_asigna
+    ESTABLECIMIENTO ||--o{ EPISODIO_ATENCION : ocurre_en
+
+    TIPO_DOCUMENTO ||--o{ FLUJO_ESTADO : define
+    TIPO_DOCUMENTO ||--o{ FLUJO_TRANSICION : define
+    TIPO_DOCUMENTO ||--o{ DOCUMENTO_ROL : vincula
+    ROL ||--o{ DOCUMENTO_ROL : participa
+    FLUJO_ESTADO ||--o{ FLUJO_TRANSICION : origen
+    FLUJO_ESTADO ||--o{ FLUJO_TRANSICION : destino
+    ROL ||--o{ FLUJO_TRANSICION : autoriza
+
+    TIPO_DOCUMENTO ||--o{ DOCUMENTO_INSTANCIA : instancia
+    EPISODIO_ATENCION ||--o{ DOCUMENTO_INSTANCIA : agrupa
+    FLUJO_ESTADO ||--o{ DOCUMENTO_INSTANCIA : estado_actual
+    DOCUMENTO_INSTANCIA ||--o{ DOCUMENTO_INSTANCIA_HISTORIAL : registra
+    PERSONAL_SALUD ||--o{ DOCUMENTO_INSTANCIA_HISTORIAL : ejecuta
+    FIRMA_ELECTRONICA ||--o{ DOCUMENTO_INSTANCIA_HISTORIAL : respalda
+
+    DOCUMENTO_INSTANCIA ||--o| FICHA_IDENTIFICACION : datos
+    DOCUMENTO_INSTANCIA ||--o| HISTORIA_CLINICA : datos
+    DOCUMENTO_INSTANCIA ||--o| SIGNOS_VITALES : datos
+    DOCUMENTO_INSTANCIA ||--o| TRIAJE : datos
+    DOCUMENTO_INSTANCIA ||--o| ATENCION_EMERGENCIA : datos
+    DOCUMENTO_INSTANCIA ||--o| INDICACIONES_MEDICAS : datos
+    DOCUMENTO_INSTANCIA ||--o| REGISTRO_ENFERMERIA : datos
+    DOCUMENTO_INSTANCIA ||--o| EVOLUCION_MEDICA : datos
+    DOCUMENTO_INSTANCIA ||--o| CONSENTIMIENTO_INFORMADO : datos
+    DOCUMENTO_INSTANCIA ||--o| REFERENCIA_RRI : datos
+    DOCUMENTO_INSTANCIA ||--o| ORDEN_INGRESO : datos
+    DOCUMENTO_INSTANCIA ||--o| HOJA_INGRESO : datos
+    DOCUMENTO_INSTANCIA ||--o| ACTO_QUIRURGICO : datos
+    DOCUMENTO_INSTANCIA ||--o| DOCUMENTO_OBSTETRICO : datos
+    DOCUMENTO_INSTANCIA ||--o| EPICRISIS_EGRESO : datos
+    DOCUMENTO_INSTANCIA ||--o| CERTIFICADO_DEFUNCION : datos
+    DOCUMENTO_INSTANCIA ||--o| CERTIFICADO_INCAPACIDAD : datos
+    DOCUMENTO_INSTANCIA ||--o| SOLICITUD_ESTUDIO : datos
+    SOLICITUD_ESTUDIO ||--o| RESULTADO_ESTUDIO : produce
+
+    DOCUMENTO_INSTANCIA ||--o{ RECTIFICACION : sufre
+    DOCUMENTO_INSTANCIA ||--o{ SUPRESION : sufre
+    PERSONAL_SALUD ||--o{ BITACORA_ACCESO : genera
+    DOCUMENTO_INSTANCIA ||--o{ BITACORA_AUDITORIA : audita
+
+    PACIENTE {
+        uuid id PK
+        text numero_expediente UK
+        text nui
+        text cun
+        date fecha_nacimiento
+        text estado_registro
+    }
+    EPISODIO_ATENCION {
+        uuid id PK
+        uuid paciente_id FK
+        text modalidad
+        text servicio_tipo
+        timestamptz fecha_hora_inicio
+        text estado
+    }
+    TIPO_DOCUMENTO {
+        uuid id PK
+        text codigo UK
+        text nombre
+        text tabla_datos
+        text tipo_registro
+        text modalidad
+    }
+    DOCUMENTO_INSTANCIA {
+        uuid id PK
+        uuid tipo_documento_id FK
+        uuid episodio_id FK
+        uuid estado_actual_id FK
+        uuid registro_id
+        int version
+    }
+    DOCUMENTO_ROL {
+        uuid id PK
+        uuid tipo_documento_id FK
+        uuid rol_id FK
+        text funcion
+    }
+    FLUJO_TRANSICION {
+        uuid id PK
+        uuid tipo_documento_id FK
+        uuid estado_origen_id FK
+        uuid estado_destino_id FK
+        uuid rol_autoriza_id FK
+        text accion
+    }
