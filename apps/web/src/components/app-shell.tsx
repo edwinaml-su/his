@@ -135,6 +135,10 @@ const SECTIONS: NavSection[] = [
         label: "Historia Clínica",
         icon: FileText,
       },
+    defaultOpen: false,
+    items: [
+      { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
+      { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
     ],
   },
   {
