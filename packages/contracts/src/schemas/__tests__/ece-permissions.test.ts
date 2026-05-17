@@ -209,4 +209,178 @@ describe("hasEcePermission", () => {
       expect(can(roles, "ece.documento.certificar")).toBe(false);
     });
   });
+
+  // --- Roles stream #16 (IC, AC, ADM) ---
+  describe("Roles stream #16 — IC / AC / ADM", () => {
+    it("IC (Interoperabilidad Clínica) no tiene permisos ECE por defecto", () => {
+      const roles = ["IC"];
+      expect(can(roles, "ece.documento.firmar")).toBe(false);
+      expect(can(roles, "ece.documento.validar")).toBe(false);
+      expect(can(roles, "ece.bitacora.read")).toBe(false);
+    });
+
+    it("AC (Apoyo Clínico) no puede firmar ni certificar", () => {
+      const roles = ["AC"];
+      expect(can(roles, "ece.documento.firmar")).toBe(false);
+      expect(can(roles, "ece.documento.certificar")).toBe(false);
+    });
+
+    it("ADM (Admisión) no tiene acceso clínico ECE", () => {
+      const roles = ["ADM"];
+      expect(can(roles, "ece.documento.firmar")).toBe(false);
+      expect(can(roles, "ece.rectificacion.solicitar")).toBe(false);
+    });
+
+    it("IC + MC (combinado) puede firmar vía MC aunque IC no pueda", () => {
+      const roles = ["IC", "MC"];
+      expect(can(roles, "ece.documento.firmar")).toBe(true);
+      expect(can(roles, "ece.documento.validar")).toBe(true);
+    });
+
+    it("AC + ENF puede firmar y solicitar rectificación vía ENF", () => {
+      const roles = ["AC", "ENF"];
+      expect(can(roles, "ece.documento.firmar")).toBe(true);
+      expect(can(roles, "ece.rectificacion.solicitar")).toBe(true);
+      expect(can(roles, "ece.documento.certificar")).toBe(false);
+    });
+  });
+
+  // --- Alias adicionales (super_admin, ADMIN_GLOBAL) ---
+  describe("Aliases ADMIN adicionales", () => {
+    it("super_admin tiene bypass total", () => {
+      const perms: EcePermission[] = [
+        "ece.documento.firmar",
+        "ece.documento.certificar",
+        "ece.documento.anular",
+        "ece.bitacora.read",
+        "ece.workflow.designer",
+      ];
+      for (const p of perms) {
+        expect(can(["super_admin"], p), `super_admin debe tener ${p}`).toBe(true);
+      }
+    });
+
+    it("ADMIN_GLOBAL tiene bypass total igual que ADMIN", () => {
+      const perms: EcePermission[] = [
+        "ece.rectificacion.aprobar",
+        "ece.workflow.designer",
+        "ece.documento.anular",
+      ];
+      for (const p of perms) {
+        expect(can(["ADMIN_GLOBAL"], p), `ADMIN_GLOBAL debe tener ${p}`).toBe(true);
+      }
+    });
+  });
+
+  // --- Alias español (medico, enfermeria) ---
+  describe("Aliases en español (medico, enfermeria)", () => {
+    it("medico (alias) puede firmar y validar igual que PHYSICIAN", () => {
+      expect(can(["medico"], "ece.documento.firmar")).toBe(true);
+      expect(can(["medico"], "ece.documento.validar")).toBe(true);
+      expect(can(["medico"], "ece.documento.certificar")).toBe(false);
+    });
+
+    it("enfermeria (alias) puede firmar y solicitar rectificación igual que NURSE", () => {
+      expect(can(["enfermeria"], "ece.documento.firmar")).toBe(true);
+      expect(can(["enfermeria"], "ece.rectificacion.solicitar")).toBe(true);
+      expect(can(["enfermeria"], "ece.documento.validar")).toBe(false);
+    });
+  });
+
+  // --- ESP overlapping con NURSE ---
+  describe("ESP + NURSE — overlap de roles clínicos", () => {
+    it("ESP + NURSE puede firmar (ambos tienen ese permiso)", () => {
+      expect(can(["ESP", "NURSE"], "ece.documento.firmar")).toBe(true);
+    });
+
+    it("ESP + NURSE no puede validar (ninguno de los dos puede)", () => {
+      expect(can(["ESP", "NURSE"], "ece.documento.validar")).toBe(false);
+    });
+
+    it("ESP + NURSE no puede certificar", () => {
+      expect(can(["ESP", "NURSE"], "ece.documento.certificar")).toBe(false);
+    });
+  });
+
+  // --- ecePersonalRoles ignorado en contexto actual ---
+  describe("ecePersonalRoles — campo adicional", () => {
+    it("ecePersonalRoles no infla permisos cuando roleCodes es vacío", () => {
+      const result = hasEcePermission("ece.documento.firmar", {
+        roleCodes: [],
+        ecePersonalRoles: ["MC", "ESP"],
+      });
+      expect(result).toBe(false);
+    });
+
+    it("ecePersonalRoles presente + roleCodes válido retorna el resultado de roleCodes", () => {
+      const result = hasEcePermission("ece.documento.firmar", {
+        roleCodes: ["NURSE"],
+        ecePersonalRoles: ["ARCH"],
+      });
+      expect(result).toBe(true);
+    });
+  });
+
+  // --- Roles no reconocidos + whitespace edge cases ---
+  describe("Roles no reconocidos y edge cases de strings", () => {
+    it("rol con espacios no coincide con alias válido", () => {
+      expect(can([" ADMIN"], "ece.documento.firmar")).toBe(false);
+      expect(can(["ADMIN "], "ece.bitacora.read")).toBe(false);
+    });
+
+    it("rol en minúsculas no reconocido no otorga permisos (excepto aliases explícitos)", () => {
+      expect(can(["dir"], "ece.documento.certificar")).toBe(false);
+      expect(can(["nurse"], "ece.documento.firmar")).toBe(false);
+    });
+
+    it("rol numérico/symbol string no otorga permisos", () => {
+      expect(can(["123", "!@#"], "ece.documento.firmar")).toBe(false);
+    });
+
+    it("array con varios roles desconocidos acumula denegación", () => {
+      const roles = ["FARMACIA", "ESTERILIZACION", "IMAGEN", "LABORATORIO"];
+      const perms: EcePermission[] = [
+        "ece.documento.firmar",
+        "ece.documento.certificar",
+        "ece.bitacora.read",
+        "ece.rectificacion.aprobar",
+        "ece.workflow.designer",
+      ];
+      for (const p of perms) {
+        expect(can(roles, p), `roles auxiliares no deben poder ${p}`).toBe(false);
+      }
+    });
+  });
+
+  // --- Todos los permisos ECE cubiertos exhaustivamente para IC/AC/ADM ---
+  describe("Cobertura exhaustiva permisos — roles auxiliares stream #16", () => {
+    const ALL_PERMS: EcePermission[] = [
+      "ece.documento.firmar",
+      "ece.documento.validar",
+      "ece.documento.certificar",
+      "ece.documento.anular",
+      "ece.bitacora.read",
+      "ece.rectificacion.solicitar",
+      "ece.rectificacion.aprobar",
+      "ece.workflow.designer",
+    ];
+
+    it("IC niega todos los permisos ECE", () => {
+      for (const p of ALL_PERMS) {
+        expect(can(["IC"], p), `IC no debe poder ${p}`).toBe(false);
+      }
+    });
+
+    it("AC niega todos los permisos ECE", () => {
+      for (const p of ALL_PERMS) {
+        expect(can(["AC"], p), `AC no debe poder ${p}`).toBe(false);
+      }
+    });
+
+    it("ADM niega todos los permisos ECE", () => {
+      for (const p of ALL_PERMS) {
+        expect(can(["ADM"], p), `ADM no debe poder ${p}`).toBe(false);
+      }
+    });
+  });
 });
