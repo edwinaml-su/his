@@ -134,7 +134,7 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={expanded}
-        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground hover:bg-sidebar-accent"
+        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       >
         <span>{section.label}</span>
         {expanded ? (
@@ -155,8 +155,8 @@ function SectionGroup({ section, pathname }: { section: NavSection; pathname: st
                   className={cn(
                     "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
                     active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                      : "text-sidebar-foreground hover:bg-sidebar-accent",
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-sm"
+                      : "text-sidebar-foreground/90 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
                   )}
                 >
                   <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -187,10 +187,17 @@ export function AppShell({
       >
         Saltar al contenido principal
       </a>
-      <aside className="hidden w-64 shrink-0 border-r bg-sidebar-background md:flex md:flex-col">
-        <div className="border-b p-4">
-          <p className="text-base font-bold">HIS Avante</p>
-          <p className="text-xs text-muted-foreground">El Salvador</p>
+      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground md:flex md:flex-col">
+        <div className="border-b border-sidebar-border p-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/avante-logo.svg"
+            alt="AVANTE Complejo Hospitalario"
+            className="h-10 w-auto brightness-0 invert"
+          />
+          <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
+            Sistema de Información Hospitalaria · El Salvador
+          </p>
         </div>
         <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
           {SECTIONS.map((section) => (
@@ -199,10 +206,10 @@ export function AppShell({
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b bg-background px-4">
+        <header className="flex h-14 items-center justify-between border-b bg-background px-4 shadow-sm">
           <div className="text-sm text-muted-foreground">{topbar}</div>
         </header>
-        <main id="main-content" tabIndex={-1} className="flex-1 p-6">
+        <main id="main-content" tabIndex={-1} className="flex-1 bg-muted/30 p-6">
           {children}
         </main>
       </div>
