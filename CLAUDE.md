@@ -198,7 +198,13 @@ Cuando una norma (NTEC / ISSS / TDR) introduce una funcionalidad que ya existe p
 
 **En prompts a sub-agentes:** incluir explícito "verifica si existe módulo legacy y refactorízalo; NO crees página nueva si el dominio ya está cubierto".
 
-**Precedente:** `/ece/triaje` fue eliminado en este PR — duplicaba `/triage` legacy que ya tenía Manchester implementado. Bridge `eceBridgeTriage` ya sincroniza con `ece.hoja_triaje`.
+**Precedente positivo:** `/ece/triaje` fue eliminado en PR #101 — duplicaba `/triage` legacy que ya tenía Manchester implementado. Bridge `eceBridgeTriage` ya sincroniza con `ece.hoja_triaje`.
+
+**Contra-ejemplo (NO duplicados, solo nombre similar — coexisten legítimamente):**
+- `/consents` (admin) = consentimientos de **tratamiento de datos** (GDPR/LOPD: data-processing, mpi-cross-org, transfusion-research, telemedicine; 1 firma paciente; revocable).
+- `/ece/consentimiento` (clinical) = consentimientos **médicos informados NTEC** (HOSPITALIZACION, QUIRURGICO; doble firma paciente+MC; inmutable post-firma Art. 40).
+
+Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no implican duplicación. Si los dominios son distintos (operador, propósito, lifecycle, normativa fuente), coexisten. Aclarar labels en sidebar para no confundir visualmente.
 
 ---
 
