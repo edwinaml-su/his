@@ -45,7 +45,7 @@ const listInput = z.object({
 
 // ─── Tipos raw SQL ────────────────────────────────────────────────────────────
 
-interface UnidosisRaw {
+export interface UnidosisRaw {
   id: string;
   codigo_unidosis: string;
   etiqueta_qr_generada: string | null;

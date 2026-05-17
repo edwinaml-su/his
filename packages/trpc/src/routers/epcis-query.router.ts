@@ -15,7 +15,7 @@ import { router, requireRole } from "../trpc";
 
 // ─── Tipos raw SQL ─────────────────────────────────────────────────────────────
 
-interface EpcisEventRow {
+export interface EpcisEventRow {
   id: string;
   equipment_id: string;
   gln_destino: string;

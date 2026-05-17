@@ -8,7 +8,10 @@
 import * as React from "react";
 import { CheckCircle2, Circle } from "lucide-react";
 import { Badge } from "@his/ui/components/badge";
-import type { ReanimacionNeonatalRow } from "@his/trpc/src/routers/ece/reanimacion-neonatal.router";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@his/trpc";
+
+type ReanimacionNeonatalRow = inferRouterOutputs<AppRouter>["eceReanimacionNeonatal"]["get"];
 
 // ---------------------------------------------------------------------------
 // Tipos

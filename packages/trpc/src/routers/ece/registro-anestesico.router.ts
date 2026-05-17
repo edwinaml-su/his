@@ -32,7 +32,7 @@ import {
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
 
-interface RegistroAnestesicoRow {
+export interface RegistroAnestesicoRow {
   id: string;
   acto_quirurgico_id: string;
   instancia_id: string | null;
@@ -323,10 +323,17 @@ export const eceRegistroAnestesicoRouter = router({
            WHERE id = ${input.id}::uuid
         `;
 
-        await emitDomainEvent(tx, "ece.anestesia.firmada", {
-          registroId: input.id,
-          actoQuirurgicoId: row.acto_quirurgico_id,
-          firmadoPor: personalId,
+        await emitDomainEvent(tx, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "ece.anestesia.firmada",
+          aggregateType: "RegistroAnestesico",
+          aggregateId: input.id,
+          emittedById: ctx.user.id,
+          payload: {
+            registroId: input.id,
+            actoQuirurgicoId: row.acto_quirurgico_id,
+            firmadoPor: personalId,
+          },
         });
       });
 

@@ -53,7 +53,7 @@ export const preopChecklistFirmarSchema = z.object({
 // Tipos de fila raw
 // =============================================================================
 
-interface PreopRow {
+export interface PreopRow {
   id: string;
   instancia_id: string;
   episodio_hospitalario_id: string;

@@ -431,7 +431,7 @@ export default function PartogramaPage({
     }
   }, []);
 
-  const registros = (listQuery.data ?? []) as RegistroRow[];
+  const registros = (listQuery.data ?? []) as unknown as RegistroRow[];
 
   // Base OMS: primer registro en fase activa
   const baseRow = registros.find((r) => Number(r.dilatacion_cm) >= 4);

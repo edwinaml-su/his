@@ -81,7 +81,11 @@ export const gs1ProcesoARouter = router({
       }
 
       await emitDomainEvent(ctx.prisma, {
+        organizationId: ctx.tenant.organizationId,
         eventType: "gs1.inbound.recibido",
+        aggregateType: "RecepcionMercancia",
+        aggregateId: recepcion.id,
+        emittedById: ctx.user.id,
         payload: {
           recepcionId: recepcion.id,
           numeroDocumentoRecepcion: recepcion.numero_documento_recepcion,
@@ -158,7 +162,11 @@ export const gs1ProcesoARouter = router({
       `;
 
       await emitDomainEvent(ctx.prisma, {
+        organizationId: ctx.tenant.organizationId,
         eventType: "gs1.inbound.rechazado",
+        aggregateType: "RecepcionMercancia",
+        aggregateId: input.recepcionId,
+        emittedById: ctx.user.id,
         payload: {
           recepcionId: input.recepcionId,
           numeroDocumentoRecepcion: rows[0].numero_documento_recepcion,

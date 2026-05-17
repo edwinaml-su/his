@@ -740,6 +740,83 @@ export const coldChainExcursionPayloadSchema = z.object({
 export type ColdChainExcursionPayload = z.infer<typeof coldChainExcursionPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// Fase 2 S5 — Quirófano + Obstetricia + GS1 Proceso B (schemas relaxed).
+// Se usan `.passthrough()` para tolerar variaciones de campos opcionales
+// que los routers puedan agregar sin requerir migración de schemas.
+// -----------------------------------------------------------------------------
+
+export const ecePreopChecklistFirmadoPayloadSchema = z.object({
+  checklistId: z.string().uuid(),
+  cirugiaCaseId: z.string().uuid().nullable().optional(),
+  pacienteId: z.string().uuid().optional(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const eceCirugiaProgramadaPayloadSchema = z.object({
+  cirugiaCaseId: z.string().uuid(),
+  pacienteId: z.string().uuid().optional(),
+  fechaProgramada: z.string().datetime().optional(),
+}).passthrough();
+
+export const eceCirugiaCanceladaPayloadSchema = z.object({
+  cirugiaCaseId: z.string().uuid(),
+  motivo: z.string().optional(),
+}).passthrough();
+
+export const eceRnRegistradoPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  rnPatientId: z.string().uuid().optional(),
+  madrePatientId: z.string().uuid().optional(),
+  episodioObsId: z.string().uuid().optional(),
+  apgar1min: z.number().int().optional(),
+  apgar5min: z.number().int().optional(),
+}).passthrough();
+
+export const eceRnReanimacionRequeridaPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  rnPatientId: z.string().uuid().optional(),
+  protocoloNrp: z.unknown().optional(),
+}).passthrough();
+
+export const eceRnFirmadoPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const ecePartogramaAlertaPayloadSchema = z.object({
+  partogramaId: z.string().uuid(),
+  tipoAlerta: z.string().optional(),
+  severidad: z.string().optional(),
+}).passthrough();
+
+export const eceExpulsionHemorragiaPostPartoAlertaPayloadSchema = z.object({
+  expulsionId: z.string().uuid(),
+  pacienteId: z.string().uuid().optional(),
+  perdidaSanguineaMl: z.number().optional(),
+}).passthrough();
+
+export const gs1TransferEnviadaPayloadSchema = z.object({
+  transferenciaId: z.string().uuid(),
+  origenGln: z.string(),
+  destinoGln: z.string(),
+  enviadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const gs1TransferRecibidaRechazadaPayloadSchema = z.object({
+  transferenciaId: z.string().uuid(),
+  origenGln: z.string(),
+  destinoGln: z.string(),
+  verificadoPor: z.string().uuid().optional(),
+  motivoRechazo: z.string().nullable().optional(),
+}).passthrough();
+
+export const eceAnestesiaFirmadaPayloadSchema = z.object({
+  registroId: z.string().uuid(),
+  actoQuirurgicoId: z.string().uuid().optional(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -934,6 +1011,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("gs1.inbound.rechazado"),
     payload: gs1InboundRechazadoPayloadSchema,
+  }),
   // Proceso C GS1 — Preparación Unidosis
   z.object({
     eventType: z.literal("gs1.unidosis.preparada"),
@@ -942,10 +1020,66 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("gs1.unidosis.verificada"),
     payload: gs1UnidosisVerificadaPayloadSchema,
+  }),
   // F2-S15 placeholder — Cold Chain
   z.object({
     eventType: z.literal("cold_chain.excursion"),
     payload: coldChainExcursionPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Preoperatorio
+  z.object({
+    eventType: z.literal("ece.preop_checklist.firmado"),
+    payload: ecePreopChecklistFirmadoPayloadSchema,
+  }),
+  // Fase 2 S5 — Bridge Cirugía
+  z.object({
+    eventType: z.literal("ece.cirugia.programada"),
+    payload: eceCirugiaProgramadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.cirugia.cancelada"),
+    payload: eceCirugiaCanceladaPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Atención RN
+  z.object({
+    eventType: z.literal("ece.rn.registrado"),
+    payload: eceRnRegistradoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rn.reanimacion_requerida"),
+    payload: eceRnReanimacionRequeridaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rn.firmado"),
+    payload: eceRnFirmadoPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Partograma
+  z.object({
+    eventType: z.literal("ece.partograma.alerta"),
+    payload: ecePartogramaAlertaPayloadSchema,
+  }),
+  // Fase 2 S5 — Período Expulsivo
+  z.object({
+    eventType: z.literal("ece.expulsion.hemorragia_post_parto_alerta"),
+    payload: eceExpulsionHemorragiaPostPartoAlertaPayloadSchema,
+  }),
+  // Fase 2 S7 — GS1 Proceso B
+  z.object({
+    eventType: z.literal("gs1.transfer.enviada"),
+    payload: gs1TransferEnviadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.transfer.recibida"),
+    payload: gs1TransferRecibidaRechazadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.transfer.rechazada"),
+    payload: gs1TransferRecibidaRechazadaPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Registro Anestésico
+  z.object({
+    eventType: z.literal("ece.anestesia.firmada"),
+    payload: eceAnestesiaFirmadaPayloadSchema,
   }),
 ]);
 

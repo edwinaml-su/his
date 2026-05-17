@@ -122,18 +122,6 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE — Quirófano",
-    defaultOpen: true,
-    items: [
-      { href: "/surgery", label: "Quirófano", icon: Scissors },
-      {
-        href: "/ece/registro-anestesico",
-        label: "Anestésico",
-        icon: Wind,
-      },
-    ],
-  },
-  {
     label: "Diagnóstico",
     defaultOpen: true,
     items: [
@@ -151,25 +139,20 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
       { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
+      { href: "/ece/quirofano/programacion", label: "Programación", icon: Scissors },
+      { href: "/ece/registro-anestesico", label: "Anestésico", icon: Wind },
       { href: "/ece/urpa", label: "URPA", icon: UserCheck },
-      {
-        href: "/ece/quirofano/programacion",
-        label: "Programación",
-        icon: Scissors,
-      },
+    ],
+  },
+  {
     label: "ECE — Maternidad",
     defaultOpen: true,
     items: [
+      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
       { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
-    label: "ECE — Maternidad",
-    defaultOpen: false,
-    items: [
-      {
-        href: "/ece/reanimacion-neonatal",
-        label: "Reanimación",
-        icon: HeartHandshake,
-      },
+      { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake },
     ],
   },
   {
@@ -181,21 +164,6 @@ const SECTIONS: NavSection[] = [
         href: "/ece/episodio-hospitalario",
         label: "Episodio Hospitalario",
         icon: BedDouble,
-      },
-    ],
-  },
-  {
-    label: "ECE — Quirófano",
-    defaultOpen: true,
-    items: [
-      { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
-    label: "ECE — Maternidad",
-    defaultOpen: true,
-    items: [
-      {
-        href: "/ece/obstetricia/partograma",
-        label: "Partograma",
-        icon: Activity,
       },
     ],
   },

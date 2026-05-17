@@ -66,7 +66,7 @@ const partogramaCerrarSchema = z.object({
   observacionCierre: z.string().max(1_000).optional(),
 });
 
-interface PartogramaRegistroRow {
+export interface PartogramaRegistroRow {
   id: string;
   doc_obstetrico_id: string;
   episodio_id: string;
@@ -150,7 +150,7 @@ function resolveEceCtx(ctx: {
 
 export const ecePartogramaRouter = router({
   /** Lista la serie temporal del partograma para un documento obstétrico. */
-  list: requireRole(["PHYSICIAN", "NURSE", "MT"]).query(
+  list: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaListSchema).query(
     async ({ ctx, input }) => {
       const { establecimientoId } = resolveEceCtx(ctx);
       const parsed = partogramaListSchema.parse(input);
@@ -169,7 +169,7 @@ export const ecePartogramaRouter = router({
   ),
 
   /** Obtiene un registro individual por id. */
-  get: requireRole(["PHYSICIAN", "NURSE", "MT"]).query(async ({ ctx, input }) => {
+  get: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaGetSchema).query(async ({ ctx, input }) => {
     const { establecimientoId } = resolveEceCtx(ctx);
     const parsed = partogramaGetSchema.parse(input);
 
@@ -189,7 +189,7 @@ export const ecePartogramaRouter = router({
   }),
 
   /** Inserta una nueva lectura y calcula la alerta OMS automáticamente. */
-  registrar: requireRole(["PHYSICIAN", "NURSE", "MT"]).mutation(
+  registrar: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaRegistrarSchema).mutation(
     async ({ ctx, input }) => {
       const { userId, establecimientoId } = resolveEceCtx(ctx);
       const data = partogramaRegistrarSchema.parse(input);
@@ -304,7 +304,7 @@ export const ecePartogramaRouter = router({
    * Marca el cierre del partograma en documentos_obstetricos
    * actualizando labor_parto JSONB con el motivo de cierre.
    */
-  cerrarPartograma: requireRole(["PHYSICIAN", "MT"]).mutation(
+  cerrarPartograma: requireRole(["PHYSICIAN", "MT"]).input(partogramaCerrarSchema).mutation(
     async ({ ctx, input }) => {
       const { establecimientoId } = resolveEceCtx(ctx);
       const data = partogramaCerrarSchema.parse(input);
@@ -340,7 +340,7 @@ export const ecePartogramaRouter = router({
    * Re-calcula y devuelve el estado de alerta OMS de toda la serie activa
    * (útil para re-renderizar la UI después de importar datos).
    */
-  detectarAlertasOMS: requireRole(["PHYSICIAN", "NURSE", "MT"]).query(
+  detectarAlertasOMS: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaListSchema).query(
     async ({ ctx, input }) => {
       const { establecimientoId } = resolveEceCtx(ctx);
       const parsed = partogramaListSchema.parse(input);
