@@ -209,4 +209,191 @@ describe("hasEcePermission", () => {
       expect(can(roles, "ece.documento.certificar")).toBe(false);
     });
   });
+
+  // =========================================================================
+  // Roles especializados (75_specialized_roles.sql)
+  // =========================================================================
+
+  // --- ece.cirugia.programar ---
+  describe("ece.cirugia.programar", () => {
+    it("MC puede programar cirugía", () => {
+      expect(can(["MC"], "ece.cirugia.programar")).toBe(true);
+    });
+
+    it("ESP puede programar cirugía", () => {
+      expect(can(["ESP"], "ece.cirugia.programar")).toBe(true);
+    });
+
+    it("GO puede programar cirugía obstétrica", () => {
+      expect(can(["GO"], "ece.cirugia.programar")).toBe(true);
+    });
+
+    it("ANEST NO puede programar cirugía (solo administra anestesia)", () => {
+      expect(can(["ANEST"], "ece.cirugia.programar")).toBe(false);
+    });
+
+    it("NURSE NO puede programar cirugía", () => {
+      expect(can(["NURSE"], "ece.cirugia.programar")).toBe(false);
+    });
+
+    it("ADMIN tiene acceso por bypass", () => {
+      expect(can(["ADMIN"], "ece.cirugia.programar")).toBe(true);
+    });
+  });
+
+  // --- ece.cirugia.firmar_acto ---
+  describe("ece.cirugia.firmar_acto", () => {
+    it("ESP cirujano firma el acto quirúrgico", () => {
+      expect(can(["ESP"], "ece.cirugia.firmar_acto")).toBe(true);
+    });
+
+    it("MC solo NO puede firmar el acto (requiere calidad de especialista)", () => {
+      expect(can(["MC"], "ece.cirugia.firmar_acto")).toBe(false);
+    });
+
+    it("GO solo NO puede firmar acto quirúrgico general (usa ESP para eso)", () => {
+      expect(can(["GO"], "ece.cirugia.firmar_acto")).toBe(false);
+    });
+
+    it("ANEST NO firma acto quirúrgico", () => {
+      expect(can(["ANEST"], "ece.cirugia.firmar_acto")).toBe(false);
+    });
+
+    it("NURSE NO firma acto quirúrgico", () => {
+      expect(can(["NURSE"], "ece.cirugia.firmar_acto")).toBe(false);
+    });
+
+    it("ADMIN tiene acceso por bypass", () => {
+      expect(can(["ADMIN"], "ece.cirugia.firmar_acto")).toBe(true);
+    });
+  });
+
+  // --- ece.anestesia.administrar ---
+  describe("ece.anestesia.administrar", () => {
+    it("ANEST administra anestesia", () => {
+      expect(can(["ANEST"], "ece.anestesia.administrar")).toBe(true);
+    });
+
+    it("ESP NO administra anestesia (separación de funciones)", () => {
+      expect(can(["ESP"], "ece.anestesia.administrar")).toBe(false);
+    });
+
+    it("PHYSICIAN NO administra anestesia", () => {
+      expect(can(["PHYSICIAN"], "ece.anestesia.administrar")).toBe(false);
+    });
+
+    it("NURSE NO administra anestesia", () => {
+      expect(can(["NURSE"], "ece.anestesia.administrar")).toBe(false);
+    });
+  });
+
+  // --- ece.urpa.dar_alta ---
+  describe("ece.urpa.dar_alta", () => {
+    it("NURSE puede dar alta URPA", () => {
+      expect(can(["NURSE"], "ece.urpa.dar_alta")).toBe(true);
+    });
+
+    it("ENF (alias) puede dar alta URPA", () => {
+      expect(can(["ENF"], "ece.urpa.dar_alta")).toBe(true);
+    });
+
+    it("ENF_NRP puede dar alta URPA", () => {
+      expect(can(["ENF_NRP"], "ece.urpa.dar_alta")).toBe(true);
+    });
+
+    it("PHYSICIAN NO da alta URPA directamente (debe ordenar, ENF ejecuta)", () => {
+      expect(can(["PHYSICIAN"], "ece.urpa.dar_alta")).toBe(false);
+    });
+
+    it("ANEST NO da alta URPA (solo ordena)", () => {
+      expect(can(["ANEST"], "ece.urpa.dar_alta")).toBe(false);
+    });
+  });
+
+  // --- ece.partograma.registrar ---
+  describe("ece.partograma.registrar", () => {
+    it("ENF puede registrar partograma", () => {
+      expect(can(["ENF"], "ece.partograma.registrar")).toBe(true);
+    });
+
+    it("NURSE puede registrar partograma", () => {
+      expect(can(["NURSE"], "ece.partograma.registrar")).toBe(true);
+    });
+
+    it("MC puede registrar partograma", () => {
+      expect(can(["MC"], "ece.partograma.registrar")).toBe(true);
+    });
+
+    it("GO puede registrar partograma", () => {
+      expect(can(["GO"], "ece.partograma.registrar")).toBe(true);
+    });
+
+    it("ANEST NO registra partograma", () => {
+      expect(can(["ANEST"], "ece.partograma.registrar")).toBe(false);
+    });
+  });
+
+  // --- ece.rn.firmar ---
+  describe("ece.rn.firmar", () => {
+    it("PEDIA firma acta de recién nacido", () => {
+      expect(can(["PEDIA"], "ece.rn.firmar")).toBe(true);
+    });
+
+    it("MC NO firma acta de RN (requiere pediatra)", () => {
+      expect(can(["MC"], "ece.rn.firmar")).toBe(false);
+    });
+
+    it("GO NO firma acta de RN", () => {
+      expect(can(["GO"], "ece.rn.firmar")).toBe(false);
+    });
+
+    it("ENF_NRP NO firma acta de RN (ejecuta reanimación, no firma acta)", () => {
+      expect(can(["ENF_NRP"], "ece.rn.firmar")).toBe(false);
+    });
+
+    it("ADMIN tiene acceso por bypass", () => {
+      expect(can(["ADMIN"], "ece.rn.firmar")).toBe(true);
+    });
+  });
+
+  // --- ece.reanimacion.ejecutar ---
+  describe("ece.reanimacion.ejecutar", () => {
+    it("PEDIA ejecuta protocolo NRP", () => {
+      expect(can(["PEDIA"], "ece.reanimacion.ejecutar")).toBe(true);
+    });
+
+    it("ENF_NRP ejecuta protocolo NRP", () => {
+      expect(can(["ENF_NRP"], "ece.reanimacion.ejecutar")).toBe(true);
+    });
+
+    it("NURSE sin certificación NRP NO puede ejecutar reanimación", () => {
+      expect(can(["NURSE"], "ece.reanimacion.ejecutar")).toBe(false);
+    });
+
+    it("MC sin certificación NRP NO puede ejecutar reanimación", () => {
+      expect(can(["MC"], "ece.reanimacion.ejecutar")).toBe(false);
+    });
+
+    it("PEDIA + ENF_NRP (equipo neonatal) ambos pueden", () => {
+      expect(can(["PEDIA", "ENF_NRP"], "ece.reanimacion.ejecutar")).toBe(true);
+    });
+  });
+
+  // --- ADMIN bypass sobre permisos nuevos ---
+  describe("ADMIN bypass — permisos especializados", () => {
+    it("ADMIN tiene acceso a todos los permisos especializados", () => {
+      const perms: EcePermission[] = [
+        "ece.cirugia.programar",
+        "ece.cirugia.firmar_acto",
+        "ece.anestesia.administrar",
+        "ece.urpa.dar_alta",
+        "ece.partograma.registrar",
+        "ece.rn.firmar",
+        "ece.reanimacion.ejecutar",
+      ];
+      for (const p of perms) {
+        expect(can(["ADMIN"], p), `ADMIN debe tener ${p}`).toBe(true);
+      }
+    });
+  });
 });
