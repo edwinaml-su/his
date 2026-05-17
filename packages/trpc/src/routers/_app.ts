@@ -97,6 +97,8 @@ import { eceCirugiaPreopRouter } from "./ece/preop-checklist.router";
 import { eceWhoChecklistRouter } from "./ece/who-checklist.router";
 // ECE — Registro Anestésico Intraoperatorio (REG_ANEST)
 import { eceRegistroAnestesicoRouter } from "./ece/registro-anestesico.router";
+// ECE — URPA (Recuperación Post-Anestésica)
+import { eceUrpaRecoveryRouter } from "./ece/urpa-recovery.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -197,6 +199,8 @@ export const appRouter = router({
   eceWhoChecklist: eceWhoChecklistRouter,
   // ECE — Registro Anestésico Intraoperatorio
   eceRegistroAnestesico: eceRegistroAnestesicoRouter,
+  // ECE — URPA (Recuperación Post-Anestésica)
+  eceUrpa: eceUrpaRecoveryRouter,
 });
 
 export type AppRouter = typeof appRouter;

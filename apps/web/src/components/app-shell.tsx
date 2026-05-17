@@ -50,6 +50,7 @@ import {
   Siren,
   ArrowLeftRight,
   CheckSquare,
+  UserCheck,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -145,6 +146,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
+      { href: "/ece/urpa", label: "URPA", icon: UserCheck },
     ],
   },
   {
