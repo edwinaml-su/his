@@ -50,6 +50,8 @@ import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+// Fase 2 — Bridge ECE-HIS Triage (Stream 18-ext)
+import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -103,6 +105,8 @@ export const appRouter = router({
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
   workflowInstance: workflowInstanceRouter,
+  // Fase 2 — Bridge ECE-HIS Triage
+  eceBridgeTriage: eceBridgeTriageRouter,
 });
 
 export type AppRouter = typeof appRouter;

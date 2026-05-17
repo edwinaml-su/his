@@ -237,6 +237,30 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.triaje.linkedToHisTriage  (Fase 2 — Bridge ECE-HIS, Stream 18-ext)
+// Emitido cuando una EceTriaje queda vinculada a una TriageEvaluation HIS.
+// -----------------------------------------------------------------------------
+
+export const eceTriajeLinkedToHisTriagePayloadSchema = z.object({
+  /** UUID de la TriageEvaluation HIS (public.TriageEvaluation). */
+  hisTriageId: z.string().uuid(),
+  /** UUID de la EceTriaje (ece.triaje). */
+  eceTriajeId: z.string().uuid(),
+  /** UUID del paciente HIS. */
+  patientId: z.string().uuid(),
+  /** Nivel Manchester 1-5 mapeado al nivelPrioridad ECE. */
+  manchesterLevel: z.number().int().min(1).max(5),
+  /** true si el triajista firmó electrónicamente en el mismo acto. */
+  firmadoInmediatamente: z.boolean(),
+  /** UUID del profesional que ejecutó la operación. */
+  byUserId: z.string().uuid(),
+});
+
+export type EceTriajeLinkedToHisTriagePayload = z.infer<
+  typeof eceTriajeLinkedToHisTriagePayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +316,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — Bridge ECE-HIS (Stream 18-ext)
+  z.object({
+    eventType: z.literal("ece.triaje.linkedToHisTriage"),
+    payload: eceTriajeLinkedToHisTriagePayloadSchema,
   }),
 ]);
 
