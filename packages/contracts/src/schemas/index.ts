@@ -18,6 +18,7 @@ export * from "./emergency";
 export * from "./encounter";
 export * from "./exchange-rate";
 export * from "./firma-electronica";
+export * from "./ece-consentimiento";
 export * from "./imaging";
 export * from "./inpatient";
 export * from "./insurance";
