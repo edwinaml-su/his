@@ -71,6 +71,9 @@ import { eceBridgePatientRouter } from "./ece-bridge-patient.router";
 import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
 // Fase 2 — Bridge ECE-HIS Triage (Stream 18-ext)
 import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
+// ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+import { eceSolicitudEstudioRouter } from "./ece/solicitud-estudio.router";
+import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -145,6 +148,9 @@ export const appRouter = router({
   eceBridgeEncounter: bridgeEncounterRouter,
   // Fase 2 — Bridge ECE-HIS Triage
   eceBridgeTriage: eceBridgeTriageRouter,
+  // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+  eceSolicitudEstudio: eceSolicitudEstudioRouter,
+  eceResultadoEstudio: eceResultadoEstudioRouter,
 });
 
 export type AppRouter = typeof appRouter;
