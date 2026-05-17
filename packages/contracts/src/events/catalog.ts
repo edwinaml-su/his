@@ -44,6 +44,9 @@ export const EVENT_TYPES = [
   "ece.epicrisis.certificada",
   // Fase 2 — Certificación DIR (Art. 21 NTEC)
   "ece.documento.certificado",
+  // Fase 2 — Bridge ECE↔HIS (Stream bridge-patient)
+  "ece.paciente.linked",
+  "ece.paciente.synced",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

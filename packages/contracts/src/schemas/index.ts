@@ -1,5 +1,6 @@
 export * from "./abac";
 export * from "./ece-bitacora";
+export * from "./ece-bridge-patient";
 export * from "./allergy";
 export * from "./audit";
 export * from "./audit-integrity";
