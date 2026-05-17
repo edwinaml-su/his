@@ -576,6 +576,31 @@ export const eceHojaIngresoValidadaPayloadSchema = z.object({
 
 export type EceHojaIngresoFirmadaPayload = z.infer<typeof eceHojaIngresoFirmadaPayloadSchema>;
 export type EceHojaIngresoValidadaPayload = z.infer<typeof eceHojaIngresoValidadaPayloadSchema>;
+// ece.admision.completada (Fase 2 — Bridge Admisión Hospitalaria)
+// Emitido cuando ADM ejecuta la admisión completa desde una orden de ingreso.
+// Crea atómicamente: episodio + episodio_hospitalario + hoja_ingreso + (cama).
+// -----------------------------------------------------------------------------
+
+export const eceAdmisionCompletadaPayloadSchema = z.object({
+  /** UUID del episodio_atencion creado. */
+  episodioId: z.string().uuid(),
+  /** UUID del episodio_hospitalario creado. */
+  episodioHospitalarioId: z.string().uuid(),
+  /** UUID de la hoja_ingreso creada. */
+  hojaIngresoId: z.string().uuid(),
+  /** UUID de la orden_ingreso que originó la admisión. */
+  ordenIngresoId: z.string().uuid(),
+  /** UUID del paciente ECE. */
+  ecePacienteId: z.string().uuid(),
+  /** UUID de la cama asignada, si se asignó una. */
+  camaAsignadaId: z.string().uuid().optional(),
+  /** UUID del ADM que ejecutó la admisión. */
+  admisionPorId: z.string().uuid(),
+  /** Organización (tenant). */
+  organizationId: z.string().uuid(),
+});
+
+export type EceAdmisionCompletadaPayload = z.infer<typeof eceAdmisionCompletadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -734,6 +759,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.hoja_ingreso.validada"),
     payload: eceHojaIngresoValidadaPayloadSchema,
+  // Fase 2 — Bridge Admisión Hospitalaria
+  z.object({
+    eventType: z.literal("ece.admision.completada"),
+    payload: eceAdmisionCompletadaPayloadSchema,
   }),
 ]);
 

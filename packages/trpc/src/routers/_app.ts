@@ -89,6 +89,8 @@ import { eceCamaRouter } from "./ece/cama.router";
 import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.router";
 // ECE — Certificado de Defunción (NTEC Art. 21)
 import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
+// Fase 2 — Bridge Admisión Hospitalaria
+import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -181,6 +183,8 @@ export const appRouter = router({
   eceEpisodioHospitalario: eceEpisodioHospitalarioRouter,
   // ECE — Certificado de Defunción (NTEC Art. 21)
   eceCertDef: eceCertDefRouter,
+  // Fase 2 — Bridge Admisión Hospitalaria
+  eceBridgeAdmision: eceBridgeAdmisionRouter,
 });
 
 export type AppRouter = typeof appRouter;
