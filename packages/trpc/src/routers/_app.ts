@@ -107,6 +107,8 @@ import { ecePartogramaRouter } from "./ece/partograma.router";
 import { eceAtencionRnRouter } from "./ece/atencion-rn.router";
 // ECE — Maternidad: Reanimación Neonatal NRP (AHA/AAP)
 import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router";
+// ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
+import { periodoExpulsivoRouter } from "./ece/periodo-expulsivo.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -217,6 +219,8 @@ export const appRouter = router({
   eceAtencionRn: eceAtencionRnRouter,
   // ECE — Maternidad: Reanimación Neonatal NRP
   eceReanimacionNeonatal: eceReanimacionNeonatalRouter,
+  // ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
+  ecePeriodoExpulsivo: periodoExpulsivoRouter,
 });
 
 export type AppRouter = typeof appRouter;
