@@ -1,6 +1,14 @@
-// Crea 2 test users (qa.admin, qa.triagist) en Supabase Auth + filas
-// correspondientes en public.User + UserOrganizationRole.
-// Idempotente: si los users ya existen, sólo se aseguran los UOR.
+// Crea test users en Supabase Auth + filas correspondientes en public.User +
+// UserOrganizationRole. Idempotente: si los users ya existen, sólo se aseguran
+// los UOR.
+//
+// Roles agregados para E2E del Sprint F2-S2 (ECE):
+//   - qa.physician   → requireRole(["PHYSICIAN"]) en routers HIS clínicos
+//   - qa.nurse       → requireRole(["NURSE"])     en signos vitales, registro enfermería
+//   - qa.director    → requireRole(["DIR"])       en certificación, bitácora, anulación
+// Si `Role.name` no existe en la BD, el script emite warning y continúa
+// (no rompe). El seed base puebla los roles administrativos; los roles
+// clínicos pueden requerir seed adicional según el ambiente.
 //
 // Requiere: NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY + DATABASE_URL.
 // Uso:
@@ -10,6 +18,12 @@ import pg from 'pg';
 const TEST_USERS = [
   { email: 'qa.admin@his.test',     password: 'TestPass123!', fullName: 'QA Admin',     roleName: 'Administrador' },
   { email: 'qa.triagist@his.test',  password: 'TestPass123!', fullName: 'QA Triagist',  roleName: 'Administrador' },
+  { email: 'qa.physician@his.test', password: 'TestPass123!', fullName: 'QA Physician', roleName: 'Médico' },
+  { email: 'qa.nurse@his.test',     password: 'TestPass123!', fullName: 'QA Nurse',     roleName: 'Enfermería' },
+  // qa.director usa rol 'Administrador' temporalmente hasta que se cree el rol
+  // 'Director' formalmente en public.Role (ECE define DIR en ece.rol pero el
+  // RBAC del HIS requiere mapping en public.Role para `tenant.roleCodes`).
+  { email: 'qa.director@his.test',  password: 'TestPass123!', fullName: 'QA Director',  roleName: 'Administrador' },
 ];
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;

@@ -70,8 +70,13 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate --schema=packages/database/prisma/schema.prisma
 
-      - name: Apply migrations to ephemeral DB
-        run: npx prisma migrate deploy --schema=packages/database/prisma/schema.prisma
+      - name: Sync schema to ephemeral DB
+        # CLAUDE.md §db: el repo NO tiene `prisma/migrations/` — el flujo es
+        # schema.prisma + SQL files numerados. En CI usamos `db push` para
+        # materializar todo el schema.prisma (modelos, enums, FKs) sin requerir
+        # migrations folder. `--accept-data-loss` es seguro: la BD efímera
+        # arranca vacía en cada run.
+        run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
 
       - name: Seed minimal data (test users incluidos)
         run: npm run db:seed

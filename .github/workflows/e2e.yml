@@ -50,8 +50,10 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate --schema=packages/database/prisma/schema.prisma
 
-      - name: Apply migrations to ephemeral DB
-        run: npx prisma migrate deploy --schema=packages/database/prisma/schema.prisma
+      - name: Sync schema to ephemeral DB
+        # CLAUDE.md §db: sin carpeta `prisma/migrations`. Usamos `db push` para
+        # crear el schema completo de Prisma en la BD efímera del runner.
+        run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
 
       - name: Seed minimal data
         run: npm run db:seed
