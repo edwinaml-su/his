@@ -39,6 +39,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  Thermometer,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -76,6 +77,13 @@ const SECTIONS: NavSection[] = [
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
     ],
   },
   {
