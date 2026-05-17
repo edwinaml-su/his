@@ -69,6 +69,8 @@ import { eceCertificacionRouter } from "./ece/certificacion.router";
 import { eceBridgePatientRouter } from "./ece-bridge-patient.router";
 // Fase 2 — Bridge ECE↔HIS (Stream 22b)
 import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
+// Fase 2 — Bridge ECE-HIS Triage (Stream 18-ext)
+import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -141,6 +143,8 @@ export const appRouter = router({
   eceBridge: eceBridgePatientRouter,
   // Fase 2 — Bridge ECE↔HIS (Stream 22b)
   eceBridgeEncounter: bridgeEncounterRouter,
+  // Fase 2 — Bridge ECE-HIS Triage
+  eceBridgeTriage: eceBridgeTriageRouter,
 });
 
 export type AppRouter = typeof appRouter;

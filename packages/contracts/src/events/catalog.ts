@@ -49,6 +49,8 @@ export const EVENT_TYPES = [
   "ece.paciente.synced",
   // Fase 2 — Bridge ECE↔HIS Encounter (Stream 22b)
   "ece.episodio.linkedToEncounter",
+  // Fase 2 — Bridge Triage HIS ↔ ECE (Stream 18-ext)
+  "ece.triaje.linkedToHisTriage",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
