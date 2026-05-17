@@ -91,6 +91,14 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "ECE",
+    defaultOpen: false,
+    items: [
+      { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
+      { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
+    ],
+  },
+  {
     label: "Soporte clínico",
     defaultOpen: false,
     items: [
