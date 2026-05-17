@@ -72,3 +72,4 @@ export * from "./ece-solicitud-estudio";
 export * from "./ece-resultado-estudio";
 export * from "./ece-valoracion-inicial";
 export * from "./ece-episodio-hospitalario";
+export * from "./ece-certificado-defuncion";
