@@ -25,6 +25,7 @@
     "seed:vaccines": "tsx --env-file=.env seed-vaccines-sv.ts",
     "seed:notif-defaults": "tsx --env-file=.env seed-notifications-defaults.ts",
     "db:seed:demo-hospitalario": "tsx --env-file=.env scripts/seed-demo-hospitalario.mjs",
+    "db:seed:demo-quirurgico": "node --env-file=.env scripts/seed-demo-quirurgico.mjs",
     "studio": "prisma studio",
     "validate": "prisma validate",
     "format": "prisma format",
