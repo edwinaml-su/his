@@ -67,6 +67,8 @@ import { bitacoraRouter } from "./ece/bitacora.router";
 import { eceRectificacionRouter } from "./ece-rectificacion.router";
 import { eceCertificacionRouter } from "./ece/certificacion.router";
 import { eceBridgePatientRouter } from "./ece-bridge-patient.router";
+// Fase 2 — Bridge ECE↔HIS (Stream 22b)
+import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -137,6 +139,8 @@ export const appRouter = router({
   eceRectificacion: eceRectificacionRouter,
   eceCertificacion: eceCertificacionRouter,
   eceBridge: eceBridgePatientRouter,
+  // Fase 2 — Bridge ECE↔HIS (Stream 22b)
+  eceBridgeEncounter: bridgeEncounterRouter,
 });
 
 export type AppRouter = typeof appRouter;

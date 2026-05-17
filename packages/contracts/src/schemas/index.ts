@@ -15,6 +15,7 @@ export * from "./country";
 export * from "./currency";
 export * from "./death-certificate";
 export * from "./discharge";
+export * from "./ece-bridge-encounter";
 export * from "./ehr-notes";
 export * from "./emergency";
 export * from "./encounter";

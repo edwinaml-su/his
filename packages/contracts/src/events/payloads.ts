@@ -358,6 +358,22 @@ export const ecePacienteSyncedPayloadSchema = z.object({
 
 export type EcePacienteLinkedPayload = z.infer<typeof ecePacienteLinkedPayloadSchema>;
 export type EcePacienteSyncedPayload = z.infer<typeof ecePacienteSyncedPayloadSchema>;
+// ece.episodio.linkedToEncounter  (Fase 2 — Bridge ECE↔HIS, Stream 22b)
+// Emitido cuando un episodio ECE se vincula (o crea) desde un Encounter HIS.
+// -----------------------------------------------------------------------------
+
+export const eceEpisodioLinkedToEncounterPayloadSchema = z.object({
+  episodioId: z.string().uuid(),
+  encounterId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  /** Quién ejecutó la operación — puede ser null para vínculos automáticos. */
+  linkedById: z.string().uuid().nullable(),
+});
+
+export type EceEpisodioLinkedToEncounterPayload = z.infer<
+  typeof eceEpisodioLinkedToEncounterPayloadSchema
+>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -448,6 +464,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.paciente.synced"),
     payload: ecePacienteSyncedPayloadSchema,
+  // Fase 2 — Bridge ECE↔HIS Encounter (Stream 22b)
+  z.object({
+    eventType: z.literal("ece.episodio.linkedToEncounter"),
+    payload: eceEpisodioLinkedToEncounterPayloadSchema,
   }),
 ]);
 
