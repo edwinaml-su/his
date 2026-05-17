@@ -60,14 +60,19 @@ export default function IndicacionesListPage(): React.ReactElement {
   const [episodioId, setEpisodioId] = React.useState("");
   const [estado, setEstado] = React.useState<IndicacionEstado | "TODOS">("TODOS");
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const list = trpcAny.eceIndicaciones?.list?.useQuery({
-    episodioId: episodioId.trim() || undefined,
-    estado: estado === "TODOS" ? undefined : estado,
-  }) ?? { data: undefined, isLoading: false };
+  // El router exige `episodioId` UUID válido. Solo ejecutamos query cuando
+  // el usuario lo proporciona. El filtro por estado se aplica client-side
+  // post-fetch (el router actual no expone ese filtro).
+  const list = trpc.eceIndicaciones.list.useQuery(
+    { episodioId: episodioId.trim() },
+    { enabled: /^[0-9a-f-]{36}$/i.test(episodioId.trim()) },
+  );
 
-  const items = (list.data?.items ?? list.data ?? []) as IndicacionListItem[];
+  const allItems = (list.data ?? []) as unknown as IndicacionListItem[];
+  const items =
+    estado === "TODOS"
+      ? allItems
+      : allItems.filter((it) => it.estado === estado);
 
   return (
     <div className="space-y-4">

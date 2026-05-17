@@ -105,9 +105,7 @@ export default function NuevaEvolucionPage() {
   const [autosaveMsg, setAutosaveMsg] = React.useState<string | null>(null);
 
   const create = trpc.eceEvolucion.create.useMutation();
-  // El router expone `firmar` (no `sign`).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sign = (trpc.eceEvolucion as any).firmar.useMutation();
+  const sign = trpc.eceEvolucion.firmar.useMutation();
   const utils = trpc.useUtils();
 
   const isPending = create.isPending || sign.isPending;
@@ -172,16 +170,13 @@ export default function NuevaEvolucionPage() {
   async function persistCreate(): Promise<{ id: string } | null> {
     setPageError(null);
     try {
-      // El router espera `episodioId`, `fecha: Date` y campos SOAP en español
-      // (`soapSubjetivo`, etc.). Adaptamos el shape del cliente.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const r = await (create as any).mutateAsync({
+      const r = await create.mutateAsync({
         episodioId: episodeId ?? "",
         fecha: new Date(),
-        soapSubjetivo: soap.subjective.trim() || undefined,
-        soapObjetivo: soap.objective.trim() || undefined,
-        soapAnalisis: soap.assessment.trim() || undefined,
-        soapPlan: soap.plan.trim() || undefined,
+        soapSubjetivo: soap.subjective.trim() || "",
+        soapObjetivo: soap.objective.trim() || "",
+        soapAnalisis: soap.assessment.trim() || "",
+        soapPlan: soap.plan.trim() || "",
       });
       return r as { id: string };
     } catch (e) {
@@ -195,8 +190,7 @@ export default function NuevaEvolucionPage() {
     const created = await persistCreate();
     if (!created) return;
     clearDraft();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (utils.eceEvolucion.list as any).invalidate({ episodioId: episodeId });
+    utils.eceEvolucion.list.invalidate({ episodioId: episodeId });
     router.replace(
       episodeId ? `/ece/evolucion?episodeId=${episodeId}` : "/ece/evolucion",
     );
@@ -209,8 +203,7 @@ export default function NuevaEvolucionPage() {
     try {
       await sign.mutateAsync({ id: created.id });
       clearDraft();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils.eceEvolucion.list as any).invalidate({ episodioId: episodeId });
+      utils.eceEvolucion.list.invalidate({ episodioId: episodeId });
       router.replace(`/ece/evolucion/${created.id}`);
     } catch (e) {
       setPageError(

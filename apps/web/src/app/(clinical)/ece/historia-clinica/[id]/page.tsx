@@ -70,8 +70,7 @@ export default function EceHistoriaClinicaDetailPage() {
     // El router firmar acepta {id, firmaId?, observacion?}. El PIN se valida
     // en el router de firma electrónica por separado; aquí pasa el PIN como
     // observación temporal hasta integrar firmaId vía flow PIN→firmaId.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (firmar.mutate as any)({ id: params.id, observacion: `pin:${pin.trim()}` });
+    firmar.mutate({ id: params.id, observacion: `pin:${pin.trim()}` });
   }
 
   function handlePinClose() {
@@ -99,11 +98,33 @@ export default function EceHistoriaClinicaDetailPage() {
     );
   }
 
-  // El router devuelve campos snake_case + un subset minimal. El detalle
-  // usa nombres expandidos (signosVitales, diagnosticos, etc.) que llegarán
-  // en iteraciones posteriores — cast tolerante mientras tanto.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const hc = query.data as any;
+  // El router devuelve un subset minimal (`HistoriaClinicaRow` con campos
+  // snake_case). El detalle UI usa nombres expandidos (patient, signosVitales,
+  // diagnosticos, hallazgosAparato, etc.) que llegarán en iteraciones
+  // posteriores. El cast a `HCDetalleExtended` documenta el shape esperado
+  // sin perder type safety completo.
+  type HCDetalleExtended = {
+    estado: string;
+    motivoConsulta?: string;
+    createdAt?: string;
+    firmadoEn?: string;
+    validadoEn?: string;
+    antecedentesPersonales?: string;
+    antecedentesFamiliares?: string;
+    antecedentesSociales?: string;
+    hallazgosAparato?: string;
+    planTerapeutico?: string;
+    patient?: { firstName?: string; lastName?: string; mrn?: string };
+    signosVitales?: {
+      paSistolica?: number;
+      paDiastolica?: number;
+      frecuenciaCardiaca?: number;
+      frecuenciaRespiratoria?: number;
+      temperatura?: number;
+    };
+    diagnosticos?: Array<{ codigoCie10: string; descripcion: string }>;
+  };
+  const hc = query.data as unknown as HCDetalleExtended;
   const esBorrador = hc.estado === "BORRADOR" || hc.estado === "borrador";
 
   return (
@@ -121,7 +142,7 @@ export default function EceHistoriaClinicaDetailPage() {
                 ? `${hc.patient.firstName} ${hc.patient.lastName} · MRN ${hc.patient.mrn ?? "—"}`
                 : "—"}
               {" · "}
-              Creada: {dateFmt.format(new Date(hc.createdAt))}
+              Creada: {hc.createdAt ? dateFmt.format(new Date(hc.createdAt)) : "—"}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -217,8 +238,7 @@ export default function EceHistoriaClinicaDetailPage() {
           <CardContent>
             {hc.diagnosticos && hc.diagnosticos.length > 0 ? (
               <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-10">
-                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                {hc.diagnosticos.map((dx: any, i: number) => (
+                {hc.diagnosticos!.map((dx, i) => (
                   <li key={i} className="flex items-center gap-2">
                     <span className="font-mono text-xs text-muted-foreground">{dx.codigoCie10}</span>
                     <span>{dx.descripcion}</span>

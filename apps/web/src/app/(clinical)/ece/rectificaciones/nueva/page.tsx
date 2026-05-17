@@ -52,8 +52,7 @@ export default function NuevaRectificacionPage() {
   });
   const [errors, setErrors] = React.useState<FormErrors>({});
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const solicitar = (trpc as any).eceRectificacion.solicitar.useMutation({
+  const solicitar = trpc.eceRectificacion.solicitar.useMutation({
     onSuccess: () => {
       router.push(`/ece/rectificaciones?documentoInstanciaId=${docId}`);
     },

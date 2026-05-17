@@ -53,8 +53,7 @@ export default function EvolucionListPage() {
 
   // Router espera `episodioId` (no `episodeId`) y `fecha: Date` (no string).
   // El nombre `episodeId` proviene del query param URL — lo mapeamos al input.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const list = (trpc.eceEvolucion.list as any).useQuery(
+  const list = trpc.eceEvolucion.list.useQuery(
     {
       episodioId: episodeId,
       fecha: fechaFiltro ? new Date(fechaFiltro) : undefined,
@@ -63,9 +62,7 @@ export default function EvolucionListPage() {
     { enabled: true },
   );
 
-  // El router devuelve `{items, nextCursor}` paginated.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const evoluciones = ((list.data as any)?.items ?? []) as EvolucionRow[];
+  const evoluciones = (list.data ?? []) as unknown as EvolucionRow[];
 
   // Sincronizar filtros en URL para bookmarkability
   function applyFilters() {
