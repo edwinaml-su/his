@@ -90,7 +90,10 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    // Consolidación: las 3 antiguas secciones "ECE" colisionaban como key
+    // duplicada en SECTIONS.map → SectionGroup. Agrupadas en una sola sección
+    // de registro continuo (signos, indicaciones, enfermería, evolución).
+    label: "ECE — Registro",
     defaultOpen: true,
     items: [
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
@@ -99,12 +102,6 @@ const SECTIONS: NavSection[] = [
         label: "Indicaciones Médicas",
         icon: ClipboardCheck,
       },
-    ],
-  },
-  {
-    label: "ECE",
-    defaultOpen: false,
-    items: [
       {
         href: "/ece/registro-enfermeria",
         label: "Registro Enfermería",
@@ -126,7 +123,8 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    // Documentos formales del expediente clínico (vida útil completa NTEC).
+    label: "ECE — Documentos",
     defaultOpen: true,
     items: [
       {
