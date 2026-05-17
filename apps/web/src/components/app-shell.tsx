@@ -12,6 +12,33 @@ import {
   Building2,
   Settings,
   History,
+  HeartPulse,
+  Pill,
+  FlaskConical,
+  Activity,
+  Scissors,
+  Wind,
+  Apple,
+  Image as ImageIcon,
+  ScanLine,
+  Calendar,
+  BellRing,
+  Globe,
+  Coins,
+  MapPin,
+  BookOpen,
+  Wrench,
+  ShieldCheck,
+  Boxes,
+  FileSignature,
+  Skull,
+  ShieldAlert,
+  KeyRound,
+  Gauge,
+  BarChart3,
+  Layers,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -21,17 +48,128 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
-const NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/patients", label: "Pacientes", icon: Users },
-  { href: "/admission", label: "Admisión", icon: ClipboardList },
-  { href: "/beds", label: "Camas", icon: Bed },
-  { href: "/triage", label: "Triage", icon: Stethoscope },
-  { href: "/organizations", label: "Organizaciones", icon: Building2 },
-  { href: "/users", label: "Usuarios", icon: Users },
-  { href: "/audit", label: "Auditoría", icon: History },
-  { href: "/catalogs/gender", label: "Catálogos", icon: Settings },
+interface NavSection {
+  label: string;
+  items: NavItem[];
+  defaultOpen?: boolean;
+}
+
+const SECTIONS: NavSection[] = [
+  {
+    label: "Visión",
+    defaultOpen: true,
+    items: [
+      { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/analytics", label: "Analítica BI", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Clínico",
+    defaultOpen: true,
+    items: [
+      { href: "/patients", label: "Pacientes", icon: Users },
+      { href: "/admission", label: "Admisión", icon: ClipboardList },
+      { href: "/beds", label: "Camas", icon: Bed },
+      { href: "/census", label: "Censo", icon: Activity },
+      { href: "/transfers", label: "Traslados", icon: Layers },
+      { href: "/triage", label: "Triage", icon: Stethoscope },
+      { href: "/emergency", label: "Emergencias", icon: HeartPulse },
+      { href: "/outpatient", label: "Consulta externa", icon: Calendar },
+      { href: "/surgery", label: "Quirófano", icon: Scissors },
+    ],
+  },
+  {
+    label: "Diagnóstico",
+    defaultOpen: true,
+    items: [
+      { href: "/pharmacy", label: "Farmacia", icon: Pill },
+      { href: "/emar", label: "eMAR", icon: ScanLine },
+      { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical },
+      { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
+      { href: "/respiratory", label: "Respiratorio", icon: Wind },
+      { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "Soporte clínico",
+    defaultOpen: false,
+    items: [
+      { href: "/equipment", label: "Equipos médicos", icon: Wrench },
+      { href: "/inventory", label: "Inventario", icon: Boxes },
+      { href: "/insurance", label: "Aseguradoras", icon: ShieldCheck },
+      { href: "/consents", label: "Consentimientos", icon: FileSignature },
+      { href: "/deaths", label: "Defunciones", icon: Skull },
+      { href: "/ledgers", label: "Contabilidad", icon: BookOpen },
+      { href: "/notifications", label: "Notificaciones", icon: BellRing },
+    ],
+  },
+  {
+    label: "Administración",
+    defaultOpen: false,
+    items: [
+      { href: "/organizations", label: "Organizaciones", icon: Building2 },
+      { href: "/users", label: "Usuarios", icon: Users },
+      { href: "/roles", label: "Roles y permisos", icon: KeyRound },
+      { href: "/abac", label: "Políticas ABAC", icon: ShieldAlert },
+      { href: "/audit", label: "Auditoría", icon: History },
+      { href: "/catalogs/gender", label: "Catálogos", icon: Settings },
+      { href: "/countries", label: "Países", icon: Globe },
+      { href: "/exchange-rates", label: "Tipos de cambio", icon: Coins },
+      { href: "/sv-localization", label: "Localización SV", icon: MapPin },
+      { href: "/triage-config", label: "Config. Triage", icon: Stethoscope },
+      { href: "/sso-config", label: "SSO", icon: KeyRound },
+      { href: "/slos", label: "SLOs", icon: Gauge },
+      { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+    ],
+  },
 ];
+
+function SectionGroup({ section, pathname }: { section: NavSection; pathname: string | null }) {
+  const [open, setOpen] = React.useState(section.defaultOpen ?? true);
+  const sectionHasActive = section.items.some((i) => pathname?.startsWith(i.href));
+  const expanded = open || sectionHasActive;
+  return (
+    <div className="mb-1">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+      >
+        <span>{section.label}</span>
+        {expanded ? (
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3 w-3" aria-hidden="true" />
+        )}
+      </button>
+      {expanded && (
+        <ul className="mt-0.5 space-y-0.5">
+          {section.items.map((item) => {
+            const Icon = item.icon;
+            const active = pathname?.startsWith(item.href);
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
+                    active
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-sm"
+                      : "text-sidebar-foreground/90 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="truncate">{item.label}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export function AppShell({
   children,
@@ -49,38 +187,29 @@ export function AppShell({
       >
         Saltar al contenido principal
       </a>
-      <aside className="hidden w-60 shrink-0 border-r bg-sidebar-background md:flex md:flex-col">
-        <div className="border-b p-4">
-          <p className="text-base font-bold">HIS Avante</p>
-          <p className="text-xs text-muted-foreground">El Salvador</p>
+      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground md:flex md:flex-col">
+        <div className="border-b border-sidebar-border p-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/avante-logo.svg"
+            alt="AVANTE Complejo Hospitalario"
+            className="h-10 w-auto brightness-0 invert"
+          />
+          <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
+            Sistema de Información Hospitalaria · El Salvador
+          </p>
         </div>
-        <nav className="flex-1 space-y-1 p-2" aria-label="Principal">
-          {NAV.map((item) => {
-            const Icon = item.icon;
-            const active = pathname?.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground hover:bg-sidebar-accent",
-                )}
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+        <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
+          {SECTIONS.map((section) => (
+            <SectionGroup key={section.label} section={section} pathname={pathname} />
+          ))}
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b bg-background px-4">
+        <header className="flex h-14 items-center justify-between border-b bg-background px-4 shadow-sm">
           <div className="text-sm text-muted-foreground">{topbar}</div>
         </header>
-        <main id="main-content" tabIndex={-1} className="flex-1 p-6">
+        <main id="main-content" tabIndex={-1} className="flex-1 bg-muted/30 p-6">
           {children}
         </main>
       </div>
