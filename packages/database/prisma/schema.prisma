@@ -4526,6 +4526,7 @@ model EceEpisodioAtencion {
   certificadosDefuncion   EceCertificadoDefuncion[]
   certificadosIncapacidad EceCertificadoIncapacidad[]
   solicitudesEstudio      EceSolicitudEstudio[]
+  estadoLogs              EceEpisodioEstadoLog[]
 
   @@index([pacienteId])
   @@index([estado])
@@ -4791,7 +4792,7 @@ model EceTriaje {
   signosVitales EceSignosVitales?   @relation(fields: [signosVitalesId], references: [id])
   registradoPor EcePersonalSalud    @relation("TRRegistradoPor", fields: [registradoPorId], references: [id])
 
-  @@map("triaje")
+  @@map("hoja_triaje")
   @@schema("ece")
 }
 
@@ -4976,7 +4977,7 @@ model EceReferenciaRri {
   solicitadoPor EcePersonalSalud     @relation("RRISolicitadoPor", fields: [solicitadoPorId], references: [id])
   respondidoPor EcePersonalSalud?    @relation("RRIRespondidoPor", fields: [respondidoPorId], references: [id])
 
-  @@map("referencia_rri")
+  @@map("rri")
   @@schema("ece")
 }
 
@@ -5283,5 +5284,321 @@ model EceSupresion {
   autorizadaPor EcePersonalSalud      @relation("AutorizadaPor", fields: [autorizadaPorId], references: [id])
 
   @@map("supresion")
+  @@schema("ece")
+}
+
+// =============================================================================
+// MODELOS FALTANTES — sincronización schema drift (SQL 59, 61, 66, 67–84)
+// =============================================================================
+
+/// Log inmutable de transiciones de estado del episodio (SQL 59)
+model EceEpisodioEstadoLog {
+  id           String    @id @default(uuid()) @db.Uuid
+  episodioId   String    @map("episodio_id") @db.Uuid
+  estadoPrevio String?   @map("estado_previo") @db.VarChar(30)
+  estadoNuevo  String    @map("estado_nuevo") @db.VarChar(30)
+  cambiado_por String?   @map("cambiado_por") @db.Uuid
+  cambiadoEn   DateTime  @default(now()) @map("cambiado_en") @db.Timestamptz()
+  motivo       String?
+
+  episodio EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
+
+  @@map("episodio_estado_log")
+  @@schema("ece")
+}
+
+/// Valoracion inicial de enfermeria al ingreso — one-per-episodio (SQL 66)
+model EceValoracionInicialEnfermeria {
+  id                      String    @id @default(uuid()) @db.Uuid
+  episodioHospitalarioId  String    @map("episodio_hospitalario_id") @db.Uuid
+  instanciaId             String?   @map("instancia_id") @db.Uuid
+  fechaHora               DateTime  @map("fecha_hora") @db.Timestamptz()
+  antecedentesPersonales  String?   @map("antecedentes_personales")
+  antecedentesFamiliares  String?   @map("antecedentes_familiares")
+  alergiasConocidas       String?   @map("alergias_conocidas")
+  medicamentosActuales    String?   @map("medicamentos_actuales")
+  escalaBraden            Int?      @map("escala_braden")
+  escalaMorse             Int?      @map("escala_morse")
+  escalaDolor             Int?      @map("escala_dolor")
+  estadoConsciencia       String?   @map("estado_consciencia")
+  dispositivosInvasivos   String?   @map("dispositivos_invasivos")
+  educacionBrindada       String?   @map("educacion_brindada")
+  planCuidadosInicial     String?   @map("plan_cuidados_inicial")
+  registradoPor           String    @map("registrado_por") @db.Uuid
+  estadoRegistro          String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  firmadoPor              String?   @map("firmado_por") @db.Uuid
+  firmadoEn               DateTime? @map("firmado_en") @db.Timestamptz()
+  validadoPor             String?   @map("validado_por") @db.Uuid
+  validadoEn              DateTime? @map("validado_en") @db.Timestamptz()
+  registradoEn            DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("valoracion_inicial_enfermeria")
+  @@schema("ece")
+}
+
+// -----------------------------------------------------------------------------
+// Modelos SQL 67–84 (tablas creadas en BD; stubs sin relaciones para compilar)
+// -----------------------------------------------------------------------------
+
+/// Lista de verificacion preoperatoria (SQL 67)
+model EcePreopChecklist {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("preop_checklist")
+  @@schema("ece")
+}
+
+/// Lista de verificacion quirurgica OMS (SQL 68)
+model EceWhoChecklist {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("who_checklist")
+  @@schema("ece")
+}
+
+/// Registro anestesico intraoperatorio (SQL 69)
+model EceRegistroAnestesico {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("registro_anestesico")
+  @@schema("ece")
+}
+
+/// Recuperacion postanestesica URPA (SQL 70)
+model EceUrpaRecovery {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("urpa_recovery")
+  @@schema("ece")
+}
+
+/// Partograma — registro de trabajo de parto (SQL 71)
+model EcePartogramaRegistro {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("partograma_registro")
+  @@schema("ece")
+}
+
+/// Atencion del recien nacido (SQL 73)
+model EceAtencionRecienNacido {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("atencion_recien_nacido")
+  @@schema("ece")
+}
+
+/// Reanimacion neonatal (SQL 74)
+model EceReanimacionNeonatal {
+  id              String    @id @default(uuid()) @db.Uuid
+  episodioId      String    @map("episodio_id") @db.Uuid
+  instanciaId     String?   @map("instancia_id") @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("reanimacion_neonatal")
+  @@schema("ece")
+}
+
+// --- GS1 catalogos (SQL 76) ---
+
+/// Catalogo GS1 GTIN — identificador global de articulo comercial
+model EceGs1Gtin {
+  id          String   @id @default(uuid()) @db.Uuid
+  gtin        String   @unique @db.VarChar(14)
+  descripcion String?
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("gs1_gtin")
+  @@schema("ece")
+}
+
+/// Catalogo GS1 GLN — numero de localizacion global
+model EceGs1Gln {
+  id          String   @id @default(uuid()) @db.Uuid
+  gln         String   @unique @db.VarChar(13)
+  descripcion String?
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("gs1_gln")
+  @@schema("ece")
+}
+
+/// Catalogo GS1 SSCC — codigo serial de contenedor de envio
+model EceGs1Sscc {
+  id          String   @id @default(uuid()) @db.Uuid
+  sscc        String   @unique @db.VarChar(18)
+  descripcion String?
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("gs1_sscc")
+  @@schema("ece")
+}
+
+/// Catalogo GS1 GSRN — numero de relacion de servicio global
+model EceGs1Gsrn {
+  id          String   @id @default(uuid()) @db.Uuid
+  gsrn        String   @unique @db.VarChar(18)
+  descripcion String?
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("gs1_gsrn")
+  @@schema("ece")
+}
+
+/// Catalogo GS1 GIAI — identificador global de activo individual
+model EceGs1Giai {
+  id          String   @id @default(uuid()) @db.Uuid
+  giai        String   @unique @db.VarChar(30)
+  descripcion String?
+  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("gs1_giai")
+  @@schema("ece")
+}
+
+// --- Supply chain / farmacia (SQL 77–80, 83) ---
+
+/// Recepcion de mercancia (SQL 77)
+model EceRecepcionMercancia {
+  id              String    @id @default(uuid()) @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+
+  @@map("recepcion_mercancia")
+  @@schema("ece")
+}
+
+/// Transferencia de inventario entre ubicaciones (SQL 78)
+model EceTransferenciaInventario {
+  id              String    @id @default(uuid()) @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+
+  @@map("transferencia_inventario")
+  @@schema("ece")
+}
+
+/// Preparacion de dosis unitaria (SQL 79)
+model EcePreparacionUnidosis {
+  id              String    @id @default(uuid()) @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+
+  @@map("preparacion_unidosis")
+  @@schema("ece")
+}
+
+/// Devolucion de inventario (SQL 80)
+model EceDevolucionInventario {
+  id              String    @id @default(uuid()) @db.Uuid
+  datos           Json?
+  registradoPor   String    @map("registrado_por") @db.Uuid
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+
+  @@map("devolucion_inventario")
+  @@schema("ece")
+}
+
+/// Umbral de alerta de inventario por articulo/ubicacion (SQL 83)
+model EceInventoryThreshold {
+  id              String   @id @default(uuid()) @db.Uuid
+  gtinId          String?  @map("gtin_id") @db.Uuid
+  ubicacion       String?  @db.VarChar(100)
+  umbralMinimo    Decimal? @map("umbral_minimo") @db.Decimal(12, 4)
+  umbralMaximo    Decimal? @map("umbral_maximo") @db.Decimal(12, 4)
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("inventory_threshold")
+  @@schema("ece")
+}
+
+// --- Cadena de frio (SQL 84) ---
+
+/// Lectura de sensor de cadena de frio (SQL 84)
+model EceColdChainLectura {
+  id              String    @id @default(uuid()) @db.Uuid
+  equipoId        String?   @map("equipo_id") @db.Uuid
+  temperatura     Decimal?  @db.Decimal(5, 2)
+  humedad         Decimal?  @db.Decimal(5, 2)
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  @@map("cold_chain_lectura")
+  @@schema("ece")
+}
+
+/// Alerta de cadena de frio por excursion termica (SQL 84)
+model EceColdChainAlerta {
+  id              String    @id @default(uuid()) @db.Uuid
+  equipoId        String?   @map("equipo_id") @db.Uuid
+  lecturaId       String?   @map("lectura_id") @db.Uuid
+  tipo            String?   @db.VarChar(50)
+  descripcion     String?
+  resuelta        Boolean   @default(false)
+  creadoEn        DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("cold_chain_alerta")
+  @@schema("ece")
+}
+
+/// Configuracion de equipo de refrigeracion (SQL 84)
+model EceColdChainConfigEquipo {
+  id              String   @id @default(uuid()) @db.Uuid
+  nombre          String   @db.VarChar(200)
+  ubicacion       String?  @db.VarChar(200)
+  tempMinima      Decimal? @map("temp_minima") @db.Decimal(5, 2)
+  tempMaxima      Decimal? @map("temp_maxima") @db.Decimal(5, 2)
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@map("cold_chain_config_equipo")
   @@schema("ece")
 }
