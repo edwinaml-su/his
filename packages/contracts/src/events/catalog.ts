@@ -65,6 +65,9 @@ export const EVENT_TYPES = [
   "ece.solicitud_estudio.anulada",
   "ece.resultado_estudio.registrado",
   "ece.resultado_estudio.aprobado",
+  // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
+  "ece.hoja_ingreso.firmada",
+  "ece.hoja_ingreso.validada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

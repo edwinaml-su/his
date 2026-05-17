@@ -549,6 +549,33 @@ export const eceResultadoEstudioAprobadoPayloadSchema = z.object({
 export type EceResultadoEstudioAprobadoPayload = z.infer<
   typeof eceResultadoEstudioAprobadoPayloadSchema
 >;
+// ece.hoja_ingreso.firmada / ece.hoja_ingreso.validada (Fase 2 — Doc 12 NTEC)
+// Emitidos cuando el ADM firma (borrador→firmado) y cuando ARCH valida.
+// -----------------------------------------------------------------------------
+
+export const eceHojaIngresoFirmadaPayloadSchema = z.object({
+  hojaIngresoId: z.string().uuid(),
+  instanciaId: z.string().uuid(),
+  tipoDocumentoCodigo: z.literal("HOJA_ING"),
+  accion: z.literal("firmar"),
+  byUserId: z.string().uuid(),
+  firmaId: z.string().uuid(),
+  /** SHA-256 hex del payload clínico en el momento de la firma. */
+  payloadHash: z.string().length(64),
+});
+
+export const eceHojaIngresoValidadaPayloadSchema = z.object({
+  hojaIngresoId: z.string().uuid(),
+  instanciaId: z.string().uuid(),
+  tipoDocumentoCodigo: z.literal("HOJA_ING"),
+  accion: z.literal("validar"),
+  byUserId: z.string().uuid(),
+  observacion: z.string().max(1000).nullable(),
+  payloadHash: z.string().length(64),
+});
+
+export type EceHojaIngresoFirmadaPayload = z.infer<typeof eceHojaIngresoFirmadaPayloadSchema>;
+export type EceHojaIngresoValidadaPayload = z.infer<typeof eceHojaIngresoValidadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -699,6 +726,14 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.resultado_estudio.aprobado"),
     payload: eceResultadoEstudioAprobadoPayloadSchema,
+  // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
+  z.object({
+    eventType: z.literal("ece.hoja_ingreso.firmada"),
+    payload: eceHojaIngresoFirmadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.hoja_ingreso.validada"),
+    payload: eceHojaIngresoValidadaPayloadSchema,
   }),
 ]);
 
