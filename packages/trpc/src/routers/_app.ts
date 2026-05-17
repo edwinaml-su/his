@@ -53,6 +53,7 @@ import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowTransicionRouter } from "./workflow-transicion.router";
 import { workflowRolRouter } from "./workflow-rol.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+import { workflowValidatorRouter } from "./workflow-validator.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
 import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
 // Fase 2 — ECE Triaje NTEC (Stream 02)
@@ -127,6 +128,7 @@ export const appRouter = router({
   workflowTransicion: workflowTransicionRouter,
   workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
+  workflowValidator: workflowValidatorRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
   // Fase 2 — ECE Triaje NTEC (Stream 02)
