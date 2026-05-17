@@ -18,6 +18,12 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../trpc";
+import {
+  validateWorkflow,
+  type EstadoInput,
+  type TransicionInput,
+  type DocumentoRolInput,
+} from "../lib/workflow-validator";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -48,6 +54,8 @@ const estadoUpdateInput = z.object({
   esFinal: z.boolean().optional(),
   orden: z.number().int().min(0).optional(),
 });
+
+const estadoDeleteInput = z.object({ id: z.string().uuid() });
 
 const transicionListInput = z.object({
   tipDocumentoId: z.string().uuid(),
@@ -239,6 +247,72 @@ export const workflowEstadoRouter = router({
                      es_inicial, es_final, orden
         `;
         return { updated: row, prev };
+      }),
+
+    /**
+     * Elimina un estado.
+     *
+     * Middleware de integridad: carga el snapshot del workflow *después* de
+     * simular la eliminación (excluyendo el estado) y bloquea si el resultado
+     * introduce nuevos ERROREs de validación.
+     */
+    delete: workflowProc
+      .input(estadoDeleteInput)
+      .mutation(async ({ ctx, input }) => {
+        // Obtener estado actual para conocer tipo_documento_id
+        const [estado] = await ctx.prisma.$queryRaw<[FlujoEstadoRow?]>`
+          SELECT id::text, tipo_documento_id::text, codigo, nombre, es_inicial, es_final, orden
+            FROM ece.flujo_estado
+           WHERE id = ${input.id}::uuid
+           LIMIT 1
+        `;
+        if (!estado) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Estado no encontrado." });
+        }
+
+        const tipDocumentoId = estado.tipo_documento_id;
+
+        // Pre-validación: simula el estado del workflow después de eliminar
+        const [todosEstados, todasTransiciones, todosRoles] = await Promise.all([
+          ctx.prisma.$queryRaw<EstadoInput[]>`
+            SELECT id::text, nombre, es_inicial, es_final
+              FROM ece.flujo_estado
+             WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+               AND id != ${input.id}::uuid
+          `,
+          ctx.prisma.$queryRaw<TransicionInput[]>`
+            SELECT id::text, estado_origen_id::text, estado_destino_id::text, accion
+              FROM ece.flujo_transicion
+             WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+          `,
+          ctx.prisma.$queryRaw<DocumentoRolInput[]>`
+            SELECT id::text FROM ece.documento_rol
+             WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+          `,
+        ]);
+
+        const resultado = validateWorkflow({
+          estados: todosEstados,
+          transiciones: todasTransiciones,
+          roles: todosRoles,
+        });
+
+        const nuevosErrores = resultado.errors.filter((e) => e.severity === "error");
+        if (nuevosErrores.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Eliminar este estado introduce errores de integridad: ${nuevosErrores.map((e) => e.message).join("; ")}`,
+          });
+        }
+
+        // Eliminar
+        const deleted = await ctx.prisma.$queryRaw<FlujoEstadoRow[]>`
+          DELETE FROM ece.flujo_estado
+           WHERE id = ${input.id}::uuid
+           RETURNING id::text, tipo_documento_id::text, codigo, nombre,
+                     es_inicial, es_final, orden
+        `;
+        return { prev: deleted[0] };
       }),
   }),
 
