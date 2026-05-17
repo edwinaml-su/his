@@ -128,6 +128,17 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      {
+        href: "/ece/quirofano/programacion",
+        label: "Programación",
+        icon: Scissors,
+      },
+    ],
+  },
+  {
     label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
