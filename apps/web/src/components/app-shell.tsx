@@ -46,6 +46,7 @@ import {
   GitBranch,
   Thermometer,
   ClipboardCheck,
+  NotebookPen,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -110,6 +111,7 @@ const SECTIONS: NavSection[] = [
         label: "Registro Enfermería",
         icon: ClipboardCheck,
       },
+      { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
     ],
   },
   {
