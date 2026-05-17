@@ -70,3 +70,4 @@ export * from "./ece-atencion-emergencia";
 export * from "./ece-rri";
 export * from "./ece-solicitud-estudio";
 export * from "./ece-resultado-estudio";
+export * from "./ece-valoracion-inicial";

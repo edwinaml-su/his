@@ -79,6 +79,8 @@ import { eceRriRouter } from "./ece/rri.router";
 // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
 import { eceSolicitudEstudioRouter } from "./ece/solicitud-estudio.router";
 import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
+// ECE — Valoración Inicial de Enfermería (one-shot al ingreso)
+import { eceValoracionInicialRouter } from "./ece/valoracion-inicial-enfermeria.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -161,6 +163,8 @@ export const appRouter = router({
   // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
   eceSolicitudEstudio: eceSolicitudEstudioRouter,
   eceResultadoEstudio: eceResultadoEstudioRouter,
+  // ECE — Valoración Inicial de Enfermería
+  eceValoracionInicial: eceValoracionInicialRouter,
 });
 
 export type AppRouter = typeof appRouter;
