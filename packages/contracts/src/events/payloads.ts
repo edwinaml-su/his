@@ -723,6 +723,21 @@ export const gs1UnidosisVerificadaPayloadSchema = z.object({
 
 export type Gs1UnidosisPreparadaPayload = z.infer<typeof gs1UnidosisPreparadaPayloadSchema>;
 export type Gs1UnidosisVerificadaPayload = z.infer<typeof gs1UnidosisVerificadaPayloadSchema>;
+// cold_chain.excursion (F2-S15 placeholder — sensor IoT real pendiente)
+// Emitido cuando una lectura queda fuera del rango configurado.
+// -----------------------------------------------------------------------------
+
+export const coldChainExcursionPayloadSchema = z.object({
+  lecturaId: z.string().uuid(),
+  equipmentId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  temperaturaC: z.number(),
+  humedadPct: z.number().optional(),
+  severidad: z.enum(["WARNING", "CRITICAL"]),
+  mensaje: z.string().min(1).max(500),
+});
+
+export type ColdChainExcursionPayload = z.infer<typeof coldChainExcursionPayloadSchema>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -927,6 +942,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("gs1.unidosis.verificada"),
     payload: gs1UnidosisVerificadaPayloadSchema,
+  // F2-S15 placeholder — Cold Chain
+  z.object({
+    eventType: z.literal("cold_chain.excursion"),
+    payload: coldChainExcursionPayloadSchema,
   }),
 ]);
 

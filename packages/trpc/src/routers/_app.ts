@@ -119,6 +119,8 @@ import { gs1ProcesoCRouter } from "./gs1-proceso-c.router";
 import { gs1ProcesoFRouter } from "./gs1-proceso-f.router";
 // GS1 Logística — EPCIS Query Layer (schema legacy)
 import { epcisQueryRouter } from "./epcis-query.router";
+// F2-S15 placeholder — Cold Chain Monitoring
+import { coldChainRouter } from "./cold-chain.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -241,6 +243,8 @@ export const appRouter = router({
   gs1ProcesoF: gs1ProcesoFRouter,
   // GS1 Logística — EPCIS Query Layer
   epcisQuery: epcisQueryRouter,
+  // F2-S15 placeholder — Cold Chain Monitoring
+  coldChain: coldChainRouter,
 });
 
 export type AppRouter = typeof appRouter;

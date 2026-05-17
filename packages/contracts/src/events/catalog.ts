@@ -84,6 +84,8 @@ export const EVENT_TYPES = [
   // Proceso C GS1 — Preparación Unidosis farmacia
   "gs1.unidosis.preparada",
   "gs1.unidosis.verificada",
+  // F2-S15 placeholder — Cold Chain excursión (sensor IoT real pendiente)
+  "cold_chain.excursion",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
