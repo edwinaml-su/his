@@ -20,10 +20,7 @@ const TEST_USERS = [
   { email: 'qa.triagist@his.test',  password: 'TestPass123!', fullName: 'QA Triagist',  roleName: 'Administrador' },
   { email: 'qa.physician@his.test', password: 'TestPass123!', fullName: 'QA Physician', roleName: 'Médico' },
   { email: 'qa.nurse@his.test',     password: 'TestPass123!', fullName: 'QA Nurse',     roleName: 'Enfermería' },
-  // qa.director usa rol 'Administrador' temporalmente hasta que se cree el rol
-  // 'Director' formalmente en public.Role (ECE define DIR en ece.rol pero el
-  // RBAC del HIS requiere mapping en public.Role para `tenant.roleCodes`).
-  { email: 'qa.director@his.test',  password: 'TestPass123!', fullName: 'QA Director',  roleName: 'Administrador' },
+  { email: 'qa.director@his.test',  password: 'TestPass123!', fullName: 'QA Director',  roleName: 'Director' },
 ];
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
