@@ -67,3 +67,4 @@ export * from "./ece-workflow";
 export * from "./ece-bridge-triage";
 export * from "./ece-permissions";
 export * from "./ece-atencion-emergencia";
+export * from "./ece-rri";

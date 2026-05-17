@@ -74,6 +74,8 @@ import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
 import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
 // Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
 import { atencionEmergenciaRouter } from "./ece/atencion-emergencia.router";
+// ECE — RRI (Referencia / Retorno / Interconsulta, NTEC Doc 10)
+import { eceRriRouter } from "./ece/rri.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -151,6 +153,8 @@ export const appRouter = router({
   eceBridgeTriage: eceBridgeTriageRouter,
   // Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
   eceAtencionEmergencia: atencionEmergenciaRouter,
+  // ECE — RRI (NTEC Doc 10)
+  eceRri: eceRriRouter,
 });
 
 export type AppRouter = typeof appRouter;

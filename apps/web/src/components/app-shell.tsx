@@ -47,6 +47,7 @@ import {
   Thermometer,
   NotebookPen,
   Siren,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -138,6 +139,7 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
+      { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
     ],
   },
   {
