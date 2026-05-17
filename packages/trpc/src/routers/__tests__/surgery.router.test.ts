@@ -414,6 +414,118 @@ describe("surgeryRouter", () => {
   });
 
   // --------------------------------------------------------------------------
+  // case.updateIntraopNotes — append-only, solo IN_PROGRESS
+  // --------------------------------------------------------------------------
+  describe("case.updateIntraopNotes", () => {
+    it("happy path: IN_PROGRESS, appends line, returns updated intraopNotes", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue({
+        id: u,
+        intraopNotes: null,
+      } as never);
+      const expectedNotes = expect.stringMatching(/^\[.+\] \[NOTE\] Texto inicial$/);
+      prisma.surgeryCase.update.mockResolvedValue({
+        id: u,
+        intraopNotes: "[2026-05-16T10:00:00.000Z] [NOTE] Texto inicial",
+      } as never);
+
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.case.updateIntraopNotes({
+        id: u,
+        appendText: "Texto inicial",
+        entryType: "NOTE",
+      });
+
+      expect(r.id).toBe(u);
+      expect(r.intraopNotes).toBeTruthy();
+      // Verify update was called with the formatted line
+      const updateArgs = prisma.surgeryCase.update.mock.calls[0]![0];
+      const data = updateArgs.data as { intraopNotes: string; updatedBy: string };
+      expect(data.intraopNotes).toMatch(/^\[.+\] \[NOTE\] Texto inicial$/);
+      expect(data.updatedBy).toBeTruthy();
+    });
+
+    it("multi-append: dos llamadas, ambas se concatenan", async () => {
+      // First call: existing is null
+      prisma.surgeryCase.findFirst.mockResolvedValueOnce({
+        id: u,
+        intraopNotes: null,
+      } as never);
+      prisma.surgeryCase.update.mockResolvedValueOnce({
+        id: u,
+        intraopNotes: "[ts1] [COMPLICATION] Primera",
+      } as never);
+
+      // Second call: existing has first line
+      prisma.surgeryCase.findFirst.mockResolvedValueOnce({
+        id: u,
+        intraopNotes: "[ts1] [COMPLICATION] Primera",
+      } as never);
+      prisma.surgeryCase.update.mockResolvedValueOnce({
+        id: u,
+        intraopNotes: "[ts1] [COMPLICATION] Primera\n[ts2] [COMPLICATION] Segunda",
+      } as never);
+
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.updateIntraopNotes({ id: u, appendText: "Primera", entryType: "COMPLICATION" });
+      await caller.case.updateIntraopNotes({ id: u, appendText: "Segunda", entryType: "COMPLICATION" });
+
+      // Second call's update data must include the first line
+      const secondUpdateArgs = prisma.surgeryCase.update.mock.calls[1]![0];
+      const data = secondUpdateArgs.data as { intraopNotes: string };
+      expect(data.intraopNotes).toContain("Primera");
+      expect(data.intraopNotes).toContain("Segunda");
+      expect(data.intraopNotes).toContain("\n");
+    });
+
+    it("status guard: SCHEDULED → BAD_REQUEST", async () => {
+      // findFirst returns null because status filter is IN_PROGRESS only
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.case.updateIntraopNotes({ id: u, appendText: "Nota", entryType: "NOTE" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("status guard: COMPLETED → BAD_REQUEST", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.case.updateIntraopNotes({ id: u, appendText: "Nota", entryType: "COMPLICATION" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("filtra por organizationId (RLS cross-tenant)", async () => {
+      // Returns null because organizationId in where doesn't match cross-tenant
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.case.updateIntraopNotes({ id: u, appendText: "Hack", entryType: "NOTE" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      // Verify the where clause includes organizationId
+      const findArgs = prisma.surgeryCase.findFirst.mock.calls[0]![0];
+      const where = findArgs!.where as { organizationId: string; status: string };
+      expect(where.organizationId).toBeTruthy();
+      expect(where.status).toBe("IN_PROGRESS");
+    });
+
+    it("entryType default es NOTE", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue({
+        id: u,
+        intraopNotes: null,
+      } as never);
+      prisma.surgeryCase.update.mockResolvedValue({ id: u, intraopNotes: "x" } as never);
+
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      // No entryType provided — should default to NOTE
+      await caller.case.updateIntraopNotes({ id: u, appendText: "Test" });
+
+      const updateArgs = prisma.surgeryCase.update.mock.calls[0]![0];
+      const data = updateArgs.data as { intraopNotes: string };
+      expect(data.intraopNotes).toContain("[NOTE]");
+    });
+  });
+
+  // --------------------------------------------------------------------------
   // case.recordAnesthesia
   // --------------------------------------------------------------------------
   describe("case.recordAnesthesia", () => {
