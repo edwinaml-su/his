@@ -55,3 +55,4 @@ export * from "./ece-triaje";
 export * from "./ece-indicaciones";
 export * from "./ece-registro-enfermeria";
 export * from "./ece-evolucion";
+export * from "./ece-episodio";
