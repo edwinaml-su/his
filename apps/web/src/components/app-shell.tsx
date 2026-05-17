@@ -44,6 +44,7 @@ import {
   FilePenLine,
   BadgeCheck,
   GitBranch,
+  Thermometer,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -84,6 +85,13 @@ const SECTIONS: NavSection[] = [
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
+    ],
+  },
+  {
+    label: "ECE",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
     ],
   },
   {
