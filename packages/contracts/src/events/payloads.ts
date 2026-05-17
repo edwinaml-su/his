@@ -263,6 +263,9 @@ export const eceIndicacionesFirmadasPayloadSchema = z.object({
 
 export type EceIndicacionesFirmadasPayload = z.infer<
   typeof eceIndicacionesFirmadasPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // ece.administracion.registrada  (Fase 2 — ECE Registro Enfermería, Stream 30)
 // Emitido cuando se agrega una fila a ece.administracion_medicamento.
 // -----------------------------------------------------------------------------
@@ -373,6 +376,9 @@ export const eceEpisodioLinkedToEncounterPayloadSchema = z.object({
 
 export type EceEpisodioLinkedToEncounterPayload = z.infer<
   typeof eceEpisodioLinkedToEncounterPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // ece.triaje.linkedToHisTriage  (Fase 2 — Bridge ECE-HIS, Stream 18-ext)
 // Emitido cuando una EceTriaje queda vinculada a una TriageEvaluation HIS.
 // -----------------------------------------------------------------------------
@@ -457,26 +463,32 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.triaje.firmado"),
     payload: eceTriajeFirmadoPayloadSchema,
+  }),
   // Fase 2 — Indicaciones Médicas ECE (IND_MED)
   z.object({
     eventType: z.literal("ece.indicaciones.firmadas"),
     payload: eceIndicacionesFirmadasPayloadSchema,
+  }),
   // Fase 2 — ECE Registro Enfermería (Stream 30)
   z.object({
     eventType: z.literal("ece.administracion.registrada"),
     payload: eceAdministracionRegistradaPayloadSchema,
+  }),
   // Fase 2 — ECE Evolución Médica (Stream 11)
   z.object({
     eventType: z.literal("ece.evolucion.firmada"),
     payload: eceEvolucionFirmadaPayloadSchema,
+  }),
   // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
   z.object({
     eventType: z.literal("ece.epicrisis.certificada"),
     payload: eceEpicrisisCertificadaPayloadSchema,
+  }),
   // Fase 2 — Certificación DIR (Art. 21 NTEC)
   z.object({
     eventType: z.literal("ece.documento.certificado"),
     payload: eceDocumentoCertificadoPayloadSchema,
+  }),
   // Fase 2 — Bridge ECE↔HIS
   z.object({
     eventType: z.literal("ece.paciente.linked"),
@@ -485,10 +497,12 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.paciente.synced"),
     payload: ecePacienteSyncedPayloadSchema,
+  }),
   // Fase 2 — Bridge ECE↔HIS Encounter (Stream 22b)
   z.object({
     eventType: z.literal("ece.episodio.linkedToEncounter"),
     payload: eceEpisodioLinkedToEncounterPayloadSchema,
+  }),
   // Fase 2 — Bridge ECE-HIS (Stream 18-ext)
   z.object({
     eventType: z.literal("ece.triaje.linkedToHisTriage"),
