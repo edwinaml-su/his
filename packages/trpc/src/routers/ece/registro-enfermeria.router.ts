@@ -17,6 +17,7 @@ import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
+import { applyGs1Validation } from "../../gs1/require-gs1-validation";
 import type { TenantContext } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
 
@@ -41,6 +42,15 @@ const eceAdministracionSchema = z.object({
   dosisAdministrada: z.string().trim().min(1).max(100),
   viaUsada: z.string().trim().min(1).max(80),
   observaciones: z.string().trim().max(2000).optional(),
+  // Campos GS1 opcionales — cuando presentes activan validación 5 correctos obligatoria
+  gs1: z.object({
+    gtin: z.string().min(8).max(14),
+    lote: z.string().min(1).max(80),
+    expiry: z.coerce.date(),
+    pacienteId: z.string().uuid(),
+    pacienteGsrn: z.string().length(18).optional(),
+    episodioId: z.string().uuid().optional(),
+  }).optional(),
 });
 
 const eceRegistroListSchema = z.object({
@@ -297,6 +307,18 @@ export const registroEnfermeriaRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "No se puede registrar administración sobre una indicación anulada.",
+        });
+      }
+
+      // Validación 5 correctos GS1 — enforcement obligatorio cuando se proveen campos GS1.
+      // Falla con PRECONDITION_FAILED si algún "correcto" falla (severity=error).
+      if (input.gs1) {
+        await applyGs1Validation(ctx, {
+          ...input.gs1,
+          dosis: input.dosisAdministrada,
+          via: input.viaUsada,
+          hora: input.horaAdministrada,
+          indicacionItemId: input.indicacionItemId,
         });
       }
 
