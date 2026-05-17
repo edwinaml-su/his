@@ -29,6 +29,7 @@
     "format": "prisma format",
     "typecheck": "tsc --noEmit",
     "lint": "echo 'no lint configured'",
+    "db:seed:demo": "node --env-file=.env scripts/seed-demo-ambulatorio.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "prisma": {

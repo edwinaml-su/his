@@ -11,6 +11,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../trpc";
+import {
+  validateWorkflow,
+  type EstadoInput,
+  type TransicionInput,
+  type DocumentoRolInput,
+} from "../lib/workflow-validator";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -197,18 +203,66 @@ export const workflowTransicionRouter = router({
   }),
 
   /**
-   * Elimina una transición. Devuelve el snapshot en prev.
+   * Elimina una transición.
+   *
+   * Middleware de integridad: simula el workflow sin esta transición y bloquea
+   * si la eliminación introduce nuevos errores de validación (no warnings).
    */
   delete: proc.input(deleteInput).mutation(async ({ ctx, input }) => {
+    // Leer transición primero para obtener tipo_documento_id
+    const [transicion] = await ctx.prisma.$queryRaw<[TransicionRow?]>`
+      SELECT id::text, tipo_documento_id::text, estado_origen_id::text,
+             estado_destino_id::text, accion, rol_autoriza_id::text, requiere_firma
+        FROM ece.flujo_transicion
+       WHERE id = ${input.id}::uuid
+       LIMIT 1
+    `;
+    if (!transicion) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Transición no encontrada." });
+    }
+
+    const tipDocumentoId = transicion.tipo_documento_id;
+
+    // Pre-validación: snapshot excluyendo la transición a eliminar
+    const [todosEstados, todasTransiciones, todosRoles] = await Promise.all([
+      ctx.prisma.$queryRaw<EstadoInput[]>`
+        SELECT id::text, nombre, es_inicial, es_final
+          FROM ece.flujo_estado
+         WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+      `,
+      ctx.prisma.$queryRaw<TransicionInput[]>`
+        SELECT id::text, estado_origen_id::text, estado_destino_id::text, accion
+          FROM ece.flujo_transicion
+         WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+           AND id != ${input.id}::uuid
+      `,
+      ctx.prisma.$queryRaw<DocumentoRolInput[]>`
+        SELECT id::text FROM ece.documento_rol
+         WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+      `,
+    ]);
+
+    const resultado = validateWorkflow({
+      estados: todosEstados,
+      transiciones: todasTransiciones,
+      roles: todosRoles,
+    });
+
+    const nuevosErrores = resultado.errors.filter((e) => e.severity === "error");
+    if (nuevosErrores.length > 0) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `Eliminar esta transición introduce errores de integridad: ${nuevosErrores.map((e) => e.message).join("; ")}`,
+      });
+    }
+
+    // Eliminar
     const deleted = await ctx.prisma.$queryRaw<TransicionRow[]>`
       DELETE FROM ece.flujo_transicion
        WHERE id = ${input.id}::uuid
        RETURNING id::text, tipo_documento_id::text, estado_origen_id::text,
                  estado_destino_id::text, accion, rol_autoriza_id::text, requiere_firma
     `;
-    if (deleted.length === 0) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Transición no encontrada." });
-    }
     return { prev: deleted[0] };
   }),
 });

@@ -53,6 +53,7 @@ import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowTransicionRouter } from "./workflow-transicion.router";
 import { workflowRolRouter } from "./workflow-rol.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+import { workflowValidatorRouter } from "./workflow-validator.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
 import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
 // Fase 2 — ECE Triaje NTEC (Stream 02)
@@ -71,6 +72,13 @@ import { eceBridgePatientRouter } from "./ece-bridge-patient.router";
 import { bridgeEncounterRouter } from "./ece/bridge-encounter.router";
 // Fase 2 — Bridge ECE-HIS Triage (Stream 18-ext)
 import { eceBridgeTriageRouter } from "./ece/bridge-triage.router";
+// Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
+import { atencionEmergenciaRouter } from "./ece/atencion-emergencia.router";
+// ECE — RRI (Referencia / Retorno / Interconsulta, NTEC Doc 10)
+import { eceRriRouter } from "./ece/rri.router";
+// ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+import { eceSolicitudEstudioRouter } from "./ece/solicitud-estudio.router";
+import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -127,6 +135,7 @@ export const appRouter = router({
   workflowTransicion: workflowTransicionRouter,
   workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
+  workflowValidator: workflowValidatorRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
   // Fase 2 — ECE Triaje NTEC (Stream 02)
@@ -145,6 +154,13 @@ export const appRouter = router({
   eceBridgeEncounter: bridgeEncounterRouter,
   // Fase 2 — Bridge ECE-HIS Triage
   eceBridgeTriage: eceBridgeTriageRouter,
+  // Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
+  eceAtencionEmergencia: atencionEmergenciaRouter,
+  // ECE — RRI (NTEC Doc 10)
+  eceRri: eceRriRouter,
+  // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
+  eceSolicitudEstudio: eceSolicitudEstudioRouter,
+  eceResultadoEstudio: eceResultadoEstudioRouter,
 });
 
 export type AppRouter = typeof appRouter;

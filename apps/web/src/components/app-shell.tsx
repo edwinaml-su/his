@@ -46,6 +46,8 @@ import {
   GitBranch,
   Thermometer,
   NotebookPen,
+  Siren,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -89,7 +91,7 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Atención",
     defaultOpen: true,
     items: [
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
@@ -98,12 +100,6 @@ const SECTIONS: NavSection[] = [
         label: "Indicaciones Médicas",
         icon: ClipboardCheck,
       },
-    ],
-  },
-  {
-    label: "ECE",
-    defaultOpen: false,
-    items: [
       {
         href: "/ece/registro-enfermeria",
         label: "Registro Enfermería",
@@ -116,6 +112,7 @@ const SECTIONS: NavSection[] = [
     label: "Diagnóstico",
     defaultOpen: true,
     items: [
+      { href: "/ece/estudios", label: "Estudios ECE", icon: FlaskConical },
       { href: "/pharmacy", label: "Farmacia", icon: Pill },
       { href: "/emar", label: "eMAR", icon: ScanLine },
       { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical },
@@ -125,7 +122,7 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    label: "ECE",
+    label: "ECE — Documentos",
     defaultOpen: true,
     items: [
       {
@@ -135,6 +132,8 @@ const SECTIONS: NavSection[] = [
       },
       { href: "/ece/consentimiento", label: "Consentimientos ECE", icon: FileSignature },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
+      { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
+      { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
     ],
   },
   {

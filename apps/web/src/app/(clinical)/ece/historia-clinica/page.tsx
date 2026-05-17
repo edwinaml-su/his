@@ -157,34 +157,18 @@ export default function EceHistoriaClinicaListPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {/*
-                  El router devuelve `HistoriaClinicaRow` con campos snake_case
-                  + un subset minimal. La UI espera shape extendido con
-                  `patient`, `motivoConsulta`, `createdAt`. Tipamos vía `Row`
-                  documentado para acceso seguro hasta que el router exponga
-                  estos campos en una iteración futura.
-                */}
-                {(query.data.items as unknown as Array<{
-                  id: string;
-                  estado: string;
-                  motivoConsulta?: string;
-                  motivo_consulta?: string;
-                  createdAt?: string;
-                  creado_en?: string;
-                  patient?: { firstName: string; lastName: string };
-                }>).map((hc) => {
+                {query.data.items.map((hc) => {
                   const paciente = hc.patient
                     ? `${hc.patient.firstName} ${hc.patient.lastName}`
                     : "—";
-                  const fecha = hc.createdAt ?? hc.creado_en;
                   return (
                     <TableRow key={hc.id}>
                       <TableCell>{paciente}</TableCell>
                       <TableCell className="max-w-[20rem] truncate">
-                        {hc.motivoConsulta ?? hc.motivo_consulta ?? "—"}
+                        {hc.motivoConsulta}
                       </TableCell>
                       <TableCell className="tabular-nums">
-                        {fecha ? dateFmt.format(new Date(fecha)) : "—"}
+                        {dateFmt.format(hc.createdAt)}
                       </TableCell>
                       <TableCell>
                         <WorkflowBadge estado={hc.estado as HcEstado} />

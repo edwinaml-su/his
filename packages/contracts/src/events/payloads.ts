@@ -440,6 +440,117 @@ export const eceEpisodioCerradoPayloadSchema = z.object({
 export type EceEpisodioCerradoPayload = z.infer<typeof eceEpisodioCerradoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// ece.atencion_emergencia.firmada  (Fase 2 — NTEC Doc 5, ATN_EMERG)
+// Emitido cuando el MT firma una atención de emergencia (borrador|en_revision → firmado).
+// -----------------------------------------------------------------------------
+
+export const eceAtencionEmergenciaFirmadaPayloadSchema = z.object({
+  atencionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  /** SHA-256 hex del payload clínico concatenado. */
+  contentHash: z.string().length(64),
+  firmadoPor: z.string().uuid(),
+  firmadaEn: z.string().datetime(),
+  organizationId: z.string().uuid(),
+});
+
+export type EceAtencionEmergenciaFirmadaPayload = z.infer<
+  typeof eceAtencionEmergenciaFirmadaPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.rri.firmada / ece.rri.respondida  (Fase 2 — NTEC Doc 10, RRI)
+// Emitidos cuando MC firma una RRI (en_revision → firmado) y cuando IC/MC/ESP
+// responde (firmado → validado).
+// -----------------------------------------------------------------------------
+
+export const eceRriFirmadaPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  tipo: z.string().min(1).max(64),
+  urgencia: z.string().min(1).max(64),
+  destinoServicioId: z.string().uuid().nullable().optional(),
+  solicitadoPor: z.string().uuid(),
+  payloadHash: z.string().length(64),
+  firmaId: z.string().uuid(),
+});
+
+export type EceRriFirmadaPayload = z.infer<typeof eceRriFirmadaPayloadSchema>;
+
+export const eceRriRespondidaPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  tipo: z.string().min(1).max(64),
+  respondidoPor: z.string().uuid(),
+  firmaId: z.string().uuid(),
+});
+
+export type EceRriRespondidaPayload = z.infer<typeof eceRriRespondidaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// ece.solicitud_estudio.{firmada,validada,anulada}  (Fase 2 — NTEC Doc 18)
+// -----------------------------------------------------------------------------
+
+export const eceSolicitudEstudioFirmadaPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  tipoDocumentoCodigo: z.string().min(1).max(64),
+  tipo: z.string().min(1).max(64),
+  prioridad: z.string().min(1).max(64),
+  accion: z.string().min(1).max(64),
+  byUserId: z.string().uuid(),
+  firmaId: z.string().uuid(),
+});
+
+export type EceSolicitudEstudioFirmadaPayload = z.infer<
+  typeof eceSolicitudEstudioFirmadaPayloadSchema
+>;
+
+export const eceSolicitudEstudioValidadaPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  tipoDocumentoCodigo: z.string().min(1).max(64),
+  accion: z.string().min(1).max(64),
+  byUserId: z.string().uuid(),
+  observacion: z.string().nullable().optional(),
+});
+
+export type EceSolicitudEstudioValidadaPayload = z.infer<
+  typeof eceSolicitudEstudioValidadaPayloadSchema
+>;
+
+export const eceSolicitudEstudioAnuladaPayloadSchema = z.object({
+  instanceId: z.string().uuid(),
+  accion: z.string().min(1).max(64),
+  motivo: z.string().min(1).max(500),
+  byUserId: z.string().uuid(),
+});
+
+export type EceSolicitudEstudioAnuladaPayload = z.infer<
+  typeof eceSolicitudEstudioAnuladaPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
+// ece.resultado_estudio.{registrado,aprobado}  (Fase 2 — NTEC Doc 18)
+// -----------------------------------------------------------------------------
+
+export const eceResultadoEstudioRegistradoPayloadSchema = z.object({
+  solicitudId: z.string().uuid(),
+  instanceId: z.string().uuid(),
+  byUserId: z.string().uuid(),
+});
+
+export type EceResultadoEstudioRegistradoPayload = z.infer<
+  typeof eceResultadoEstudioRegistradoPayloadSchema
+>;
+
+export const eceResultadoEstudioAprobadoPayloadSchema = z.object({
+  solicitudId: z.string().uuid(),
+  byUserId: z.string().uuid(),
+  comentarioMedico: z.string().nullable().optional(),
+});
+
+export type EceResultadoEstudioAprobadoPayload = z.infer<
+  typeof eceResultadoEstudioAprobadoPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -553,6 +664,41 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.episodio.cerrado"),
     payload: eceEpisodioCerradoPayloadSchema,
+  }),
+  // Fase 2 — ECE Atención de Emergencia (ATN_EMERG)
+  z.object({
+    eventType: z.literal("ece.atencion_emergencia.firmada"),
+    payload: eceAtencionEmergenciaFirmadaPayloadSchema,
+  }),
+  // Fase 2 — ECE RRI (NTEC Doc 10)
+  z.object({
+    eventType: z.literal("ece.rri.firmada"),
+    payload: eceRriFirmadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rri.respondida"),
+    payload: eceRriRespondidaPayloadSchema,
+  }),
+  // Fase 2 — ECE Solicitud/Resultado Estudio (NTEC Doc 18)
+  z.object({
+    eventType: z.literal("ece.solicitud_estudio.firmada"),
+    payload: eceSolicitudEstudioFirmadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.solicitud_estudio.validada"),
+    payload: eceSolicitudEstudioValidadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.solicitud_estudio.anulada"),
+    payload: eceSolicitudEstudioAnuladaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.resultado_estudio.registrado"),
+    payload: eceResultadoEstudioRegistradoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.resultado_estudio.aprobado"),
+    payload: eceResultadoEstudioAprobadoPayloadSchema,
   }),
 ]);
 
