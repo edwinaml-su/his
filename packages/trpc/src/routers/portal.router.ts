@@ -24,6 +24,7 @@ import {
 } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, portalProcedure } from "../trpc";
+import { withPortalContext } from "../rls-context";
 
 // ─── DUI validator (paridad con packages/contracts/src/validators/index.ts) ──
 
@@ -463,8 +464,305 @@ const guardianRouter = router({
   }),
 });
 
+// ─── Pagination input reutilizable ───────────────────────────────────────────
+
+const paginationInput = z.object({
+  cursor: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(50).default(20),
+});
+
+// ─── Helper: resolución de patientId del portal account + guardian opcional ──
+
+/**
+ * Resuelve el patientId efectivo para queries HCE.
+ *
+ * Si `wardPatientId` está presente, valida que la relación
+ * `GuardianRelationship` esté ACTIVE. Lanza FORBIDDEN si no.
+ *
+ * Defensa IDOR: el `patientId` base NUNCA se acepta del input —
+ * siempre proviene de `ctx.portalAccount.patientId` (el JWT del portal).
+ */
+async function resolvePatientId(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: { prisma: any; portalAccount: { id: string; patientId: string } },
+  wardPatientId: string | undefined,
+): Promise<string> {
+  if (!wardPatientId) return ctx.portalAccount.patientId;
+
+  const rel = await ctx.prisma.guardianRelationship.findFirst({
+    where: {
+      guardianAccountId: ctx.portalAccount.id,
+      wardPatientId,
+      status: "ACTIVE",
+    },
+    select: { wardPatientId: true },
+  });
+
+  if (!rel) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Relación de tutela no activa o no encontrada.",
+    });
+  }
+
+  return rel.wardPatientId as string;
+}
+
+// ─── HCE sub-router ───────────────────────────────────────────────────────────
+
+/**
+ * HCE consulta del portal — E.B20.2.
+ *
+ * Todos los procedures usan portalProcedure + withPortalContext.
+ * El patientId se deriva del JWT (ctx.portalAccount.patientId) — nunca del input.
+ * El guardian puede consultar wardPatientId si la relación GuardianRelationship está ACTIVE.
+ *
+ * Gap §5.2: showInPortal en LabResult NO implementado — todos los resultados
+ * con validatedAt != null (estado VALIDATED/RELEASED en el flujo LIS) son visibles.
+ * Pendiente decisión @DBA sobre campo `confidential` en LabResult.
+ */
+
+const guardianInput = z.object({
+  wardPatientId: z.string().uuid().optional(),
+});
+
+const hceRouter = router({
+  appointments: router({
+    /**
+     * US.B20.2.1 — citas del paciente (próximas + pasadas, paginadas).
+     * Ordenadas descendente (más recientes primero) para el tab "pasadas";
+     * el filtro de próximas se aplica con `upcoming=true`.
+     */
+    list: portalProcedure
+      .input(guardianInput.merge(paginationInput).extend({ upcoming: z.boolean().optional() }))
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          const now = new Date();
+          const where = {
+            patientId,
+            deletedAt: null,
+            ...(input.upcoming
+              ? { scheduledAt: { gte: now } }
+              : { scheduledAt: { lt: now } }),
+            ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+          };
+
+          return tx.outpatientAppointment.findMany({
+            where,
+            select: {
+              id: true,
+              scheduledAt: true,
+              durationMinutes: true,
+              status: true,
+              reason: true,
+              provider: { select: { fullName: true } },
+            },
+            orderBy: { scheduledAt: input.upcoming ? "asc" : "desc" },
+            take: input.limit,
+          });
+        });
+      }),
+
+    /** US.B20.2.1 — próximas 5 citas del paciente. */
+    upcoming: portalProcedure
+      .input(guardianInput)
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          return tx.outpatientAppointment.findMany({
+            where: {
+              patientId,
+              deletedAt: null,
+              scheduledAt: { gte: new Date() },
+              status: { notIn: ["CANCELLED", "NO_SHOW"] },
+            },
+            select: {
+              id: true,
+              scheduledAt: true,
+              durationMinutes: true,
+              status: true,
+              reason: true,
+              provider: { select: { fullName: true } },
+            },
+            orderBy: { scheduledAt: "asc" },
+            take: 5,
+          });
+        });
+      }),
+  }),
+
+  labResults: router({
+    /**
+     * US.B20.2.2 — resultados de laboratorio del paciente.
+     * Filtra: solo resultados con validatedAt != null (estado VALIDATED en flujo LIS).
+     * La paginación usa cursor sobre id (UUID).
+     *
+     * Gap §5.2: campo `confidential` no existe en schema — no se filtra.
+     */
+    list: portalProcedure
+      .input(guardianInput.merge(paginationInput))
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          // Navegar: LabResult → LabOrderItem → LabOrder (tiene patientId)
+          const results = await tx.labResult.findMany({
+            where: {
+              validatedAt: { not: null },
+              orderItem: {
+                order: { patientId },
+              },
+              ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+            },
+            select: {
+              id: true,
+              flag: true,
+              valueNumeric: true,
+              valueText: true,
+              valueUnit: true,
+              validatedAt: true,
+              resultedAt: true,
+              orderItem: {
+                select: {
+                  test: { select: { name: true, code: true } },
+                  order: { select: { orderedAt: true } },
+                },
+              },
+            },
+            orderBy: { resultedAt: "desc" },
+            take: input.limit,
+          });
+
+          return results;
+        });
+      }),
+
+    /** US.B20.2.2 — detalle de un resultado de lab individual. */
+    get: portalProcedure
+      .input(guardianInput.extend({ resultId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          const result = await tx.labResult.findFirst({
+            where: {
+              id: input.resultId,
+              validatedAt: { not: null },
+              orderItem: { order: { patientId } },
+            },
+            select: {
+              id: true,
+              flag: true,
+              valueNumeric: true,
+              valueText: true,
+              valueUnit: true,
+              notes: true,
+              validatedAt: true,
+              resultedAt: true,
+              orderItem: {
+                select: {
+                  test: {
+                    select: {
+                      name: true,
+                      code: true,
+                      refRangeLow: true,
+                      refRangeHigh: true,
+                      unit: true,
+                    },
+                  },
+                  order: { select: { orderedAt: true, patientId: true } },
+                },
+              },
+            },
+          });
+
+          if (!result) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Resultado no encontrado." });
+          }
+
+          return result;
+        });
+      }),
+  }),
+
+  prescriptions: router({
+    /**
+     * US.B20.2.5 — recetas del paciente (con líneas + dispensaciones).
+     * Muestra SIGNED y PARTIALLY_DISPENSED (activas/vigentes).
+     */
+    list: portalProcedure
+      .input(guardianInput.merge(paginationInput))
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          return tx.prescription.findMany({
+            where: {
+              patientId,
+              status: { in: ["SIGNED", "PARTIALLY_DISPENSED"] },
+              ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+            },
+            select: {
+              id: true,
+              prescribedAt: true,
+              status: true,
+              signedAt: true,
+              items: {
+                select: {
+                  id: true,
+                  dosage: true,
+                  route: true,
+                  frequency: true,
+                  durationDays: true,
+                  prescribedQty: true,
+                  administeredQty: true,
+                  drug: { select: { genericName: true, brandName: true } },
+                  dispenses: {
+                    select: { dispensedAt: true, quantity: true },
+                    orderBy: { dispensedAt: "desc" },
+                    take: 5,
+                  },
+                },
+              },
+            },
+            orderBy: { prescribedAt: "desc" },
+            take: input.limit,
+          });
+        });
+      }),
+  }),
+
+  vaccinations: router({
+    /** US.B20.2.4 — historial de vacunación del paciente. */
+    list: portalProcedure
+      .input(guardianInput)
+      .query(async ({ ctx, input }) => {
+        const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+        return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          return tx.patientVaccination.findMany({
+            where: { patientId },
+            select: {
+              id: true,
+              doseNumber: true,
+              administeredAt: true,
+              lotNumber: true,
+              anatomicalSite: true,
+              vaccine: { select: { name: true, code: true, scheduleNote: true } },
+            },
+            orderBy: { administeredAt: "desc" },
+          });
+        });
+      }),
+  }),
+});
+
 export const portalRouter = router({
   account: accountRouter,
   auth: authRouter,
   guardian: guardianRouter,
+  hce: hceRouter,
 });
