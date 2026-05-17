@@ -42,6 +42,8 @@ export const EVENT_TYPES = [
   "ece.evolucion.firmada",
   // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
   "ece.epicrisis.certificada",
+  // Fase 2 — Certificación DIR (Art. 21 NTEC)
+  "ece.documento.certificado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

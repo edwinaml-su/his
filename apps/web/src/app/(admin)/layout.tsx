@@ -22,6 +22,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
 
   return (
     <AppShell
+      roleCodes={tenant?.roleCodes ?? []}
       topbar={
         <div className="flex w-full items-center justify-between gap-4">
           <span className="truncate">

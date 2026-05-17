@@ -63,6 +63,7 @@ import { epicrisisRouter } from "./ece/epicrisis.router";
 // ECE
 import { bitacoraRouter } from "./ece/bitacora.router";
 import { eceRectificacionRouter } from "./ece-rectificacion.router";
+import { eceCertificacionRouter } from "./ece/certificacion.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -129,6 +130,7 @@ export const appRouter = router({
   // ECE
   bitacora: bitacoraRouter,
   eceRectificacion: eceRectificacionRouter,
+  eceCertificacion: eceCertificacionRouter,
 });
 
 export type AppRouter = typeof appRouter;
