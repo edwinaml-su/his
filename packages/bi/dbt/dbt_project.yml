@@ -1,0 +1,47 @@
+name: 'his_bi'
+version: '1.0.0'
+config-version: 2
+
+# Perfil de conexion a Postgres (definir en ~/.dbt/profiles.yml)
+profile: 'his_bi'
+
+# Rutas del proyecto
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+analysis-paths: ["analyses"]
+macro-paths: ["macros"]
+docs-paths: ["docs"]
+asset-paths: ["assets"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Configuracion de modelos
+models:
+  his_bi:
+    # Todos los modelos van a staging schema por defecto (Silver layer)
+    +materialized: view
+    staging:
+      +schema: staging
+    gold:
+      +schema: analytics
+      +materialized: table  # Gold usa matviews manuales (SQL 50), no dbt models
+
+# Configuracion de snapshots
+snapshots:
+  his_bi:
+    # Los snapshots van al schema analytics (Gold layer)
+    +target_schema: analytics
+    +strategy: check
+    +unique_key: patient_id
+
+# Variables de proyecto
+vars:
+  # Fecha minima para snapshots (evitar procesar data historica completa en dev)
+  snapshot_start_date: '2024-01-01'
+  # Schema source (Bronze layer)
+  source_schema: 'public'

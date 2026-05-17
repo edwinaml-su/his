@@ -1,0 +1,22 @@
+{
+  "name": "@his/bi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HIS BI — Capa semantica Cube.dev + dbt snapshots (Beta.19b)",
+  "scripts": {
+    "cube:dev": "cubejs-server",
+    "cube:validate": "node -e \"require('./cube/cube.js'); console.log('cube.js OK');\"",
+    "dbt:snapshot": "dbt snapshot --select dim_patient_snapshot",
+    "dbt:debug": "dbt debug"
+  },
+  "dependencies": {
+    "@cubejs-backend/server": "^0.36.0",
+    "@cubejs-backend/postgres-driver": "^0.36.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

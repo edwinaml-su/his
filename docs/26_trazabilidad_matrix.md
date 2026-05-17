@@ -2,7 +2,7 @@
 
 **Proyecto:** HIS Multipaís — Inversiones Avante
 **Autor:** @QA — QA Automation Engineer (SDET)
-**Versión:** 1.1 — 2026-05-16 (Wave DoD.0 — coverage baseline medido)
+**Versión:** 1.2 — 2026-05-16 (Wave DoD.2 — workflow a11y CI + baseline firmado)
 **Propósito:** Vincular requerimientos del TDR → User Stories → Casos de prueba → Evidencia ejecutada.
 **Contexto:** Entregable DoD-bridge. EV-físico ~78 %, EV-DoD 0 % — esta matriz identifica la brecha y propone plan de cierre.
 **Coverage baseline:** contracts 78.82 % lines | trpc 78.11 % lines | infrastructure 86.26 % lines | web 5.97 % lines (ver `docs/27_coverage_baseline.md`)
@@ -187,15 +187,23 @@ Los siguientes gaps están ordenados por impacto regulatorio y riesgo.
 
 ---
 
-### GAP-3 — A11y (axe) nunca ejecutado ni firmado en ningún wave (CRÍTICO DoD)
+### GAP-3 — A11y (axe) — PARCIALMENTE RESUELTO (Wave DoD.2 — 2026-05-16)
 
-**Descripción:** `apps/web/e2e/a11y.spec.ts` existe (3 tests) pero cubre solo las páginas del MVP. El DoD de CLAUDE.md exige "axe sin críticos/serios". No hay evidencia de ejecución en CI ni reporte de 0 violaciones para ningún módulo.
+**Descripcion original:** A11y (axe) nunca ejecutado ni firmado. El DoD de CLAUDE.md exige "axe sin criticos/serios".
 
-**Riesgo:** Violaciones de accesibilidad WCAG en producción. Riesgo legal en entorno hospitalario (TDR §6 cumplimiento).
+**Estado Wave DoD.2:** Workflow `.github/workflows/a11y.yml` creado. Spec `apps/web/e2e/dod/a11y-baseline.spec.ts` integrado en CI (push main + PR + nightly). Baseline firmado CONDICIONAL para 5 paginas:
+- Violaciones criticas: **0** (todas las paginas).
+- Violaciones serias: **1 tipo** (skip link ausente en AppShell, A11Y-001) — documentada en `docs/29_a11y_baseline_results.md`.
+- **El CI bloqueara merges hasta que A11Y-001 se corrija.** Fix estimado: 30 minutos (@Dev).
 
-**Acción:** Extender `a11y.spec.ts` para cubrir al menos login, triage queue, bed-map, notifications inbox. Ejecutar en e2e.yml y documentar resultado.
+**Riesgo residual:** Hasta que se corrija A11Y-001 y el CI pase verde, el workflow bloquea. Las 15 rutas criticas adicionales (triage, eMAR, LIS, farmacia, etc.) no estan cubiertas — ver GAP-3 extension en Wave DoD.3.
 
-**Evidencia faltante:** Output de axe con 0 violaciones críticas/serias en cualquier página.
+**Accion pendiente (DoD.3):**
+1. @Dev: fix A11Y-001 en `apps/web/src/components/app-shell.tsx` (skip link + `id="main-content"` en `<main>`).
+2. @QA: verificar CI verde post-fix, actualizar firma en `docs/29_a11y_baseline_results.md` a VERDE.
+3. @QA: ampliar spec a las 15 rutas adicionales listadas en `docs/29_a11y_baseline_results.md` seccion 6.
+
+**Evidencia:** `.github/workflows/a11y.yml` + `docs/29_a11y_baseline_results.md` + `apps/web/e2e/dod/a11y-baseline.spec.ts`.
 
 ---
 
@@ -355,5 +363,27 @@ Un ❓ en esta matriz es preferible a un ✅ sin evidencia. Si no hay evidencia 
 
 ---
 
-*Versión 1.0: @QA — 2026-05-16 — Snapshot inicial.*
-*Versión 1.1: @QA — 2026-05-16 — Wave DoD.0: coverage baseline medido, Beta.16/17 actualizadas a mergeadas, Beta.18 marcada ❌ sin tests, GAP-1 y GAP-5 actualizados con datos reales. Próxima revisión: al completar Wave DoD.1 (fix BUG-DOD-001/002 + tests mfa/rbac/audit).*
+---
+
+## 8. Cobertura A11y (axe-core)
+
+**Wave DoD.2 — 2026-05-16**
+
+| Item | Estado |
+|---|---|
+| Workflow CI | `.github/workflows/a11y.yml` — activo en push main + PR + nightly |
+| Spec | `apps/web/e2e/dod/a11y-baseline.spec.ts` — 5 tests, WCAG 2.1 AA |
+| Paginas baseline firmadas | 5: `/`, `/login`, `/admin`, `/notifications`, `/settings/notifications` |
+| Violaciones criticas | **0** |
+| Violaciones serias | **1 tipo** (A11Y-001 skip link — deuda documentada) |
+| Firma @QA | CONDICIONAL — pendiente fix A11Y-001 para firma VERDE |
+| Paginas pendientes DoD.3 | 15 rutas criticas (ver `docs/29_a11y_baseline_results.md` §6) |
+| Resultados completos | `docs/29_a11y_baseline_results.md` |
+
+**Politica a partir de DoD.2:** todo PR que toca `apps/web/**` dispara `a11y.yml`. El job no tiene `continue-on-error` — falla bloquea merge.
+
+---
+
+*Version 1.0: @QA — 2026-05-16 — Snapshot inicial.*
+*Version 1.1: @QA — 2026-05-16 — Wave DoD.0: coverage baseline medido, Beta.16/17 actualizadas a mergeadas, Beta.18 marcada sin tests, GAP-1 y GAP-5 actualizados con datos reales.*
+*Version 1.2: @QA — 2026-05-16 — Wave DoD.2: workflow a11y CI creado, baseline 5 paginas firmado CONDICIONAL, GAP-3 parcialmente resuelto, seccion 8 Cobertura A11y agregada. Proximo hito: fix A11Y-001 (skip link) por @Dev.*

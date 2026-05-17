@@ -134,6 +134,17 @@ export const surgeryCaseAnesthesiaInput = z
     },
   );
 
+export const INTRAOP_ENTRY_TYPE = ["COMPLICATION", "NOTE"] as const;
+export const intraopEntryTypeEnum = z.enum(INTRAOP_ENTRY_TYPE);
+
+export const surgeryCaseUpdateIntraopNotesInput = z.object({
+  id: z.string().uuid(),
+  appendText: z.string().trim().min(1).max(2000),
+  entryType: intraopEntryTypeEnum.default("NOTE"),
+});
+
+export type SurgeryCaseUpdateIntraopNotesInput = z.infer<typeof surgeryCaseUpdateIntraopNotesInput>;
+
 export type OperatingRoomCreateInput = z.infer<typeof operatingRoomCreateInput>;
 export type SurgeryCaseCreateInput = z.infer<typeof surgeryCaseCreateInput>;
 export type SurgeryCaseListInput = z.infer<typeof surgeryCaseListInput>;

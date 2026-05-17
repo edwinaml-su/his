@@ -1,0 +1,32 @@
+version: 2
+
+sources:
+  - name: public
+    description: "Bronze layer — schema public (OLTP 4NF Prisma)"
+    schema: public
+    tables:
+      - name: Patient
+        description: "Registro maestro de paciente (MPI)"
+        columns:
+          - name: id
+            description: "UUID PK del paciente"
+          - name: organizationId
+            description: "Organizacion propietaria (RLS)"
+          - name: biologicalSexId
+            description: "FK a BiologicalSex"
+          - name: birthDate
+            description: "Fecha de nacimiento (PHI — no exponer en Gold)"
+          - name: active
+            description: "Paciente activo en OLTP"
+          - name: updatedAt
+            description: "Timestamp de ultima modificacion — change detection SCD2"
+          - name: deletedAt
+            description: "Soft delete timestamp (NULL = activo)"
+
+      - name: BiologicalSex
+        description: "Catalogo de sexo biologico"
+        columns:
+          - name: id
+            description: "UUID PK"
+          - name: code
+            description: "Codigo: MALE / FEMALE / INTERSEX / UNKNOWN"
