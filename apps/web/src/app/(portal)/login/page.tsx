@@ -5,14 +5,14 @@
  * Solicita un magic link passwordless al correo registrado.
  */
 import { useState } from "react";
-import { api } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 export default function PortalLoginPage() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const requestLogin = api.portal.auth.requestLogin.useMutation({
+  const requestLogin = trpc.portal.auth.requestLogin.useMutation({
     onSuccess: () => setSent(true),
     onError: () => setError("Error al enviar el enlace. Intente de nuevo."),
   });

@@ -5,7 +5,7 @@
  * Flujo: idle → enrolling (muestra secreto/QR) → done.
  */
 import { useState } from "react";
-import { api } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 type State = "idle" | "enrolling" | "done";
 
@@ -15,27 +15,17 @@ export default function MfaSettingsPage() {
   const [totpCode, setTotpCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const enableMfa = api.portal.account.enableMfa.useMutation({
-    onSuccess: (data) => {
+  const enableMfa = trpc.portal.account.enableMfa.useMutation({
+    onSuccess: (data: { secret: string }) => {
       setSecret(data.secret);
       setState("enrolling");
     },
     onError: () => setError("Error al iniciar la configuración. Intente de nuevo."),
   });
 
-  const verifyMfa = api.portal.account.verifyMfa.useMutation({
-    onSuccess: (data) => {
-      if (!data.success) {
-        setError(
-          data.reason === "código_inválido"
-            ? "Código incorrecto. Intente de nuevo."
-            : "Error de configuración.",
-        );
-        return;
-      }
-      setState("done");
-    },
-    onError: () => setError("Error de red. Intente de nuevo."),
+  const verifyMfa = trpc.portal.account.verifyMfa.useMutation({
+    onSuccess: () => setState("done"),
+    onError: (err) => setError(err.message ?? "Código incorrecto. Intente de nuevo."),
   });
 
   function handleEnable() {
@@ -46,7 +36,7 @@ export default function MfaSettingsPage() {
   function handleVerify(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    verifyMfa.mutate({ totpCode });
+    verifyMfa.mutate({ code: totpCode });
   }
 
   if (state === "done") {

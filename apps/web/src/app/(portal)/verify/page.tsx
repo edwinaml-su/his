@@ -7,7 +7,7 @@
  */
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { api } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 function VerifyContent() {
   const params = useSearchParams();
@@ -17,21 +17,19 @@ function VerifyContent() {
   const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const verifyLogin = api.portal.auth.verifyLogin.useMutation({
-    onSuccess: (data) => {
-      if (!data.success) {
-        if ("mfaRequired" in data && data.mfaRequired) {
-          setMfaRequired(true);
-          return;
-        }
-        setError("El enlace es inválido o ha expirado.");
-        return;
-      }
+  const verifyLogin = trpc.portal.auth.verifyLogin.useMutation({
+    onSuccess: () => {
       // Almacenar el session token en cookie httpOnly vía server action (US.B20.1.x)
       // Por ahora redirigir al dashboard.
       router.push("/dashboard");
     },
-    onError: () => setError("Error de red. Intente de nuevo."),
+    onError: (err) => {
+      if (err.data?.code === "PRECONDITION_FAILED") {
+        setMfaRequired(true);
+        return;
+      }
+      setError(err.message ?? "Error de red. Intente de nuevo.");
+    },
   });
 
   useEffect(() => {
