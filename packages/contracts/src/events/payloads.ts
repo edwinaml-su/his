@@ -263,6 +263,20 @@ export const eceIndicacionesFirmadasPayloadSchema = z.object({
 
 export type EceIndicacionesFirmadasPayload = z.infer<
   typeof eceIndicacionesFirmadasPayloadSchema
+// ece.administracion.registrada  (Fase 2 — ECE Registro Enfermería, Stream 30)
+// Emitido cuando se agrega una fila a ece.administracion_medicamento.
+// -----------------------------------------------------------------------------
+
+export const eceAdministracionRegistradaPayloadSchema = z.object({
+  administracionId: z.string().uuid(),
+  registroId: z.string().uuid(),
+  indicacionItemId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  enfermeraId: z.string().uuid(),
+});
+
+export type EceAdministracionRegistradaPayload = z.infer<
+  typeof eceAdministracionRegistradaPayloadSchema
 >;
 
 // -----------------------------------------------------------------------------
@@ -330,6 +344,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.indicaciones.firmadas"),
     payload: eceIndicacionesFirmadasPayloadSchema,
+  // Fase 2 — ECE Registro Enfermería (Stream 30)
+  z.object({
+    eventType: z.literal("ece.administracion.registrada"),
+    payload: eceAdministracionRegistradaPayloadSchema,
   }),
 ]);
 

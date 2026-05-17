@@ -55,6 +55,7 @@ import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
 // Fase 2 — ECE Triaje NTEC (Stream 02)
 import { triajeEceRouter } from "./ece/triaje-ece.router";
 import { indicacionesMedicasRouter } from "./ece/indicaciones-medicas.router";
+import { registroEnfermeriaRouter } from "./ece/registro-enfermeria.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -113,6 +114,7 @@ export const appRouter = router({
   // Fase 2 — ECE Triaje NTEC (Stream 02)
   eceTriaje: triajeEceRouter,
   eceIndicaciones: indicacionesMedicasRouter,
+  eceRegistroEnfermeria: registroEnfermeriaRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -36,6 +36,8 @@ export const EVENT_TYPES = [
   "ece.triaje.firmado",
   // Fase 2 — Indicaciones Médicas ECE (IND_MED)
   "ece.indicaciones.firmadas",
+  // Fase 2 — ECE Registro de Enfermería (Stream 30)
+  "ece.administracion.registrada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

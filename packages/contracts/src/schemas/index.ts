@@ -53,3 +53,4 @@ export * from "./ece-historia-clinica";
 export * from "./ece-signos-vitales";
 export * from "./ece-triaje";
 export * from "./ece-indicaciones";
+export * from "./ece-registro-enfermeria";
