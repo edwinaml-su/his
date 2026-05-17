@@ -15,7 +15,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:a11y": "playwright test e2e/a11y.spec.ts"
+    "test:a11y": "playwright test e2e/a11y.spec.ts",
+    "test:perf": "playwright test e2e/perf/lighthouse-baseline.spec.ts"
   },
   "dependencies": {
     "@his/contracts": "*",
@@ -55,6 +56,8 @@
     "jsdom": "^25.0.1",
     "@playwright/test": "^1.49.0",
     "@axe-core/playwright": "^4.10.1",
+    "playwright-lighthouse": "^4.0.0",
+    "lighthouse": "^12.2.1",
     "@his/test-utils": "*",
     "@his/eslint-config": "*"
   }
