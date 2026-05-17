@@ -78,6 +78,8 @@ export const EVENT_TYPES = [
   // Fase 2 (S4) — ECE Certificado de Defunción (MC firma → DIR certifica)
   "ece.certificado_defuncion.firmado",
   "ece.certificado_defuncion.certificado",
+  // F2-S15 placeholder — Cold Chain excursión (sensor IoT real pendiente)
+  "cold_chain.excursion",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

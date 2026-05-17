@@ -673,6 +673,23 @@ export type EceCertificadoDefuncionCertificadoPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// cold_chain.excursion (F2-S15 placeholder — sensor IoT real pendiente)
+// Emitido cuando una lectura queda fuera del rango configurado.
+// -----------------------------------------------------------------------------
+
+export const coldChainExcursionPayloadSchema = z.object({
+  lecturaId: z.string().uuid(),
+  equipmentId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  temperaturaC: z.number(),
+  humedadPct: z.number().optional(),
+  severidad: z.enum(["WARNING", "CRITICAL"]),
+  mensaje: z.string().min(1).max(500),
+});
+
+export type ColdChainExcursionPayload = z.infer<typeof coldChainExcursionPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -858,6 +875,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.certificado_defuncion.certificado"),
     payload: eceCertificadoDefuncionCertificadoPayloadSchema,
+  }),
+  // F2-S15 placeholder — Cold Chain
+  z.object({
+    eventType: z.literal("cold_chain.excursion"),
+    payload: coldChainExcursionPayloadSchema,
   }),
 ]);
 
