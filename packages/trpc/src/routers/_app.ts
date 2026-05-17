@@ -91,6 +91,8 @@ import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.route
 import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 // Fase 2 — Bridge Admisión Hospitalaria
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
+// GS1 — Proceso F: Logística inversa devoluciones
+import { gs1ProcesoFRouter } from "./gs1-proceso-f.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -185,6 +187,8 @@ export const appRouter = router({
   eceCertDef: eceCertDefRouter,
   // Fase 2 — Bridge Admisión Hospitalaria
   eceBridgeAdmision: eceBridgeAdmisionRouter,
+  // GS1 — Proceso F: Logística inversa devoluciones
+  gs1ProcesoF: gs1ProcesoFRouter,
 });
 
 export type AppRouter = typeof appRouter;
