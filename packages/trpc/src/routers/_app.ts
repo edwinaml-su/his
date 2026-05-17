@@ -83,6 +83,8 @@ import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
 import { eceValoracionInicialRouter } from "./ece/valoracion-inicial-enfermeria.router";
 // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
 import { eceHojaIngresoRouter } from "./ece/hoja-ingreso.router";
+// ECE — Mapa de Camas
+import { eceCamaRouter } from "./ece/cama.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -169,6 +171,8 @@ export const appRouter = router({
   eceValoracionInicial: eceValoracionInicialRouter,
   // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
   eceHojaIngreso: eceHojaIngresoRouter,
+  // ECE — Mapa de Camas
+  eceCama: eceCamaRouter,
 });
 
 export type AppRouter = typeof appRouter;
