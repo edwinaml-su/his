@@ -39,6 +39,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  NotebookPen,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -76,6 +77,7 @@ const SECTIONS: NavSection[] = [
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
     ],
   },
   {
