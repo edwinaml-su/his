@@ -93,6 +93,8 @@ import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 // ECE — Lista de Verificación Preoperatoria (NTEC Art. 28)
 import { eceCirugiaPreopRouter } from "./ece/preop-checklist.router";
+// ECE — WHO Surgical Safety Checklist (OMS Cirugía Segura 2009)
+import { eceWhoChecklistRouter } from "./ece/who-checklist.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -189,6 +191,8 @@ export const appRouter = router({
   eceBridgeAdmision: eceBridgeAdmisionRouter,
   // ECE — Lista de Verificación Preoperatoria (NTEC Art. 28)
   eceCirugiaPreop: eceCirugiaPreopRouter,
+  // ECE — WHO Surgical Safety Checklist
+  eceWhoChecklist: eceWhoChecklistRouter,
 });
 
 export type AppRouter = typeof appRouter;
