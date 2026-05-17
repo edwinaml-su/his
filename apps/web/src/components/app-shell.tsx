@@ -39,6 +39,7 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
+  FilePenLine,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -76,6 +77,7 @@ const SECTIONS: NavSection[] = [
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
     ],
   },
   {
@@ -120,6 +122,7 @@ const SECTIONS: NavSection[] = [
       { href: "/sso-config", label: "SSO", icon: KeyRound },
       { href: "/slos", label: "SLOs", icon: Gauge },
       { href: "/settings/notifications", label: "Preferencias notif.", icon: Settings },
+      { href: "/ece/rectificaciones/cola", label: "ECE Cola DIR", icon: FilePenLine },
     ],
   },
 ];
