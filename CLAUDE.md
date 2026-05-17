@@ -177,6 +177,31 @@ Para aplicar SQL hardening / RLS al proyecto Supabase remoto: `mcp__supabase__ap
 
 ---
 
+## Adecuar legacy vs duplicar (regla permanente)
+
+Cuando una norma (NTEC / ISSS / TDR) introduce una funcionalidad que ya existe parcial en el HIS legacy, **EXTIENDE** el módulo legacy con lo que falta — NO crees una ruta paralela `/ece/<X>` que duplique el dominio.
+
+**Antes de crear `apps/web/src/app/(clinical)/ece/<X>/`** o `apps/web/src/app/(admin)/ece/<X>/`:
+
+1. Verifica si existe `apps/web/src/app/(clinical)/<X>/` o `apps/web/src/app/(admin)/<X>/`.
+2. Si existe: diff funcional `legacy vs NTEC`. Identifica el GAP (qué requiere la norma y no está cubierto).
+3. Inyecta el GAP al legacy (formularios extra, validaciones, integración con motor workflow ECE, persistencia bridge a `ece.<tabla>`).
+4. Usa los bridges (`bridge-triage`, `bridge-encounter`, `bridge-patient` — PR #93) para sincronizar HIS↔ECE.
+
+**Casos donde aplica** (módulos HIS con equivalente NTEC): triage, consents, deaths, patient registry, encounter, indications, lab orders, prescriptions, vital signs.
+
+**Casos donde NO aplica** (documentos nuevos NTEC sin equivalente HIS): FICHA_IDENT, RRI, epicrisis formal, defunción CIE-10 estructurada, bitácora ECE, rectificación.
+
+**Sidebar:** un solo item por dominio. El sufijo "ECE" solo para documentos formales NTEC sin equivalente legacy.
+
+**Si descubres duplicación post-merge:** priorizar consolidar (refactor legacy + eliminar `/ece/*` duplicado + redirect 301 en `next.config.mjs` + dedupe sidebar). NO dejar como deuda.
+
+**En prompts a sub-agentes:** incluir explícito "verifica si existe módulo legacy y refactorízalo; NO crees página nueva si el dominio ya está cubierto".
+
+**Precedente:** `/ece/triaje` fue eliminado en este PR — duplicaba `/triage` legacy que ya tenía Manchester implementado. Bridge `eceBridgeTriage` ya sincroniza con `ece.hoja_triaje`.
+
+---
+
 ## Gotchas concretos (lecciones pagadas)
 
 - **Vercel monorepo:** sin `prisma generate` en `installCommand` el build truena con tipos missing. Ya configurado en `vercel.json`.

@@ -15,6 +15,26 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
+  // Redirects permanentes para módulos consolidados.
+  // `/ece/triaje` fue creado erróneamente como duplicado de `/triage` legacy en
+  // F2-S2. El bridge `eceBridgeTriage` (PR #93) ya sincroniza Triage HIS →
+  // `ece.hoja_triaje`, así que el módulo legacy cubre el dominio completo
+  // NTEC + ISSS. Regla permanente: ver memoria `feedback_adecuar_no_duplicar`
+  // + CLAUDE.md §"Adecuar vs duplicar".
+  async redirects() {
+    return [
+      {
+        source: "/ece/triaje",
+        destination: "/triage",
+        permanent: true,
+      },
+      {
+        source: "/ece/triaje/:path*",
+        destination: "/triage",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;
