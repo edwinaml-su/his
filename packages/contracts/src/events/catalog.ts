@@ -40,6 +40,8 @@ export const EVENT_TYPES = [
   "ece.administracion.registrada",
   // Fase 2 — ECE Evolución Médica (Stream 11)
   "ece.evolucion.firmada",
+  // Fase 2 — ECE Epicrisis de Egreso (NTEC §3.15, Art. 21)
+  "ece.epicrisis.certificada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

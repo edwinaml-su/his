@@ -57,3 +57,4 @@ export * from "./ece-indicaciones";
 export * from "./ece-registro-enfermeria";
 export * from "./ece-evolucion";
 export * from "./ece-episodio";
+export * from "./ece-epicrisis";
