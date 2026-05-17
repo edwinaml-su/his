@@ -70,3 +70,8 @@ export * from "./ece-atencion-emergencia";
 export * from "./ece-rri";
 export * from "./ece-solicitud-estudio";
 export * from "./ece-resultado-estudio";
+export * from "./ece-valoracion-inicial";
+export * from "./ece-episodio-hospitalario";
+export * from "./ece-certificado-defuncion";
+export * from "./ece-bridge-admision";
+export * from "./ece-hoja-ingreso";

@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   Users,
   Bed,
+  BedDouble,
   Stethoscope,
   ClipboardList,
   Building2,
@@ -101,6 +102,11 @@ const SECTIONS: NavSection[] = [
         icon: ClipboardCheck,
       },
       {
+        href: "/ece/valoracion-inicial-enfermeria",
+        label: "Valoración Inicial ENF",
+        icon: NotebookPen,
+      },
+      {
         href: "/ece/registro-enfermeria",
         label: "Registro Enfermería",
         icon: ClipboardCheck,
@@ -119,6 +125,18 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Hospitalario",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList },
+      {
+        href: "/ece/episodio-hospitalario",
+        label: "Episodio Hospitalario",
+        icon: BedDouble,
+      },
     ],
   },
   {

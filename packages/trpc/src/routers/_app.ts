@@ -79,6 +79,18 @@ import { eceRriRouter } from "./ece/rri.router";
 // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
 import { eceSolicitudEstudioRouter } from "./ece/solicitud-estudio.router";
 import { eceResultadoEstudioRouter } from "./ece/resultado-estudio.router";
+// ECE — Valoración Inicial de Enfermería (one-shot al ingreso)
+import { eceValoracionInicialRouter } from "./ece/valoracion-inicial-enfermeria.router";
+// Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
+import { eceHojaIngresoRouter } from "./ece/hoja-ingreso.router";
+// ECE — Mapa de Camas
+import { eceCamaRouter } from "./ece/cama.router";
+// Fase 2 — ECE Episodio Hospitalario (ciclo hospitalario completo)
+import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.router";
+// ECE — Certificado de Defunción (NTEC Art. 21)
+import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
+// Fase 2 — Bridge Admisión Hospitalaria
+import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -161,6 +173,18 @@ export const appRouter = router({
   // ECE — Solicitud y Resultado de Estudio (Doc 18 NTEC)
   eceSolicitudEstudio: eceSolicitudEstudioRouter,
   eceResultadoEstudio: eceResultadoEstudioRouter,
+  // ECE — Valoración Inicial de Enfermería
+  eceValoracionInicial: eceValoracionInicialRouter,
+  // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
+  eceHojaIngreso: eceHojaIngresoRouter,
+  // ECE — Mapa de Camas
+  eceCama: eceCamaRouter,
+  // Fase 2 — ECE Episodio Hospitalario (ciclo hospitalario completo)
+  eceEpisodioHospitalario: eceEpisodioHospitalarioRouter,
+  // ECE — Certificado de Defunción (NTEC Art. 21)
+  eceCertDef: eceCertDefRouter,
+  // Fase 2 — Bridge Admisión Hospitalaria
+  eceBridgeAdmision: eceBridgeAdmisionRouter,
 });
 
 export type AppRouter = typeof appRouter;
