@@ -50,6 +50,21 @@ const SAMPLE_HC = {
   creado_por: MOCK_USER_ADMIN.id,
   creado_en: new Date("2026-05-17T08:00:00Z"),
   actualizado_en: new Date("2026-05-17T08:00:00Z"),
+  // Campos extendidos del nuevo shape (post-refactor PR #97 follow-up):
+  firmado_en: null,
+  validado_en: null,
+  patient_id: null,
+  patient_first_name: null,
+  patient_last_name: null,
+  patient_mrn: null,
+  sv_tomado_en: null,
+  sv_pa_sistolica: null,
+  sv_pa_diastolica: null,
+  sv_frecuencia_cardiaca: null,
+  sv_frecuencia_respiratoria: null,
+  sv_temperatura: null,
+  diagnosticos_json: null,
+  examen_fisico_json: null,
 };
 
 const TENANT_MC = {
