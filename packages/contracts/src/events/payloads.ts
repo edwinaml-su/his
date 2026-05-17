@@ -195,6 +195,29 @@ export const accountingJournalPostedHighValuePayloadSchema = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// nutrition.allergyOverride  (UAT-BUG-02)
+// Emitido cuando un médico autoriza explícitamente un plan dietético que
+// contiene alergenos del paciente, con razón documentada y consentimiento.
+// -----------------------------------------------------------------------------
+
+export const nutritionAllergyOverridePayloadSchema = z.object({
+  nutritionOrderId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  dietPlanId: z.string().uuid(),
+  /** Alergenos en conflicto (valores de DietPlan.allergens que intersectaron). */
+  conflictingAllergens: z.array(z.string().min(1)).min(1),
+  /** Razón clínica documentada para el override. */
+  reason: z.string().min(1).max(1000),
+  /** Nombre o ID del profesional que autorizó el override. */
+  acknowledgedBy: z.string().min(1).max(200),
+  prescriberId: z.string().uuid(),
+});
+
+export type NutritionAllergyOverridePayload = z.infer<
+  typeof nutritionAllergyOverridePayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -240,6 +263,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("accounting.journalPostedHighValue"),
     payload: accountingJournalPostedHighValuePayloadSchema,
+  }),
+  // UAT-BUG-02 — Override clínico de alergia en orden nutricional
+  z.object({
+    eventType: z.literal("nutrition.allergyOverride"),
+    payload: nutritionAllergyOverridePayloadSchema,
   }),
 ]);
 

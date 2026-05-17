@@ -3169,6 +3169,9 @@ model DietPlan {
   /// Lista de códigos de diagnóstico (CIE-10/SNOMED) compatibles con este plan.
   /// Usado por validateDietCompatibility() para validar NutritionOrder.dietPlanId.
   compatibleWithDiagnoses String[]       @default([])
+  /// Alergenos declarados en el plan (e.g. ["NUTS", "DAIRY", "GLUTEN"]).
+  /// Comparados contra PatientAllergy.substanceText (uppercase) en order.create. UAT-BUG-02.
+  allergens               String[]       @default([])
   notes                   String?        @db.Text
   startedAt               DateTime       @default(now()) @db.Timestamptz()
   endedAt                 DateTime?      @db.Timestamptz()

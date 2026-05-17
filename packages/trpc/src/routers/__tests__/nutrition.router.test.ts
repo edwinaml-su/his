@@ -1,5 +1,5 @@
 /**
- * Tests del nutritionRouter — Beta.13 hardening layer 1.
+ * Tests del nutritionRouter — Beta.13 hardening layer 1 + UAT-BUG-02.
  *
  * Cubre:
  *  - State machine: transiciones válidas e inválidas.
@@ -7,6 +7,7 @@
  *  - Exclusividad ENTERAL/PARENTERAL por encounter.
  *  - NutritionAssessment append-only post-firma.
  *  - Comportamientos existentes del skeleton Wave 8.
+ *  - UAT-BUG-02: validación PatientAllergy vs DietPlan.allergens en order.create.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -18,10 +19,25 @@ const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
 const w = "00000000-0000-0000-0000-000000000003";
 
+/**
+ * Delega el callback de $transaction al mismo mock prisma para que los
+ * mocks de create/findMany/domainEvent.create sean visibles dentro del
+ * callback transaccional (patrón pathologyRouter.test.ts).
+ */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  prisma.$transaction.mockImplementation(async (cb: unknown) => {
+    if (typeof cb === "function") {
+      return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+    }
+    return cb;
+  });
+}
+
 describe("nutritionRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
   });
 
   // -------------------------------------------------------------------------
@@ -228,6 +244,7 @@ describe("nutritionRouter", () => {
     it("OK si no hay conflicto de exclusividad (findFirst retorna null)", async () => {
       prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
       prisma.nutritionOrder.findFirst.mockResolvedValue(null as never);
+      // patientAllergy.findMany needed for allergy check (no dietPlanId → skipped entirely)
       prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
       const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.order.create({
@@ -290,9 +307,14 @@ describe("nutritionRouter", () => {
     it("OK si hay intersección de diagnósticos", async () => {
       prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
       prisma.nutritionOrder.findFirst.mockResolvedValue(null as never);
+      // validateDietCompatibility query (returns compatibleWithDiagnoses)
+      // findAllergyConflicts query (returns allergens)
+      // Both use dietPlan.findFirst — mock returns both fields.
       prisma.dietPlan.findFirst.mockResolvedValue({
         compatibleWithDiagnoses: ["E11", "N18.3"],
+        allergens: [],
       } as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
       prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
       const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -314,7 +336,9 @@ describe("nutritionRouter", () => {
       prisma.nutritionOrder.findFirst.mockResolvedValue(null as never);
       prisma.dietPlan.findFirst.mockResolvedValue({
         compatibleWithDiagnoses: [],
+        allergens: [],
       } as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
       prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
       const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -326,6 +350,135 @@ describe("nutritionRouter", () => {
         encounterDiagnoses: ["X99"],
       });
       expect(prisma.nutritionOrder.create).toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // UAT-BUG-02 — order.create: validación PatientAllergy vs DietPlan.allergens
+  // -------------------------------------------------------------------------
+
+  describe("order.create — UAT-BUG-02 allergy conflict validation", () => {
+    /**
+     * Helper: mock de encounter + exclusivity (sin conflicto) + dietPlan.findFirst
+     * con alergenos especificados.
+     */
+    function mockBaseForAllergyTests(allergens: string[]): void {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.nutritionOrder.findFirst.mockResolvedValue(null as never);
+      // validateDietCompatibility usa findFirst({ select: { compatibleWithDiagnoses } })
+      // findAllergyConflicts usa findFirst({ select: { allergens } })
+      // Las dos son llamadas separadas al mismo mock — ambas necesitan retornar ambos campos.
+      prisma.dietPlan.findFirst.mockResolvedValue({
+        compatibleWithDiagnoses: [],
+        allergens,
+      } as never);
+    }
+
+    it("Happy: paciente sin alergia conflictiva → create OK", async () => {
+      mockBaseForAllergyTests(["NUTS", "DAIRY"]);
+      // Paciente alérgico a SHELLFISH — no hay intersección.
+      prisma.patientAllergy.findMany.mockResolvedValue([
+        { substanceText: "SHELLFISH" },
+      ] as never);
+      prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
+      const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        prescriberId: u,
+        route: "ENTERAL",
+        dietPlanId: v,
+      });
+      expect(result).toMatchObject({ id: w });
+      expect(prisma.nutritionOrder.create).toHaveBeenCalledOnce();
+    });
+
+    it("PRECONDITION_FAILED: paciente alérgico a NUTS, plan contiene NUTS", async () => {
+      mockBaseForAllergyTests(["NUTS", "DAIRY"]);
+      prisma.patientAllergy.findMany.mockResolvedValue([
+        { substanceText: "NUTS" },
+      ] as never);
+      const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.create({
+          encounterId: u,
+          patientId: u,
+          prescriberId: u,
+          route: "ENTERAL",
+          dietPlanId: v,
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
+
+    it("Override válido → create OK + emite evento nutrition.allergyOverride", async () => {
+      mockBaseForAllergyTests(["NUTS"]);
+      prisma.patientAllergy.findMany.mockResolvedValue([
+        { substanceText: "NUTS" },
+      ] as never);
+      prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+      prisma.auditLog.create.mockResolvedValue({} as never);
+
+      const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        prescriberId: u,
+        route: "ENTERAL",
+        dietPlanId: v,
+        overrideAllergy: {
+          reason: "Paciente firmó consentimiento informado previo a la intervención.",
+          acknowledgedBy: "Dr. García",
+        },
+      });
+
+      expect(result).toMatchObject({ id: w });
+      // Verifica que emitDomainEvent (implementado como domainEvent.create) fue llamado
+      // con eventType nutrition.allergyOverride.
+      const eventCall = prisma.domainEvent.create.mock.calls.find(
+        (c) => c[0]?.data?.eventType === "nutrition.allergyOverride",
+      );
+      expect(eventCall).toBeDefined();
+      const payload = eventCall![0]!.data!.payload as {
+        conflictingAllergens: string[];
+        reason: string;
+      };
+      expect(payload.conflictingAllergens).toContain("NUTS");
+      expect(payload.reason).toContain("consentimiento");
+    });
+
+    it("Override sin reason → ZodError (validación de input)", async () => {
+      // No necesitamos mocks de BD — Zod rechaza antes de llegar al handler.
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.create({
+          encounterId: u,
+          patientId: u,
+          prescriberId: u,
+          route: "ENTERAL",
+          dietPlanId: v,
+          // @ts-expect-error — forzamos reason vacío para test de validación
+          overrideAllergy: { reason: "", acknowledgedBy: "Dr. García" },
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("PatientAllergy inactive → ignorada (no bloquea create)", async () => {
+      mockBaseForAllergyTests(["GLUTEN"]);
+      // La alergia a GLUTEN existe pero active = false — findAllergyConflicts filtra active:true.
+      // El mock retorna vacío porque whereactive=true excluiría la inactiva.
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.nutritionOrder.create.mockResolvedValue({ id: w } as never);
+      const caller = nutritionRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        prescriberId: u,
+        route: "ENTERAL",
+        dietPlanId: v,
+      });
+      expect(result).toMatchObject({ id: w });
     });
   });
 
