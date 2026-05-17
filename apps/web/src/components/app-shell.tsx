@@ -102,6 +102,17 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "ECE",
+    defaultOpen: false,
+    items: [
+      {
+        href: "/ece/registro-enfermeria",
+        label: "Registro Enfermería",
+        icon: ClipboardCheck,
+      },
+    ],
+  },
+  {
     label: "Diagnóstico",
     defaultOpen: true,
     items: [
