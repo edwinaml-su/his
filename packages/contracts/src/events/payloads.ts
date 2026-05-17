@@ -237,6 +237,21 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.triaje.firmado  (Fase 2 — ECE Triaje NTEC, Stream 02)
+// Emitido cuando ENF firma la hoja de triaje ECE.
+// -----------------------------------------------------------------------------
+
+export const eceTriajeFirmadoPayloadSchema = z.object({
+  hojaTriajeId: z.string().uuid(),
+  instanciaId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  manchesterNivel: z.number().int().min(1).max(5),
+  firmadoPorId: z.string().uuid(),
+});
+
+export type EceTriajeFirmadoPayload = z.infer<typeof eceTriajeFirmadoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +307,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  z.object({
+    eventType: z.literal("ece.triaje.firmado"),
+    payload: eceTriajeFirmadoPayloadSchema,
   }),
 ]);
 

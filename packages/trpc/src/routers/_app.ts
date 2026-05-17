@@ -50,6 +50,8 @@ import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowInstanceRouter } from "./workflow-instance.router";
+// Fase 2 — ECE Triaje NTEC (Stream 02)
+import { triajeEceRouter } from "./ece/triaje-ece.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -103,6 +105,8 @@ export const appRouter = router({
   workflowTipoDoc: workflowTipoDocRouter,
   workflowEstado: workflowEstadoRouter,
   workflowInstance: workflowInstanceRouter,
+  // Fase 2 — ECE Triaje NTEC (Stream 02)
+  eceTriaje: triajeEceRouter,
 });
 
 export type AppRouter = typeof appRouter;
