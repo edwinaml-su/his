@@ -6,6 +6,70 @@ Versionado semántico según [SemVer](https://semver.org/lang/es/).
 
 ---
 
+## [Sprint F2-S4] — 2026-05-17
+
+### Agregado
+
+- **Hoja de Ingreso + Apertura de Episodio Hospitalario (US.F2.4.1–2):** UI completa
+  en `app/(clinical)/hospitalizacion/nuevo`, router `hojaIngresoRouter` con procedures
+  `crear`, `listar`, `detalle`. Vincula orden de ingreso a episodio hospitalario.
+
+- **Valoración Inicial de Enfermería (US.F2.4.5):** nueva tabla
+  `ece.valoracion_inicial_enfermeria` con columnas de valoracion cefalocaudal, Barthel,
+  Braden, Glasgow, plan de cuidados inicial. SQL hardening completo en
+  `packages/database/sql/66_valoracion_inicial_enfermeria.sql` (RLS policies +
+  trigger inmutabilidad + FK a `ece.episodio_atencion`).
+
+- **Mapa de Camas (cross-cutting):** componente `BedMap` sobre react-flow (heredado F2-S3),
+  visualización de disponibilidad en tiempo real por servicio. Router `camaRouter.listar`
+  con filtros por servicio, estado y piso.
+
+- **Episodio Hospitalario con Alta Médica (US.F2.4.22):** router complementario
+  `episodioHospitalarioRouter` con procedures `emitirEgreso` (transición `en_curso →
+  egresado`) y `ordenEgreso`. Incluye validación de epicrisis completa antes del alta.
+
+- **Ruta de Defunción (US.F2.4.24–25):** UI completa para `certificado-defuncion` y
+  `acta-entrega-cuerpo`. Router `defuncionRouter` con procedures `registrarFallecimiento`,
+  `emitirCertificado`, `registrarEntregaCuerpo`. Integración con flujo de egreso especial.
+
+- **Bridge Admisión atómica (ADR 0014):** endpoint `admitirDesdeOrden` en
+  `bridgeAdmisionRouter`. Ejecuta 5 INSERTs + 1 UPDATE en una sola transacción Postgres.
+  Elimina la clase de bugs de estado parcial detectada en F2-S3.
+
+- **3 specs E2E hospitalarios:**
+  - `e2e/fase2/flujo-hospitalario.spec.ts` — happy path admisión → estancia → alta (5 escenarios).
+  - `e2e/fase2/defuncion.spec.ts` — ruta fallecimiento + documentos legales (3 escenarios).
+  - `e2e/fase2/mapa-camas.spec.ts` — listado, filtros, estado en tiempo real (3 escenarios).
+
+- **Seed demo hospitalario:** `packages/database/scripts/seed-hospitalizacion-demo.mjs`.
+  10 camas en servicio Medicina Interna, 3 episodios activos, personal de turno,
+  datos realistas con DUI/NIT válidos (SLV).
+
+- **ADR `docs/adr/0013-ece-mapa-camas-reactflow.md`:** decisión de renderizado client-side
+  con react-flow vs SVG estático vs tabla HTML. Alternativas rechazadas con razonamiento.
+
+- **ADR `docs/adr/0014-ece-bridge-admision-atomicidad.md`:** decisión de transacción única
+  vs orquestación en cliente vs Saga pattern vs stored procedure.
+
+- **Sprint Review `docs/sprint-reviews/sprint_f2_s4_review.md`:** logros 9 streams,
+  metricas, retroactiva y carry-over F2-S5.
+
+### Cambios
+
+- **Epicrisis UI refinada (US.F2.4.23):** refactor del componente `EpicrisisForm`.
+  Secciones colapsables, codificacion CIE-10 de egreso inline, receta digital, agenda
+  de citas post-egreso. El router `epicrisisRouter` no cambia — solo la UI.
+
+- **`episodioRouter` complementado:** procedimiento `emitirEgreso` agregado al router
+  existente. No es un router nuevo, es una extension backward-compatible.
+
+### Eliminados
+
+- Nada eliminado. La UI de episodio ambulatorio (rutas `/ece/ambulatorio/**`) permanece
+  intacta — no hay duplicacion detectada que amerite eliminacion en este sprint.
+
+---
+
 ## [Sprint F2-S2] — 2026-05-17
 
 ### Agregado

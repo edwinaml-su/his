@@ -104,7 +104,7 @@ US.F2.4.1 Orden de Ingreso
 
 ---
 
-### US.F2.4.1 — Orden de Ingreso Hospitalario
+### ✅ US.F2.4.1 — Orden de Ingreso Hospitalario
 
 | Campo | Valor |
 |---|---|
@@ -163,7 +163,7 @@ Característica: Orden de ingreso hospitalario
 
 ---
 
-### US.F2.4.2 — Hoja de Ingreso / Apertura de Episodio Hospitalario
+### ✅ US.F2.4.2 — Hoja de Ingreso / Apertura de Episodio Hospitalario
 
 | Campo | Valor |
 |---|---|
@@ -338,7 +338,7 @@ Característica: Historia clínica de ingreso hospitalario
 
 ---
 
-### US.F2.4.5 — Valoración de Enfermería al Ingreso + Plan de Cuidados
+### ✅ US.F2.4.5 — Valoración de Enfermería al Ingreso + Plan de Cuidados
 
 | Campo | Valor |
 |---|---|
@@ -1179,7 +1179,7 @@ Característica: Atención del recién nacido y generación de CUN/NUI
 
 ---
 
-### US.F2.4.22 — Orden de Egreso / Certificación de Alta Médica
+### ✅ US.F2.4.22 — Orden de Egreso / Certificación de Alta Médica
 
 | Campo | Valor |
 |---|---|
@@ -1236,7 +1236,7 @@ Característica: Orden de egreso y alta médica
 
 ---
 
-### US.F2.4.23 — Epicrisis / Hoja de Egreso + Indicaciones + Receta + Citas
+### ✅ US.F2.4.23 — Epicrisis / Hoja de Egreso + Indicaciones + Receta + Citas
 
 | Campo | Valor |
 |---|---|
@@ -1299,7 +1299,7 @@ Característica: Epicrisis / hoja de egreso
 
 ---
 
-### US.F2.4.24 — Certificado de Defunción
+### ✅ US.F2.4.24 — Certificado de Defunción
 
 | Campo | Valor |
 |---|---|
@@ -1348,7 +1348,7 @@ Característica: Certificado de defunción
 
 ---
 
-### US.F2.4.25 — Acta de Entrega de Cuerpo + Registro de Morgue
+### ✅ US.F2.4.25 — Acta de Entrega de Cuerpo + Registro de Morgue
 
 | Campo | Valor |
 |---|---|
