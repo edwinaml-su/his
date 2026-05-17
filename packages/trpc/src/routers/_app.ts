@@ -60,6 +60,8 @@ import { registroEnfermeriaRouter } from "./ece/registro-enfermeria.router";
 import { eceEpisodioRouter } from "./ece/episodio.router";
 import { eceConsentimientoRouter } from "./ece/consentimiento.router";
 import { epicrisisRouter } from "./ece/epicrisis.router";
+// ECE
+import { bitacoraRouter } from "./ece/bitacora.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -123,6 +125,8 @@ export const appRouter = router({
   eceEpisodio: eceEpisodioRouter,
   eceConsentimiento: eceConsentimientoRouter,
   eceEpicrisis: epicrisisRouter,
+  // ECE
+  bitacora: bitacoraRouter,
 });
 
 export type AppRouter = typeof appRouter;
