@@ -49,6 +49,10 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  LayoutGrid,
+  CheckSquare,
+  UserCheck,
+  Zap,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -125,6 +129,19 @@ const SECTIONS: NavSection[] = [
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
       { href: "/respiratory", label: "Respiratorio", icon: Wind },
       { href: "/nutrition", label: "Nutrición", icon: Apple },
+    ],
+  },
+  {
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
+      { href: "/surgery", label: "Programación", icon: Scissors },
+      { href: "/surgery/preop", label: "Preoperatorio", icon: ClipboardList },
+      { href: "/surgery/who-checklist", label: "WHO Checklist", icon: CheckSquare },
+      { href: "/surgery/intra", label: "Acto Quirúrgico", icon: Zap },
+      { href: "/surgery/anestesia", label: "Anestésico", icon: Wind },
+      { href: "/surgery/urpa", label: "URPA", icon: UserCheck },
     ],
   },
   {
