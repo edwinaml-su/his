@@ -113,6 +113,8 @@ import { periodoExpulsivoRouter } from "./ece/periodo-expulsivo.router";
 import { gs1ProcesoARouter } from "./gs1-proceso-a.router";
 // GS1 Logística — Proceso B (Transferencias entre depósitos)
 import { gs1ProcesoBRouter } from "./gs1-proceso-b.router";
+// Proceso C GS1 — Preparación Unidosis
+import { gs1ProcesoCRouter } from "./gs1-proceso-c.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -229,6 +231,8 @@ export const appRouter = router({
   gs1ProcesoA: gs1ProcesoARouter,
   // GS1 Logística — Proceso B (Transferencias entre depósitos GLN)
   gs1ProcesoB: gs1ProcesoBRouter,
+  // Proceso C GS1 — Preparación Unidosis
+  gs1ProcesoC: gs1ProcesoCRouter,
 });
 
 export type AppRouter = typeof appRouter;

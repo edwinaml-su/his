@@ -703,6 +703,26 @@ export const gs1InboundRechazadoPayloadSchema = z.object({
 });
 
 export type Gs1InboundRechazadoPayload = z.infer<typeof gs1InboundRechazadoPayloadSchema>;
+// gs1.unidosis.preparada / gs1.unidosis.verificada
+// -----------------------------------------------------------------------------
+
+export const gs1UnidosisPreparadaPayloadSchema = z.object({
+  codigoUnidosis: z.string(),
+  pacienteId: z.string().uuid(),
+  indicacionId: z.string().uuid(),
+  gtinOrigenId: z.string().uuid(),
+  cantidadPreparada: z.number().int().positive(),
+  expiryUnidosis: z.string().datetime(),
+});
+
+export const gs1UnidosisVerificadaPayloadSchema = z.object({
+  codigoUnidosis: z.string(),
+  pacienteId: z.string().uuid(),
+  verificadoPor: z.string().uuid(),
+});
+
+export type Gs1UnidosisPreparadaPayload = z.infer<typeof gs1UnidosisPreparadaPayloadSchema>;
+export type Gs1UnidosisVerificadaPayload = z.infer<typeof gs1UnidosisVerificadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -899,6 +919,14 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("gs1.inbound.rechazado"),
     payload: gs1InboundRechazadoPayloadSchema,
+  // Proceso C GS1 — Preparación Unidosis
+  z.object({
+    eventType: z.literal("gs1.unidosis.preparada"),
+    payload: gs1UnidosisPreparadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.unidosis.verificada"),
+    payload: gs1UnidosisVerificadaPayloadSchema,
   }),
 ]);
 

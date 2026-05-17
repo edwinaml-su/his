@@ -79,3 +79,4 @@ export * from "./ece-registro-anestesico";
 export * from "./ece-urpa";
 // Fase 2 (S7) — GS1 Logística: Proceso A Inbound
 export * from "./gs1-inbound";
+export * from "./gs1-proceso-c";

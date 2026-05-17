@@ -81,6 +81,9 @@ export const EVENT_TYPES = [
   // Fase 2 (S7) — GS1 Proceso A: Inbound (recepción muelle)
   "gs1.inbound.recibido",
   "gs1.inbound.rechazado",
+  // Proceso C GS1 — Preparación Unidosis farmacia
+  "gs1.unidosis.preparada",
+  "gs1.unidosis.verificada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

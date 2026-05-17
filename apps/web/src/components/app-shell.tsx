@@ -218,6 +218,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/gs1/inbound", label: "Inbound", icon: Package },
       { href: "/gs1/transfers", label: "Transfers", icon: Truck },
+      { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
     ],
   },
   {
