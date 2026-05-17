@@ -44,6 +44,7 @@ import { notificationsRouter } from "./notifications.router";
 import { bloodBankRouter } from "./blood-bank.router";
 import { pathologyRouter } from "./pathology.router";
 import { accountingRouter } from "./accounting.router";
+import { portalRouter } from "./portal.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -91,6 +92,7 @@ export const appRouter = router({
   bloodBank: bloodBankRouter,
   pathology: pathologyRouter,
   accounting: accountingRouter,
+  portal: portalRouter,
 });
 
 export type AppRouter = typeof appRouter;

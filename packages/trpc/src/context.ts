@@ -15,10 +15,19 @@ export interface SessionUser {
   fullName: string;
 }
 
+/** Contexto de un paciente autenticado en el Portal del Paciente (Beta.20). */
+export interface PortalAccountContext {
+  id: string;
+  patientId: string;
+  email: string;
+}
+
 export interface TRPCContext {
   prisma: typeof prisma;
   user: SessionUser | null;
   tenant: TenantContext | null;
+  /** Contexto de portal (null fuera del portal). */
+  portalAccount: PortalAccountContext | null;
   /** IP / UA opcional para auditoría. */
   ip?: string;
   userAgent?: string;
@@ -27,6 +36,7 @@ export interface TRPCContext {
 export interface CreateContextInput {
   user: SessionUser | null;
   tenant: TenantContext | null;
+  portalAccount?: PortalAccountContext | null;
   ip?: string;
   userAgent?: string;
 }
@@ -36,6 +46,7 @@ export function createTRPCContext(input: CreateContextInput): TRPCContext {
     prisma,
     user: input.user,
     tenant: input.tenant,
+    portalAccount: input.portalAccount ?? null,
     ip: input.ip,
     userAgent: input.userAgent,
   };

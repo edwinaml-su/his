@@ -122,3 +122,37 @@ export async function withTenantContext<T>(
     return fn(tx as unknown as PrismaClient);
   });
 }
+
+/**
+ * Aplica el GUC `app.current_portal_account` para las policies RLS del portal
+ * (SQL `52_portal_hardening.sql`). Uso análogo a `applyTenantContext`.
+ */
+export async function applyPortalContext(
+  tx: Pick<PrismaClient, "$executeRawUnsafe">,
+  portalAccountId: string,
+  options: { demoteRole?: boolean } = {},
+): Promise<void> {
+  const id = String(portalAccountId).replace(/'/g, "''");
+  await tx.$executeRawUnsafe(
+    `SET LOCAL "app.current_portal_account" = '${id}'::uuid::text;`,
+  );
+  if (options.demoteRole !== false) {
+    await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
+  }
+}
+
+/**
+ * Azúcar: ejecuta `fn` dentro de un `prisma.$transaction` con el contexto
+ * de portal aplicado al inicio. Análogo a `withTenantContext`.
+ */
+export async function withPortalContext<T>(
+  prisma: PrismaClient,
+  portalAccountId: string,
+  fn: (tx: PrismaClient) => Promise<T>,
+  options: { demoteRole?: boolean } = {},
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await applyPortalContext(tx as unknown as PrismaClient, portalAccountId, options);
+    return fn(tx as unknown as PrismaClient);
+  });
+}

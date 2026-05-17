@@ -43,6 +43,17 @@ export const tenantProcedure = protectedProcedure.use(({ ctx, next }) => {
   return next({ ctx: { ...ctx, tenant: ctx.tenant } });
 });
 
+/** Requiere sesión autenticada en el Portal del Paciente (Beta.20). */
+export const portalProcedure = t.procedure.use(({ ctx, next }) => {
+  if (!ctx.portalAccount) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "Sesión de portal requerida.",
+    });
+  }
+  return next({ ctx: { ...ctx, portalAccount: ctx.portalAccount } });
+});
+
 /** Helper: verifica que el usuario tenga al menos un rol de los listados. */
 export function requireRole(roleCodes: string[]) {
   return tenantProcedure.use(({ ctx, next }) => {
