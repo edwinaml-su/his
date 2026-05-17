@@ -45,6 +45,7 @@ import {
   BadgeCheck,
   GitBranch,
   Thermometer,
+  ClipboardCheck,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -93,6 +94,11 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/ece/signos-vitales", label: "Signos Vitales", icon: Thermometer },
+      {
+        href: "/ece/indicaciones",
+        label: "Indicaciones Médicas",
+        icon: ClipboardCheck,
+      },
     ],
   },
   {
