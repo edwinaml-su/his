@@ -58,6 +58,7 @@ import { triajeEceRouter } from "./ece/triaje-ece.router";
 import { indicacionesMedicasRouter } from "./ece/indicaciones-medicas.router";
 import { registroEnfermeriaRouter } from "./ece/registro-enfermeria.router";
 import { eceEpisodioRouter } from "./ece/episodio.router";
+import { eceConsentimientoRouter } from "./ece/consentimiento.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -119,6 +120,7 @@ export const appRouter = router({
   eceIndicaciones: indicacionesMedicasRouter,
   eceRegistroEnfermeria: registroEnfermeriaRouter,
   eceEpisodio: eceEpisodioRouter,
+  eceConsentimiento: eceConsentimientoRouter,
 });
 
 export type AppRouter = typeof appRouter;
