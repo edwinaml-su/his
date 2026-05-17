@@ -1,8 +1,9 @@
 "use client";
 
 /**
- * US-5.6 — Listado de certificados de defunción emitidos en la organización.
- * Acceso restringido a PHYSICIAN o ADMIN (validado en el router).
+ * US-5.6 — Listado de certificados de defunción (ECE).
+ * Consume trpc.eceCertDef.list en lugar del router legacy deathCertificate.
+ * URL /deaths mantenida — solo cambia la fuente de datos.
  */
 import * as React from "react";
 import Link from "next/link";
@@ -33,39 +34,60 @@ import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 
-type Manner = "natural" | "accident" | "suicide" | "homicide" | "undetermined";
+// Shape mínima del item devuelto por eceCertDef.list (espeja CertDefRow).
+interface CertDefItem {
+  id: string;
+  fecha_hora_defuncion: Date;
+  causa_principal_cie10: string;
+  manera: string;
+  lugar_defuncion: string;
+  estado_workflow: string;
+}
 
-const MANNER_LABEL: Record<Manner, string> = {
-  natural: "Natural",
-  accident: "Accidente",
-  suicide: "Suicidio",
-  homicide: "Homicidio",
-  undetermined: "Indeterminado",
+type EstadoWorkflow = "borrador" | "firmado" | "validado" | "certificado" | "anulado";
+
+const ESTADO_LABEL: Record<EstadoWorkflow, string> = {
+  borrador: "Borrador",
+  firmado: "Firmado MC",
+  validado: "Validado MC",
+  certificado: "Certificado DIR",
+  anulado: "Anulado",
 };
 
-const MANNER_VARIANT: Record<
-  Manner,
+const ESTADO_VARIANT: Record<
+  EstadoWorkflow,
   "default" | "secondary" | "outline" | "destructive" | "success"
 > = {
-  natural: "secondary",
-  accident: "outline",
-  suicide: "destructive",
-  homicide: "destructive",
-  undetermined: "outline",
+  borrador: "outline",
+  firmado: "secondary",
+  validado: "secondary",
+  certificado: "success",
+  anulado: "destructive",
+};
+
+type ManeraCie = "natural" | "violenta" | "accidental" | "suicidio" | "homicidio" | "indeterminada";
+
+const MANERA_LABEL: Record<ManeraCie, string> = {
+  natural: "Natural",
+  violenta: "Violenta",
+  accidental: "Accidental",
+  suicidio: "Suicidio",
+  homicidio: "Homicidio",
+  indeterminada: "Indeterminada",
 };
 
 export default function DeathsListPage() {
-  const [manner, setManner] = React.useState<Manner | "">("");
+  const [estado, setEstado] = React.useState<EstadoWorkflow | "">("");
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
   const [page, setPage] = React.useState(1);
 
-  const list = trpc.deathCertificate.list.useQuery({
+  const list = trpc.eceCertDef.list.useQuery({
     page,
     pageSize: 20,
-    manner: manner || undefined,
-    dateFrom: from ? new Date(from) : undefined,
-    dateTo: to ? new Date(to) : undefined,
+    estado: estado || undefined,
+    fechaDesde: from ? new Date(from) : undefined,
+    fechaHasta: to ? new Date(to) : undefined,
   });
 
   return (
@@ -73,8 +95,7 @@ export default function DeathsListPage() {
       <div>
         <h1 className="text-2xl font-bold">Certificados de defunción</h1>
         <p className="text-sm text-muted-foreground">
-          Registro de certificados emitidos. Acceso restringido a personal
-          médico y administrativo.
+          Registro ECE (NTEC Art. 21). Acceso restringido a personal médico y administrativo.
         </p>
       </div>
 
@@ -103,36 +124,39 @@ export default function DeathsListPage() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Modo</Label>
+              <Label>Estado workflow</Label>
               <Select
-                value={manner}
-                onValueChange={(v) => setManner(v as Manner | "")}
+                value={estado}
+                onValueChange={(v) => setEstado(v as EstadoWorkflow | "")}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="">Todos</SelectItem>
-                  {(Object.keys(MANNER_LABEL) as Manner[]).map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {MANNER_LABEL[m]}
+                  {(Object.keys(ESTADO_LABEL) as EstadoWorkflow[]).map((e) => (
+                    <SelectItem key={e} value={e}>
+                      {ESTADO_LABEL[e]}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-end">
+            <div className="flex items-end gap-2">
               <Button
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  setManner("");
+                  setEstado("");
                   setFrom("");
                   setTo("");
                   setPage(1);
                 }}
               >
                 Limpiar
+              </Button>
+              <Button asChild variant="default">
+                <Link href="/deaths/nueva">Nuevo</Link>
               </Button>
             </div>
           </div>
@@ -152,64 +176,48 @@ export default function DeathsListPage() {
             <p className="text-sm text-destructive">{list.error.message}</p>
           ) : !list.data || list.data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              Sin certificados emitidos para los filtros seleccionados.
+              Sin certificados para los filtros seleccionados.
             </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Paciente</TableHead>
-                  <TableHead>MRN</TableHead>
-                  <TableHead>Fecha fallecimiento</TableHead>
-                  <TableHead>Causa básica</TableHead>
-                  <TableHead>Modo</TableHead>
-                  <TableHead>Médico certificante</TableHead>
-                  <TableHead>Reg. Civil</TableHead>
+                  <TableHead>Fecha defunción</TableHead>
+                  <TableHead>Causa principal (CIE-10)</TableHead>
+                  <TableHead>Manera</TableHead>
+                  <TableHead>Lugar</TableHead>
+                  <TableHead>Estado</TableHead>
                   <TableHead aria-label="acciones" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {list.data.items.map((c) => {
-                  const m = c.manner as Manner | null | undefined;
+                {(list.data.items as CertDefItem[]).map((c) => {
+                  const estadoVal = c.estado_workflow as EstadoWorkflow;
+                  const manera = c.manera as ManeraCie | null | undefined;
                   return (
                     <TableRow key={c.id}>
-                      <TableCell>
-                        {c.patient.firstName} {c.patient.lastName}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {c.patient.mrn}
-                      </TableCell>
-                      <TableCell>
-                        {new Date(c.occurredAt).toLocaleString("es-SV")}
+                      <TableCell className="tabular-nums">
+                        {new Date(c.fecha_hora_defuncion).toLocaleString("es-SV")}
                       </TableCell>
                       <TableCell>
                         <span className="font-mono text-xs">
-                          {c.basicCauseCode}
-                        </span>{" "}
-                        <span className="text-muted-foreground">
-                          {c.basicCauseDesc}
+                          {c.causa_principal_cie10}
                         </span>
                       </TableCell>
                       <TableCell>
-                        {m ? (
-                          <Badge variant={MANNER_VARIANT[m]}>
-                            {MANNER_LABEL[m]}
-                          </Badge>
+                        {manera ? (
+                          <span className="text-sm">{MANERA_LABEL[manera]}</span>
                         ) : (
-                          <span className="text-xs text-muted-foreground">
-                            —
-                          </span>
+                          <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {c.certifiedById.slice(0, 8)}…
+                      <TableCell className="capitalize text-sm">
+                        {c.lugar_defuncion}
                       </TableCell>
                       <TableCell>
-                        {c.notifiedToCivilRegistryAt ? (
-                          <Badge variant="success">Notificado</Badge>
-                        ) : (
-                          <Badge variant="outline">Pendiente</Badge>
-                        )}
+                        <Badge variant={ESTADO_VARIANT[estadoVal]}>
+                          {ESTADO_LABEL[estadoVal]}
+                        </Badge>
                       </TableCell>
                       <TableCell>
                         <Link
