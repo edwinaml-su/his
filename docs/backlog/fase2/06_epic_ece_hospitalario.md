@@ -652,7 +652,7 @@ Característica: Solicitud y resultado de estudios hospitalarios
 
 ---
 
-### US.F2.4.11 — Nota Preoperatoria + Valoración Anestésica + Riesgo Quirúrgico
+### ✅ US.F2.4.11 — Nota Preoperatoria + Valoración Anestésica + Riesgo Quirúrgico
 
 | Campo | Valor |
 |---|---|
@@ -702,7 +702,7 @@ Característica: Valoración preoperatoria
 
 ---
 
-### US.F2.4.12 — Consentimiento Quirúrgico + Anestésico (Bloqueante)
+### ✅ US.F2.4.12 — Consentimiento Quirúrgico + Anestésico (Bloqueante)
 
 | Campo | Valor |
 |---|---|
@@ -751,7 +751,7 @@ Característica: Consentimiento quirúrgico y anestésico
 
 ---
 
-### US.F2.4.13 — Lista de Verificación de Cirugía Segura (3 fases)
+### ✅ US.F2.4.13 — Lista de Verificación de Cirugía Segura (3 fases)
 
 | Campo | Valor |
 |---|---|
@@ -806,7 +806,7 @@ Característica: Lista de verificación de cirugía segura
 
 ---
 
-### US.F2.4.14 — Nota / Descripción Operatoria
+### ✅ US.F2.4.14 — Nota / Descripción Operatoria
 
 | Campo | Valor |
 |---|---|
@@ -854,7 +854,7 @@ Característica: Descripción operatoria
 
 ---
 
-### US.F2.4.15 — Registro Anestésico Transanestésico (Series Temporales)
+### ✅ US.F2.4.15 — Registro Anestésico Transanestésico (Series Temporales)
 
 | Campo | Valor |
 |---|---|
@@ -900,7 +900,7 @@ Característica: Registro anestésico transanestésico
 
 ---
 
-### US.F2.4.16 — Hoja de Recuperación Postanestésica (URPA)
+### ✅ US.F2.4.16 — Hoja de Recuperación Postanestésica (URPA)
 
 | Campo | Valor |
 |---|---|
@@ -988,7 +988,7 @@ Característica: Notas de UCI/UCIN
 
 ---
 
-### US.F2.4.18 — Partograma (Series Temporales)
+### ✅ US.F2.4.18 — Partograma (Series Temporales)
 
 | Campo | Valor |
 |---|---|
@@ -1036,7 +1036,7 @@ Característica: Partograma obstétrico
 
 ---
 
-### US.F2.4.19 — Hoja de Labor de Parto
+### ✅ US.F2.4.19 — Hoja de Labor de Parto
 
 | Campo | Valor |
 |---|---|
@@ -1077,7 +1077,7 @@ Característica: Hoja de labor de parto
 
 ---
 
-### US.F2.4.20 — Hoja de Sala de Expulsión
+### ✅ US.F2.4.20 — Hoja de Sala de Expulsión
 
 | Campo | Valor |
 |---|---|
@@ -1122,7 +1122,7 @@ Característica: Hoja de sala de expulsión
 
 ---
 
-### US.F2.4.21 — Hoja de Atención del Recién Nacido (genera CUN/NUI)
+### ✅ US.F2.4.21 — Hoja de Atención del Recién Nacido (genera CUN/NUI)
 
 | Campo | Valor |
 |---|---|
