@@ -49,6 +49,7 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  Package,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -152,6 +153,13 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
+    ],
+  },
+  {
+    label: "GS1 Logística",
+    defaultOpen: false,
+    items: [
+      { href: "/gs1/inbound", label: "Inbound", icon: Package },
     ],
   },
   {

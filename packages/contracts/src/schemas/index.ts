@@ -75,3 +75,5 @@ export * from "./ece-episodio-hospitalario";
 export * from "./ece-certificado-defuncion";
 export * from "./ece-bridge-admision";
 export * from "./ece-hoja-ingreso";
+// Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+export * from "./gs1-inbound";

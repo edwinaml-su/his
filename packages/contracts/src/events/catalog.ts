@@ -78,6 +78,9 @@ export const EVENT_TYPES = [
   // Fase 2 (S4) — ECE Certificado de Defunción (MC firma → DIR certifica)
   "ece.certificado_defuncion.firmado",
   "ece.certificado_defuncion.certificado",
+  // Fase 2 (S7) — GS1 Proceso A: Inbound (recepción muelle)
+  "gs1.inbound.recibido",
+  "gs1.inbound.rechazado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
