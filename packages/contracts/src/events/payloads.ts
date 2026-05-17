@@ -237,6 +237,22 @@ export type WorkflowTransitionExecutedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.evolucion.firmada  (Fase 2 — ECE Evolución Médica, Stream 11)
+// Emitido cuando un MC/MT firma una evolución médica.
+// -----------------------------------------------------------------------------
+
+export const eceEvolucionFirmadaPayloadSchema = z.object({
+  evolucionId: z.string().uuid(),
+  episodioId: z.string().uuid(),
+  firmadaPor: z.string().uuid(),
+  /** SHA-256 hex del payload SOAP concatenado (subjetivo||objetivo||analisis||plan). */
+  contentHash: z.string().length(64),
+  firmadaEn: z.string().datetime(),
+});
+
+export type EceEvolucionFirmadaPayload = z.infer<typeof eceEvolucionFirmadaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -292,6 +308,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("workflow.transitionExecuted"),
     payload: workflowTransitionExecutedPayloadSchema,
+  }),
+  // Fase 2 — ECE Evolución Médica (Stream 11)
+  z.object({
+    eventType: z.literal("ece.evolucion.firmada"),
+    payload: eceEvolucionFirmadaPayloadSchema,
   }),
 ]);
 
