@@ -12,11 +12,16 @@
  * se ejecuten para verificar payload shape.
  */
 import type { PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 const prismaStub = {} as unknown as PrismaClient;
 
 export const prisma = prismaStub;
 export type { PrismaClient };
+// Re-exportamos el namespace `Prisma` del cliente real para que routers que
+// usan `Prisma.sql\`...\`` template literal (workflow-tipoDoc, etc.) lo
+// encuentren resuelto en tests via el alias del vitest.config.
+export { Prisma };
 
 export { emitDomainEvent } from "../../../../database/src/outbox/emit";
 export type {
