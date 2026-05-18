@@ -217,6 +217,13 @@ const SECTIONS: NavSection[] = [
         requiredRoles: ["DIR"],
       },
       { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
+      // Fase 2 S7 — Farmacovigilancia (US.F2.6.56)
+      {
+        href: "/farmacovigilancia",
+        label: "Farmacovigilancia",
+        icon: ShieldAlert,
+        requiredRoles: ["ADMIN", "PHARM", "DIRECTOR"],
+      },
     ],
   },
 ];

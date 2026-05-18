@@ -82,6 +82,14 @@ export const EVENT_TYPES = [
   "ece.acto_quirurgico.firmado",
   "ece.acto_quirurgico.validado",
   "ece.nacimiento.registrado",
+  // Fase 2 (S7) — GS1 EPCIS bedside events + Farmacovigilancia (US.F2.6.53-58)
+  "gs1.epcis.dispensacion",
+  "gs1.epcis.bedside",
+  "gs1.epcis.sustitucion",
+  "farmacovigilancia.alergia_detectada",
+  "farmacovigilancia.recall_detectado",
+  "farmacovigilancia.doble_dispensacion",
+  "farmacovigilancia.dosis_vencida",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
