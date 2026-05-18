@@ -370,6 +370,8 @@ model Organization {
   solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
   // F2-S15-D — Audit Dashboard Config
   auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
+  // F2-S14 Stream A — Modo Rondas
+  eceRondaSessions          EceRondaSession[]         @relation("OrgEceRondaSessions")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -509,6 +511,8 @@ model User {
   expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
   eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
   arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
+  // F2-S14 Stream A — Modo Rondas
+  eceRondaSessions          EceRondaSession[]            @relation("UserEceRondaSessions")
 
   @@schema("public")
 }
@@ -6338,4 +6342,38 @@ model AuditDashboardConfig {
   organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@schema("public")
+}
+
+// =============================================================================
+// F2-S14 Stream A — Modo Rondas
+// US.F2.6.46 (flujo optimizado) · US.F2.6.50 (ruta optimizada) · US.F2.6.51 (pausa)
+// =============================================================================
+
+/// Sesión de ronda de enfermería — persiste estado para pausa/reanudación.
+/// Ciclo: activa → pausada ↔ activa → completada.
+/// TTL implícito: completado_en se setea al finalizar o al iniciar nueva sesión.
+model EceRondaSession {
+  id                      String    @id @default(uuid()) @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  organizationId          String    @map("organization_id") @db.Uuid
+  /// POR_HORA = indicaciones por hora programada ASC
+  /// POR_UBICACION = camas por servicio + número ASC (minimiza desplazamientos)
+  modo                    String    @default("POR_HORA") @db.VarChar(20)
+  iniciadoEn              DateTime  @default(now()) @map("iniciado_en") @db.Timestamptz()
+  pausadoEn               DateTime? @map("pausado_en") @db.Timestamptz()
+  reanudadoEn             DateTime? @map("reanudado_en") @db.Timestamptz()
+  completadoEn            DateTime? @map("completado_en") @db.Timestamptz()
+  totalPacientes          Int       @default(0) @map("total_pacientes")
+  /// JSONB: array de IndicacionRonda pendientes (ordenadas según modo)
+  indicacionesPending     Json      @default("[]") @map("indicaciones_pending")
+  /// JSONB: array de IndicacionRonda ya administradas en esta sesión
+  indicacionesCompletadas Json      @default("[]") @map("indicaciones_completadas")
+
+  organization Organization @relation("OrgEceRondaSessions", fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation("UserEceRondaSessions", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, organizationId, completadoEn])
+  @@index([organizationId, iniciadoEn(sort: Desc)])
+  @@map("ronda_session")
+  @@schema("ece")
 }
