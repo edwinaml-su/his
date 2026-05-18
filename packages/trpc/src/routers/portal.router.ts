@@ -760,9 +760,135 @@ const hceRouter = router({
   }),
 });
 
+// ─── Expediente router (US.F2.7.43) ─────────────────────────────────────────
+
+/**
+ * US.F2.7.43 — Acceso del paciente a su expediente ECE vía portal.
+ *
+ * Retorna: episodios de atención, diagnósticos, documentos firmados.
+ * Excluye: notas internas (clinicalNote.isInternal=true), drafts, notas confidenciales.
+ * El patientId NUNCA se acepta del input — proviene del JWT del portal.
+ */
+const expedienteRouter = router({
+  /** Resumen del expediente del paciente autenticado. */
+  getMiExpediente: portalProcedure
+    .input(z.object({ wardPatientId: z.string().uuid().optional() }))
+    .query(async ({ ctx, input }) => {
+      const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+      return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: patientId },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            secondLastName: true,
+            mrn: true,
+            birthDate: true,
+            biologicalSex: { select: { name: true } },
+            identifiers: {
+              where: { isPrimary: true },
+              select: { kind: true, value: true },
+              take: 1,
+            },
+          },
+        });
+
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Expediente no encontrado." });
+        }
+
+        // Episodios del paciente (admisiones)
+        const encounters = await tx.encounter.findMany({
+          where: { patientId },
+          select: {
+            id: true,
+            admissionType: true,
+            admittedAt: true,
+            dischargedAt: true,
+            dischargeType: true,
+            encounterNumber: true,
+          },
+          orderBy: { admittedAt: "desc" },
+          take: 20,
+        });
+
+        const encounterIds = encounters.map((e) => e.id);
+
+        // Diagnósticos de los encuentros del paciente
+        const diagnoses =
+          encounterIds.length > 0
+            ? await tx.encounterDiagnosis.findMany({
+                where: { encounterId: { in: encounterIds } },
+                select: {
+                  id: true,
+                  type: true,
+                  diagnosedAt: true,
+                  conceptId: true,
+                  encounterId: true,
+                },
+                orderBy: { diagnosedAt: "desc" },
+                take: 50,
+              })
+            : [];
+
+        return { patient, encounters, diagnoses };
+      });
+    }),
+
+  /** Notas clínicas firmadas visibles al paciente (solo con signedAt != null). */
+  getMisDocumentosFirmados: portalProcedure
+    .input(
+      z.object({
+        wardPatientId: z.string().uuid().optional(),
+        encounterIds: z.array(z.string().uuid()).max(20).optional(),
+        cursor: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(30).default(10),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const patientId = await resolvePatientId(ctx, input.wardPatientId);
+
+      return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+        // Primero resolver encounterIds del paciente si no se pasaron
+        let eIds = input.encounterIds;
+        if (!eIds) {
+          const encs = await tx.encounter.findMany({
+            where: { patientId },
+            select: { id: true },
+            take: 50,
+          });
+          eIds = encs.map((e) => e.id);
+        }
+
+        if (eIds.length === 0) return [];
+
+        return tx.clinicalNote.findMany({
+          where: {
+            encounterId: { in: eIds },
+            signedAt: { not: null }, // solo firmadas
+            ...(input.cursor ? { id: { lt: input.cursor } } : {}),
+          },
+          select: {
+            id: true,
+            noteType: true,
+            signedAt: true,
+            encounterId: true,
+            authorId: true,
+            updatedAt: true,
+          },
+          orderBy: { signedAt: "desc" },
+          take: input.limit,
+        });
+      });
+    }),
+});
+
 export const portalRouter = router({
   account: accountRouter,
   auth: authRouter,
   guardian: guardianRouter,
   hce: hceRouter,
+  expediente: expedienteRouter,
 });

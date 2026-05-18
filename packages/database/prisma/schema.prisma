@@ -358,6 +358,18 @@ model Organization {
   pharmacyCarts             PharmacyCart[]            @relation("OrgPharmacyCarts")
   // F2-S7 W2 — ECE Staff Schedule
   eceStaffSchedules         EceStaffSchedule[]        @relation("OrgEceStaffSchedule")
+  // F2-S15 Stream A — Cumplimiento operacional
+  contingenciaEventos       EceContingenciaEvento[]   @relation("OrgContingenciaEventos")
+  reglasRetencion           EceReglaRetencion[]       @relation("OrgReglasRetencion")
+  eliminaciones             EceEliminacionSupervisada[] @relation("OrgEliminaciones")
+  // F2-S15 Stream B — Comité ECE
+  comiteMinutas             ComiteMinuta[]            @relation("OrgComiteMinutas")
+  // F2-S15 Stream C — MPI Dedup + ARCO
+  expedienteFormatConfigs   ExpedienteFormatConfig[]  @relation("OrgExpedienteFormat")
+  ecePatientMerges          EcePatientMerge[]         @relation("OrgEcePatientMerge")
+  solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
+  // F2-S15-D — Audit Dashboard Config
+  auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -432,13 +444,15 @@ model User {
   id             String    @id @default(uuid()) @db.Uuid
   email          String    @unique @db.Citext
   fullName       String    @db.VarChar(200)
-  active         Boolean   @default(true)
-  mfaEnabled     Boolean   @default(false)
-  lastLoginAt    DateTime? @db.Timestamptz()
+  active         Boolean           @default(true)
+  mfaEnabled     Boolean           @default(false)
+  lastLoginAt    DateTime?         @db.Timestamptz()
+  /// F2-S15-D US.F2.7.20 — estado de la cuenta para depuración anual.
+  accountStatus  UserAccountStatus @default(ACTIVE)
   /// US-2.1 - intentos fallidos consecutivos de login (se resetea al login OK).
-  failedAttempts Int       @default(0)
+  failedAttempts Int               @default(0)
   /// US-2.1 - bloqueo temporal por intentos fallidos. NULL = no bloqueado.
-  lockedUntil    DateTime? @db.Timestamptz()
+  lockedUntil    DateTime?         @db.Timestamptz()
   createdAt      DateTime  @default(now()) @db.Timestamptz()
   createdBy      String?   @db.Uuid
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
@@ -486,6 +500,15 @@ model User {
   cartsReceived             PharmacyCart[]               @relation("CartReceivedBy")
   // F2-S7 W2 — ECE Staff Schedule
   eceStaffSchedules         EceStaffSchedule[]           @relation("UserEceStaffSchedule")
+  // F2-S15 Stream A — Cumplimiento operacional
+  contingenciaActivaciones  EceContingenciaEvento[]      @relation("ContingenciaActivadoPor")
+  contingenciaDesactivaciones EceContingenciaEvento[]    @relation("ContingenciaDesactivadoPor")
+  reglasRetencionCreadas    EceReglaRetencion[]           @relation("ReglaRetencionCreador")
+  eliminacionesSolicitadas  EceEliminacionSupervisada[]  @relation("EliminacionSolicitante")
+  // F2-S15-C — MPI Dedup + ARCO
+  expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
+  eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
+  arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
 
   @@schema("public")
 }
@@ -964,6 +987,8 @@ model Patient {
   active             Boolean   @default(true)
   /// AI(8018) GSRN — asignado automáticamente al confirmar admisión hospitalaria (US.F2.6.1).
   gsrn               String?   @unique @db.Char(18)
+  /// F2-S15-C: paciente absorbido en merge NTEC; apunta al canónico. NULL = registro activo.
+  mergedIntoId       String?   @db.Uuid
   deletedAt          DateTime? @db.Timestamptz()
   deletedBy          String?   @db.Uuid
   createdAt          DateTime  @default(now()) @db.Timestamptz()
@@ -1019,10 +1044,17 @@ model Patient {
   pharmacyCarts          PharmacyCart[]            @relation("PatientPharmacyCarts")
   // F2-S7 — Patient ID via pulsera GSRN (US.F2.6.37-40)
   gsrnHistory            GsrnHistory[]
+  // F2-S15-C — MPI Dedup + ARCO
+  mergedInto             Patient?           @relation("PatientMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedPatients         Patient[]          @relation("PatientMergedInto")
+  ecePatientMergesCanon  EcePatientMerge[]  @relation("EceMergeCanonical")
+  ecePatientMergesMerged EcePatientMerge[]  @relation("EceMergeMerged")
+  solicitudesArco        SolicitudArco[]    @relation("PatientSolicitudesArco")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
   @@index([birthDate])
+  @@index([mergedIntoId])
   @@schema("public")
 }
 
@@ -4481,8 +4513,10 @@ model EceFirmaElectronica {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   revokedAt      DateTime? @map("revoked_at") @db.Timestamptz()
 
-  personal  EcePersonalSalud                @relation(fields: [personalId], references: [id])
-  historial EceDocumentoInstanciaHistorial[]
+  personal      EcePersonalSalud                @relation(fields: [personalId], references: [id])
+  historial     EceDocumentoInstanciaHistorial[]
+  eliminacion1  EceEliminacionSupervisada[]     @relation("EliminacionFirma1")
+  eliminacion2  EceEliminacionSupervisada[]     @relation("EliminacionFirma2")
 
   @@map("firma_electronica")
   @@schema("ece")
@@ -4628,6 +4662,10 @@ model EceEpisodioAtencion {
   creadoPor         String?   @map("creado_por") @db.Uuid
   creadoEn          DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
 
+  /// F2-S15 Stream A — conservación §7
+  estadoConservacion         EstadoConservacion   @default(ACTIVO) @map("estado_conservacion")
+  fechaVencimientoRetencion  DateTime?            @map("fecha_vencimiento_retencion") @db.Timestamptz()
+
   paciente                EcePaciente               @relation(fields: [pacienteId], references: [id])
   establecimiento         EceEstablecimiento        @relation(fields: [establecimientoId], references: [id])
   servicio                EceServicio?              @relation(fields: [servicioId], references: [id])
@@ -4651,6 +4689,7 @@ model EceEpisodioAtencion {
   certificadosIncapacidad EceCertificadoIncapacidad[]
   solicitudesEstudio      EceSolicitudEstudio[]
   estadoLogs              EceEpisodioEstadoLog[]
+  eliminaciones           EceEliminacionSupervisada[] @relation("EpisodioEliminaciones")
 
   @@index([pacienteId])
   @@index([estado])
@@ -4886,6 +4925,10 @@ model EceSignosVitales {
   registradoPorId        String   @map("registrado_por") @db.Uuid
   registradoEn           DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro         String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("SVRegistradoPor", fields: [registradoPorId], references: [id])
@@ -4911,6 +4954,10 @@ model EceTriaje {
   registradoPorId        String   @map("registrado_por") @db.Uuid
   registradoEn           DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro         String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   signosVitales EceSignosVitales?   @relation(fields: [signosVitalesId], references: [id])
@@ -4958,6 +5005,10 @@ model EceIndicacionesMedicas {
   data                Json?
   registradoEn        DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro      String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio            EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   medicoPrescriptor   EcePersonalSalud    @relation("IMPrescriptor", fields: [medicoPrescriptorId], references: [id])
@@ -5042,6 +5093,10 @@ model EceEvolucionMedica {
   registradoPorId  String   @map("registrado_por") @db.Uuid
   registradoEn     DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro   String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("EMRegistradoPor", fields: [registradoPorId], references: [id])
@@ -5971,5 +6026,316 @@ model PharmacyCartItem {
   medicationDispense MedicationDispense? @relation(fields: [medicationDispenseId], references: [id], onDelete: SetNull)
 
   @@index([cartId])
+  @@schema("public")
+}
+
+// =============================================================================
+// F2-S15 Stream A — Cumplimiento operacional
+// §6 Contingencia operativa (US.F2.7.26-28)
+// §7 Conservación diferenciada y retención (US.F2.7.29-32)
+// =============================================================================
+
+/// Estado de conservación del episodio de atención (US.F2.7.29).
+/// ACTIVO: expediente vigente con atenciones recientes.
+/// PASIVO: sin atenciones en 5+ años; pasa a cola de evaluación.
+/// POR_ELIMINAR: solicitud de eliminación supervisada iniciada.
+enum EstadoConservacion {
+  ACTIVO
+  PASIVO
+  POR_ELIMINAR
+
+  @@schema("ece")
+}
+
+/// Estado de la solicitud de eliminación supervisada (US.F2.7.31).
+enum EstadoEliminacion {
+  SOLICITADA
+  APROBADA
+  RECHAZADA
+  EJECUTADA
+
+  @@schema("ece")
+}
+
+/// §6 — Registro de períodos de contingencia operativa (US.F2.7.26).
+/// Cada fila representa un período en que el sistema estuvo inoperativo
+/// y se usaron formularios en papel. Desactivado_en NULL = aún activo.
+/// RLS: organizationId. Roles: ADM, DIR (activar/desactivar).
+model EceContingenciaEvento {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  motivo            String
+  esperadoHasta     DateTime? @map("esperado_hasta") @db.Timestamptz()
+  activadoEn        DateTime  @default(now()) @map("activado_en") @db.Timestamptz()
+  activadoPorId     String    @map("activado_por_id") @db.Uuid
+  desactivadoEn     DateTime? @map("desactivado_en") @db.Timestamptz()
+  desactivadoPorId  String?   @map("desactivado_por_id") @db.Uuid
+
+  organization   Organization @relation("OrgContingenciaEventos", fields: [organizationId], references: [id], onDelete: Restrict)
+  activadoPor    User         @relation("ContingenciaActivadoPor", fields: [activadoPorId], references: [id], onDelete: Restrict)
+  desactivadoPor User?        @relation("ContingenciaDesactivadoPor", fields: [desactivadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, desactivadoEn])
+  @@map("contingencia_evento")
+  @@schema("ece")
+}
+
+/// §7 — Catálogo de reglas de retención por patrón CIE-10 (US.F2.7.30).
+/// cie10Pattern NULL = regla por defecto.
+/// aniosRetencion = 10 para forenses (X*, V*), 5 para base general.
+/// RLS: organizationId. Roles: DIR (gestión).
+model EceReglaRetencion {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  /// Patrón LIKE sobre código CIE-10 (ej. 'X%', 'V%'). NULL = default.
+  cie10Pattern     String?   @map("cie10_pattern") @db.VarChar(20)
+  aniosRetencion   Int       @map("anios_retencion")
+  motivoLegal      String    @map("motivo_legal")
+  vigenteDesde     DateTime  @default(now()) @map("vigente_desde") @db.Date
+  vigenteHasta     DateTime? @map("vigente_hasta") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdById      String?   @map("created_by_id") @db.Uuid
+
+  organization Organization @relation("OrgReglasRetencion", fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User?        @relation("ReglaRetencionCreador", fields: [createdById], references: [id], onDelete: SetNull)
+  eliminaciones EceEliminacionSupervisada[]
+
+  @@index([organizationId, cie10Pattern])
+  @@map("regla_retencion")
+  @@schema("ece")
+}
+
+/// §7 — Solicitud de eliminación supervisada con doble firma (US.F2.7.31).
+/// Workflow: SOLICITADA → APROBADA → EJECUTADA | RECHAZADA.
+/// NO es borrado físico: marca el episodio como eliminado y preserva metadata.
+/// Requiere 2 firmas electrónicas distintas (firma_dir1 + firma_dir2).
+/// RLS: organizationId. Roles: DIR (firma), DIR_MEDICO (firma).
+model EceEliminacionSupervisada {
+  id                       String             @id @default(uuid()) @db.Uuid
+  organizationId           String             @map("organization_id") @db.Uuid
+  episodioId               String             @map("episodio_id") @db.Uuid
+  solicitadoPorId          String             @map("solicitado_por_id") @db.Uuid
+  motivoBaja               String             @map("motivo_baja")
+  estado                   EstadoEliminacion  @default(SOLICITADA)
+  firmaDir1Id              String?            @map("firma_dir1_id") @db.Uuid
+  firmaDir2Id              String?            @map("firma_dir2_id") @db.Uuid
+  fechaAprobacion          DateTime?          @map("fecha_aprobacion") @db.Timestamptz()
+  fechaRechazo             DateTime?          @map("fecha_rechazo") @db.Timestamptz()
+  motivoRechazo            String?            @map("motivo_rechazo")
+  fechaEjecucion           DateTime?          @map("fecha_ejecucion") @db.Timestamptz()
+  /// Metadata preservada permanentemente (inmutable post-ejecución, audit §TDR 6.3).
+  pacienteNombre           String?            @map("paciente_nombre") @db.VarChar(200)
+  pacienteDui              String?            @map("paciente_dui") @db.VarChar(20)
+  reglaRetencionId         String?            @map("regla_retencion_id") @db.Uuid
+  fechaVencimientoRetencion DateTime?         @map("fecha_vencimiento_retencion") @db.Timestamptz()
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization    Organization      @relation("OrgEliminaciones", fields: [organizationId], references: [id], onDelete: Restrict)
+  episodio        EceEpisodioAtencion @relation("EpisodioEliminaciones", fields: [episodioId], references: [id], onDelete: Restrict)
+  solicitadoPor   User              @relation("EliminacionSolicitante", fields: [solicitadoPorId], references: [id], onDelete: Restrict)
+  firmaDir1       EceFirmaElectronica? @relation("EliminacionFirma1", fields: [firmaDir1Id], references: [id], onDelete: SetNull)
+  firmaDir2       EceFirmaElectronica? @relation("EliminacionFirma2", fields: [firmaDir2Id], references: [id], onDelete: SetNull)
+  reglaRetencion  EceReglaRetencion? @relation(fields: [reglaRetencionId], references: [id], onDelete: SetNull)
+
+  @@index([estado])
+  @@index([organizationId, estado])
+  @@index([episodioId])
+  @@map("eliminacion_supervisada")
+  @@schema("ece")
+}
+
+/// Catálogo CIE-10 OMS en español (versión MINSAL SV 2019).
+/// Búsqueda full-text via índice GIN trigramas (pg_trgm) en descripcion.
+/// Tabla global (no tenant-scoped) — reutilizable por todos los módulos clínicos.
+model Icd10Catalog {
+  /// Código CIE-10: 3-7 caracteres (ej. "A00", "J06.9", "O00.0").
+  codigo      String   @id @db.VarChar(7)
+  descripcion String   @db.Text
+  /// Capítulo romano romano (ej. "I", "II", "XIX").
+  capitulo    String?  @db.VarChar(5)
+  /// Rango de grupo (ej. "A00-A09").
+  grupo       String?  @db.VarChar(10)
+  /// Notas de exclusión como array de objetos {codigo, nota}.
+  exclusiones Json?
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+
+  @@map("Icd10Catalog")
+  @@schema("public")
+}
+
+/// Combinaciones de códigos CIE-10 que el sistema debe alertar como potencialmente inválidas.
+/// Restringe por sexo_excluido (null = aplica a ambos) y rango etario.
+/// US.F2.7.35 — NTEC Art. 16-17.
+model Icd10CombinacinInvalida {
+  id              String   @id @default(uuid()) @db.Uuid
+  codigoA         String   @db.VarChar(7)
+  codigoB         String   @db.VarChar(7)
+  motivo          String   @db.Text
+  /// null = aplica a ambos sexos. Valores: "masculino" | "femenino"
+  sexoExcluido    String?  @db.VarChar(20)
+  /// null = sin restricción de edad mínima (en años).
+  edadMinExcluida Int?
+  /// null = sin restricción de edad máxima (en años, inclusive).
+  edadMaxExcluida Int?
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now()) @db.Timestamptz()
+
+  @@unique([codigoA, codigoB], map: "icd10_comb_pair_unique")
+  @@index([codigoA])
+  @@index([codigoB])
+  @@map("icd10_combinacion_invalida")
+  @@schema("ece")
+}
+
+/// Minuta de reunión del Comité del Expediente Clínico.
+/// Inmutable post-firma (trigger trg_comite_inmutable en BD).
+/// Hash chain idéntico al patrón de audit_log: prev_hash → payload_hash → chain_hash.
+/// US.F2.7.46 — NTEC Art. 32.
+model ComiteMinuta {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  establecimientoId  String?   @db.Uuid
+  fechaReunion       DateTime  @db.Date
+  /// [{nombre: string, rol: string, personal_id?: string}]
+  asistentes         Json      @default("[]")
+  /// [{numero: number, tema: string, descripcion?: string}]
+  temasAgenda        Json      @default("[]")
+  /// [{numero: number, acuerdo: string, responsable?: string, fecha_limite?: string}]
+  acuerdos           Json      @default("[]")
+  proximaFecha       DateTime? @db.Date
+  firmaPresidenteId  String?   @db.Uuid
+  firmadaEn          DateTime? @db.Timestamptz()
+  /// "borrador" | "firmada"
+  estado             String    @default("borrador") @db.VarChar(20)
+  /// SHA-256 del payload JSON (asistentes + temas + acuerdos).
+  payloadHash        String?   @db.VarChar(64)
+  /// chain_hash de la minuta previa (null si es la primera).
+  prevHash           String?   @db.VarChar(64)
+  /// SHA-256(prevHash || payloadHash).
+  chainHash          String?   @db.VarChar(64)
+  registradoPor      String?   @db.Uuid
+  registradoEn       DateTime  @default(now()) @db.Timestamptz()
+  actualizadoEn      DateTime  @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgComiteMinutas", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([fechaReunion(sort: Desc)])
+  @@map("comite_minuta")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S15 Stream C — MPI Dedup + Portal ARCO (US.F2.7.39-45)
+// =============================================================================
+
+/// Formato de número de expediente configurable por establecimiento (US.F2.7.42).
+/// Soporta tokens: {YYYY}, {MM}, {INC:N} (secuencial N dígitos), {org_prefix}, {nui}.
+model ExpedienteFormatConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  formato        String   @default("{YYYY}-{INC:6}") @db.VarChar(80)
+  vigenteDesde   DateTime @default(now()) @db.Timestamptz()
+  creadoPorId    String?  @db.Uuid
+  creadoEn       DateTime @default(now()) @db.Timestamptz()
+
+  organization Organization @relation("OrgExpedienteFormat", fields: [organizationId], references: [id], onDelete: Restrict)
+  creadoPor    User?        @relation("ExpedienteFormatCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, vigenteDesde(sort: Desc)])
+  @@map("ExpedienteFormatConfig")
+  @@schema("public")
+}
+
+/// Merge de expedientes ECE con doble firma electrónica (US.F2.7.41).
+/// Distinto del public.PatientMerge legacy (HIS base); éste documenta el flujo NTEC:
+/// PENDIENTE → requiere firmaDir1Id + firmaDir2Id → EJECUTADO (irreversible).
+model EcePatientMerge {
+  id                   String   @id @default(uuid()) @db.Uuid
+  organizationId       String   @db.Uuid
+  canonicalPatientId   String   @db.Uuid /// paciente superviviente.
+  mergedPatientId      String   @db.Uuid /// paciente absorbido → mergedIntoId = canonicalPatientId.
+  solicitadoPorId      String?  @db.Uuid
+  /// Hash PIN del DIR 1 (inmutable — no FK para no perder historia si usuario se elimina).
+  firmaDir1Id          String?  @db.VarChar(200)
+  /// Hash PIN del Director Médico.
+  firmaDir2Id          String?  @db.VarChar(200)
+  fechaEjecucion       DateTime? @db.Timestamptz()
+  estado               String   @default("PENDIENTE") @db.VarChar(30)
+  creadoEn             DateTime @default(now()) @db.Timestamptz()
+
+  organization     Organization @relation("OrgEcePatientMerge", fields: [organizationId], references: [id], onDelete: Restrict)
+  canonicalPatient Patient      @relation("EceMergeCanonical", fields: [canonicalPatientId], references: [id], onDelete: Restrict)
+  mergedPatient    Patient      @relation("EceMergeMerged", fields: [mergedPatientId], references: [id], onDelete: Restrict)
+  solicitadoPor    User?        @relation("EceMergeSolicitante", fields: [solicitadoPorId], references: [id], onDelete: SetNull)
+
+  @@unique([canonicalPatientId, mergedPatientId], name: "uq_ece_merge_pair")
+  @@index([organizationId, estado])
+  @@index([canonicalPatientId])
+  @@map("EcePatientMerge")
+  @@schema("public")
+}
+
+/// Solicitud ARCO del paciente: Rectificación o Supresión (US.F2.7.44-45).
+/// Ciclo: PENDIENTE → APROBADA | RECHAZADA → EJECUTADA.
+/// Excepciones de supresión: datos forenses, epidemiológicos, orden judicial (director rechaza con motivo).
+model SolicitudArco {
+  id               String    @id @default(uuid()) @db.Uuid
+  pacienteId       String    @map("paciente_id") @db.Uuid
+  organizacionId   String    @map("organizacion_id") @db.Uuid
+  tipo             String    @db.VarChar(20) /// RECTIFICACION | SUPRESION
+  documentoTarget  String?   @map("documento_target") @db.VarChar(200)
+  motivo           String    @db.Text
+  estado           String    @default("PENDIENTE") @db.VarChar(20)
+  revisadoPorId    String?   @map("revisado_por_id") @db.Uuid
+  fechaRespuesta   DateTime? @map("fecha_respuesta") @db.Timestamptz()
+  motivoRespuesta  String?   @map("motivo_respuesta") @db.Text
+  creadoEn         DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+  actualizadoEn    DateTime  @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz()
+
+  paciente    Patient @relation("PatientSolicitudesArco", fields: [pacienteId], references: [id], onDelete: Restrict)
+  organizacion Organization @relation("OrgSolicitudesArco", fields: [organizacionId], references: [id], onDelete: Restrict)
+  revisadoPor User?   @relation("ArcoRevisor", fields: [revisadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([pacienteId, estado])
+  @@index([organizacionId, estado, creadoEn(sort: Desc)])
+  @@map("solicitud_arco")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S15 Stream D — Audit & RBAC Refinement
+// US.F2.7.3-5, 13, 16, 20-22
+// =============================================================================
+
+/// US.F2.7.20 — Estado de cuenta de usuario para depuración anual.
+enum UserAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@schema("public")
+}
+
+/// US.F2.7.16 — Configuración de dashboard de auditoría por organización.
+/// Almacena whitelist de IPs y horario clínico para detección de outliers.
+model AuditDashboardConfig {
+  id                    String   @id @default(uuid()) @db.Uuid
+  organizationId        String   @unique @db.Uuid
+  /// Lista de IPs whitelisted. Acceso desde IP fuera de esta lista = outlier.
+  ipWhitelist           String[] @default([])
+  /// Hora inicio horario clínico (formato HH:MM). Default 06:00.
+  horarioClinicoInicio  String   @default("06:00") @db.VarChar(5)
+  /// Hora fin horario clínico (formato HH:MM). Default 22:00.
+  horarioClinicoFin     String   @default("22:00") @db.VarChar(5)
+  /// Habilita alertas de outlier para la org.
+  outlierAlertEnabled   Boolean  @default(true)
+  createdAt             DateTime @default(now()) @db.Timestamptz()
+  updatedAt             DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
+
   @@schema("public")
 }

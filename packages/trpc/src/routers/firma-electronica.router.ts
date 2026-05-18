@@ -1,5 +1,5 @@
 /**
- * Stream 18 — Router tRPC: Firma Electrónica Simple (ECE).
+ * Stream 18 / F2-S15-D — Router tRPC: Firma Electrónica Simple (ECE).
  *
  * Norma técnica: Arts. 4.17, 23 lit. a.4, 44, 45, 52 — Acuerdo n.° 1616
  * (MINSAL, 2024).  Implementa el ciclo de vida del PIN de firma para el
@@ -11,6 +11,7 @@
  *   firma.confirm         — valida PIN + emite firma con contexto de auditoría (protectedProcedure).
  *   firma.requestRecovery — genera token de recuperación y lo envía por email (publicProcedure).
  *   firma.completeRecovery — completa recuperación con MFA + nuevo PIN (publicProcedure).
+ *   firma.history         — historial de firmas del profesional (US.F2.7.5, protectedProcedure).
  *
  * Estrategia de hashing:
  *   argon2id (mismo algoritmo que `@his/infrastructure/src/firma/pin-hasher.ts`).
@@ -32,7 +33,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { protectedProcedure, publicProcedure, router } from "../trpc";
+import { protectedProcedure, publicProcedure, requireRole, router } from "../trpc";
 // argon2 must be in packages/trpc/package.json: "argon2": "^0.41.1"
 import argon2 from "argon2";
 
@@ -97,9 +98,30 @@ const completeRecoveryInput = z.object({
   path: ["confirmPin"],
 });
 
+// US.F2.7.5 — historial de firmas del profesional
+const historyInput = z.object({
+  userId:   z.string().uuid().optional(), // para ADM/DIR; si absent usa ctx.user.id
+  dateFrom: z.string().datetime().optional(),
+  dateTo:   z.string().datetime().optional(),
+  limit:    z.number().int().min(1).max(200).default(50),
+  offset:   z.number().int().min(0).default(0),
+});
+
 // =============================================================================
 // Tipos locales para filas raw SQL
 // =============================================================================
+
+type FirmaHistoryRow = {
+  id:            string;
+  firma_id:      string;
+  user_id:       string;
+  accion:        string;
+  exito:         boolean;
+  contexto:      string | null;
+  ip:            string | null;
+  registrado_en: Date;
+  total?:        bigint;
+};
 
 type FirmaRow = {
   id: string;
@@ -641,5 +663,89 @@ export const firmaElectronicaRouter = router({
       }
 
       return { ok: true as const, message: "PIN de firma actualizado correctamente." };
+    }),
+
+  /**
+   * US.F2.7.5 — Historial de firmas del profesional.
+   * Solo visible para el propio usuario o roles ADM/DIR.
+   * Retorna todas las entradas de ece.bitacora_acceso (tabla con columnas
+   * originales: id, firma_id, user_id, accion, exito, contexto, ip, registrado_en)
+   * correspondientes al userId solicitado.
+   *
+   * NOTA: La tabla ece.bitacora_acceso en producción usa nombres legacy distintos.
+   * Este procedure consulta la vista de bitácora desde ece.firma_electronica
+   * para obtener firmaId y luego las entradas de ece.bitacora_acceso.
+   */
+  history: protectedProcedure
+    .input(historyInput)
+    .query(async ({ ctx, input }) => {
+      // El userId a consultar: el propio o uno externo (solo ADM/DIR)
+      const targetUserId = input.userId ?? ctx.user.id;
+
+      // Si consulta otro usuario, verificar rol ADM/DIR via tenant
+      if (targetUserId !== ctx.user.id) {
+        const roleCodes: string[] = ctx.tenant?.roleCodes ?? [];
+        const isPrivileged = ["ADM", "DIR", "super_admin"].some((code) =>
+          roleCodes.includes(code),
+        );
+        if (!isPrivileged) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Solo puede consultar su propio historial de firmas.",
+          });
+        }
+      }
+
+      const conditions: string[] = ["b.firma_id IN (SELECT id FROM ece.firma_electronica WHERE personal_id IN (SELECT id FROM ece.personal_salud WHERE his_user_id = $1::uuid))"];
+      const params: unknown[] = [targetUserId];
+      let idx = 2;
+
+      if (input.dateFrom) {
+        conditions.push(`b.registrado_en >= $${idx++}::timestamptz`);
+        params.push(input.dateFrom);
+      }
+      if (input.dateTo) {
+        conditions.push(`b.registrado_en <= $${idx++}::timestamptz`);
+        params.push(input.dateTo);
+      }
+      const where = conditions.join(" AND ");
+
+      // Count para paginación
+      type CountRow = { total: bigint };
+      const countRows = await (ctx.prisma.$queryRawUnsafe as (
+        sql: string, ...p: unknown[]
+      ) => Promise<CountRow[]>)(
+        `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${where}`,
+        ...params,
+      );
+      const total = Number(countRows[0]?.total ?? 0);
+
+      // Filas paginadas
+      const dataParams = [...params, input.limit, input.offset];
+      const rows = await (ctx.prisma.$queryRawUnsafe as (
+        sql: string, ...p: unknown[]
+      ) => Promise<FirmaHistoryRow[]>)(
+        `SELECT b.id, b.firma_id, b.user_id, b.accion, b.exito,
+                b.contexto, b.ip, b.registrado_en
+         FROM ece.bitacora_acceso b
+         WHERE ${where}
+         ORDER BY b.registrado_en DESC
+         LIMIT $${idx} OFFSET $${idx + 1}`,
+        ...dataParams,
+      );
+
+      return {
+        items: rows.map((r) => ({
+          id:          r.id,
+          firmaId:     r.firma_id,
+          userId:      r.user_id,
+          accion:      r.accion,
+          exito:       r.exito,
+          contexto:    r.contexto,
+          ip:          r.ip,
+          registradoEn: r.registrado_en.toISOString(),
+        })),
+        total,
+      };
     }),
 });
