@@ -160,6 +160,9 @@ import { patientDedupRouter } from "./patient-dedup.router";
 import { portalArcoRouter } from "./portal-arco.router";
 // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
 import { auditOutlierRouter } from "./audit-outlier.router";
+// F2-S16-B — Workflow: publicación + versionado + validación visual
+import { workflowPublicacionRouter } from "./workflow-publicacion.router";
+import { workflowValidatorVisualRouter } from "./workflow-validator-visual.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -217,6 +220,8 @@ export const appRouter = router({
   workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
   workflowValidator: workflowValidatorRouter,
+  workflowPublicacion: workflowPublicacionRouter,
+  workflowValidatorVisual: workflowValidatorVisualRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
   // Fase 2 — ECE Triaje NTEC (Stream 02)
