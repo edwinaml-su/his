@@ -116,6 +116,14 @@ const eceEpicrisisAnularSchema = z.object({
   motivoAnulacion: z.string().min(10).max(1_000),
 });
 
+// US.F2.7.34 — Asignación obligatoria de CIE-10 al cierre de episodio
+// Principal + hasta 4 secundarios (NTEC Art. 16-17).
+const eceEpicrisisCie10Schema = z.object({
+  id: z.string().uuid(),
+  cie10Principal: cie10CodeSchema,
+  cie10Secundarios: z.array(cie10CodeSchema).max(4).default([]),
+});
+
 // ---------------------------------------------------------------------------
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
@@ -344,6 +352,18 @@ export const epicrisisRouter = router({
       });
     }
 
+    // US.F2.7.34 — Hard-stop: diagnóstico CIE-10 obligatorio al cierre (Art. 17 NTEC).
+    const cie10Check = await ctx.prisma.$queryRaw<[{ cie10_principal: string | null }?]>`
+      SELECT "cie10_principal" FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
+    `;
+    if (!cie10Check[0]?.cie10_principal) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "Debe asignar al menos un diagnóstico CIE-10 antes de firmar la epicrisis (Art. 17 NTEC).",
+      });
+    }
+
     // La transición a 'firmado' hace el documento inmutable (trigger BD lo refuerza).
     await ctx.prisma.$executeRaw`
       UPDATE ece.epicrisis_egreso
@@ -451,6 +471,53 @@ export const epicrisisRouter = router({
 
       return { ok: true as const, estado: "certificado", documentHash };
     });
+  }),
+
+  /**
+   * Asigna o actualiza los diagnósticos CIE-10 de la epicrisis (MC/PHYSICIAN).
+   * Permitido mientras el estado sea 'borrador' únicamente.
+   * Hard-stop: sin CIE-10 principal no puede avanzar a 'firmado' (US.F2.7.34).
+   */
+  setCie10: requireRole(["MC", "PHYSICIAN"]).input(eceEpicrisisCie10Schema).mutation(async ({ ctx, input }) => {
+    withEceContext(ctx);
+
+    const rows = await ctx.prisma.$queryRaw<[{ estado_workflow: string }?]>`
+      SELECT estado_workflow FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
+    `;
+    const epicrisis = rows[0];
+
+    if (!epicrisis) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+    }
+    if (epicrisis.estado_workflow !== "borrador") {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Los diagnósticos CIE-10 solo pueden modificarse en estado borrador.",
+      });
+    }
+
+    // Verificar que el código principal existe en el catálogo
+    const catalogCheck = await ctx.prisma.$queryRaw<[{ codigo: string }?]>`
+      SELECT "codigo" FROM public."Icd10Catalog"
+      WHERE "codigo" = ${input.cie10Principal} AND "activo" = true
+      LIMIT 1
+    `;
+    if (!catalogCheck[0]) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Código CIE-10 principal "${input.cie10Principal}" no encontrado en el catálogo.`,
+      });
+    }
+
+    await ctx.prisma.$executeRaw`
+      UPDATE ece.epicrisis_egreso
+      SET "cie10_principal"    = ${input.cie10Principal},
+          "cie10_secundarios"  = ${input.cie10Secundarios}::varchar[]
+      WHERE id = ${input.id}::uuid
+        AND estado_workflow = 'borrador'
+    `;
+
+    return { ok: true as const };
   }),
 
   /**

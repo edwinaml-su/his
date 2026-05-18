@@ -6121,3 +6121,85 @@ model EceEliminacionSupervisada {
   @@map("eliminacion_supervisada")
   @@schema("ece")
 }
+
+/// Catálogo CIE-10 OMS en español (versión MINSAL SV 2019).
+/// Búsqueda full-text via índice GIN trigramas (pg_trgm) en descripcion.
+/// Tabla global (no tenant-scoped) — reutilizable por todos los módulos clínicos.
+model Icd10Catalog {
+  /// Código CIE-10: 3-7 caracteres (ej. "A00", "J06.9", "O00.0").
+  codigo      String   @id @db.VarChar(7)
+  descripcion String   @db.Text
+  /// Capítulo romano romano (ej. "I", "II", "XIX").
+  capitulo    String?  @db.VarChar(5)
+  /// Rango de grupo (ej. "A00-A09").
+  grupo       String?  @db.VarChar(10)
+  /// Notas de exclusión como array de objetos {codigo, nota}.
+  exclusiones Json?
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+
+  @@map("Icd10Catalog")
+  @@schema("public")
+}
+
+/// Combinaciones de códigos CIE-10 que el sistema debe alertar como potencialmente inválidas.
+/// Restringe por sexo_excluido (null = aplica a ambos) y rango etario.
+/// US.F2.7.35 — NTEC Art. 16-17.
+model Icd10CombinacinInvalida {
+  id              String   @id @default(uuid()) @db.Uuid
+  codigoA         String   @db.VarChar(7)
+  codigoB         String   @db.VarChar(7)
+  motivo          String   @db.Text
+  /// null = aplica a ambos sexos. Valores: "masculino" | "femenino"
+  sexoExcluido    String?  @db.VarChar(20)
+  /// null = sin restricción de edad mínima (en años).
+  edadMinExcluida Int?
+  /// null = sin restricción de edad máxima (en años, inclusive).
+  edadMaxExcluida Int?
+  activo          Boolean  @default(true)
+  creadoEn        DateTime @default(now()) @db.Timestamptz()
+
+  @@unique([codigoA, codigoB], map: "icd10_comb_pair_unique")
+  @@index([codigoA])
+  @@index([codigoB])
+  @@map("icd10_combinacion_invalida")
+  @@schema("ece")
+}
+
+/// Minuta de reunión del Comité del Expediente Clínico.
+/// Inmutable post-firma (trigger trg_comite_inmutable en BD).
+/// Hash chain idéntico al patrón de audit_log: prev_hash → payload_hash → chain_hash.
+/// US.F2.7.46 — NTEC Art. 32.
+model ComiteMinuta {
+  id                 String    @id @default(uuid()) @db.Uuid
+  organizationId     String    @db.Uuid
+  establecimientoId  String?   @db.Uuid
+  fechaReunion       DateTime  @db.Date
+  /// [{nombre: string, rol: string, personal_id?: string}]
+  asistentes         Json      @default("[]")
+  /// [{numero: number, tema: string, descripcion?: string}]
+  temasAgenda        Json      @default("[]")
+  /// [{numero: number, acuerdo: string, responsable?: string, fecha_limite?: string}]
+  acuerdos           Json      @default("[]")
+  proximaFecha       DateTime? @db.Date
+  firmaPresidenteId  String?   @db.Uuid
+  firmadaEn          DateTime? @db.Timestamptz()
+  /// "borrador" | "firmada"
+  estado             String    @default("borrador") @db.VarChar(20)
+  /// SHA-256 del payload JSON (asistentes + temas + acuerdos).
+  payloadHash        String?   @db.VarChar(64)
+  /// chain_hash de la minuta previa (null si es la primera).
+  prevHash           String?   @db.VarChar(64)
+  /// SHA-256(prevHash || payloadHash).
+  chainHash          String?   @db.VarChar(64)
+  registradoPor      String?   @db.Uuid
+  registradoEn       DateTime  @default(now()) @db.Timestamptz()
+  actualizadoEn      DateTime  @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgComiteMinutas", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([fechaReunion(sort: Desc)])
+  @@map("comite_minuta")
+  @@schema("ece")
+}

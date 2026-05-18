@@ -152,6 +152,9 @@ import { farmacovigilanciaRouter } from "./farmacovigilancia.router";
 // F2-S15 Stream A — Cumplimiento Operacional (contingencia + retención)
 import { contingenciaRouter } from "./ece/contingencia.router";
 import { retencionRouter } from "./ece/retencion.router";
+// F2-S15 Stream B — CIE-10 + Comité ECE (US.F2.7.33-35, US.F2.7.46-48)
+import { icd10Router } from "./ece/icd10.router";
+import { comiteEceRouter } from "./ece/comite-ece.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -307,6 +310,9 @@ export const appRouter = router({
   // F2-S15 Stream A — Cumplimiento Operacional
   eceContingencia: contingenciaRouter,
   eceRetencion: retencionRouter,
+  // F2-S15 Stream B — CIE-10 + Comité ECE (US.F2.7.33-35, US.F2.7.46-48)
+  icd10: icd10Router,
+  comiteEce: comiteEceRouter,
 });
 
 export type AppRouter = typeof appRouter;
