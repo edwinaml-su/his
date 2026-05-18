@@ -140,30 +140,15 @@ const SECTIONS: NavSection[] = [
     label: "ECE — Quirófano",
     defaultOpen: true,
     items: [
+      { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
       { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
       { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
       { href: "/ece/quirofano/programacion", label: "Programación", icon: Scissors },
-      { href: "/ece/registro-anestesico", label: "Anestésico", icon: Wind },
-      { href: "/ece/urpa", label: "URPA", icon: UserCheck },
-    ],
-  },
-  {
-    label: "ECE — Maternidad",
-    defaultOpen: true,
-    items: [
-      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
-      { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
-      { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake },
-    // Solo items con páginas mergeadas. Preop/WHO/anestésico/URPA están
-    // pendientes de re-lanzamiento de agentes rate-limited y se agregarán
-    // en PR posterior.
-    label: "ECE — Quirófano",
-    defaultOpen: true,
-    items: [
-      { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
       { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap },
       { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature },
+      { href: "/ece/registro-anestesico", label: "Anestésico", icon: Wind },
+      { href: "/ece/urpa", label: "URPA", icon: UserCheck },
     ],
   },
   {
@@ -202,13 +187,17 @@ const SECTIONS: NavSection[] = [
       { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
       { href: "/gs1/devoluciones", label: "Devoluciones", icon: Undo2 },
       { href: "/gs1/trazabilidad", label: "Trazabilidad", icon: Search },
-    // Solo items con páginas mergeadas. Partograma/atención RN/reanimación
-    // pendientes de re-lanzamiento de agentes rate-limited.
+    ],
+  },
+  {
     label: "ECE — Maternidad",
     defaultOpen: true,
     items: [
       { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
       { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble },
+      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
+      { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
+      { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake },
     ],
   },
   {
