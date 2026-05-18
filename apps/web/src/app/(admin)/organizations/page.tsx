@@ -20,15 +20,22 @@ import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
 import { trpc } from "@/lib/trpc/react";
 import { OrganizationRow, type OrgRowData } from "./organization-row";
 import { OrganizationCurrencyDialog } from "./organization-currency-dialog";
+import { OrganizationGs1PrefixDialog } from "./organization-gs1-prefix-dialog";
 
 export default function OrganizationsPage() {
   const query = trpc.organization.listAll.useQuery();
   const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [gs1DialogOpen, setGs1DialogOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<OrgRowData | null>(null);
 
   function handleEdit(org: OrgRowData) {
     setSelected(org);
     setDialogOpen(true);
+  }
+
+  function handleEditGs1Prefix(org: OrgRowData) {
+    setSelected(org);
+    setGs1DialogOpen(true);
   }
 
   return (
@@ -69,6 +76,7 @@ export default function OrganizationsPage() {
                   <TableHead>Moneda funcional</TableHead>
                   <TableHead>Moneda presentación</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead>Prefijo GS1</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
@@ -78,6 +86,7 @@ export default function OrganizationsPage() {
                     key={org.id}
                     org={org as OrgRowData}
                     onEditCurrency={handleEdit}
+                    onEditGs1Prefix={handleEditGs1Prefix}
                   />
                 ))}
               </TableBody>
@@ -89,6 +98,12 @@ export default function OrganizationsPage() {
       <OrganizationCurrencyDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
+        organization={selected}
+      />
+
+      <OrganizationGs1PrefixDialog
+        open={gs1DialogOpen}
+        onOpenChange={setGs1DialogOpen}
         organization={selected}
       />
     </div>
