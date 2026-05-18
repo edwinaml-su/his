@@ -45,7 +45,7 @@ const tipoGlnEnum = z.enum(["proveedor", "deposito", "farmacia", "servicio", "ca
 // Tipos internos de resultado
 // ---------------------------------------------------------------------------
 
-interface GlnTreeNode {
+export interface GlnTreeNode {
   id: string;
   codigo: string;
   descripcion: string;
