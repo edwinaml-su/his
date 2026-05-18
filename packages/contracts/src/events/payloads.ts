@@ -1274,6 +1274,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.anestesia.firmada"),
     payload: eceAnestesiaFirmadaPayloadSchema,
+  }),
   // Fase 2 (S7) — Sustitución genérico-comercial (US.F2.6.11)
   z.object({
     eventType: z.literal("pharmacy.substitution.proposed"),
@@ -1286,6 +1287,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("pharmacy.substitution.rejected"),
     payload: pharmacySubstitutionDecidedPayloadSchema,
+  }),
   // Fase 2 (S7) — GS1 EPCIS bedside events
   z.object({
     eventType: z.literal("gs1.epcis.dispensacion"),
@@ -1315,6 +1317,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("farmacovigilancia.dosis_vencida"),
     payload: farmacovigilanciaVencidoPayloadSchema,
+  }),
   // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
   z.object({
     eventType: z.literal("pharmacy.reservation.created"),
