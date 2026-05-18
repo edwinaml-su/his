@@ -356,6 +356,8 @@ model Organization {
   medicationGtins           MedicationGtin[]          @relation("OrgMedicationGtin")
   // F2-S7 — Carrito Unidosis
   pharmacyCarts             PharmacyCart[]            @relation("OrgPharmacyCarts")
+  // F2-S7 W2 — ECE Staff Schedule
+  eceStaffSchedules         EceStaffSchedule[]        @relation("OrgEceStaffSchedule")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -482,6 +484,8 @@ model User {
   // F2-S7 — Carrito Unidosis
   cartsDispatched           PharmacyCart[]               @relation("CartDispatchedBy")
   cartsReceived             PharmacyCart[]               @relation("CartReceivedBy")
+  // F2-S7 W2 — ECE Staff Schedule
+  eceStaffSchedules         EceStaffSchedule[]           @relation("UserEceStaffSchedule")
 
   @@schema("public")
 }
@@ -5912,6 +5916,44 @@ model PharmacyCart {
   @@index([organizationId, status])
   @@index([patientId])
   @@schema("public")
+}
+
+// =============================================================================
+// ECE Staff Schedule — turnos de enfermería (F2-S7 Wave 2)
+// Tabla en Supabase: ece.staff_schedule (ya creada vía SQL).
+// @@schema("public") porque Prisma multi-schema solo soporta schemas
+// declarados en datasource; el schema "ece" está declarado en la config.
+// =============================================================================
+
+/// Turno de trabajo del personal de enfermería.
+/// Usado por bedside.shiftQueue para filtrar indicaciones del turno activo.
+model EceStaffSchedule {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  userId         String   @db.Uuid
+  turno          EceTurno
+  fechaInicio    DateTime @db.Timestamptz()
+  fechaFin       DateTime @db.Timestamptz()
+  servicioId     String?  @db.Uuid
+  glnDestino     String?  @map("gln_destino") @db.VarChar(15)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+
+  organization Organization @relation("OrgEceStaffSchedule", fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation("UserEceStaffSchedule", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, userId, fechaInicio])
+  @@index([userId, fechaFin])
+  @@map("staff_schedule")
+  @@schema("ece")
+}
+
+enum EceTurno {
+  MANANA
+  TARDE
+  NOCHE
+  GUARDIA_24H
+
+  @@schema("ece")
 }
 
 /// Ítem del carrito — enlaza un despacho (MedicationDispense) con el carrito.

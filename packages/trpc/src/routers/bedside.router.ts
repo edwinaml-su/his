@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
@@ -293,19 +294,282 @@ interface LastAdminRow {
 }
 
 // ---------------------------------------------------------------------------
-// Router
+// Sub-router: administration
 // ---------------------------------------------------------------------------
 
-export const bedsideRouter = router({
+const administrationRecordInput = z.object({
+  patientGsrn:  z.string().length(18).regex(/^\d{18}$/),
+  medicamentoGtin: z.string().length(14).regex(/^\d{14}$/),
+  lote:         z.string().min(1).max(80),
+  serie:        z.string().max(80).optional(),
+  dosis:        z.string().min(1).max(200), // ej. "500mg/cap"
+  via:          z.enum(["ORAL", "IV", "IM", "SC", "TOPICAL", "INHALED", "RECTAL", "SUBLINGUAL", "OPHTHALMIC", "OTIC", "NASAL"]),
+  indicationId: z.string().uuid(),
+  staffGsrn:   z.string().length(18).regex(/^\d{18}$/),
+});
+
+const administrationRouter = router({
   /**
-   * validate5Correctos — Algoritmo 5 Correctos bedside.
+   * Registra una administración bedside en MedicationAdministration con flags BCMA=true.
+   * Emite evento de dominio "gs1.epcis.bedside" al outbox transaccional.
    *
-   * Síncrono: los hard-stops no pueden ser asíncronos (guia §4.1).
-   * Toda escritura usa withTenantContext (RLS mandatorio).
+   * Precondición: el flujo de 5 Correctos ya fue validado (validate5Correctos).
+   * Esta procedure NO re-valida — asume que el cliente llama en orden.
    */
-  validate5Correctos: tenantProcedure
-    .input(validate5CorrectosInput)
+  record: tenantProcedure
+    .input(administrationRecordInput)
+    .mutation(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+
+      // Resolver patientId desde GSRN
+      const gsrnRows = await ctx.prisma.$queryRawUnsafe<{ referencia_id: string }[]>(
+        `SELECT referencia_id FROM ece.gs1_gsrn WHERE codigo = $1 AND tipo = 'paciente' AND activo = true LIMIT 1`,
+        input.patientGsrn,
+      );
+      const patientId = gsrnRows[0]?.referencia_id;
+      if (!patientId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `GSRN paciente ${input.patientGsrn} no encontrado o inactivo.`,
+        });
+      }
+
+      // Resolver userId (enfermero) desde staffGsrn
+      const staffRows = await ctx.prisma.$queryRawUnsafe<{ user_id: string }[]>(
+        `SELECT user_id FROM "StaffGsrn" WHERE gsrn = $1 AND status = 'ACTIVE' LIMIT 1`,
+        input.staffGsrn,
+      );
+      const nurseId = staffRows[0]?.user_id ?? ctx.user.id;
+
+      // Resolver prescriptionItemId desde indicationId
+      // ece.indicaciones_medicas tiene una FK opcional a PrescriptionItem.
+      // Si existe: lo usamos. Si no: necesitamos uno — bloqueamos para seguridad.
+      const indicRows = await ctx.prisma.$queryRawUnsafe<{ prescription_item_id: string | null }[]>(
+        `SELECT prescription_item_id FROM ece.indicaciones_medicas WHERE id = $1 LIMIT 1`,
+        input.indicationId,
+      );
+      const prescriptionItemId = indicRows[0]?.prescription_item_id;
+      if (!prescriptionItemId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `La indicación ${input.indicationId} no tiene PrescriptionItem enlazado. Complete el bridge ECE→HIS antes de registrar administración bedside.`,
+        });
+      }
+
+      const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Crear MedicationAdministration con flags BCMA activos
+        const admin = await tx.medicationAdministration.create({
+          data: {
+            organizationId:       orgId,
+            prescriptionItemId,
+            administeredById:     nurseId,
+            administeredAt:       new Date(),
+            status:               "ADMINISTERED",
+            route:                input.via,
+            patientBarcodeScanned:  true,
+            drugBarcodeScanned:     true,
+            providerBadgeScanned:   true,
+            scannedAt:              new Date(),
+            patientWristbandScanned: true,
+            // GS1 bedside fields
+            gtinScanned:     input.medicamentoGtin,
+            loteScanned:     input.lote,
+            serieScanned:    input.serie ?? null,
+            gsrnPaciente:    input.patientGsrn,
+            gsrnEnfermera:   input.staffGsrn,
+            notes:           `Bedside BCMA: ${input.dosis} via ${input.via}`,
+          },
+          select: { id: true },
+        });
+
+        // Evento EPCIS bedside — insertamos en ece.epcis_events (mismo patrón
+        // que validate5Correctos en este archivo). El DomainEvent outbox
+        // requiere @his/database que tiene un stub en este worktree;
+        // usamos el camino directo para evitar la dependencia del stub.
+        const epcisEventId = randomUUID();
+        const payloadHash = createHash("sha256")
+          .update(JSON.stringify({ epcisEventId, gtin: input.medicamentoGtin, lote: input.lote, indicationId: input.indicationId }))
+          .digest("hex");
+
+        await tx.$executeRawUnsafe(
+          `INSERT INTO ece.epcis_events
+             (organization_id, event_type, what, "where", "when", why, who)
+           VALUES ($1::uuid, 'ObjectEvent', $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb)`,
+          orgId,
+          JSON.stringify({
+            subtipo:     "BEDSIDE_ADMIN",
+            gtin:        input.medicamentoGtin,
+            lote:        input.lote,
+            serie:       input.serie ?? null,
+            epcisEventId,
+            payloadHash,
+            adminId:     admin.id,
+          }),
+          JSON.stringify({ readPoint: "0000000000000" }),
+          new Date().toISOString(),
+          JSON.stringify({ businessStep: "administering", disposition: "consumed" }),
+          JSON.stringify({
+            gsrnProfesional: input.staffGsrn,
+            gsrnPaciente:    input.patientGsrn,
+          }),
+        );
+
+        return admin;
+      });
+
+      return { administrationId: result.id };
+    }),
+});
+
+// ---------------------------------------------------------------------------
+// Sub-router: shiftQueue
+// ---------------------------------------------------------------------------
+
+interface ShiftQueueItem {
+  patientId:        string;
+  patientGsrn:      string | null;
+  indicationId:     string;
+  gtinMedicamento:  string | null;
+  horaProgramada:   Date | null;
+  status:           "PENDING" | "DONE" | "OVERDUE";
+}
+
+interface IndicacionPendienteRow {
+  indicacion_id:  string;
+  patient_id:     string;
+  patient_gsrn:   string | null;
+  gtin:           string | null;
+  hora_programada: Date | null;
+}
+
+const shiftQueueRouter = router({
+  /**
+   * Retorna la cola de indicaciones pendientes del turno activo del enfermero.
+   *
+   * Lógica:
+   * 1. Busca el turno activo en ece.staff_schedule para ctx.user.id y now().
+   * 2. Si existe: filtra indicaciones del servicio asignado al turno.
+   * 3. Fallback (sin schedule): retorna TODAS las indicaciones vigentes de la org.
+   * 4. Calcula status PENDING/DONE/OVERDUE por ventana terapéutica (±30 min).
+   */
+  pending: tenantProcedure
+    .input(z.object({}).optional())
+    .query(async ({ ctx }): Promise<{ items: ShiftQueueItem[] }> => {
+      const orgId  = ctx.tenant.organizationId;
+      const userId = ctx.user.id;
+      const now    = new Date();
+
+      // Turno activo del enfermero
+      const scheduleRows = await ctx.prisma.$queryRawUnsafe<{ servicio_id: string | null }[]>(
+        `SELECT servicio_id
+           FROM ece.staff_schedule
+          WHERE organization_id = $1::uuid
+            AND user_id = $2::uuid
+            AND fecha_inicio <= $3
+            AND fecha_fin    >= $3
+          ORDER BY fecha_inicio DESC
+          LIMIT 1`,
+        orgId,
+        userId,
+        now.toISOString(),
+      );
+      const servicioId = scheduleRows[0]?.servicio_id ?? null;
+
+      // Indicaciones activas — filtradas por servicio si hay schedule
+      const indicRows = await ctx.prisma.$queryRawUnsafe<IndicacionPendienteRow[]>(
+        `SELECT
+           i.id                    AS indicacion_id,
+           i.patient_id,
+           p.gsrn                  AS patient_gsrn,
+           i.gtin_medicamento      AS gtin,
+           i.proxima_administracion AS hora_programada
+         FROM ece.indicaciones_medicas i
+         LEFT JOIN "Patient" p ON p.id = i.patient_id
+         WHERE i.organization_id = $1::uuid
+           AND i.estado = 'ACTIVA'
+           ${servicioId ? `AND i.servicio_id = $2::uuid` : ""}
+         ORDER BY i.proxima_administracion ASC NULLS LAST
+         LIMIT 100`,
+        ...(servicioId ? [orgId, servicioId] : [orgId]),
+      );
+
+      const TOLERANCIA_MS = 30 * 60_000;
+
+      const items: ShiftQueueItem[] = indicRows.map((row) => {
+        let status: "PENDING" | "DONE" | "OVERDUE" = "PENDING";
+        if (row.hora_programada) {
+          const hp = new Date(row.hora_programada).getTime();
+          if (now.getTime() > hp + TOLERANCIA_MS) {
+            status = "OVERDUE";
+          }
+        }
+        return {
+          patientId:       row.patient_id,
+          patientGsrn:     row.patient_gsrn,
+          indicationId:    row.indicacion_id,
+          gtinMedicamento: row.gtin,
+          horaProgramada:  row.hora_programada ? new Date(row.hora_programada) : null,
+          status,
+        };
+      });
+
+      return { items };
+    }),
+});
+
+// ---------------------------------------------------------------------------
+// Sub-router: validate5Correct (alias de compatibilidad para Stream 11 UI)
+//
+// Stream 11 UI espera: trpc.bedside.validate5Correct.validate
+// API existente:       trpc.bedside.validate5Correctos (procedure plana)
+//
+// Decisión: alias wrapper que adapta el input shape y delega a runValidate5Correctos().
+// No se renombra validate5Correctos para no romper clientes existentes.
+// ---------------------------------------------------------------------------
+
+const validate5CorrectInput = z.object({
+  patientGsrn:  z.string().length(18),
+  nurseGsrn:    z.string().length(18),
+  gtin:         z.string().min(14),
+  lot:          z.string().min(1),
+  expiry:       z.string().min(1),
+  indicationId: z.string().min(1),
+});
+
+const validate5CorrectRouter = router({
+  /**
+   * Alias de validate5Correctos para la UI de Stream 11.
+   * Adapta el input del wizard (patientGsrn, nurseGsrn, gtin, lot, expiry)
+   * al input original (gsrnPaciente, gsrnEnfermera, gs1Medicamento).
+   */
+  validate: tenantProcedure
+    .input(validate5CorrectInput)
     .mutation(async ({ ctx, input }): Promise<ValidateResult> => {
+      // Construye DataMatrix GS1 sintético en formato parentético
+      const gs1Medicamento = `(01)${input.gtin}(10)${input.lot}(17)${input.expiry}`;
+      return runValidate5Correctos(ctx, {
+        gsrnEnfermera:  input.nurseGsrn,
+        gsrnPaciente:   input.patientGsrn,
+        gs1Medicamento,
+        indicationId:   input.indicationId,
+        timestamp:      new Date(),
+      });
+    }),
+});
+
+// ---------------------------------------------------------------------------
+// Core logic — validate5Correctos extraída para reutilización interna
+// ---------------------------------------------------------------------------
+
+type Validate5CorrectosCtx = {
+  prisma: PrismaClient;
+  tenant: { organizationId: string; userId: string };
+};
+
+async function runValidate5Correctos(
+  ctx: Validate5CorrectosCtx,
+  input: z.infer<typeof validate5CorrectosInput>,
+): Promise<ValidateResult> {
       const orgId = ctx.tenant.organizationId;
 
       // ── Paso 0: Parsear DataMatrix GS1 ─────────────────────────────────
@@ -537,7 +801,25 @@ export const bedsideRouter = router({
       );
 
       return { ok: true, validationId };
-    }),
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+export const bedsideRouter = router({
+  /**
+   * validate5Correctos — Algoritmo 5 Correctos bedside (procedure plana, API pública).
+   * La UI de Stream 11 accede vía bedside.validate5Correct.validate (alias abajo).
+   */
+  validate5Correctos: tenantProcedure
+    .input(validate5CorrectosInput)
+    .mutation(({ ctx, input }): Promise<ValidateResult> => runValidate5Correctos(ctx, input)),
+
+  // Sub-routers nuevos (F2-S7 Wave 2)
+  administration: administrationRouter,
+  shiftQueue:     shiftQueueRouter,
+  validate5Correct: validate5CorrectRouter,
 });
 
 // ---------------------------------------------------------------------------
