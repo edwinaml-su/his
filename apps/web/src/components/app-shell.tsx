@@ -49,6 +49,8 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  LayoutGrid,
+  Zap,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -128,6 +130,18 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    // Solo items con páginas mergeadas. Preop/WHO/anestésico/URPA están
+    // pendientes de re-lanzamiento de agentes rate-limited y se agregarán
+    // en PR posterior.
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
+      { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap },
+      { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature },
+    ],
+  },
+  {
     label: "ECE — Hospitalario",
     defaultOpen: true,
     items: [
@@ -152,6 +166,16 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
+    ],
+  },
+  {
+    // Solo items con páginas mergeadas. Partograma/atención RN/reanimación
+    // pendientes de re-lanzamiento de agentes rate-limited.
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
+      { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble },
     ],
   },
   {

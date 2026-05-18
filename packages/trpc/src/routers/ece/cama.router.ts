@@ -122,6 +122,19 @@ function withEceCtx(ctx: {
   return ctx.tenant.establishmentId;
 }
 
+// ─── Tipos adicionales ────────────────────────────────────────────────────────
+
+export interface ServicioMapRow {
+  servicioId: string;
+  servicioNombre: string;
+  camas: CamaEstadoRow[];
+}
+
+interface ServicioRaw {
+  servicio_id: string;
+  servicio_nombre: string;
+}
+
 // ─── Base procedures ──────────────────────────────────────────────────────────
 
 const readBase = requireRole(["NURSE", "ADM", "PHYSICIAN"]);
@@ -220,6 +233,80 @@ export const eceCamaRouter = router({
           limpieza:      Number(m.limpieza),
           mantenimiento: Number(m.mantenimiento),
         };
+      });
+    }),
+
+  /**
+   * Mapa completo agrupado por servicio.
+   * Shape compatible con el legacy bed.getMap para migración transparente.
+   */
+  mapCompleto: readBase
+    .query(async ({ ctx }) => {
+      const establecimientoId = withEceCtx(ctx);
+
+      return withWorkflowContext(ctx.prisma, establecimientoId, async (tx) => {
+        // Obtener servicios con camas activas
+        const servicios = await tx.$queryRaw<ServicioRaw[]>`
+          SELECT DISTINCT
+            w.id::text   AS servicio_id,
+            w.name       AS servicio_nombre
+          FROM public."Ward" w
+          JOIN public."Bed" b ON b."wardId" = w.id
+          WHERE b.active = true
+          ORDER BY w.name ASC
+        `;
+
+        if (servicios.length === 0) return [];
+
+        // Una sola query para todas las camas de todos los servicios
+        const todasCamas = await tx.$queryRaw<(CamaRaw & { ward_id: string })[]>`
+          SELECT
+            b.id::text                               AS cama_id,
+            b.code                                   AS codigo,
+            w.name                                   AS servicio,
+            w.id::text                               AS ward_id,
+            b."statusManual"                         AS estado_manual,
+            ac.id::text                              AS asignacion_id,
+            CONCAT(p."firstName", ' ', p."lastName1") AS paciente_nombre,
+            ea.id::text                              AS episodio_id,
+            ac.fecha_asignacion                      AS asignada_desde
+          FROM public."Bed" b
+          JOIN public."Ward" w ON w.id = b."wardId"
+          LEFT JOIN ece.asignacion_cama ac
+            ON ac.cama_id = b.id AND ac.activa = true
+          LEFT JOIN ece.episodio_hospitalario eh
+            ON eh.id = ac.episodio_hospitalario_id
+          LEFT JOIN ece.episodio_atencion ea
+            ON ea.id = eh.episodio_atencion_id
+          LEFT JOIN public."Patient" p
+            ON p.id = ea.paciente_id
+          WHERE b.active = true
+          ORDER BY w.name ASC, b.code ASC
+        `;
+
+        // Agrupar en memoria por servicio
+        const camasPorServicio = new Map<string, CamaEstadoRow[]>();
+        for (const r of todasCamas) {
+          const grupo = camasPorServicio.get(r.ward_id) ?? [];
+          grupo.push({
+            camaId: r.cama_id,
+            codigo: r.codigo,
+            servicio: r.servicio,
+            estado: resolverEstado(r.estado_manual, r.asignacion_id !== null),
+            pacienteNombre: r.paciente_nombre ?? null,
+            episodioId: r.episodio_id ?? null,
+            asignadaDesde: r.asignada_desde ?? null,
+          });
+          camasPorServicio.set(r.ward_id, grupo);
+        }
+
+        return servicios
+          .filter((s) => (camasPorServicio.get(s.servicio_id)?.length ?? 0) > 0)
+          .map((s): ServicioMapRow => ({
+            servicioId: s.servicio_id,
+            servicioNombre: s.servicio_nombre,
+            camas: camasPorServicio.get(s.servicio_id) ?? [],
+          }));
       });
     }),
 

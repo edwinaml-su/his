@@ -19,14 +19,26 @@ export type EcePermission =
   | "ece.bitacora.read"
   | "ece.rectificacion.solicitar"
   | "ece.rectificacion.aprobar"
-  | "ece.workflow.designer";
+  | "ece.workflow.designer"
+  // Permisos quirúrgicos / obstétricos / neonatales (75_specialized_roles.sql)
+  | "ece.cirugia.programar"
+  | "ece.cirugia.firmar_acto"
+  | "ece.anestesia.administrar"
+  | "ece.urpa.dar_alta"
+  | "ece.partograma.registrar"
+  | "ece.rn.firmar"
+  | "ece.reanimacion.ejecutar";
 
-const ADMIN_CODES    = new Set(["ADMIN", "ADMIN_GLOBAL", "super_admin", "admin_clinico"]);
-const DIR_CODES      = new Set(["DIR"]);
-const ARCH_CODES     = new Set(["ARCH"]);
+const ADMIN_CODES     = new Set(["ADMIN", "ADMIN_GLOBAL", "super_admin", "admin_clinico"]);
+const DIR_CODES       = new Set(["DIR"]);
+const ARCH_CODES      = new Set(["ARCH"]);
 const PHYSICIAN_CODES = new Set(["PHYSICIAN", "medico", "MC", "MT"]);
-const NURSE_CODES    = new Set(["NURSE", "enfermeria", "ENF"]);
-const ESP_CODES      = new Set(["ESP"]);
+const NURSE_CODES     = new Set(["NURSE", "enfermeria", "ENF"]);
+const ESP_CODES       = new Set(["ESP"]);
+const ANEST_CODES     = new Set(["ANEST"]);
+const GO_CODES        = new Set(["GO"]);
+const PEDIA_CODES     = new Set(["PEDIA"]);
+const ENF_NRP_CODES   = new Set(["ENF_NRP"]);
 
 function hasAny(roleCodes: readonly string[], set: Set<string>): boolean {
   return roleCodes.some((c) => set.has(c));
@@ -60,6 +72,28 @@ export function hasEcePermission(
       return hasAny(roleCodes, DIR_CODES);
     case "ece.workflow.designer":
       return hasAny(roleCodes, DIR_CODES);
+    case "ece.cirugia.programar":
+      return (
+        hasAny(roleCodes, PHYSICIAN_CODES) ||
+        hasAny(roleCodes, ESP_CODES) ||
+        hasAny(roleCodes, GO_CODES)
+      );
+    case "ece.cirugia.firmar_acto":
+      return hasAny(roleCodes, ESP_CODES);
+    case "ece.anestesia.administrar":
+      return hasAny(roleCodes, ANEST_CODES);
+    case "ece.urpa.dar_alta":
+      return hasAny(roleCodes, NURSE_CODES) || hasAny(roleCodes, ENF_NRP_CODES);
+    case "ece.partograma.registrar":
+      return (
+        hasAny(roleCodes, NURSE_CODES) ||
+        hasAny(roleCodes, PHYSICIAN_CODES) ||
+        hasAny(roleCodes, GO_CODES)
+      );
+    case "ece.rn.firmar":
+      return hasAny(roleCodes, PEDIA_CODES);
+    case "ece.reanimacion.ejecutar":
+      return hasAny(roleCodes, PEDIA_CODES) || hasAny(roleCodes, ENF_NRP_CODES);
     default: {
       const _exhaustive: never = permission;
       return false;
