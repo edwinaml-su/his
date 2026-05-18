@@ -12,7 +12,8 @@
     "./fixtures/dui": "./src/fixtures/dui-fixtures.ts",
     "./fixtures/encounters": "./src/fixtures/encounters.ts",
     "./db": "./src/db/test-database.ts",
-    "./auth": "./src/auth/mock-session.ts"
+    "./auth": "./src/auth/mock-session.ts",
+    "./fixtures/bedside-hardstops": "./src/fixtures/bedside-hardstops.ts"
   },
   "scripts": {
     "lint": "echo 'no lint configured'",

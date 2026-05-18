@@ -5,3 +5,4 @@ export * from "./fixtures/dui-fixtures";
 export * from "./fixtures/patients";
 export * from "./fixtures/encounters";
 export * from "./auth/mock-session";
+export * from "./fixtures/bedside-hardstops";
