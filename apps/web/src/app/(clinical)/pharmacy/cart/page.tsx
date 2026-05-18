@@ -130,7 +130,7 @@ export default function PharmacyCartListPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {data?.carts.map((cart) => (
+                {data?.carts.map((cart: { id: string; patient: { firstName: string; lastName: string; mrn: string }; turno: string; status: string; createdAt: string | Date; items: unknown[] }) => (
                   <TableRow key={cart.id}>
                     <TableCell>
                       {cart.patient.firstName} {cart.patient.lastName}

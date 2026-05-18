@@ -187,7 +187,7 @@ export default function CartDetailPage() {
                   </TableCell>
                 </TableRow>
               )}
-              {cart.items.map((item, i) => (
+              {cart.items.map((item: { id: string; gtin: string; lote: string | null; serie: string | null; createdAt: string | Date }, i: number) => (
                 <TableRow key={item.id}>
                   <TableCell>{i + 1}</TableCell>
                   <TableCell className="font-mono text-xs">{item.gtin}</TableCell>

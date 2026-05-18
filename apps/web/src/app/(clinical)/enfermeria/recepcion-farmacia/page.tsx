@@ -98,7 +98,7 @@ export default function RecepcionFarmaciaPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {data?.carts.map((cart) => (
+                {data?.carts.map((cart: { id: string; patient: { firstName: string; lastName: string; mrn: string }; turno: string; status: string; dispatchedAt: string | Date | null }) => (
                   <TableRow key={cart.id}>
                     <TableCell>
                       {cart.patient.firstName} {cart.patient.lastName}

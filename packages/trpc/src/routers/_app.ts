@@ -296,7 +296,7 @@ export const appRouter = router({
   // F2-S7 Stream 08 — Sustitución
   pharmacySubstitution: pharmacySubstitutionRouter,
   // F2-S7 Stream 09 — Carrito unidosis
-  cart: cartRouter,
+  pharmacyCart: cartRouter,
   // F2-S7 Stream 14 — Patient ID por pulsera
   patientIdentification: patientIdentificationRouter,
   // F2-S7 Stream 15 — Farmacovigilancia
