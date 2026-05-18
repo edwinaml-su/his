@@ -815,6 +815,200 @@ export const eceAnestesiaFirmadaPayloadSchema = z.object({
   actoQuirurgicoId: z.string().uuid().optional(),
   firmadoPor: z.string().uuid().optional(),
 }).passthrough();
+// pharmacy.substitution.proposed / authorized / rejected  (US.F2.6.11)
+// -----------------------------------------------------------------------------
+
+export const pharmacySubstitutionProposedPayloadSchema = z.object({
+  substitutionId:    z.string().uuid(),
+  prescriptionId:    z.string().uuid(),
+  prescriptionItemId: z.string().uuid(),
+  gtinOriginal:      z.string().length(14),
+  gtinSustituto:     z.string().length(14),
+  /** UUID del médico prescriptor al que se notifica para autorizar. */
+  prescriptorUserId: z.string().uuid(),
+  /** UUID del farmacéutico que propone. */
+  farmaceuticoUserId: z.string().uuid(),
+});
+
+export type PharmacySubstitutionProposedPayload = z.infer<
+  typeof pharmacySubstitutionProposedPayloadSchema
+>;
+
+/** Payload compartido para authorized / rejected. */
+export const pharmacySubstitutionDecidedPayloadSchema = z.object({
+  substitutionId:  z.string().uuid(),
+  prescriptionId:  z.string().uuid(),
+  gtinOriginal:    z.string().length(14),
+  gtinSustituto:   z.string().length(14),
+  /** UUID del médico que tomó la decisión. */
+  medicoUserId:    z.string().uuid(),
+  motivo:          z.string().min(1).max(1000),
+});
+
+export type PharmacySubstitutionDecidedPayload = z.infer<
+  typeof pharmacySubstitutionDecidedPayloadSchema
+>;
+// gs1.epcis.* — EPCIS bedside events (Fase 2 S7, US.F2.6.53-58)
+// -----------------------------------------------------------------------------
+
+/** WHAT dimension: identificadores GS1 del medicamento escaneado */
+export const epcisWhatSchema = z.object({
+  gtin: z.string().length(14),
+  lote: z.string().min(1).max(50).optional(),
+  serial: z.string().min(1).max(50).optional(),
+  /** vencimiento en formato YYMMDD (GS1 AI 17) o ISO 8601 date */
+  vencimiento: z.string().optional(),
+  /** SGTIN = gtin + serial combinado */
+  sgtin: z.string().optional(),
+});
+
+/** WHERE dimension: ubicaciones GLN */
+export const epcisWhereSchema = z.object({
+  readPoint: z.string().length(13),  // GLN lectura
+  bizLocation: z.string().length(13).optional(), // GLN ubicación de negocio
+});
+
+/** WHY dimension: business step + disposition + bizTransactionList */
+export const epcisWhySchema = z.object({
+  businessStep: z.enum([
+    "dispensing", "administering", "accepting", "reserving",
+    "stat_administration", "returning",
+  ]),
+  disposition: z.enum([
+    "in_progress", "in_transit", "in_stock",
+    "consumed", "recalled", "expired", "non_sellable", "dispensed",
+  ]),
+  /** Referencia a la receta/indicación (bizTransactionList EPCIS) */
+  bizTransactionId: z.string().optional(),
+  bizTransactionType: z.enum(["po", "rma", "desadv"]).optional(),
+});
+
+/** WHO dimension: GSRN profesional + GSRN paciente */
+export const epcisWhoSchema = z.object({
+  gsrnProfesional: z.string().length(18).optional(),
+  gsrnPaciente: z.string().length(18).optional(),
+});
+
+export const gs1EpcisDispensacionPayloadSchema = z.object({
+  epcisEventId: z.string().uuid(),
+  tipoEvento: z.literal("ObjectEvent"),
+  subtipo: z.literal("PHARMACY_DISPENSE"),
+  what: epcisWhatSchema,
+  where: epcisWhereSchema,
+  why: epcisWhySchema,
+  who: epcisWhoSchema,
+  payloadHash: z.string().length(64),
+  establecimientoId: z.string().uuid(),
+  indicationId: z.string().uuid().optional(),
+});
+
+export const gs1EpcisBedsidePayloadSchema = z.object({
+  epcisEventId: z.string().uuid(),
+  tipoEvento: z.literal("ObjectEvent"),
+  subtipo: z.literal("BEDSIDE_ADMIN"),
+  what: epcisWhatSchema,
+  where: epcisWhereSchema,
+  why: epcisWhySchema,
+  who: epcisWhoSchema,
+  payloadHash: z.string().length(64),
+  establecimientoId: z.string().uuid(),
+  indicationId: z.string().uuid().optional(),
+});
+
+export const gs1EpcisSubstitucionPayloadSchema = z.object({
+  epcisEventId: z.string().uuid(),
+  tipoEvento: z.literal("TransactionEvent"),
+  subtipo: z.literal("SUBSTITUTION"),
+  what: epcisWhatSchema,
+  /** GTIN original que fue sustituido */
+  gtinOriginal: z.string().length(14),
+  where: epcisWhereSchema,
+  why: epcisWhySchema,
+  who: epcisWhoSchema,
+  payloadHash: z.string().length(64),
+  establecimientoId: z.string().uuid(),
+});
+
+export type Gs1EpcisDispensacionPayload = z.infer<typeof gs1EpcisDispensacionPayloadSchema>;
+export type Gs1EpcisBedsidePayload = z.infer<typeof gs1EpcisBedsidePayloadSchema>;
+export type Gs1EpcisSubstitucionPayload = z.infer<typeof gs1EpcisSubstitucionPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// farmacovigilancia.* — Incidentes de farmacovigilancia (Fase 2 S7, US.F2.6.56-57)
+// -----------------------------------------------------------------------------
+
+export const farmacovigilanciaIncidentBaseSchema = z.object({
+  incidentId: z.string().uuid(),
+  severity: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+  patientId: z.string().uuid().optional(),
+  gtin: z.string().length(14).optional(),
+  gsrnEnfermera: z.string().length(18).optional(),
+  establecimientoId: z.string().uuid(),
+  detectedAt: z.string().datetime(),
+});
+
+export const farmacovigilanciaAlergiaPayloadSchema =
+  farmacovigilanciaIncidentBaseSchema.extend({
+    tipo: z.literal("ALERGIA_DETECTADA"),
+    allergyId: z.string().uuid(),
+    drugId: z.string().uuid().optional(),
+    prescriberId: z.string().uuid().nullable(),
+  });
+
+export const farmacovigilanciaRecallPayloadSchema =
+  farmacovigilanciaIncidentBaseSchema.extend({
+    tipo: z.literal("RECALL_DETECTADO"),
+    lote: z.string().min(1).max(50),
+    glnUbicacion: z.string().length(13).optional(),
+  });
+
+export const farmacovigilanciaDobleDispPayloadSchema =
+  farmacovigilanciaIncidentBaseSchema.extend({
+    tipo: z.literal("DOBLE_DISPENSACION"),
+    prescriptionItemId: z.string().uuid(),
+    ventanaHoras: z.number().positive(),
+  });
+
+export const farmacovigilanciaVencidoPayloadSchema =
+  farmacovigilanciaIncidentBaseSchema.extend({
+    tipo: z.literal("DOSIS_VENCIDA"),
+    lote: z.string().min(1).max(50),
+    vencimiento: z.string(),
+  });
+
+export type FarmacovigilanciaAlergiaPayload = z.infer<typeof farmacovigilanciaAlergiaPayloadSchema>;
+export type FarmacovigilanciaRecallPayload = z.infer<typeof farmacovigilanciaRecallPayloadSchema>;
+export type FarmacovigilanciaDobleDispPayload = z.infer<typeof farmacovigilanciaDobleDispPayloadSchema>;
+export type FarmacovigilanciaVencidoPayload = z.infer<typeof farmacovigilanciaVencidoPayloadSchema>;
+// pharmacy.reservation.created / pharmacy.reservation.cancelled (US.F2.6.8)
+// Emitidos cuando se crea o cancela una reserva lógica GS1.
+// -----------------------------------------------------------------------------
+
+export const pharmacyReservationCreatedPayloadSchema = z.object({
+  reservationId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  pharmacyOrderId: z.string().uuid(),
+  gtin: z.string().length(14),
+  lote: z.string().min(1).max(80),
+  serie: z.string().max(80).optional(),
+  expiresAt: z.string().datetime(),
+  organizationId: z.string().uuid(),
+});
+
+export const pharmacyReservationCancelledPayloadSchema = z.object({
+  reservationId: z.string().uuid(),
+  motivo: z.string().min(1),
+  cancelledBy: z.string().uuid(),
+  patientId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+export type PharmacyReservationCreatedPayload = z.infer<
+  typeof pharmacyReservationCreatedPayloadSchema
+>;
+export type PharmacyReservationCancelledPayload = z.infer<
+  typeof pharmacyReservationCancelledPayloadSchema
+>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -1080,6 +1274,58 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.anestesia.firmada"),
     payload: eceAnestesiaFirmadaPayloadSchema,
+  }),
+  // Fase 2 (S7) — Sustitución genérico-comercial (US.F2.6.11)
+  z.object({
+    eventType: z.literal("pharmacy.substitution.proposed"),
+    payload: pharmacySubstitutionProposedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.substitution.authorized"),
+    payload: pharmacySubstitutionDecidedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.substitution.rejected"),
+    payload: pharmacySubstitutionDecidedPayloadSchema,
+  }),
+  // Fase 2 (S7) — GS1 EPCIS bedside events
+  z.object({
+    eventType: z.literal("gs1.epcis.dispensacion"),
+    payload: gs1EpcisDispensacionPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.epcis.bedside"),
+    payload: gs1EpcisBedsidePayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.epcis.sustitucion"),
+    payload: gs1EpcisSubstitucionPayloadSchema,
+  }),
+  // Fase 2 (S7) — Farmacovigilancia
+  z.object({
+    eventType: z.literal("farmacovigilancia.alergia_detectada"),
+    payload: farmacovigilanciaAlergiaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("farmacovigilancia.recall_detectado"),
+    payload: farmacovigilanciaRecallPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("farmacovigilancia.doble_dispensacion"),
+    payload: farmacovigilanciaDobleDispPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("farmacovigilancia.dosis_vencida"),
+    payload: farmacovigilanciaVencidoPayloadSchema,
+  }),
+  // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
+  z.object({
+    eventType: z.literal("pharmacy.reservation.created"),
+    payload: pharmacyReservationCreatedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.reservation.cancelled"),
+    payload: pharmacyReservationCancelledPayloadSchema,
   }),
 ]);
 

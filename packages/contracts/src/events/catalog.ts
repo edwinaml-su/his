@@ -109,6 +109,24 @@ export const EVENT_TYPES = [
   "ece.acto_quirurgico.firmado",
   "ece.acto_quirurgico.validado",
   "ece.nacimiento.registrado",
+  // Fase 2 (S7) — Sustitución genérico-comercial autorizada (US.F2.6.11)
+  "pharmacy.substitution.proposed",
+  "pharmacy.substitution.authorized",
+  "pharmacy.substitution.rejected",
+  // Fase 2 (S7) — GS1 EPCIS bedside events + Farmacovigilancia (US.F2.6.53-58)
+  "gs1.epcis.dispensacion",
+  "gs1.epcis.bedside",
+  "gs1.epcis.sustitucion",
+  "farmacovigilancia.alergia_detectada",
+  "farmacovigilancia.recall_detectado",
+  "farmacovigilancia.doble_dispensacion",
+  "farmacovigilancia.dosis_vencida",
+  // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
+  "medication.administered.bedside",
+  "medication.administration.canceled",
+  // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
+  "pharmacy.reservation.created",
+  "pharmacy.reservation.cancelled",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

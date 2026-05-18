@@ -80,3 +80,5 @@ export function validateIdentifier(
       return typeof value === "string" && value.trim().length > 0;
   }
 }
+
+export * from "./gs1";

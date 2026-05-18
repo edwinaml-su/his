@@ -131,6 +131,24 @@ import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 import { eceSalaExpulsionRouter } from "./ece/sala-expulsion.router";
 // Fase 2 S7 — GS1 Bedside: GSRN Pulsera Paciente (US.F2.6.1)
 import { gsrnPulseraRouter } from "./pharmacy/gsrn-pulsera.router";
+// F2-S7 Stream 03 — StaffGsrn catalog (US.F2.6.2)
+import { staffGsrnRouter } from "./staff-gsrn.router";
+// F2-S7 Stream 04 — GS1 catálogos admin (GLN tree + Medicamentos + Dashboard)
+import { glnHierarchyRouter } from "./gs1-gln-hierarchy.router";
+import { gs1MedicationRouter } from "./gs1-medication.router";
+import { gs1DashboardRouter } from "./gs1-dashboard.router";
+// F2-S7 Stream 05 — Picking station dispensation
+import { dispensationRouter } from "./pharmacy/dispensation.router";
+// F2-S7 Stream 06 — PharmacyReservation flow + duplicate detection
+import { pharmacyDispensationRouter } from "./pharmacy-dispensation.router";
+// F2-S7 Stream 08 — Sustitución autorizada
+import { pharmacySubstitutionRouter } from "./pharmacy/substitution.router";
+// F2-S7 Stream 09 — Carrito unidosis
+import { cartRouter } from "./pharmacy/cart.router";
+// F2-S7 Stream 14 — Patient ID via pulsera GSRN
+import { patientIdentificationRouter } from "./patient-identification.router";
+// F2-S7 Stream 15 — Farmacovigilancia
+import { farmacovigilanciaRouter } from "./farmacovigilancia.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -265,6 +283,24 @@ export const appRouter = router({
   eceSalaExpulsion: eceSalaExpulsionRouter,
   // Fase 2 S7 — GS1 Bedside: GSRN Pulsera Paciente (US.F2.6.1)
   gsrnPulsera: gsrnPulseraRouter,
+  // F2-S7 Stream 03 — StaffGsrn
+  staffGsrn: staffGsrnRouter,
+  // F2-S7 Stream 04 — GS1 admin catálogos
+  gs1GlnHierarchy: glnHierarchyRouter,
+  gs1Medication: gs1MedicationRouter,
+  gs1Dashboard: gs1DashboardRouter,
+  // F2-S7 Stream 05 — Picking station
+  dispensation: dispensationRouter,
+  // F2-S7 Stream 06 — PharmacyReservation
+  pharmacyDispensation: pharmacyDispensationRouter,
+  // F2-S7 Stream 08 — Sustitución
+  pharmacySubstitution: pharmacySubstitutionRouter,
+  // F2-S7 Stream 09 — Carrito unidosis
+  pharmacyCart: cartRouter,
+  // F2-S7 Stream 14 — Patient ID por pulsera
+  patientIdentification: patientIdentificationRouter,
+  // F2-S7 Stream 15 — Farmacovigilancia
+  farmacovigilancia: farmacovigilanciaRouter,
 });
 
 export type AppRouter = typeof appRouter;

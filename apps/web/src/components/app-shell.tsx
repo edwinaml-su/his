@@ -187,6 +187,23 @@ const SECTIONS: NavSection[] = [
       { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
       { href: "/gs1/devoluciones", label: "Devoluciones", icon: Undo2 },
       { href: "/gs1/trazabilidad", label: "Trazabilidad", icon: Search },
+      // F2-S7 — GS1 Bedside catálogos
+      { href: "/gs1/gln", label: "GLN Jerarquía", icon: Layers },
+      { href: "/gs1/medicamentos", label: "Medicamentos GS1", icon: Pill },
+      { href: "/gs1/dashboard", label: "Dashboard GS1", icon: BarChart3 },
+    ],
+  },
+  {
+    label: "Bedside (BCMA)",
+    defaultOpen: false,
+    items: [
+      { href: "/bedside", label: "Cola Bedside", icon: ScanLine },
+      { href: "/pharmacy/dispense", label: "Dispensación Farmacia", icon: Pill },
+      { href: "/pharmacy/cart", label: "Carrito Unidosis", icon: Boxes },
+      { href: "/enfermeria/recepcion-farmacia", label: "Recepción Farmacia", icon: Truck },
+      { href: "/patient-id", label: "ID Paciente (GSRN)", icon: ScanLine },
+      { href: "/ece/kardex", label: "Kardex eMAR", icon: ClipboardCheck },
+      { href: "/medico/substitutions-pending", label: "Sustituciones Pendientes", icon: ArrowLeftRight },
     ],
   },
   {
@@ -239,6 +256,19 @@ const SECTIONS: NavSection[] = [
         requiredRoles: ["DIR"],
       },
       { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
+      // F2-S7 admin
+      {
+        href: "/staff-gsrn",
+        label: "GSRN Personal",
+        icon: BadgeCheck,
+        requiredRoles: ["ADMIN_CLINICO", "ADMIN"],
+      },
+      {
+        href: "/farmacovigilancia",
+        label: "Farmacovigilancia",
+        icon: ShieldAlert,
+        requiredRoles: ["ADMIN", "PHARM", "DIRECTOR"],
+      },
     ],
   },
 ];
