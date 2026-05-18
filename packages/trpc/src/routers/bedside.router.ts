@@ -425,7 +425,7 @@ const administrationRouter = router({
 // Sub-router: shiftQueue
 // ---------------------------------------------------------------------------
 
-interface ShiftQueueItem {
+export interface ShiftQueueItem {
   patientId:        string;
   patientGsrn:      string | null;
   indicationId:     string;
