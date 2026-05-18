@@ -76,7 +76,7 @@ export function parseGs1String(raw: string): Gs1ParseResult {
   }
 
   // Eliminar header ]d2 / ]C1 que @zxing puede incluir.
-  let input = raw.replace(/^\]d2|^\]C1|^\]e0/i, "");
+  const input = raw.replace(/^\]d2|^\]C1|^\]e0/i, "");
 
   const result: Gs1Data = {};
   let pos = 0;
