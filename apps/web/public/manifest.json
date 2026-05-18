@@ -1,0 +1,36 @@
+{
+  "name": "AVANTE HIS — Sistema de Información Hospitalaria",
+  "short_name": "AVANTE HIS",
+  "description": "Sistema de Información Hospitalaria — Inversiones Avante, El Salvador",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#1e3a5f",
+  "icons": [
+    {
+      "src": "/avante-logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Bedside Enfermería",
+      "short_name": "Bedside",
+      "description": "Flujo GS1 administración bedside — Proceso E",
+      "url": "/bedside",
+      "icons": [
+        {
+          "src": "/avante-logo.svg",
+          "sizes": "any",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ],
+  "categories": ["health", "medical"],
+  "lang": "es-SV"
+}

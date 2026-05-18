@@ -129,6 +129,7 @@ const SECTIONS: NavSection[] = [
       },
       { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
       { href: "/enfermeria/recepcion-farmacia", label: "Recepción Farmacia", icon: Boxes },
+      { href: "/bedside", label: "Bedside (Enfermería)", icon: ScanLine },
     ],
   },
   {

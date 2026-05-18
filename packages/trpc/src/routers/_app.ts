@@ -139,6 +139,8 @@ import { gsrnPulseraRouter } from "./pharmacy/gsrn-pulsera.router";
 import { staffGsrnRouter } from "./staff-gsrn.router";
 // F2-S7 — Carrito Unidosis (US.F2.6.12-16)
 import { cartRouter } from "./pharmacy/cart.router";
+// Fase 2 — Bedside PWA (US.F2.6.23-26)
+import { bedsideRouter } from "./bedside.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -281,6 +283,8 @@ export const appRouter = router({
   staffGsrn: staffGsrnRouter,
   // F2-S7 — Carrito Unidosis (US.F2.6.12-16)
   pharmacyCart: cartRouter,
+  // Fase 2 — Bedside PWA (US.F2.6.23-26)
+  bedside: bedsideRouter,
 });
 
 export type AppRouter = typeof appRouter;
