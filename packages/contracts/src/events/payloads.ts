@@ -673,6 +673,41 @@ export type EceCertificadoDefuncionCertificadoPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// pharmacy.substitution.proposed / authorized / rejected  (US.F2.6.11)
+// -----------------------------------------------------------------------------
+
+export const pharmacySubstitutionProposedPayloadSchema = z.object({
+  substitutionId:    z.string().uuid(),
+  prescriptionId:    z.string().uuid(),
+  prescriptionItemId: z.string().uuid(),
+  gtinOriginal:      z.string().length(14),
+  gtinSustituto:     z.string().length(14),
+  /** UUID del médico prescriptor al que se notifica para autorizar. */
+  prescriptorUserId: z.string().uuid(),
+  /** UUID del farmacéutico que propone. */
+  farmaceuticoUserId: z.string().uuid(),
+});
+
+export type PharmacySubstitutionProposedPayload = z.infer<
+  typeof pharmacySubstitutionProposedPayloadSchema
+>;
+
+/** Payload compartido para authorized / rejected. */
+export const pharmacySubstitutionDecidedPayloadSchema = z.object({
+  substitutionId:  z.string().uuid(),
+  prescriptionId:  z.string().uuid(),
+  gtinOriginal:    z.string().length(14),
+  gtinSustituto:   z.string().length(14),
+  /** UUID del médico que tomó la decisión. */
+  medicoUserId:    z.string().uuid(),
+  motivo:          z.string().min(1).max(1000),
+});
+
+export type PharmacySubstitutionDecidedPayload = z.infer<
+  typeof pharmacySubstitutionDecidedPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -858,6 +893,19 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.certificado_defuncion.certificado"),
     payload: eceCertificadoDefuncionCertificadoPayloadSchema,
+  }),
+  // Fase 2 (S7) — Sustitución genérico-comercial (US.F2.6.11)
+  z.object({
+    eventType: z.literal("pharmacy.substitution.proposed"),
+    payload: pharmacySubstitutionProposedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.substitution.authorized"),
+    payload: pharmacySubstitutionDecidedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.substitution.rejected"),
+    payload: pharmacySubstitutionDecidedPayloadSchema,
   }),
 ]);
 
