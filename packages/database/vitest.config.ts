@@ -14,6 +14,9 @@ export default defineConfig({
     name: "database",
     environment: "node",
     globals: false,
-    include: ["src/**/__tests__/**/*.test.ts"],
+    include: [
+      "src/**/__tests__/**/*.test.ts",
+      "scripts/__tests__/**/*.test.mjs",
+    ],
   },
 });
