@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   Users,
   Bed,
-  BedDouble,
   Stethoscope,
   ClipboardList,
   Building2,
@@ -60,6 +59,7 @@ import {
   LayoutGrid,
   Zap,
   ArrowRightLeft,
+  ScanLine,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -67,8 +67,6 @@ interface NavItem {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
-  /** Si se especifica, el item solo aparece si el usuario tiene alguno de estos roles. */
-  requiredRoles?: string[];
 }
 
 interface NavSection {
@@ -276,114 +274,62 @@ const SECTIONS: NavSection[] = [
       },
     ],
   },
+const NAV: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/patients", label: "Pacientes", icon: Users },
+  { href: "/admission", label: "Admisión", icon: ClipboardList },
+  { href: "/beds", label: "Camas", icon: Bed },
+  { href: "/triage", label: "Triage", icon: Stethoscope },
+  // US.F2.6.37-40 — Identificación de paciente por pulsera GSRN
+  { href: "/patient-id", label: "Identificación Paciente", icon: ScanLine },
+  { href: "/organizations", label: "Organizaciones", icon: Building2 },
+  { href: "/users", label: "Usuarios", icon: Users },
+  { href: "/audit", label: "Auditoría", icon: History },
+  { href: "/catalogs/gender", label: "Catálogos", icon: Settings },
 ];
-
-function SectionGroup({
-  section,
-  pathname,
-  roleCodes,
-}: {
-  section: NavSection;
-  pathname: string | null;
-  roleCodes: string[];
-}) {
-  const visibleItems = section.items.filter((item) =>
-    !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
-  );
-
-  const [open, setOpen] = React.useState(section.defaultOpen ?? true);
-  const sectionHasActive = visibleItems.some((i) => pathname?.startsWith(i.href));
-  const expanded = open || sectionHasActive;
-
-  if (visibleItems.length === 0) return null;
-
-  return (
-    <div className="mb-1">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={expanded}
-        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
-      >
-        <span>{section.label}</span>
-        {expanded ? (
-          <ChevronDown className="h-3 w-3" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="h-3 w-3" aria-hidden="true" />
-        )}
-      </button>
-      {expanded && (
-        <ul className="mt-0.5 space-y-0.5">
-          {visibleItems.map((item) => {
-            const Icon = item.icon;
-            const active = pathname?.startsWith(item.href);
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className={cn(
-                    "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors",
-                    active
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium shadow-sm"
-                      : "text-sidebar-foreground/90 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span className="truncate">{item.label}</span>
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
 
 export function AppShell({
   children,
   topbar,
-  roleCodes = [],
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
-  /** Roles del usuario activo — usados para filtrar items con requiredRoles. */
-  roleCodes?: string[];
 }) {
   const pathname = usePathname();
   return (
     <div className="flex min-h-screen">
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
-      >
-        Saltar al contenido principal
-      </a>
-      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground md:flex md:flex-col">
-        <div className="border-b border-sidebar-border p-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/avante-logo.svg"
-            alt="AVANTE Complejo Hospitalario"
-            className="h-10 w-auto brightness-0 invert"
-          />
-          <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
-            Sistema de Información Hospitalaria · El Salvador
-          </p>
+      <aside className="hidden w-60 shrink-0 border-r bg-sidebar-background md:flex md:flex-col">
+        <div className="border-b p-4">
+          <p className="text-base font-bold">HIS Avante</p>
+          <p className="text-xs text-muted-foreground">El Salvador</p>
         </div>
-        <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
-          {SECTIONS.map((section) => (
-            <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
-          ))}
+        <nav className="flex-1 space-y-1 p-2" aria-label="Principal">
+          {NAV.map((item) => {
+            const Icon = item.icon;
+            const active = pathname?.startsWith(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground hover:bg-sidebar-accent",
+                )}
+              >
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
         </nav>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b bg-background px-4 shadow-sm">
+        <header className="flex h-14 items-center justify-between border-b bg-background px-4">
           <div className="text-sm text-muted-foreground">{topbar}</div>
         </header>
-        <main id="main-content" tabIndex={-1} className="flex-1 bg-muted/30 p-6">
-          {children}
-        </main>
+        <main className="flex-1 p-6">{children}</main>
       </div>
     </div>
   );

@@ -1013,10 +1013,43 @@ model Patient {
   pharmacyReservations   PharmacyReservation[]     @relation("PatPharmacyReservations")
   // F2-S7 — Carrito Unidosis
   pharmacyCarts          PharmacyCart[]            @relation("PatientPharmacyCarts")
+  // F2-S7 — Patient ID via pulsera GSRN (US.F2.6.37-40)
+  gsrnHistory            GsrnHistory[]
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
   @@index([birthDate])
+  @@schema("public")
+}
+
+/// US.F2.6.37-40 — historial inmutable de pulseras GSRN por paciente.
+/// Registra cada emisión y revocación. Una sola fila ACTIVE por paciente/org.
+model GsrnHistory {
+  id               String    @id @default(uuid()) @db.Uuid
+  patientId        String    @db.Uuid
+  organizationId   String    @db.Uuid
+  gsrn             String    @unique @db.Char(18)
+  status           GsrnStatus @default(ACTIVE)
+  assignedAt       DateTime  @default(now()) @db.Timestamptz()
+  revokedAt        DateTime? @db.Timestamptz()
+  assignedById     String?   @db.Uuid
+  revokedById      String?   @db.Uuid
+  motivoRevocacion String?   @db.Text
+  createdAt        DateTime  @default(now()) @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @db.Timestamptz()
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+  @@index([organizationId])
+  @@index([gsrn])
+  @@schema("public")
+}
+
+enum GsrnStatus {
+  ACTIVE
+  REVOKED
+
   @@schema("public")
 }
 
