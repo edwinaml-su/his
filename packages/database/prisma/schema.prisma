@@ -1825,7 +1825,7 @@ model PrescriptionItem {
 model PharmacyReservation {
   id              String                    @id @default(uuid()) @db.Uuid
   organizationId  String                    @db.Uuid
-  pharmacyOrderId String                    @db.Uuid /// FK a PrescriptionItem (dispensación activa)
+  pharmacyOrderId String                    @db.Uuid /// FK a PharmacyOrder
   patientId       String                    @db.Uuid
   gtin            String                    @db.Char(14)    /// GTIN-14 GS1
   lote            String                    @db.VarChar(80)
@@ -1836,6 +1836,10 @@ model PharmacyReservation {
   createdAt       DateTime                  @default(now()) @db.Timestamptz()
   updatedAt       DateTime                  @updatedAt @db.Timestamptz()
 
+  organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
+  pharmacyOrder PharmacyOrder  @relation(fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
+  patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
+
   @@index([organizationId, patientId])
   @@index([pharmacyOrderId])
   @@index([expiresAt])
@@ -1845,6 +1849,7 @@ model PharmacyReservation {
 enum PharmacyReservationStatus {
   RESERVED
   CONFIRMED
+  DISPATCHED
   CANCELLED
   EXPIRED
 
@@ -5735,16 +5740,6 @@ enum PharmacyOrderStatus {
   @@schema("public")
 }
 
-/// Estado de una reserva de ítem GS1 para un paciente.
-enum PharmacyReservationStatus {
-  RESERVED
-  DISPATCHED
-  EXPIRED
-  CANCELLED
-
-  @@schema("public")
-}
-
 /// Estado del identificador GSRN del personal.
 enum StaffGsrnStatus {
   ACTIVE
@@ -5787,38 +5782,6 @@ model PharmacyOrder {
   @@index([glnOrigen])
   @@index([glnDestino])
   @@map("PharmacyOrder")
-  @@schema("public")
-}
-
-/// GS1 F2-S7 — Reserva de unidad GS1 (GTIN+lote+serie) para un paciente/orden.
-/// El job cron expira reservas pasado expiresAt.
-/// State machine: RESERVED → DISPATCHED | EXPIRED | CANCELLED.
-/// RLS: organizationId.
-model PharmacyReservation {
-  id               String                   @id @default(uuid()) @db.Uuid
-  organizationId   String                   @db.Uuid
-  pharmacyOrderId  String                   @db.Uuid
-  patientId        String                   @db.Uuid
-  /// GTIN-14 del ítem reservado.
-  gtin             String                   @db.VarChar(14)
-  /// Número de lote del ítem.
-  lote             String?                  @db.VarChar(60)
-  /// Número de serie del ítem (unitarios serializados).
-  serie            String?                  @db.VarChar(60)
-  status           PharmacyReservationStatus @default(RESERVED)
-  expiresAt        DateTime                 @db.Timestamptz() /// TTL para cron de expiración.
-  createdAt        DateTime                 @default(now()) @db.Timestamptz()
-
-  organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
-  pharmacyOrder PharmacyOrder  @relation(fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
-  patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
-
-  @@index([organizationId, status])
-  @@index([pharmacyOrderId])
-  @@index([patientId])
-  @@index([expiresAt]) /// usado por job cron de expiración.
-  @@index([gtin])
-  @@map("PharmacyReservation")
   @@schema("public")
 }
 
