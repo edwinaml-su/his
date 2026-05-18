@@ -14,6 +14,7 @@ import {
   Settings,
   History,
   HeartPulse,
+  HeartHandshake,
   Pill,
   FlaskConical,
   Activity,
@@ -49,6 +50,13 @@ import {
   NotebookPen,
   Siren,
   ArrowLeftRight,
+  CheckSquare,
+  UserCheck,
+  Baby,
+  Package,
+  Truck,
+  Undo2,
+  Search,
   LayoutGrid,
   Zap,
 } from "lucide-react";
@@ -89,7 +97,6 @@ const SECTIONS: NavSection[] = [
       { href: "/triage", label: "Triage", icon: Stethoscope },
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
-      { href: "/surgery", label: "Quirófano", icon: Scissors },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
     ],
   },
@@ -130,15 +137,18 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    // Solo items con páginas mergeadas. Preop/WHO/anestésico/URPA están
-    // pendientes de re-lanzamiento de agentes rate-limited y se agregarán
-    // en PR posterior.
     label: "ECE — Quirófano",
     defaultOpen: true,
     items: [
       { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
+      { href: "/surgery", label: "Quirófano", icon: Scissors },
+      { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList },
+      { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare },
+      { href: "/ece/quirofano/programacion", label: "Programación", icon: Scissors },
       { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap },
       { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature },
+      { href: "/ece/registro-anestesico", label: "Anestésico", icon: Wind },
+      { href: "/ece/urpa", label: "URPA", icon: UserCheck },
     ],
   },
   {
@@ -169,13 +179,25 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
-    // Solo items con páginas mergeadas. Partograma/atención RN/reanimación
-    // pendientes de re-lanzamiento de agentes rate-limited.
+    label: "GS1 Logística",
+    defaultOpen: false,
+    items: [
+      { href: "/gs1/inbound", label: "Inbound", icon: Package },
+      { href: "/gs1/transfers", label: "Transfers", icon: Truck },
+      { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
+      { href: "/gs1/devoluciones", label: "Devoluciones", icon: Undo2 },
+      { href: "/gs1/trazabilidad", label: "Trazabilidad", icon: Search },
+    ],
+  },
+  {
     label: "ECE — Maternidad",
     defaultOpen: true,
     items: [
       { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
       { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble },
+      { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
+      { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
+      { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake },
     ],
   },
   {

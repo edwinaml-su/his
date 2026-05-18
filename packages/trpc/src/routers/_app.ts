@@ -91,6 +91,36 @@ import { eceEpisodioHospitalarioRouter } from "./ece/episodio-hospitalario.route
 import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 // Fase 2 — Bridge Admisión Hospitalaria
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
+// ECE — Lista de Verificación Preoperatoria (NTEC Art. 28)
+import { eceCirugiaPreopRouter } from "./ece/preop-checklist.router";
+// ECE — WHO Surgical Safety Checklist (OMS Cirugía Segura 2009)
+import { eceWhoChecklistRouter } from "./ece/who-checklist.router";
+// ECE — Registro Anestésico Intraoperatorio (REG_ANEST)
+import { eceRegistroAnestesicoRouter } from "./ece/registro-anestesico.router";
+// ECE — URPA (Recuperación Post-Anestésica)
+import { eceUrpaRecoveryRouter } from "./ece/urpa-recovery.router";
+// Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
+import { eceBridgeCirugiaRouter } from "./ece/bridge-cirugia.router";
+// ECE — Partograma OMS (NTEC Doc 14)
+import { ecePartogramaRouter } from "./ece/partograma.router";
+// ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
+import { eceAtencionRnRouter } from "./ece/atencion-rn.router";
+// ECE — Maternidad: Reanimación Neonatal NRP (AHA/AAP)
+import { eceReanimacionNeonatalRouter } from "./ece/reanimacion-neonatal.router";
+// ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
+import { periodoExpulsivoRouter } from "./ece/periodo-expulsivo.router";
+// Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+import { gs1ProcesoARouter } from "./gs1-proceso-a.router";
+// GS1 Logística — Proceso B (Transferencias entre depósitos)
+import { gs1ProcesoBRouter } from "./gs1-proceso-b.router";
+// Proceso C GS1 — Preparación Unidosis
+import { gs1ProcesoCRouter } from "./gs1-proceso-c.router";
+// GS1 — Proceso F: Logística inversa devoluciones
+import { gs1ProcesoFRouter } from "./gs1-proceso-f.router";
+// GS1 Logística — EPCIS Query Layer (schema legacy)
+import { epcisQueryRouter } from "./epcis-query.router";
+// F2-S15 placeholder — Cold Chain Monitoring
+import { coldChainRouter } from "./cold-chain.router";
 // GS1 Healthcare Standards
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
@@ -191,6 +221,36 @@ export const appRouter = router({
   eceCertDef: eceCertDefRouter,
   // Fase 2 — Bridge Admisión Hospitalaria
   eceBridgeAdmision: eceBridgeAdmisionRouter,
+  // ECE — Lista de Verificación Preoperatoria (NTEC Art. 28)
+  eceCirugiaPreop: eceCirugiaPreopRouter,
+  // ECE — WHO Surgical Safety Checklist
+  eceWhoChecklist: eceWhoChecklistRouter,
+  // ECE — Registro Anestésico Intraoperatorio
+  eceRegistroAnestesico: eceRegistroAnestesicoRouter,
+  // ECE — URPA (Recuperación Post-Anestésica)
+  eceUrpa: eceUrpaRecoveryRouter,
+  // Fase 2 — Bridge Cirugía Quirúrgica (ECE — Quirófano)
+  eceBridgeCirugia: eceBridgeCirugiaRouter,
+  // ECE — Partograma OMS (NTEC Doc 14)
+  ecePartograma: ecePartogramaRouter,
+  // ECE — Atención Recién Nacido (NTEC Doc ATN_RN)
+  eceAtencionRn: eceAtencionRnRouter,
+  // ECE — Maternidad: Reanimación Neonatal NRP
+  eceReanimacionNeonatal: eceReanimacionNeonatalRouter,
+  // ECE — Período Expulsivo + Alumbramiento (NTEC Doc 14)
+  ecePeriodoExpulsivo: periodoExpulsivoRouter,
+  // Fase 2 (S7) — GS1 Logística: Proceso A Inbound
+  gs1ProcesoA: gs1ProcesoARouter,
+  // GS1 Logística — Proceso B (Transferencias entre depósitos GLN)
+  gs1ProcesoB: gs1ProcesoBRouter,
+  // Proceso C GS1 — Preparación Unidosis
+  gs1ProcesoC: gs1ProcesoCRouter,
+  // GS1 — Proceso F: Logística inversa devoluciones
+  gs1ProcesoF: gs1ProcesoFRouter,
+  // GS1 Logística — EPCIS Query Layer
+  epcisQuery: epcisQueryRouter,
+  // F2-S15 placeholder — Cold Chain Monitoring
+  coldChain: coldChainRouter,
   // GS1 Healthcare Standards
   gs1: gs1CatalogosRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)

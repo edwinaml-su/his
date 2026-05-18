@@ -214,6 +214,10 @@ export const workflowEstadoRouter = router({
     /**
      * Actualiza un estado. Devuelve snapshot anterior (`prev`) para trazabilidad.
      * No permite cambiar tipo_documento_id ni codigo (identidad del estado).
+     *
+     * Middleware de integridad: cuando cambia `esInicial` o `esFinal` se simula
+     * el workflow resultante y se bloquea con PRECONDITION_FAILED si el cambio
+     * introduce nuevos errores (p.ej. WF001 sin inicial, WF003 dos iniciales).
      */
     update: workflowProc
       .input(estadoUpdateInput)
@@ -235,6 +239,50 @@ export const workflowEstadoRouter = router({
           esFinal: input.esFinal ?? prev.es_final,
           orden: input.orden ?? prev.orden,
         };
+
+        // Pre-validación solo cuando cambia es_inicial o es_final
+        const cambiaFlags =
+          input.esInicial !== undefined || input.esFinal !== undefined;
+
+        if (cambiaFlags) {
+          const [todosEstados, todasTransiciones, todosRoles] = await Promise.all([
+            ctx.prisma.$queryRaw<EstadoInput[]>`
+              SELECT id::text, nombre, es_inicial, es_final
+                FROM ece.flujo_estado
+               WHERE tipo_documento_id = ${prev.tipo_documento_id}::uuid
+            `,
+            ctx.prisma.$queryRaw<TransicionInput[]>`
+              SELECT id::text, estado_origen_id::text, estado_destino_id::text, accion
+                FROM ece.flujo_transicion
+               WHERE tipo_documento_id = ${prev.tipo_documento_id}::uuid
+            `,
+            ctx.prisma.$queryRaw<DocumentoRolInput[]>`
+              SELECT id::text FROM ece.documento_rol
+               WHERE tipo_documento_id = ${prev.tipo_documento_id}::uuid
+            `,
+          ]);
+
+          // Simular el estado resultante aplicando los cambios en memoria
+          const estadosSimulados: EstadoInput[] = todosEstados.map((e) =>
+            e.id === input.id
+              ? { ...e, es_inicial: updated.esInicial, es_final: updated.esFinal }
+              : e,
+          );
+
+          const resultado = validateWorkflow({
+            estados: estadosSimulados,
+            transiciones: todasTransiciones,
+            roles: todosRoles,
+          });
+
+          const nuevosErrores = resultado.errors.filter((e) => e.severity === "error");
+          if (nuevosErrores.length > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `El cambio introduce errores de integridad: ${nuevosErrores.map((e) => e.message).join("; ")}`,
+            });
+          }
+        }
 
         const [row] = await ctx.prisma.$queryRaw<[FlujoEstadoRow]>`
           UPDATE ece.flujo_estado

@@ -673,6 +673,150 @@ export type EceCertificadoDefuncionCertificadoPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// gs1.inbound.recibido  (Fase 2 S7 — GS1 Proceso A)
+// Emitido cuando un operador registra la recepción de mercancía en muelle.
+// -----------------------------------------------------------------------------
+
+export const gs1InboundRecibidoPayloadSchema = z.object({
+  recepcionId: z.string().uuid(),
+  numeroDocumentoRecepcion: z.string().min(1),
+  proveedorGln: z.string().length(13),
+  establecimientoId: z.string().uuid(),
+  cantidadProductos: z.number().int().nonnegative(),
+  registradoPorId: z.string().uuid(),
+});
+
+export type Gs1InboundRecibidoPayload = z.infer<typeof gs1InboundRecibidoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// gs1.inbound.rechazado  (Fase 2 S7 — GS1 Proceso A)
+// Emitido cuando un supervisor rechaza una recepción pendiente.
+// -----------------------------------------------------------------------------
+
+export const gs1InboundRechazadoPayloadSchema = z.object({
+  recepcionId: z.string().uuid(),
+  numeroDocumentoRecepcion: z.string().min(1),
+  proveedorGln: z.string().length(13),
+  establecimientoId: z.string().uuid(),
+  motivoRechazo: z.string().min(5),
+  rechazadoPorId: z.string().uuid(),
+});
+
+export type Gs1InboundRechazadoPayload = z.infer<typeof gs1InboundRechazadoPayloadSchema>;
+// gs1.unidosis.preparada / gs1.unidosis.verificada
+// -----------------------------------------------------------------------------
+
+export const gs1UnidosisPreparadaPayloadSchema = z.object({
+  codigoUnidosis: z.string(),
+  pacienteId: z.string().uuid(),
+  indicacionId: z.string().uuid(),
+  gtinOrigenId: z.string().uuid(),
+  cantidadPreparada: z.number().int().positive(),
+  expiryUnidosis: z.string().datetime(),
+});
+
+export const gs1UnidosisVerificadaPayloadSchema = z.object({
+  codigoUnidosis: z.string(),
+  pacienteId: z.string().uuid(),
+  verificadoPor: z.string().uuid(),
+});
+
+export type Gs1UnidosisPreparadaPayload = z.infer<typeof gs1UnidosisPreparadaPayloadSchema>;
+export type Gs1UnidosisVerificadaPayload = z.infer<typeof gs1UnidosisVerificadaPayloadSchema>;
+// cold_chain.excursion (F2-S15 placeholder — sensor IoT real pendiente)
+// Emitido cuando una lectura queda fuera del rango configurado.
+// -----------------------------------------------------------------------------
+
+export const coldChainExcursionPayloadSchema = z.object({
+  lecturaId: z.string().uuid(),
+  equipmentId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  temperaturaC: z.number(),
+  humedadPct: z.number().optional(),
+  severidad: z.enum(["WARNING", "CRITICAL"]),
+  mensaje: z.string().min(1).max(500),
+});
+
+export type ColdChainExcursionPayload = z.infer<typeof coldChainExcursionPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// Fase 2 S5 — Quirófano + Obstetricia + GS1 Proceso B (schemas relaxed).
+// Se usan `.passthrough()` para tolerar variaciones de campos opcionales
+// que los routers puedan agregar sin requerir migración de schemas.
+// -----------------------------------------------------------------------------
+
+export const ecePreopChecklistFirmadoPayloadSchema = z.object({
+  checklistId: z.string().uuid(),
+  cirugiaCaseId: z.string().uuid().nullable().optional(),
+  pacienteId: z.string().uuid().optional(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const eceCirugiaProgramadaPayloadSchema = z.object({
+  cirugiaCaseId: z.string().uuid(),
+  pacienteId: z.string().uuid().optional(),
+  fechaProgramada: z.string().datetime().optional(),
+}).passthrough();
+
+export const eceCirugiaCanceladaPayloadSchema = z.object({
+  cirugiaCaseId: z.string().uuid(),
+  motivo: z.string().optional(),
+}).passthrough();
+
+export const eceRnRegistradoPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  rnPatientId: z.string().uuid().optional(),
+  madrePatientId: z.string().uuid().optional(),
+  episodioObsId: z.string().uuid().optional(),
+  apgar1min: z.number().int().optional(),
+  apgar5min: z.number().int().optional(),
+}).passthrough();
+
+export const eceRnReanimacionRequeridaPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  rnPatientId: z.string().uuid().optional(),
+  protocoloNrp: z.unknown().optional(),
+}).passthrough();
+
+export const eceRnFirmadoPayloadSchema = z.object({
+  atnRnId: z.string().uuid(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const ecePartogramaAlertaPayloadSchema = z.object({
+  partogramaId: z.string().uuid(),
+  tipoAlerta: z.string().optional(),
+  severidad: z.string().optional(),
+}).passthrough();
+
+export const eceExpulsionHemorragiaPostPartoAlertaPayloadSchema = z.object({
+  expulsionId: z.string().uuid(),
+  pacienteId: z.string().uuid().optional(),
+  perdidaSanguineaMl: z.number().optional(),
+}).passthrough();
+
+export const gs1TransferEnviadaPayloadSchema = z.object({
+  transferenciaId: z.string().uuid(),
+  origenGln: z.string(),
+  destinoGln: z.string(),
+  enviadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+export const gs1TransferRecibidaRechazadaPayloadSchema = z.object({
+  transferenciaId: z.string().uuid(),
+  origenGln: z.string(),
+  destinoGln: z.string(),
+  verificadoPor: z.string().uuid().optional(),
+  motivoRechazo: z.string().nullable().optional(),
+}).passthrough();
+
+export const eceAnestesiaFirmadaPayloadSchema = z.object({
+  registroId: z.string().uuid(),
+  actoQuirurgicoId: z.string().uuid().optional(),
+  firmadoPor: z.string().uuid().optional(),
+}).passthrough();
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -858,6 +1002,84 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.certificado_defuncion.certificado"),
     payload: eceCertificadoDefuncionCertificadoPayloadSchema,
+  }),
+  // Fase 2 (S7) — GS1 Proceso A: Inbound
+  z.object({
+    eventType: z.literal("gs1.inbound.recibido"),
+    payload: gs1InboundRecibidoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.inbound.rechazado"),
+    payload: gs1InboundRechazadoPayloadSchema,
+  }),
+  // Proceso C GS1 — Preparación Unidosis
+  z.object({
+    eventType: z.literal("gs1.unidosis.preparada"),
+    payload: gs1UnidosisPreparadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.unidosis.verificada"),
+    payload: gs1UnidosisVerificadaPayloadSchema,
+  }),
+  // F2-S15 placeholder — Cold Chain
+  z.object({
+    eventType: z.literal("cold_chain.excursion"),
+    payload: coldChainExcursionPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Preoperatorio
+  z.object({
+    eventType: z.literal("ece.preop_checklist.firmado"),
+    payload: ecePreopChecklistFirmadoPayloadSchema,
+  }),
+  // Fase 2 S5 — Bridge Cirugía
+  z.object({
+    eventType: z.literal("ece.cirugia.programada"),
+    payload: eceCirugiaProgramadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.cirugia.cancelada"),
+    payload: eceCirugiaCanceladaPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Atención RN
+  z.object({
+    eventType: z.literal("ece.rn.registrado"),
+    payload: eceRnRegistradoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rn.reanimacion_requerida"),
+    payload: eceRnReanimacionRequeridaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rn.firmado"),
+    payload: eceRnFirmadoPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Partograma
+  z.object({
+    eventType: z.literal("ece.partograma.alerta"),
+    payload: ecePartogramaAlertaPayloadSchema,
+  }),
+  // Fase 2 S5 — Período Expulsivo
+  z.object({
+    eventType: z.literal("ece.expulsion.hemorragia_post_parto_alerta"),
+    payload: eceExpulsionHemorragiaPostPartoAlertaPayloadSchema,
+  }),
+  // Fase 2 S7 — GS1 Proceso B
+  z.object({
+    eventType: z.literal("gs1.transfer.enviada"),
+    payload: gs1TransferEnviadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.transfer.recibida"),
+    payload: gs1TransferRecibidaRechazadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("gs1.transfer.rechazada"),
+    payload: gs1TransferRecibidaRechazadaPayloadSchema,
+  }),
+  // Fase 2 S5 — ECE Registro Anestésico
+  z.object({
+    eventType: z.literal("ece.anestesia.firmada"),
+    payload: eceAnestesiaFirmadaPayloadSchema,
   }),
 ]);
 

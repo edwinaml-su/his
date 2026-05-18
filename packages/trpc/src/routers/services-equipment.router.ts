@@ -23,6 +23,9 @@ import {
   calibrationLogCreateInput,
   calibrationLogListInput,
   isValidTransition,
+  registrarGiaiInput,
+  actualizarUbicacionInput,
+  historialUbicacionesInput,
   type EquipmentStatusType,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
@@ -205,6 +208,102 @@ export const servicesEquipmentRouter = router({
           orderBy: { certificationExpiresAt: "asc" },
           take: input.limit,
         });
+      }),
+
+    // ------------------------------------------------------------------
+    // GS1 — GIAI + GLN + EPCIS
+    // ------------------------------------------------------------------
+
+    registrarGiai: tenantProcedure
+      .input(registrarGiaiInput)
+      .mutation(async ({ ctx, input }) => {
+        const eq = await ctx.prisma.biomedicalEquipment.findFirst({
+          where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+
+        try {
+          await ctx.prisma.biomedicalEquipment.update({
+            where: { id: input.equipmentId },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            data: { giai_code: input.giaiCode } as any,
+          });
+        } catch (err: unknown) {
+          const pg = err as { code?: string };
+          if (pg.code === "23505") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "El GIAI ya está asignado a otro equipo.",
+            });
+          }
+          throw err;
+        }
+        return { ok: true as const };
+      }),
+
+    actualizarUbicacion: tenantProcedure
+      .input(actualizarUbicacionInput)
+      .mutation(async ({ ctx, input }) => {
+        const eq = await ctx.prisma.biomedicalEquipment.findFirst({
+          where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          select: { id: true, gln_ubicacion_actual: true } as any,
+        });
+        if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+
+        // Actualiza columna GLN en el equipo
+        await ctx.prisma.biomedicalEquipment.update({
+          where: { id: input.equipmentId },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data: { gln_ubicacion_actual: input.glnUbicacion } as any,
+        });
+
+        // Registra evento EPCIS en ece.epcis_event_equipment vía raw query
+        // (tabla fuera del schema Prisma; usamos $executeRaw para no bloquear el build)
+        await ctx.prisma.$executeRaw`
+          INSERT INTO ece.epcis_event_equipment
+            (equipment_id, gln_origen, gln_destino, biz_step, recorded_by)
+          VALUES (
+            ${input.equipmentId}::uuid,
+            ${(eq as Record<string, unknown>).gln_ubicacion_actual as string | null},
+            ${input.glnUbicacion},
+            ${input.bizStep ?? "storing"},
+            ${ctx.user.id}::uuid
+          )
+        `;
+
+        return { ok: true as const };
+      }),
+
+    historialUbicaciones: tenantProcedure
+      .input(historialUbicacionesInput)
+      .query(async ({ ctx, input }) => {
+        // Verifica pertenencia al tenant
+        const eq = await ctx.prisma.biomedicalEquipment.findFirst({
+          where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+
+        // Lee eventos EPCIS vía raw query (tabla fuera del schema Prisma)
+        const rows = await ctx.prisma.$queryRaw<
+          {
+            id: string;
+            event_time: Date;
+            biz_step: string | null;
+            gln_destino: string | null;
+            gln_origen: string | null;
+            recorded_by: string | null;
+          }[]
+        >`
+          SELECT id, event_time, biz_step, gln_destino, gln_origen, recorded_by
+          FROM ece.epcis_event_equipment
+          WHERE equipment_id = ${input.equipmentId}::uuid
+          ORDER BY event_time DESC
+          LIMIT ${input.limit}
+        `;
+        return rows;
       }),
   }),
 

@@ -1,0 +1,84 @@
+name: Performance Budget (Lighthouse)
+
+# Nightly + manual. NO corre en cada PR — auditoría Lighthouse es lenta (~2 min/página).
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL base a auditar (default: producción Vercel)'
+        required: false
+        default: 'https://his.complejoavante.com'
+  schedule:
+    # Nightly 07:00 UTC ≈ 01:00 America/El_Salvador (UTC-6)
+    - cron: '0 7 * * *'
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  lighthouse:
+    name: Lighthouse Baseline Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      # URL a auditar — workflow_dispatch puede sobreescribirla
+      E2E_BASE_URL: ${{ github.event.inputs.base_url || 'https://his.complejoavante.com' }}
+      # Guard: en este workflow sí hay BD real (apuntamos a producción/staging)
+      HAS_REAL_SUPABASE: 'true'
+      # Credenciales para login en E2E — deben existir como secrets del repo
+      E2E_ADMIN_EMAIL: ${{ secrets.E2E_ADMIN_EMAIL }}
+      E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      # Supabase prod (solo lectura — necesario para que la app arranque)
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers (Chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Lighthouse audit (5 páginas)
+        run: |
+          npx playwright test apps/web/e2e/perf/lighthouse-baseline.spec.ts \
+            --project=chromium \
+            --reporter=html \
+            --output=apps/web/test-results/perf
+
+      - name: Upload Lighthouse reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report-${{ github.run_id }}
+          path: |
+            apps/web/test-results/perf/
+            apps/web/playwright-report/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Notify on regression (optional — requiere Slack webhook)
+        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": ":rotating_light: *Lighthouse regression* en `${{ github.repository }}`.\nBranch: `${{ github.ref_name }}` | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Ver run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

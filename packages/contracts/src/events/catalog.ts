@@ -78,6 +78,33 @@ export const EVENT_TYPES = [
   // Fase 2 (S4) — ECE Certificado de Defunción (MC firma → DIR certifica)
   "ece.certificado_defuncion.firmado",
   "ece.certificado_defuncion.certificado",
+  // Fase 2 (S7) — GS1 Proceso A: Inbound (recepción muelle)
+  "gs1.inbound.recibido",
+  "gs1.inbound.rechazado",
+  // Proceso C GS1 — Preparación Unidosis farmacia
+  "gs1.unidosis.preparada",
+  "gs1.unidosis.verificada",
+  // F2-S15 placeholder — Cold Chain excursión (sensor IoT real pendiente)
+  "cold_chain.excursion",
+  // Fase 2 S5 — ECE Preoperatorio (NTEC Art. 28)
+  "ece.preop_checklist.firmado",
+  // Fase 2 S5 — Bridge Cirugía Quirúrgica
+  "ece.cirugia.programada",
+  "ece.cirugia.cancelada",
+  // Fase 2 S5 — ECE Atención Recién Nacido (NTEC ATN_RN)
+  "ece.rn.registrado",
+  "ece.rn.reanimacion_requerida",
+  "ece.rn.firmado",
+  // Fase 2 S5 — ECE Partograma (alerta dilatación / línea de acción)
+  "ece.partograma.alerta",
+  // Fase 2 S5 — ECE Período Expulsivo (hemorragia post-parto)
+  "ece.expulsion.hemorragia_post_parto_alerta",
+  // Fase 2 S7 — GS1 Proceso B: Transferencias inter-depósito GLN
+  "gs1.transfer.enviada",
+  "gs1.transfer.recibida",
+  "gs1.transfer.rechazada",
+  // Fase 2 S5 — ECE Registro Anestésico (REG_ANEST)
+  "ece.anestesia.firmada",
   // Fase 2 (S5) — ECE Quirófano (Acto Quirúrgico) y Obstetricia (Sala de Expulsión)
   "ece.acto_quirurgico.firmado",
   "ece.acto_quirurgico.validado",

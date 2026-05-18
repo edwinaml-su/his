@@ -12,6 +12,9 @@ import {
   stockMovementListInput,
   stockTransferInput,
   expiringLotsInput,
+  configurarThresholdInput,
+  listAlertasInput,
+  alertaTipoEnum,
 } from "../inventory";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -290,4 +293,94 @@ describe("stockMovementListInput", () => {
     if (r.success) expect(r.data.limit).toBe(100);
     expect(stockMovementListInput.safeParse({ limit: 1000 }).success).toBe(false);
   });
+});
+
+// ---------------------------------------------------------------------------
+// GS1 Threshold schemas (SQL 83)
+// ---------------------------------------------------------------------------
+
+describe("alertaTipoEnum", () => {
+  it.each(["stock_bajo", "stock_critico", "proximo_vencer", "vencido"])(
+    "tipo %s válido",
+    (t) => expect(alertaTipoEnum.safeParse(t).success).toBe(true),
+  );
+  it("tipo desconocido inválido", () =>
+    expect(alertaTipoEnum.safeParse("sin_stock").success).toBe(false));
+});
+
+describe("configurarThresholdInput", () => {
+  const base = {
+    gtinId: u,
+    ubicacionGln: "7799999001234",
+    stockMinimo: 100,
+    stockCritico: 20,
+    reorderPoint: 50,
+    diasCaducidadAlerta: 30,
+  };
+
+  it("acepta threshold válido completo", () =>
+    expect(configurarThresholdInput.safeParse(base).success).toBe(true));
+
+  it("diasCaducidadAlerta default 30 cuando se omite", () => {
+    const { diasCaducidadAlerta: _, ...sinDias } = base;
+    const r = configurarThresholdInput.safeParse(sinDias);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.diasCaducidadAlerta).toBe(30);
+  });
+
+  it("rechaza stockCritico > stockMinimo", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, stockCritico: 150 }).success,
+    ).toBe(false));
+
+  it("rechaza stockMinimo negativo", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, stockMinimo: -1 }).success,
+    ).toBe(false));
+
+  it("rechaza diasCaducidadAlerta = 0", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, diasCaducidadAlerta: 0 }).success,
+    ).toBe(false));
+
+  it("rechaza diasCaducidadAlerta > 365", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, diasCaducidadAlerta: 366 }).success,
+    ).toBe(false));
+
+  it("acepta stockCritico = stockMinimo (límite exacto válido)", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, stockCritico: 100, stockMinimo: 100 }).success,
+    ).toBe(true));
+
+  it("rechaza gtinId con formato inválido (no UUID)", () =>
+    expect(
+      configurarThresholdInput.safeParse({ ...base, gtinId: "not-a-uuid" }).success,
+    ).toBe(false));
+});
+
+describe("listAlertasInput", () => {
+  it("default limit=100 sin filtros", () => {
+    const r = listAlertasInput.safeParse({});
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.limit).toBe(100);
+  });
+
+  it("acepta filtro por tipos de alerta", () =>
+    expect(
+      listAlertasInput.safeParse({ tipos: ["stock_critico", "vencido"] }).success,
+    ).toBe(true));
+
+  it("rechaza tipo de alerta desconocido en array", () =>
+    expect(
+      listAlertasInput.safeParse({ tipos: ["stock_critico", "inexistente"] }).success,
+    ).toBe(false));
+
+  it("acepta filtro por gtinId UUID", () =>
+    expect(listAlertasInput.safeParse({ gtinId: u }).success).toBe(true));
+
+  it("acepta filtro combinado gtinId + ubicacionGln", () =>
+    expect(
+      listAlertasInput.safeParse({ gtinId: u, ubicacionGln: "7799999001234" }).success,
+    ).toBe(true));
 });

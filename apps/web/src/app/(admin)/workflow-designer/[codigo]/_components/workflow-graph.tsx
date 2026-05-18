@@ -11,6 +11,10 @@
  *  - Sidebar derecho al clickar nodo/edge — no rompe la estructura de la página padre.
  *  - Accesibilidad: aria-label en nodos, foco por teclado delegado a ReactFlow (tab/arrows nativos).
  *  - Responsive: zoom inicial 0.7 en viewport < 640px.
+ *  - Snap-to-grid 20px para alineación precisa.
+ *  - Overlay rojo con tooltip si conexión suelta en nodo sin destino válido.
+ *  - Botón "Layout auto" recalcula posiciones dagre y descarta localStorage.
+ *  - Doble clic sobre nodo activa edición inline del label.
  */
 
 import * as React from "react";
@@ -29,6 +33,8 @@ import ReactFlow, {
   type NodeProps,
   Handle,
   Position,
+  useReactFlow,
+  ReactFlowProvider,
 } from "reactflow";
 import "reactflow/dist/style.css";
 // dagre para auto-layout
@@ -63,7 +69,11 @@ interface WorkflowGraphProps {
   transiciones: TransicionRow[];
   tipDocCodigo: string; // para clave localStorage
   workflowEditHref: string; // href del botón "Editar"
+  /** Callback cuando el usuario edita un label inline. No persiste en BD — el padre decide qué hacer. */
+  onLabelChange?: (estadoId: string, newLabel: string) => void;
 }
+
+const SNAP_GRID: [number, number] = [20, 20];
 
 // ─── Constantes de layout ──────────────────────────────────────────────────────
 
@@ -101,22 +111,41 @@ interface EstadoNodeData {
   es_final: boolean;
   orden: number;
   onSelect: (id: string) => void;
+  onLabelChange: (id: string, label: string) => void;
 }
 
 function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
   const style = nodeStyle(data.es_inicial, data.es_final);
   const badge = data.es_inicial ? "INICIAL" : data.es_final ? "FINAL" : null;
 
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState(data.label);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  function commitEdit() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== data.label) {
+      data.onLabelChange(id, trimmed);
+    } else {
+      setDraft(data.label); // revert si vacío o sin cambios
+    }
+    setEditing(false);
+  }
+
   return (
     <div
       role="button"
       tabIndex={0}
       aria-label={`Estado ${data.label}${data.es_inicial ? ", estado inicial" : ""}${data.es_final ? ", estado final" : ""}`}
-      onClick={() => data.onSelect(id)}
+      onClick={() => { if (!editing) data.onSelect(id); }}
+      onDoubleClick={(e) => { e.stopPropagation(); setEditing(true); }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          data.onSelect(id);
+          if (!editing) { e.preventDefault(); data.onSelect(id); }
         }
       }}
       style={{
@@ -129,7 +158,7 @@ function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        cursor: "pointer",
+        cursor: editing ? "text" : "pointer",
         userSelect: "none",
       }}
     >
@@ -147,9 +176,36 @@ function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
           {badge}
         </span>
       )}
-      <span style={{ fontWeight: 600, fontSize: 13, textAlign: "center" }}>
-        {data.label}
-      </span>
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter") commitEdit();
+            if (e.key === "Escape") { setDraft(data.label); setEditing(false); }
+          }}
+          aria-label="Editar nombre del estado"
+          data-testid="node-label-input"
+          style={{
+            width: "100%",
+            textAlign: "center",
+            fontWeight: 600,
+            fontSize: 13,
+            background: "transparent",
+            border: "none",
+            outline: "1px solid currentColor",
+            borderRadius: 4,
+            padding: "2px 4px",
+          }}
+        />
+      ) : (
+        <span style={{ fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+          {data.label}
+        </span>
+      )}
       <span style={{ fontSize: 10, opacity: 0.6 }}>{data.codigo}</span>
 
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
@@ -321,14 +377,52 @@ function DetailSidebar({
   );
 }
 
-// ─── Componente principal ──────────────────────────────────────────────────────
+// ─── Overlay de conexión inválida ─────────────────────────────────────────────
 
-export function WorkflowGraph({
+interface InvalidConnectionOverlayProps {
+  message: string;
+  position: { x: number; y: number };
+}
+
+function InvalidConnectionOverlay({ message, position }: InvalidConnectionOverlayProps) {
+  return (
+    <div
+      data-testid="invalid-connection-overlay"
+      role="alert"
+      aria-live="assertive"
+      style={{
+        position: "absolute",
+        left: position.x,
+        top: position.y,
+        transform: "translate(-50%, -110%)",
+        background: "#dc2626",
+        color: "#fff",
+        borderRadius: 6,
+        padding: "4px 10px",
+        fontSize: 12,
+        fontWeight: 600,
+        pointerEvents: "none",
+        zIndex: 20,
+        whiteSpace: "nowrap",
+        boxShadow: "0 2px 8px rgba(220,38,38,0.4)",
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
+// ─── Componente inner (requiere ReactFlowProvider en el padre) ─────────────────
+
+function WorkflowGraphInner({
   estados,
   transiciones,
   tipDocCodigo,
   workflowEditHref,
+  onLabelChange,
 }: WorkflowGraphProps) {
+  const { fitView } = useReactFlow();
+
   // Detectar mobile para zoom inicial
   const isMobile =
     typeof window !== "undefined" && window.innerWidth < 640;
@@ -343,7 +437,7 @@ export function WorkflowGraph({
   const { initialNodes, initialEdges } = React.useMemo(() => {
     const saved = loadPositions(tipDocCodigo);
 
-    const onSelect = () => {}; // placeholder — se reemplaza en el render real
+    const placeholder = () => {}; // se reemplaza abajo con los handlers reales
 
     const rawNodes: Node<EstadoNodeData>[] = estados.map((e) => ({
       id: e.id,
@@ -355,7 +449,8 @@ export function WorkflowGraph({
         es_inicial: e.es_inicial,
         es_final: e.es_final,
         orden: e.orden,
-        onSelect,
+        onSelect: placeholder,
+        onLabelChange: placeholder as EstadoNodeData["onLabelChange"],
       },
     }));
 
@@ -382,15 +477,19 @@ export function WorkflowGraph({
   const [nodes, setNodes] = React.useState<Node[]>(initialNodes);
   const [edges, setEdges] = React.useState<Edge[]>(initialEdges);
 
-  // Sincronizar cuando cambian estados/transiciones (re-render por CRUD)
+  // ── Overlay de conexión inválida ───────────────────────────────────────────
+
+  const [invalidOverlay, setInvalidOverlay] = React.useState<{
+    message: string;
+    position: { x: number; y: number };
+  } | null>(null);
+
+  // Oculta el overlay después de 2s
   React.useEffect(() => {
-    setNodes(initialNodes.map((n) => ({
-      ...n,
-      data: { ...n.data, onSelect: handleNodeClick },
-    })));
-    setEdges(initialEdges);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialNodes, initialEdges]);
+    if (!invalidOverlay) return;
+    const t = setTimeout(() => setInvalidOverlay(null), 2000);
+    return () => clearTimeout(t);
+  }, [invalidOverlay]);
 
   // ── Selección ──────────────────────────────────────────────────────────────
 
@@ -407,7 +506,18 @@ export function WorkflowGraph({
     setSelectedEstadoId(null);
   }
 
-  // ── Cambios de nodos (drag) ────────────────────────────────────────────────
+  // ── Inline label change ────────────────────────────────────────────────────
+
+  function handleLabelChange(id: string, newLabel: string) {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id ? { ...n, data: { ...n.data, label: newLabel } } : n,
+      ),
+    );
+    onLabelChange?.(id, newLabel);
+  }
+
+  // ── Cambios de nodos (drag con snap) ──────────────────────────────────────
 
   function handleNodesChange(changes: NodeChange[]) {
     setNodes((nds) => {
@@ -421,16 +531,67 @@ export function WorkflowGraph({
     setEdges((eds) => applyEdgeChanges(changes, eds));
   }
 
+  // ── Conexión con validación runtime ───────────────────────────────────────
+
   function handleConnect(connection: Connection) {
+    const estadoIds = new Set(estados.map((e) => e.id));
+    const targetId = connection.target;
+
+    // Verifica que ambos extremos existen en el workflow actual
+    if (!targetId || !estadoIds.has(targetId) || !estadoIds.has(connection.source ?? "")) {
+      setInvalidOverlay({
+        message: "Estado no alcanzable en este workflow",
+        position: { x: 200, y: 80 }, // posición fija dentro del contenedor; suficiente para visibilidad
+      });
+      return;
+    }
+
+    // Verifica que no se crea un loop al mismo estado (self-loop)
+    if (connection.source === targetId) {
+      setInvalidOverlay({
+        message: "No se permiten transiciones al mismo estado",
+        position: { x: 200, y: 80 },
+      });
+      return;
+    }
+
     setEdges((eds) => addEdge(connection, eds));
   }
 
-  // ── Eliminar edge (solo UI — persiste en formulario externo) ───────────────
+  // ── Auto-layout dagre ──────────────────────────────────────────────────────
+
+  function handleAutoLayout() {
+    setNodes((nds) => {
+      const laid = applyDagreLayout(nds, edges);
+      // Limpiar posiciones guardadas para que el nuevo layout persista
+      try { localStorage.removeItem(`wf-positions-${tipDocCodigo}`); } catch { /* noop */ }
+      savePositions(tipDocCodigo, laid);
+      return laid;
+    });
+    // fitView después de que React aplique el estado (siguiente tick)
+    setTimeout(() => void fitView({ padding: 0.2 }), 50);
+  }
+
+  // ── Eliminar edge ──────────────────────────────────────────────────────────
 
   function handleDeleteEdge(id: string) {
     setEdges((eds) => eds.filter((e) => e.id !== id));
     setSelectedTransicionId(null);
   }
+
+  // Sincronizar cuando cambian estados/transiciones (re-render por CRUD)
+  React.useEffect(() => {
+    setNodes(initialNodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        onSelect: handleNodeClick,
+        onLabelChange: handleLabelChange,
+      },
+    })));
+    setEdges(initialEdges);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialNodes, initialEdges]);
 
   // ── Computed para sidebar ──────────────────────────────────────────────────
 
@@ -442,12 +603,16 @@ export function WorkflowGraph({
     ? transiciones.filter((t) => t.estado_origen_id === selectedEstadoId)
     : [];
 
-  // Inyectar handler real en nodes
-  const nodesWithHandler = React.useMemo(
+  // Inyectar handlers reales en nodes
+  const nodesWithHandlers = React.useMemo(
     () =>
       nodes.map((n) => ({
         ...n,
-        data: { ...n.data, onSelect: handleNodeClick },
+        data: {
+          ...n.data,
+          onSelect: handleNodeClick,
+          onLabelChange: handleLabelChange,
+        },
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [nodes],
@@ -459,21 +624,44 @@ export function WorkflowGraph({
       style={{ height: 480 }}
       data-testid="workflow-graph-container"
     >
+      {/* Botón "Layout auto-dagre" */}
+      <div className="absolute left-2 top-2 z-10">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={handleAutoLayout}
+          aria-label="Aplicar layout automático dagre"
+          data-testid="auto-layout-btn"
+        >
+          Layout auto
+        </Button>
+      </div>
+
+      {/* Overlay rojo de conexión inválida */}
+      {invalidOverlay && (
+        <InvalidConnectionOverlay
+          message={invalidOverlay.message}
+          position={invalidOverlay.position}
+        />
+      )}
+
       <ReactFlow
-        nodes={nodesWithHandler}
+        nodes={nodesWithHandlers}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={handleNodesChange}
         onEdgesChange={handleEdgesChange}
         onConnect={handleConnect}
         onEdgeClick={handleEdgeClick}
+        snapToGrid
+        snapGrid={SNAP_GRID}
         defaultViewport={{ x: 40, y: 40, zoom: isMobile ? 0.7 : 1 }}
         fitView={!isMobile}
         fitViewOptions={{ padding: 0.2 }}
         attributionPosition="bottom-right"
         aria-label="Grafo de estados y transiciones del workflow"
       >
-        <Background gap={16} size={1} color="#e5e7eb" />
+        <Background gap={20} size={1} color="#e5e7eb" />
         <Controls />
         <MiniMap
           nodeColor={(n: Node) => {
@@ -498,5 +686,15 @@ export function WorkflowGraph({
         onDeleteEdge={handleDeleteEdge}
       />
     </div>
+  );
+}
+
+// ─── Export público (envuelto en ReactFlowProvider para useReactFlow) ──────────
+
+export function WorkflowGraph(props: WorkflowGraphProps) {
+  return (
+    <ReactFlowProvider>
+      <WorkflowGraphInner {...props} />
+    </ReactFlowProvider>
   );
 }

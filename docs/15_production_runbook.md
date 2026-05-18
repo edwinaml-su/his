@@ -425,7 +425,60 @@ cd packages/database && pnpm prisma migrate deploy
 
 ---
 
-## 13. Referencias
+---
+
+## 13. Performance Budget (§perf-budget) {#perf-budget}
+
+**Herramienta:** Lighthouse via `playwright-lighthouse` + Playwright (Chromium).
+**Ejecución:** `.github/workflows/perf.yml` — nightly 07:00 UTC + `workflow_dispatch`.
+**Spec:** `apps/web/e2e/perf/lighthouse-baseline.spec.ts`.
+**Guard:** sólo activo si `HAS_REAL_SUPABASE=true` (skip en CI dummy de e2e.yml).
+
+### Umbrales mínimos (bloquean pipeline si bajan)
+
+| Categoría Lighthouse | Umbral mínimo |
+|----------------------|---------------|
+| Performance          | **80**        |
+| Accessibility        | **95**        |
+| Best Practices       | **90**        |
+| SEO                  | **85**        |
+
+### Páginas auditadas
+
+| Página                    | Ruta                        |
+|---------------------------|-----------------------------|
+| Dashboard                 | `/dashboard`                |
+| Lista de pacientes        | `/patients`                 |
+| Triage Manchester         | `/triage`                   |
+| ECE Historia Clínica      | `/ece/historia-clinica`     |
+| Workflow Designer         | `/workflow-designer`        |
+
+### Baselines obtenidos
+
+> Los baselines reales se obtienen cuando el workflow corre contra producción/staging con `HAS_REAL_SUPABASE=true`. Los artefactos JSON por página se guardan en `apps/web/test-results/perf/<pagina>-scores.json` y se adjuntan al run de GitHub Actions (retención 30 días).
+>
+> En entorno local dummy (BD mock) el spec se salta automáticamente — no produce scores.
+>
+> **Primera ejecución programada:** nightly posterior al merge de este spec a `main`. Actualizar esta tabla con los valores obtenidos.
+
+| Página                | Performance | Accessibility | Best Practices | SEO  | Fecha         |
+|-----------------------|-------------|---------------|----------------|------|---------------|
+| dashboard             | —           | —             | —              | —    | pendiente     |
+| patients              | —           | —             | —              | —    | pendiente     |
+| triage                | —           | —             | —              | —    | pendiente     |
+| ece-historia-clinica  | —           | —             | —              | —    | pendiente     |
+| workflow-designer     | —           | —             | —              | —    | pendiente     |
+
+### Procedimiento si una métrica baja
+
+1. Revisar artefacto `lighthouse-report-<run_id>` → identificar oportunidades en la sección "Diagnostics".
+2. Causas comunes: JS no chunkeado, imágenes sin lazy load, meta tags faltantes, contraste WCAG.
+3. Abrir issue en backlog con etiqueta `perf-regression` y severidad según cuánto bajó.
+4. Umbral temporal (máx. 1 sprint): `THRESHOLDS` puede bajarse ±5 pts con aprobación de `@QA` + `@Dev` documentada en el issue.
+
+---
+
+## 15. Referencias
 
 - `docs/08_devops.md` — Política DevOps general, branching, migraciones.
 - `docs/13_slos_kpis.md` — SLOs/SLIs MVP y Fase 6+.
