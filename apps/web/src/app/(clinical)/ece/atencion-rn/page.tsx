@@ -456,8 +456,8 @@ export default function AtencionRnPage() {
                   <TableHead>Hora nac.</TableHead>
                   <TableHead>Peso (g)</TableHead>
                   <TableHead>EG (sem)</TableHead>
-                  <TableHead>Apgar 1'</TableHead>
-                  <TableHead>Apgar 5'</TableHead>
+                  <TableHead>Apgar 1&apos;</TableHead>
+                  <TableHead>Apgar 5&apos;</TableHead>
                   <TableHead>Alimentación</TableHead>
                   <TableHead>Estado</TableHead>
                 </TableRow>
