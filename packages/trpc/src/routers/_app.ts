@@ -123,6 +123,8 @@ import { epcisQueryRouter } from "./epcis-query.router";
 import { coldChainRouter } from "./cold-chain.router";
 // GS1 Healthcare Standards
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
+// Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
+import { bedsideRouter } from "./bedside.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -253,6 +255,8 @@ export const appRouter = router({
   coldChain: coldChainRouter,
   // GS1 Healthcare Standards
   gs1: gs1CatalogosRouter,
+  // Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
+  bedside: bedsideRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)
