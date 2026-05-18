@@ -93,6 +93,9 @@ import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 // GS1 Healthcare Standards
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
+import { glnHierarchyRouter } from "./gs1-gln-hierarchy.router";
+import { gs1MedicationRouter } from "./gs1-medication.router";
+import { gs1DashboardRouter } from "./gs1-dashboard.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -193,6 +196,10 @@ export const appRouter = router({
   eceBridgeAdmision: eceBridgeAdmisionRouter,
   // GS1 Healthcare Standards
   gs1: gs1CatalogosRouter,
+  // GS1 — US.F2.6.3-5: GLN hierarchy, medicamentos extendidos, dashboard
+  gs1GlnHierarchy: glnHierarchyRouter,
+  gs1Medication: gs1MedicationRouter,
+  gs1Dashboard: gs1DashboardRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)

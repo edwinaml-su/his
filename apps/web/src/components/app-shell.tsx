@@ -179,6 +179,16 @@ const SECTIONS: NavSection[] = [
     ],
   },
   {
+    label: "GS1 Logística",
+    defaultOpen: false,
+    items: [
+      { href: "/gs1/gln",          label: "GLN Ubicaciones",    icon: MapPin },
+      { href: "/gs1/medicamentos", label: "Medicamentos GTIN",  icon: Pill },
+      { href: "/gs1/dashboard",    label: "Dashboard GS1",      icon: LayoutGrid },
+      { href: "/gs1/lote",         label: "Trazabilidad lote",  icon: Boxes },
+    ],
+  },
+  {
     label: "Soporte clínico",
     defaultOpen: false,
     items: [
