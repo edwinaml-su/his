@@ -187,7 +187,8 @@ export default function CartDetailPage() {
                   </TableCell>
                 </TableRow>
               )}
-              {cart.items.map((item: { id: string; gtin: string; lote: string | null; serie: string | null; createdAt: string | Date }, i: number) => (
+              {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+              {cart.items.map((item: any, i: number) => (
                 <TableRow key={item.id}>
                   <TableCell>{i + 1}</TableCell>
                   <TableCell className="font-mono text-xs">{item.gtin}</TableCell>

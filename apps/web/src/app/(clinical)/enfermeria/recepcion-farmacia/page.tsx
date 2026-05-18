@@ -98,7 +98,8 @@ export default function RecepcionFarmaciaPage() {
                     </TableCell>
                   </TableRow>
                 )}
-                {data?.carts.map((cart: { id: string; patient: { firstName: string; lastName: string; mrn: string }; turno: string; status: string; dispatchedAt: string | Date | null }) => (
+                {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                {data?.carts.map((cart: any) => (
                   <TableRow key={cart.id}>
                     <TableCell>
                       {cart.patient.firstName} {cart.patient.lastName}
