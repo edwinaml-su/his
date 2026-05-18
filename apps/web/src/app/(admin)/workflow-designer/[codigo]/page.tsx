@@ -529,7 +529,6 @@ export default function WorkflowGrafoPage() {
                   estados={estados ?? []}
                   transiciones={transiciones ?? []}
                   tipDocCodigo={codigo}
-                  workflowEditHref={`/workflow-designer/${codigo}/editar`}
                 />
               )}
             </CardContent>
