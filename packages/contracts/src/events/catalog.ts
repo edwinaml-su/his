@@ -121,6 +121,9 @@ export const EVENT_TYPES = [
   "farmacovigilancia.recall_detectado",
   "farmacovigilancia.doble_dispensacion",
   "farmacovigilancia.dosis_vencida",
+  // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
+  "medication.administered.bedside",
+  "medication.administration.canceled",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

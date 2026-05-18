@@ -453,6 +453,7 @@ model User {
   primarySurgeon            SurgeryCase[]                @relation("SurgeryPrimarySurgeon")
   medicationAdministrations MedicationAdministration[]   @relation("MedAdminAdministrator")
   medAdminSecondVerify      MedicationAdministration[]   @relation("MedAdminSecondVerifier")
+  medAdminCanceled          MedicationAdministration[]   @relation("MedAdminCanceledBy")
   imagingOrdered            ImagingOrder[]               @relation("ImagingOrderingProvider")
   imagingReported           ImagingReport[]              @relation("ImagingRadiologist")
   respiratoryPrescribed     RespiratoryOrder[]           @relation("RespiratoryPrescriber")
@@ -2460,6 +2461,8 @@ enum MedAdminStatus {
   REFUSED
   MISSED
   DOCUMENTED_LATE
+  /// Cancelado por enfermería con motivo obligatorio.
+  CANCELED
 
   @@schema("public")
 }
@@ -2495,6 +2498,19 @@ model MedicationAdministration {
   /// Override de timing o qty con audit.
   overrideReason          String?        @db.VarChar(500)
   notes                   String?        @db.Text
+  /// BCMA bedside GS1 — campos opcionales para compatibilidad con admin manual legacy.
+  /// US.F2.6.30-33: bedsideValidationId FK opcional al evento de scan bedside (Stream 01/10).
+  bedsideValidationId     String?        @map("bedside_validation_id") @db.Uuid
+  gtinScanned             String?        @map("gtin_scanned") @db.VarChar(50)
+  loteScanned             String?        @map("lote_scanned") @db.VarChar(50)
+  serieScanned            String?        @map("serie_scanned") @db.VarChar(50)
+  gsrnPaciente            String?        @map("gsrn_paciente") @db.VarChar(20)
+  gsrnEnfermera           String?        @map("gsrn_enfermera") @db.VarChar(20)
+  glnUbicacion            String?        @map("gln_ubicacion") @db.VarChar(15)
+  /// Cancelación de enfermería con motivo obligatorio.
+  cancelReason            String?        @map("cancel_reason") @db.VarChar(500)
+  canceledAt              DateTime?      @map("canceled_at") @db.Timestamptz()
+  canceledById            String?        @map("canceled_by_id") @db.Uuid
   createdAt               DateTime       @default(now()) @db.Timestamptz()
   updatedAt               DateTime       @updatedAt @db.Timestamptz()
 
@@ -2502,12 +2518,14 @@ model MedicationAdministration {
   prescriptionItem PrescriptionItem @relation("MedAdminItem", fields: [prescriptionItemId], references: [id], onDelete: Restrict)
   administeredBy   User             @relation("MedAdminAdministrator", fields: [administeredById], references: [id], onDelete: Restrict)
   secondVerifier   User?            @relation("MedAdminSecondVerifier", fields: [secondVerifierId], references: [id], onDelete: Restrict)
+  canceledBy       User?            @relation("MedAdminCanceledBy", fields: [canceledById], references: [id], onDelete: Restrict)
 
   @@index([organizationId, administeredAt])
   @@index([prescriptionItemId])
   @@index([administeredById])
   @@index([status])
   @@index([scheduledTime])
+  @@index([bedsideValidationId])
   @@schema("public")
 }
 
