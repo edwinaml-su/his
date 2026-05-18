@@ -35,10 +35,12 @@ export function DatamatrixPreview({
 
     async function render() {
       try {
-        const bwipjs = await import("bwip-js");
+        // bwip-js v4 exporta el bundle browser via subpath
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const mod: any = await import("bwip-js/browser");
         if (!canvasRef.current || cancelled) return;
 
-        bwipjs.toCanvas(canvasRef.current, {
+        mod.toCanvas(canvasRef.current, {
           bcid: "datamatrix",
           text: gs1Payload,
           scale: 3,
