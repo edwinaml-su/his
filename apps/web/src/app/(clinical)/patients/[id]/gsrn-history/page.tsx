@@ -244,7 +244,7 @@ export default function GsrnHistoryPage() {
       {!activeEntry && (
         <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4">
           <p className="text-sm text-yellow-800">
-            Este paciente no tiene pulsera activa. Use el botón "Emitir nueva pulsera".
+            Este paciente no tiene pulsera activa. Use el botón &quot;Emitir nueva pulsera&quot;.
           </p>
         </div>
       )}
