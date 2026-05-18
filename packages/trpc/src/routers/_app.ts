@@ -158,6 +158,8 @@ import { comiteEceRouter } from "./ece/comite-ece.router";
 // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
 import { patientDedupRouter } from "./patient-dedup.router";
 import { portalArcoRouter } from "./portal-arco.router";
+// F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
+import { auditOutlierRouter } from "./audit-outlier.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -319,6 +321,8 @@ export const appRouter = router({
   // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
   patientDedup: patientDedupRouter,
   portalArco: portalArcoRouter,
+  // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
+  auditOutlier: auditOutlierRouter,
 });
 
 export type AppRouter = typeof appRouter;
