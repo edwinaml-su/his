@@ -137,6 +137,8 @@ import { eceSalaExpulsionRouter } from "./ece/sala-expulsion.router";
 import { gsrnPulseraRouter } from "./pharmacy/gsrn-pulsera.router";
 // Fase 2 — S7: Catálogo GSRN Profesionales (US.F2.6.2)
 import { staffGsrnRouter } from "./staff-gsrn.router";
+// F2-S7 — Carrito Unidosis (US.F2.6.12-16)
+import { cartRouter } from "./pharmacy/cart.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -277,6 +279,8 @@ export const appRouter = router({
   gsrnPulsera: gsrnPulseraRouter,
   // Fase 2 — S7: Catálogo GSRN Profesionales (US.F2.6.2)
   staffGsrn: staffGsrnRouter,
+  // F2-S7 — Carrito Unidosis (US.F2.6.12-16)
+  pharmacyCart: cartRouter,
 });
 
 export type AppRouter = typeof appRouter;

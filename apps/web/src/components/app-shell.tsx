@@ -128,6 +128,7 @@ const SECTIONS: NavSection[] = [
         icon: ClipboardCheck,
       },
       { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
+      { href: "/enfermeria/recepcion-farmacia", label: "Recepción Farmacia", icon: Boxes },
     ],
   },
   {
@@ -137,6 +138,7 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/estudios", label: "Estudios ECE", icon: FlaskConical },
       { href: "/pharmacy", label: "Farmacia", icon: Pill },
       { href: "/pharmacy/dispense", label: "Picking Dispensación", icon: ClipboardCheck },
+      { href: "/pharmacy/cart", label: "Carrito Unidosis", icon: Boxes },
       { href: "/emar", label: "eMAR", icon: ScanLine },
       { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical },
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
