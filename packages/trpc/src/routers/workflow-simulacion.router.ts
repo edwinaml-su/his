@@ -38,7 +38,7 @@ const pathInput = z.object({
 
 // ── Row types ─────────────────────────────────────────────────────────────────
 
-interface EstadoSimRow {
+export interface EstadoSimRow {
   id: string;
   codigo: string;
   nombre: string;
@@ -48,7 +48,7 @@ interface EstadoSimRow {
   descripcion_markdown: string | null;
 }
 
-interface TransicionSimRow {
+export interface TransicionSimRow {
   id: string;
   estado_origen_id: string;
   estado_destino_id: string;
@@ -56,6 +56,12 @@ interface TransicionSimRow {
   rol_codigo: string;
   rol_nombre: string;
   requiere_firma: boolean;
+}
+
+export interface PathStep {
+  estado: EstadoSimRow;
+  transicionEjecutada: TransicionSimRow | null;
+  accionUsada: string | null;
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -210,12 +216,6 @@ export const workflowSimulacionRouter = router({
     }
 
     // Trazar el path
-    interface PathStep {
-      estado: EstadoSimRow;
-      transicionEjecutada: TransicionSimRow | null;
-      accionUsada: string | null;
-    }
-
     const steps: PathStep[] = [
       { estado: estadoInicial, transicionEjecutada: null, accionUsada: null },
     ];

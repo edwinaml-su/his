@@ -592,7 +592,7 @@ type SnapNode = { id: string; nombre: string; [k: string]: unknown };
 type SnapEdge = { id: string; accion: string; [k: string]: unknown };
 type Snapshot = { nodes: SnapNode[]; edges: SnapEdge[] };
 
-interface DiffResult {
+export interface DiffResult {
   nodes: {
     added: SnapNode[];
     removed: SnapNode[];
