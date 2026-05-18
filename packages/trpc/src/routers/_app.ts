@@ -125,6 +125,8 @@ import { coldChainRouter } from "./cold-chain.router";
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
 // Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
 import { bedsideRouter } from "./bedside.router";
+// Fase 2 (S7) — Sustitución genérico-comercial autorizada (US.F2.6.11)
+import { pharmacySubstitutionRouter } from "./pharmacy/substitution.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -261,6 +263,8 @@ export const appRouter = router({
   gs1: gs1CatalogosRouter,
   // Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
   bedside: bedsideRouter,
+  // Fase 2 (S7) — Sustitución genérico-comercial (US.F2.6.11)
+  pharmacySubstitution: pharmacySubstitutionRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)

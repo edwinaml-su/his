@@ -59,6 +59,7 @@ import {
   Search,
   LayoutGrid,
   Zap,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -98,6 +99,12 @@ const SECTIONS: NavSection[] = [
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
+      {
+        href: "/medico/substitutions-pending",
+        label: "Sustituciones pendientes",
+        icon: ArrowRightLeft,
+        requiredRoles: ["MEDICO", "ADMIN"],
+      },
     ],
   },
   {
