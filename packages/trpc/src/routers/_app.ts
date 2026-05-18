@@ -149,6 +149,9 @@ import { cartRouter } from "./pharmacy/cart.router";
 import { patientIdentificationRouter } from "./patient-identification.router";
 // F2-S7 Stream 15 — Farmacovigilancia
 import { farmacovigilanciaRouter } from "./farmacovigilancia.router";
+// F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
+import { patientDedupRouter } from "./patient-dedup.router";
+import { portalArcoRouter } from "./portal-arco.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -301,6 +304,9 @@ export const appRouter = router({
   patientIdentification: patientIdentificationRouter,
   // F2-S7 Stream 15 — Farmacovigilancia
   farmacovigilancia: farmacovigilanciaRouter,
+  // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
+  patientDedup: patientDedupRouter,
+  portalArco: portalArcoRouter,
 });
 
 export type AppRouter = typeof appRouter;
