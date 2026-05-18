@@ -50,6 +50,78 @@ Versionado semántico según [SemVer](https://semver.org/lang/es/).
 
 ---
 
+## [Sprint F2-S6] — 2026-05-17
+
+### Agregado
+
+- **Catálogos maestros GS1 (US.F2.5.1–5):** modelos Prisma `GtinCatalog`, `GlnLocation`,
+  `SsccUnit`, `GsrnPerson`, `GiaiAsset`. Validadores de dígito verificador (modulo-10 GS1)
+  en `packages/contracts/src/validators/gs1.ts` con paridad en `73_epcis_event.sql`.
+  Tests fixture-based en `packages/contracts/src/validators/__tests__/gs1.test.ts`.
+
+- **Proceso A — Recepción Inbound (US.F2.5.6–13):** router `receiving.*` con procedures
+  `importDesadv`, `scanSscc`, `scanGtin`, `reportDiscrepancy`, `closeSession`. Tabla
+  `RecepcionMercancia` con SQL hardening en `packages/database/sql/70_recepcion_mercancia.sql`
+  (RLS + trigger inmutabilidad + FK a `GlnLocation`). Bloqueo automático de recall en
+  recepción via `checkSanitaryAlert`. Acta de discrepancia en PDF con `@react-pdf/renderer`.
+
+- **Componente `<BarcodeScanner>` PWA (US.F2.5.12):** integración de `@zxing/browser`
+  en React. Parser de FNC1 (0x1D) para separar AIs GS1-128 y DataMatrix. Debounce HID
+  200ms. Feedback de vibración (`navigator.vibrate([200])`) en lectura exitosa. Extracción
+  correcta de AI 01 (GTIN), 17 (vencimiento), 10 (lote), 21 (serie).
+
+- **Proceso B — Transferencias Internas (US.F2.5.14–21):** router `inventory.*` con
+  procedures `dispatch`, `receiveTransfer`, `stockByGln`, `requestTransfer`, `approveRequest`.
+  Tabla `TransferenciaInventario` con SQL hardening en `71_transferencia_inventario.sql`.
+  Modelos `ParLevel` (niveles PAR min/max por GTIN+GLN) y `ColdChainLectura` (temperatura
+  de despacho y recepción). Job cron Supabase Edge Function cada 15 min para evaluación PAR.
+  Cuarentena automática por temperatura fuera de rango.
+
+- **Proceso C — Fraccionamiento Unidosis (US.F2.5.22–28):** router `unitDose.*` con
+  procedures `startRepack`, `generateUnitDose`, `printDataMatrix`, `closeSession`,
+  `reverseTrace`. Tabla `PreparacionUnidosis` en `72_preparacion_unidosis.sql`.
+  Herencia obligatoria de lote+vencimiento del GTIN padre al hijo. Conciliación con
+  tolerancia ≤ 2% (merma aceptable). Generación ZPL/PDF con `bwip-js` para impresoras
+  Zebra y genéricas. Trazabilidad inversa serial → GTIN padre via Transformation Event EPCIS.
+
+- **Proceso F — Logística Inversa y Cuarentena (US.F2.5.29–38):** modelos `SanitaryAlert`,
+  `DevolucionInventario`, `ReturnOrder`. Router `returns.*` con procedures `registerRecall`,
+  `triggerSweep`, `registerReturn`, `registerMerma`, `clearLot`. Edge Function asíncrona
+  de barrido de GLN (CTE recursiva sobre árbol GLN) con SLO < 30s medido via observability.
+  Bloqueo transversal en `receiving`, `inventory` y `unitDose` via helper `checkSanitaryAlert`.
+  Notificación outbox (patrón Beta.15) a farmacéuticos activos ante recall. Acta de devolución
+  en PDF con firma digital del Director de Farmacia.
+
+- **Motor EPCIS — Persistencia (US.F2.5.39):** tabla `EpcisEvent` inmutable con trigger
+  `BEFORE UPDATE OR DELETE RAISE EXCEPTION` en `73_epcis_event.sql`. Soporta los 4 tipos
+  del estándar: ObjectEvent, AggregationEvent, TransactionEvent, TransformationEvent.
+  Campos WHAT/WHERE/WHEN/WHY/WHO en Json con índices GIN sobre campos críticos. RLS por
+  `organizationId`. Sin `updatedAt` — inmutable por diseño (patrón audit hash chain).
+
+- **Motor EPCIS — Consulta y Exportación (US.F2.5.40–41):** router `epcis.*` con filtros
+  por GTIN, lote, GLN y rango de fechas. Exportación en JSON (compatible con EPCIS Query
+  Interface 2.0) y PDF (para auditorías MINSAL). Corrección de eventos via patrón "void
+  event" con referencia al evento original.
+
+- **4 specs E2E GS1:**
+  - `e2e/fase2/gs1-recepcion.spec.ts` — Proceso A: DESADV → escaneo → hard stops (5 escenarios).
+  - `e2e/fase2/gs1-transferencia.spec.ts` — Proceso B: despacho → tránsito → recepción (4 escenarios).
+  - `e2e/fase2/gs1-unidosis.spec.ts` — Proceso C: fraccionamiento → DataMatrix → conciliación (5 escenarios).
+  - `e2e/fase2/gs1-recall.spec.ts` — Proceso F: recall → barrido → bloqueo → devolución (4 escenarios).
+
+- **ADR `docs/adr/0017-gs1-event-sourcing.md`:** decision de tabla `EpcisEvent` dedicada
+  (event sourcing) vs queries sobre tablas operacionales vs Kafka vs schema normalizado
+  por tipo de evento. Alternativas rechazadas con razonamiento detallado.
+
+- **Sprint Review `docs/sprint-reviews/sprint_f2_s6_review.md`:** logros 15 streams,
+  metricas (~75 SP, 4 SQL, 13 tablas nuevas), retroactiva y carry-over F2-S7.
+
+### Eliminados
+
+- Nada eliminado. Los modelos GS1 son adiciones netas al schema sin afectar modelos previos.
+
+---
+
 ## [Sprint F2-S4] — 2026-05-17
 
 ### Agregado

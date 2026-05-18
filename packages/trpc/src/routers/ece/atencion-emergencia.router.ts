@@ -1,16 +1,49 @@
 /**
- * Router tRPC — ECE Atención de Emergencia (NTEC Doc 5, código ATN_EMERG).
+ * Router tRPC — ECE Atención de Emergencia.
  *
- * Tabla física: ece.atencion_emergencia (raw SQL — fuera del schema Prisma).
- * Workflow: borrador → en_revision → firmado → validado → anulado.
- * Roles:
- *   MT (médico de turno) crea, edita, firma y valida.
- *   DIR puede anular en cualquier estado pre-validado.
+ * Documento NTEC: Doc 5 — Registro de Atención de Emergencias.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.5.
+ * Código de tipo_documento: ATN_EMERG.
  *
- * Outbox: firmar emite `ece.atencion_emergencia.firmada` con hash SHA-256
- * del payload clínico para integridad documental.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: ATN_EMERG)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (MT: enviar a revisión)
+ *   en_revision → firmado      (MT: firma con hash SHA-256 del payload)
+ *   firmado     → validado     (MT/PHYSICIAN: validación clínica)
+ *   cualquier   → anulado      (DIR: director médico, solo pre-validado)
  *
- * Raw SQL es obligatorio porque el schema Prisma no modela las tablas ECE.
+ *   Inmutabilidad post-firma: no se permiten UPDATE a campos clínicos
+ *   una vez el estado es 'firmado'. Solo DIR puede anular, lo que crea
+ *   una nueva fila con estado 'anulado' y registra en bitácora.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro de la transacción Prisma)
+ * ---------------------------------------------------------------------------
+ *   'ece.atencion_emergencia.firmada'  — emitido por firmar().
+ *     Payload: { atencionId, episodioId, medicoId, payloadHash, organizationId }
+ *     payloadHash = SHA-256 de { motivoConsulta, exploracion, diagnostico,
+ *                                planTerapeutico } — cadena de integridad documental.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.atencion_emergencia  — fila principal (episodio_id, motivo_consulta,
+ *                              exploracion, diagnostico, plan_terapeutico,
+ *                              estado, firmado_por, firmado_en, payload_hash)
+ *   ece.personal_salud       — consultada para mapear his_user_id → personal ECE id
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get           → requireRole(["MT","PHYSICIAN","NURSE","DIR"])
+ *   create, update      → requireRole(["MT","PHYSICIAN"])
+ *   firmar, validar     → requireRole(["MT","PHYSICIAN"])
+ *   anular              → requireRole(["DIR"])
+ *
+ * Raw SQL es obligatorio porque el schema Prisma no modela las tablas ECE
+ * (opción B — schema Postgres separado). Se usa node:crypto createHash para
+ * el hash SHA-256 del payload previo a la firma.
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";

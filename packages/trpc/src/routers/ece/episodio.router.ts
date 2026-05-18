@@ -1,25 +1,46 @@
 /**
- * ece.episodio — Router tRPC para Episodios de Atención (ambulatorio/hospitalario).
+ * Router tRPC — ECE Episodios de Atención (ambulatorio y hospitalario).
  *
- * Tablas operadas (schema ece, raw SQL — fuera del modelo Prisma):
- *   ece.episodio_atencion        — episodios ambulatorios
- *   ece.episodio_hospitalario    — episodios hospitalarios (vincula a episodio_atencion)
- *   ece.asignacion_cama          — asignaciones de cama dentro de episodio hospitalario
- *   ece.episodio_estado_log      — bitácora inmutable de transiciones de estado
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3 — Gestión de episodios.
+ * Código de módulo: ECE-EPISODIO.
+ * Un episodio agrupa todos los documentos clínicos de una atención continua.
+ * Para hospitalización, episodio_atencion tiene un subtype episodio_hospitalario.
  *
- * Transiciones válidas del state machine (validadas también por triggers en BD):
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (state machine de episodio — validado también por triggers en BD)
+ * ---------------------------------------------------------------------------
  *   abierto → en_curso → cerrado
- *   cancelado es estado terminal.
+ *   cancelado es estado terminal (desde cualquier estado pre-cierre)
  *
- * Outbox:
- *   crear*  → emite `ece.episodio.abierto`
- *   transicionar (→ cerrado) → emite `ece.episodio.cerrado`
+ *   Los triggers de BD impiden regresar de estados cerrado/cancelado.
+ *   El alta médica (episodio-hospitalario.router) transiciona via confirmarAlta.
+ *   Las transiciones se registran en ece.episodio_estado_log (append-only).
  *
- * Roles:
- *   list*, get    → PHYSICIAN | NURSE | ADM
- *   crearAmbulatorio, transicionar → PHYSICIAN | NURSE
- *   crearHospitalario → PHYSICIAN | ADM
- *   asignarCama, liberarCama → NURSE | ADM
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.episodio.abierto'  — emitido al crearAmbulatorio / crearHospitalario.
+ *     Payload: { episodioId, pacienteId, tipo ('ambulatorio'|'hospitalario'), orgId }
+ *   'ece.episodio.cerrado'  — emitido al transicionar() con estado destino 'cerrado'.
+ *     Payload: { episodioId, pacienteId, fechaCierre, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.episodio_atencion        — fila base: paciente_id, tipo, estado,
+ *                                  motivo, fecha_apertura, fecha_cierre
+ *   ece.episodio_hospitalario    — subtype hospitalario: sala_id, orden_ingreso_id,
+ *                                  gravedad, fecha_ingreso, fecha_egreso
+ *   ece.asignacion_cama          — asignación activa: cama_id, episodio_id, estado
+ *   ece.episodio_estado_log      — bitácora inmutable de cada transición de estado
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   listAmbulatorios, listHospitalarios, get → requireRole(["PHYSICIAN","NURSE","ADM"])
+ *   crearAmbulatorio, transicionar           → requireRole(["PHYSICIAN","NURSE"])
+ *   crearHospitalario                        → requireRole(["PHYSICIAN","ADM"])
+ *   asignarCama, liberarCama                 → requireRole(["NURSE","ADM"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

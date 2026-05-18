@@ -1,29 +1,58 @@
 /**
- * eceConsentimiento — Router tRPC para Consentimiento Informado ECE (Doc 9 NTEC §3.9).
+ * Router tRPC — ECE Consentimiento Informado (CONS_INF).
  *
- * Workflow CONS_INF (código inmutable, no en revisión):
- *   borrador → firmado  (acción 'firmar', rol MC, requiere firma electrónica)
- *   firmado  → validado (acción 'validar', rol DIR)
+ * Documento NTEC: Doc 9 — Consentimiento Informado del Paciente.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.9.
+ * Código de tipo_documento: CONS_INF.
+ * Relevancia ética y legal: la firma del paciente es requisito previo a cualquier
+ *   procedimiento invasivo. Sin consentimiento firmado, el procedimiento no puede
+ *   ejecutarse en el flujo del sistema.
  *
- * Flujo de doble firma:
- *   1. Médico (MC) crea el borrador con los datos clínicos del consentimiento.
- *   2. El paciente/representante registra su firma (imagen URI) vía firmarPaciente.
- *   3. El MC firma con PIN electrónico vía firmar — avanza el workflow a 'firmado'.
- *   4. El DIR valida (aprueba) el consentimiento vía validar.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (doble firma — código: CONS_INF)
+ * ---------------------------------------------------------------------------
+ *   borrador  → (interacción paciente) → firmadoPaciente
+ *             → firmado   (MC firma con PIN argon2id — avanza workflow)
+ *   firmado   → validado  (DIR valida formalmente)
  *
- * La tabla `ece.consentimiento_informado` es INMUTABLE después del paso 3.
- * Triggers en BD impiden UPDATE/DELETE sobre campos clínicos post-firma.
- * El router detecta el estado via documento_instancia y lanza CONFLICT si
- * el estado no es borrador cuando se intenta firmar o modificar.
+ *   Paso 1: MC (PHYSICIAN) crea el borrador (create).
+ *   Paso 2: paciente/representante registra su firma como imagen URI (firmarPaciente).
+ *           No requiere PIN; la imagen biométrica actúa como firma manuscrita digital.
+ *   Paso 3: MC firma con PIN electrónico (firmar) — avanza a 'firmado'.
+ *   Paso 4: DIR valida (validar) — estado definitivo.
  *
- * Outbox: cada firma MC emite 'ece.consentimiento.firmado' con hash inmutable.
+ *   INMUTABILIDAD: triggers en BD bloquean UPDATE/DELETE post-firma (paso 3).
+ *   El router verifica estado en ece.documento_instancia y lanza CONFLICT si
+ *   el documento ya está firmado y se intenta modificar.
  *
- * Tablas raw SQL (schema ece — sin modelo Prisma):
- *   ece.consentimiento_informado
- *   ece.documento_instancia
- *   ece.personal_salud
- *   ece.firma_electronica
- *   ece.paciente
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.consentimiento.firmado'  — emitido por firmar() del MC.
+ *     Payload: { consentimientoId, episodioId, pacienteId, medicoId,
+ *                payloadHash, orgId }
+ *     payloadHash = SHA-256({ procedimiento, riesgos, alternativas,
+ *                              beneficios, firmaUri })
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.consentimiento_informado  — fila principal: episodio_id, procedimiento,
+ *                                   riesgos, alternativas, beneficios,
+ *                                   firma_paciente_uri, estado, instancia_id
+ *   ece.documento_instancia       — estado actual del documento
+ *   ece.personal_salud            — mapeo his_user_id → personal ECE id
+ *   ece.firma_electronica         — credencial PIN del MC (argon2id)
+ *   ece.paciente                  — datos del paciente (nombre, representante)
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get         → requireRole(["MC","PHYSICIAN","DIR","NURSE"])
+ *   create, update    → requireRole(["MC","PHYSICIAN"])
+ *   firmarPaciente    → requireRole(["MC","PHYSICIAN"])  — no requiere PIN
+ *   firmar            → requireRole(["MC","PHYSICIAN"])  — requiere PIN argon2id
+ *   validar           → requireRole(["DIR"])
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";

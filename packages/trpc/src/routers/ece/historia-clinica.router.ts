@@ -1,25 +1,49 @@
 /**
- * eceHistoriaClinica — CRUD + workflow de ece.historia_clinica.
+ * Router tRPC — ECE Historia Clínica (HIST_CLIN).
  *
- * Tabla operada: ece.historia_clinica (schema ECE, raw SQL — sin modelo Prisma).
- * Schema real (61_ece_06_documentos.sql):
- *   - antecedentes JSONB, examen_fisico JSONB, diagnosticos JSONB
- *   - estado vive en ece.documento_instancia (via instancia_id)
- *   - patient: instancia_id → episodio_id → ece.episodio_atencion.paciente_id
- *              → ece.paciente.public_patient_id → public."Patient"
+ * Documento NTEC: Doc 2 — Historia Clínica del Paciente.
+ * Norma: TDR §6 / MINSAL Acuerdo n.° 1616 (2024), §3.2.
+ * Código de tipo_documento: HIST_CLIN.
+ * Es el documento clínico maestro por paciente; referenciado por todos los demás
+ * documentos del ECE a través de episodio_id.
  *
- * Workflow: HIST_CLIN con estados borrador → en_revision → firmado → validado → anulado.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: HIST_CLIN)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision   (MC/MT/DIR: enviar a revisión)
+ *   en_revision → firmado       (MC: firma Médico Certificador con SHA-256 payload)
+ *   firmado     → validado      (DIR: director valida — estado definitivo)
+ *   cualquiera  → anulado       (MC/MT/DIR: pre-validado)
  *
- * Autorización:
- *   - Lectura:  PHYSICIAN, NURSE, MC, MT, DIR
- *   - Escritura (create/update): MC, MT, DIR
- *   - firmar:   MC (Médico certificador)
- *   - validar:  DIR
- *   - enviarRevision / anular: MC, MT, DIR
+ *   El estado vive en ece.documento_instancia (via instancia_id), no directamente
+ *   en ece.historia_clinica. Cada transición inserta fila en
+ *   ece.documento_instancia_historial con sha256(payload) para cadena de integridad.
  *
- * Toda transición registra en ece.documento_instancia_historial con sha256(payload).
+ * ---------------------------------------------------------------------------
+ * OUTBOX
+ * ---------------------------------------------------------------------------
+ *   No emite evento propio (el evento lo emite el motor de workflow genérico
+ *   'workflow.transitionExecuted' a través de ece.documento_instancia_historial).
  *
- * Spec: TDR §6 / Doc 2 NTEC / docs/backlog/fase2/
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — 61_ece_06_documentos.sql, fuera del modelo Prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.historia_clinica            — antecedentes JSONB, examen_fisico JSONB,
+ *                                     diagnosticos JSONB, instancia_id FK
+ *   ece.documento_instancia         — estado actual del documento
+ *   ece.documento_instancia_historial — log de transiciones + sha256 payload
+ *   ece.episodio_atencion           — join para obtener paciente_id
+ *   ece.paciente                    — public_patient_id → public."Patient"
+ *   public."Patient"                — nombre e identificación del paciente
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get                       → requireRole(["PHYSICIAN","NURSE","MC","MT","DIR"])
+ *   create, update                  → requireRole(["MC","MT","DIR"])
+ *   enviarRevision, anular          → requireRole(["MC","MT","DIR"])
+ *   firmar                          → requireRole(["MC"])
+ *   validar                         → requireRole(["DIR"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

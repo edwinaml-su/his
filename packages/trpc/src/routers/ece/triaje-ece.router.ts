@@ -1,25 +1,47 @@
 /**
- * ECE Triaje — Router tRPC (NTEC §3.4 Hoja de Triaje).
+ * Router tRPC — ECE Hoja de Triaje (documento NTEC §3.4).
  *
- * Gestiona el documento formal `ece.hoja_triaje` como complemento al triage
- * HIS (schema public). Ciclo de vida: borrador → en_revision → firmado → validado.
+ * Documento NTEC: §3.4 — Hoja de Triaje Manchester / Clasificación de Urgencias.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024).
+ * Código de tipo_documento: HOJA_TRIAJE.
+ * Complementa al triage HIS (schema public — TriageEvaluation). El documento ECE
+ *   es la versión regulatoria que queda en el expediente permanente del paciente.
  *
- * Procedures:
- *   eceTriaje.list          — lista paginada por episodio/paciente
- *   eceTriaje.get           — lectura de una hoja por id
- *   eceTriaje.create        — crea borrador (cualquier rol ECE)
- *   eceTriaje.firmar        — ENF firma la hoja (estado → firmado)
- *   eceTriaje.validar       — MT valida la hoja firmada (estado → validado)
- *   eceTriaje.linkToHisTriage — vincula con TriageEvaluation HIS
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: HOJA_TRIAJE)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (ENF/NURSE: completar evaluación inicial)
+ *   en_revision → firmado      (ENF/NURSE: firma — avanza workflow en JSONB)
+ *   firmado     → validado     (MT: médico de triaje valida la clasificación)
  *
- * Raw SQL contra ece.hoja_triaje (fuera del schema Prisma).
- * RLS via withWorkflowContext (SET LOCAL app.ece_personal_id, etc.).
- * Outbox: firmar emite `ece.triaje.firmado`.
+ *   El estado del workflow vive en el campo JSONB de la fila:
+ *     ece.hoja_triaje.evaluacion_triaje->>'estado_workflow'
+ *   No usa ece.documento_instancia genérico — la tabla tiene estado embebido.
+ *   Esto permite un ciclo de lectura más eficiente en el contexto de urgencias.
  *
- * Autorización:
- *   - list/get/create: cualquier rol ECE (MC, MT, ENF, ARCH, DIR, ESP)
- *   - firmar: solo ENF
- *   - validar: solo MT
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.triaje.firmado'  — emitido por firmar(). Stream 18-ext.
+ *     Payload: { hojaTriajeId, episodioId, enfermeroId, nivel_triaje, orgId }
+ *     Consumido por el módulo de urgencias para priorizar cola de atención.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.hoja_triaje           — fila principal: episodio_id, evaluacion_triaje JSONB
+ *                               (contiene nivel_manchester, motivo_consulta,
+ *                                signos_vitales_iniciales, estado_workflow),
+ *                               instancia_id FK nullable
+ *   ece.documento_instancia   — instancia de flujo (opcional, usado por linkToHisTriage)
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get, create     → requireRole(["MC","MT","ENF","NURSE","ARCH","DIR","ESP"])
+ *   firmar                → requireRole(["ENF","NURSE"])
+ *   validar               → requireRole(["MT"])
+ *   linkToHisTriage       → requireRole(["NURSE","ENF","MT"])
  */
 import { z } from "zod";
 import { Prisma } from "@prisma/client";

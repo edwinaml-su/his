@@ -1,16 +1,45 @@
 /**
  * ECE — Registro de Enfermería + Administración de Medicamento (MAR/Kardex).
  *
- * Tablas operadas (raw SQL — schema ece):
- *   ece.registro_enfermeria       — cabecera del registro de jornada
- *   ece.administracion_medicamento — detalle de cada administración
+ * Documento NTEC: Doc 7 — Registro de Enfermería y Administración de Medicamento
+ *   (MAR = Medication Administration Record / Kardex de Enfermería).
+ * Norma: TDR §7 / MINSAL Acuerdo n.° 1616 (2024).
+ * Código de tipo_documento: REG_ENF.
  *
- * Workflow: código REG_ENF, estados borrador → en_revision → firmado → validado.
- * Rol requerido: NURSE en todas las procedures.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: REG_ENF)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (NURSE: completar turno)
+ *   en_revision → firmado      (NURSE: firma al final de turno)
+ *   firmado     → validado     (NURSE coordinadora: cierre formal)
  *
- * Outbox: registrarAdministracion emite `ece.administracion.registrada` (Stream 30).
+ *   Estados son por cabecera (ece.registro_enfermeria); los ítems de
+ *   administración (ece.administracion_medicamento) se insertan en borrador/en_revision.
  *
- * Spec: TDR §7 NTEC / Doc 7 MAR-Kardex.
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.administracion.registrada'  — Stream 30. Emitido por registrarAdministracion().
+ *     Payload: { registroId, indicacionItemId, horaAdministrada, enfermeroId, orgId }
+ *   Usado por el motor de Kardex y BCMA para conciliar administraciones.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.registro_enfermeria        — cabecera (episodio_id, fecha, turno,
+ *                                    estado, observaciones, firmado_por, firmado_en)
+ *   ece.administracion_medicamento — línea de detalle (registro_id,
+ *                                    indicacion_item_id, hora_administrada,
+ *                                    dosis_administrada, via_usada, observaciones)
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC (todas las procedures: requireRole(["NURSE"]))
+ * ---------------------------------------------------------------------------
+ *   list, get, create, update           → NURSE
+ *   firmar, validar, registrarAdministracion → NURSE
+ *
+ * Raw SQL es obligatorio porque ece.* usa schema Postgres separado (opción B)
+ * y no está en schema.prisma. Las queries usan prisma.$queryRaw con Prisma.sql.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
