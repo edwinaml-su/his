@@ -239,6 +239,13 @@ const SECTIONS: NavSection[] = [
         requiredRoles: ["DIR"],
       },
       { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch },
+      // F2-S7 US.F2.6.2
+      {
+        href: "/staff-gsrn",
+        label: "GSRN Personal",
+        icon: BadgeCheck,
+        requiredRoles: ["ADMIN_CLINICO", "ADMIN"],
+      },
     ],
   },
 ];

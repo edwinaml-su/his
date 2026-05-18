@@ -131,6 +131,8 @@ import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 import { eceSalaExpulsionRouter } from "./ece/sala-expulsion.router";
 // Fase 2 S7 — GS1 Bedside: GSRN Pulsera Paciente (US.F2.6.1)
 import { gsrnPulseraRouter } from "./pharmacy/gsrn-pulsera.router";
+// Fase 2 — S7: Catálogo GSRN Profesionales (US.F2.6.2)
+import { staffGsrnRouter } from "./staff-gsrn.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -265,6 +267,8 @@ export const appRouter = router({
   eceSalaExpulsion: eceSalaExpulsionRouter,
   // Fase 2 S7 — GS1 Bedside: GSRN Pulsera Paciente (US.F2.6.1)
   gsrnPulsera: gsrnPulseraRouter,
+  // Fase 2 — S7: Catálogo GSRN Profesionales (US.F2.6.2)
+  staffGsrn: staffGsrnRouter,
 });
 
 export type AppRouter = typeof appRouter;
