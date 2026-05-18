@@ -82,6 +82,9 @@ export const EVENT_TYPES = [
   "ece.acto_quirurgico.firmado",
   "ece.acto_quirurgico.validado",
   "ece.nacimiento.registrado",
+  // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
+  "medication.administered.bedside",
+  "medication.administration.canceled",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
