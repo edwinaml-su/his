@@ -127,6 +127,8 @@ import { gs1CatalogosRouter } from "./gs1-catalogos.router";
 import { bedsideRouter } from "./bedside.router";
 // Fase 2 (S7) — Sustitución genérico-comercial autorizada (US.F2.6.11)
 import { pharmacySubstitutionRouter } from "./pharmacy/substitution.router";
+// Fase 2 — F2-S7: Estación de Picking Farmacia (US.F2.6.6-7)
+import { dispensationRouter } from "./pharmacy/dispensation.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -265,6 +267,8 @@ export const appRouter = router({
   bedside: bedsideRouter,
   // Fase 2 (S7) — Sustitución genérico-comercial (US.F2.6.11)
   pharmacySubstitution: pharmacySubstitutionRouter,
+  // Fase 2 — F2-S7: Estación de Picking Farmacia (US.F2.6.6-7)
+  dispensation: dispensationRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)
