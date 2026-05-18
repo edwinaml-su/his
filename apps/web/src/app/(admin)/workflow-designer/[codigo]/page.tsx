@@ -3,20 +3,14 @@
 /**
  * Workflow Designer — Vista de grafo del workflow de un tipo de documento.
  *
- * Layout:
- *  - Sección superior: nombre y badges del tipo de documento.
- *  - Grafo ReactFlow: nodos custom por tipo, drag-drop, sidebar de detalles.
- *  - Panel lateral derecho: matriz documento_rol (LLENA/RESPONSABLE/AUTORIZA/FIRMA × rol).
- *  - Botón "Editar workflow" → /workflow-designer/[codigo]/editar.
- *
- * Accesibilidad (WCAG 2.2 AA):
- *  - Nodos con aria-label descriptivo.
- *  - La tabla de roles tiene encabezados apropiados.
- *  - Navegación por teclado: nodos focusables con Enter/Space para abrir sidebar.
+ * Mejoras US.F2.2.14-17:
+ *  - RBAC: solo WORKFLOW_DESIGNER / DIR / ADMIN pueden editar (US.F2.2.14).
+ *  - Read-only mode: banner azul + paleta oculta + botones deshabilitados (US.F2.2.15).
+ *  - Mobile: viewport < 768px muestra MobileView (lista de estados) (US.F2.2.16).
+ *  - Accesibilidad WCAG 2.1 AA: skip-links, aria-labels, focus visible (US.F2.2.17).
  */
 import * as React from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { Badge } from "@his/ui/components/badge";
 import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -30,7 +24,46 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { useParams } from "next/navigation";
 import { WorkflowGraph } from "./_components/workflow-graph";
+import { MobileView } from "./_components/mobile-view";
+import { ReadOnlyBanner } from "./_components/read-only-banner";
+import { useWorkflowAccess } from "./_components/use-workflow-access";
+
+// ─── Skip-links ───────────────────────────────────────────────────────────────
+
+function SkipLinks() {
+  return (
+    <nav aria-label="Saltar al contenido" className="sr-only focus-within:not-sr-only">
+      <ul className="flex gap-2 p-2 bg-primary text-primary-foreground">
+        <li>
+          <a
+            href="#workflow-paleta"
+            className="underline focus:outline-2 focus:outline-primary-foreground px-2 py-1 rounded"
+          >
+            Saltar a paleta
+          </a>
+        </li>
+        <li>
+          <a
+            href="#workflow-canvas"
+            className="underline focus:outline-2 focus:outline-primary-foreground px-2 py-1 rounded"
+          >
+            Saltar a canvas
+          </a>
+        </li>
+        <li>
+          <a
+            href="#workflow-propiedades"
+            className="underline focus:outline-2 focus:outline-primary-foreground px-2 py-1 rounded"
+          >
+            Saltar a propiedades
+          </a>
+        </li>
+      </ul>
+    </nav>
+  );
+}
 
 // ─── Panel de validación ──────────────────────────────────────────────────────
 
@@ -40,12 +73,6 @@ interface ValidationIssue {
   severity: "error" | "warning";
 }
 
-/**
- * Muestra el resultado del validator de integridad.
- *
- * Errores primero (rojo), warnings después (ámbar).
- * Cada item incluye el código de regla y un link "Ir al item" cuando aplica.
- */
 function ValidationPanel({
   issues,
   onValidate,
@@ -59,7 +86,6 @@ function ValidationPanel({
 }) {
   const errores = (issues ?? []).filter((i) => i.severity === "error");
   const warnings = (issues ?? []).filter((i) => i.severity === "warning");
-
   const badgeCount = errores.length + warnings.length;
 
   return (
@@ -113,7 +139,6 @@ function ValidationPanel({
                       </span>
                       {issue.message}
                     </span>
-                    {/* Link contextual: estados y transiciones se editan en /editar */}
                     <Link
                       href={`/workflow-designer/${tipoDocCodigo}/editar`}
                       className="shrink-0 text-xs text-muted-foreground underline hover:text-foreground"
@@ -210,11 +235,7 @@ interface RolRow {
 
 function MatrizRoles({ roles }: { roles: RolRow[] }) {
   const funciones = ["LLENA", "RESPONSABLE", "AUTORIZA", "FIRMA"] as const;
-
-  // Agrupar por rol_codigo
-  const rolesUnicos = Array.from(
-    new Set(roles.map((r) => r.rol_codigo ?? r.rol_id)),
-  );
+  const rolesUnicos = Array.from(new Set(roles.map((r) => r.rol_codigo ?? r.rol_id)));
 
   if (rolesUnicos.length === 0) {
     return (
@@ -236,11 +257,8 @@ function MatrizRoles({ roles }: { roles: RolRow[] }) {
       </TableHeader>
       <TableBody>
         {rolesUnicos.map((rolCodigo) => {
-          const rolesDeEsteRol = roles.filter(
-            (r) => (r.rol_codigo ?? r.rol_id) === rolCodigo,
-          );
-          const rolNombre =
-            rolesDeEsteRol[0]?.rol_nombre ?? rolCodigo;
+          const rolesDeEsteRol = roles.filter((r) => (r.rol_codigo ?? r.rol_id) === rolCodigo);
+          const rolNombre = rolesDeEsteRol[0]?.rol_nombre ?? rolCodigo;
           return (
             <TableRow key={rolCodigo}>
               <TableCell className="text-xs font-medium">
@@ -278,21 +296,41 @@ function MatrizRoles({ roles }: { roles: RolRow[] }) {
   );
 }
 
+// ─── Hook de detección de viewport móvil ─────────────────────────────────────
+
+function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    setIsMobile(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  return isMobile;
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function WorkflowGrafoPage() {
   const params = useParams();
   const codigo = typeof params.codigo === "string" ? params.codigo : "";
+  const isMobile = useIsMobile();
 
-  // Primero obtenemos el tipo de documento por código
+  // Leer roles del tenant context (mismo patrón que workflows/page.tsx)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sessionQuery = (trpc as any).userAdmin?.me?.useQuery?.() ?? { data: null };
+  const roleCodes: string[] = sessionQuery.data?.roleCodes ?? [];
+  const { canEdit, isReadOnly } = useWorkflowAccess(roleCodes);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: tiposDocs, isLoading: loadingDoc } = (trpc as any).workflowTipoDoc.list.useQuery(
     { soloActivos: false },
   );
 
-  const tipoDoc = tiposDocs?.find(
-    (d: { codigo: string }) => d.codigo === codigo,
-  );
+  const tipoDoc = tiposDocs?.find((d: { codigo: string }) => d.codigo === codigo);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: estados, isLoading: loadingEstados } = (trpc as any).workflowEstado.estado.list.useQuery(
@@ -312,7 +350,6 @@ export default function WorkflowGrafoPage() {
     { enabled: !!tipoDoc?.id },
   );
 
-  // ── Validación de integridad ────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: validacion, isLoading: loadingValidacion, refetch: refetchValidacion } = (trpc as any).workflowValidator.validate.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
@@ -323,7 +360,7 @@ export default function WorkflowGrafoPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4" aria-busy="true" aria-label="Cargando workflow">
         <div className="h-8 w-64 animate-pulse rounded bg-muted" aria-hidden="true" />
         <div className="h-64 animate-pulse rounded bg-muted" aria-hidden="true" />
       </div>
@@ -345,16 +382,45 @@ export default function WorkflowGrafoPage() {
     );
   }
 
+  // Vista móvil: siempre solo lectura, React Flow no se monta
+  if (isMobile) {
+    return (
+      <div className="space-y-4" data-testid="mobile-view-container">
+        <SkipLinks />
+        {/* Encabezado compacto */}
+        <div>
+          <h1 className="text-xl font-bold">{tipoDoc.nombre}</h1>
+          <code className="text-xs text-muted-foreground">{tipoDoc.codigo}</code>
+        </div>
+        <MobileView
+          estados={estados ?? []}
+          transiciones={transiciones ?? []}
+          tipoDocNombre={tipoDoc.nombre}
+        />
+        <p className="text-xs text-muted-foreground">
+          <Link href="/workflow-designer" className="underline">
+            Tipos de documento
+          </Link>{" "}
+          / {tipoDoc.nombre}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {/* Skip-links WCAG 2.1 AA (US.F2.2.17) */}
+      <SkipLinks />
+
+      {/* Banner de solo lectura (US.F2.2.15) */}
+      {isReadOnly && <ReadOnlyBanner />}
+
       {/* Encabezado */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold">{tipoDoc.nombre}</h1>
-            {!tipoDoc.activo && (
-              <Badge variant="outline">Inactivo</Badge>
-            )}
+            {!tipoDoc.activo && <Badge variant="outline">Inactivo</Badge>}
           </div>
           <code className="text-xs text-muted-foreground">{tipoDoc.codigo}</code>
           <div className="mt-1 flex flex-wrap gap-1">
@@ -371,14 +437,31 @@ export default function WorkflowGrafoPage() {
             )}
           </div>
         </div>
-        <Button asChild>
-          <Link
-            href={`/workflow-designer/${codigo}/editar`}
-            aria-label={`Editar workflow de ${tipoDoc.nombre}`}
+
+        {/* Botón "Editar workflow" — oculto en modo solo lectura (US.F2.2.15) */}
+        {canEdit && (
+          <Button asChild>
+            <Link
+              href={`/workflow-designer/${codigo}/editar`}
+              aria-label={`Editar workflow de ${tipoDoc.nombre}`}
+            >
+              Editar workflow
+            </Link>
+          </Button>
+        )}
+
+        {/* Botón "Auto-layout" deshabilitado en solo lectura */}
+        {isReadOnly && (
+          <Button
+            variant="outline"
+            disabled
+            aria-label="Auto-layout deshabilitado en modo solo lectura"
+            aria-disabled="true"
+            data-testid="auto-layout-disabled"
           >
-            Editar workflow
-          </Link>
-        </Button>
+            Auto-layout
+          </Button>
+        )}
       </div>
 
       {/* Panel de validación */}
@@ -389,55 +472,91 @@ export default function WorkflowGrafoPage() {
         tipoDocCodigo={codigo}
       />
 
-      {/* Grafo + Matriz */}
+      {/* Layout: Paleta (read-only oculta) + Canvas + Propiedades */}
       <div className="flex flex-col gap-4 lg:flex-row">
-        {/* Grafo de estados y transiciones */}
-        <Card className="flex-1">
-          <CardHeader>
-            <CardTitle className="text-sm">
-              Estados y transiciones
-              <span className="ml-2 font-normal text-muted-foreground">
-                ({(estados ?? []).length} estados, {(transiciones ?? []).length} transiciones)
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(estados ?? []).length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Sin estados configurados. Usa{" "}
-                <Link
-                  href={`/workflow-designer/${codigo}/editar`}
-                  className="underline"
-                >
-                  Editar workflow
-                </Link>{" "}
-                para agregar estados.
-              </p>
-            ) : (
-              <WorkflowGraph
-                estados={estados ?? []}
-                transiciones={transiciones ?? []}
-                tipDocCodigo={codigo}
-                workflowEditHref={`/workflow-designer/${codigo}/editar`}
-              />
-            )}
-          </CardContent>
-        </Card>
+        {/* Paleta lateral — oculta en solo lectura (US.F2.2.15) */}
+        {canEdit && (
+          <aside
+            id="workflow-paleta"
+            aria-label="Paleta de elementos del workflow"
+            className="w-full lg:w-48"
+            tabIndex={-1}
+          >
+            <Card className="h-full">
+              <CardHeader>
+                <CardTitle className="text-sm">Paleta</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-xs text-muted-foreground">
+                  Arrastra elementos al canvas para agregar estados.
+                </p>
+              </CardContent>
+            </Card>
+          </aside>
+        )}
 
-        {/* Matriz de roles */}
-        <Card className="w-full lg:w-96">
-          <CardHeader>
-            <CardTitle className="text-sm">
-              Matriz de roles funcionales
-              <span className="ml-2 font-normal text-muted-foreground">
-                (documento_rol)
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <MatrizRoles roles={roles ?? []} />
-          </CardContent>
-        </Card>
+        {/* Grafo de estados y transiciones */}
+        <main
+          id="workflow-canvas"
+          className="flex-1"
+          aria-label="Canvas del workflow"
+          tabIndex={-1}
+        >
+          <Card className="h-full">
+            <CardHeader>
+              <CardTitle className="text-sm">
+                Estados y transiciones
+                <span className="ml-2 font-normal text-muted-foreground">
+                  ({(estados ?? []).length} estados, {(transiciones ?? []).length} transiciones)
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {(estados ?? []).length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Sin estados configurados.{" "}
+                  {canEdit && (
+                    <Link
+                      href={`/workflow-designer/${codigo}/editar`}
+                      className="underline"
+                    >
+                      Editar workflow
+                    </Link>
+                  )}
+                </p>
+              ) : (
+                <WorkflowGraph
+                  estados={estados ?? []}
+                  transiciones={transiciones ?? []}
+                  tipDocumentoId={tipoDoc?.id ?? ""}
+                  tipDocCodigo={codigo}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </main>
+
+        {/* Panel de propiedades + Matriz de roles */}
+        <aside
+          id="workflow-propiedades"
+          aria-label="Propiedades y matriz de roles"
+          className="w-full lg:w-96"
+          tabIndex={-1}
+        >
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm">
+                Matriz de roles funcionales
+                <span className="ml-2 font-normal text-muted-foreground">
+                  (documento_rol)
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              <MatrizRoles roles={roles ?? []} />
+            </CardContent>
+          </Card>
+        </aside>
       </div>
 
       {/* Breadcrumb / volver */}

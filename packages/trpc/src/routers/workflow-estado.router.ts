@@ -57,6 +57,13 @@ const estadoUpdateInput = z.object({
 
 const estadoDeleteInput = z.object({ id: z.string().uuid() });
 
+// Layout persistence (US.F2.2.01)
+const layoutSetInput = z.object({
+  estadoId: z.string().uuid(),
+  x: z.number(),
+  y: z.number(),
+});
+
 const transicionListInput = z.object({
   tipDocumentoId: z.string().uuid(),
 });
@@ -104,6 +111,7 @@ type FlujoEstadoRow = {
   es_inicial: boolean;
   es_final: boolean;
   orden: number;
+  descripcion_markdown: string | null;
 };
 
 type FlujoTransicionRow = {
@@ -153,7 +161,7 @@ export const workflowEstadoRouter = router({
       .query(async ({ ctx, input }) => {
         const rows = await ctx.prisma.$queryRaw<FlujoEstadoRow[]>`
           SELECT id::text, tipo_documento_id::text, codigo, nombre,
-                 es_inicial, es_final, orden
+                 es_inicial, es_final, orden, descripcion_markdown
             FROM ece.flujo_estado
            WHERE tipo_documento_id = ${input.tipDocumentoId}::uuid
            ORDER BY orden ASC, codigo ASC
@@ -361,6 +369,41 @@ export const workflowEstadoRouter = router({
                      es_inicial, es_final, orden
         `;
         return { prev: deleted[0] };
+      }),
+
+    /**
+     * Persiste la posición x/y del nodo en ece.workflow_estado_layout.
+     * Llamado en cada dragEnd del Workflow Designer visual (US.F2.2.01).
+     * Usa upsert (ON CONFLICT) — idempotente.
+     */
+    setLayout: workflowProc
+      .input(layoutSetInput)
+      .mutation(async ({ ctx, input }) => {
+        await ctx.prisma.$executeRaw`
+          INSERT INTO ece.workflow_estado_layout (estado_id, x, y, updated_at)
+          VALUES (${input.estadoId}::uuid, ${input.x}, ${input.y}, now())
+          ON CONFLICT (estado_id)
+            DO UPDATE SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now()
+        `;
+        return { estadoId: input.estadoId, x: input.x, y: input.y };
+      }),
+
+    /**
+     * Devuelve las posiciones guardadas para todos los estados de un tipo de documento.
+     */
+    getLayout: workflowProc
+      .input(z.object({ tipDocumentoId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        const rows = await ctx.prisma.$queryRaw<
+          { estado_id: string; x: number; y: number }[]
+        >`
+          SELECT wl.estado_id::text, wl.x, wl.y
+            FROM ece.workflow_estado_layout wl
+            JOIN ece.flujo_estado fe ON fe.id = wl.estado_id
+           WHERE fe.tipo_documento_id = ${input.tipDocumentoId}::uuid
+        `;
+        // Map to Record<estadoId, {x,y}> for O(1) lookup
+        return Object.fromEntries(rows.map((r) => [r.estado_id, { x: r.x, y: r.y }]));
       }),
   }),
 
