@@ -84,7 +84,7 @@ const createCombInputSchema = z.object({
 // Tipos raw BD
 // ---------------------------------------------------------------------------
 
-interface Icd10Row {
+export interface Icd10Row {
   codigo: string;
   descripcion: string;
   capitulo: string | null;
@@ -92,7 +92,7 @@ interface Icd10Row {
   activo: boolean;
 }
 
-interface CombinacionRow {
+export interface CombinacionRow {
   id: string;
   codigo_a: string;
   codigo_b: string;

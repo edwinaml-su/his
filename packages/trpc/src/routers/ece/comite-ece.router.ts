@@ -95,7 +95,7 @@ const reportInputSchema = z.object({
 // Tipos raw BD
 // ---------------------------------------------------------------------------
 
-interface ComiteMinutaRow {
+export interface ComiteMinutaRow {
   id: string;
   organization_id: string;
   establecimiento_id: string | null;
