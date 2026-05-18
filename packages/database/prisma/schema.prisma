@@ -362,6 +362,12 @@ model Organization {
   contingenciaEventos       EceContingenciaEvento[]   @relation("OrgContingenciaEventos")
   reglasRetencion           EceReglaRetencion[]       @relation("OrgReglasRetencion")
   eliminaciones             EceEliminacionSupervisada[] @relation("OrgEliminaciones")
+  // F2-S15 Stream B — Comité ECE
+  comiteMinutas             ComiteMinuta[]            @relation("OrgComiteMinutas")
+  // F2-S15 Stream C — MPI Dedup + ARCO
+  expedienteFormatConfigs   ExpedienteFormatConfig[]  @relation("OrgExpedienteFormat")
+  ecePatientMerges          EcePatientMerge[]         @relation("OrgEcePatientMerge")
+  solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -495,6 +501,10 @@ model User {
   contingenciaDesactivaciones EceContingenciaEvento[]    @relation("ContingenciaDesactivadoPor")
   reglasRetencionCreadas    EceReglaRetencion[]           @relation("ReglaRetencionCreador")
   eliminacionesSolicitadas  EceEliminacionSupervisada[]  @relation("EliminacionSolicitante")
+  // F2-S15-C — MPI Dedup + ARCO
+  expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
+  eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
+  arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
 
   @@schema("public")
 }
@@ -973,6 +983,8 @@ model Patient {
   active             Boolean   @default(true)
   /// AI(8018) GSRN — asignado automáticamente al confirmar admisión hospitalaria (US.F2.6.1).
   gsrn               String?   @unique @db.Char(18)
+  /// F2-S15-C: paciente absorbido en merge NTEC; apunta al canónico. NULL = registro activo.
+  mergedIntoId       String?   @db.Uuid
   deletedAt          DateTime? @db.Timestamptz()
   deletedBy          String?   @db.Uuid
   createdAt          DateTime  @default(now()) @db.Timestamptz()
@@ -1028,10 +1040,17 @@ model Patient {
   pharmacyCarts          PharmacyCart[]            @relation("PatientPharmacyCarts")
   // F2-S7 — Patient ID via pulsera GSRN (US.F2.6.37-40)
   gsrnHistory            GsrnHistory[]
+  // F2-S15-C — MPI Dedup + ARCO
+  mergedInto             Patient?           @relation("PatientMergedInto", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedPatients         Patient[]          @relation("PatientMergedInto")
+  ecePatientMergesCanon  EcePatientMerge[]  @relation("EceMergeCanonical")
+  ecePatientMergesMerged EcePatientMerge[]  @relation("EceMergeMerged")
+  solicitudesArco        SolicitudArco[]    @relation("PatientSolicitudesArco")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
   @@index([birthDate])
+  @@index([mergedIntoId])
   @@schema("public")
 }
 
@@ -6201,5 +6220,83 @@ model ComiteMinuta {
   @@index([organizationId])
   @@index([fechaReunion(sort: Desc)])
   @@map("comite_minuta")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S15 Stream C — MPI Dedup + Portal ARCO (US.F2.7.39-45)
+// =============================================================================
+
+/// Formato de número de expediente configurable por establecimiento (US.F2.7.42).
+/// Soporta tokens: {YYYY}, {MM}, {INC:N} (secuencial N dígitos), {org_prefix}, {nui}.
+model ExpedienteFormatConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  formato        String   @default("{YYYY}-{INC:6}") @db.VarChar(80)
+  vigenteDesde   DateTime @default(now()) @db.Timestamptz()
+  creadoPorId    String?  @db.Uuid
+  creadoEn       DateTime @default(now()) @db.Timestamptz()
+
+  organization Organization @relation("OrgExpedienteFormat", fields: [organizationId], references: [id], onDelete: Restrict)
+  creadoPor    User?        @relation("ExpedienteFormatCreador", fields: [creadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, vigenteDesde(sort: Desc)])
+  @@map("ExpedienteFormatConfig")
+  @@schema("public")
+}
+
+/// Merge de expedientes ECE con doble firma electrónica (US.F2.7.41).
+/// Distinto del public.PatientMerge legacy (HIS base); éste documenta el flujo NTEC:
+/// PENDIENTE → requiere firmaDir1Id + firmaDir2Id → EJECUTADO (irreversible).
+model EcePatientMerge {
+  id                   String   @id @default(uuid()) @db.Uuid
+  organizationId       String   @db.Uuid
+  canonicalPatientId   String   @db.Uuid /// paciente superviviente.
+  mergedPatientId      String   @db.Uuid /// paciente absorbido → mergedIntoId = canonicalPatientId.
+  solicitadoPorId      String?  @db.Uuid
+  /// Hash PIN del DIR 1 (inmutable — no FK para no perder historia si usuario se elimina).
+  firmaDir1Id          String?  @db.VarChar(200)
+  /// Hash PIN del Director Médico.
+  firmaDir2Id          String?  @db.VarChar(200)
+  fechaEjecucion       DateTime? @db.Timestamptz()
+  estado               String   @default("PENDIENTE") @db.VarChar(30)
+  creadoEn             DateTime @default(now()) @db.Timestamptz()
+
+  organization     Organization @relation("OrgEcePatientMerge", fields: [organizationId], references: [id], onDelete: Restrict)
+  canonicalPatient Patient      @relation("EceMergeCanonical", fields: [canonicalPatientId], references: [id], onDelete: Restrict)
+  mergedPatient    Patient      @relation("EceMergeMerged", fields: [mergedPatientId], references: [id], onDelete: Restrict)
+  solicitadoPor    User?        @relation("EceMergeSolicitante", fields: [solicitadoPorId], references: [id], onDelete: SetNull)
+
+  @@unique([canonicalPatientId, mergedPatientId], name: "uq_ece_merge_pair")
+  @@index([organizationId, estado])
+  @@index([canonicalPatientId])
+  @@map("EcePatientMerge")
+  @@schema("public")
+}
+
+/// Solicitud ARCO del paciente: Rectificación o Supresión (US.F2.7.44-45).
+/// Ciclo: PENDIENTE → APROBADA | RECHAZADA → EJECUTADA.
+/// Excepciones de supresión: datos forenses, epidemiológicos, orden judicial (director rechaza con motivo).
+model SolicitudArco {
+  id               String    @id @default(uuid()) @db.Uuid
+  pacienteId       String    @map("paciente_id") @db.Uuid
+  organizacionId   String    @map("organizacion_id") @db.Uuid
+  tipo             String    @db.VarChar(20) /// RECTIFICACION | SUPRESION
+  documentoTarget  String?   @map("documento_target") @db.VarChar(200)
+  motivo           String    @db.Text
+  estado           String    @default("PENDIENTE") @db.VarChar(20)
+  revisadoPorId    String?   @map("revisado_por_id") @db.Uuid
+  fechaRespuesta   DateTime? @map("fecha_respuesta") @db.Timestamptz()
+  motivoRespuesta  String?   @map("motivo_respuesta") @db.Text
+  creadoEn         DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+  actualizadoEn    DateTime  @default(now()) @updatedAt @map("actualizado_en") @db.Timestamptz()
+
+  paciente    Patient @relation("PatientSolicitudesArco", fields: [pacienteId], references: [id], onDelete: Restrict)
+  organizacion Organization @relation("OrgSolicitudesArco", fields: [organizacionId], references: [id], onDelete: Restrict)
+  revisadoPor User?   @relation("ArcoRevisor", fields: [revisadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([pacienteId, estado])
+  @@index([organizacionId, estado, creadoEn(sort: Desc)])
+  @@map("solicitud_arco")
   @@schema("ece")
 }

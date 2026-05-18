@@ -155,6 +155,9 @@ import { retencionRouter } from "./ece/retencion.router";
 // F2-S15 Stream B — CIE-10 + Comité ECE (US.F2.7.33-35, US.F2.7.46-48)
 import { icd10Router } from "./ece/icd10.router";
 import { comiteEceRouter } from "./ece/comite-ece.router";
+// F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
+import { patientDedupRouter } from "./patient-dedup.router";
+import { portalArcoRouter } from "./portal-arco.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -313,6 +316,9 @@ export const appRouter = router({
   // F2-S15 Stream B — CIE-10 + Comité ECE (US.F2.7.33-35, US.F2.7.46-48)
   icd10: icd10Router,
   comiteEce: comiteEceRouter,
+  // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
+  patientDedup: patientDedupRouter,
+  portalArco: portalArcoRouter,
 });
 
 export type AppRouter = typeof appRouter;
