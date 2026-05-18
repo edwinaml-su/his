@@ -114,6 +114,7 @@ const SECTIONS: NavSection[] = [
         icon: ClipboardCheck,
       },
       { href: "/ece/evolucion", label: "Evolución Médica", icon: NotebookPen },
+      { href: "/ece/kardex", label: "Kardex", icon: ClipboardCheck },
     ],
   },
   {

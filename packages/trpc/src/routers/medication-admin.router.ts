@@ -15,11 +15,16 @@ import {
   medicationAdministrationRecordInput,
   medicationAdministrationListInput,
   medicationAdministrationGetInput,
+  recordBedsideAdminInput,
+  cancelAdminInput,
+  listByPatientInput,
+  kardexStatsInput,
   detectAllergyMismatch,
   type AllergyMismatchPayload,
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Helpers internos
@@ -352,5 +357,246 @@ export const medicationAdminRouter = router({
       });
       if (!item) throw new TRPCError({ code: "NOT_FOUND" });
       return item;
+    }),
+
+  /**
+   * `recordBedsideAdmin` -- crea MedicationAdministration desde un scan bedside exitoso.
+   * US.F2.6.30: vínculo bidireccional bedside scan → eMAR.
+   * Captura campos GS1 (GTIN, lote, serie, GSRN) en los campos BCMA opcionales.
+   */
+  recordBedsideAdmin: tenantProcedure
+    .input(recordBedsideAdminInput)
+    .mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Validar que el PrescriptionItem (indicación) pertenece a la organización
+        // y está en estado apto para administrar.
+        const indication = await tx.prescriptionItem.findFirst({
+          where: {
+            id: input.indicationId,
+            prescription: {
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SIGNED", "PARTIALLY_DISPENSED", "DISPENSED"] },
+            },
+          },
+          select: { id: true },
+        });
+
+        if (!indication) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Indicación no encontrada o la prescripción no está activa.",
+          });
+        }
+
+        const admin = await tx.medicationAdministration.create({
+          data: {
+            organizationId:       ctx.tenant.organizationId,
+            prescriptionItemId:   indication.id,
+            administeredById:     input.nurseId,
+            status:               "ADMINISTERED",
+            administeredAt:       new Date(),
+            // BCMA scan flags — todos true porque vienen del flujo bedside
+            patientBarcodeScanned:   true,
+            drugBarcodeScanned:      true,
+            providerBadgeScanned:    true,
+            patientWristbandScanned: true,
+            scannedAt:               new Date(),
+            // Campos GS1 bedside
+            bedsideValidationId: input.validationId ?? null,
+            gtinScanned:         input.gtin,
+            loteScanned:         input.lote,
+            serieScanned:        input.serie ?? null,
+            gsrnPaciente:        input.gsrnPaciente ?? null,
+            gsrnEnfermera:       input.gsrnEnfermera ?? null,
+            glnUbicacion:        input.glnUbicacion ?? null,
+            route:               input.route ?? null,
+            site:                input.site ?? null,
+            notes:               input.notes ?? null,
+          },
+        });
+
+        // Emitir evento de dominio para outbox/notificaciones
+        await emitDomainEvent(tx, {
+          organizationId: ctx.tenant.organizationId,
+          eventType:      "medication.administered.bedside",
+          aggregateType:  "MedicationAdministration",
+          aggregateId:    admin.id,
+          emittedById:    input.nurseId,
+          payload: {
+            patientId:   input.patientId,
+            gtin:        input.gtin,
+            lote:        input.lote,
+            administeredAt: admin.administeredAt.toISOString(),
+          },
+        });
+
+        return admin;
+      });
+    }),
+
+  /**
+   * `cancelAdmin` -- cancela una administración con motivo obligatorio.
+   * US.F2.6.31-33: enfermería puede cancelar con razón; notifica al médico prescriptor.
+   */
+  cancelAdmin: tenantProcedure
+    .input(cancelAdminInput)
+    .mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const existing = await tx.medicationAdministration.findFirst({
+          where: {
+            id:             input.adminId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          include: {
+            prescriptionItem: {
+              include: {
+                prescription: { select: { prescriberId: true, patientId: true } },
+              },
+            },
+          },
+        });
+
+        if (!existing) {
+          throw new TRPCError({ code: "NOT_FOUND" });
+        }
+
+        if (existing.status === "CANCELED") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La administración ya fue cancelada.",
+          });
+        }
+
+        const canceled = await tx.medicationAdministration.update({
+          where: { id: input.adminId },
+          data: {
+            status:       "CANCELED",
+            cancelReason: input.cancelReason,
+            canceledAt:   new Date(),
+            canceledById: ctx.user.id,
+          },
+        });
+
+        // Notificar al médico prescriptor si hay dosis cancelada
+        const prescriberId = existing.prescriptionItem?.prescription?.prescriberId;
+        if (prescriberId) {
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType:      "medication.administration.canceled",
+            aggregateType:  "MedicationAdministration",
+            aggregateId:    canceled.id,
+            emittedById:    ctx.user.id,
+            payload: {
+              cancelReason:  input.cancelReason,
+              canceledById:  ctx.user.id,
+              prescriberId,
+              patientId:     existing.prescriptionItem?.prescription?.patientId,
+            },
+          });
+        }
+
+        return canceled;
+      });
+    }),
+
+  /**
+   * `listByPatient` -- historial kardex por paciente.
+   * US.F2.6.31: lista de medicamentos pendientes/administrados por paciente.
+   * Requiere join prescriptionItem → prescription → patientId.
+   */
+  listByPatient: tenantProcedure
+    .input(listByPatientInput)
+    .query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.medicationAdministration.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            prescriptionItem: {
+              prescription: { patientId: input.patientId },
+            },
+            ...(input.status && { status: input.status }),
+            ...((input.fromDate || input.toDate) && {
+              administeredAt: {
+                ...(input.fromDate && { gte: input.fromDate }),
+                ...(input.toDate  && { lte: input.toDate  }),
+              },
+            }),
+          },
+          include: {
+            administeredBy: { select: { id: true, fullName: true } },
+            canceledBy:     { select: { id: true, fullName: true } },
+            prescriptionItem: {
+              include: {
+                drug: {
+                  select: { id: true, genericName: true, brandName: true, atcCode: true },
+                },
+              },
+            },
+          },
+          orderBy: { administeredAt: "desc" },
+          take:    input.limit,
+        });
+      });
+    }),
+
+  /**
+   * `kardexStats` -- agregados BI para reportes de administración.
+   * US.F2.6.32-33: % BCMA, % cancelaciones, top medicamentos.
+   */
+  kardexStats: tenantProcedure
+    .input(kardexStatsInput)
+    .query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [total, withBcma, canceled, topMeds] = await Promise.all([
+          tx.medicationAdministration.count({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              administeredAt: { gte: input.fromDate, lte: input.toDate },
+            },
+          }),
+          tx.medicationAdministration.count({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              administeredAt: { gte: input.fromDate, lte: input.toDate },
+              gtinScanned:    { not: null },
+            },
+          }),
+          tx.medicationAdministration.groupBy({
+            by:    ["cancelReason"],
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              administeredAt: { gte: input.fromDate, lte: input.toDate },
+              status:         "CANCELED",
+            },
+            _count: { id: true },
+            orderBy: { _count: { id: "desc" } },
+          }),
+          tx.medicationAdministration.groupBy({
+            by:    ["prescriptionItemId"],
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              administeredAt: { gte: input.fromDate, lte: input.toDate },
+              status:         { in: ["ADMINISTERED", "GIVEN"] },
+            },
+            _count: { id: true },
+            orderBy: { _count: { id: "desc" } },
+            take: 10,
+          }),
+        ]);
+
+        return {
+          total,
+          bcmaCount:         withBcma,
+          bcmaPct:           total > 0 ? Math.round((withBcma / total) * 100) : 0,
+          canceledByReason:  canceled.map((r) => ({
+            reason: r.cancelReason ?? "SIN_MOTIVO",
+            count:  r._count.id,
+          })),
+          topPrescriptionItemIds: topMeds.map((r) => ({
+            prescriptionItemId: r.prescriptionItemId,
+            count:              r._count.id,
+          })),
+        };
+      });
     }),
 });

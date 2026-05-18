@@ -18,6 +18,7 @@ const MED_ADMIN_STATUS = [
   'REFUSED',
   'MISSED',
   'DOCUMENTED_LATE',
+  'CANCELED',
 ] as const;
 
 const ADMIN_ROUTE = [
@@ -90,6 +91,73 @@ export const medicationAdministrationGetInput = z.object({
 
 export type MedicationAdministrationRecordInput = z.infer<typeof medicationAdministrationRecordInput>;
 export type MedicationAdministrationListInput = z.infer<typeof medicationAdministrationListInput>;
+
+// ---------------------------------------------------------------------------
+// US.F2.6.30-33 — BCMA bedside inputs
+// ---------------------------------------------------------------------------
+
+/**
+ * Registra una administración directamente desde el flujo bedside GS1.
+ * Los campos BCMA (gtin, lote, serie, gsrn*) son los valores escaneados del DataMatrix.
+ * bedsideValidationId es FK opcional al evento de validación del Stream 01/10.
+ */
+export const recordBedsideAdminInput = z.object({
+  /** FK al evento BedsideValidation del Stream 01/10 (puede no existir aún). */
+  validationId:    z.string().uuid().optional(),
+  /** FK a la indicación médica (MedicalOrder/PrescriptionItem). */
+  indicationId:    z.string().uuid(),
+  /** GTIN escaneado del DataMatrix — AI (01). */
+  gtin:            z.string().min(8).max(50),
+  /** Número de lote escaneado — AI (10). */
+  lote:            z.string().min(1).max(50),
+  /** Número de serie escaneado — AI (21). Opcional si unidosis sin serie. */
+  serie:           z.string().max(50).optional(),
+  /** GLN de la ubicación bedside — AI (414). */
+  glnUbicacion:    z.string().min(13).max(15).optional(),
+  /** GSRN del paciente (de la pulsera) — AI (8018). */
+  gsrnPaciente:    z.string().min(18).max(20).optional(),
+  /** GSRN de la enfermera (del badge) — AI (8018). */
+  gsrnEnfermera:   z.string().min(18).max(20).optional(),
+  /** FK del User enfermera (resuelto desde GSRN). */
+  nurseId:         z.string().uuid(),
+  /** FK del Patient. */
+  patientId:       z.string().uuid(),
+  /** FK a PharmacyReservation (opcional — puede no existir cuando se implemente). */
+  reservationId:   z.string().uuid().optional(),
+  route:           medAdminRouteEnum.optional(),
+  site:            z.string().trim().max(80).optional(),
+  notes:           z.string().trim().max(4000).optional(),
+});
+
+export type RecordBedsideAdminInput = z.infer<typeof recordBedsideAdminInput>;
+
+/** Cancela una administración con motivo obligatorio. */
+export const cancelAdminInput = z.object({
+  adminId:    z.string().uuid(),
+  /** Motivo descriptivo de la cancelación (mínimo 10 chars para forzar texto real). */
+  cancelReason: z.string().trim().min(10).max(500),
+});
+
+export type CancelAdminInput = z.infer<typeof cancelAdminInput>;
+
+/** Consulta historial kardex por paciente. */
+export const listByPatientInput = z.object({
+  patientId:  z.string().uuid(),
+  fromDate:   z.coerce.date().optional(),
+  toDate:     z.coerce.date().optional(),
+  status:     medAdminStatusEnum.optional(),
+  limit:      z.number().int().min(1).max(200).default(50),
+});
+
+export type ListByPatientInput = z.infer<typeof listByPatientInput>;
+
+/** Agregados BI: stats de administraciones por org/fecha. */
+export const kardexStatsInput = z.object({
+  fromDate: z.coerce.date(),
+  toDate:   z.coerce.date(),
+});
+
+export type KardexStatsInput = z.infer<typeof kardexStatsInput>;
 
 // ---------------------------------------------------------------------------
 // Beta.15 (US.B15.4.3b) — Detector puro de allergy.mismatch para eMAR.
