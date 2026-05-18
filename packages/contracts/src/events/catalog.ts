@@ -105,6 +105,10 @@ export const EVENT_TYPES = [
   "gs1.transfer.rechazada",
   // Fase 2 S5 — ECE Registro Anestésico (REG_ANEST)
   "ece.anestesia.firmada",
+  // Fase 2 (S5) — ECE Quirófano (Acto Quirúrgico) y Obstetricia (Sala de Expulsión)
+  "ece.acto_quirurgico.firmado",
+  "ece.acto_quirurgico.validado",
+  "ece.nacimiento.registrado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

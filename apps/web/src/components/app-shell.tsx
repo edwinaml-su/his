@@ -57,6 +57,8 @@ import {
   Truck,
   Undo2,
   Search,
+  LayoutGrid,
+  Zap,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -153,6 +155,15 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity },
       { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby },
       { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake },
+    // Solo items con páginas mergeadas. Preop/WHO/anestésico/URPA están
+    // pendientes de re-lanzamiento de agentes rate-limited y se agregarán
+    // en PR posterior.
+    label: "ECE — Quirófano",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid },
+      { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap },
+      { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature },
     ],
   },
   {
@@ -191,6 +202,13 @@ const SECTIONS: NavSection[] = [
       { href: "/pharmacy/unidosis", label: "Unidosis", icon: Pill },
       { href: "/gs1/devoluciones", label: "Devoluciones", icon: Undo2 },
       { href: "/gs1/trazabilidad", label: "Trazabilidad", icon: Search },
+    // Solo items con páginas mergeadas. Partograma/atención RN/reanimación
+    // pendientes de re-lanzamiento de agentes rate-limited.
+    label: "ECE — Maternidad",
+    defaultOpen: true,
+    items: [
+      { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid },
+      { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble },
     ],
   },
   {

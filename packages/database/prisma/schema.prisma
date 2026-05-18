@@ -4351,13 +4351,18 @@ model EceAsignacionRol {
 model EceFirmaElectronica {
   id             String    @id @default(uuid()) @db.Uuid
   personalId     String    @unique @map("personal_id") @db.Uuid
-  hashCredencial String    @map("hash_credencial")
-  algoritmo      String    @default("argon2id") @db.VarChar(20)
-  vigente        Boolean   @default(true)
-  emitidaEn      DateTime  @default(now()) @map("emitida_en") @db.Timestamptz()
-  revocadaEn     DateTime? @map("revocada_en") @db.Timestamptz()
+  // Hash PHC completo argon2id ($argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>).
+  // Nunca PIN plano ni bcrypt — solo argon2id vía capa aplicación.
+  pinHash        String    @map("pin_hash")
+  // Salt explícito para auditoría de rotación (también embebido en pin_hash PHC).
+  saltExtra      String    @map("salt_extra")
+  lastRotatedAt  DateTime  @default(now()) @map("last_rotated_at") @db.Timestamptz()
+  failedAttempts Int       @default(0) @map("failed_attempts")
+  lockedUntil    DateTime? @map("locked_until") @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz()
 
-  personal  EcePersonalSalud               @relation(fields: [personalId], references: [id])
+  personal  EcePersonalSalud                @relation(fields: [personalId], references: [id])
   historial EceDocumentoInstanciaHistorial[]
 
   @@map("firma_electronica")
