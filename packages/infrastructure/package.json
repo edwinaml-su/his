@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./observability/logger": "./src/observability/logger.ts",
+    "./observability/health-check": "./src/observability/health-check.ts",
     "./notifications": "./src/notifications/index.ts",
     "./notifications/resend": "./src/notifications/resend.ts"
   },
