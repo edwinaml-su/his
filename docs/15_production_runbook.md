@@ -478,12 +478,123 @@ cd packages/database && pnpm prisma migrate deploy
 
 ---
 
+## 14. Post Go-Live Monitoring {#post-golive-monitoring}
+
+> Esta sección aplica desde T+0 (cutover) hasta que el sistema entra en operación BAU estable (aprox. T+30 días). Para el protocolo de hipercuidado completo ver `docs/17_hipercuidado_runbook.md`.
+
+### 14.1 SLO bedside — algoritmo 5 correctos < 200ms
+
+El SLO más crítico del sistema es la latencia del algoritmo server-side de los 5 Correctos GS1 Bedside. Debe responder en < 200ms (síncrono mandatorio — el enfermero espera el resultado con el medicamento en la mano).
+
+**Cómo medir:**
+
+```bash
+# En Sentry, filtrar por transaction: bedside.validate5Correctos
+# O en Vercel Analytics: ruta /api/trpc/bedside.validate5Correctos
+# Umbral: p95 < 200ms, p99 < 500ms
+```
+
+**Alertas configuradas:**
+
+| Métrica | Umbral alerta | Acción |
+|---|---|---|
+| p95 bedside | > 200ms sostenido 5 min | Sentry alert → WhatsApp HIS Hipercuidado |
+| p99 bedside | > 500ms sostenido 2 min | Escalar a SRE on-call P2 |
+| Error rate bedside | > 0.1% | Escalar a SRE on-call P2 |
+
+### 14.2 Supabase Advisor Security CRITICAL = 0
+
+Verificar diariamente durante las primeras 2 semanas, luego semanalmente.
+
+```bash
+# Via MCP:
+# mcp__supabase__get_advisors → filtrar level: "ERROR" o "CRITICAL"
+# Meta: 0 resultados CRITICAL en todo momento
+```
+
+Si aparece un advisor CRITICAL nuevo post go-live:
+1. Escalar a SRE Lead inmediatamente.
+2. No considerar el sistema "estable" hasta resolver.
+3. Documentar en `docs/incidents/<date>-advisor-critical.md`.
+
+### 14.3 Error rate < 0.1%
+
+Medido en Sentry como porcentaje de requests con status 5xx sobre el total.
+
+| Ventana | Umbral OK | Umbral alerta | Umbral P1 |
+|---|---|---|---|
+| Últimos 5 min | < 0.1% | 0.1-0.5% | > 0.5% |
+| Últimas 24h | < 0.05% | 0.05-0.1% | > 0.1% |
+
+**Dashboard Sentry:** `avante-his` → Issues → `environment:production` → Agrupar por `transaction`.
+
+### 14.4 P95 latencia global
+
+| Endpoint | SLO p95 | Acción si supera |
+|---|---|---|
+| `bedside.validate5Correctos` | < 200ms | Escalar P2 |
+| `admission.*` | < 400ms | Escalar P2 si > 800ms |
+| `triage.*` | < 400ms | Escalar P2 si > 800ms |
+| `pharmacy.dispensation.*` | < 400ms | Escalar P3 si > 800ms |
+| Cualquier endpoint | < 1.5s | Escalar P3 si > 3s |
+
+**Fuente de datos:** Vercel Analytics (Web Vitals + custom) o Sentry Performance.
+
+### 14.5 Audit hash chain integrity
+
+La integridad de la cadena de hash del audit log es un indicador de seguridad — una ruptura indica posible manipulación de datos.
+
+**Verificación manual diaria (durante hipercuidado):**
+
+```sql
+-- Via Supabase SQL Editor:
+SELECT
+  table_name,
+  MAX(created_at) AS ultimo_registro,
+  SUM(CASE WHEN chain_hash IS NULL THEN 1 ELSE 0 END) AS sin_hash,
+  COUNT(*) AS total_24h
+FROM audit.audit_log
+WHERE created_at > NOW() - INTERVAL '24 hours'
+GROUP BY table_name
+ORDER BY sin_hash DESC;
+-- Meta: sin_hash = 0 en todas las tablas
+```
+
+**Si hay ruptura:** P1 inmediato. Ver `docs/15_production_runbook.md §6` + `docs/17_hipercuidado_runbook.md §3`.
+
+### 14.6 Cadencia de revisión post go-live
+
+| Frecuencia | Qué revisar | Responsable |
+|---|---|---|
+| Cada hora (primeras 4h post go-live) | Error rate, bedside latency, Sentry issues P1 | SRE on-call |
+| Diaria (días 1-14) | KPIs completos `docs/17_hipercuidado_runbook.md §4` + audit chain | SRE on-call |
+| Semanal (semanas 3-4) | Advisor security, performance budget, error trends | SRE Lead |
+| Mensual (from day 30) | SLO compliance %, DORA metrics, capacity planning | SRE Lead + PO |
+
+### 14.7 DORA metrics — baseline inicial
+
+Registrar los 4 DORA metrics desde el Día 0:
+
+| Métrica DORA | Definición | Herramienta | Objetivo Fase 1 |
+|---|---|---|---|
+| Deployment frequency | Deploys exitosos a producción / semana | GitHub Actions + Vercel | ≥ 2/semana |
+| Lead time for changes | PR merged → deploy producción | GitHub API | < 1 día |
+| Change failure rate | % deploys que requieren rollback o hotfix | GitHub Issues labels | < 5% |
+| MTTR | Tiempo medio de restauración post-incidente P1/P2 | Incident log | < 4h |
+
+**Cómo registrar:** crear issue en GitHub con label `dora-metric` al final de cada semana con los valores de esa semana.
+
+---
+
 ## 15. Referencias
 
 - `docs/08_devops.md` — Política DevOps general, branching, migraciones.
 - `docs/13_slos_kpis.md` — SLOs/SLIs MVP y Fase 6+.
 - `docs/14_encryption_strategy.md` — Cifrado en reposo/tránsito.
 - `docs/17_hipercuidado_runbook.md` — Operación 2 semanas post go-live.
-- `docs/18_golive_checklist.md` — Checklist de cutover (Día 0).
+- `docs/go-live/00_go_live_runbook.md` — Runbook operativo de deploy (T-7 → T+24h).
+- `docs/go-live/01_uat_scenarios.md` — Escenarios UAT por rol (25 escenarios).
+- `docs/go-live/03_capacitacion_plan.md` — Plan de capacitación staff.
+- `docs/go-live/04_carry_over_manual.md` — Items pendientes pre-deploy (SQL + config).
 - `apps/web/sentry.{client,server,edge}.config.ts` — Configs Sentry vigentes.
 - `apps/web/src/app/api/health/route.ts` — Healthcheck.
