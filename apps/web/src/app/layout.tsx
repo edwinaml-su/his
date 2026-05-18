@@ -5,6 +5,7 @@ import { Providers } from "./providers";
 export const metadata: Metadata = {
   title: "HIS Avante",
   description: "Sistema de Información Hospitalaria — Inversiones Avante",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({
