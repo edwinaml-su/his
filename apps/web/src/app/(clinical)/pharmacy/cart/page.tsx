@@ -29,7 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
-import { trpc } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 const STATUS_LABELS: Record<string, string> = {
   ARMANDO: "Armando",

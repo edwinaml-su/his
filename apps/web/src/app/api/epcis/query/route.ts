@@ -123,8 +123,8 @@ function toEpcisXml(events: ReturnType<typeof toEpcisJsonEvent>[]): string {
         <action>OBSERVE</action>
         <bizStep>${e.bizStep}</bizStep>
         <disposition>${e.disposition}</disposition>
-        <readPoint><id>${(e.readPoint as Record<string, string>).id}</id></readPoint>
-        <bizLocation><id>${(e.bizLocation as Record<string, string>).id}</id></bizLocation>
+        <readPoint><id>${(e.readPoint as unknown as Record<string, string>).id}</id></readPoint>
+        <bizLocation><id>${(e.bizLocation as unknown as Record<string, string>).id}</id></bizLocation>
       </ObjectEvent>`).join("");
 
   const footer = `

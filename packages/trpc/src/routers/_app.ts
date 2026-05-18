@@ -286,7 +286,7 @@ export const appRouter = router({
   // F2-S7 Stream 03 — StaffGsrn
   staffGsrn: staffGsrnRouter,
   // F2-S7 Stream 04 — GS1 admin catálogos
-  gs1Gln: glnHierarchyRouter,
+  gs1GlnHierarchy: glnHierarchyRouter,
   gs1Medication: gs1MedicationRouter,
   gs1Dashboard: gs1DashboardRouter,
   // F2-S7 Stream 05 — Picking station

@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@his/ui/components/dialog";
-import { trpc } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 export default function RecepcionFarmaciaPage() {
   const [selectedCart, setSelectedCart] = React.useState<string | null>(null);

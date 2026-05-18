@@ -33,7 +33,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@his/ui/components/dialog";
-import { trpc } from "@/lib/trpc/client";
+import { trpc } from "@/lib/trpc/react";
 
 const STATUS_VARIANT: Record<
   string,
