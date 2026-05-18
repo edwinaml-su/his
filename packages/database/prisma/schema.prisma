@@ -356,6 +356,8 @@ model Organization {
   medicationGtins           MedicationGtin[]          @relation("OrgMedicationGtin")
   // F2-S7 — Carrito Unidosis
   pharmacyCarts             PharmacyCart[]            @relation("OrgPharmacyCarts")
+  // F2-S15-D — Audit Dashboard Config
+  auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -430,13 +432,15 @@ model User {
   id             String    @id @default(uuid()) @db.Uuid
   email          String    @unique @db.Citext
   fullName       String    @db.VarChar(200)
-  active         Boolean   @default(true)
-  mfaEnabled     Boolean   @default(false)
-  lastLoginAt    DateTime? @db.Timestamptz()
+  active         Boolean           @default(true)
+  mfaEnabled     Boolean           @default(false)
+  lastLoginAt    DateTime?         @db.Timestamptz()
+  /// F2-S15-D US.F2.7.20 — estado de la cuenta para depuración anual.
+  accountStatus  UserAccountStatus @default(ACTIVE)
   /// US-2.1 - intentos fallidos consecutivos de login (se resetea al login OK).
-  failedAttempts Int       @default(0)
+  failedAttempts Int               @default(0)
   /// US-2.1 - bloqueo temporal por intentos fallidos. NULL = no bloqueado.
-  lockedUntil    DateTime? @db.Timestamptz()
+  lockedUntil    DateTime?         @db.Timestamptz()
   createdAt      DateTime  @default(now()) @db.Timestamptz()
   createdBy      String?   @db.Uuid
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
@@ -5929,5 +5933,40 @@ model PharmacyCartItem {
   medicationDispense MedicationDispense? @relation(fields: [medicationDispenseId], references: [id], onDelete: SetNull)
 
   @@index([cartId])
+  @@schema("public")
+}
+
+// =============================================================================
+// F2-S15 Stream D — Audit & RBAC Refinement
+// US.F2.7.3-5, 13, 16, 20-22
+// =============================================================================
+
+/// US.F2.7.20 — Estado de cuenta de usuario para depuración anual.
+enum UserAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+
+  @@schema("public")
+}
+
+/// US.F2.7.16 — Configuración de dashboard de auditoría por organización.
+/// Almacena whitelist de IPs y horario clínico para detección de outliers.
+model AuditDashboardConfig {
+  id                    String   @id @default(uuid()) @db.Uuid
+  organizationId        String   @unique @db.Uuid
+  /// Lista de IPs whitelisted. Acceso desde IP fuera de esta lista = outlier.
+  ipWhitelist           String[] @default([])
+  /// Hora inicio horario clínico (formato HH:MM). Default 06:00.
+  horarioClinicoInicio  String   @default("06:00") @db.VarChar(5)
+  /// Hora fin horario clínico (formato HH:MM). Default 22:00.
+  horarioClinicoFin     String   @default("22:00") @db.VarChar(5)
+  /// Habilita alertas de outlier para la org.
+  outlierAlertEnabled   Boolean  @default(true)
+  createdAt             DateTime @default(now()) @db.Timestamptz()
+  updatedAt             DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
+
   @@schema("public")
 }

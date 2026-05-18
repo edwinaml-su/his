@@ -1,15 +1,17 @@
 /**
- * US-2.3 — router RBAC.
+ * US-2.3 / F2-S15-D — router RBAC.
  *
  * Endpoints:
- *   - listRoles      : roles de la org actual + roles globales (organizationId NULL).
- *                      Incluye contadores: usuarios asignados (vigentes) y permisos.
- *   - getRole        : detalle del rol con permisos (RolePermission + Permission).
- *   - createRole     : crea rol en la org actual o global (super_admin).
- *   - updateRole     : edita name/description/active. No mueve organizationId.
- *   - deactivateRole : soft delete (active=false).
- *   - listPermissions: catálogo completo (seed) ordenado por resource+action.
- *   - setRolePermissions: upsert masivo del set de permisos del rol.
+ *   - listRoles          : roles de la org actual + roles globales (organizationId NULL).
+ *   - getRole            : detalle del rol con permisos.
+ *   - createRole         : crea rol en la org actual o global (super_admin).
+ *   - updateRole         : edita name/description/active.
+ *   - deactivateRole     : soft delete (active=false).
+ *   - listPermissions    : catálogo completo ordenado por resource+action.
+ *   - setRolePermissions : upsert masivo del set de permisos.
+ *   - permissionMatrix   : tabla pivot user × resource × action (US.F2.7.21).
+ *   - purgeInactiveUsers : detecta y marca usuarios inactivos >1 año (US.F2.7.20).
+ *   - reactivateUser     : reactiva usuario inactivo con motivo (US.F2.7.20).
  *
  * Reglas:
  *   1. Roles globales (organizationId NULL) sólo pueden ser creados/modificados
@@ -32,7 +34,7 @@ import {
   rbacDeactivateRoleInput,
   rbacSetRolePermissionsInput,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { requireRole, router, tenantProcedure } from "../trpc";
 
 const SUPER_ADMIN_CODE = "super_admin";
 
@@ -343,5 +345,180 @@ export const rbacRouter = router({
       }
 
       return { ok: true, count: desired.length };
+    }),
+
+  /**
+   * US.F2.7.21 — Reporte "quién tiene qué permiso".
+   * Retorna una tabla pivot: usuario × recurso × acción con effect (ALLOW/DENY).
+   * Solo super_admin o DIR pueden ver la matriz completa.
+   */
+  permissionMatrix: requireRole(["DIR", "super_admin"])
+    .input(z.object({
+      // Filtro opcional por recurso
+      resource: z.string().trim().max(120).optional(),
+      // Solo usuarios vigentes (validTo IS NULL OR >= now)
+      activeOnly: z.boolean().default(true),
+    }))
+    .query(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+      const now   = new Date();
+
+      // Obtener usuarios con roles activos en la org
+      const userRoles = await ctx.prisma.userOrganizationRole.findMany({
+        where: {
+          role: {
+            OR: [{ organizationId: orgId }, { organizationId: null }],
+          },
+          ...(input.activeOnly
+            ? {
+                validFrom: { lte: now },
+                OR: [{ validTo: null }, { validTo: { gte: now } }],
+              }
+            : {}),
+        },
+        include: {
+          role: {
+            include: {
+              permissions: {
+                include: { permission: true },
+                where: input.resource
+                  ? { permission: { resource: input.resource } }
+                  : undefined,
+              },
+            },
+          },
+          user: { select: { id: true, fullName: true, email: true } },
+        },
+      });
+
+      // Construir mapa: userId → { userInfo, permissions: Map<resource:action, effect> }
+      type MatrixEntry = {
+        userId:   string;
+        fullName: string;
+        email:    string;
+        permissions: Array<{
+          resource: string;
+          action:   string;
+          effect:   "ALLOW" | "DENY";
+        }>;
+      };
+
+      const matrixMap = new Map<string, MatrixEntry>();
+
+      for (const ur of userRoles) {
+        const userId = ur.userId;
+        if (!matrixMap.has(userId)) {
+          matrixMap.set(userId, {
+            userId,
+            fullName: ur.user.fullName,
+            email:    ur.user.email,
+            permissions: [],
+          });
+        }
+        const entry = matrixMap.get(userId)!;
+        for (const rp of ur.role.permissions) {
+          // ALLOW gana sobre DENY si hay conflicto (policy local)
+          const existing = entry.permissions.find(
+            (p) => p.resource === rp.permission.resource && p.action === rp.permission.action,
+          );
+          if (!existing) {
+            entry.permissions.push({
+              resource: rp.permission.resource,
+              action:   rp.permission.action,
+              effect:   rp.effect as "ALLOW" | "DENY",
+            });
+          } else if (rp.effect === "ALLOW") {
+            existing.effect = "ALLOW";
+          }
+        }
+      }
+
+      return {
+        users: Array.from(matrixMap.values()),
+        totalUsers: matrixMap.size,
+      };
+    }),
+
+  /**
+   * US.F2.7.20 — Depuración anual de usuarios inactivos.
+   * Detecta usuarios cuyo lastLoginAt < now() - 1 año y los marca INACTIVE.
+   * Notifica al DIR (outbox simple: DomainEvent).
+   * Solo super_admin o DIR pueden ejecutar.
+   */
+  purgeInactiveUsers: requireRole(["DIR", "super_admin"])
+    .input(z.object({
+      dryRun: z.boolean().default(true),
+      // inactividad en días (default: 365)
+      inactiveDays: z.number().int().min(30).max(3650).default(365),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      const cutoff = new Date(Date.now() - input.inactiveDays * 24 * 60 * 60 * 1000);
+
+      // Buscar usuarios activos que llevan más de inactiveDays sin login
+      const candidates = await ctx.prisma.user.findMany({
+        where: {
+          active:      true,
+          lastLoginAt: { lt: cutoff },
+        },
+        select: { id: true, fullName: true, email: true, lastLoginAt: true },
+      });
+
+      if (input.dryRun || candidates.length === 0) {
+        return { dryRun: true, affected: candidates.length, users: candidates };
+      }
+
+      // Marcar accountStatus=INACTIVE via raw (campo aún no en Prisma schema, migración 04)
+      await ctx.prisma.$executeRawUnsafe(
+        `UPDATE public."User"
+         SET "accountStatus" = 'INACTIVE'
+         WHERE id = ANY($1::uuid[])`,
+        candidates.map((u) => u.id),
+      );
+
+      // Emitir evento de dominio para notificación DIR (best-effort)
+      ctx.prisma.domainEvent.createMany({
+        data: candidates.map((u) => ({
+          eventType:      "user.purged_inactive",
+          aggregateType:  "User",
+          aggregateId:    u.id,
+          organizationId: ctx.tenant.organizationId,
+          emittedById:    ctx.user.id,
+          payload:        JSON.stringify({ userId: u.id, email: u.email, lastLoginAt: u.lastLoginAt }),
+        })),
+      }).catch((e: unknown) => console.error("[rbac.purgeInactiveUsers] evento:", e));
+
+      return { dryRun: false, affected: candidates.length, users: candidates };
+    }),
+
+  /**
+   * US.F2.7.20 — Reactiva usuario INACTIVE con motivo.
+   * Solo ADM puede reactivar.
+   */
+  reactivateUser: requireRole(["ADM", "super_admin"])
+    .input(z.object({
+      userId: z.string().uuid(),
+      motivo: z.string().min(1).max(500),
+    }))
+    .mutation(async ({ ctx, input }) => {
+      await ctx.prisma.$executeRawUnsafe(
+        `UPDATE public."User"
+         SET "accountStatus" = 'ACTIVE'
+         WHERE id = $1::uuid`,
+        input.userId,
+      );
+
+      // Auditoría del motivo en DomainEvent
+      await ctx.prisma.domainEvent.create({
+        data: {
+          eventType:      "user.reactivated",
+          aggregateType:  "User",
+          aggregateId:    input.userId,
+          organizationId: ctx.tenant.organizationId,
+          emittedById:    ctx.user.id,
+          payload:        JSON.stringify({ motivo: input.motivo }),
+        },
+      });
+
+      return { ok: true as const };
     }),
 });
