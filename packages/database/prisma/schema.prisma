@@ -346,6 +346,8 @@ model Organization {
   accountingPeriods         AccountingPeriod[]  @relation("PeriodOrganization")
   journalEntries            JournalEntry[]      @relation("JournalOrganization")
   costCenters               CostCenter[]        @relation("CostCenterOrganization")
+  // F2-S7 — Carrito Unidosis
+  pharmacyCarts             PharmacyCart[]      @relation("OrgPharmacyCarts")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -464,6 +466,9 @@ model User {
   journalEntriesCreated     JournalEntry[]               @relation("JournalCreatedBy")
   journalEntriesPosted      JournalEntry[]               @relation("JournalPostedBy")
   accountingPeriodsClosedBy AccountingPeriod[]           @relation("PeriodClosedBy")
+  // F2-S7 — Carrito Unidosis
+  cartsDispatched           PharmacyCart[]              @relation("CartDispatchedBy")
+  cartsReceived             PharmacyCart[]              @relation("CartReceivedBy")
 
   @@schema("public")
 }
@@ -988,6 +993,8 @@ model Patient {
   // Beta.20 — Portal del Paciente
   portalAccount          PortalAccount?
   guardianRelationships  GuardianRelationship[]    @relation("GuardianWard")
+  // F2-S7 — Carrito Unidosis
+  pharmacyCarts          PharmacyCart[]            @relation("PatientPharmacyCarts")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1770,7 +1777,8 @@ model MedicationDispense {
   expiryDate         DateTime? @db.Date
   notes              String?   @db.Text
 
-  item PrescriptionItem @relation(fields: [prescriptionItemId], references: [id], onDelete: Restrict)
+  item          PrescriptionItem   @relation(fields: [prescriptionItemId], references: [id], onDelete: Restrict)
+  cartItems     PharmacyCartItem[]
 
   @@index([prescriptionItemId])
   @@index([dispensedAt])
@@ -5289,4 +5297,65 @@ model EceSupresion {
 
   @@map("supresion")
   @@schema("ece")
+}
+
+// =============================================================================
+// §GS1 Carrito Unidosis — US.F2.6.12-16
+// Farmacéutico arma carrito virtual por turno+paciente y despacha a GLN destino.
+// =============================================================================
+
+/// Estado del carrito: avance unidireccional (ARMANDO → LISTO → DESPACHADO → RECIBIDO).
+enum PharmacyCartStatus {
+  ARMANDO
+  LISTO
+  DESPACHADO
+  RECIBIDO
+
+  @@schema("public")
+}
+
+/// Carrito unidosis — agrupa ítems de dispensación por turno y paciente.
+model PharmacyCart {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @db.Uuid
+  turno          String              @db.VarChar(20) /// "MAÑANA", "TARDE", "NOCHE"
+  patientId      String              @db.Uuid
+  glnDestino     String              @db.VarChar(13) /// GLN destino (servicio hospitalización)
+  status         PharmacyCartStatus  @default(ARMANDO)
+  dispatchedAt   DateTime?           @db.Timestamptz()
+  dispatchedById String?             @db.Uuid
+  receivedAt     DateTime?           @db.Timestamptz()
+  receivedById   String?             @db.Uuid
+  signature      String?             @db.VarChar(2000) /// firma electrónica simple recepción
+  createdAt      DateTime            @default(now()) @db.Timestamptz()
+  updatedAt      DateTime            @updatedAt @db.Timestamptz()
+
+  organization Organization       @relation("OrgPharmacyCarts", fields: [organizationId], references: [id], onDelete: Restrict)
+  patient      Patient            @relation("PatientPharmacyCarts", fields: [patientId], references: [id], onDelete: Restrict)
+  dispatchedBy User?              @relation("CartDispatchedBy", fields: [dispatchedById], references: [id], onDelete: SetNull)
+  receivedBy   User?              @relation("CartReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+  items        PharmacyCartItem[]
+
+  @@unique([organizationId, turno, patientId], name: "one_cart_per_turno_patient")
+  @@index([organizationId, status])
+  @@index([patientId])
+  @@schema("public")
+}
+
+/// Ítem del carrito — enlaza un despacho (MedicationDispense) con el carrito.
+model PharmacyCartItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  cartId             String   @db.Uuid
+  medicationDispenseId String? @db.Uuid /// FK opcional: ítem puede ser manual (scan GTIN)
+  gtin               String   @db.VarChar(14)
+  lote               String?  @db.VarChar(80)
+  serie              String?  @db.VarChar(80)
+  posicionCarrito    Int      @default(0) /// orden visual en el carrito
+  createdAt          DateTime @default(now()) @db.Timestamptz()
+
+  cart              PharmacyCart      @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  medicationDispense MedicationDispense? @relation(fields: [medicationDispenseId], references: [id], onDelete: SetNull)
+
+  @@index([cartId])
+  @@schema("public")
 }

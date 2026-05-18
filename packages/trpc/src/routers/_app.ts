@@ -97,6 +97,8 @@ import { gs1CatalogosRouter } from "./gs1-catalogos.router";
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
 import { eceSalaExpulsionRouter } from "./ece/sala-expulsion.router";
+// F2-S7 — Carrito Unidosis (US.F2.6.12-16)
+import { cartRouter } from "./pharmacy/cart.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -197,6 +199,8 @@ export const appRouter = router({
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)
   eceSalaExpulsion: eceSalaExpulsionRouter,
+  // F2-S7 — Carrito Unidosis (US.F2.6.12-16)
+  pharmacyCart: cartRouter,
 });
 
 export type AppRouter = typeof appRouter;
