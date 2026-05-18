@@ -295,6 +295,8 @@ model Organization {
   functionalCurrency String   @db.Uuid
   reportingCurrency  String?  @db.Uuid
   active             Boolean  @default(true)
+  /// Prefijo GS1 de la empresa (7–9 dígitos) para generación de GSRN (US.F2.6.1).
+  gs1CompanyPrefix   String?  @db.VarChar(9)
   createdAt          DateTime @default(now()) @db.Timestamptz()
   createdBy          String?  @db.Uuid
   updatedAt          DateTime @updatedAt @db.Timestamptz()
@@ -940,6 +942,8 @@ model Patient {
   unknownLabel       String?   @db.VarChar(40) /// NN-AAAAMMDD-NNN.
   motherPatientId    String?   @db.Uuid /// vínculo neonato↔madre.
   active             Boolean   @default(true)
+  /// AI(8018) GSRN — asignado automáticamente al confirmar admisión hospitalaria (US.F2.6.1).
+  gsrn               String?   @unique @db.Char(18)
   deletedAt          DateTime? @db.Timestamptz()
   deletedBy          String?   @db.Uuid
   createdAt          DateTime  @default(now()) @db.Timestamptz()

@@ -9,16 +9,9 @@ import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 
 /**
- * US-5.1 — Pantalla post-admisión.
+ * US-5.1 + US.F2.6.1 — Pantalla post-admisión.
  *
- * Recibe el `id` del encuentro recién creado (o el reusado por idempotencia)
- * y muestra el resumen: número de encuentro, paciente, servicio, cama
- * asignada y siguiente paso (triage, ver censo, ir al detalle).
- *
- * Estrategia de fetch: usamos `encounter.listOpenByOrg` con `pageSize=100`
- * y filtramos en cliente — evita pedir un nuevo endpoint `getById` que
- * pertenecería al patient/encounter team. Cuando US-5.4 lo agregue, este
- * componente debería migrar a `encounter.getById`.
+ * Muestra resumen del encuentro y permite imprimir/reimprimir la pulsera GSRN.
  */
 export default function AdmissionConfirmPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,6 +21,18 @@ export default function AdmissionConfirmPage() {
   });
 
   const enc = list.data?.items.find((e) => e.id === id);
+  const patientId = enc?.patient.id ?? "";
+
+  const gsrnQuery = trpc.gsrnPulsera.get.useQuery(
+    { patientId },
+    { enabled: !!patientId },
+  );
+
+  const printMutation = trpc.gsrnPulsera.print.useMutation();
+  const reprintMutation = trpc.gsrnPulsera.reprint.useMutation();
+  const assignMutation = trpc.gsrnPulsera.assign.useMutation({
+    onSuccess: () => void gsrnQuery.refetch(),
+  });
 
   if (list.isLoading) {
     return <p className="text-sm text-muted-foreground">Cargando…</p>;
@@ -37,8 +42,7 @@ export default function AdmissionConfirmPage() {
     return (
       <div className="space-y-3">
         <p className="text-sm text-destructive">
-          Encuentro no encontrado entre los abiertos. Puede haber sido
-          cerrado.
+          Encuentro no encontrado entre los abiertos. Puede haber sido cerrado.
         </p>
         <Button asChild variant="outline">
           <Link href="/admission">Volver a admisión</Link>
@@ -48,6 +52,21 @@ export default function AdmissionConfirmPage() {
   }
 
   const bed = enc.bedAssignments[0]?.bed ?? null;
+  const gsrn = gsrnQuery.data?.gsrn;
+  const isPrinting = printMutation.isPending;
+  const isReprinting = reprintMutation.isPending;
+
+  function handlePrint() {
+    printMutation.mutate({ patientId });
+  }
+
+  function handleReprint() {
+    reprintMutation.mutate({ patientId });
+  }
+
+  function handleAssignGsrn() {
+    assignMutation.mutate({ patientId });
+  }
 
   return (
     <div className="space-y-4">
@@ -95,6 +114,74 @@ export default function AdmissionConfirmPage() {
             <dt className="text-muted-foreground">Admitido</dt>
             <dd>{new Date(enc.admittedAt).toLocaleString("es-SV")}</dd>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* US.F2.6.1 — Pulsera GSRN */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Pulsera de Identificación (GSRN)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {gsrnQuery.isLoading ? (
+            <p className="text-sm text-muted-foreground">Cargando GSRN…</p>
+          ) : gsrn ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">GSRN:</span>
+                <code className="rounded bg-muted px-2 py-0.5 text-sm font-mono">
+                  {gsrn}
+                </code>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={handlePrint}
+                  disabled={isPrinting}
+                >
+                  {isPrinting ? "Imprimiendo…" : "Imprimir Pulsera"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReprint}
+                  disabled={isReprinting}
+                >
+                  {isReprinting ? "Reimprimiendo…" : "Reimprimir Pulsera"}
+                </Button>
+              </div>
+              {printMutation.isSuccess && (
+                <p className="text-sm text-green-700">
+                  Pulsera enviada a impresora.
+                </p>
+              )}
+              {reprintMutation.isSuccess && (
+                <p className="text-sm text-green-700">
+                  Reimpresión enviada a impresora.
+                </p>
+              )}
+            </>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                GSRN no asignado. El sistema lo asigna automáticamente al
+                confirmar admisión. Si no se asignó, puede hacerlo manualmente.
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={handleAssignGsrn}
+                disabled={assignMutation.isPending}
+              >
+                {assignMutation.isPending ? "Asignando…" : "Asignar GSRN"}
+              </Button>
+              {assignMutation.isError && (
+                <p className="text-sm text-destructive">
+                  {assignMutation.error.message}
+                </p>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
