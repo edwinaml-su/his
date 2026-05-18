@@ -149,6 +149,9 @@ import { cartRouter } from "./pharmacy/cart.router";
 import { patientIdentificationRouter } from "./patient-identification.router";
 // F2-S7 Stream 15 — Farmacovigilancia
 import { farmacovigilanciaRouter } from "./farmacovigilancia.router";
+// F2-S16-B — Workflow: publicación + versionado + validación visual
+import { workflowPublicacionRouter } from "./workflow-publicacion.router";
+import { workflowValidatorVisualRouter } from "./workflow-validator-visual.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -206,6 +209,8 @@ export const appRouter = router({
   workflowRol: workflowRolRouter,
   workflowInstance: workflowInstanceRouter,
   workflowValidator: workflowValidatorRouter,
+  workflowPublicacion: workflowPublicacionRouter,
+  workflowValidatorVisual: workflowValidatorVisualRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
   // Fase 2 — ECE Triaje NTEC (Stream 02)
