@@ -980,6 +980,35 @@ export type FarmacovigilanciaAlergiaPayload = z.infer<typeof farmacovigilanciaAl
 export type FarmacovigilanciaRecallPayload = z.infer<typeof farmacovigilanciaRecallPayloadSchema>;
 export type FarmacovigilanciaDobleDispPayload = z.infer<typeof farmacovigilanciaDobleDispPayloadSchema>;
 export type FarmacovigilanciaVencidoPayload = z.infer<typeof farmacovigilanciaVencidoPayloadSchema>;
+// pharmacy.reservation.created / pharmacy.reservation.cancelled (US.F2.6.8)
+// Emitidos cuando se crea o cancela una reserva lógica GS1.
+// -----------------------------------------------------------------------------
+
+export const pharmacyReservationCreatedPayloadSchema = z.object({
+  reservationId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  pharmacyOrderId: z.string().uuid(),
+  gtin: z.string().length(14),
+  lote: z.string().min(1).max(80),
+  serie: z.string().max(80).optional(),
+  expiresAt: z.string().datetime(),
+  organizationId: z.string().uuid(),
+});
+
+export const pharmacyReservationCancelledPayloadSchema = z.object({
+  reservationId: z.string().uuid(),
+  motivo: z.string().min(1),
+  cancelledBy: z.string().uuid(),
+  patientId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+});
+
+export type PharmacyReservationCreatedPayload = z.infer<
+  typeof pharmacyReservationCreatedPayloadSchema
+>;
+export type PharmacyReservationCancelledPayload = z.infer<
+  typeof pharmacyReservationCancelledPayloadSchema
+>;
 
 // -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
@@ -1286,6 +1315,14 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("farmacovigilancia.dosis_vencida"),
     payload: farmacovigilanciaVencidoPayloadSchema,
+  // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
+  z.object({
+    eventType: z.literal("pharmacy.reservation.created"),
+    payload: pharmacyReservationCreatedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("pharmacy.reservation.cancelled"),
+    payload: pharmacyReservationCancelledPayloadSchema,
   }),
 ]);
 

@@ -1786,6 +1786,38 @@ model PrescriptionItem {
   @@schema("public")
 }
 
+/// US.F2.6.8 — Reserva lógica de unidad GS1 (GTIN+lote+serie) al paciente.
+/// Expira automáticamente en 4 h si no se confirma el despacho.
+/// El índice parcial uq_pharma_reservation_active en SQL 89 previene doble RESERVED.
+model PharmacyReservation {
+  id              String                    @id @default(uuid()) @db.Uuid
+  organizationId  String                    @db.Uuid
+  pharmacyOrderId String                    @db.Uuid /// FK a PrescriptionItem (dispensación activa)
+  patientId       String                    @db.Uuid
+  gtin            String                    @db.Char(14)    /// GTIN-14 GS1
+  lote            String                    @db.VarChar(80)
+  serie           String?                   @db.VarChar(80) /// número de serie; null si ítem sin serie
+  status          PharmacyReservationStatus @default(RESERVED)
+  expiresAt       DateTime                  @db.Timestamptz() /// now() + 4h al crear
+  cancelMotivo    String?                   @db.Text
+  createdAt       DateTime                  @default(now()) @db.Timestamptz()
+  updatedAt       DateTime                  @updatedAt @db.Timestamptz()
+
+  @@index([organizationId, patientId])
+  @@index([pharmacyOrderId])
+  @@index([expiresAt])
+  @@schema("public")
+}
+
+enum PharmacyReservationStatus {
+  RESERVED
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+
+  @@schema("public")
+}
+
 /// TDR §15.3 — dispensación (registro por farmacéutico).
 model MedicationDispense {
   id                 String    @id @default(uuid()) @db.Uuid

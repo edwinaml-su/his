@@ -1,431 +1,446 @@
 "use client";
 
 /**
- * US.F2.6.7 — Estación de Picking Farmacia.
+ * US.F2.6.8-9 — Dispensación GS1 con reserva lógica y detección de duplicados.
  *
- * Muestra los ítems de la receta y permite escanear el DataMatrix de cada
- * unidad. Hard stops:
- *   - GTIN_NO_COINCIDE_CON_RECETA
- *   - MEDICAMENTO_VENCIDO        (+ notificación outbox)
- *   - LOTE_EN_RECALL
- *
- * Feedback:
- *   - Beep verde (HTML5 Audio, 880 Hz) en scan correcto.
- *   - Beep rojo (HTML5 Audio, 220 Hz) en hard stop.
- *   - Modal full-screen rojo con razón del hard stop.
- *   - Botón "Finalizar Dispensación" habilitado solo cuando todos ESCANEADO.
+ * Flujo:
+ *  1. Ingreso del scan GS1 (GTIN, lote, serie).
+ *  2. checkDuplicate → Hard Stop si ítem ya dispensado en ventana terapéutica.
+ *  3. reserveItem → bloquea el serial al paciente. Muestra contador 4h.
+ *  4. Botón "Cancelar Reserva" con confirmación + motivo.
+ *  5. Banner visual mientras la reserva está activa.
  */
 import * as React from "react";
-import { use } from "react";
-import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
+import { useParams, useRouter } from "next/navigation";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
-import { Badge } from "@his/ui/components/badge";
-import { Gs1Scanner } from "@/components/gs1-scanner";
+import { Input } from "@his/ui/components/input";
+import { Label } from "@his/ui/components/label";
+import { Form, FormError, FormField } from "@his/ui/components/form";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
 
-// ---------------------------------------------------------------------------
-// Tipos
-// ---------------------------------------------------------------------------
-
-type ItemStatus = "PENDIENTE" | "ESCANEADO" | "HARD_STOP";
-
-interface PickingItem {
-  id: string;
-  drugId: string;
-  genericName: string;
-  dosage: string;
-  route: string;
-  frequency: string;
-  status: ItemStatus;
-  hardStopReason?: string;
-  scannedGtin?: string;
-  scannedLot?: string;
-  scannedExpiry?: string;
+interface ScanFormState {
+  gtin: string;
+  lote: string;
+  serie: string;
+  patientId: string;
+  prescriptionItemId: string;
 }
 
-interface HardStopModal {
-  visible: boolean;
-  reason: string;
+type HardStopReason =
+  | "ITEM_YA_DISPENSADO_EN_VENTANA"
+  | "SERIAL_YA_RESERVADO_OTRO_PACIENTE";
+
+interface HardStop {
+  reason: HardStopReason;
+  detail: string;
 }
 
-// ---------------------------------------------------------------------------
-// Sonido (beep HTML5 Audio — no depende de librería externa)
-// ---------------------------------------------------------------------------
-
-function playBeep(type: "ok" | "error"): void {
-  try {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = type === "ok" ? 880 : 220;
-    osc.type = "sine";
-    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.3);
-  } catch {
-    // AudioContext puede no estar disponible en SSR / jsdom.
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Componente principal
-// ---------------------------------------------------------------------------
-
-export default function PickingStationPage({
-  params,
-}: {
-  params: Promise<{ orderId: string }>;
-}): React.ReactElement {
-  const { orderId } = use(params);
+export default function GS1DispensePage(): React.ReactElement {
+  const params = useParams();
+  const orderId = params["orderId"] as string;
   const router = useRouter();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
 
-  // Cargar la receta para obtener los ítems.
-  const prescriptionQuery = trpcAny.pharmacy.prescription.get.useQuery(
-    { id: orderId },
-    { retry: false },
-  );
-
-  const scanMutation = trpcAny.dispensation.scanItem.useMutation();
-
-  // Estado local de ítems de picking (inicializado desde la receta).
-  const [items, setItems] = React.useState<PickingItem[]>([]);
-  const [hardStop, setHardStop] = React.useState<HardStopModal>({
-    visible: false,
-    reason: "",
+  const [form, setForm] = React.useState<ScanFormState>({
+    gtin: "",
+    lote: "",
+    serie: "",
+    patientId: "",
+    prescriptionItemId: "",
   });
+  const [errors, setErrors] = React.useState<Partial<ScanFormState>>({});
+  const [hardStop, setHardStop] = React.useState<HardStop | null>(null);
+  const [reservationId, setReservationId] = React.useState<string | null>(null);
+  const [reservedAt, setReservedAt] = React.useState<Date | null>(null);
+  const [cancelOpen, setCancelOpen] = React.useState(false);
+  const [cancelMotivo, setCancelMotivo] = React.useState("");
+  const [cancelError, setCancelError] = React.useState<string | null>(null);
+  const [serverError, setServerError] = React.useState<string | null>(null);
+  const [checkPending, setCheckPending] = React.useState(false);
 
-  // Inicializar ítems cuando la receta carga.
+  // Contador tiempo restante
+  const [minutosRestantes, setMinutosRestantes] = React.useState<number | null>(null);
+
   React.useEffect(() => {
-    if (!prescriptionQuery.data) return;
-    const rx = prescriptionQuery.data;
-    const rxItems = rx.items ?? [];
-    setItems(
-      rxItems.map(
-        (it: {
-          id: string;
-          drug: { id: string; genericName: string };
-          dosage: string;
-          route: string;
-          frequency: string;
-        }) => ({
-          id: it.id,
-          drugId: it.drug.id,
-          genericName: it.drug.genericName,
-          dosage: it.dosage,
-          route: it.route,
-          frequency: it.frequency,
-          status: "PENDIENTE" as ItemStatus,
-        }),
-      ),
-    );
-  }, [prescriptionQuery.data]);
-
-  const allScanned =
-    items.length > 0 && items.every((it) => it.status === "ESCANEADO");
-  const pendingCount = items.filter((it) => it.status === "PENDIENTE").length;
-
-  async function handleScanSuccess(gs1Raw: string, data: Gs1DataPartial) {
-    try {
-      if (!data.gtin) {
-        playBeep("error");
-        setHardStop({ visible: true, reason: "GS1_PARSE_ERROR: GTIN ausente en el DataMatrix." });
+    if (!reservedAt) {
+      setMinutosRestantes(null);
+      return;
+    }
+    const tick = () => {
+      const diff = reservedAt.getTime() + 4 * 60 * 60 * 1000 - Date.now();
+      if (diff <= 0) {
+        setMinutosRestantes(0);
+        setReservationId(null);
         return;
       }
-      const result = await scanMutation.mutateAsync({
-        pharmacyOrderId: orderId,
-        gtin: data.gtin,
-        ...(data.lot ? { lot: data.lot } : {}),
-        ...(data.expiry ? { expiry: data.expiry } : {}),
-        ...(data.serial ? { serial: data.serial } : {}),
-        gs1Raw,
-      });
+      setMinutosRestantes(Math.ceil(diff / 60000));
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, [reservedAt]);
 
-      if ("hardStop" in result) {
-        playBeep("error");
-        setHardStop({ visible: true, reason: mapHardStop(result.hardStop as string) });
-        // Marcar el primer ítem pendiente como HARD_STOP.
-        setItems((prev) => {
-          const idx = prev.findIndex((it) => it.status === "PENDIENTE");
-          if (idx === -1) return prev;
-          const next = [...prev];
-          next[idx] = {
-            ...next[idx]!,
-            status: "HARD_STOP",
-            hardStopReason: result.hardStop as string,
-          };
-          return next;
+  const checkDuplicateMutation = trpcAny.pharmacyDispensation.checkDuplicate.useQuery;
+
+  const reserveMutation = trpcAny.pharmacyDispensation.reserveItem.useMutation({
+    onSuccess: (data: { id: string }) => {
+      setReservationId(data.id);
+      setReservedAt(new Date());
+      setServerError(null);
+    },
+    onError: (err: { message: string }) => {
+      const msg = err.message;
+      if (msg === "SERIAL_YA_RESERVADO_OTRO_PACIENTE") {
+        setHardStop({
+          reason: "SERIAL_YA_RESERVADO_OTRO_PACIENTE",
+          detail: "Este número de serie ya está reservado para otro paciente.",
+        });
+      } else {
+        setServerError(msg);
+      }
+    },
+  });
+
+  const cancelMutation = trpcAny.pharmacyDispensation.cancelReservation.useMutation({
+    onSuccess: () => {
+      setReservationId(null);
+      setReservedAt(null);
+      setCancelOpen(false);
+      setCancelMotivo("");
+      setCancelError(null);
+    },
+    onError: (err: { message: string }) => setCancelError(err.message),
+  });
+
+  function validate(): boolean {
+    const e: Partial<ScanFormState> = {};
+    if (!/^\d{14}$/.test(form.gtin)) e.gtin = "GTIN-14: 14 dígitos numéricos";
+    if (!form.lote.trim()) e.lote = "Lote requerido";
+    if (!form.patientId.trim()) e.patientId = "ID de paciente requerido";
+    if (!form.prescriptionItemId.trim())
+      e.prescriptionItemId = "ID de ítem de receta requerido";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  async function handleScan(e: React.FormEvent) {
+    e.preventDefault();
+    if (!validate()) return;
+    setHardStop(null);
+    setServerError(null);
+    setCheckPending(true);
+
+    try {
+      // 1. checkDuplicate primero (US.F2.6.9)
+      // Usamos fetch directo para query síncrona inline sin hook condicional
+      const checkResult = await (
+        trpcAny.pharmacyDispensation.checkDuplicate.fetch({
+          patientId: form.patientId,
+          prescriptionItemId: form.prescriptionItemId,
+          gtin: form.gtin,
+        }) as Promise<{
+          allowed: boolean;
+          lastDispensedAt: string | null;
+          nextWindowAt: string | null;
+          reason?: string;
+        }>
+      );
+
+      if (!checkResult.allowed) {
+        const next = checkResult.nextWindowAt
+          ? new Date(checkResult.nextWindowAt).toLocaleString("es-SV")
+          : "—";
+        setHardStop({
+          reason: "ITEM_YA_DISPENSADO_EN_VENTANA",
+          detail: `Ítem ya dispensado. Próxima ventana: ${next}`,
         });
         return;
       }
 
-      // Scan correcto.
-      playBeep("ok");
-      const scanned = result.item as {
-        prescriptionItemId: string;
-        gtin: string;
-        lot: string | null;
-        expiry: string | null;
-      };
-      setItems((prev) => {
-        const idx = prev.findIndex(
-          (it) =>
-            it.id === scanned.prescriptionItemId && it.status === "PENDIENTE",
-        );
-        const fallbackIdx = prev.findIndex((it) => it.status === "PENDIENTE");
-        const target = idx !== -1 ? idx : fallbackIdx;
-        if (target === -1) return prev;
-        const next = [...prev];
-        next[target] = {
-          ...next[target]!,
-          status: "ESCANEADO",
-          scannedGtin: scanned.gtin,
-          scannedLot: scanned.lot ?? undefined,
-          scannedExpiry: scanned.expiry ?? undefined,
-        };
-        return next;
+      // 2. Reservar serial (US.F2.6.8)
+      reserveMutation.mutate({
+        pharmacyOrderId: orderId,
+        gtin: form.gtin,
+        lote: form.lote,
+        serie: form.serie.trim() || undefined,
+        patientId: form.patientId,
       });
-    } catch (err: unknown) {
-      playBeep("error");
-      const msg = err instanceof Error ? err.message : "Error al validar el scan.";
-      setHardStop({ visible: true, reason: msg });
+    } catch (err) {
+      setServerError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setCheckPending(false);
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Render
-  // ---------------------------------------------------------------------------
-
-  if (prescriptionQuery.isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <p className="text-muted-foreground">Cargando orden…</p>
-      </div>
-    );
+  function handleCancelConfirm() {
+    if (!cancelMotivo.trim()) {
+      setCancelError("El motivo de cancelación es requerido");
+      return;
+    }
+    if (!reservationId) return;
+    cancelMutation.mutate({
+      reservationId,
+      motivo: cancelMotivo.trim(),
+    });
   }
 
-  if (prescriptionQuery.error || !prescriptionQuery.data) {
-    return (
-      <div role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-destructive">
-        No se pudo cargar la orden o no existe.{" "}
-        <button
-          type="button"
-          className="underline"
-          onClick={() => router.back()}
-        >
-          Volver
-        </button>
-      </div>
-    );
-  }
-
-  const rx = prescriptionQuery.data;
+  const isPending =
+    checkPending || reserveMutation.isPending || cancelMutation.isPending;
 
   return (
-    <div className="space-y-6">
-      {/* Hard Stop modal */}
-      {hardStop.visible ? (
-        <HardStopOverlay
-          reason={hardStop.reason}
-          onClose={() => setHardStop({ visible: false, reason: "" })}
-        />
-      ) : null}
-
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Picking — Estación de Dispensación</h1>
-        <p className="text-sm text-muted-foreground">
-          Paciente: {rx.patient?.firstName} {rx.patient?.lastName} · MRN{" "}
-          {rx.patient?.mrn}
-        </p>
-      </div>
-
-      {/* Escáner GS1 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Escanear DataMatrix de la unidad
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Gs1Scanner
-            onScanSuccess={(data) => {
-              const gs1Raw = buildGs1Raw(data);
-              void handleScanSuccess(gs1Raw, data);
-            }}
-            onScanError={(msg) => {
-              playBeep("error");
-              setHardStop({ visible: true, reason: `GS1_PARSE_ERROR: ${msg}` });
-            }}
-          />
-          {scanMutation.isPending ? (
-            <p className="mt-2 text-sm text-muted-foreground" aria-live="polite">
-              Validando scan…
-            </p>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      {/* Tabla de ítems */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">
-            Ítems de la receta{" "}
-            <span className="text-sm font-normal text-muted-foreground">
-              ({items.filter((it) => it.status === "ESCANEADO").length}/{items.length} escaneados)
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ul className="divide-y rounded-md border" role="list" aria-label="Ítems de la receta">
-            {items.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center justify-between px-4 py-3 text-sm"
-              >
-                <div>
-                  <p className="font-medium">{item.genericName}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {item.dosage} · {item.route} · {item.frequency}
-                  </p>
-                  {item.scannedGtin ? (
-                    <p className="text-xs text-muted-foreground font-mono">
-                      GTIN: {item.scannedGtin}
-                      {item.scannedLot ? ` · Lote: ${item.scannedLot}` : ""}
-                    </p>
-                  ) : null}
-                  {item.hardStopReason ? (
-                    <p className="text-xs text-destructive" role="alert">
-                      {mapHardStop(item.hardStopReason)}
-                    </p>
-                  ) : null}
-                </div>
-                <ItemStatusBadge status={item.status} />
-              </li>
-            ))}
-            {items.length === 0 ? (
-              <li className="px-4 py-6 text-center text-sm text-muted-foreground">
-                Cargando ítems…
-              </li>
-            ) : null}
-          </ul>
-        </CardContent>
-      </Card>
-
-      {/* Acciones */}
-      <div className="flex items-center justify-between">
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
         <Button
           type="button"
           variant="outline"
+          size="sm"
           onClick={() => router.back()}
         >
-          Volver a la cola
+          Volver
         </Button>
-        <Button
-          type="button"
-          disabled={!allScanned}
-          aria-disabled={!allScanned}
-          onClick={() => {
-            // Fase 2: dispatch de la dispensación completa (US.F2.6.13+).
-            // Por ahora navega a confirmación.
-            router.push(`/pharmacy/dispense/${orderId}/confirm`);
-          }}
-        >
-          Finalizar Dispensación
-          {pendingCount > 0 ? ` (${pendingCount} pendiente${pendingCount !== 1 ? "s" : ""})` : ""}
-        </Button>
+        <div>
+          <h1 className="text-2xl font-bold">Dispensación GS1</h1>
+          <p className="text-sm text-muted-foreground">
+            Orden: <code className="font-mono text-xs">{orderId}</code>
+          </p>
+        </div>
       </div>
+
+      {/* Banner reserva activa */}
+      {reservationId && minutosRestantes !== null && minutosRestantes > 0 ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center justify-between rounded-md border border-green-500/40 bg-green-500/10 px-4 py-3"
+        >
+          <p className="text-sm font-medium text-green-700">
+            Reserva activa — expira en{" "}
+            <strong>{minutosRestantes} min</strong>
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            onClick={() => setCancelOpen(true)}
+          >
+            Cancelar reserva
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Banner reserva expirada */}
+      {reservedAt && minutosRestantes === 0 ? (
+        <div
+          role="alert"
+          className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-4 py-3 text-sm text-yellow-700"
+        >
+          La reserva expiró. Escanee nuevamente para crear una nueva reserva.
+        </div>
+      ) : null}
+
+      {/* Hard Stop */}
+      {hardStop ? (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3"
+        >
+          <p className="font-semibold text-destructive">
+            HARD STOP — {hardStop.reason}
+          </p>
+          <p className="mt-1 text-sm text-destructive">{hardStop.detail}</p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={() => setHardStop(null)}
+          >
+            Descartar
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Formulario de scan */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Escanear unidad GS1</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Form onSubmit={(e) => void handleScan(e)}>
+            <FormField>
+              <Label htmlFor="gs1-gtin">
+                GTIN-14 <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="gs1-gtin"
+                placeholder="00000000000000"
+                maxLength={14}
+                value={form.gtin}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, gtin: e.target.value }))
+                }
+                aria-invalid={Boolean(errors.gtin)}
+                disabled={Boolean(reservationId)}
+              />
+              <FormError>{errors.gtin}</FormError>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="gs1-lote">
+                Lote <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="gs1-lote"
+                placeholder="L2024A"
+                maxLength={80}
+                value={form.lote}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, lote: e.target.value }))
+                }
+                aria-invalid={Boolean(errors.lote)}
+                disabled={Boolean(reservationId)}
+              />
+              <FormError>{errors.lote}</FormError>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="gs1-serie">Serie (opcional)</Label>
+              <Input
+                id="gs1-serie"
+                placeholder="21000001"
+                maxLength={80}
+                value={form.serie}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, serie: e.target.value }))
+                }
+                disabled={Boolean(reservationId)}
+              />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="gs1-patient">
+                ID Paciente <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="gs1-patient"
+                placeholder="UUID del paciente"
+                value={form.patientId}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, patientId: e.target.value }))
+                }
+                aria-invalid={Boolean(errors.patientId)}
+                disabled={Boolean(reservationId)}
+              />
+              <FormError>{errors.patientId}</FormError>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="gs1-item">
+                ID Ítem de Receta <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="gs1-item"
+                placeholder="UUID del ítem de prescripción"
+                value={form.prescriptionItemId}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    prescriptionItemId: e.target.value,
+                  }))
+                }
+                aria-invalid={Boolean(errors.prescriptionItemId)}
+                disabled={Boolean(reservationId)}
+              />
+              <FormError>{errors.prescriptionItemId}</FormError>
+            </FormField>
+
+            {serverError ? (
+              <p
+                role="alert"
+                className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+              >
+                {serverError}
+              </p>
+            ) : null}
+
+            {!reservationId ? (
+              <Button type="submit" disabled={isPending}>
+                {isPending ? "Verificando…" : "Validar y reservar"}
+              </Button>
+            ) : (
+              <p className="text-sm text-green-700">
+                Unidad reservada correctamente. Confirme el despacho desde el
+                sistema de farmacia.
+              </p>
+            )}
+          </Form>
+        </CardContent>
+      </Card>
+
+      {/* Dialog cancelación */}
+      <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancelar reserva</DialogTitle>
+            <DialogDescription>
+              Ingrese el motivo de cancelación. La unidad quedará disponible
+              para otros pacientes.
+            </DialogDescription>
+          </DialogHeader>
+
+          <FormField>
+            <Label htmlFor="cancel-motivo">
+              Motivo <span className="text-destructive">*</span>
+            </Label>
+            <Input
+              id="cancel-motivo"
+              value={cancelMotivo}
+              onChange={(e) => setCancelMotivo(e.target.value)}
+              placeholder="Ejemplo: orden médica suspendida"
+              aria-invalid={Boolean(cancelError)}
+              autoFocus
+            />
+            {cancelError ? (
+              <FormError>{cancelError}</FormError>
+            ) : null}
+          </FormField>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCancelOpen(false)}
+            >
+              Volver
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={cancelMutation.isPending}
+              onClick={handleCancelConfirm}
+            >
+              {cancelMutation.isPending ? "Cancelando…" : "Confirmar cancelación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Sub-componentes
-// ---------------------------------------------------------------------------
-
-function HardStopOverlay({
-  reason,
-  onClose,
-}: {
-  reason: string;
-  onClose: () => void;
-}): React.ReactElement {
-  return (
-    <div
-      role="alertdialog"
-      aria-modal="true"
-      aria-label="Hard Stop de Dispensación"
-      aria-live="assertive"
-      className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-red-600 text-white p-8"
-    >
-      <h2 className="text-4xl font-bold mb-4">HARD STOP</h2>
-      <p className="text-xl text-center max-w-lg mb-8">{reason}</p>
-      <Button
-        type="button"
-        variant="outline"
-        className="bg-white text-red-700 border-white hover:bg-red-50"
-        onClick={onClose}
-      >
-        Cerrar y reintentar
-      </Button>
-    </div>
-  );
-}
-
-function ItemStatusBadge({ status }: { status: ItemStatus }): React.ReactElement {
-  if (status === "ESCANEADO") {
-    return (
-      <Badge className="bg-green-100 text-green-800 border-green-300">
-        ESCANEADO
-      </Badge>
-    );
-  }
-  if (status === "HARD_STOP") {
-    return (
-      <Badge variant="destructive">
-        HARD STOP
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="secondary">
-      PENDIENTE
-    </Badge>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function mapHardStop(code: string): string {
-  const map: Record<string, string> = {
-    GTIN_NO_COINCIDE_CON_RECETA: "El GTIN escaneado no corresponde a la receta médica activa.",
-    MEDICAMENTO_VENCIDO: "Medicamento vencido. No se puede dispensar. Farmacéutico jefe notificado.",
-    LOTE_EN_RECALL: "Lote en alerta de RECALL. Dispensación bloqueada automáticamente.",
-  };
-  return map[code] ?? code;
-}
-
-type Gs1DataPartial = {
-  gtin?: string;
-  lot?: string;
-  expiry?: string;
-  serial?: string;
-};
-
-/** Reconstruye un string GS1 AI desde los datos parseados para re-enviar al server. */
-function buildGs1Raw(data: Gs1DataPartial): string {
-  let s = "";
-  if (data.gtin) s += `(01)${data.gtin}`;
-  if (data.lot) s += `(10)${data.lot}`;
-  if (data.expiry) s += `(17)${data.expiry}`;
-  if (data.serial) s += `(21)${data.serial}`;
-  return s;
 }

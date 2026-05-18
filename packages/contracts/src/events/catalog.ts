@@ -124,6 +124,9 @@ export const EVENT_TYPES = [
   // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
   "medication.administered.bedside",
   "medication.administration.canceled",
+  // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
+  "pharmacy.reservation.created",
+  "pharmacy.reservation.cancelled",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

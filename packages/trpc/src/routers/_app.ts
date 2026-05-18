@@ -132,6 +132,8 @@ import { dispensationRouter } from "./pharmacy/dispensation.router";
 import { glnHierarchyRouter } from "./gs1-gln-hierarchy.router";
 import { gs1MedicationRouter } from "./gs1-medication.router";
 import { gs1DashboardRouter } from "./gs1-dashboard.router";
+// Proceso D — Dispensación GS1 (US.F2.6.8-9)
+import { pharmacyDispensationRouter } from "./pharmacy-dispensation.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -282,6 +284,8 @@ export const appRouter = router({
   gs1GlnHierarchy: glnHierarchyRouter,
   gs1Medication: gs1MedicationRouter,
   gs1Dashboard: gs1DashboardRouter,
+  // Proceso D — Dispensación GS1 (US.F2.6.8-9)
+  pharmacyDispensation: pharmacyDispensationRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)
