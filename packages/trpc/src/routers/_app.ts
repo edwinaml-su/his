@@ -166,6 +166,8 @@ import { workflowValidatorVisualRouter } from "./workflow-validator-visual.route
 // F2-S16 Stream C — Workflow Power Features (plantillas + simulación)
 import { workflowPlantillaRouter } from "./workflow-plantilla.router";
 import { workflowSimulacionRouter } from "./workflow-simulacion.router";
+// F2-S14 Stream B — Modo STAT: bypass justificado bedside (US.F2.6.47)
+import { bedsideStatRouter } from "./bedside-stat.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -334,6 +336,8 @@ export const appRouter = router({
   // F2-S16 Stream C — Workflow Power Features
   workflowPlantilla: workflowPlantillaRouter,
   workflowSimulacion: workflowSimulacionRouter,
+  // F2-S14 Stream B — Modo STAT
+  bedsideStat: bedsideStatRouter,
 });
 
 export type AppRouter = typeof appRouter;

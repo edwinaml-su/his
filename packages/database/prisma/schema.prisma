@@ -370,6 +370,8 @@ model Organization {
   solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
   // F2-S15-D — Audit Dashboard Config
   auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
+  // F2-S14-B — Modo STAT
+  eceStatEvents             EceStatEvent[]            @relation("OrgEceStatEvent")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -509,6 +511,8 @@ model User {
   expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
   eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
   arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
+  // F2-S14-B — Modo STAT
+  eceStatEventsActivados    EceStatEvent[]               @relation("EceStatEventActivador")
 
   @@schema("public")
 }
@@ -6338,4 +6342,42 @@ model AuditDashboardConfig {
   organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@schema("public")
+}
+
+// =============================================================================
+// F2-S14 Stream B — Modo STAT
+// US.F2.6.47 — Administración urgente con bypass justificado
+// =============================================================================
+
+/// Sesión STAT activa para administración urgente bedside.
+/// Inmutable una vez completado=true (trigger trg_stat_event_immutability).
+/// Hard-stops bypassables: PACIENTE_NO_COINCIDE, MEDICAMENTO_NO_COINCIDE, FUERA_DE_VENTANA.
+/// Hard-stops NO bypassables: PROFESIONAL_NO_HABILITADO, LOTE_EN_RECALL, MEDICAMENTO_VENCIDO.
+model EceStatEvent {
+  id                       String    @id @default(uuid()) @db.Uuid
+  organizationId           String    @map("organization_id") @db.Uuid
+  encounterId              String?   @map("encounter_id") @db.Uuid
+  patientId                String    @map("patient_id") @db.Uuid
+  indicationId             String    @map("indication_id")
+  activadoPorId            String    @map("activado_por_id") @db.Uuid
+  /// Catálogo: PARO_CARDIORRESPIRATORIO | HIPOGLUCEMIA_SEVERA | ANAFILAXIA | OTRO_URGENTE
+  motivo                   String    @db.VarChar(40)
+  motivoLibre              String?   @map("motivo_libre") @db.Text
+  testigosIds              String[]  @map("testigos_ids") @db.Uuid
+  /// JSONB: array de hard-stop codes bypasados en esta sesión.
+  hardStopsBypassed        Json      @default("[]") @map("hard_stops_bypassed")
+  /// SHA-256(gsrnMedico|activadoEn|indicationId) para trazabilidad de firma.
+  firmaMedicoHash          String?   @map("firma_medico_hash") @db.VarChar(200)
+  activadoEn               DateTime  @default(now()) @map("activado_en") @db.Timestamptz()
+  completadoEn             DateTime? @map("completado_en") @db.Timestamptz()
+  medicationAdministrationId String? @map("medication_administration_id") @db.Uuid
+  completado               Boolean   @default(false)
+
+  organization Organization @relation("OrgEceStatEvent", fields: [organizationId], references: [id], onDelete: Restrict)
+  activadoPor  User         @relation("EceStatEventActivador", fields: [activadoPorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, activadoEn(sort: Desc)], name: "idx_stat_event_org_activado")
+  @@index([activadoPorId, completado], name: "idx_stat_event_activado_por_activo")
+  @@map("stat_event")
+  @@schema("ece")
 }
