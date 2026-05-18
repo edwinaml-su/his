@@ -358,6 +358,10 @@ model Organization {
   pharmacyCarts             PharmacyCart[]            @relation("OrgPharmacyCarts")
   // F2-S7 W2 — ECE Staff Schedule
   eceStaffSchedules         EceStaffSchedule[]        @relation("OrgEceStaffSchedule")
+  // F2-S15 Stream A — Cumplimiento operacional
+  contingenciaEventos       EceContingenciaEvento[]   @relation("OrgContingenciaEventos")
+  reglasRetencion           EceReglaRetencion[]       @relation("OrgReglasRetencion")
+  eliminaciones             EceEliminacionSupervisada[] @relation("OrgEliminaciones")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -486,6 +490,11 @@ model User {
   cartsReceived             PharmacyCart[]               @relation("CartReceivedBy")
   // F2-S7 W2 — ECE Staff Schedule
   eceStaffSchedules         EceStaffSchedule[]           @relation("UserEceStaffSchedule")
+  // F2-S15 Stream A — Cumplimiento operacional
+  contingenciaActivaciones  EceContingenciaEvento[]      @relation("ContingenciaActivadoPor")
+  contingenciaDesactivaciones EceContingenciaEvento[]    @relation("ContingenciaDesactivadoPor")
+  reglasRetencionCreadas    EceReglaRetencion[]           @relation("ReglaRetencionCreador")
+  eliminacionesSolicitadas  EceEliminacionSupervisada[]  @relation("EliminacionSolicitante")
 
   @@schema("public")
 }
@@ -4481,8 +4490,10 @@ model EceFirmaElectronica {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   revokedAt      DateTime? @map("revoked_at") @db.Timestamptz()
 
-  personal  EcePersonalSalud                @relation(fields: [personalId], references: [id])
-  historial EceDocumentoInstanciaHistorial[]
+  personal      EcePersonalSalud                @relation(fields: [personalId], references: [id])
+  historial     EceDocumentoInstanciaHistorial[]
+  eliminacion1  EceEliminacionSupervisada[]     @relation("EliminacionFirma1")
+  eliminacion2  EceEliminacionSupervisada[]     @relation("EliminacionFirma2")
 
   @@map("firma_electronica")
   @@schema("ece")
@@ -4628,6 +4639,10 @@ model EceEpisodioAtencion {
   creadoPor         String?   @map("creado_por") @db.Uuid
   creadoEn          DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
 
+  /// F2-S15 Stream A — conservación §7
+  estadoConservacion         EstadoConservacion   @default(ACTIVO) @map("estado_conservacion")
+  fechaVencimientoRetencion  DateTime?            @map("fecha_vencimiento_retencion") @db.Timestamptz()
+
   paciente                EcePaciente               @relation(fields: [pacienteId], references: [id])
   establecimiento         EceEstablecimiento        @relation(fields: [establecimientoId], references: [id])
   servicio                EceServicio?              @relation(fields: [servicioId], references: [id])
@@ -4651,6 +4666,7 @@ model EceEpisodioAtencion {
   certificadosIncapacidad EceCertificadoIncapacidad[]
   solicitudesEstudio      EceSolicitudEstudio[]
   estadoLogs              EceEpisodioEstadoLog[]
+  eliminaciones           EceEliminacionSupervisada[] @relation("EpisodioEliminaciones")
 
   @@index([pacienteId])
   @@index([estado])
@@ -4886,6 +4902,10 @@ model EceSignosVitales {
   registradoPorId        String   @map("registrado_por") @db.Uuid
   registradoEn           DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro         String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("SVRegistradoPor", fields: [registradoPorId], references: [id])
@@ -4911,6 +4931,10 @@ model EceTriaje {
   registradoPorId        String   @map("registrado_por") @db.Uuid
   registradoEn           DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro         String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   signosVitales EceSignosVitales?   @relation(fields: [signosVitalesId], references: [id])
@@ -4958,6 +4982,10 @@ model EceIndicacionesMedicas {
   data                Json?
   registradoEn        DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro      String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio            EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   medicoPrescriptor   EcePersonalSalud    @relation("IMPrescriptor", fields: [medicoPrescriptorId], references: [id])
@@ -5042,6 +5070,10 @@ model EceEvolucionMedica {
   registradoPorId  String   @map("registrado_por") @db.Uuid
   registradoEn     DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro   String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// F2-S15 Stream A — contingencia §6
+  digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
+  timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
+  contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("EMRegistradoPor", fields: [registradoPorId], references: [id])
@@ -5972,4 +6004,120 @@ model PharmacyCartItem {
 
   @@index([cartId])
   @@schema("public")
+}
+
+// =============================================================================
+// F2-S15 Stream A — Cumplimiento operacional
+// §6 Contingencia operativa (US.F2.7.26-28)
+// §7 Conservación diferenciada y retención (US.F2.7.29-32)
+// =============================================================================
+
+/// Estado de conservación del episodio de atención (US.F2.7.29).
+/// ACTIVO: expediente vigente con atenciones recientes.
+/// PASIVO: sin atenciones en 5+ años; pasa a cola de evaluación.
+/// POR_ELIMINAR: solicitud de eliminación supervisada iniciada.
+enum EstadoConservacion {
+  ACTIVO
+  PASIVO
+  POR_ELIMINAR
+
+  @@schema("ece")
+}
+
+/// Estado de la solicitud de eliminación supervisada (US.F2.7.31).
+enum EstadoEliminacion {
+  SOLICITADA
+  APROBADA
+  RECHAZADA
+  EJECUTADA
+
+  @@schema("ece")
+}
+
+/// §6 — Registro de períodos de contingencia operativa (US.F2.7.26).
+/// Cada fila representa un período en que el sistema estuvo inoperativo
+/// y se usaron formularios en papel. Desactivado_en NULL = aún activo.
+/// RLS: organizationId. Roles: ADM, DIR (activar/desactivar).
+model EceContingenciaEvento {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @map("organization_id") @db.Uuid
+  motivo            String
+  esperadoHasta     DateTime? @map("esperado_hasta") @db.Timestamptz()
+  activadoEn        DateTime  @default(now()) @map("activado_en") @db.Timestamptz()
+  activadoPorId     String    @map("activado_por_id") @db.Uuid
+  desactivadoEn     DateTime? @map("desactivado_en") @db.Timestamptz()
+  desactivadoPorId  String?   @map("desactivado_por_id") @db.Uuid
+
+  organization   Organization @relation("OrgContingenciaEventos", fields: [organizationId], references: [id], onDelete: Restrict)
+  activadoPor    User         @relation("ContingenciaActivadoPor", fields: [activadoPorId], references: [id], onDelete: Restrict)
+  desactivadoPor User?        @relation("ContingenciaDesactivadoPor", fields: [desactivadoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, desactivadoEn])
+  @@map("contingencia_evento")
+  @@schema("ece")
+}
+
+/// §7 — Catálogo de reglas de retención por patrón CIE-10 (US.F2.7.30).
+/// cie10Pattern NULL = regla por defecto.
+/// aniosRetencion = 10 para forenses (X*, V*), 5 para base general.
+/// RLS: organizationId. Roles: DIR (gestión).
+model EceReglaRetencion {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @map("organization_id") @db.Uuid
+  /// Patrón LIKE sobre código CIE-10 (ej. 'X%', 'V%'). NULL = default.
+  cie10Pattern     String?   @map("cie10_pattern") @db.VarChar(20)
+  aniosRetencion   Int       @map("anios_retencion")
+  motivoLegal      String    @map("motivo_legal")
+  vigenteDesde     DateTime  @default(now()) @map("vigente_desde") @db.Date
+  vigenteHasta     DateTime? @map("vigente_hasta") @db.Date
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  createdById      String?   @map("created_by_id") @db.Uuid
+
+  organization Organization @relation("OrgReglasRetencion", fields: [organizationId], references: [id], onDelete: Restrict)
+  createdBy    User?        @relation("ReglaRetencionCreador", fields: [createdById], references: [id], onDelete: SetNull)
+  eliminaciones EceEliminacionSupervisada[]
+
+  @@index([organizationId, cie10Pattern])
+  @@map("regla_retencion")
+  @@schema("ece")
+}
+
+/// §7 — Solicitud de eliminación supervisada con doble firma (US.F2.7.31).
+/// Workflow: SOLICITADA → APROBADA → EJECUTADA | RECHAZADA.
+/// NO es borrado físico: marca el episodio como eliminado y preserva metadata.
+/// Requiere 2 firmas electrónicas distintas (firma_dir1 + firma_dir2).
+/// RLS: organizationId. Roles: DIR (firma), DIR_MEDICO (firma).
+model EceEliminacionSupervisada {
+  id                       String             @id @default(uuid()) @db.Uuid
+  organizationId           String             @map("organization_id") @db.Uuid
+  episodioId               String             @map("episodio_id") @db.Uuid
+  solicitadoPorId          String             @map("solicitado_por_id") @db.Uuid
+  motivoBaja               String             @map("motivo_baja")
+  estado                   EstadoEliminacion  @default(SOLICITADA)
+  firmaDir1Id              String?            @map("firma_dir1_id") @db.Uuid
+  firmaDir2Id              String?            @map("firma_dir2_id") @db.Uuid
+  fechaAprobacion          DateTime?          @map("fecha_aprobacion") @db.Timestamptz()
+  fechaRechazo             DateTime?          @map("fecha_rechazo") @db.Timestamptz()
+  motivoRechazo            String?            @map("motivo_rechazo")
+  fechaEjecucion           DateTime?          @map("fecha_ejecucion") @db.Timestamptz()
+  /// Metadata preservada permanentemente (inmutable post-ejecución, audit §TDR 6.3).
+  pacienteNombre           String?            @map("paciente_nombre") @db.VarChar(200)
+  pacienteDui              String?            @map("paciente_dui") @db.VarChar(20)
+  reglaRetencionId         String?            @map("regla_retencion_id") @db.Uuid
+  fechaVencimientoRetencion DateTime?         @map("fecha_vencimiento_retencion") @db.Timestamptz()
+  createdAt                DateTime           @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt                DateTime           @updatedAt @map("updated_at") @db.Timestamptz()
+
+  organization    Organization      @relation("OrgEliminaciones", fields: [organizationId], references: [id], onDelete: Restrict)
+  episodio        EceEpisodioAtencion @relation("EpisodioEliminaciones", fields: [episodioId], references: [id], onDelete: Restrict)
+  solicitadoPor   User              @relation("EliminacionSolicitante", fields: [solicitadoPorId], references: [id], onDelete: Restrict)
+  firmaDir1       EceFirmaElectronica? @relation("EliminacionFirma1", fields: [firmaDir1Id], references: [id], onDelete: SetNull)
+  firmaDir2       EceFirmaElectronica? @relation("EliminacionFirma2", fields: [firmaDir2Id], references: [id], onDelete: SetNull)
+  reglaRetencion  EceReglaRetencion? @relation(fields: [reglaRetencionId], references: [id], onDelete: SetNull)
+
+  @@index([estado])
+  @@index([organizationId, estado])
+  @@index([episodioId])
+  @@map("eliminacion_supervisada")
+  @@schema("ece")
 }
