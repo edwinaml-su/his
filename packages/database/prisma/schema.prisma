@@ -330,6 +330,11 @@ model Organization {
   nutritionOrders           NutritionOrder[]           @relation("OrgNutritionOrders")
   domainEvents              DomainEvent[]
   notifications             Notification[]
+  pharmacyOrders            PharmacyOrder[]           @relation("OrgPharmacyOrders")
+  pharmacyReservations      PharmacyReservation[]     @relation("OrgPharmacyReservations")
+  pharmacySubstitutions     PharmacySubstitution[]    @relation("OrgPharmacySubstitutions")
+  staffGsrns                StaffGsrn[]               @relation("OrgStaffGsrn")
+  medicationGtins           MedicationGtin[]          @relation("OrgMedicationGtin")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -429,6 +434,9 @@ model User {
   domainEventsEmitted       DomainEvent[]                @relation("DomainEventEmitter")
   notificationsReceived     Notification[]               @relation("NotificationRecipient")
   notificationPreferences   UserNotificationPreference[]
+  pharmacyOrdersDispensed   PharmacyOrder[]              @relation("PharmacyOrderDispenser")
+  pharmacySubstitutionsAuth PharmacySubstitution[]       @relation("PharmacySubstitutionAuthorizer")
+  staffGsrn                 StaffGsrn?                   @relation("UserStaffGsrn")
 
   @@schema("public")
 }
@@ -904,6 +912,8 @@ model Patient {
   isUnknown          Boolean   @default(false) /// NN.
   unknownLabel       String?   @db.VarChar(40) /// NN-AAAAMMDD-NNN.
   motherPatientId    String?   @db.Uuid /// vínculo neonato↔madre.
+  /// GS1 GSRN — identificador de 18 dígitos para pulsera de paciente. GS1 F2-S7.
+  gsrn               String?   @unique @db.VarChar(18) @map("gsrn")
   active             Boolean   @default(true)
   deletedAt          DateTime? @db.Timestamptz()
   deletedBy          String?   @db.Uuid
@@ -947,6 +957,8 @@ model Patient {
   dietPlans              DietPlan[]                @relation("PatDietPlans")
   nutritionAssessments   NutritionAssessment[]     @relation("PatNutritionAssessments")
   nutritionOrders        NutritionOrder[]          @relation("PatNutritionOrders")
+  pharmacyOrders         PharmacyOrder[]           @relation("PatPharmacyOrders")
+  pharmacyReservations   PharmacyReservation[]     @relation("PatPharmacyReservations")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1292,6 +1304,7 @@ model Encounter {
   dietPlans              DietPlan[]              @relation("EncDietPlans")
   nutritionAssessments   NutritionAssessment[]   @relation("EncNutritionAssessments")
   nutritionOrders        NutritionOrder[]        @relation("EncNutritionOrders")
+  pharmacyOrders         PharmacyOrder[]         @relation("EncPharmacyOrders")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -3345,5 +3358,195 @@ model RoleNotificationDefault {
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([roleId, severity, channel])
+  @@schema("public")
+}
+
+// =============================================================================
+// F2-S7 — GS1 Bedside (Proceso D + E)
+// Sprint F2-S7 | GS1 GSRN / GTIN / GLN bedside verification + dispensación.
+// Reusa EpcisEvent (definido en schema GS1 logística F2-S6) para trazabilidad.
+// TDR §15 (Farmacia) + GS1 EPCIS 2.0 + MINSAL SIGSA reqs.
+// =============================================================================
+
+/// Estado de una orden de dispensación farmacéutica.
+enum PharmacyOrderStatus {
+  PENDING
+  DISPENSING
+  DISPENSED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// Estado de una reserva de ítem GS1 para un paciente.
+enum PharmacyReservationStatus {
+  RESERVED
+  DISPATCHED
+  EXPIRED
+  CANCELLED
+
+  @@schema("public")
+}
+
+/// Estado del identificador GSRN del personal.
+enum StaffGsrnStatus {
+  ACTIVE
+  REVOKED
+
+  @@schema("public")
+}
+
+/// GS1 F2-S7 — Orden de dispensación farmacéutica generada desde una orden médica.
+/// Agrega GLN origen/destino para trazabilidad entre puntos de servicio GS1.
+/// State machine: PENDING → DISPENSING → DISPENSED | CANCELLED.
+/// RLS: organizationId. Audit trigger en 87_pharmacy_substitution.sql.
+model PharmacyOrder {
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid /// tenant RLS.
+  encounterId    String               @db.Uuid
+  medicalOrderId String?              @db.Uuid /// PrescriptionItem.id de referencia.
+  patientId      String               @db.Uuid
+  status         PharmacyOrderStatus  @default(PENDING)
+  /// GLN (13 dígitos) del punto de servicio que origina la solicitud (ej. sala).
+  glnOrigen      String               @db.VarChar(13)
+  /// GLN del punto de servicio que entrega (ej. farmacia central).
+  glnDestino     String               @db.VarChar(13)
+  dispensedAt    DateTime?            @db.Timestamptz()
+  dispensedById  String?              @db.Uuid /// User.id del farmacéutico.
+  createdAt      DateTime             @default(now()) @db.Timestamptz()
+  createdBy      String?              @db.Uuid
+  updatedAt      DateTime             @updatedAt @db.Timestamptz()
+
+  organization  Organization          @relation("OrgPharmacyOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  encounter     Encounter             @relation("EncPharmacyOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient       Patient               @relation("PatPharmacyOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  dispensedBy   User?                 @relation("PharmacyOrderDispenser", fields: [dispensedById], references: [id], onDelete: SetNull)
+  reservations  PharmacyReservation[]
+  substitutions PharmacySubstitution[]
+
+  @@index([organizationId, status])
+  @@index([encounterId])
+  @@index([patientId])
+  @@index([glnOrigen])
+  @@index([glnDestino])
+  @@map("PharmacyOrder")
+  @@schema("public")
+}
+
+/// GS1 F2-S7 — Reserva de unidad GS1 (GTIN+lote+serie) para un paciente/orden.
+/// El job cron expira reservas pasado expiresAt.
+/// State machine: RESERVED → DISPATCHED | EXPIRED | CANCELLED.
+/// RLS: organizationId.
+model PharmacyReservation {
+  id               String                   @id @default(uuid()) @db.Uuid
+  organizationId   String                   @db.Uuid
+  pharmacyOrderId  String                   @db.Uuid
+  patientId        String                   @db.Uuid
+  /// GTIN-14 del ítem reservado.
+  gtin             String                   @db.VarChar(14)
+  /// Número de lote del ítem.
+  lote             String?                  @db.VarChar(60)
+  /// Número de serie del ítem (unitarios serializados).
+  serie            String?                  @db.VarChar(60)
+  status           PharmacyReservationStatus @default(RESERVED)
+  expiresAt        DateTime                 @db.Timestamptz() /// TTL para cron de expiración.
+  createdAt        DateTime                 @default(now()) @db.Timestamptz()
+
+  organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
+  pharmacyOrder PharmacyOrder  @relation(fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
+  patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([pharmacyOrderId])
+  @@index([patientId])
+  @@index([expiresAt]) /// usado por job cron de expiración.
+  @@index([gtin])
+  @@map("PharmacyReservation")
+  @@schema("public")
+}
+
+/// GS1 F2-S7 — Sustitución de GTIN autorizada por farmacéutico/médico.
+/// Registra la trazabilidad de intercambio terapéutico (bioequivalente) con
+/// el GTIN original vs el sustituto y quién autorizó.
+/// Audit trigger en 87_pharmacy_substitution.sql (hash chain completo).
+model PharmacySubstitution {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  pharmacyOrderId String   @db.Uuid
+  /// GTIN-14 del medicamento originalmente prescrito.
+  gtinOriginal    String   @db.VarChar(14)
+  /// GTIN-14 del medicamento entregado como sustituto.
+  gtinSustituto   String   @db.VarChar(14)
+  autorizadoPorId String   @db.Uuid /// User.id (farmacéutico o médico).
+  autorizadoEn    DateTime @db.Timestamptz()
+  /// Razón clínica/administrativa de la sustitución (libre, max 500 chars).
+  motivo          String   @db.VarChar(500)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+
+  organization  Organization  @relation("OrgPharmacySubstitutions", fields: [organizationId], references: [id], onDelete: Restrict)
+  pharmacyOrder PharmacyOrder @relation(fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
+  autorizadoPor User          @relation("PharmacySubstitutionAuthorizer", fields: [autorizadoPorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([pharmacyOrderId])
+  @@index([autorizadoPorId])
+  @@map("PharmacySubstitution")
+  @@schema("public")
+}
+
+/// GS1 F2-S7 — GSRN (18 dígitos) asignado al personal clínico para identificación
+/// bedside mediante DataMatrix en credencial física.
+/// Unicidad: un GSRN por usuario (relación 1:1 activa; puede haber histórico revocado).
+/// RLS: organizationId. Audit trigger en 88_staff_gsrn.sql.
+model StaffGsrn {
+  id            String        @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userId        String        @unique @db.Uuid /// User.id — un GSRN activo por usuario.
+  /// GSRN GS1: 18 dígitos numéricos. Único globalmente.
+  gsrn          String        @unique @db.VarChar(18)
+  /// Contenido del DataMatrix impreso en credencial (base64 o texto estructurado GS1).
+  badgeDataMatrix String?     @db.VarChar(500)
+  status        StaffGsrnStatus @default(ACTIVE)
+  createdAt     DateTime      @default(now()) @db.Timestamptz()
+  revokedAt     DateTime?     @db.Timestamptz()
+
+  organization Organization @relation("OrgStaffGsrn", fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation("UserStaffGsrn", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status])
+  @@index([gsrn])
+  @@map("StaffGsrn")
+  @@schema("public")
+}
+
+/// GS1 F2-S7 — Catálogo GTIN con metadatos extendidos para alertas bedside.
+/// Extiende el catálogo de drogas/medicamentos con campos GS1 de rastreabilidad.
+/// GTIN-14 como clave natural única. Reusable desde Drug via gtinRef.
+model MedicationGtin {
+  id                  String   @id @default(uuid()) @db.Uuid
+  organizationId      String   @db.Uuid
+  /// GTIN-14 (padded con ceros a la izquierda si es GTIN-8/12/13).
+  gtin                String   @unique @db.VarChar(14)
+  /// Nombre comercial del producto.
+  brandName           String   @db.VarChar(200)
+  /// Concentración/forma farmacéutica (ej. "500mg comprimido").
+  strengthForm        String?  @db.VarChar(200)
+  /// Principios activos GS1/RxNorm (array para combinados).
+  activeIngredients   String[] @default([])
+  /// Excipientes potencialmente alergénicos (GS1 Healthcare alertas).
+  excipientesAlergenos String[] @default([])
+  /// Estado de recall GS1: NONE | VOLUNTARY | MANDATORY | MARKET_WITHDRAWAL.
+  recallStatus        String?  @default("NONE") @db.VarChar(40)
+  /// Referencia opcional al Drug.id del HIS para bidi join.
+  drugId              String?  @db.Uuid
+  createdAt           DateTime @default(now()) @db.Timestamptz()
+  updatedAt           DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgMedicationGtin", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([gtin])
+  @@index([recallStatus]) /// queries de recall activos.
+  @@map("MedicationGtin")
   @@schema("public")
 }
