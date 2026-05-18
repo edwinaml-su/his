@@ -26,6 +26,7 @@ export type OrgRowData = {
   taxId: string;
   active: boolean;
   functionalCurrency: string;
+  gs1CompanyPrefix: string | null;
   isAdmin: boolean;
   country: { id: string; isoAlpha3: string; name: string } | null;
   functionalCurr: Currency | null;
@@ -35,9 +36,10 @@ export type OrgRowData = {
 type Props = {
   org: OrgRowData;
   onEditCurrency: (org: OrgRowData) => void;
+  onEditGs1Prefix: (org: OrgRowData) => void;
 };
 
-export function OrganizationRow({ org, onEditCurrency }: Props) {
+export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix }: Props) {
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -90,22 +92,46 @@ export function OrganizationRow({ org, onEditCurrency }: Props) {
           <Badge variant="secondary">Inactiva</Badge>
         )}
       </TableCell>
+      <TableCell>
+        {org.gs1CompanyPrefix ? (
+          <span className="font-mono text-sm">{org.gs1CompanyPrefix}</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )}
+      </TableCell>
       <TableCell className="text-right">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => onEditCurrency(org)}
-          disabled={!org.isAdmin || !org.active}
-          title={
-            !org.isAdmin
-              ? "Requiere rol ADMIN en esta organización"
-              : !org.active
-                ? "Organización inactiva"
-                : "Cambiar moneda funcional"
-          }
-        >
-          Cambiar moneda
-        </Button>
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onEditGs1Prefix(org)}
+            disabled={!org.isAdmin || !org.active}
+            title={
+              !org.isAdmin
+                ? "Requiere rol ADMIN en esta organización"
+                : !org.active
+                  ? "Organización inactiva"
+                  : "Configurar prefijo GS1"
+            }
+          >
+            Prefijo GS1
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onEditCurrency(org)}
+            disabled={!org.isAdmin || !org.active}
+            title={
+              !org.isAdmin
+                ? "Requiere rol ADMIN en esta organización"
+                : !org.active
+                  ? "Organización inactiva"
+                  : "Cambiar moneda funcional"
+            }
+          >
+            Cambiar moneda
+          </Button>
+        </div>
       </TableCell>
     </TableRow>
   );

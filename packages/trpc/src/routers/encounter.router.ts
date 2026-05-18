@@ -228,6 +228,13 @@ export const encounterRouter = router({
           select: { gs1CompanyPrefix: true },
         });
 
+        if (!org?.gs1CompanyPrefix) {
+          // Configurar gs1CompanyPrefix en Administración > Organizaciones
+          // para usar el prefijo oficial de la empresa en lugar del fallback.
+          console.warn(
+            `[GSRN] org ${ctx.tenant.organizationId} sin gs1CompanyPrefix configurado — usando fallback ${FALLBACK_GS1_PREFIX}`,
+          );
+        }
         const prefix = org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX;
         const serial = serialFromMrn(patient.mrn);
         const gsrn = buildGSRN(prefix, serial);

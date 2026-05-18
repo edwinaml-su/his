@@ -5,6 +5,14 @@ import {
   setFunctionalCurrencyResultSchema,
 } from "@his/contracts";
 import { router, protectedProcedure, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
+
+/** Zod schema compartido: gs1CompanyPrefix nullable 7-9 dígitos. */
+export const gs1CompanyPrefixSchema = z
+  .string()
+  .regex(/^\d{7,9}$/, "El prefijo GS1 debe tener entre 7 y 9 dígitos numéricos.")
+  .nullable()
+  .optional();
 
 /**
  * US-1.2 — nodo del árbol jerárquico Holding -> Empresa -> Establecimiento.
@@ -226,6 +234,59 @@ export const organizationRouter = router({
             ? "Moneda funcional actualizada. Revisar reportes financieros (revaluación pendiente Sprint 2)."
             : null,
       };
+    }),
+
+  /**
+   * US.F2.S7.W2 — configura el prefijo GS1 Company de la organización.
+   * Usado por `buildGSRN` al asignar pulseras GSRN-18 en admisiones hospitalarias.
+   *
+   * Reglas:
+   *   1) El usuario debe ser ADMIN vigente en esa org.
+   *   2) El prefijo debe ser null o 7–9 dígitos numéricos (validación Zod).
+   *   3) Usa withTenantContext para que RLS aplique en la actualización.
+   */
+  setGs1CompanyPrefix: protectedProcedure
+    .input(
+      z.object({
+        organizationId: z.string().uuid(),
+        gs1CompanyPrefix: gs1CompanyPrefixSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Verificar membresía ADMIN vigente.
+      const now = new Date();
+      const adminMembership = await ctx.prisma.userOrganizationRole.findFirst({
+        where: {
+          userId: ctx.user.id,
+          organizationId: input.organizationId,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gte: now } }],
+          role: { code: { in: ["ADMIN", "ADMIN_CLINICO"] } },
+        },
+      });
+      if (!adminMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Requiere rol ADMIN o ADMIN_CLINICO en la organización.",
+        });
+      }
+
+      const updated = await withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user.id, organizationId: input.organizationId },
+        async (tx) => {
+          return tx.organization.update({
+            where: { id: input.organizationId },
+            data: {
+              gs1CompanyPrefix: input.gs1CompanyPrefix ?? null,
+              updatedBy: ctx.user.id,
+            },
+            select: { id: true, gs1CompanyPrefix: true },
+          });
+        },
+      );
+
+      return { ok: true, organizationId: updated.id, gs1CompanyPrefix: updated.gs1CompanyPrefix };
     }),
 
   /**
