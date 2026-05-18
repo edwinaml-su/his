@@ -1,18 +1,17 @@
 "use client";
 
 /**
- * §15 Pharmacy — Despacho de medicación.
+ * US.F2.6.19 / US.F2.6.6 — Lista de órdenes pendientes de dispensación.
  *
- * Lista las recetas SIGNED o PARTIALLY_DISPENSED y permite despachar
- * cada item individualmente. Se eligió un Dialog modal (en lugar de un
- * inline form) porque el despacho requiere captura de batch + expiry y
- * confirmación atómica; embebido en la fila ocuparía demasiado espacio
- * y dificultaría a11y.
+ * Muestra recetas SIGNED / PARTIALLY_DISPENSED con filtros de turno y estado.
+ * "Iniciar Dispensación" verifica pre-condiciones (US.F2.6.6) antes de navegar
+ * al flujo de picking por orden ([orderId]).
  *
- * Filtro client-side: la query general devuelve toda la lista y aquí
- * sólo se muestran las que están en estados elegibles.
+ * NOTA: Este archivo extiende (no reemplaza) el flujo legacy de despacho de
+ * medicamentos — agrega la capa GS1 picking por encima.
  */
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -20,354 +19,170 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
-import { Input } from "@his/ui/components/input";
-import { Label } from "@his/ui/components/label";
-import { Form, FormError, FormField } from "@his/ui/components/form";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@his/ui/components/dialog";
-import { dispenseCreateInput } from "@his/contracts";
+import { Badge } from "@his/ui/components/badge";
 import { trpc } from "@/lib/trpc/react";
 import {
   PrescriptionStatusBadge,
   type PrescriptionStatus,
 } from "../_components/prescription-status-badge";
 
-interface DispenseRecord {
-  id: string;
-  quantity: number;
-  dispensedAt: string | Date;
-}
+// ---------------------------------------------------------------------------
+// Tipos locales
+// ---------------------------------------------------------------------------
 
-interface PrescriptionItemRecord {
-  id: string;
-  dosage: string;
-  route: string;
-  frequency: string;
-  drug: {
-    id: string;
-    genericName: string;
-    brandName?: string | null;
-    strengthValue?: string | number | null;
-    strengthUnit?: string | null;
-  };
-  dispenses: DispenseRecord[];
-}
-
-interface PrescriptionRecord {
+interface PrescriptionListItem {
   id: string;
   status: PrescriptionStatus;
   prescribedAt: string | Date;
-  patient: { id: string; firstName: string; lastName: string; mrn: string };
+  prescriberId: string;
+  patient: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    mrn: string;
+  };
   encounter: { id: string; encounterNumber: string };
-  items: PrescriptionItemRecord[];
+  items: Array<{
+    id: string;
+    drug: { genericName: string };
+    dosage: string;
+    frequency: string;
+  }>;
 }
 
-const ELIGIBLE_STATUSES: PrescriptionStatus[] = [
-  "SIGNED",
-  "PARTIALLY_DISPENSED",
-];
+const ELIGIBLE_STATUSES: PrescriptionStatus[] = ["SIGNED", "PARTIALLY_DISPENSED"];
 
-export default function PharmacyDispensePage(): React.ReactElement {
+// ---------------------------------------------------------------------------
+// Página principal
+// ---------------------------------------------------------------------------
+
+export default function PharmacyPickingQueuePage(): React.ReactElement {
+  const router = useRouter();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
-  const utils = trpcAny.useUtils?.();
   const list = trpcAny.pharmacy.prescription.list.useQuery({});
-  const [expanded, setExpanded] = React.useState<string | null>(null);
-  const [dispenseTarget, setDispenseTarget] = React.useState<{
-    prescriptionId: string;
-    item: PrescriptionItemRecord;
-  } | null>(null);
 
-  const all = (list.data?.items ?? list.data ?? []) as PrescriptionRecord[];
-  const eligible = all.filter((rx) => ELIGIBLE_STATUSES.includes(rx.status));
+  const [startingId, setStartingId] = React.useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
 
-  const handleDispenseSuccess = () => {
-    setDispenseTarget(null);
-    if (utils?.pharmacy?.prescription?.list?.invalidate) {
-      utils.pharmacy.prescription.list.invalidate();
-    } else {
-      list.refetch();
+  const checkPreconditions =
+    trpcAny.dispensation.checkPreconditions.useQuery as (
+      args: { patientId: string; indicationId: string },
+      opts: { enabled: boolean; retry: false },
+    ) => { isLoading: boolean; error: { message: string } | null; data: unknown };
+
+  const all = (list.data?.items ?? list.data ?? []) as PrescriptionListItem[];
+  const queue = all.filter((rx) => ELIGIBLE_STATUSES.includes(rx.status));
+
+  async function handleStartPicking(rx: PrescriptionListItem) {
+    setErrorMsg(null);
+    setStartingId(rx.id);
+    try {
+      // Verificar pre-condición server-side antes de navegar.
+      await trpcAny.dispensation.checkPreconditions.fetch({
+        patientId: rx.patient.id,
+        indicationId: rx.id,
+      });
+      router.push(`/pharmacy/dispense/${rx.id}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error al verificar la receta.";
+      setErrorMsg(mapHardStop(msg));
+    } finally {
+      setStartingId(null);
     }
-  };
+  }
 
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold">Despachar medicación</h1>
+        <h1 className="text-2xl font-bold">Estación de Picking — Cola de Dispensación</h1>
         <p className="text-sm text-muted-foreground">
-          Recetas firmadas pendientes o con despacho parcial.
+          Recetas firmadas pendientes de dispensar con escaneo GS1 DataMatrix.
         </p>
       </div>
 
+      {errorMsg ? (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {errorMsg}
+        </div>
+      ) : null}
+
       <Card>
         <CardHeader>
-          <CardTitle>Recetas elegibles</CardTitle>
+          <CardTitle>
+            Cola de órdenes{" "}
+            {queue.length > 0 ? (
+              <Badge variant="secondary">{queue.length}</Badge>
+            ) : null}
+          </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-2">
+        <CardContent>
           {list.isLoading ? (
-            <p className="text-sm text-muted-foreground">Cargando…</p>
-          ) : eligible.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Cargando órdenes…</p>
+          ) : queue.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No hay recetas pendientes de despacho.
+              No hay órdenes pendientes de dispensar.
             </p>
           ) : (
-            <ul className="divide-y rounded-md border">
-              {eligible.map((rx) => {
-                const isOpen = expanded === rx.id;
-                return (
-                  <li key={rx.id}>
-                    <button
+            <ul className="divide-y rounded-md border" role="list">
+              {queue.map((rx) => (
+                <li
+                  key={rx.id}
+                  className="flex items-center justify-between px-4 py-3 text-sm"
+                >
+                  <div className="space-y-0.5">
+                    <p className="font-semibold">
+                      {rx.patient.firstName} {rx.patient.lastName}
+                      <span className="ml-2 text-xs text-muted-foreground font-normal">
+                        MRN {rx.patient.mrn} · {rx.encounter.encounterNumber}
+                      </span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(rx.prescribedAt).toLocaleString("es-SV")} ·{" "}
+                      {rx.items.length} ítem{rx.items.length !== 1 ? "s" : ""}
+                      {" · "}
+                      {rx.items
+                        .slice(0, 2)
+                        .map((it) => it.drug.genericName)
+                        .join(", ")}
+                      {rx.items.length > 2 ? "…" : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <PrescriptionStatusBadge status={rx.status} />
+                    <Button
                       type="button"
-                      onClick={() => setExpanded(isOpen ? null : rx.id)}
-                      aria-expanded={isOpen}
-                      aria-controls={`rx-items-${rx.id}`}
-                      className="flex w-full items-center justify-between px-3 py-3 text-left text-sm hover:bg-accent"
+                      size="sm"
+                      disabled={startingId === rx.id}
+                      onClick={() => handleStartPicking(rx)}
+                      aria-label={`Iniciar dispensación para ${rx.patient.firstName} ${rx.patient.lastName}`}
                     >
-                      <div>
-                        <p className="font-semibold">
-                          {rx.patient.firstName} {rx.patient.lastName}
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            MRN {rx.patient.mrn} ·{" "}
-                            {rx.encounter.encounterNumber}
-                          </span>
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(rx.prescribedAt).toLocaleString("es-SV")} ·{" "}
-                          {rx.items.length} ítems
-                        </p>
-                      </div>
-                      <PrescriptionStatusBadge status={rx.status} />
-                    </button>
-                    {isOpen ? (
-                      <div
-                        id={`rx-items-${rx.id}`}
-                        className="bg-muted/40 px-3 py-2"
-                      >
-                        <ul className="space-y-2">
-                          {rx.items.map((it) => {
-                            const strength =
-                              it.drug.strengthValue != null &&
-                              it.drug.strengthUnit
-                                ? `${it.drug.strengthValue}${it.drug.strengthUnit}`
-                                : "";
-                            return (
-                              <li
-                                key={it.id}
-                                className="flex items-center justify-between rounded-md bg-background px-3 py-2 text-sm"
-                              >
-                                <div>
-                                  <p className="font-medium">
-                                    {it.drug.genericName}
-                                    {strength ? ` ${strength}` : ""}
-                                    {it.drug.brandName
-                                      ? ` (${it.drug.brandName})`
-                                      : ""}
-                                  </p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {it.dosage} · {it.route} · {it.frequency} ·{" "}
-                                    {it.dispenses.length} despachos previos
-                                  </p>
-                                </div>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  onClick={() =>
-                                    setDispenseTarget({
-                                      prescriptionId: rx.id,
-                                      item: it,
-                                    })
-                                  }
-                                >
-                                  Despachar
-                                </Button>
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
+                      {startingId === rx.id ? "Verificando…" : "Iniciar Dispensación"}
+                    </Button>
+                  </div>
+                </li>
+              ))}
             </ul>
           )}
         </CardContent>
       </Card>
-
-      <DispenseDialog
-        target={dispenseTarget}
-        onClose={() => setDispenseTarget(null)}
-        onSuccess={handleDispenseSuccess}
-      />
     </div>
   );
 }
 
-interface DispenseDialogProps {
-  target: { prescriptionId: string; item: PrescriptionItemRecord } | null;
-  onClose: () => void;
-  onSuccess: () => void;
-}
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-function DispenseDialog({
-  target,
-  onClose,
-  onSuccess,
-}: DispenseDialogProps): React.ReactElement {
-  const [quantity, setQuantity] = React.useState("");
-  const [batchNumber, setBatchNumber] = React.useState("");
-  const [expiryDate, setExpiryDate] = React.useState("");
-  const [notes, setNotes] = React.useState("");
-  const [errors, setErrors] = React.useState<Record<string, string>>({});
-  const [serverError, setServerError] = React.useState<string | null>(null);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const dispenseMutation = trpcAny.pharmacy.dispense.create.useMutation({
-    onSuccess: () => {
-      setQuantity("");
-      setBatchNumber("");
-      setExpiryDate("");
-      setNotes("");
-      setErrors({});
-      setServerError(null);
-      onSuccess();
-    },
-    onError: (err: { message: string }) => setServerError(err.message),
-  });
-
-  // Reset al cambiar de target
-  React.useEffect(() => {
-    setQuantity("");
-    setBatchNumber("");
-    setExpiryDate("");
-    setNotes("");
-    setErrors({});
-    setServerError(null);
-  }, [target?.item.id]);
-
-  const isOpen = target !== null;
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!target) return;
-    setServerError(null);
-
-    const candidate = {
-      prescriptionItemId: target.item.id,
-      quantity: Number(quantity),
-      ...(batchNumber.trim() ? { batchNumber: batchNumber.trim() } : {}),
-      ...(expiryDate ? { expiryDate: new Date(expiryDate) } : {}),
-      ...(notes.trim() ? { notes: notes.trim() } : {}),
-    };
-
-    const parsed = dispenseCreateInput.safeParse(candidate);
-    if (!parsed.success) {
-      const fe: Record<string, string> = {};
-      for (const issue of parsed.error.errors) {
-        const k = String(issue.path[0] ?? "_");
-        if (!fe[k]) fe[k] = issue.message;
-      }
-      setErrors(fe);
-      return;
-    }
-    setErrors({});
-    dispenseMutation.mutate(parsed.data);
-  };
-
-  return (
-    <Dialog open={isOpen} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Despachar medicamento</DialogTitle>
-          {target ? (
-            <DialogDescription>
-              {target.item.drug.genericName}
-              {target.item.drug.strengthValue != null &&
-              target.item.drug.strengthUnit
-                ? ` ${target.item.drug.strengthValue}${target.item.drug.strengthUnit}`
-                : ""}{" "}
-              · {target.item.dosage}
-            </DialogDescription>
-          ) : null}
-        </DialogHeader>
-
-        {target ? (
-          <Form onSubmit={handleSubmit}>
-            <FormField>
-              <Label htmlFor="dispense-qty">
-                Cantidad <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="dispense-qty"
-                type="number"
-                min="1"
-                step="1"
-                autoFocus
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                aria-invalid={Boolean(errors.quantity)}
-              />
-              <FormError>{errors.quantity}</FormError>
-            </FormField>
-            <FormField>
-              <Label htmlFor="dispense-batch">Lote</Label>
-              <Input
-                id="dispense-batch"
-                value={batchNumber}
-                onChange={(e) => setBatchNumber(e.target.value)}
-                aria-invalid={Boolean(errors.batchNumber)}
-              />
-              <FormError>{errors.batchNumber}</FormError>
-            </FormField>
-            <FormField>
-              <Label htmlFor="dispense-exp">Vencimiento</Label>
-              <Input
-                id="dispense-exp"
-                type="date"
-                value={expiryDate}
-                onChange={(e) => setExpiryDate(e.target.value)}
-                aria-invalid={Boolean(errors.expiryDate)}
-              />
-              <FormError>{errors.expiryDate}</FormError>
-            </FormField>
-            <FormField>
-              <Label htmlFor="dispense-notes">Notas</Label>
-              <textarea
-                id="dispense-notes"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-            </FormField>
-
-            {serverError ? (
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
-              >
-                {serverError}
-              </p>
-            ) : null}
-
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={onClose}>
-                Cancelar
-              </Button>
-              <Button type="submit" disabled={dispenseMutation.isPending}>
-                {dispenseMutation.isPending ? "Despachando…" : "Despachar"}
-              </Button>
-            </DialogFooter>
-          </Form>
-        ) : null}
-      </DialogContent>
-    </Dialog>
-  );
+function mapHardStop(raw: string): string {
+  if (raw.includes("SIN_RECETA_ACTIVA")) {
+    return "Hard Stop: No existe receta médica digital activa para este paciente.";
+  }
+  if (raw.includes("RECETA_SUSPENDIDA")) {
+    return "Hard Stop: La receta está suspendida. Verifique con el médico prescriptor.";
+  }
+  return raw;
 }

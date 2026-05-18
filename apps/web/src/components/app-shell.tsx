@@ -122,6 +122,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/ece/estudios", label: "Estudios ECE", icon: FlaskConical },
       { href: "/pharmacy", label: "Farmacia", icon: Pill },
+      { href: "/pharmacy/dispense", label: "Picking Dispensación", icon: ClipboardCheck },
       { href: "/emar", label: "eMAR", icon: ScanLine },
       { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical },
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon },
