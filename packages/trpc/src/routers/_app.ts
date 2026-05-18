@@ -93,6 +93,8 @@ import { eceCertDefRouter } from "./ece/certificado-defuncion.router";
 import { eceBridgeAdmisionRouter } from "./ece/bridge-admision.router";
 // GS1 Healthcare Standards
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
+// Proceso D — Dispensación GS1 (US.F2.6.8-9)
+import { pharmacyDispensationRouter } from "./pharmacy-dispensation.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
 import { eceActoQuirurgicoRouter } from "./ece/acto-quirurgico.router";
 // ECE — Sala de Expulsión (Doc 14 NTEC)
@@ -193,6 +195,8 @@ export const appRouter = router({
   eceBridgeAdmision: eceBridgeAdmisionRouter,
   // GS1 Healthcare Standards
   gs1: gs1CatalogosRouter,
+  // Proceso D — Dispensación GS1 (US.F2.6.8-9)
+  pharmacyDispensation: pharmacyDispensationRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
   eceActoQx: eceActoQuirurgicoRouter,
   // ECE — Sala de Expulsión (Doc 14 NTEC)
