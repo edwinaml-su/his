@@ -45,6 +45,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import dagre from "@dagrejs/dagre";
+import ReactMarkdown from "react-markdown";
 import { trpc } from "@/lib/trpc/react";
 
 // ─── Tipos públicos ────────────────────────────────────────────────────────────
@@ -111,51 +112,96 @@ interface EstadoNodeData {
   es_inicial: boolean;
   es_final: boolean;
   orden: number;
+  descripcion_markdown: string | null;
   onSelect: (id: string) => void;
+}
+
+/** Detecta si un string markdown tiene contenido renderable (no solo whitespace). */
+export function hasMarkdownContent(md: string | null | undefined): boolean {
+  if (md == null) return false;
+  return md.trim().length > 0;
 }
 
 function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
   const style = nodeStyle(data.es_inicial, data.es_final);
   const badge = data.es_inicial ? "INICIAL" : data.es_final ? "FINAL" : null;
+  const [tooltipOpen, setTooltipOpen] = React.useState(false);
+  const hasDoc = hasMarkdownContent(data.descripcion_markdown);
+  const tooltipId = `estado-tooltip-${id}`;
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label={`Estado ${data.label}${data.es_inicial ? ", estado inicial" : ""}${data.es_final ? ", estado final" : ""}`}
-      onClick={() => data.onSelect(id)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          data.onSelect(id);
-        }
-      }}
-      style={{
-        ...style,
-        borderRadius: 8,
-        padding: "6px 12px",
-        width: NODE_W,
-        minHeight: NODE_H,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        cursor: "pointer",
-        userSelect: "none",
-      }}
-    >
-      {badge && (
-        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 2, opacity: 0.75 }}>
-          {badge}
+    <div style={{ position: "relative" }}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`Estado ${data.label}${data.es_inicial ? ", estado inicial" : ""}${data.es_final ? ", estado final" : ""}`}
+        aria-describedby={hasDoc ? tooltipId : undefined}
+        title={hasDoc && !tooltipOpen ? (data.descripcion_markdown ?? undefined) : undefined}
+        onClick={() => data.onSelect(id)}
+        onMouseEnter={() => hasDoc && setTooltipOpen(true)}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={() => hasDoc && setTooltipOpen(true)}
+        onBlur={() => setTooltipOpen(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            data.onSelect(id);
+          }
+          if (e.key === "Escape") setTooltipOpen(false);
+        }}
+        style={{
+          ...style,
+          borderRadius: 8,
+          padding: "6px 12px",
+          width: NODE_W,
+          minHeight: NODE_H,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        {badge && (
+          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 2, opacity: 0.75 }}>
+            {badge}
+          </span>
+        )}
+        <span style={{ fontWeight: 600, fontSize: 13, textAlign: "center" }}>
+          {data.label}
         </span>
-      )}
-      <span style={{ fontWeight: 600, fontSize: 13, textAlign: "center" }}>
-        {data.label}
-      </span>
-      <span style={{ fontSize: 10, opacity: 0.6 }}>{data.codigo}</span>
+        <span style={{ fontSize: 10, opacity: 0.6 }}>{data.codigo}</span>
 
-      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
-      <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+        <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+        <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
+      </div>
+
+      {hasDoc && tooltipOpen && (
+        <div
+          id={tooltipId}
+          role="tooltip"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 8px)",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 1000,
+            maxWidth: 320,
+            background: "#fff",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            padding: "10px 12px",
+            boxShadow: "0 8px 16px -4px rgba(0,0,0,0.15)",
+            fontSize: 12,
+            lineHeight: 1.45,
+            color: "#1f2937",
+            whiteSpace: "normal",
+          }}
+        >
+          <ReactMarkdown>{data.descripcion_markdown ?? ""}</ReactMarkdown>
+        </div>
+      )}
     </div>
   );
 }
@@ -230,6 +276,7 @@ const WorkflowGraphInner = React.forwardRef<WorkflowGraphHandle, WorkflowGraphPr
           es_inicial: e.es_inicial,
           es_final: e.es_final,
           orden: e.orden,
+          descripcion_markdown: (e as { descripcion_markdown?: string | null }).descripcion_markdown ?? null,
           onSelect: placeholder as EstadoNodeData["onSelect"],
         },
         draggable: !readOnly,

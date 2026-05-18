@@ -111,6 +111,7 @@ type FlujoEstadoRow = {
   es_inicial: boolean;
   es_final: boolean;
   orden: number;
+  descripcion_markdown: string | null;
 };
 
 type FlujoTransicionRow = {
@@ -160,7 +161,7 @@ export const workflowEstadoRouter = router({
       .query(async ({ ctx, input }) => {
         const rows = await ctx.prisma.$queryRaw<FlujoEstadoRow[]>`
           SELECT id::text, tipo_documento_id::text, codigo, nombre,
-                 es_inicial, es_final, orden
+                 es_inicial, es_final, orden, descripcion_markdown
             FROM ece.flujo_estado
            WHERE tipo_documento_id = ${input.tipDocumentoId}::uuid
            ORDER BY orden ASC, codigo ASC
