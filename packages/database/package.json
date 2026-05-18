@@ -33,6 +33,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "echo 'no lint configured'",
     "db:seed:demo": "node --env-file=.env scripts/seed-demo-ambulatorio.mjs",
+    "db:seed:icd10-full": "node --env-file=.env scripts/seed-icd10-full.mjs",
+    "db:seed:go-live-defaults": "node --env-file=.env scripts/seed-go-live-defaults.mjs",
+    "db:seed:go-live-verify": "node --env-file=.env scripts/seed-go-live-verify.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "prisma": {
