@@ -7,8 +7,20 @@ import {
   encounterListSchema,
   encounterListOpenByOrgSchema,
   encounterCensusSchema,
+  buildGSRN,
+  validateGSRN,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
+
+/** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
+const FALLBACK_GS1_PREFIX = "7503000";
+
+function serialFromMrn(mrn: string): number {
+  const match = /(\d+)$/.exec(mrn);
+  if (match) return Number.parseInt(match[1]!, 10);
+  return Array.from(mrn).reduce((acc, c) => acc + c.charCodeAt(0), 0) % 1_000_000;
+}
 
 /**
  * Genera un número de encuentro legible: ENC-YYYY-XXXXXX.
@@ -193,6 +205,42 @@ export const encounterRouter = router({
           data: { status: "OCCUPIED" },
         });
       }
+
+      return encounter;
+    }).then(async (encounter) => {
+      // Hook US.F2.6.1: asignar GSRN al confirmar admisión hospitalaria.
+      // TX separada — no bloquea la admisión si el GSRN falla.
+      // Silencia CONFLICT (paciente ya tiene GSRN de un encuentro previo).
+      await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: {
+            id: input.patientId,
+            organizationId: ctx.tenant.organizationId,
+            deletedAt: null,
+          },
+          select: { id: true, gsrn: true, mrn: true },
+        });
+
+        if (!patient || patient.gsrn) return; // ya asignado o no encontrado
+
+        const org = await tx.organization.findUnique({
+          where: { id: ctx.tenant.organizationId },
+          select: { gs1CompanyPrefix: true },
+        });
+
+        const prefix = org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX;
+        const serial = serialFromMrn(patient.mrn);
+        const gsrn = buildGSRN(prefix, serial);
+
+        if (!validateGSRN(gsrn)) return; // defensivo
+
+        await tx.patient.update({
+          where: { id: patient.id },
+          data: { gsrn },
+        });
+      }).catch(() => {
+        // GSRN assignment failure es non-fatal para la creación del encuentro.
+      });
 
       return encounter;
     });
