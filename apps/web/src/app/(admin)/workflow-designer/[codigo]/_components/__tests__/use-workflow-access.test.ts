@@ -63,8 +63,10 @@ describe("useWorkflowAccess", () => {
   // ── Invariantes ──────────────────────────────────────────────────────────────
 
   it("canEdit y isReadOnly son siempre opuestos", () => {
-    for (const codes of [["DIR"], ["ENF"], [], ["WORKFLOW_DESIGNER", "MC"]]) {
-      const { canEdit, isReadOnly } = useWorkflowAccess(codes);
+    const cases = [["DIR"], ["ENF"], [], ["WORKFLOW_DESIGNER", "MC"]];
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const results = cases.map((codes) => useWorkflowAccess(codes));
+    for (const { canEdit, isReadOnly } of results) {
       expect(canEdit).toBe(!isReadOnly);
     }
   });
