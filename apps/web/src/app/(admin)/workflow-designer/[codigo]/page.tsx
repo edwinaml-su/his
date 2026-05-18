@@ -528,6 +528,7 @@ export default function WorkflowGrafoPage() {
                 <WorkflowGraph
                   estados={estados ?? []}
                   transiciones={transiciones ?? []}
+                  tipDocumentoId={tipoDoc?.id ?? ""}
                   tipDocCodigo={codigo}
                 />
               )}
