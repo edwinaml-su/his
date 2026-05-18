@@ -144,6 +144,8 @@ import { staffGsrnRouter } from "./staff-gsrn.router";
 import { cartRouter } from "./pharmacy/cart.router";
 // Fase 2 — Bedside PWA (US.F2.6.23-26)
 import { bedsideRouter } from "./bedside.router";
+// Fase 2 S7 — GS1 EPCIS + Farmacovigilancia (US.F2.6.53-58)
+import { farmacovigilanciaRouter } from "./farmacovigilancia.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -292,6 +294,8 @@ export const appRouter = router({
   pharmacyCart: cartRouter,
   // Fase 2 — Bedside PWA (US.F2.6.23-26)
   bedside: bedsideRouter,
+  // Fase 2 S7 — GS1 EPCIS + Farmacovigilancia (US.F2.6.53-58)
+  farmacovigilancia: farmacovigilanciaRouter,
 });
 
 export type AppRouter = typeof appRouter;

@@ -266,6 +266,12 @@ const SECTIONS: NavSection[] = [
         label: "GSRN Personal",
         icon: BadgeCheck,
         requiredRoles: ["ADMIN_CLINICO", "ADMIN"],
+      // Fase 2 S7 — Farmacovigilancia (US.F2.6.56)
+      {
+        href: "/farmacovigilancia",
+        label: "Farmacovigilancia",
+        icon: ShieldAlert,
+        requiredRoles: ["ADMIN", "PHARM", "DIRECTOR"],
       },
     ],
   },
