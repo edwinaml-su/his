@@ -1,24 +1,49 @@
 /**
- * ece.episodioHospitalario — Router tRPC para el ciclo hospitalario completo.
+ * Router tRPC — ECE Episodio Hospitalario (ciclo hospitalización → alta).
  *
- * Complementa `eceEpisodioRouter` (apertura/transición genérica).
- * Cubre el período durante hospitalización hasta alta médica firmada.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3 — Gestión del episodio hospitalario.
+ * Complementa `eceEpisodioRouter` (apertura y transición genérica de episodios).
+ * Este router cubre la fase de hospitalización activa hasta el alta médica firmada.
  *
- * Tablas operadas (raw SQL — fuera del modelo Prisma):
- *   ece.episodio_atencion         — estado, motivo
- *   ece.episodio_hospitalario     — datos subtype (sala, orden, fechas)
- *   ece.asignacion_cama           — liberar cama al confirmar alta
- *   ece.epicrisis_egreso          — crear borrador al iniciar alta
- *   ece.episodio_estado_log       — bitácora de transiciones
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (alta médica — dos pasos)
+ * ---------------------------------------------------------------------------
+ *   Paso 1 — iniciarAltaMedica (PHYSICIAN)
+ *     Transición: episodio_atencion.estado → 'alta_pendiente'
+ *     Acción: crea borrador de ece.epicrisis_egreso (EPICRISIS_EGRESO) para
+ *             que el médico complete el resumen de egreso antes del alta formal.
+ *     Outbox: emite `ece.episodio.altaIniciada`
  *
- * Outbox:
- *   iniciarAltaMedica  → `ece.episodio.altaIniciada`
- *   confirmarAlta      → `ece.episodio.altaConfirmada`
+ *   Paso 2 — confirmarAlta (PHYSICIAN)
+ *     Precondición: epicrisis_egreso.estado IN ('firmado','validado','certificado')
+ *     Transición: episodio_atencion.estado → 'cerrado'
+ *     Acción: libera ece.asignacion_cama (estado → 'liberada'),
+ *             registra fecha_egreso en ece.episodio_hospitalario,
+ *             appends a ece.episodio_estado_log.
+ *     Outbox: emite `ece.episodio.altaConfirmada`
  *
- * Roles:
- *   listActivos, getDetalle  → PHYSICIAN | NURSE | ADM
- *   iniciarAltaMedica        → PHYSICIAN
- *   confirmarAlta            → PHYSICIAN
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.episodio.altaIniciada'   — payload: { episodioId, pacienteId, medicoId, orgId }
+ *   'ece.episodio.altaConfirmada' — payload: { episodioId, camaId, fechaEgreso, orgId }
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.episodio_atencion       — estado principal del episodio (motivo, estado)
+ *   ece.episodio_hospitalario   — datos subtype: sala_id, orden_ingreso_id,
+ *                                 gravedad, fecha_ingreso, fecha_egreso
+ *   ece.asignacion_cama         — se libera al confirmar alta (estado 'liberada')
+ *   ece.epicrisis_egreso        — se crea borrador al iniciar alta
+ *   ece.episodio_estado_log     — bitácora inmutable append-only de transiciones
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   listActivos, getDetalle  → requireRole(["PHYSICIAN","NURSE","ADM"])
+ *   iniciarAltaMedica        → requireRole(["PHYSICIAN"])
+ *   confirmarAlta            → requireRole(["PHYSICIAN"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

@@ -1,23 +1,61 @@
 /**
- * eceRriRouter — Referencia / Retorno / Interconsulta (NTEC Doc 10).
+ * Router tRPC — ECE Referencia / Retorno / Interconsulta (RRI).
  *
- * Workflow RRI (código 'RRI'):
- *   borrador → en_revision  (crear provee estado inicial)
- *   en_revision → firmado   (firmar, rol MC — emite ece.rri.firmada)
- *   firmado → validado      (responder, rol IC — emite ece.rri.respondida)
- *   cualquiera → anulado    (anular, rol DIR)
+ * Documento NTEC: Doc 10 — Referencia, Retorno e Interconsulta Médica.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.10.
+ * Código de tipo_documento: RRI.
+ * Regula el traslado de pacientes entre niveles de atención (referencia),
+ *   la respuesta de retorno del centro receptor, y las interconsultas
+ *   entre especialidades dentro del mismo establecimiento.
  *
- * Doble firma:
- *   1. MC crea solicitud (borrador/en_revision).
- *   2. MC firma con PIN electrónico → estado firmado, outbox ece.rri.firmada.
- *   3. IC responde + firma PIN → estado validado, outbox ece.rri.respondida.
- *   4. DIR puede anular en cualquier estado previo a validado.
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (doble firma con PIN — código tipo: RRI)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (MC: completar datos de la solicitud)
+ *   en_revision → firmado      (MC: firma con PIN argon2id)
+ *                               → emite 'ece.rri.firmada'
+ *   firmado     → validado     (IC: médico interconsultante responde + firma PIN)
+ *                               → emite 'ece.rri.respondida'
+ *   cualquiera  → anulado      (DIR: pre-validado)
  *
- * Tablas raw SQL (schema ece):
- *   ece.rri
- *   ece.documento_instancia
- *   ece.personal_salud
- *   ece.firma_electronica
+ *   Paso 1: MC (Médico Certificador) crea la solicitud de RRI (borrador).
+ *   Paso 2: MC firma con PIN electrónico (firmar) — el documento se vuelve oficial.
+ *   Paso 3: IC (Médico Interconsultante / centro receptor) responde y firma con PIN.
+ *   Paso 4 (opcional): DIR anula en caso de error o cancelación.
+ *
+ *   El PIN se verifica contra ece.firma_electronica.pin_hash (argon2id).
+ *   Lockout automático tras 3 intentos fallidos (locked_until timestamptz).
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.rri.firmada'     — emitido por firmar(). Notifica al centro receptor.
+ *     Payload: { rriId, episodioId, medicoId, tipo ('referencia'|'interconsulta'),
+ *                payloadHash, orgId }
+ *   'ece.rri.respondida'  — emitido por responder(). Cierra el circuito.
+ *     Payload: { rriId, icId, respuesta, payloadHash, orgId }
+ *   payloadHash = SHA-256({ motivoReferencia, diagnostico, centroReceptor,
+ *                            especialidadSolicitada })
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.rri                  — fila principal: episodio_id, tipo_rri,
+ *                              motivo_referencia, diagnostico_cie10,
+ *                              centro_receptor, especialidad_solicitada,
+ *                              respuesta_ic, estado, instancia_id
+ *   ece.documento_instancia  — instancia de flujo vinculada
+ *   ece.personal_salud       — mapeo his_user_id → personal ECE id
+ *   ece.firma_electronica    — credencial PIN (argon2id) del MC y del IC
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get    → requireRole(["MC","PHYSICIAN","IC","DIR","NURSE"])
+ *   create       → requireRole(["MC","PHYSICIAN"])
+ *   firmar       → requireRole(["MC","PHYSICIAN"])  — requiere PIN
+ *   responder    → requireRole(["IC","PHYSICIAN"])  — requiere PIN
+ *   anular       → requireRole(["DIR"])
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";

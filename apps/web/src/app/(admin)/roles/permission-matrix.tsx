@@ -93,7 +93,11 @@ export function PermissionMatrix({
     },
   });
 
-  const permissions = (permsQ.data ?? []) as Permission[];
+  // Memo evita que el array nuevo del `??` cambie deps en cada render.
+  const permissions = React.useMemo(
+    () => (permsQ.data ?? []) as Permission[],
+    [permsQ.data],
+  );
 
   // Filtrado cliente.
   const filtered = React.useMemo(() => {

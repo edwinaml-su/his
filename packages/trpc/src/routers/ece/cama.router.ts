@@ -1,26 +1,49 @@
 /**
- * ece.cama — Router tRPC para el Mapa de Camas.
+ * Router tRPC — ECE Mapa de Camas Hospitalarias.
  *
- * Tablas operadas (raw SQL, schema ece + público):
- *   public."Bed"             — catálogo de camas (código, servicio_id)
- *   ece.asignacion_cama      — asignaciones activas (episodio → cama)
- *   ece.episodio_hospitalario — episodio hospitalario (vincula paciente)
- *   ece.episodio_atencion    — datos base del episodio (paciente_id)
- *   public."Patient"         — nombre del paciente
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3 — Gestión de recursos hospitalarios.
+ * Código de módulo: ECE-CAMAS.
+ * Responsabilidad: vista en tiempo real del estado de cada cama por servicio,
+ *   métricas de ocupación, y transiciones manuales de estado operativo.
  *
- * Procedures:
- *   listEstadoCamas  — query: lista camas del servicio con su estado en tiempo real
- *   estadoServicio   — query: métricas agregadas (totales, libres, ocupadas…)
- *   cambiarEstado    — mutation: transición manual (libre↔limpieza↔mantenimiento)
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (estados de cama — no es workflow de documento NTEC)
+ * ---------------------------------------------------------------------------
+ *   Estados de cama (public."Bed".estadoManual):
+ *     libre → limpieza → libre   (ciclo post-alta)
+ *     libre → mantenimiento → libre (ciclo correctivo)
  *
- * Roles:
- *   listEstadoCamas, estadoServicio → NURSE | ADM | PHYSICIAN
- *   cambiarEstado                   → NURSE | ADM
+ *   Estado "ocupada" es derivado: se infiere de la existencia de una fila
+ *   en ece.asignacion_cama con estado 'activa'. Tiene prioridad sobre
+ *   estadoManual: una cama con asignación activa siempre es "ocupada".
  *
- * Nota: "ocupada" se deriva de la existencia de una asignacion_cama activa.
- * Los estados manuales (limpieza/mantenimiento) viven en public."Bed".estadoManual.
- * Si una cama tiene asignación activa, su estado es "ocupada" con independencia
- * del estadoManual.
+ *   Las asignaciones se crean en el bridge-admision.router.ts y se liberan
+ *   en episodio-hospitalario.router.ts (confirmarAlta). Este router solo
+ *   gestiona transiciones manuales de estado operativo.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX
+ * ---------------------------------------------------------------------------
+ *   No emite eventos de dominio. Los cambios de estado de cama son operativos,
+ *   no generan eventos clínicos ni notificaciones (Beta.15).
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — mezcla schema public + ece)
+ * ---------------------------------------------------------------------------
+ *   public."Bed"              — catálogo de camas: codigo, servicio_id,
+ *                               tipo_cama, "estadoManual"
+ *   ece.asignacion_cama       — asignaciones activas: cama_id, episodio_id,
+ *                               estado ('activa'|'liberada'), fecha_asignacion
+ *   ece.episodio_hospitalario — para join con paciente (via episodio_atencion)
+ *   ece.episodio_atencion     — datos base: paciente_id
+ *   public."Patient"          — nombre y documento del paciente
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   listEstadoCamas  → requireRole(["NURSE","ADM","PHYSICIAN"])
+ *   estadoServicio   → requireRole(["NURSE","ADM","PHYSICIAN"])
+ *   cambiarEstado    → requireRole(["NURSE","ADM"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";

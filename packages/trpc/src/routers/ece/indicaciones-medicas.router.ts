@@ -1,19 +1,48 @@
 /**
- * §ECE — Router tRPC: Indicaciones Médicas (IND_MED).
+ * Router tRPC — ECE Indicaciones Médicas (IND_MED).
  *
- * Norma técnica NTEC Doc 6. Tablas raw SQL (schema ece):
- *   ece.indicaciones_medicas   — encabezado de la orden
- *   ece.indicacion_item        — líneas de medicamento
+ * Documento NTEC: Doc 6 — Indicaciones Médicas / Prescripción Farmacológica.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.6.
+ * Código de tipo_documento: IND_MED.
  *
- * Workflow IND_MED:
- *   borrador → en_revision → firmado → validado → anulado
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (código tipo: IND_MED)
+ * ---------------------------------------------------------------------------
+ *   borrador    → en_revision  (MC: enviar a validar por enfermería)
+ *   en_revision → firmado      (MC: firma con firma electrónica + hash SHA-256)
+ *   firmado     → validado     (ENF/NURSE: transcripción confirmada al MAR/Kardex)
+ *   cualquiera  → anulado      (MC | ENF, pre-validado)
  *
- * Roles:
- *   MC (PHYSICIAN) — create, firmar
- *   ENF (NURSE)    — validar (transcripción)
- *   MC | ENF       — list, get, addItem, removeItem, anular
+ *   Items de la orden (ece.indicacion_item) se pueden agregar/eliminar mientras
+ *   el encabezado está en estado borrador o en_revision. Post-firma son inmutables.
  *
- * Outbox: `firmar` emite `ece.indicaciones.firmadas` vía emitDomainEvent.
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.indicaciones.firmadas'  — emitido por firmar().
+ *     Payload: { indicacionId, episodioId, medicoId, itemCount, organizationId }
+ *     Consumido por el motor de MAR (Stream 30) para crear las líneas de
+ *     ece.administracion_medicamento pendientes de enfermería.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.indicaciones_medicas  — encabezado: episodio_id, observaciones, estado,
+ *                               firmado_por, firmado_en
+ *   ece.indicacion_item       — línea: indicacion_id, medicamento_codigo, dosis,
+ *                               via, frecuencia, duracion_dias, observaciones
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   list, get                 → requireRole(["MC","PHYSICIAN","NURSE","ENF"])
+ *   create, firmar            → requireRole(["MC","PHYSICIAN"])
+ *   addItem, removeItem       → requireRole(["MC","PHYSICIAN"])
+ *   validar                   → requireRole(["NURSE","ENF"])
+ *   anular                    → requireRole(["MC","PHYSICIAN","NURSE","ENF"])
+ *
+ * Raw SQL es obligatorio porque ece.* usa schema Postgres separado (opción B)
+ * y no está mapeado en schema.prisma. Queries con Prisma.sql para prevenir SQLi.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

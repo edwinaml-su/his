@@ -1,21 +1,49 @@
 /**
- * ECE — Certificación DIR (Art. 21 NTEC, Acuerdo 1616 MINSAL 2024).
+ * Router tRPC — ECE Certificación Director (Art. 21 NTEC).
  *
- * Solo el rol DIR certifica copias formales de documentos tipo
- * FICHA_ID, EPICRISIS o CERT_DEF.  El documento debe estar en estado
- * 'validado' para poder certificarse.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), Art. 21 — Certificación oficial de
+ *   documentos clínicos por el Director Médico del establecimiento.
+ * Código de operación: ECE-CERT (transversal — aplica a varios tipos_documento).
  *
- * Tablas raw SQL (schema ece):
- *   ece.documento_instancia           — estado actual del documento
- *   ece.documento_instancia_historial — bitácora inmutable de transiciones
- *   ece.firma_electronica             — credencial de firma del DIR
- *   ece.personal_salud                — mapeo his_user_id → personal ECE
+ * Este router implementa el paso final del workflow de certificación para
+ * documentos que requieren sello del director. Solo opera sobre documentos
+ * en estado 'validado'. Los tipos elegibles son:
+ *   - FICHA_ID    (Ficha de Identificación del Paciente)
+ *   - EPICRISIS   (Epicrisis de Egreso)
+ *   - CERT_DEF    (Certificado de Defunción)
  *
- * Procedures:
- *   ece.certificacion.listCola  — query (DIR): documentos en estado validado
- *   ece.certificacion.certificar — mutation (DIR): avanza a certificado + emite outbox
+ * ---------------------------------------------------------------------------
+ * WORKFLOW  (paso terminal — solo el step certificar)
+ * ---------------------------------------------------------------------------
+ *   validado → certificado  (DIR: firma con PIN argon2id + emite outbox)
+ *   Precondición estricta: estado = 'validado' en ece.documento_instancia.
+ *   El router rechaza con FORBIDDEN si el tipo_documento no está en la lista
+ *   elegible, usando requireEcePermission("ece.documento.certificar").
  *
- * Outbox: emite `ece.documento.certificado` con hash + dirUserId (Beta.15).
+ *   El PIN se verifica contra ece.firma_electronica.pin_hash (argon2id).
+ *   Lockout automático tras 3 intentos fallidos (locked_until timestamptz).
+ *   Se registra transición en ece.documento_instancia_historial con SHA-256.
+ *
+ * ---------------------------------------------------------------------------
+ * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * ---------------------------------------------------------------------------
+ *   'ece.documento.certificado'  — emitido por certificar(). Beta.15 notifications.
+ *     Payload: { instanciaId, tipoDocumento, dirUserId, payloadHash, orgId }
+ *     payloadHash = SHA-256(instanciaId + tipoDocumento + directorId + timestamp)
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ---------------------------------------------------------------------------
+ *   ece.documento_instancia           — estado actual; filtrado por 'validado'
+ *   ece.documento_instancia_historial — append-only log de transiciones
+ *   ece.firma_electronica             — credencial PIN del DIR (argon2id hash)
+ *   ece.personal_salud                — mapeo his_user_id → personal ECE id
+ *
+ * ---------------------------------------------------------------------------
+ * ROLES tRPC
+ * ---------------------------------------------------------------------------
+ *   listCola    → requireRole(["DIR"])  — cola de documentos pendientes de certificar
+ *   certificar  → requireRole(["DIR"])  + requireEcePermission("ece.documento.certificar")
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
