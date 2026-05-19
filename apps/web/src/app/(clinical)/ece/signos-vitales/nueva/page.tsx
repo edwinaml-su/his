@@ -25,6 +25,7 @@ import {
   evaluateVitalAlerts,
   type InpatientVitalAlert,
 } from "@his/contracts/schemas/inpatient";
+import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
 // Schema de validación (replica eceSignosVitalesCreateSchema — actualizar
@@ -38,6 +39,9 @@ const RANGES = {
   respiratoryRate: { min: 4, max: 60, label: "Frecuencia respiratoria", unit: "rpm" },
   temperatureC: { min: 30, max: 43, label: "Temperatura", unit: "°C" },
   spo2: { min: 50, max: 100, label: "SpO₂", unit: "%" },
+  pesoKg: { min: 0.5, max: 300, label: "Peso", unit: "kg" },
+  tallaCm: { min: 30, max: 250, label: "Talla", unit: "cm" },
+  glucometriaMgdl: { min: 20, max: 600, label: "Glucometría", unit: "mg/dL" },
 } as const;
 
 type RangeField = keyof typeof RANGES;
@@ -50,6 +54,10 @@ interface FormState {
   temperatureC: string;
   spo2: string;
   painScale: number; // 0-10 slider nativo
+  // HD-18: datos antropométricos
+  pesoKg: string;
+  tallaCm: string;
+  glucometriaMgdl: string;
 }
 
 const INITIAL: FormState = {
@@ -60,6 +68,9 @@ const INITIAL: FormState = {
   temperatureC: "",
   spo2: "",
   painScale: 0,
+  pesoKg: "",
+  tallaCm: "",
+  glucometriaMgdl: "",
 };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +90,16 @@ function parseOpt(raw: string): number | null {
   if (raw.trim() === "") return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+/** Calcula IMC visual en tiempo real (solo para mostrar, el router lo persiste). */
+function calcImcDisplay(pesoKgRaw: string, tallaCmRaw: string): string | null {
+  const peso = parseOpt(pesoKgRaw);
+  const talla = parseOpt(tallaCmRaw);
+  if (!peso || !talla || talla === 0) return null;
+  const tallaM = talla / 100;
+  const imc = Math.round((peso / (tallaM * tallaM)) * 10) / 10;
+  return String(imc);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +207,10 @@ export default function NuevoSignoVitalPage() {
   const [form, setForm] = React.useState<FormState>(INITIAL);
   const [touched, setTouched] = React.useState<Partial<Record<RangeField, boolean>>>({});
   const [submitting, setSubmitting] = React.useState(false);
+  const [submitError, setSubmitError] = React.useState<string | null>(null);
+
+  const createMutation = trpc.eceSignosVitales.create.useMutation();
+  const firmarMutation = trpc.eceSignosVitales.firmar.useMutation();
 
   // Compute alerts en tiempo real
   const alerts: InpatientVitalAlert[] = evaluateVitalAlerts({
@@ -200,10 +225,15 @@ export default function NuevoSignoVitalPage() {
 
   const fieldErrors: Partial<Record<RangeField, string | null>> = {};
   for (const k of Object.keys(RANGES) as RangeField[]) {
-    fieldErrors[k] = touched[k] ? validateField(k, form[k] as string) : null;
+    const val = k === "pesoKg" || k === "tallaCm" || k === "glucometriaMgdl"
+      ? (form[k] as string)
+      : (form[k as keyof Omit<FormState, "painScale">] as string);
+    fieldErrors[k] = touched[k] ? validateField(k, val) : null;
   }
 
   const hasErrors = Object.values(fieldErrors).some((e) => e !== null);
+
+  const imcDisplay = calcImcDisplay(form.pesoKg, form.tallaCm);
 
   const setField = (field: RangeField, val: string) => {
     setForm((prev) => ({ ...prev, [field]: val }));
@@ -215,6 +245,8 @@ export default function NuevoSignoVitalPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSubmitError(null);
+
     // Marcar todos los campos como tocados para mostrar errores
     const allTouched = Object.fromEntries(
       (Object.keys(RANGES) as RangeField[]).map((k) => [k, true]),
@@ -225,10 +257,27 @@ export default function NuevoSignoVitalPage() {
 
     setSubmitting(true);
     try {
-      // TODO: llamar api.eceSignosVitales.create + firmar en una sola acción
-      // cuando el router tRPC esté conectado al cliente.
-      await new Promise((r) => setTimeout(r, 600)); // stub
+      // Crear el registro en borrador
+      const { id } = await createMutation.mutateAsync({
+        presionSistolica: parseOpt(form.systolicBp) ?? undefined,
+        presionDiastolica: parseOpt(form.diastolicBp) ?? undefined,
+        frecuenciaCardiaca: parseOpt(form.heartRate) ?? undefined,
+        frecuenciaRespiratoria: parseOpt(form.respiratoryRate) ?? undefined,
+        temperatura: parseOpt(form.temperatureC) ?? undefined,
+        saturacionO2: parseOpt(form.spo2) ?? undefined,
+        escalaDolor: form.painScale,
+        pesoKg: parseOpt(form.pesoKg) ?? undefined,
+        tallaCm: parseOpt(form.tallaCm) ?? undefined,
+        glucometriaMgdl: parseOpt(form.glucometriaMgdl) ?? undefined,
+      });
+
+      // Firmar inmediatamente (flujo de alta frecuencia: borrador → firmado en una acción)
+      await firmarMutation.mutateAsync({ id });
+
       router.push("/ece/signos-vitales");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Error al registrar signos vitales.";
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -244,6 +293,12 @@ export default function NuevoSignoVitalPage() {
 
       {/* Alerta crítica en tiempo real */}
       <AlertaBanner alerts={alerts} />
+
+      {submitError && (
+        <div role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          {submitError}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} noValidate className="space-y-6" aria-label="Formulario de signos vitales">
         {/* Presión arterial */}
@@ -353,6 +408,69 @@ export default function NuevoSignoVitalPage() {
             value={form.painScale}
             onChange={(v) => setForm((prev) => ({ ...prev, painScale: v }))}
           />
+        </fieldset>
+
+        {/* Datos antropométricos (HD-18 — NTEC Art. 28) */}
+        <fieldset className="rounded-lg border p-4 space-y-4">
+          <legend className="px-1 text-sm font-semibold text-foreground">
+            Datos antropométricos <span className="font-normal text-muted-foreground">(opcional)</span>
+          </legend>
+          <div className="grid grid-cols-2 gap-4">
+            {(["pesoKg", "tallaCm"] as const).map((field) => {
+              const r = RANGES[field];
+              const err = fieldErrors[field];
+              return (
+                <div key={field} className="space-y-1.5">
+                  <Label htmlFor={field}>
+                    {r.label}
+                    <span className="ml-1 text-xs text-muted-foreground">({r.unit})</span>
+                  </Label>
+                  <Input
+                    id={field}
+                    inputMode="decimal"
+                    type="number"
+                    step="0.1"
+                    placeholder={`${r.min}–${r.max}`}
+                    value={form[field]}
+                    onChange={(e) => setField(field, e.target.value)}
+                    onBlur={() => markTouched(field)}
+                    aria-describedby={err ? `${field}-err` : undefined}
+                    aria-invalid={!!err}
+                  />
+                  <FieldError id={`${field}-err`} message={err ?? null} />
+                </div>
+              );
+            })}
+          </div>
+
+          {/* IMC calculado automáticamente */}
+          {imcDisplay && (
+            <p className="text-sm text-muted-foreground" aria-live="polite">
+              IMC calculado: <span className="font-semibold text-foreground">{imcDisplay} kg/m²</span>
+            </p>
+          )}
+
+          {/* Glucometría */}
+          <div className="space-y-1.5">
+            <Label htmlFor="glucometriaMgdl">
+              {RANGES.glucometriaMgdl.label}
+              <span className="ml-1 text-xs text-muted-foreground">({RANGES.glucometriaMgdl.unit})</span>
+            </Label>
+            <Input
+              id="glucometriaMgdl"
+              inputMode="decimal"
+              type="number"
+              step="1"
+              placeholder={`${RANGES.glucometriaMgdl.min}–${RANGES.glucometriaMgdl.max}`}
+              value={form.glucometriaMgdl}
+              onChange={(e) => setField("glucometriaMgdl", e.target.value)}
+              onBlur={() => markTouched("glucometriaMgdl")}
+              aria-describedby={fieldErrors.glucometriaMgdl ? "glucometriaMgdl-err" : undefined}
+              aria-invalid={!!fieldErrors.glucometriaMgdl}
+              className="max-w-[200px]"
+            />
+            <FieldError id="glucometriaMgdl-err" message={fieldErrors.glucometriaMgdl ?? null} />
+          </div>
         </fieldset>
 
         {/* Acciones */}
