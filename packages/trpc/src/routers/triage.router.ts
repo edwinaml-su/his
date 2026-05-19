@@ -293,120 +293,126 @@ export const triageRouter = router({
       const estId = ctx.tenant.establishmentId;
       const userId = ctx.user.id;
 
-      // 1. Resolver / crear paciente.
-      let patientId: string;
-      if (input.mode === "EXISTING_PATIENT") {
-        const p = await ctx.prisma.patient.findFirst({
-          where: { id: input.patientId, organizationId: orgId, deletedAt: null },
-          select: { id: true, active: true },
-        });
-        if (!p) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no existe en esta organización." });
+      // H3-07 — Toda la creación de paciente NN + encounter + triage debe
+      // pasar por withTenantContext para que RLS aplique. Antes el flujo
+      // hacía `ctx.prisma.patient.create` directo, sin demote a
+      // `authenticated`, dejando el filtro tenant solo en el `where` JS.
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // 1. Resolver / crear paciente.
+        let patientId: string;
+        if (input.mode === "EXISTING_PATIENT") {
+          const p = await tx.patient.findFirst({
+            where: { id: input.patientId, organizationId: orgId, deletedAt: null },
+            select: { id: true, active: true },
+          });
+          if (!p) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no existe en esta organización." });
+          }
+          if (!p.active) {
+            throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Paciente inactivo (posible fallecimiento)." });
+          }
+          patientId = p.id;
+        } else {
+          const now = new Date();
+          const mrn = `NN-${formatNnSuffix(now)}`;
+          const truncated = input.nnFields.description.slice(0, 100).trim() || "Desconocido";
+          const created = await tx.patient.create({
+            data: {
+              organizationId: orgId,
+              mrn,
+              firstName: "NN",
+              lastName: truncated,
+              biologicalSexId: input.nnFields.sexAtBirthId,
+              birthDateEstimated: input.nnFields.estimatedAge != null,
+              birthDate:
+                input.nnFields.estimatedAge != null
+                  ? new Date(Date.UTC(now.getFullYear() - input.nnFields.estimatedAge, 0, 1, 12, 0, 0))
+                  : null,
+              isUnknown: true,
+              unknownLabel: mrn,
+              createdBy: userId,
+            },
+          });
+          patientId = created.id;
         }
-        if (!p.active) {
-          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Paciente inactivo (posible fallecimiento)." });
-        }
-        patientId = p.id;
-      } else {
-        const now = new Date();
-        const mrn = `NN-${formatNnSuffix(now)}`;
-        const truncated = input.nnFields.description.slice(0, 100).trim() || "Desconocido";
-        const created = await ctx.prisma.patient.create({
-          data: {
-            organizationId: orgId,
-            mrn,
-            firstName: "NN",
-            lastName: truncated,
-            biologicalSexId: input.nnFields.sexAtBirthId,
-            birthDateEstimated: input.nnFields.estimatedAge != null,
-            birthDate:
-              input.nnFields.estimatedAge != null
-                ? new Date(Date.UTC(now.getFullYear() - input.nnFields.estimatedAge, 0, 1, 12, 0, 0))
-                : null,
-            isUnknown: true,
-            unknownLabel: mrn,
-            createdBy: userId,
-          },
-        });
-        patientId = created.id;
-      }
 
-      // 2. Reusar o crear Encounter EMERGENCY abierto.
-      let encounter = await ctx.prisma.encounter.findFirst({
-        where: {
-          organizationId: orgId,
-          patientId,
-          admissionType: "EMERGENCY",
-          dischargedAt: null,
-        },
-        orderBy: { admittedAt: "desc" },
-      });
-      if (!encounter) {
-        const currencyId = await resolveCountryCurrency(ctx.prisma, countryId);
-        const encounterNumber = await nextEncounterNumber(ctx.prisma, orgId);
-        encounter = await ctx.prisma.encounter.create({
+        // 2. Reusar o crear Encounter EMERGENCY abierto.
+        let encounter = await tx.encounter.findFirst({
+          where: {
+            organizationId: orgId,
+            patientId,
+            admissionType: "EMERGENCY",
+            dischargedAt: null,
+          },
+          orderBy: { admittedAt: "desc" },
+        });
+        if (!encounter) {
+          const currencyId = await resolveCountryCurrency(tx, countryId);
+          const encounterNumber = await nextEncounterNumber(tx, orgId);
+          encounter = await tx.encounter.create({
+            data: {
+              countryId,
+              organizationId: orgId,
+              establishmentId: estId,
+              patientId,
+              admissionType: "EMERGENCY",
+              encounterNumber,
+              admittedAt: new Date(),
+              currencyId,
+              exchangeRateToFunc: 1,
+              createdBy: userId,
+            },
+          });
+        }
+
+        // 3. Resolver flowchart "general" + nivel placeholder (BLUE).
+        const flowchart = await tx.triageFlowchart.findFirst({
+          where: { organizationId: orgId, active: true },
+          orderBy: { name: "asc" },
+          select: { id: true },
+        });
+        if (!flowchart) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No hay flowchart Manchester activo configurado.",
+          });
+        }
+        const placeholderLevel = await tx.triageLevel.findFirst({
+          where: { organizationId: orgId, active: true },
+          orderBy: { priority: "desc" }, // priority=5 (BLUE) primero
+          select: { id: true },
+        });
+        if (!placeholderLevel) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Niveles Manchester no seedeados.",
+          });
+        }
+
+        // 4. Crear TriageEvaluation IN_PROGRESS.
+        const triage = await tx.triageEvaluation.create({
           data: {
             countryId,
             organizationId: orgId,
             establishmentId: estId,
             patientId,
-            admissionType: "EMERGENCY",
-            encounterNumber,
-            admittedAt: new Date(),
-            currencyId,
-            exchangeRateToFunc: 1,
+            encounterId: encounter.id,
+            flowchartId: flowchart.id,
+            assignedLevelId: placeholderLevel.id, // placeholder; US-6.4 sobre-escribe.
+            status: "IN_PROGRESS",
+            startedAt: new Date(),
+            triagistUserId: userId,
             createdBy: userId,
           },
+          select: { id: true },
         });
-      }
 
-      // 3. Resolver flowchart "general" + nivel placeholder (BLUE).
-      const flowchart = await ctx.prisma.triageFlowchart.findFirst({
-        where: { organizationId: orgId, active: true },
-        orderBy: { name: "asc" },
-        select: { id: true },
-      });
-      if (!flowchart) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No hay flowchart Manchester activo configurado.",
-        });
-      }
-      const placeholderLevel = await ctx.prisma.triageLevel.findFirst({
-        where: { organizationId: orgId, active: true },
-        orderBy: { priority: "desc" }, // priority=5 (BLUE) primero
-        select: { id: true },
-      });
-      if (!placeholderLevel) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Niveles Manchester no seedeados.",
-        });
-      }
-
-      // 4. Crear TriageEvaluation IN_PROGRESS.
-      const triage = await ctx.prisma.triageEvaluation.create({
-        data: {
-          countryId,
-          organizationId: orgId,
-          establishmentId: estId,
-          patientId,
+        return {
           encounterId: encounter.id,
-          flowchartId: flowchart.id,
-          assignedLevelId: placeholderLevel.id, // placeholder; US-6.4 sobre-escribe.
-          status: "IN_PROGRESS",
-          startedAt: new Date(),
-          triagistUserId: userId,
-          createdBy: userId,
-        },
-        select: { id: true },
+          triageEvaluationId: triage.id,
+          patientId,
+        };
       });
-
-      return {
-        encounterId: encounter.id,
-        triageEvaluationId: triage.id,
-        patientId,
-      };
     }),
 
   /**

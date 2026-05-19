@@ -13,12 +13,27 @@ import { MOCK_TENANT, MOCK_USER_ADMIN, VALID_DUIS, INVALID_DUIS } from "@his/tes
 describe("patientRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
+  /**
+   * Tras H1-06 (S0 Tier 1), `search` y `get` se ejecutan dentro de
+   * `withTenantContext` → `prisma.$transaction(callback)`. El mock ejecuta
+   * el callback con el propio `prisma` como `tx`, manteniendo los delegados
+   * accesibles desde mock.calls.
+   */
+  function setupTx() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void }).mockImplementation(
+      async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma),
+    );
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+  }
+
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
   });
 
   describe("search", () => {
     it("filtra por organizationId del tenant y excluye eliminados", async () => {
+      setupTx();
       prisma.patient.findMany.mockResolvedValue([] as never);
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
@@ -36,10 +51,24 @@ describe("patientRouter", () => {
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.search({ query: "" })).rejects.toThrow();
     });
+
+    it("RLS — la query corre dentro de $transaction + SET LOCAL ROLE", async () => {
+      setupTx();
+      prisma.patient.findMany.mockResolvedValue([] as never);
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+
+      await caller.search({ query: "María" });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+    });
   });
 
   describe("get", () => {
     it("lanza NOT_FOUND si no existe", async () => {
+      setupTx();
       prisma.patient.findFirst.mockResolvedValue(null);
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.get({ id: MOCK_USER_ADMIN.id })).rejects.toMatchObject({
@@ -48,11 +77,24 @@ describe("patientRouter", () => {
     });
 
     it("retorna paciente con relaciones cuando existe", async () => {
+      setupTx();
       const fake = { id: MOCK_USER_ADMIN.id, firstName: "Ana" };
       prisma.patient.findFirst.mockResolvedValue(fake as never);
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       const out = await caller.get({ id: MOCK_USER_ADMIN.id });
       expect(out).toEqual(fake);
+    });
+
+    it("RLS — get corre dentro de $transaction + demote", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue({ id: MOCK_USER_ADMIN.id } as never);
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+
+      await caller.get({ id: MOCK_USER_ADMIN.id });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
     });
   });
 
