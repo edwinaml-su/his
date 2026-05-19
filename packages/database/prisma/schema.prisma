@@ -1808,6 +1808,8 @@ model Drug {
   dispensingClass       DispensingClass    @default(RX)
   requiresControlledLog Boolean            @default(false)
   active                Boolean            @default(true)
+  /// Excipientes con potencial alergénico (GS1/WHO INN). Array TEXT[].
+  allergyExcipients     String[]           @default([])
   createdAt             DateTime           @default(now()) @db.Timestamptz()
   updatedAt             DateTime           @updatedAt @db.Timestamptz()
 

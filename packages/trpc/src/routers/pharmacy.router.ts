@@ -19,6 +19,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+// Importación directa del schema de farmacia para evitar ciclo ESM con el
+// barrel de @his/contracts en contexto de tests vitest.
 import {
   drugListInput,
   drugCreateInput,
@@ -35,9 +37,9 @@ import {
   type DrugInteractionEntry,
   type PrescriptionStatusType,
   type PharmacyInteractionAlert,
-  type DrugInteractionPayload,
-} from "@his/contracts";
-import { emitDomainEvent } from "@his/database";
+} from "../../../contracts/src/schemas/pharmacy";
+import type { DrugInteractionPayload } from "../../../contracts/src/events/payloads";
+import * as Database from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 /**
@@ -126,20 +128,24 @@ export function _resetInteractionsDatasetForTesting(
 }
 
 // ---------------------------------------------------------------------------
-// Extended inputs (Beta.2)
+// Extended inputs (Beta.2) — lazy para evitar TDZ en ciclos ESM de tests.
 // ---------------------------------------------------------------------------
 
-const prescriptionSignWithOverrideInput = prescriptionSignInput.extend({
-  /** Justificación obligatoria si hay interaction major/contraindicated. */
-  forceOverrideJustification: z.string().trim().min(10).max(2000).optional(),
-});
+function getPrescriptionSignWithOverrideInput() {
+  return prescriptionSignInput.extend({
+    /** Justificación obligatoria si hay interaction major/contraindicated. */
+    forceOverrideJustification: z.string().trim().min(10).max(2000).optional(),
+  });
+}
 
-const dispenseCreateExtendedInput = dispenseCreateInput.extend({
-  /** Para RX_CONTROLLED: justificación legal del 2-eyes (mínimo 10 chars). */
-  controlledJustification: z.string().trim().min(10).max(2000).optional(),
-  /** Para RX_CONTROLLED: usuario testigo (no puede ser el mismo dispensador). */
-  witnessUserId: z.string().uuid().optional(),
-});
+function getDispenseCreateExtendedInput() {
+  return dispenseCreateInput.extend({
+    /** Para RX_CONTROLLED: justificación legal del 2-eyes (mínimo 10 chars). */
+    controlledJustification: z.string().trim().min(10).max(2000).optional(),
+    /** Para RX_CONTROLLED: usuario testigo (no puede ser el mismo dispensador). */
+    witnessUserId: z.string().uuid().optional(),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Router
@@ -244,7 +250,7 @@ export const pharmacyRouter = router({
      * - State machine: solo DRAFT → SIGNED permitida aquí.
      */
     sign: tenantProcedure
-      .input(prescriptionSignWithOverrideInput)
+      .input(getPrescriptionSignWithOverrideInput())
       .mutation(async ({ ctx, input }) => {
         const presc = await ctx.prisma.prescription.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId },
@@ -322,7 +328,7 @@ export const pharmacyRouter = router({
               severity: worstInteractionSeverity(alerts),
               description,
             };
-            await emitDomainEvent(tx, {
+            await Database.emitDomainEvent(tx, {
               organizationId: ctx.tenant.organizationId,
               eventType: "drug.interaction",
               aggregateType: "Prescription",
@@ -347,7 +353,7 @@ export const pharmacyRouter = router({
      *   pero recomendada).
      */
     create: tenantProcedure
-      .input(dispenseCreateExtendedInput)
+      .input(getDispenseCreateExtendedInput())
       .mutation(async ({ ctx, input }) => {
         // Verifica que el item pertenezca a una prescription dispensable de la misma org.
         const item = await ctx.prisma.prescriptionItem.findFirst({

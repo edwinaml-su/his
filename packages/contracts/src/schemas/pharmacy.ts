@@ -61,6 +61,8 @@ export const drugCreateInput = z.object({
   strengthUnit: z.string().trim().min(1).max(20),
   dispensingClass: dispensingClassEnum.default("RX"),
   requiresControlledLog: z.boolean().default(false),
+  /// Excipientes con potencial alergénico. Coincide con Drug.allergyExcipients en BD.
+  allergyExcipients: z.array(z.string().trim().min(1).max(100)).default([]),
 });
 
 export const prescriptionItemInput = z.object({

@@ -6,8 +6,11 @@
  * - Interaction detection con dataset inyectado en tests.
  * - Lot expiry validation.
  * - 2-eyes RX_CONTROLLED y high-risk drugs.
+ *
+ * Fix (BCMA-001/FARM-001): `emitDomainEvent` se mockea vía vi.mock para evitar
+ * el ciclo ESM que el barrel de @his/database introduce en contexto vitest.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import {
@@ -15,6 +18,22 @@ import {
   _resetInteractionsDatasetForTesting,
 } from "../pharmacy.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+
+// Mock de @his/database en el contexto del router para que emitDomainEvent
+// sea una función callable aunque el ciclo ESM lo deje como undefined.
+vi.mock("@his/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@his/database")>();
+  return {
+    ...actual,
+    emitDomainEvent: vi.fn().mockImplementation(async (tx: unknown, input: unknown) => {
+      // Delegar a tx.domainEvent.create para que los tests puedan verificar el payload.
+      const typedTx = tx as { domainEvent: { create: (args: unknown) => Promise<unknown> } };
+      if (typeof typedTx?.domainEvent?.create === "function") {
+        await typedTx.domainEvent.create({ data: (input as Record<string, unknown>) });
+      }
+    }),
+  };
+});
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
