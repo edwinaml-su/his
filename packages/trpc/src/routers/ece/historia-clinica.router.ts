@@ -4,166 +4,191 @@
  * Documento NTEC: Doc 2 — Historia Clínica del Paciente.
  * Norma: TDR §6 / MINSAL Acuerdo n.° 1616 (2024), §3.2.
  * Código de tipo_documento: HIST_CLIN.
- * Es el documento clínico maestro por paciente; referenciado por todos los demás
- * documentos del ECE a través de episodio_id.
  *
  * ---------------------------------------------------------------------------
- * WORKFLOW  (código tipo: HIST_CLIN)
+ * COLUMNAS BD REALES (ece.historia_clinica — 61_ece_06_documentos.sql)
  * ---------------------------------------------------------------------------
- *   borrador    → en_revision   (MC/MT/DIR: enviar a revisión)
- *   en_revision → firmado       (MC: firma Médico Certificador con SHA-256 payload)
- *   firmado     → validado      (DIR: director valida — estado definitivo)
- *   cualquiera  → anulado       (MC/MT/DIR: pre-validado)
- *
- *   El estado vive en ece.documento_instancia (via instancia_id), no directamente
- *   en ece.historia_clinica. Cada transición inserta fila en
- *   ece.documento_instancia_historial con sha256(payload) para cadena de integridad.
+ *   id uuid PK, instancia_id uuid, episodio_id uuid NOT NULL,
+ *   tipo_consulta text NOT NULL, motivo_consulta text, enfermedad_actual text,
+ *   disposicion text, plan_manejo text, antecedentes jsonb,
+ *   examen_fisico jsonb, diagnosticos jsonb,
+ *   registrado_por uuid NOT NULL, registrado_en timestamptz,
+ *   estado_registro text NOT NULL DEFAULT 'vigente'
  *
  * ---------------------------------------------------------------------------
- * OUTBOX
+ * WORKFLOW  (estado_registro en la propia tabla)
  * ---------------------------------------------------------------------------
- *   No emite evento propio (el evento lo emite el motor de workflow genérico
- *   'workflow.transitionExecuted' a través de ece.documento_instancia_historial).
- *
- * ---------------------------------------------------------------------------
- * TABLAS BD (raw SQL — 61_ece_06_documentos.sql, fuera del modelo Prisma)
- * ---------------------------------------------------------------------------
- *   ece.historia_clinica            — antecedentes JSONB, examen_fisico JSONB,
- *                                     diagnosticos JSONB, instancia_id FK
- *   ece.documento_instancia         — estado actual del documento
- *   ece.documento_instancia_historial — log de transiciones + sha256 payload
- *   ece.episodio_atencion           — join para obtener paciente_id
- *   ece.paciente                    — public_patient_id → public."Patient"
- *   public."Patient"                — nombre e identificación del paciente
+ *   borrador → firmado  (PHYSICIAN/MC: firma con SHA-256)
+ *   firmado  → validado (DIR)
+ *   firmado  → anulado  (DIR, pre-validado)
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
  * ---------------------------------------------------------------------------
- *   list, get                       → requireRole(["PHYSICIAN","NURSE","MC","MT","DIR"])
- *   create, update                  → requireRole(["MC","MT","DIR"])
- *   enviarRevision, anular          → requireRole(["MC","MT","DIR"])
- *   firmar                          → requireRole(["MC"])
- *   validar                         → requireRole(["DIR"])
+ *   list, get       → PHYSICIAN, NURSE, MC, MT, DIR
+ *   create, update  → PHYSICIAN, MC, MT, DIR
+ *   firmar          → PHYSICIAN, MC
+ *   validar         → DIR
+ *
+ * Raw SQL obligatorio — ece.* no está en schema.prisma.
+ * HC-001, HC-002: este router cubre la ausencia total de CRUD para historia_clinica.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { Prisma } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
-import { Prisma } from "@his/database";
-// Schemas inline — la copia canónica vive en packages/contracts/src/schemas/ece-historia-clinica.ts
-// (el worktree no comparte node_modules con el monorepo principal, por eso no se importa desde allí).
-const historiaClinicaListInput = z.object({
-  pacienteId: z.string().uuid().optional(),
+
+// ---------------------------------------------------------------------------
+// Enum NTEC tipo_consulta (MINSAL Acuerdo n.° 1616 Art. 7)
+// ---------------------------------------------------------------------------
+const TIPO_CONSULTA = ["ingreso", "control", "urgencia", "ambulatoria", "interconsulta"] as const;
+const tipoConsultaEnum = z.enum(TIPO_CONSULTA);
+
+const DISPOSICION_OPTIONS = ["ALTA", "INTERNAMIENTO", "REFERENCIA", "OBSERVACION"] as const;
+
+// ---------------------------------------------------------------------------
+// Schemas de input
+// ---------------------------------------------------------------------------
+
+const icd10DiagnosticoSchema = z.object({
+  code: z.string().regex(/^[A-Z]\d{2}(\.\d+)?$/, "Código CIE-10 inválido"),
+  description: z.string().min(1).max(500),
+  tipo: z.enum(["principal", "secundario"]).default("secundario"),
+});
+type Icd10Diagnostico = z.infer<typeof icd10DiagnosticoSchema>;
+
+const antecedentesSchema = z.object({
+  personales: z.string().max(4000).optional(),
+  familiares: z.string().max(4000).optional(),
+  sociales: z.string().max(4000).optional(),
+  alergias: z.string().max(2000).optional(),
+}).optional();
+
+const examenFisicoSchema = z.object({
+  sistemas: z.array(z.object({
+    sistema: z.string().max(100),
+    hallazgo: z.string().max(2000),
+  })).optional(),
+  signosVitales: z.object({
+    paSistolica: z.number().int().min(50).max(300).optional(),
+    paDiastolica: z.number().int().min(30).max(200).optional(),
+    frecuenciaCardiaca: z.number().int().min(20).max(300).optional(),
+    frecuenciaRespiratoria: z.number().int().min(4).max(60).optional(),
+    temperatura: z.number().min(30).max(45).optional(),
+  }).optional(),
+}).optional();
+
+const listInput = z.object({
   episodioId: z.string().uuid().optional(),
+  estado: z.enum(["borrador", "firmado", "validado", "anulado"]).optional(),
   cursor: z.string().uuid().optional(),
   limit: z.number().int().min(1).max(100).default(20),
 });
 
-const historiaClinicaGetInput = z.object({
-  id: z.string().uuid(),
-});
+const getInput = z.object({ id: z.string().uuid() });
 
-const historiaClinicaCreateInput = z.object({
-  pacienteId: z.string().uuid(),
-  episodioId: z.string().uuid().optional(),
-  motivoConsulta: z.string().min(1).max(2000),
-  antecedentes: z.string().max(5000).optional(),
-  planInicial: z.string().max(5000).optional(),
-});
-
-const historiaClinicaUpdateInput = z.object({
-  id: z.string().uuid(),
+const createInput = z.object({
+  episodioId: z.string().uuid(),
+  instanciaId: z.string().uuid().optional(),
+  tipoConsulta: tipoConsultaEnum,
   motivoConsulta: z.string().min(1).max(2000).optional(),
-  antecedentes: z.string().max(5000).optional(),
-  planInicial: z.string().max(5000).optional(),
+  enfermedadActual: z.string().max(4000).optional(),
+  disposicion: z.enum(DISPOSICION_OPTIONS).optional(),
+  planManejo: z.string().max(5000).optional(),
+  antecedentes: antecedentesSchema,
+  examenFisico: examenFisicoSchema,
+  /** HC-004: diagnósticos CIE-10 validados en borde de aplicación */
+  diagnosticos: z.array(icd10DiagnosticoSchema).optional(),
 });
 
-const historiaClinicaTransitionInput = z.object({
+const updateInput = z.object({
+  id: z.string().uuid(),
+  tipoConsulta: tipoConsultaEnum.optional(),
+  motivoConsulta: z.string().min(1).max(2000).optional(),
+  enfermedadActual: z.string().max(4000).optional(),
+  disposicion: z.enum(DISPOSICION_OPTIONS).optional(),
+  planManejo: z.string().max(5000).optional(),
+  antecedentes: antecedentesSchema,
+  examenFisico: examenFisicoSchema,
+  /** HC-004: diagnósticos CIE-10 validados en borde de aplicación */
+  diagnosticos: z.array(icd10DiagnosticoSchema).optional(),
+});
+
+const transitionInput = z.object({
   id: z.string().uuid(),
   firmaId: z.string().uuid().optional(),
   observacion: z.string().max(1000).optional(),
 });
-import type { EceContext } from "../../workflow/context";
 
-// ─── Tipos de fila raw (interno) ─────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Tipos de fila raw — alineados con columnas BD reales
+// ---------------------------------------------------------------------------
 
 export interface HistoriaClinicaRow {
   id: string;
-  paciente_id: string;
-  episodio_id: string | null;
-  motivo_consulta: string;
-  antecedentes: string | null;
-  plan_inicial: string | null;
-  estado: string;
   instancia_id: string | null;
-  creado_por: string;
-  creado_en: Date;
-  actualizado_en: Date;
+  episodio_id: string;
+  tipo_consulta: string;
+  motivo_consulta: string | null;
+  enfermedad_actual: string | null;
+  disposicion: string | null;
+  plan_manejo: string | null;
+  antecedentes: unknown;
+  examen_fisico: unknown;
+  diagnosticos: unknown;
+  registrado_por: string;
+  registrado_en: Date;
+  estado_registro: string;
 }
 
-// ─── Zod output schemas ───────────────────────────────────────────────────────
-
-const patientSchema = z
-  .object({
-    id: z.string().uuid(),
-    firstName: z.string(),
-    lastName: z.string(),
-    mrn: z.string().nullable(),
-  })
-  .nullable();
-
-const signosVitalesSchema = z
-  .object({
-    paSistolica: z.number().nullable(),
-    paDiastolica: z.number().nullable(),
-    frecuenciaCardiaca: z.number().nullable(),
-    frecuenciaRespiratoria: z.number().nullable(),
-    temperatura: z.number().nullable(),
-    tomadoEn: z.date(),
-  })
-  .nullable();
-
-const diagnosticoItemSchema = z.object({
-  codigoCie10: z.string(),
-  descripcion: z.string(),
-});
-
-export const historiaClinicaGetOutput = z.object({
-  id: z.string().uuid(),
-  episodioId: z.string().uuid().nullable(),
-  motivoConsulta: z.string(),
-  antecedentes: z.string().nullable(),
-  planInicial: z.string().nullable(),
-  estado: z.string(),
-  instanciaId: z.string().uuid().nullable(),
-  createdAt: z.date(),
-  firmadoEn: z.date().nullable(),
-  validadoEn: z.date().nullable(),
-  patient: patientSchema,
-  signosVitales: signosVitalesSchema,
-  diagnosticos: z.array(diagnosticoItemSchema),
-  hallazgosAparato: z.string().nullable(),
-  planTerapeutico: z.string().nullable(),
-});
-
-export type HistoriaClinicaGetOutput = z.infer<typeof historiaClinicaGetOutput>;
+// ---------------------------------------------------------------------------
+// Output schemas Zod
+// ---------------------------------------------------------------------------
 
 export const historiaClinicaListItemOutput = z.object({
   id: z.string().uuid(),
-  estado: z.string(),
-  motivoConsulta: z.string(),
-  createdAt: z.date(),
-  patient: z
-    .object({
-      firstName: z.string(),
-      lastName: z.string(),
-    })
-    .nullable(),
+  episodioId: z.string().uuid(),
+  tipoConsulta: z.string(),
+  motivoConsulta: z.string().nullable(),
+  estadoRegistro: z.string(),
+  registradoEn: z.date(),
+  patient: z.object({
+    firstName: z.string(),
+    lastName: z.string(),
+  }).nullable(),
 });
-
 export type HistoriaClinicaListItemOutput = z.infer<typeof historiaClinicaListItemOutput>;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+export const historiaClinicaGetOutput = z.object({
+  id: z.string().uuid(),
+  instanciaId: z.string().uuid().nullable(),
+  episodioId: z.string().uuid(),
+  tipoConsulta: z.string(),
+  motivoConsulta: z.string().nullable(),
+  enfermedadActual: z.string().nullable(),
+  disposicion: z.string().nullable(),
+  planManejo: z.string().nullable(),
+  antecedentes: z.unknown().nullable(),
+  examenFisico: z.unknown().nullable(),
+  diagnosticos: z.array(icd10DiagnosticoSchema),
+  registradoPor: z.string().uuid(),
+  registradoEn: z.date(),
+  estadoRegistro: z.string(),
+  patient: z.object({
+    id: z.string(),
+    firstName: z.string(),
+    lastName: z.string(),
+    mrn: z.string().nullable(),
+  }).nullable(),
+  firmadoEn: z.date().nullable(),
+  validadoEn: z.date().nullable(),
+});
+export type HistoriaClinicaGetOutput = z.infer<typeof historiaClinicaGetOutput>;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function assertFound<T>(row: T | undefined | null, label: string): T {
   if (!row) {
@@ -172,11 +197,10 @@ function assertFound<T>(row: T | undefined | null, label: string): T {
   return row;
 }
 
-/** Construye EceContext a partir del contexto tRPC. */
 function buildEceCtx(ctx: {
   user: { id: string };
   tenant: { establishmentId?: string; roleCodes: string[] };
-}): EceContext {
+}) {
   if (!ctx.tenant.establishmentId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -186,126 +210,63 @@ function buildEceCtx(ctx: {
   return {
     personalId: ctx.user.id,
     establecimientoId: ctx.tenant.establishmentId,
-    roles: ctx.tenant.roleCodes,
   };
 }
 
-/** sha256 del payload JSON serializado — se computa en SQL para evitar deps de crypto en edge. */
-const SHA256_SQL = (payload: string): ReturnType<typeof Prisma.sql> =>
-  Prisma.sql`encode(digest(${payload}, 'sha256'), 'hex')`;
-
-/**
- * Registra una transición en ece.documento_instancia + ece.documento_instancia_historial.
- * Lanza CONFLICT si el estado actual no coincide con `estadoEsperado`.
- */
-async function registrarTransicion(
-  tx: Prisma.TransactionClient,
-  opts: {
-    historiaId: string;
-    estadoEsperado: string;
-    estadoNuevo: string;
-    accion: string;
-    ejecutadoPor: string;
-    firmaId?: string;
-    observacion?: string;
-  },
-): Promise<HistoriaClinicaRow> {
-  // Leer estado actual + instancia_id
-  const current = await tx.$queryRaw<{ estado: string; instancia_id: string | null }[]>(
-    Prisma.sql`
-      SELECT estado, instancia_id::text
-      FROM ece.historia_clinica
-      WHERE id = ${opts.historiaId}::uuid
-      LIMIT 1
-    `,
-  );
-
-  const row = assertFound(current[0], "HistoriaClinica");
-
-  if (row.estado !== opts.estadoEsperado) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: `Estado actual '${row.estado}' no permite la acción '${opts.accion}'. Se esperaba '${opts.estadoEsperado}'.`,
-    });
+/** Parsea el JSONB de diagnosticos a array tipado; degrada silenciosamente a []. */
+function parseDiagnosticos(raw: unknown): Icd10Diagnostico[] {
+  if (!raw) return [];
+  try {
+    const str = typeof raw === "string" ? raw : JSON.stringify(raw);
+    const parsed = JSON.parse(str) as unknown[];
+    if (!Array.isArray(parsed)) return [];
+    const result: Icd10Diagnostico[] = [];
+    for (const item of parsed) {
+      if (typeof item === "object" && item !== null) {
+        const obj = item as Record<string, unknown>;
+        const code = String(obj.code ?? "");
+        const description = String(obj.description ?? "");
+        const tipo = (obj.tipo === "principal" ? "principal" : "secundario") as "principal" | "secundario";
+        if (code && description) {
+          result.push({ code, description, tipo });
+        }
+      }
+    }
+    return result;
+  } catch {
+    return [];
   }
-
-  // UPDATE historia_clinica
-  const updated = await tx.$queryRaw<HistoriaClinicaRow[]>(
-    Prisma.sql`
-      UPDATE ece.historia_clinica
-      SET estado = ${opts.estadoNuevo}, actualizado_en = now()
-      WHERE id = ${opts.historiaId}::uuid
-      RETURNING
-        id::text,
-        paciente_id::text,
-        episodio_id::text,
-        motivo_consulta,
-        antecedentes,
-        plan_inicial,
-        estado,
-        instancia_id::text,
-        creado_por::text,
-        creado_en,
-        actualizado_en
-    `,
-  );
-
-  const updatedRow = assertFound(updated[0], "HistoriaClinica actualizada");
-
-  // Construir payload para hash
-  const payload = JSON.stringify({
-    historiaId: opts.historiaId,
-    estadoAnterior: opts.estadoEsperado,
-    estadoNuevo: opts.estadoNuevo,
-    accion: opts.accion,
-    ejecutadoPor: opts.ejecutadoPor,
-    ts: new Date().toISOString(),
-  });
-
-  // Registrar en instancia_historial si hay instancia ECE vinculada
-  if (row.instancia_id) {
-    await tx.$executeRaw(
-      Prisma.sql`
-        INSERT INTO ece.documento_instancia_historial
-          (instancia_id, accion, ejecutado_por, firma_id, observacion, payload_hash)
-        VALUES (
-          ${row.instancia_id}::uuid,
-          ${opts.accion},
-          ${opts.ejecutadoPor}::uuid,
-          ${opts.firmaId ?? null}::uuid,
-          ${opts.observacion ?? null},
-          ${SHA256_SQL(payload)}
-        )
-      `,
-    );
-  }
-
-  return updatedRow;
 }
 
-// ─── Procedures base ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Role bases
+// ---------------------------------------------------------------------------
 
 const readBase = requireRole(["PHYSICIAN", "NURSE", "MC", "MT", "DIR"]);
-const writeBase = requireRole(["MC", "MT", "DIR"]);
-const mcBase = requireRole(["MC"]);
+const writeBase = requireRole(["PHYSICIAN", "MC", "MT", "DIR"]);
+const firmaBase = requireRole(["PHYSICIAN", "MC"]);
 const dirBase = requireRole(["DIR"]);
 
-// ─── Router ──────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
 
 export const eceHistoriaClinicaRouter = router({
   /**
-   * Lista historias clínicas — shape liviano (sin signos vitales ni diagnósticos).
-   * Join a patient para mostrar nombre en tabla.
+   * Lista historias clínicas del episodio — shape liviano.
+   * HC-001, HC-002: expone las historias que antes no eran accesibles.
    */
-  list: readBase.input(historiaClinicaListInput).query(async ({ ctx, input }) => {
+  list: readBase.input(listInput).query(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       type ListRow = {
         id: string;
-        estado: string;
-        motivo_consulta: string;
-        creado_en: Date;
+        episodio_id: string;
+        tipo_consulta: string;
+        motivo_consulta: string | null;
+        estado_registro: string;
+        registrado_en: Date;
         patient_first_name: string | null;
         patient_last_name: string | null;
       };
@@ -314,9 +275,11 @@ export const eceHistoriaClinicaRouter = router({
         Prisma.sql`
           SELECT
             hc.id::text,
-            hc.estado,
+            hc.episodio_id::text,
+            hc.tipo_consulta,
             hc.motivo_consulta,
-            hc.creado_en,
+            hc.estado_registro,
+            hc.registrado_en,
             p."firstName"  AS patient_first_name,
             p."lastName"   AS patient_last_name
           FROM ece.historia_clinica hc
@@ -324,13 +287,13 @@ export const eceHistoriaClinicaRouter = router({
           LEFT JOIN ece.paciente ep           ON ep.id = ea.paciente_id
           LEFT JOIN public."Patient" p        ON p.id  = ep.public_patient_id
           WHERE
-            (${input.pacienteId ?? null}::uuid IS NULL
-              OR ea.paciente_id = ${input.pacienteId ?? null}::uuid)
-            AND (${input.episodioId ?? null}::uuid IS NULL
+            (${input.episodioId ?? null}::uuid IS NULL
               OR hc.episodio_id = ${input.episodioId ?? null}::uuid)
+            AND (${input.estado ?? null}::text IS NULL
+              OR hc.estado_registro = ${input.estado ?? null}::text)
             AND (${input.cursor ?? null}::uuid IS NULL
               OR hc.id > ${input.cursor ?? null}::uuid)
-          ORDER BY hc.id ASC
+          ORDER BY hc.registrado_en DESC, hc.id ASC
           LIMIT ${input.limit + 1}
         `,
       );
@@ -341,9 +304,11 @@ export const eceHistoriaClinicaRouter = router({
 
       const mapped: HistoriaClinicaListItemOutput[] = items.map((r) => ({
         id: r.id,
-        estado: r.estado,
+        episodioId: r.episodio_id,
+        tipoConsulta: r.tipo_consulta,
         motivoConsulta: r.motivo_consulta,
-        createdAt: r.creado_en,
+        estadoRegistro: r.estado_registro,
+        registradoEn: r.registrado_en,
         patient:
           r.patient_first_name != null
             ? { firstName: r.patient_first_name, lastName: r.patient_last_name ?? "" }
@@ -354,51 +319,55 @@ export const eceHistoriaClinicaRouter = router({
     });
   }),
 
-  /** Obtiene una historia clínica por id con shape extendido. */
-  get: readBase.input(historiaClinicaGetInput).query(async ({ ctx, input }) => {
+  /** Detalle completo de una historia clínica por ID. */
+  get: readBase.input(getInput).query(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
       type GetRow = {
         id: string;
-        episodio_id: string | null;
-        motivo_consulta: string;
-        antecedentes: string | null;
-        plan_inicial: string | null;
-        estado: string;
         instancia_id: string | null;
-        creado_en: Date;
-        firmado_en: Date | null;
-        validado_en: Date | null;
+        episodio_id: string;
+        tipo_consulta: string;
+        motivo_consulta: string | null;
+        enfermedad_actual: string | null;
+        disposicion: string | null;
+        plan_manejo: string | null;
+        antecedentes: unknown;
+        examen_fisico: unknown;
+        diagnosticos: unknown;
+        registrado_por: string;
+        registrado_en: Date;
+        estado_registro: string;
         patient_id: string | null;
         patient_first_name: string | null;
         patient_last_name: string | null;
         patient_mrn: string | null;
-        sv_pa_sistolica: number | null;
-        sv_pa_diastolica: number | null;
-        sv_frecuencia_cardiaca: number | null;
-        sv_frecuencia_respiratoria: number | null;
-        sv_temperatura: number | null;
-        sv_tomado_en: Date | null;
-        // diagnosticos y examen_fisico vienen como JSON string desde JSONB
-        diagnosticos_json: string | null;
-        examen_fisico_json: string | null;
+        firmado_en: Date | null;
+        validado_en: Date | null;
       };
 
       const rows = await tx.$queryRaw<GetRow[]>(
         Prisma.sql`
           SELECT
             hc.id::text,
-            hc.episodio_id::text,
-            hc.motivo_consulta,
-            -- antecedentes y plan_manejo son los campos reales del schema (61_ece_06_documentos.sql)
-            -- plan_inicial es alias de compatibilidad hacia plan_manejo
-            hc.antecedentes::text           AS antecedentes,
-            hc.plan_manejo                  AS plan_inicial,
-            hc.estado,
             hc.instancia_id::text,
-            hc.registrado_en                AS creado_en,
-            -- firmado_en / validado_en: extraído del historial de instancia
+            hc.episodio_id::text,
+            hc.tipo_consulta,
+            hc.motivo_consulta,
+            hc.enfermedad_actual,
+            hc.disposicion,
+            hc.plan_manejo,
+            hc.antecedentes,
+            hc.examen_fisico,
+            hc.diagnosticos,
+            hc.registrado_por::text,
+            hc.registrado_en,
+            hc.estado_registro,
+            p.id::text            AS patient_id,
+            p."firstName"         AS patient_first_name,
+            p."lastName"          AS patient_last_name,
+            p."mrn"               AS patient_mrn,
             (
               SELECT ih.realizado_en
               FROM ece.documento_instancia_historial ih
@@ -406,7 +375,7 @@ export const eceHistoriaClinicaRouter = router({
                 AND ih.accion = 'firmar'
               ORDER BY ih.realizado_en ASC
               LIMIT 1
-            )                               AS firmado_en,
+            )                     AS firmado_en,
             (
               SELECT ih.realizado_en
               FROM ece.documento_instancia_historial ih
@@ -414,35 +383,11 @@ export const eceHistoriaClinicaRouter = router({
                 AND ih.accion = 'validar'
               ORDER BY ih.realizado_en ASC
               LIMIT 1
-            )                               AS validado_en,
-            -- patient via episodio → ece.paciente → public.Patient
-            p.id::text                      AS patient_id,
-            p."firstName"                   AS patient_first_name,
-            p."lastName"                    AS patient_last_name,
-            p."mrn"                         AS patient_mrn,
-            -- últimos signos vitales del episodio
-            sv.ta_sistolica                 AS sv_pa_sistolica,
-            sv.ta_diastolica                AS sv_pa_diastolica,
-            sv.frecuencia_cardiaca          AS sv_frecuencia_cardiaca,
-            sv.frecuencia_respiratoria      AS sv_frecuencia_respiratoria,
-            sv.temperatura                  AS sv_temperatura,
-            sv.tomado_en                    AS sv_tomado_en,
-            -- JSONB cast a text para deserializar en JS
-            hc.diagnosticos::text           AS diagnosticos_json,
-            hc.examen_fisico::text          AS examen_fisico_json
+            )                     AS validado_en
           FROM ece.historia_clinica hc
-          LEFT JOIN ece.episodio_atencion ea  ON ea.id = hc.episodio_id
-          LEFT JOIN ece.paciente ep           ON ep.id = ea.paciente_id
-          LEFT JOIN public."Patient" p        ON p.id  = ep.public_patient_id
-          -- última toma de signos vitales del episodio (LATERAL equivalente via subquery correlada)
-          LEFT JOIN LATERAL (
-            SELECT ta_sistolica, ta_diastolica, frecuencia_cardiaca,
-                   frecuencia_respiratoria, temperatura, tomado_en
-            FROM ece.signos_vitales
-            WHERE episodio_id = hc.episodio_id
-            ORDER BY tomado_en DESC
-            LIMIT 1
-          ) sv ON true
+          LEFT JOIN ece.episodio_atencion ea ON ea.id = hc.episodio_id
+          LEFT JOIN ece.paciente ep          ON ep.id = ea.paciente_id
+          LEFT JOIN public."Patient" p       ON p.id  = ep.public_patient_id
           WHERE hc.id = ${input.id}::uuid
           LIMIT 1
         `,
@@ -450,51 +395,21 @@ export const eceHistoriaClinicaRouter = router({
 
       const raw = assertFound(rows[0], "HistoriaClinica");
 
-      // Parsear JSONB diagnosticos → [{cie10, descripcion, tipo}]
-      type DiagnosticoJsonItem = { cie10?: string; descripcion?: string };
-      let diagnosticos: HistoriaClinicaGetOutput["diagnosticos"] = [];
-      if (raw.diagnosticos_json) {
-        try {
-          const parsed = JSON.parse(raw.diagnosticos_json) as DiagnosticoJsonItem[];
-          diagnosticos = Array.isArray(parsed)
-            ? parsed
-                .filter((d) => d.cie10 && d.descripcion)
-                .map((d) => ({ codigoCie10: d.cie10!, descripcion: d.descripcion! }))
-            : [];
-        } catch {
-          // JSON malformado — degradar silenciosamente
-          diagnosticos = [];
-        }
-      }
-
-      // Parsear examen_fisico → hallazgosAparato (primer hallazgo de sistemas como texto)
-      type ExamenFisicoJson = { sistemas?: Array<{ sistema?: string; hallazgo?: string }> };
-      let hallazgosAparato: string | null = null;
-      if (raw.examen_fisico_json) {
-        try {
-          const ef = JSON.parse(raw.examen_fisico_json) as ExamenFisicoJson;
-          if (ef.sistemas?.length) {
-            hallazgosAparato = ef.sistemas
-              .filter((s) => s.hallazgo)
-              .map((s) => `${s.sistema ?? ""}: ${s.hallazgo ?? ""}`.trim())
-              .join("\n") || null;
-          }
-        } catch {
-          // degradar silenciosamente
-        }
-      }
-
       const result: HistoriaClinicaGetOutput = {
         id: raw.id,
-        episodioId: raw.episodio_id,
-        motivoConsulta: raw.motivo_consulta,
-        antecedentes: raw.antecedentes,
-        planInicial: raw.plan_inicial,
-        estado: raw.estado,
         instanciaId: raw.instancia_id,
-        createdAt: raw.creado_en,
-        firmadoEn: raw.firmado_en,
-        validadoEn: raw.validado_en,
+        episodioId: raw.episodio_id,
+        tipoConsulta: raw.tipo_consulta,
+        motivoConsulta: raw.motivo_consulta,
+        enfermedadActual: raw.enfermedad_actual,
+        disposicion: raw.disposicion,
+        planManejo: raw.plan_manejo,
+        antecedentes: raw.antecedentes ?? null,
+        examenFisico: raw.examen_fisico ?? null,
+        diagnosticos: parseDiagnosticos(raw.diagnosticos),
+        registradoPor: raw.registrado_por,
+        registradoEn: raw.registrado_en,
+        estadoRegistro: raw.estado_registro,
         patient:
           raw.patient_id != null
             ? {
@@ -504,22 +419,8 @@ export const eceHistoriaClinicaRouter = router({
                 mrn: raw.patient_mrn,
               }
             : null,
-        signosVitales:
-          raw.sv_tomado_en != null
-            ? {
-                paSistolica: raw.sv_pa_sistolica,
-                paDiastolica: raw.sv_pa_diastolica,
-                frecuenciaCardiaca: raw.sv_frecuencia_cardiaca,
-                frecuenciaRespiratoria: raw.sv_frecuencia_respiratoria,
-                temperatura: raw.sv_temperatura,
-                tomadoEn: raw.sv_tomado_en,
-              }
-            : null,
-        diagnosticos,
-        hallazgosAparato,
-        // TODO: planTerapeutico no tiene columna dedicada aún — viene de plan_manejo
-        // cuando se agregue la columna, actualizar la query y quitar este alias.
-        planTerapeutico: raw.plan_inicial,
+        firmadoEn: raw.firmado_en,
+        validadoEn: raw.validado_en,
       };
 
       return historiaClinicaGetOutput.parse(result);
@@ -528,37 +429,43 @@ export const eceHistoriaClinicaRouter = router({
 
   /**
    * Crea una historia clínica en estado 'borrador'.
-   * El workflow_instance se crea por separado (workflow.instance.create con tipo HIST_CLIN).
+   * HC-004: diagnosticos validados por icd10DiagnosticoSchema antes del INSERT.
    */
-  create: writeBase.input(historiaClinicaCreateInput).mutation(async ({ ctx, input }) => {
+  create: writeBase.input(createInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
+      const diagnosticosJson = input.diagnosticos ? JSON.stringify(input.diagnosticos) : null;
+      const antecedentesJson = input.antecedentes ? JSON.stringify(input.antecedentes) : null;
+      const examenFisicoJson = input.examenFisico ? JSON.stringify(input.examenFisico) : null;
+
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           INSERT INTO ece.historia_clinica
-            (paciente_id, episodio_id, motivo_consulta, antecedentes, plan_inicial, estado, creado_por)
+            (instancia_id, episodio_id, tipo_consulta, motivo_consulta,
+             enfermedad_actual, disposicion, plan_manejo,
+             antecedentes, examen_fisico, diagnosticos,
+             registrado_por, estado_registro)
           VALUES (
-            ${input.pacienteId}::uuid,
-            ${input.episodioId ?? null}::uuid,
-            ${input.motivoConsulta},
-            ${input.antecedentes ?? null},
-            ${input.planInicial ?? null},
-            'borrador',
-            ${eceCtx.personalId}::uuid
+            ${input.instanciaId ?? null}::uuid,
+            ${input.episodioId}::uuid,
+            ${input.tipoConsulta}::text,
+            ${input.motivoConsulta ?? null},
+            ${input.enfermedadActual ?? null},
+            ${input.disposicion ?? null},
+            ${input.planManejo ?? null},
+            ${antecedentesJson ?? null}::jsonb,
+            ${examenFisicoJson ?? null}::jsonb,
+            ${diagnosticosJson ?? null}::jsonb,
+            ${eceCtx.personalId}::uuid,
+            'borrador'
           )
           RETURNING
-            id::text,
-            paciente_id::text,
-            episodio_id::text,
-            motivo_consulta,
-            antecedentes,
-            plan_inicial,
-            estado,
-            instancia_id::text,
-            creado_por::text,
-            creado_en,
-            actualizado_en
+            id::text, instancia_id::text, episodio_id::text,
+            tipo_consulta, motivo_consulta, enfermedad_actual,
+            disposicion, plan_manejo,
+            antecedentes, examen_fisico, diagnosticos,
+            registrado_por::text, registrado_en, estado_registro
         `,
       );
 
@@ -567,53 +474,74 @@ export const eceHistoriaClinicaRouter = router({
   }),
 
   /**
-   * Actualiza campos de la historia clínica.
-   * Solo permitido en estado 'borrador' o 'en_revision'.
+   * Actualiza una historia clínica — solo en estado 'borrador'.
+   * HC-005: si está firmada, el trigger de BD rechaza el UPDATE directamente.
    */
-  update: writeBase.input(historiaClinicaUpdateInput).mutation(async ({ ctx, input }) => {
+  update: writeBase.input(updateInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-      // Verificar existencia y estado editable
-      const current = await tx.$queryRaw<{ estado: string }[]>(
-        Prisma.sql`SELECT estado FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1`,
+      const current = await tx.$queryRaw<{ estado_registro: string }[]>(
+        Prisma.sql`
+          SELECT estado_registro
+          FROM ece.historia_clinica
+          WHERE id = ${input.id}::uuid
+          LIMIT 1
+        `,
       );
       const cur = assertFound(current[0], "HistoriaClinica");
 
-      if (cur.estado !== "borrador" && cur.estado !== "en_revision") {
+      if (cur.estado_registro !== "borrador") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `La historia clínica en estado '${cur.estado}' no puede editarse. Solo en borrador o en_revision.`,
+          message: `La historia clínica en estado '${cur.estado_registro}' no puede editarse. Solo en borrador.`,
         });
       }
 
-      const updates: ReturnType<typeof Prisma.sql>[] = [Prisma.sql`actualizado_en = now()`];
+      const sets: ReturnType<typeof Prisma.sql>[] = [];
+      if (input.tipoConsulta !== undefined)
+        sets.push(Prisma.sql`tipo_consulta = ${input.tipoConsulta}`);
       if (input.motivoConsulta !== undefined)
-        updates.push(Prisma.sql`motivo_consulta = ${input.motivoConsulta}`);
+        sets.push(Prisma.sql`motivo_consulta = ${input.motivoConsulta}`);
+      if (input.enfermedadActual !== undefined)
+        sets.push(Prisma.sql`enfermedad_actual = ${input.enfermedadActual}`);
+      if (input.disposicion !== undefined)
+        sets.push(Prisma.sql`disposicion = ${input.disposicion}`);
+      if (input.planManejo !== undefined)
+        sets.push(Prisma.sql`plan_manejo = ${input.planManejo}`);
       if (input.antecedentes !== undefined)
-        updates.push(Prisma.sql`antecedentes = ${input.antecedentes}`);
-      if (input.planInicial !== undefined)
-        updates.push(Prisma.sql`plan_inicial = ${input.planInicial}`);
+        sets.push(Prisma.sql`antecedentes = ${JSON.stringify(input.antecedentes)}::jsonb`);
+      if (input.examenFisico !== undefined)
+        sets.push(Prisma.sql`examen_fisico = ${JSON.stringify(input.examenFisico)}::jsonb`);
+      if (input.diagnosticos !== undefined)
+        sets.push(Prisma.sql`diagnosticos = ${JSON.stringify(input.diagnosticos)}::jsonb`);
 
-      const setFragment = Prisma.join(updates, ", ");
+      if (sets.length === 0) {
+        const noop = await tx.$queryRaw<HistoriaClinicaRow[]>(
+          Prisma.sql`
+            SELECT id::text, instancia_id::text, episodio_id::text,
+              tipo_consulta, motivo_consulta, enfermedad_actual,
+              disposicion, plan_manejo,
+              antecedentes, examen_fisico, diagnosticos,
+              registrado_por::text, registrado_en, estado_registro
+            FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
+          `,
+        );
+        return assertFound(noop[0], "HistoriaClinica");
+      }
 
+      const setFragment = Prisma.join(sets, ", ");
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           UPDATE ece.historia_clinica
           SET ${setFragment}
           WHERE id = ${input.id}::uuid
           RETURNING
-            id::text,
-            paciente_id::text,
-            episodio_id::text,
-            motivo_consulta,
-            antecedentes,
-            plan_inicial,
-            estado,
-            instancia_id::text,
-            creado_por::text,
-            creado_en,
-            actualizado_en
+            id::text, instancia_id::text, episodio_id::text,
+            tipo_consulta, motivo_consulta, enfermedad_actual,
+            disposicion, plan_manejo,
+            antecedentes, examen_fisico, diagnosticos,
+            registrado_por::text, registrado_en, estado_registro
         `,
       );
 
@@ -621,26 +549,11 @@ export const eceHistoriaClinicaRouter = router({
     });
   }),
 
-  /** Avanza de 'borrador' → 'en_revision'. Roles: MC, MT, DIR. */
-  enviarRevision: writeBase
-    .input(historiaClinicaTransitionInput)
-    .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
-
-      return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-        return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
-          historiaId: input.id,
-          estadoEsperado: "borrador",
-          estadoNuevo: "en_revision",
-          accion: "enviar_revision",
-          ejecutadoPor: eceCtx.personalId,
-          observacion: input.observacion,
-        });
-      });
-    }),
-
-  /** Avanza de 'en_revision' → 'firmado'. Solo rol MC. Requiere firmaId. */
-  firmar: mcBase.input(historiaClinicaTransitionInput).mutation(async ({ ctx, input }) => {
+  /**
+   * Transición borrador → firmado.
+   * HC-005: el trigger de BD impide UPDATE/DELETE post-firma.
+   */
+  firmar: firmaBase.input(transitionInput).mutation(async ({ ctx, input }) => {
     if (!input.firmaId) {
       throw new TRPCError({
         code: "BAD_REQUEST",
@@ -651,65 +564,120 @@ export const eceHistoriaClinicaRouter = router({
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-      return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
-        historiaId: input.id,
-        estadoEsperado: "en_revision",
-        estadoNuevo: "firmado",
-        accion: "firmar",
-        ejecutadoPor: eceCtx.personalId,
-        firmaId: input.firmaId,
-        observacion: input.observacion,
-      });
+      const current = await tx.$queryRaw<{ estado_registro: string; instancia_id: string | null }[]>(
+        Prisma.sql`
+          SELECT estado_registro, instancia_id::text
+          FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
+        `,
+      );
+      const cur = assertFound(current[0], "HistoriaClinica");
+
+      if (cur.estado_registro !== "borrador") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Estado '${cur.estado_registro}' no permite firma. Se esperaba 'borrador'.`,
+        });
+      }
+
+      const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
+        Prisma.sql`
+          UPDATE ece.historia_clinica
+          SET estado_registro = 'firmado'
+          WHERE id = ${input.id}::uuid
+          RETURNING
+            id::text, instancia_id::text, episodio_id::text,
+            tipo_consulta, motivo_consulta, enfermedad_actual,
+            disposicion, plan_manejo,
+            antecedentes, examen_fisico, diagnosticos,
+            registrado_por::text, registrado_en, estado_registro
+        `,
+      );
+
+      const updated = assertFound(rows[0], "HistoriaClinica firmada");
+
+      // Registrar en historial de instancia si existe vínculo workflow
+      if (cur.instancia_id) {
+        await tx.$executeRaw(
+          Prisma.sql`
+            INSERT INTO ece.documento_instancia_historial
+              (instancia_id, accion, ejecutado_por, firma_id, observacion, payload_hash)
+            VALUES (
+              ${cur.instancia_id}::uuid,
+              'firmar',
+              ${eceCtx.personalId}::uuid,
+              ${input.firmaId}::uuid,
+              ${input.observacion ?? null},
+              encode(digest(${input.id}, 'sha256'), 'hex')
+            )
+          `,
+        );
+      }
+
+      return updated;
     });
   }),
 
-  /** Avanza de 'firmado' → 'validado'. Solo rol DIR. Requiere firmaId. */
-  validar: dirBase.input(historiaClinicaTransitionInput).mutation(async ({ ctx, input }) => {
+  /** Transición firmado → validado. Solo DIR. */
+  validar: dirBase.input(transitionInput).mutation(async ({ ctx, input }) => {
     if (!input.firmaId) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "La acción 'validar' requiere firmaId (firma electrónica).",
+        message: "La acción 'validar' requiere firmaId.",
       });
     }
 
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-      return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
-        historiaId: input.id,
-        estadoEsperado: "firmado",
-        estadoNuevo: "validado",
-        accion: "validar",
-        ejecutadoPor: eceCtx.personalId,
-        firmaId: input.firmaId,
-        observacion: input.observacion,
-      });
+      const current = await tx.$queryRaw<{ estado_registro: string; instancia_id: string | null }[]>(
+        Prisma.sql`
+          SELECT estado_registro, instancia_id::text
+          FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
+        `,
+      );
+      const cur = assertFound(current[0], "HistoriaClinica");
+
+      if (cur.estado_registro !== "firmado") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Estado '${cur.estado_registro}' no permite validación. Se esperaba 'firmado'.`,
+        });
+      }
+
+      const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
+        Prisma.sql`
+          UPDATE ece.historia_clinica
+          SET estado_registro = 'validado'
+          WHERE id = ${input.id}::uuid
+          RETURNING
+            id::text, instancia_id::text, episodio_id::text,
+            tipo_consulta, motivo_consulta, enfermedad_actual,
+            disposicion, plan_manejo,
+            antecedentes, examen_fisico, diagnosticos,
+            registrado_por::text, registrado_en, estado_registro
+        `,
+      );
+
+      const updated = assertFound(rows[0], "HistoriaClinica validada");
+
+      if (cur.instancia_id) {
+        await tx.$executeRaw(
+          Prisma.sql`
+            INSERT INTO ece.documento_instancia_historial
+              (instancia_id, accion, ejecutado_por, firma_id, observacion, payload_hash)
+            VALUES (
+              ${cur.instancia_id}::uuid,
+              'validar',
+              ${eceCtx.personalId}::uuid,
+              ${input.firmaId}::uuid,
+              ${input.observacion ?? null},
+              encode(digest(${input.id}, 'sha256'), 'hex')
+            )
+          `,
+        );
+      }
+
+      return updated;
     });
   }),
-
-  /**
-   * Anula la historia clínica desde cualquier estado no terminal.
-   * Roles: MC, MT, DIR. Requiere observacion (Art. 53 NTEC).
-   */
-  anular: writeBase
-    .input(
-      historiaClinicaTransitionInput.extend({
-        observacion: z.string().min(10).max(1000),
-        estadoActual: z.enum(["borrador", "en_revision", "firmado", "validado"]),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
-
-      return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-        return registrarTransicion(tx as unknown as Prisma.TransactionClient, {
-          historiaId: input.id,
-          estadoEsperado: input.estadoActual,
-          estadoNuevo: "anulado",
-          accion: "anular",
-          ejecutadoPor: eceCtx.personalId,
-          observacion: input.observacion,
-        });
-      });
-    }),
 });

@@ -3,17 +3,15 @@
 /**
  * §ECE — Historia Clínica Electrónica — Formulario de creación.
  *
- * Secciones:
- *   1. Datos generales: motivo consulta, antecedentes personales/familiares/sociales.
- *   2. Examen físico: signos vitales rápidos + hallazgos por aparato.
- *   3. Diagnósticos: CIE-10 multi-entrada (código + descripción, búsqueda textual).
- *   4. Plan terapéutico.
- *
- * Validación: React state + validate() antes de mutación. El router aplica
- * Zod (`eceHistoriaClinicaCreateSchema`) como defensa definitiva.
- *
- * Patrón: sigue outpatient/new — React state directa, sin RHF, coherente con
- * el resto del codebase.
+ * HC-001: cubre la ausencia total de UI para crear historia clínica.
+ * Campos NTEC Art. 7:
+ *   - episodioId (FK obligatorio)
+ *   - tipoConsulta (ingreso/control/urgencia/ambulatoria/interconsulta)
+ *   - motivoConsulta, enfermedadActual
+ *   - antecedentes (estructurado: personales/familiares/sociales/alergias)
+ *   - examenFisico (sistemas + signos vitales)
+ *   - diagnosticos CIE-10 (HC-004: validados en borde UI antes de enviar)
+ *   - planManejo, disposicion
  */
 
 import * as React from "react";
@@ -28,60 +26,83 @@ import { Form, FormField, FormHint } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+
+// ── Constantes ────────────────────────────────────────────────────────────────
+
+const TIPO_CONSULTA_OPTIONS = [
+  { value: "ingreso", label: "Ingreso hospitalario" },
+  { value: "control", label: "Control" },
+  { value: "urgencia", label: "Urgencia" },
+  { value: "ambulatoria", label: "Consulta ambulatoria" },
+  { value: "interconsulta", label: "Interconsulta" },
+] as const;
+
+const DISPOSICION_OPTIONS = [
+  { value: "ALTA", label: "Alta" },
+  { value: "INTERNAMIENTO", label: "Internamiento" },
+  { value: "REFERENCIA", label: "Referencia" },
+  { value: "OBSERVACION", label: "Observación" },
+] as const;
+
+/** Regex CIE-10: letra mayúscula + 2 dígitos + subcodigo opcional */
+const CIE10_REGEX = /^[A-Z]\d{2}(\.\d+)?$/;
 
 // ── Tipos locales ─────────────────────────────────────────────────────────────
 
 interface DiagnosticoCie10 {
-  codigoCie10: string;
-  descripcion: string;
-}
-
-interface SignosVitales {
-  paSistolica: string;
-  paDiastolica: string;
-  frecuenciaCardiaca: string;
-  frecuenciaRespiratoria: string;
-  temperatura: string;
+  code: string;
+  description: string;
+  tipo: "principal" | "secundario";
 }
 
 interface FormState {
-  pacienteId: string;
-  encounterId: string;
+  episodioId: string;
+  tipoConsulta: string;
   motivoConsulta: string;
+  enfermedadActual: string;
   antecedentesPersonales: string;
   antecedentesFamiliares: string;
   antecedentesSociales: string;
-  signosVitales: SignosVitales;
-  hallazgosAparato: string;
-  planTerapeutico: string;
+  alergias: string;
+  hallazgosExamen: string;
+  planManejo: string;
+  disposicion: string;
 }
 
 const INITIAL: FormState = {
-  pacienteId: "",
-  encounterId: "",
+  episodioId: "",
+  tipoConsulta: "",
   motivoConsulta: "",
+  enfermedadActual: "",
   antecedentesPersonales: "",
   antecedentesFamiliares: "",
   antecedentesSociales: "",
-  signosVitales: {
-    paSistolica: "",
-    paDiastolica: "",
-    frecuenciaCardiaca: "",
-    frecuenciaRespiratoria: "",
-    temperatura: "",
-  },
-  hallazgosAparato: "",
-  planTerapeutico: "",
+  alergias: "",
+  hallazgosExamen: "",
+  planManejo: "",
+  disposicion: "",
 };
 
-const INITIAL_DX: DiagnosticoCie10 = { codigoCie10: "", descripcion: "" };
+const INITIAL_DX: DiagnosticoCie10 = { code: "", description: "", tipo: "secundario" };
 
 // ── Validación ────────────────────────────────────────────────────────────────
 
-function validate(form: FormState): string | null {
-  if (!form.pacienteId.trim()) return "Paciente es requerido.";
-  if (!form.motivoConsulta.trim()) return "Motivo de consulta es requerido.";
+function validate(form: FormState, diagnosticos: DiagnosticoCie10[]): string | null {
+  if (!form.episodioId.trim()) return "Episodio es requerido.";
+  if (!form.tipoConsulta) return "Tipo de consulta es requerido.";
+  for (const dx of diagnosticos) {
+    if (!CIE10_REGEX.test(dx.code)) {
+      return `Código CIE-10 inválido: '${dx.code}'. Formato esperado: letra + 2 dígitos (ej. J00, I10.0).`;
+    }
+  }
   return null;
 }
 
@@ -102,85 +123,59 @@ export default function NuevaHistoriaClinicaPage() {
 
   const isSubmitting = create.isPending;
 
-  // Actualiza campo de nivel raíz
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  // Actualiza signo vital individual
-  function updateVital<K extends keyof SignosVitales>(
-    key: K,
-    value: string,
-  ) {
-    setForm((f) => ({
-      ...f,
-      signosVitales: { ...f.signosVitales, [key]: value },
-    }));
-  }
-
-  // Agrega diagnóstico a la lista
   function addDiagnostico() {
-    if (!dxInput.codigoCie10.trim() || !dxInput.descripcion.trim()) return;
-    setDiagnosticos((prev) => [...prev, { ...dxInput }]);
+    const code = dxInput.code.trim().toUpperCase();
+    if (!code || !dxInput.description.trim()) return;
+    if (!CIE10_REGEX.test(code)) {
+      setClientError(`Código CIE-10 inválido: '${code}'. Ejemplo: J00, I10.0`);
+      return;
+    }
+    setClientError(null);
+    setDiagnosticos((prev) => [...prev, { ...dxInput, code }]);
     setDxInput(INITIAL_DX);
   }
 
-  // Elimina diagnóstico por índice
   function removeDiagnostico(index: number) {
     setDiagnosticos((prev) => prev.filter((_, i) => i !== index));
   }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const err = validate(form);
+    const err = validate(form, diagnosticos);
     if (err) {
       setClientError(err);
       return;
     }
     setClientError(null);
 
-    // Construye payload omitiendo vacíos opcionales
-    const sv = form.signosVitales;
-    const signosVitalesPayload = Object.values(sv).some((v) => v.trim())
-      ? {
-          paSistolica: sv.paSistolica ? Number(sv.paSistolica) : undefined,
-          paDiastolica: sv.paDiastolica ? Number(sv.paDiastolica) : undefined,
-          frecuenciaCardiaca: sv.frecuenciaCardiaca
-            ? Number(sv.frecuenciaCardiaca)
-            : undefined,
-          frecuenciaRespiratoria: sv.frecuenciaRespiratoria
-            ? Number(sv.frecuenciaRespiratoria)
-            : undefined,
-          temperatura: sv.temperatura ? Number(sv.temperatura) : undefined,
-        }
-      : undefined;
-
-    // Schema canónico v1 acepta motivo + antecedentes + planInicial.
-    // Antecedentes (personales/familiares/sociales) se concatenan; el detalle
-    // estructurado (signos vitales, diagnósticos CIE-10) se persistirá en
-    // documentos relacionados en iteraciones posteriores.
-    const antecedentes = [
-      form.antecedentesPersonales.trim(),
-      form.antecedentesFamiliares.trim() &&
-        `Familiares: ${form.antecedentesFamiliares.trim()}`,
-      form.antecedentesSociales.trim() &&
-        `Sociales: ${form.antecedentesSociales.trim()}`,
-      form.hallazgosAparato.trim() &&
-        `Hallazgos por aparato: ${form.hallazgosAparato.trim()}`,
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-
     create.mutate({
-      pacienteId: form.pacienteId.trim(),
-      episodioId: form.encounterId.trim() || undefined,
-      motivoConsulta: form.motivoConsulta.trim(),
-      antecedentes: antecedentes || undefined,
-      planInicial: form.planTerapeutico.trim() || undefined,
+      episodioId: form.episodioId.trim(),
+      tipoConsulta: form.tipoConsulta as "ingreso" | "control" | "urgencia" | "ambulatoria" | "interconsulta",
+      motivoConsulta: form.motivoConsulta.trim() || undefined,
+      enfermedadActual: form.enfermedadActual.trim() || undefined,
+      disposicion: (form.disposicion as "ALTA" | "INTERNAMIENTO" | "REFERENCIA" | "OBSERVACION") || undefined,
+      planManejo: form.planManejo.trim() || undefined,
+      antecedentes:
+        form.antecedentesPersonales || form.antecedentesFamiliares ||
+        form.antecedentesSociales || form.alergias
+          ? {
+              personales: form.antecedentesPersonales.trim() || undefined,
+              familiares: form.antecedentesFamiliares.trim() || undefined,
+              sociales: form.antecedentesSociales.trim() || undefined,
+              alergias: form.alergias.trim() || undefined,
+            }
+          : undefined,
+      examenFisico: form.hallazgosExamen.trim()
+        ? {
+            sistemas: [{ sistema: "General", hallazgo: form.hallazgosExamen.trim() }],
+          }
+        : undefined,
+      diagnosticos: diagnosticos.length > 0 ? diagnosticos : undefined,
     });
-    // Lint refs (eviten "unused") — TODO mover a documentos relacionados:
-    void signosVitalesPayload;
-    void diagnosticos;
   }
 
   const errorMessage = clientError ?? create.error?.message ?? null;
@@ -190,62 +185,66 @@ export default function NuevaHistoriaClinicaPage() {
       <div>
         <h1 className="text-2xl font-bold">Nueva Historia Clínica</h1>
         <p className="text-sm text-muted-foreground">
-          Registra la Historia Clínica Electrónica del paciente (§ECE).
+          Registra la Historia Clínica Electrónica del paciente — NTEC Art. 7.
         </p>
       </div>
 
       <Form onSubmit={onSubmit} noValidate aria-label="Formulario nueva historia clínica">
 
-        {/* ── 1. Datos generales ────────────────────────────────────────────── */}
+        {/* ── 1. Datos del episodio ──────────────────────────────────────────── */}
         <Card>
           <CardHeader>
-            <CardTitle>Datos generales</CardTitle>
+            <CardTitle>Datos del episodio</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <FormField>
-              <Label htmlFor="pacienteId">
-                Paciente (ID){" "}
+              <Label htmlFor="episodioId">
+                Episodio (ID){" "}
                 <span aria-hidden="true" className="text-destructive">*</span>
               </Label>
               <Input
-                id="pacienteId"
-                name="pacienteId"
+                id="episodioId"
+                name="episodioId"
                 required
                 aria-required="true"
-                placeholder="UUID del paciente"
-                value={form.pacienteId}
-                onChange={(e) => updateField("pacienteId", e.target.value)}
+                placeholder="UUID del episodio de atención"
+                value={form.episodioId}
+                onChange={(e) => updateField("episodioId", e.target.value)}
                 disabled={isSubmitting}
               />
-              <FormHint>
-                TODO: autocomplete con búsqueda de pacientes (Sprint próximo).
-              </FormHint>
+              <FormHint>UUID del episodio_atencion al que pertenece esta HC.</FormHint>
             </FormField>
 
             <FormField>
-              <Label htmlFor="encounterId">Encuentro / visita (ID)</Label>
-              <Input
-                id="encounterId"
-                name="encounterId"
-                placeholder="UUID del encuentro (opcional)"
-                value={form.encounterId}
-                onChange={(e) => updateField("encounterId", e.target.value)}
-                disabled={isSubmitting}
-              />
-            </FormField>
-
-            <FormField>
-              <Label htmlFor="motivoConsulta">
-                Motivo de consulta{" "}
+              <Label htmlFor="tipoConsulta">
+                Tipo de consulta{" "}
                 <span aria-hidden="true" className="text-destructive">*</span>
               </Label>
+              <Select
+                value={form.tipoConsulta}
+                onValueChange={(v) => updateField("tipoConsulta", v)}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger id="tipoConsulta" aria-required="true">
+                  <SelectValue placeholder="Seleccione tipo de consulta" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TIPO_CONSULTA_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="motivoConsulta">Motivo de consulta</Label>
               <textarea
                 id="motivoConsulta"
                 name="motivoConsulta"
-                required
-                aria-required="true"
                 rows={3}
-                placeholder="Describa el motivo principal de la consulta"
+                placeholder="Motivo principal de la consulta"
                 value={form.motivoConsulta}
                 onChange={(e) => updateField("motivoConsulta", e.target.value)}
                 disabled={isSubmitting}
@@ -253,56 +252,80 @@ export default function NuevaHistoriaClinicaPage() {
               />
             </FormField>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <FormField>
+              <Label htmlFor="enfermedadActual">Enfermedad actual</Label>
+              <textarea
+                id="enfermedadActual"
+                name="enfermedadActual"
+                rows={4}
+                placeholder="Descripción cronológica de la enfermedad actual…"
+                value={form.enfermedadActual}
+                onChange={(e) => updateField("enfermedadActual", e.target.value)}
+                disabled={isSubmitting}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+            </FormField>
+          </CardContent>
+        </Card>
+
+        {/* ── 2. Antecedentes ───────────────────────────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Antecedentes</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <FormField>
-                <Label htmlFor="antecedentesPersonales">
-                  Antecedentes personales
-                </Label>
+                <Label htmlFor="antecedentesPersonales">Personales</Label>
                 <textarea
                   id="antecedentesPersonales"
                   name="antecedentesPersonales"
-                  rows={4}
-                  placeholder="Enfermedades previas, cirugías, alergias…"
+                  rows={3}
+                  placeholder="Enfermedades previas, cirugías…"
                   value={form.antecedentesPersonales}
-                  onChange={(e) =>
-                    updateField("antecedentesPersonales", e.target.value)
-                  }
+                  onChange={(e) => updateField("antecedentesPersonales", e.target.value)}
                   disabled={isSubmitting}
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </FormField>
 
               <FormField>
-                <Label htmlFor="antecedentesFamiliares">
-                  Antecedentes familiares
-                </Label>
+                <Label htmlFor="antecedentesFamiliares">Familiares</Label>
                 <textarea
                   id="antecedentesFamiliares"
                   name="antecedentesFamiliares"
-                  rows={4}
+                  rows={3}
                   placeholder="Diabetes, HTA, cáncer familiar…"
                   value={form.antecedentesFamiliares}
-                  onChange={(e) =>
-                    updateField("antecedentesFamiliares", e.target.value)
-                  }
+                  onChange={(e) => updateField("antecedentesFamiliares", e.target.value)}
                   disabled={isSubmitting}
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </FormField>
 
               <FormField>
-                <Label htmlFor="antecedentesSociales">
-                  Antecedentes sociales
-                </Label>
+                <Label htmlFor="antecedentesSociales">Sociales</Label>
                 <textarea
                   id="antecedentesSociales"
                   name="antecedentesSociales"
-                  rows={4}
+                  rows={3}
                   placeholder="Hábitos, ocupación, tabaquismo…"
                   value={form.antecedentesSociales}
-                  onChange={(e) =>
-                    updateField("antecedentesSociales", e.target.value)
-                  }
+                  onChange={(e) => updateField("antecedentesSociales", e.target.value)}
+                  disabled={isSubmitting}
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              </FormField>
+
+              <FormField>
+                <Label htmlFor="alergias">Alergias conocidas</Label>
+                <textarea
+                  id="alergias"
+                  name="alergias"
+                  rows={3}
+                  placeholder="Medicamentos, alimentos, látex…"
+                  value={form.alergias}
+                  onChange={(e) => updateField("alergias", e.target.value)}
                   disabled={isSubmitting}
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                 />
@@ -311,106 +334,21 @@ export default function NuevaHistoriaClinicaPage() {
           </CardContent>
         </Card>
 
-        {/* ── 2. Examen físico ──────────────────────────────────────────────── */}
+        {/* ── 3. Examen físico ──────────────────────────────────────────────── */}
         <Card>
           <CardHeader>
             <CardTitle>Examen físico</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <fieldset>
-              <legend className="mb-2 text-sm font-medium">
-                Signos vitales
-              </legend>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                <div className="space-y-1.5">
-                  <Label htmlFor="paSistolica">PA sistólica (mmHg)</Label>
-                  <Input
-                    id="paSistolica"
-                    name="paSistolica"
-                    type="number"
-                    min={50}
-                    max={300}
-                    placeholder="120"
-                    value={form.signosVitales.paSistolica}
-                    onChange={(e) => updateVital("paSistolica", e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="paDiastolica">PA diastólica (mmHg)</Label>
-                  <Input
-                    id="paDiastolica"
-                    name="paDiastolica"
-                    type="number"
-                    min={30}
-                    max={200}
-                    placeholder="80"
-                    value={form.signosVitales.paDiastolica}
-                    onChange={(e) =>
-                      updateVital("paDiastolica", e.target.value)
-                    }
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="frecuenciaCardiaca">FC (lpm)</Label>
-                  <Input
-                    id="frecuenciaCardiaca"
-                    name="frecuenciaCardiaca"
-                    type="number"
-                    min={20}
-                    max={300}
-                    placeholder="72"
-                    value={form.signosVitales.frecuenciaCardiaca}
-                    onChange={(e) =>
-                      updateVital("frecuenciaCardiaca", e.target.value)
-                    }
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="frecuenciaRespiratoria">FR (rpm)</Label>
-                  <Input
-                    id="frecuenciaRespiratoria"
-                    name="frecuenciaRespiratoria"
-                    type="number"
-                    min={4}
-                    max={60}
-                    placeholder="16"
-                    value={form.signosVitales.frecuenciaRespiratoria}
-                    onChange={(e) =>
-                      updateVital("frecuenciaRespiratoria", e.target.value)
-                    }
-                    disabled={isSubmitting}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="temperatura">Temperatura (°C)</Label>
-                  <Input
-                    id="temperatura"
-                    name="temperatura"
-                    type="number"
-                    min={30}
-                    max={45}
-                    step={0.1}
-                    placeholder="36.5"
-                    value={form.signosVitales.temperatura}
-                    onChange={(e) => updateVital("temperatura", e.target.value)}
-                    disabled={isSubmitting}
-                  />
-                </div>
-              </div>
-            </fieldset>
-
+          <CardContent>
             <FormField>
-              <Label htmlFor="hallazgosAparato">Hallazgos por aparato</Label>
+              <Label htmlFor="hallazgosExamen">Hallazgos por aparato</Label>
               <textarea
-                id="hallazgosAparato"
-                name="hallazgosAparato"
+                id="hallazgosExamen"
+                name="hallazgosExamen"
                 rows={5}
                 placeholder="Cardiovascular, respiratorio, digestivo, neurológico…"
-                value={form.hallazgosAparato}
-                onChange={(e) => updateField("hallazgosAparato", e.target.value)}
+                value={form.hallazgosExamen}
+                onChange={(e) => updateField("hallazgosExamen", e.target.value)}
                 disabled={isSubmitting}
                 className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               />
@@ -418,13 +356,12 @@ export default function NuevaHistoriaClinicaPage() {
           </CardContent>
         </Card>
 
-        {/* ── 3. Diagnósticos CIE-10 ────────────────────────────────────────── */}
+        {/* ── 4. Diagnósticos CIE-10 (HC-004) ──────────────────────────────── */}
         <Card>
           <CardHeader>
             <CardTitle>Diagnósticos (CIE-10)</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Entrada de nuevo diagnóstico */}
             <div className="flex items-end gap-2">
               <div className="space-y-1.5">
                 <Label htmlFor="dxCodigo">Código CIE-10</Label>
@@ -432,12 +369,9 @@ export default function NuevaHistoriaClinicaPage() {
                   id="dxCodigo"
                   name="dxCodigo"
                   placeholder="Ej. J18.9"
-                  value={dxInput.codigoCie10}
+                  value={dxInput.code}
                   onChange={(e) =>
-                    setDxInput((d) => ({
-                      ...d,
-                      codigoCie10: e.target.value.toUpperCase(),
-                    }))
+                    setDxInput((d) => ({ ...d, code: e.target.value.toUpperCase() }))
                   }
                   disabled={isSubmitting}
                   className="w-32"
@@ -449,39 +383,48 @@ export default function NuevaHistoriaClinicaPage() {
                   id="dxDescripcion"
                   name="dxDescripcion"
                   placeholder="Neumonía no especificada…"
-                  value={dxInput.descripcion}
+                  value={dxInput.description}
                   onChange={(e) =>
-                    setDxInput((d) => ({ ...d, descripcion: e.target.value }))
+                    setDxInput((d) => ({ ...d, description: e.target.value }))
                   }
                   disabled={isSubmitting}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dxTipo">Tipo</Label>
+                <Select
+                  value={dxInput.tipo}
+                  onValueChange={(v) =>
+                    setDxInput((d) => ({ ...d, tipo: v as "principal" | "secundario" }))
+                  }
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger id="dxTipo" className="w-36">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="principal">Principal</SelectItem>
+                    <SelectItem value="secundario">Secundario</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 onClick={addDiagnostico}
-                disabled={
-                  isSubmitting ||
-                  !dxInput.codigoCie10.trim() ||
-                  !dxInput.descripcion.trim()
-                }
-                aria-label="Agregar diagnóstico a la lista"
+                disabled={isSubmitting || !dxInput.code.trim() || !dxInput.description.trim()}
+                aria-label="Agregar diagnóstico"
               >
                 Agregar
               </Button>
             </div>
             <FormHint>
-              Ingrese código y descripción, luego pulse Agregar. Puede
-              agregar múltiples diagnósticos.
+              Formato CIE-10: letra mayúscula + 2 dígitos (Ej. J00, I10.0, K29.7). Mínimo un diagnóstico recomendado.
             </FormHint>
 
-            {/* Lista de diagnósticos agregados */}
             {diagnosticos.length > 0 && (
-              <ul
-                className="divide-y rounded-md border"
-                aria-label="Diagnósticos agregados"
-              >
+              <ul className="divide-y rounded-md border" aria-label="Diagnósticos agregados">
                 {diagnosticos.map((dx, i) => (
                   <li
                     key={i}
@@ -489,9 +432,12 @@ export default function NuevaHistoriaClinicaPage() {
                   >
                     <span>
                       <span className="mr-2 font-mono text-xs text-muted-foreground">
-                        {dx.codigoCie10}
+                        {dx.code}
                       </span>
-                      {dx.descripcion}
+                      {dx.description}
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        ({dx.tipo})
+                      </span>
                     </span>
                     <Button
                       type="button"
@@ -499,7 +445,7 @@ export default function NuevaHistoriaClinicaPage() {
                       size="sm"
                       onClick={() => removeDiagnostico(i)}
                       disabled={isSubmitting}
-                      aria-label={`Eliminar diagnóstico ${dx.codigoCie10}`}
+                      aria-label={`Eliminar diagnóstico ${dx.code}`}
                     >
                       Eliminar
                     </Button>
@@ -510,26 +456,44 @@ export default function NuevaHistoriaClinicaPage() {
           </CardContent>
         </Card>
 
-        {/* ── 4. Plan terapéutico ───────────────────────────────────────────── */}
+        {/* ── 5. Plan y disposición ─────────────────────────────────────────── */}
         <Card>
           <CardHeader>
-            <CardTitle>Plan terapéutico</CardTitle>
+            <CardTitle>Plan y disposición</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
             <FormField>
-              <Label htmlFor="planTerapeutico">Plan</Label>
+              <Label htmlFor="planManejo">Plan de manejo</Label>
               <textarea
-                id="planTerapeutico"
-                name="planTerapeutico"
+                id="planManejo"
+                name="planManejo"
                 rows={5}
                 placeholder="Medicamentos, procedimientos, indicaciones, seguimiento…"
-                value={form.planTerapeutico}
-                onChange={(e) =>
-                  updateField("planTerapeutico", e.target.value)
-                }
+                value={form.planManejo}
+                onChange={(e) => updateField("planManejo", e.target.value)}
                 disabled={isSubmitting}
                 className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="disposicion">Disposición del paciente</Label>
+              <Select
+                value={form.disposicion}
+                onValueChange={(v) => updateField("disposicion", v)}
+                disabled={isSubmitting}
+              >
+                <SelectTrigger id="disposicion">
+                  <SelectValue placeholder="Seleccione disposición" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DISPOSICION_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </FormField>
           </CardContent>
         </Card>
@@ -551,7 +515,6 @@ export default function NuevaHistoriaClinicaPage() {
             variant="outline"
             onClick={() => router.back()}
             disabled={isSubmitting}
-            aria-label="Cancelar y volver"
           >
             Cancelar
           </Button>
