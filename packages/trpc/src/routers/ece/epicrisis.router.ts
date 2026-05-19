@@ -2,8 +2,7 @@
  * Router tRPC — ECE Epicrisis de Egreso.
  *
  * Documento NTEC: §3.15 Epicrisis / Resumen de Egreso Hospitalario.
- * Norma: MINSAL Acuerdo n.° 1616 (2024), Arts. 40-21.
- * Código de tipo_documento: EPICRISIS_EGRESO.
+ * Norma: MINSAL Acuerdo n.° 1616 (2024), Arts. 17, 21, 40.
  *
  * ---------------------------------------------------------------------------
  * WORKFLOW  (tres firmas progresivas — Art. 40 NTEC)
@@ -13,30 +12,13 @@
  *   validado    → certificado  (DIR: director médico certifica formalmente)
  *   cualquiera  → anulado      (DIR: solo antes del estado certificado)
  *
- *   INMUTABILIDAD: el trigger `trg_epicrisis_inmutable` en BD bloquea cualquier
- *   UPDATE o DELETE sobre ece.epicrisis_egreso una vez que estado = 'firmado'.
- *   La anulación crea registro nuevo con estado 'anulado' (soft-delete).
+ *   INMUTABILIDAD: trg_bloquea_epicrisis bloquea UPDATE/DELETE cuando
+ *   estado_workflow IN ('firmado','certificado','anulado').
  *
  * ---------------------------------------------------------------------------
  * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
  * ---------------------------------------------------------------------------
  *   'ece.epicrisis.certificada'  — emitido por certificar().
- *     Payload: { epicrisisId, episodioHospitalarioId, directorId,
- *                payloadHash, organizationId }
- *     payloadHash = SHA-256({ diagnosticosEgreso, resumenIngreso,
- *                              tratamientoEgreso, indicacionesEgreso })
- *
- * ---------------------------------------------------------------------------
- * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
- * ---------------------------------------------------------------------------
- *   ece.epicrisis_egreso         — fila principal: episodio_hospitalario_id,
- *                                  fecha_egreso, motivo_egreso,
- *                                  diagnostico_egreso_cie10 (JSONB array),
- *                                  resumen_ingreso, evolucion_hospitalaria,
- *                                  tratamiento_egreso, indicaciones_egreso,
- *                                  estado, firmado_por, validado_por,
- *                                  certificado_por, payload_hash
- *   ece.documento_instancia      — instancia de flujo vinculada (instancia_id)
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -47,18 +29,16 @@
  *   validar             → requireRole(["ESP"])
  *   certificar          → requireRole(["DIR"])
  *   anular              → requireRole(["DIR"])
- *
- * Raw SQL es obligatorio porque el schema Prisma no modela las tablas ECE.
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
+import { applyWorkflowContext } from "../../workflow/context";
 
 // ---------------------------------------------------------------------------
-// Schemas locales (espejo de packages/contracts/src/schemas/ece-epicrisis.ts)
-// Definidos inline para evitar dependencia circular en el contexto de test.
+// Schemas locales
 // ---------------------------------------------------------------------------
 
 const cie10CodeSchema = z
@@ -116,8 +96,7 @@ const eceEpicrisisAnularSchema = z.object({
   motivoAnulacion: z.string().min(10).max(1_000),
 });
 
-// US.F2.7.34 — Asignación obligatoria de CIE-10 al cierre de episodio
-// Principal + hasta 4 secundarios (NTEC Art. 16-17).
+// US.F2.7.34 — Asignación obligatoria de CIE-10 al cierre de episodio (NTEC Art. 17).
 const eceEpicrisisCie10Schema = z.object({
   id: z.string().uuid(),
   cie10Principal: cie10CodeSchema,
@@ -136,14 +115,16 @@ export interface EpicrisisRow {
   tipo_egreso: string;
   circunstancia_alta: string;
   diagnosticos_egreso: unknown;
-  resumen_ingreso: string;
-  evolucion_hospitalaria: string;
-  tratamiento_egreso: string;
-  indicaciones_egreso: string;
+  resumen_ingreso: string | null;
+  evolucion_hospitalaria: string | null;
+  tratamiento_egreso: string | null;
+  indicaciones_egreso: string | null;
   notas: string | null;
   medico_tratante_id: string;
   visto_jefe_servicio_id: string | null;
   estado_workflow: string;
+  cie10_principal: string | null;
+  cie10_secundarios: string[] | null;
   firma_mc_id: string | null;
   firma_esp_id: string | null;
   firma_dir_id: string | null;
@@ -156,14 +137,12 @@ export interface EpicrisisRow {
 }
 
 // ---------------------------------------------------------------------------
-// Helper withEceContext
+// Helper: extraer contexto ECE del ctx de tRPC.
+// Solo valida que exista establishmentId — la demotion de rol la hace
+// applyWorkflowContext() dentro de la transacción (A-04).
 // ---------------------------------------------------------------------------
 
-/**
- * Construye el contexto mínimo para operaciones ECE.
- * Lanza BAD_REQUEST si no hay establecimiento activo.
- */
-function withEceContext(ctx: {
+function extractEceCtx(ctx: {
   user: { id: string };
   tenant: { organizationId: string; establishmentId?: string; roleCodes: string[] };
 }): { personalId: string; organizationId: string; establecimientoId: string; roles: string[] } {
@@ -209,33 +188,36 @@ const eceBase = requireRole(["MC", "ESP", "DIR", "PHYSICIAN", "ADMIN"]);
 
 export const epicrisisRouter = router({
   /**
-   * Lista epicrisis filtradas por episodioId (o globales del tenant).
+   * Lista epicrisis del establecimiento activo (A-06: filtro por establecimiento).
    */
   list: eceBase.input(eceEpicrisisListSchema).query(async ({ ctx, input }) => {
-    const eceCtx = withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    // Construye cláusulas WHERE dinámicas de forma segura con interpolación tipada.
-    const episodioFilter = input.episodioId ? input.episodioId : null;
+    const episodioFilter = input.episodioId ?? null;
     const estadoFilter = input.estado ?? null;
     const offset = (input.page - 1) * input.pageSize;
+    const establecimientoId = eceCtx.establecimientoId;
 
+    // A-06: filtrar por establecimiento_id vía JOIN con episodio_atencion.
     const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT *
-      FROM ece.epicrisis_egreso
-      WHERE (${episodioFilter}::uuid IS NULL OR episodio_id = ${episodioFilter}::uuid)
-        AND (${estadoFilter}::text IS NULL OR estado_workflow = ${estadoFilter}::text)
-      ORDER BY registrado_en DESC
+      SELECT ee.*
+      FROM ece.epicrisis_egreso ee
+      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+      WHERE ea.establecimiento_id = ${establecimientoId}::uuid
+        AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
+        AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
+      ORDER BY ee.registrado_en DESC
       LIMIT ${input.pageSize} OFFSET ${offset}
     `;
 
     const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
       SELECT COUNT(*) AS total
-      FROM ece.epicrisis_egreso
-      WHERE (${episodioFilter}::uuid IS NULL OR episodio_id = ${episodioFilter}::uuid)
-        AND (${estadoFilter}::text IS NULL OR estado_workflow = ${estadoFilter}::text)
+      FROM ece.epicrisis_egreso ee
+      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+      WHERE ea.establecimiento_id = ${establecimientoId}::uuid
+        AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
+        AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
     `;
-
-    void eceCtx; // utilizado en withEceContext para validar tenant
 
     return {
       items: rows,
@@ -246,13 +228,19 @@ export const epicrisisRouter = router({
   }),
 
   /**
-   * Lectura individual de epicrisis.
+   * Lectura individual — A-06: verifica pertenencia al establecimiento.
    */
   get: eceBase.input(eceEpicrisisGetSchema).query(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
+    const establecimientoId = eceCtx.establecimientoId;
 
     const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT * FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
+      SELECT ee.*
+      FROM ece.epicrisis_egreso ee
+      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+      WHERE ee.id = ${input.id}::uuid
+        AND ea.establecimiento_id = ${establecimientoId}::uuid
+      LIMIT 1
     `;
 
     if (rows.length === 0) {
@@ -263,173 +251,208 @@ export const epicrisisRouter = router({
 
   /**
    * Crea una epicrisis en estado `borrador`.
-   * Solo rol MC/PHYSICIAN puede crear.
-   * 1:1 con episodio hospitalario (UNIQUE en episodio_id).
+   * A-04: usa withWorkflowContext (transacción + demote rol) para escritura.
    */
   create: requireRole(["MC", "PHYSICIAN"]).input(eceEpicrisisCreateSchema).mutation(async ({ ctx, input }) => {
-    const eceCtx = withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    // Verificar que no exista ya una epicrisis para el episodio (1:1).
-    const existing = await ctx.prisma.$queryRaw<[{ id: string }?]>`
-      SELECT id::text FROM ece.epicrisis_egreso
-      WHERE episodio_id = ${input.episodioHospitalarioId}::uuid
-      LIMIT 1
-    `;
-    if (existing[0]) {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "Ya existe una epicrisis para este episodio hospitalario.",
+    return ctx.prisma.$transaction(async (tx) => {
+      // A-04: demote rol para que RLS aplique en la transacción.
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
       });
-    }
 
-    // Resolver personal_salud vinculado al usuario HIS.
-    const personalRows = await ctx.prisma.$queryRaw<[{ id: string }?]>`
-      SELECT id::text FROM ece.personal_salud
-      WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
-    `;
-    if (!personalRows[0]) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "El usuario no tiene un registro de personal de salud activo en ECE.",
-      });
-    }
-    const medicoId = personalRows[0].id;
+      // Verificar 1:1 con episodio.
+      const existing = await tx.$queryRaw<[{ id: string }?]>`
+        SELECT id::text FROM ece.epicrisis_egreso
+        WHERE episodio_id = ${input.episodioHospitalarioId}::uuid
+        LIMIT 1
+      `;
+      if (existing[0]) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Ya existe una epicrisis para este episodio hospitalario.",
+        });
+      }
 
-    const tipoEgreso = input.motivoEgreso === "fallecido" ? "fallecido" : "vivo";
+      // Resolver personal_salud vinculado al usuario HIS.
+      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
+        SELECT id::text FROM ece.personal_salud
+        WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
+      `;
+      if (!personalRows[0]) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "El usuario no tiene un registro de personal de salud activo en ECE.",
+        });
+      }
+      const medicoId = personalRows[0].id;
+      const tipoEgreso = input.motivoEgreso === "fallecido" ? "fallecido" : "vivo";
 
-    const rows = await ctx.prisma.$queryRaw<[{ id: string }]>`
-      INSERT INTO ece.epicrisis_egreso (
-        episodio_id,
-        fecha_hora_egreso,
-        tipo_egreso,
-        circunstancia_alta,
-        diagnosticos_egreso,
-        resumen_ingreso,
-        evolucion_hospitalaria,
-        tratamiento_egreso,
-        indicaciones_egreso,
-        notas,
-        medico_tratante_id,
-        estado_workflow
-      ) VALUES (
-        ${input.episodioHospitalarioId}::uuid,
-        ${input.fechaEgreso}::timestamptz,
-        ${tipoEgreso},
-        ${input.motivoEgreso},
-        ${JSON.stringify(input.diagnosticoEgresoCie10)}::jsonb,
-        ${input.resumenIngreso},
-        ${input.evolucionHospitalaria},
-        ${input.tratamientoEgreso},
-        ${input.indicacionesEgreso},
-        ${input.notas ?? null},
-        ${medicoId}::uuid,
-        'borrador'
-      )
-      RETURNING id::text
-    `;
+      const rows = await tx.$queryRaw<[{ id: string }]>`
+        INSERT INTO ece.epicrisis_egreso (
+          episodio_id,
+          fecha_hora_egreso,
+          tipo_egreso,
+          circunstancia_alta,
+          diagnosticos_egreso,
+          resumen_ingreso,
+          evolucion_hospitalaria,
+          tratamiento_egreso,
+          indicaciones_egreso,
+          notas,
+          medico_tratante_id,
+          estado_workflow
+        ) VALUES (
+          ${input.episodioHospitalarioId}::uuid,
+          ${input.fechaEgreso}::timestamptz,
+          ${tipoEgreso},
+          ${input.motivoEgreso},
+          ${JSON.stringify(input.diagnosticoEgresoCie10)}::jsonb,
+          ${input.resumenIngreso},
+          ${input.evolucionHospitalaria},
+          ${input.tratamientoEgreso},
+          ${input.indicacionesEgreso},
+          ${input.notas ?? null},
+          ${medicoId}::uuid,
+          'borrador'
+        )
+        RETURNING id::text
+      `;
 
-    return { id: rows[0]!.id };
+      return { id: rows[0]!.id };
+    });
   }),
 
   /**
    * Firma la epicrisis (MC). Transición borrador → firmado.
-   * Post-firma el documento es INMUTABLE (trigger en BD).
+   * A-04: withWorkflowContext en transacción.
+   * A-01: hard-stop CIE-10 obligatorio (Art. 17 NTEC).
    */
   firmar: requireRole(["MC", "PHYSICIAN"]).input(eceEpicrisisFirmarSchema).mutation(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT * FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const epicrisis = rows[0];
-    if (!epicrisis) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
-    }
-    if (epicrisis.estado_workflow !== "borrador") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: `Solo se puede firmar en estado borrador. Estado actual: ${epicrisis.estado_workflow}.`,
+    return ctx.prisma.$transaction(async (tx) => {
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
       });
-    }
 
-    // US.F2.7.34 — Hard-stop: diagnóstico CIE-10 obligatorio al cierre (Art. 17 NTEC).
-    const cie10Check = await ctx.prisma.$queryRaw<[{ cie10_principal: string | null }?]>`
-      SELECT "cie10_principal" FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    if (!cie10Check[0]?.cie10_principal) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "Debe asignar al menos un diagnóstico CIE-10 antes de firmar la epicrisis (Art. 17 NTEC).",
-      });
-    }
+      const rows = await tx.$queryRaw<EpicrisisRow[]>`
+        SELECT ee.*
+        FROM ece.epicrisis_egreso ee
+        JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+        WHERE ee.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+        LIMIT 1
+      `;
+      const epicrisis = rows[0];
+      if (!epicrisis) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+      }
+      if (epicrisis.estado_workflow !== "borrador") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Solo se puede firmar en estado borrador. Estado actual: ${epicrisis.estado_workflow}.`,
+        });
+      }
 
-    // La transición a 'firmado' hace el documento inmutable (trigger BD lo refuerza).
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.epicrisis_egreso
-      SET estado_workflow = 'firmado',
-          firma_mc_id     = ${input.firmaId}::uuid,
-          firmado_en      = now()
-      WHERE id = ${input.id}::uuid
-        AND estado_workflow = 'borrador'
-    `;
+      // US.F2.7.34 — Hard-stop Art. 17 NTEC: CIE-10 principal obligatorio.
+      if (!epicrisis.cie10_principal) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Debe asignar el diagnóstico CIE-10 principal antes de firmar la epicrisis (Art. 17 NTEC).",
+        });
+      }
 
-    return { ok: true as const, estado: "firmado" };
+      await tx.$executeRaw`
+        UPDATE ece.epicrisis_egreso
+        SET estado_workflow = 'firmado',
+            firma_mc_id    = ${input.firmaId}::uuid,
+            firmado_en     = now()
+        WHERE id = ${input.id}::uuid
+          AND estado_workflow = 'borrador'
+      `;
+
+      return { ok: true as const, estado: "firmado" };
+    });
   }),
 
   /**
-   * Valida la epicrisis (ESP — Jefe de Servicio). Transición firmado → validado.
+   * Valida la epicrisis (ESP). Transición firmado → validado.
+   * A-04: withWorkflowContext en transacción.
    */
   validar: requireRole(["ESP"]).input(eceEpicrisisValidarSchema).mutation(async ({ ctx, input }) => {
-    const eceCtx = withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT * FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const epicrisis = rows[0];
-    if (!epicrisis) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
-    }
-    if (epicrisis.estado_workflow !== "firmado") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: `Solo se puede validar en estado firmado. Estado actual: ${epicrisis.estado_workflow}.`,
+    return ctx.prisma.$transaction(async (tx) => {
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
       });
-    }
 
-    const personalRows = await ctx.prisma.$queryRaw<[{ id: string }?]>`
-      SELECT id::text FROM ece.personal_salud
-      WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
-    `;
-    const jefeId = personalRows[0]?.id ?? eceCtx.personalId;
+      const rows = await tx.$queryRaw<EpicrisisRow[]>`
+        SELECT ee.*
+        FROM ece.epicrisis_egreso ee
+        JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+        WHERE ee.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+        LIMIT 1
+      `;
+      const epicrisis = rows[0];
+      if (!epicrisis) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+      }
+      if (epicrisis.estado_workflow !== "firmado") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Solo se puede validar en estado firmado. Estado actual: ${epicrisis.estado_workflow}.`,
+        });
+      }
 
-    const observacion = input.observacion ?? null;
+      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
+        SELECT id::text FROM ece.personal_salud
+        WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
+      `;
+      const jefeId = personalRows[0]?.id ?? eceCtx.personalId;
+      const observacion = input.observacion ?? null;
+      void observacion; // reservado para bitácora futura
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.epicrisis_egreso
-      SET estado_workflow         = 'validado',
-          visto_jefe_servicio_id  = ${jefeId}::uuid,
-          validado_en             = now()
-      WHERE id = ${input.id}::uuid
-        AND estado_workflow = 'firmado'
-    `;
+      await tx.$executeRaw`
+        UPDATE ece.epicrisis_egreso
+        SET estado_workflow        = 'validado',
+            visto_jefe_servicio_id = ${jefeId}::uuid,
+            validado_en            = now()
+        WHERE id = ${input.id}::uuid
+          AND estado_workflow = 'firmado'
+      `;
 
-    void observacion; // campo reservado para bitácora futura
-
-    return { ok: true as const, estado: "validado" };
+      return { ok: true as const, estado: "validado" };
+    });
   }),
 
   /**
    * Certifica la epicrisis (DIR). Transición validado → certificado.
-   * OBLIGATORIO para copias formales (Art. 21 NTEC).
-   * Emite outbox `ece.epicrisis.certificada` con hash + directorId.
+   * A-03: mutación efectivamente llamada desde UI (fix en page.tsx).
+   * A-04: withWorkflowContext en transacción.
    */
   certificar: requireRole(["DIR"]).input(eceEpicrisisCertificarSchema).mutation(async ({ ctx, input }) => {
-    const eceCtx = withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
     return ctx.prisma.$transaction(async (tx) => {
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
+      });
+
       const rows = await tx.$queryRaw<EpicrisisRow[]>`
-        SELECT * FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
+        SELECT ee.*
+        FROM ece.epicrisis_egreso ee
+        JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+        WHERE ee.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+        LIMIT 1
       `;
       const epicrisis = rows[0];
       if (!epicrisis) {
@@ -447,8 +470,8 @@ export const epicrisisRouter = router({
       await tx.$executeRaw`
         UPDATE ece.epicrisis_egreso
         SET estado_workflow = 'certificado',
-            firma_dir_id    = ${input.firmaId}::uuid,
-            certificado_en  = now()
+            firma_dir_id   = ${input.firmaId}::uuid,
+            certificado_en = now()
         WHERE id = ${input.id}::uuid
           AND estado_workflow = 'validado'
       `;
@@ -474,84 +497,108 @@ export const epicrisisRouter = router({
   }),
 
   /**
-   * Asigna o actualiza los diagnósticos CIE-10 de la epicrisis (MC/PHYSICIAN).
-   * Permitido mientras el estado sea 'borrador' únicamente.
-   * Hard-stop: sin CIE-10 principal no puede avanzar a 'firmado' (US.F2.7.34).
+   * Asigna/actualiza CIE-10 (MC/PHYSICIAN). Solo en estado borrador.
+   * A-01: columnas cie10_principal / cie10_secundarios ya existen en BD.
+   * A-04: withWorkflowContext en transacción.
    */
   setCie10: requireRole(["MC", "PHYSICIAN"]).input(eceEpicrisisCie10Schema).mutation(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<[{ estado_workflow: string }?]>`
-      SELECT estado_workflow FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const epicrisis = rows[0];
-
-    if (!epicrisis) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
-    }
-    if (epicrisis.estado_workflow !== "borrador") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "Los diagnósticos CIE-10 solo pueden modificarse en estado borrador.",
+    return ctx.prisma.$transaction(async (tx) => {
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
       });
-    }
 
-    // Verificar que el código principal existe en el catálogo
-    const catalogCheck = await ctx.prisma.$queryRaw<[{ codigo: string }?]>`
-      SELECT "codigo" FROM public."Icd10Catalog"
-      WHERE "codigo" = ${input.cie10Principal} AND "activo" = true
-      LIMIT 1
-    `;
-    if (!catalogCheck[0]) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `Código CIE-10 principal "${input.cie10Principal}" no encontrado en el catálogo.`,
-      });
-    }
+      const rows = await tx.$queryRaw<[{ estado_workflow: string }?]>`
+        SELECT ee.estado_workflow
+        FROM ece.epicrisis_egreso ee
+        JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+        WHERE ee.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+        LIMIT 1
+      `;
+      const epicrisis = rows[0];
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.epicrisis_egreso
-      SET "cie10_principal"    = ${input.cie10Principal},
-          "cie10_secundarios"  = ${input.cie10Secundarios}::varchar[]
-      WHERE id = ${input.id}::uuid
-        AND estado_workflow = 'borrador'
-    `;
+      if (!epicrisis) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+      }
+      if (epicrisis.estado_workflow !== "borrador") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Los diagnósticos CIE-10 solo pueden modificarse en estado borrador.",
+        });
+      }
 
-    return { ok: true as const };
+      // Verificar código principal en catálogo activo.
+      const catalogCheck = await tx.$queryRaw<[{ codigo: string }?]>`
+        SELECT "codigo" FROM public."Icd10Catalog"
+        WHERE "codigo" = ${input.cie10Principal} AND "activo" = true
+        LIMIT 1
+      `;
+      if (!catalogCheck[0]) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Código CIE-10 principal "${input.cie10Principal}" no encontrado en el catálogo.`,
+        });
+      }
+
+      await tx.$executeRaw`
+        UPDATE ece.epicrisis_egreso
+        SET cie10_principal    = ${input.cie10Principal},
+            cie10_secundarios  = ${input.cie10Secundarios}::varchar[]
+        WHERE id = ${input.id}::uuid
+          AND estado_workflow = 'borrador'
+      `;
+
+      return { ok: true as const };
+    });
   }),
 
   /**
    * Anula la epicrisis (DIR). Solo si NO está certificada.
-   * La anulación es terminal — no hay reversión.
+   * A-04: withWorkflowContext en transacción.
    */
   anular: requireRole(["DIR"]).input(eceEpicrisisAnularSchema).mutation(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = extractEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT estado_workflow FROM ece.epicrisis_egreso WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const epicrisis = rows[0];
-    if (!epicrisis) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
-    }
-    if (epicrisis.estado_workflow === "certificado") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "Un documento certificado no puede anularse. Inicie un proceso administrativo.",
+    return ctx.prisma.$transaction(async (tx) => {
+      await applyWorkflowContext(tx as Parameters<typeof applyWorkflowContext>[0], {
+        personalId: eceCtx.personalId,
+        establecimientoId: eceCtx.establecimientoId,
       });
-    }
-    if (epicrisis.estado_workflow === "anulado") {
-      throw new TRPCError({ code: "CONFLICT", message: "La epicrisis ya está anulada." });
-    }
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.epicrisis_egreso
-      SET estado_workflow  = 'anulado',
-          motivo_anulacion = ${input.motivoAnulacion},
-          anulado_en       = now()
-      WHERE id = ${input.id}::uuid
-    `;
+      const rows = await tx.$queryRaw<[{ estado_workflow: string }?]>`
+        SELECT ee.estado_workflow
+        FROM ece.epicrisis_egreso ee
+        JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+        WHERE ee.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+        LIMIT 1
+      `;
+      const epicrisis = rows[0];
+      if (!epicrisis) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+      }
+      if (epicrisis.estado_workflow === "certificado") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Un documento certificado no puede anularse. Inicie un proceso administrativo.",
+        });
+      }
+      if (epicrisis.estado_workflow === "anulado") {
+        throw new TRPCError({ code: "CONFLICT", message: "La epicrisis ya está anulada." });
+      }
 
-    return { ok: true as const, estado: "anulado" };
+      await tx.$executeRaw`
+        UPDATE ece.epicrisis_egreso
+        SET estado_workflow  = 'anulado',
+            motivo_anulacion = ${input.motivoAnulacion},
+            anulado_en       = now()
+        WHERE id = ${input.id}::uuid
+      `;
+
+      return { ok: true as const, estado: "anulado" };
+    });
   }),
 });
