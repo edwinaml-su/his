@@ -167,7 +167,7 @@ const listAdminSchema = z.object({
 
 // ─── Tipos de fila raw ────────────────────────────────────────────────────────
 
-interface IndicacionRow {
+export interface IndicacionRow {
   id: string;
   instancia_id: string | null;
   episodio_id: string;
@@ -181,7 +181,7 @@ interface IndicacionRow {
   digitado_retroactivamente: boolean;
 }
 
-interface IndicacionItemRow {
+export interface IndicacionItemRow {
   id: string;
   indicacion_id: string;
   tipo: string;
@@ -192,7 +192,7 @@ interface IndicacionItemRow {
   duracion: string | null;
 }
 
-interface AdminRow {
+export interface AdminRow {
   id: string;
   registro_enf_id: string;
   indicacion_item_id: string;
