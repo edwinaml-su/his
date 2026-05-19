@@ -23,6 +23,14 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@his/ui/components/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -337,12 +345,48 @@ export default function SalaExpulsionPage() {
     null,
   );
 
+  // Estado modal PIN de firma (NTEC Art. 39)
+  const [pinTarget, setPinTarget] = React.useState<string | null>(null);
+  const [pinValue, setPinValue] = React.useState("");
+  const [pinError, setPinError] = React.useState<string | null>(null);
+
   const listQuery = trpc.eceSalaExpulsion.list.useQuery({ limit: 20 });
   const utils = trpc.useUtils();
 
   const firmarMutation = trpc.eceSalaExpulsion.firmar.useMutation({
-    onSuccess: () => utils.eceSalaExpulsion.list.invalidate(),
+    onSuccess: () => {
+      setPinTarget(null);
+      setPinValue("");
+      setPinError(null);
+      void utils.eceSalaExpulsion.list.invalidate();
+    },
+    onError: (err: { message: string }) => {
+      setPinError(err.message);
+      setPinValue("");
+    },
   });
+
+  function abrirModalFirma(id: string) {
+    setPinTarget(id);
+    setPinValue("");
+    setPinError(null);
+  }
+
+  function cerrarModalFirma() {
+    setPinTarget(null);
+    setPinValue("");
+    setPinError(null);
+  }
+
+  function submitFirma(e: React.FormEvent) {
+    e.preventDefault();
+    if (!pinTarget) return;
+    if (!/^\d{6,8}$/.test(pinValue)) {
+      setPinError("El PIN debe tener entre 6 y 8 dígitos numéricos.");
+      return;
+    }
+    firmarMutation.mutate({ id: pinTarget, pin: pinValue });
+  }
 
   const faseCfg = FASES.find((f) => f.key === cronometro.fase) ?? FASES[0]!;
   const tieneNacimiento = Boolean(cronometro.timestamps.expulsiva);
@@ -512,8 +556,7 @@ export default function SalaExpulsionPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => firmarMutation.mutate({ id: r.id })}
-                          disabled={firmarMutation.isPending}
+                          onClick={() => abrirModalFirma(r.id)}
                         >
                           Firmar
                         </Button>
@@ -535,6 +578,62 @@ export default function SalaExpulsionPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Modal PIN — firma electrónica (NTEC Art. 39) */}
+      <Dialog open={pinTarget !== null} onOpenChange={(open) => { if (!open) cerrarModalFirma(); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Firma electrónica</DialogTitle>
+            <DialogDescription>
+              Ingrese su PIN para firmar el registro de nacimiento (NTEC Art. 39).
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={submitFirma} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="pin-expulsion">PIN de firma (6-8 dígitos)</Label>
+              <Input
+                id="pin-expulsion"
+                type="password"
+                inputMode="numeric"
+                autoComplete="current-password"
+                value={pinValue}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                  setPinValue(e.target.value.replace(/\D/g, "").slice(0, 8));
+                  setPinError(null);
+                }}
+                disabled={firmarMutation.isPending}
+                placeholder="••••••"
+                aria-describedby={pinError ? "pin-expulsion-error" : undefined}
+                aria-invalid={pinError ? true : undefined}
+                className="tracking-widest text-center text-lg"
+                autoFocus
+              />
+              {pinError && (
+                <p id="pin-expulsion-error" role="alert" className="text-xs text-destructive">
+                  {pinError}
+                </p>
+              )}
+            </div>
+            <DialogFooter className="gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={cerrarModalFirma}
+                disabled={firmarMutation.isPending}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={pinValue.length < 6 || firmarMutation.isPending}
+                className="bg-[#1a3c6e] hover:bg-[#15305a] text-white"
+              >
+                {firmarMutation.isPending ? "Firmando…" : "Firmar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
