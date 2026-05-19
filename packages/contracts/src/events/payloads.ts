@@ -1011,6 +1011,22 @@ export type PharmacyReservationCancelledPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// ece.urpa.alta_otorgada  (S1 HD-30 — NTEC Art. 36, URPA)
+// Emitido cuando ENF otorga el alta de la Unidad de Recuperación Post-Anestésica.
+// -----------------------------------------------------------------------------
+
+export const eceUrpaAltaOtorgadaPayloadSchema = z.object({
+  urpaId: z.string().uuid(),
+  actoQuirurgicoId: z.string().uuid(),
+  escalaAldreteAlta: z.number().int().min(0).max(10),
+  criterioAlta: z.enum(["cumple", "no_cumple_observacion", "trasladar_uci"]),
+  altaOtorgadaEn: z.string().datetime(),
+  registradoPor: z.string().uuid(),
+});
+
+export type EceUrpaAltaOtorgadaPayload = z.infer<typeof eceUrpaAltaOtorgadaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1326,6 +1342,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("pharmacy.reservation.cancelled"),
     payload: pharmacyReservationCancelledPayloadSchema,
+  }),
+  // S1 HD-30 — ECE URPA: alta post-anestésica (NTEC Art. 36)
+  z.object({
+    eventType: z.literal("ece.urpa.alta_otorgada"),
+    payload: eceUrpaAltaOtorgadaPayloadSchema,
   }),
 ]);
 

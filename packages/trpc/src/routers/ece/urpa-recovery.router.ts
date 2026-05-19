@@ -16,7 +16,7 @@
  *   - Aldrete alta ≥9 → criterio debe ser "cumple".
  *   - Aldrete alta <9 → criterio "no_cumple_observacion" o "trasladar_uci".
  *   - Validado en Zod (eceUrpaDarAltaSchema) y reforzado en router.
- *   - Emite evento de dominio ece.urpa.alta_otorgada en notifications_outbox.
+ *   - Emite evento de dominio ece.urpa.alta_otorgada vía emitDomainEvent (outbox unificado).
  *
  * @QA E2E a cubrir:
  *   - Flujo completo: create → registrarSignos → darAlta (Aldrete ≥9, criterio cumple).
@@ -29,6 +29,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+import { emitDomainEvent } from "@his/database";
 import {
   eceUrpaCreateSchema,
   eceUrpaRegistrarSignosSchema,
@@ -294,7 +295,7 @@ export const eceUrpaRecoveryRouter = router({
    * Reglas:
    *   - Aldrete alta ≥9 → criterio debe ser "cumple".
    *   - Aldrete alta <9 → criterio "no_cumple_observacion" o "trasladar_uci".
-   *   - Emite evento ece.urpa.alta_otorgada en notifications_outbox.
+   *   - Emite evento ece.urpa.alta_otorgada vía emitDomainEvent (outbox unificado).
    */
   darAlta: nurseOnly
     .input(eceUrpaDarAltaSchema)
@@ -355,20 +356,21 @@ export const eceUrpaRecoveryRouter = router({
           WHERE id = ${input.id}::uuid
         `;
 
-        // Evento de dominio en notifications_outbox.
-        const payload = JSON.stringify({
-          urpaId: input.id,
-          actoQuirurgicoId: urpa.acto_quirurgico_id,
-          escalaAldreteAlta: aldreteAlta,
-          criterioAlta: criterio,
-          altaOtorgadaEn: altaTs.toISOString(),
-          registradoPor: personalId,
+        await emitDomainEvent(tx, {
+          eventType: "ece.urpa.alta_otorgada",
+          aggregateType: "UrpaRecovery",
+          aggregateId: input.id,
+          organizationId: ctx.tenant.organizationId,
+          emittedById: ctx.user.id,
+          payload: {
+            urpaId: input.id,
+            actoQuirurgicoId: urpa.acto_quirurgico_id,
+            escalaAldreteAlta: aldreteAlta,
+            criterioAlta: criterio,
+            altaOtorgadaEn: altaTs.toISOString(),
+            registradoPor: personalId,
+          },
         });
-
-        await tx.$executeRaw`
-          INSERT INTO notifications_outbox (event_type, payload, created_at)
-          VALUES ('ece.urpa.alta_otorgada', ${payload}::jsonb, now())
-        `;
 
         return { ok: true as const, altaTs: altaTs.toISOString() };
       });
