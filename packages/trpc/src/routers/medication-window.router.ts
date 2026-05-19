@@ -196,12 +196,15 @@ export const medicationWindowRouter = router({
             new Date(row.proxima_administracion).toISOString(),
           );
 
-          // Outbox event "medication.window-closing" → Beta.15 dispatcher
+          // Outbox event "medication.window-closing" → Beta.15 dispatcher.
+          // Columnas camelCase quoted (Prisma convention). Dedup vía
+          // uq_domain_event_pending_dedup (SQL 97): solo 1 evento pendiente
+          // por (organizationId, aggregateId, eventType) WHERE publishedAt IS NULL.
           await tx.$executeRawUnsafe(
             `INSERT INTO "DomainEvent"
-               (organization_id, event_type, aggregate_type, aggregate_id, payload, occurred_at)
+               ("organizationId", "eventType", "aggregateType", "aggregateId", payload, "occurredAt")
              VALUES ($1::uuid, 'medication.window-closing', 'Indication', $2::uuid, $3::jsonb, now())
-             ON CONFLICT DO NOTHING`,
+             ON CONFLICT ("organizationId", "aggregateId", "eventType") WHERE "publishedAt" IS NULL DO NOTHING`,
             orgId,
             // indicationId puede ser TEXT no UUID en ece — cast defensivo
             row.indication_id,
