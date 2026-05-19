@@ -52,7 +52,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import argon2 from "argon2";
+import { argon2 } from "@his/infrastructure";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";

@@ -4,9 +4,11 @@ const nextConfig = {
   experimental: {
     typedRoutes: true,
     optimizePackageImports: ["lucide-react", "@his/ui"],
+    // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
+    serverComponentsExternalPackages: ["@node-rs/argon2"],
   },
   // Permitir importar paquetes del monorepo en src.
-  transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database"],
+  transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database", "@his/infrastructure"],
   // ESLint NO bloquea el build — typecheck es el gate de tipo.
   // Lint se corre en CI separado (ver .github/workflows/ci.yml).
   // Razón: agentes paralelos del Sprint 1 introdujeron `// eslint-disable-next-line

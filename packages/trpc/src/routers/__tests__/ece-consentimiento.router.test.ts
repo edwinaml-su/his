@@ -42,7 +42,7 @@ vi.mock("@his/database", async (importOriginal) => {
 
 import { emitDomainEvent } from "@his/database";
 // Importación estática necesaria para que vi.mocked funcione correctamente
-import argon2 from "argon2";
+import { argon2 } from "@his/infrastructure";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 

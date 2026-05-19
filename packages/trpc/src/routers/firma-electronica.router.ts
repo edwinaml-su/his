@@ -35,7 +35,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, publicProcedure, requireRole, router } from "../trpc";
 // argon2 must be in packages/trpc/package.json: "argon2": "^0.41.1"
-import argon2 from "argon2";
+import { argon2 } from "@his/infrastructure";
 
 // =============================================================================
 // Constantes
