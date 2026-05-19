@@ -12,11 +12,17 @@
  *  8.  create — NOT_FOUND cuando episodio no existe
  *  9.  create — PRECONDITION_FAILED cuando tipo documento ACT_QX no configurado
  * 10.  update — CONFLICT cuando estado != borrador (inmutabilidad)
+ * 10b. update — permite mutación cuando estado == borrador (HE-06: trigger condicional)
  * 11.  firmar — CONFLICT cuando estado no es borrador
  * 12.  firmar — PRECONDITION_FAILED cuando procedimiento_realizado está vacío
  * 13.  validar — CONFLICT cuando estado no es firmado
  * 14.  anular — CONFLICT cuando estado es firmado
  * 15.  anular — CONFLICT cuando estado es validado
+ *
+ * @QA E2E pendiente (HE-06 — validación trigger BD real):
+ *   - UPDATE en estado borrador → debe pasar sin error 2F003 (trigger condicional).
+ *   - UPDATE en estado firmado  → debe lanzar ERRCODE 2F003 del trigger Postgres.
+ *   - DELETE en estado validado → debe lanzar ERRCODE 2F003 del trigger Postgres.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -242,6 +248,21 @@ describe("eceActoQuirurgicoRouter", () => {
     await expect(
       caller.update({ id: AQ_ID, diagnosticoPre: "Nuevo diagnóstico" }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  // 10b — update en borrador permite mutación (HE-06: trigger condicional post-firma)
+  it("update permite mutación cuando el acto está en borrador", async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([AQ_ROW_BORRADOR] as never);
+    prisma.$executeRaw.mockResolvedValueOnce(1 as never);
+
+    const caller = eceActoQuirurgicoRouter.createCaller(
+      makeCtx({ prisma, tenant: ESP_TENANT, user: ESP_USER }),
+    );
+
+    const result = await caller.update({ id: AQ_ID, diagnosticoPre: "Hernia bilateral" });
+    expect(result.ok).toBe(true);
+    // $executeRaw fue invocado: el UPDATE llegó a la BD (trigger condicional lo permite)
+    expect(prisma.$executeRaw).toHaveBeenCalledOnce();
   });
 
   // 11 — firmar CONFLICT estado no borrador
