@@ -172,6 +172,8 @@ import { bedsideRondaRouter } from "./bedside-ronda.router";
 import { bedsideStatRouter } from "./bedside-stat.router";
 // F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters (US.F2.6.41-45, 52)
 import { medicationWindowRouter } from "./medication-window.router";
+// S5 — HF-01: Dashboard Maternidad real (NTEC Art. 25)
+import { eceObstetriciaRouter } from "./ece/obstetricia.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -346,6 +348,8 @@ export const appRouter = router({
   bedsideStat: bedsideStatRouter,
   // F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters
   medicationWindow: medicationWindowRouter,
+  // S5 — HF-01: Dashboard Maternidad real (NTEC Art. 25)
+  eceObstetricia: eceObstetriciaRouter,
 });
 
 export type AppRouter = typeof appRouter;
