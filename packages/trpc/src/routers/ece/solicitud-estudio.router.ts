@@ -13,7 +13,7 @@
  * ---------------------------------------------------------------------------
  *   borrador    → en_revision  (MC: completar datos del estudio solicitado)
  *   en_revision → firmado      (MC: firma con PIN argon2id — autoriza el estudio)
- *   firmado     → validado     (MC: validación clínica — confirma la solicitud)
+ *   firmado     → validado     (MC: validación clínica con PIN — confirma la solicitud)
  *   cualquiera  → anulado      (MC: pre-validado — cancelación o error)
  *
  *   MC firma y también valida (mismo rol). El PIN se verifica contra
@@ -25,7 +25,7 @@
  * ---------------------------------------------------------------------------
  *   'ece.solicitud_estudio.firmada'   — emitido por firmar(). Notifica al laboratorio
  *     o servicio de imagenología que hay un estudio autorizado pendiente.
- *     Payload: { solicitudId, episodioId, medicoId, tipoEstudio, prioridad, orgId }
+ *     Payload: { solicitudId, episodioId, medicoId, tipo, orgId }
  *   'ece.solicitud_estudio.validada'  — emitido por validar().
  *     Payload: { solicitudId, medicoId, orgId }
  *   'ece.solicitud_estudio.anulada'   — emitido por anular().
@@ -34,21 +34,22 @@
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.solicitud_estudio   — fila principal: episodio_id, tipo_estudio
- *                             ('laboratorio'|'imagenologia'|'otro'),
- *                             prioridad ('rutina'|'urgente'|'stat'),
- *                             descripcion, estado, firmado_por, firmado_en,
- *                             instancia_id FK(ece.documento_instancia)
+ *   ece.solicitud_estudio — columnas reales:
+ *     id, instancia_id, episodio_id, tipo (text),
+ *     examenes (jsonb — array de códigos + prioridad embedded),
+ *     indicacion_clinica (text, nullable),
+ *     medico_solicitante_id (uuid), fecha_hora (timestamptz),
+ *     estado (text), registrado_en (timestamptz)
  *   ece.documento_instancia — instancia de flujo vinculada
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
  * ---------------------------------------------------------------------------
- *   list, get   → requireRole(["MC","PHYSICIAN","NURSE","TEC","PROF_DX"])
- *   create      → requireRole(["MC","PHYSICIAN"])
- *   firmar      → requireRole(["MC","PHYSICIAN"])  — requiere PIN argon2id
- *   validar     → requireRole(["MC","PHYSICIAN"])
- *   anular      → requireRole(["MC","PHYSICIAN"])
+ *   list, get   → requireRole(["MC","ESP","ENF","DIR","ARCH","TEC"])
+ *   create      → requireRole(["MC","ESP"])
+ *   firmar      → requireRole(["MC","ESP"])  — requiere PIN argon2id
+ *   validar     → requireRole(["MC","ESP"])  — requiere PIN argon2id (HH-03)
+ *   anular      → requireRole(["MC","ESP","DIR"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -63,22 +64,26 @@ import { emitDomainEvent } from "@his/database";
 
 const tipoEstudioSchema = z.enum(["laboratorio", "imagenologia", "otro"]);
 const prioridadEstudioSchema = z.enum(["rutina", "urgente", "stat"]);
+const pinSchema = z.string().trim().regex(/^\d{6,8}$/, "PIN debe ser 6-8 dígitos");
 
 const createSchema = z.object({
   episodioId: z.string().uuid(),
   tipo: tipoEstudioSchema,
-  estudiosSolicitados: z.array(z.string().min(1).max(100)).min(1).max(50),
+  /** Lista de códigos de examen (ej. LOINC). Se persiste en examenes jsonb junto con prioridad. */
+  examenes: z.array(z.string().min(1).max(100)).min(1).max(50),
   prioridad: prioridadEstudioSchema.default("rutina"),
-  observacionesClinicas: z.string().max(4000).optional(),
+  indicacionClinica: z.string().max(4000).optional(),
 });
 
 const firmarSchema = z.object({
   solicitudId: z.string().uuid(),
-  pin: z.string().trim().regex(/^\d{6,8}$/, "PIN debe ser 6-8 dígitos"),
+  pin: pinSchema,
 });
 
+/** HH-03: validar requiere PIN igual que firmar (NTEC Art. 19/20). */
 const validarSchema = z.object({
   solicitudId: z.string().uuid(),
+  pin: pinSchema,
   observacion: z.string().max(1000).optional(),
 });
 
@@ -97,20 +102,21 @@ const listSchema = z.object({
 const getSchema = z.object({ id: z.string().uuid() });
 
 // ---------------------------------------------------------------------------
-// Tipos de fila raw
+// Tipos de fila raw — alineados con columnas reales de ece.solicitud_estudio
 // ---------------------------------------------------------------------------
 
 export interface SolicitudRow {
   id: string;
   instancia_id: string;
   episodio_id: string;
-  paciente_id: string;
   tipo: string;
-  estudios_solicitados: unknown;
-  prioridad: string;
-  observaciones_clinicas: string | null;
-  solicitado_por: string;
-  fecha_solicitud: Date;
+  /** JSONB: { examenes: string[], prioridad: string } */
+  examenes: unknown;
+  indicacion_clinica: string | null;
+  medico_solicitante_id: string;
+  fecha_hora: Date;
+  estado: string;
+  /** Estado desde ece.flujo_estado via JOIN con ece.documento_instancia */
   estado_codigo: string;
   estado_id: string;
 }
@@ -301,13 +307,12 @@ async function findSolicitud(tx: RawTx, id: string): Promise<SolicitudRow | null
       se.id::text,
       se.instancia_id::text,
       se.episodio_id::text,
-      se.paciente_id::text,
       se.tipo,
-      se.estudios_solicitados,
-      se.prioridad,
-      se.observaciones_clinicas,
-      se.solicitado_por::text,
-      se.fecha_solicitud,
+      se.examenes,
+      se.indicacion_clinica,
+      se.medico_solicitante_id::text,
+      se.fecha_hora,
+      se.estado,
       fe.codigo AS estado_codigo,
       fe.id::text AS estado_id
     FROM ece.solicitud_estudio se
@@ -343,13 +348,12 @@ export const eceSolicitudEstudioRouter = router({
           se.id::text,
           se.instancia_id::text,
           se.episodio_id::text,
-          se.paciente_id::text,
           se.tipo,
-          se.estudios_solicitados,
-          se.prioridad,
-          se.observaciones_clinicas,
-          se.solicitado_por::text,
-          se.fecha_solicitud,
+          se.examenes,
+          se.indicacion_clinica,
+          se.medico_solicitante_id::text,
+          se.fecha_hora,
+          se.estado,
           fe.codigo AS estado_codigo,
           fe.id::text AS estado_id
         FROM ece.solicitud_estudio se
@@ -358,7 +362,7 @@ export const eceSolicitudEstudioRouter = router({
         WHERE (${input.episodioId ?? null}::uuid IS NULL OR se.episodio_id = ${input.episodioId ?? null}::uuid)
           AND (${input.estadoCodigo ?? null} IS NULL OR fe.codigo = ${input.estadoCodigo ?? null})
           AND (${input.cursor ?? null}::uuid IS NULL OR se.id < ${input.cursor ?? null}::uuid)
-        ORDER BY se.fecha_solicitud DESC, se.id DESC
+        ORDER BY se.fecha_hora DESC, se.id DESC
         LIMIT ${input.limit}
       `;
       const nextCursor = rows.length === input.limit ? rows[rows.length - 1]!.id : null;
@@ -401,7 +405,7 @@ export const eceSolicitudEstudioRouter = router({
       }
       const { tipo_doc_id, estado_inicial_id } = tipoRows[0]!;
 
-      // Resolver paciente desde episodio
+      // Resolver paciente desde episodio (para documento_instancia que sí tiene paciente_id)
       const episodioRows = await (tx.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
@@ -445,23 +449,20 @@ export const eceSolicitudEstudioRouter = router({
       `;
       const instanciaId = instanciaRows[0]!.id;
 
-      // Insertar solicitud (estudios_solicitados como JSONB)
-      const estudiosSolicitadosJson = JSON.stringify(input.estudiosSolicitados);
+      // examenes jsonb embebe la lista de códigos + prioridad
+      const examenesJson = JSON.stringify({ examenes: input.examenes, prioridad: input.prioridad });
       const solRows = await (tx.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.solicitud_estudio
-          (instancia_id, episodio_id, paciente_id, tipo,
-           estudios_solicitados, prioridad, observaciones_clinicas, solicitado_por)
+          (instancia_id, episodio_id, tipo, examenes, indicacion_clinica, medico_solicitante_id)
         VALUES (
           ${instanciaId}::uuid,
           ${input.episodioId}::uuid,
-          ${pacienteId}::uuid,
           ${input.tipo},
-          ${estudiosSolicitadosJson}::jsonb,
-          ${input.prioridad},
-          ${input.observacionesClinicas ?? null},
+          ${examenesJson}::jsonb,
+          ${input.indicacionClinica ?? null},
           ${personal.id}::uuid
         )
         RETURNING id::text
@@ -504,7 +505,6 @@ export const eceSolicitudEstudioRouter = router({
           instanceId: sol.instancia_id,
           tipoDocumentoCodigo: "SOL_EST",
           tipo: sol.tipo,
-          prioridad: sol.prioridad,
           accion: "firmar",
           byUserId: ctx.user.id,
           firmaId,
@@ -515,7 +515,11 @@ export const eceSolicitudEstudioRouter = router({
     });
   }),
 
-  /** MC valida la solicitud firmada — firmado → validado. */
+  /**
+   * MC valida la solicitud firmada — firmado → validado.
+   * HH-03: requiere PIN (NTEC Art. 19/20 — toda transición de estado con
+   * efecto clínico requiere firma electrónica).
+   */
   validar: mcProc.input(validarSchema).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
     return withEceCtx(ctx.prisma, eceCtx, async (tx) => {
@@ -530,8 +534,9 @@ export const eceSolicitudEstudioRouter = router({
         });
       }
 
+      const { firmaId } = await verifyPinOrThrow(tx, ctx.user.id, input.pin);
       const rolEjecutor = ctx.tenant.roleCodes.includes("MC") ? "MC" : "ESP";
-      await avanzarEstado(tx, sol.instancia_id, "validar", eceCtx.personalId, rolEjecutor);
+      await avanzarEstado(tx, sol.instancia_id, "validar", eceCtx.personalId, rolEjecutor, firmaId);
 
       await emitDomainEvent(tx, {
         organizationId: ctx.tenant.organizationId,
@@ -544,6 +549,7 @@ export const eceSolicitudEstudioRouter = router({
           tipoDocumentoCodigo: "SOL_EST",
           accion: "validar",
           byUserId: ctx.user.id,
+          firmaId,
           observacion: input.observacion ?? null,
         },
       });
