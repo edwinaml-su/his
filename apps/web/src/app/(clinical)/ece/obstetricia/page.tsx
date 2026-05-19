@@ -1,18 +1,17 @@
 "use client";
 
 /**
- * ECE — Dashboard Maternidad (TDR §ECE Obstetricia)
+ * ECE — Dashboard Maternidad (NTEC Art. 25)
  *
  * Vista operacional para jefe de servicio de maternidad.
  *
  * Secciones:
- *   - KPIs: trabajo de parto activo / salas expulsión ocupadas /
- *           nacimientos del día / RN en UCIN
+ *   - KPIs: partos hoy / pendientes / cesáreas / fallecidos maternos
  *   - Mosaico de salas: pre-parto / expulsión / post-parto
- *   - Panel de alertas clínicas: partograma + alumbramiento + hemorragia
- *   - Cola de próximas pacientes esperadas
+ *   - Panel de alertas clínicas: partograma + alumbramiento + HPP
+ *   - Cola de episodios en labor activa
  *
- * Auto-refresh cada 30 s (refetchInterval en cada query).
+ * Auto-refresh cada 30 s via refetchInterval (reemplaza setInterval manual).
  *
  * Accesibilidad (WCAG 2.2 AA):
  *   - h1 único, h2 por sección
@@ -35,136 +34,47 @@ import {
 } from "lucide-react";
 import { Badge } from "@his/ui/components/badge";
 import { cn } from "@his/ui/lib/utils";
+import { trpc } from "@/lib/trpc/react";
 
 // ─── Constantes ────────────────────────────────────────────────────────────────
 
 const REFRESH_INTERVAL_MS = 30_000;
 
-// ─── Tipos de dominio ──────────────────────────────────────────────────────────
+// ─── Tipos locales (espejo de los tipos del router para evitar import deep) ───
 
-type EstadoSala = "libre" | "pre-parto" | "expulsion" | "post-parto";
-
-interface SalaMock {
+interface Sala {
   id: string;
   codigo: string;
-  tipo: "pre-parto" | "expulsion" | "post-parto";
-  estado: EstadoSala;
-  pacienteNombre: string | null;
-  /** Minutos desde que la paciente ingresó a esta sala */
-  minutosEnSala: number | null;
-  /** Dilatación en cm (solo pre-parto/expulsión) */
-  dilatacionCm: number | null;
+  tipo: string;
+  estado: string;
+  paciente_nombre: string | null;
+  minutos_en_sala: number | null;
+  dilatacion_cm: number | null;
 }
 
-interface AlertaClinica {
+interface Alerta {
   id: string;
-  tipo: "partograma-lento" | "alumbramiento-tardio" | "hemorragia-postparto";
-  pacienteNombre: string;
-  salaId: string;
-  salaCodigo: string;
-  minutosTranscurridos: number;
+  tipo: string;
+  paciente_nombre: string;
+  sala_codigo: string;
+  minutos_transcurridos: number;
   mensaje: string;
 }
 
 interface PacienteEsperada {
   id: string;
-  nombre: string;
-  semanas: number;
-  horaEstimadaIngreso: string;
-  motivo: string;
+  paciente_nombre: string;
+  semanas_gestacion: number | null;
+  hora_ingreso: string;
+  motivo: string | null;
 }
 
-interface KpiData {
-  trabajoParto: number;
-  salasExpulsionOcupadas: number;
-  nacimientosHoy: number;
-  rnUcin: number;
+interface Kpis {
+  partos_hoy: number;
+  partos_pendientes: number;
+  cesareas_hoy: number;
+  fallecidos_maternos_hoy: number;
 }
-
-// ─── Datos mock (reemplazar con tRPC cuando router esté disponible) ────────────
-// TODO: reemplazar por trpc.eceObstetricia.kpis / salas / alertas / cola
-
-function useMockKpis(): { data: KpiData } {
-  const [data] = React.useState<KpiData>({
-    trabajoParto: 4,
-    salasExpulsionOcupadas: 2,
-    nacimientosHoy: 7,
-    rnUcin: 1,
-  });
-  return { data };
-}
-
-const SALAS_MOCK: SalaMock[] = [
-  {
-    id: "s1", codigo: "PP-01", tipo: "pre-parto", estado: "pre-parto",
-    pacienteNombre: "García, M.", minutosEnSala: 95, dilatacionCm: 6,
-  },
-  {
-    id: "s2", codigo: "PP-02", tipo: "pre-parto", estado: "pre-parto",
-    pacienteNombre: "López, R.", minutosEnSala: 200, dilatacionCm: 4,
-  },
-  {
-    id: "s3", codigo: "PP-03", tipo: "pre-parto", estado: "libre",
-    pacienteNombre: null, minutosEnSala: null, dilatacionCm: null,
-  },
-  {
-    id: "s4", codigo: "EX-01", tipo: "expulsion", estado: "expulsion",
-    pacienteNombre: "Martínez, K.", minutosEnSala: 18, dilatacionCm: 10,
-  },
-  {
-    id: "s5", codigo: "EX-02", tipo: "expulsion", estado: "expulsion",
-    pacienteNombre: "Pérez, L.", minutosEnSala: 25, dilatacionCm: 10,
-  },
-  {
-    id: "s6", codigo: "EX-03", tipo: "expulsion", estado: "libre",
-    pacienteNombre: null, minutosEnSala: null, dilatacionCm: null,
-  },
-  {
-    id: "s7", codigo: "PO-01", tipo: "post-parto", estado: "post-parto",
-    pacienteNombre: "Hernández, V.", minutosEnSala: 120, dilatacionCm: null,
-  },
-  {
-    id: "s8", codigo: "PO-02", tipo: "post-parto", estado: "post-parto",
-    pacienteNombre: "Ramos, S.", minutosEnSala: 45, dilatacionCm: null,
-  },
-  {
-    id: "s9", codigo: "PO-03", tipo: "post-parto", estado: "libre",
-    pacienteNombre: null, minutosEnSala: null, dilatacionCm: null,
-  },
-];
-
-const ALERTAS_MOCK: AlertaClinica[] = [
-  {
-    id: "a1",
-    tipo: "partograma-lento",
-    pacienteNombre: "López, R.",
-    salaId: "s2",
-    salaCodigo: "PP-02",
-    minutosTranscurridos: 200,
-    mensaje: "Dilatación 4 cm — progresión por debajo de la curva de alerta (≤0.5 cm/h por >2 h)",
-  },
-  {
-    id: "a2",
-    tipo: "alumbramiento-tardio",
-    pacienteNombre: "Martínez, K.",
-    salaId: "s4",
-    salaCodigo: "EX-01",
-    minutosTranscurridos: 38,
-    mensaje: "Alumbramiento sin completar a los 38 min del nacimiento (límite: 30 min)",
-  },
-];
-
-const COLA_MOCK: PacienteEsperada[] = [
-  {
-    id: "c1", nombre: "Flores, A.", semanas: 39, horaEstimadaIngreso: "14:30", motivo: "Trabajo de parto",
-  },
-  {
-    id: "c2", nombre: "Torres, M.", semanas: 37, horaEstimadaIngreso: "15:00", motivo: "Inducción programada",
-  },
-  {
-    id: "c3", nombre: "Reyes, J.", semanas: 40, horaEstimadaIngreso: "16:15", motivo: "Trabajo de parto",
-  },
-];
 
 // ─── Sub-componentes ───────────────────────────────────────────────────────────
 
@@ -197,45 +107,40 @@ function KpiCard({ label, value, icon: Icon, colorClass }: KpiCardProps) {
 }
 
 function formatMinutos(min: number): string {
-  if (min < 60) return `${min} min`;
+  if (min < 60) return `${Math.round(min)} min`;
   const h = Math.floor(min / 60);
-  const m = min % 60;
+  const m = Math.round(min % 60);
   return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
 
-const TIPO_LABEL: Record<SalaMock["tipo"], string> = {
+const TIPO_LABEL: Record<string, string> = {
   "pre-parto": "Pre-parto",
   expulsion: "Expulsión",
   "post-parto": "Post-parto",
 };
 
-const ESTADO_BADGE: Record<
-  EstadoSala,
-  { text: string; className: string }
-> = {
+const ESTADO_BADGE: Record<string, { text: string; className: string }> = {
   libre: {
     text: "Libre",
     className: "bg-emerald-100 text-emerald-900 dark:bg-emerald-900 dark:text-emerald-100",
   },
-  "pre-parto": {
-    text: "En trabajo de parto",
+  ocupada: {
+    text: "Ocupada",
     className: "bg-blue-100 text-blue-900 dark:bg-blue-900 dark:text-blue-100",
   },
-  expulsion: {
-    text: "En expulsión",
-    className: "bg-rose-100 text-rose-900 dark:bg-rose-900 dark:text-rose-100",
-  },
-  "post-parto": {
-    text: "Post-parto",
+  limpieza: {
+    text: "En limpieza",
     className: "bg-violet-100 text-violet-900 dark:bg-violet-900 dark:text-violet-100",
   },
 };
 
-function SalaCard({ sala }: { sala: SalaMock }) {
-  const badge = ESTADO_BADGE[sala.estado];
-  const ariaLabel = sala.pacienteNombre
-    ? `${TIPO_LABEL[sala.tipo]} ${sala.codigo} — ${sala.pacienteNombre} — ${badge.text}`
-    : `${TIPO_LABEL[sala.tipo]} ${sala.codigo} — Libre`;
+function SalaCard({ sala }: { sala: Sala }) {
+  // ESTADO_BADGE cubre los estados conocidos; fallback a libre para desconocidos
+  const badge = ESTADO_BADGE[sala.estado] ?? ESTADO_BADGE.libre!;
+  const tipoLabel = TIPO_LABEL[sala.tipo] ?? sala.tipo;
+  const ariaLabel = sala.paciente_nombre
+    ? `${tipoLabel} ${sala.codigo} — ${sala.paciente_nombre} — ${badge.text}`
+    : `${tipoLabel} ${sala.codigo} — Libre`;
 
   return (
     <article
@@ -244,60 +149,73 @@ function SalaCard({ sala }: { sala: SalaMock }) {
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-          {TIPO_LABEL[sala.tipo]}
+          {tipoLabel}
         </span>
         <span className="font-mono text-sm font-medium">{sala.codigo}</span>
       </div>
 
       <Badge className={cn("text-xs", badge.className)}>{badge.text}</Badge>
 
-      {sala.pacienteNombre && (
+      {sala.paciente_nombre && (
         <div className="mt-2 space-y-1 text-sm">
-          <p className="font-medium truncate">{sala.pacienteNombre}</p>
-          {sala.minutosEnSala !== null && (
+          <p className="font-medium truncate">{sala.paciente_nombre}</p>
+          {sala.minutos_en_sala !== null && (
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="h-3 w-3 shrink-0" aria-hidden />
-              <span>En sala: {formatMinutos(sala.minutosEnSala)}</span>
+              <span>En sala: {formatMinutos(sala.minutos_en_sala)}</span>
             </p>
           )}
-          {sala.dilatacionCm !== null && (
+          {sala.dilatacion_cm !== null && (
             <p className="text-xs text-muted-foreground">
-              Dilatación: <span className="font-semibold">{sala.dilatacionCm} cm</span>
+              Dilatación: <span className="font-semibold">{sala.dilatacion_cm} cm</span>
             </p>
           )}
         </div>
       )}
 
-      {!sala.pacienteNombre && (
+      {!sala.paciente_nombre && (
         <p className="mt-2 text-xs text-muted-foreground">Sin paciente asignada</p>
       )}
     </article>
   );
 }
 
-const ALERTA_CONFIG: Record<
-  AlertaClinica["tipo"],
-  { label: string; className: string; iconClass: string }
-> = {
-  "partograma-lento": {
+const ALERTA_CONFIG: Record<string, { label: string; className: string; iconClass: string }> = {
+  "ece.partograma.alerta": {
     label: "Partograma — Dilatación lenta",
     className: "border-amber-400 bg-amber-50 dark:border-amber-600 dark:bg-amber-950/40",
     iconClass: "text-amber-600 dark:text-amber-400",
   },
-  "alumbramiento-tardio": {
+  "ece.alumbramiento.tardio": {
     label: "Alumbramiento > 30 min",
     className: "border-orange-400 bg-orange-50 dark:border-orange-600 dark:bg-orange-950/40",
     iconClass: "text-orange-600 dark:text-orange-400",
   },
-  "hemorragia-postparto": {
+  "ece.hemorragia.postparto.sospecha": {
     label: "Hemorragia post-parto",
     className: "border-red-500 bg-red-50 dark:border-red-700 dark:bg-red-950/40",
     iconClass: "text-red-600 dark:text-red-400",
   },
+  "ece.hpp.activo": {
+    label: "HPP activo",
+    className: "border-red-600 bg-red-100 dark:border-red-800 dark:bg-red-950/60",
+    iconClass: "text-red-700 dark:text-red-300",
+  },
+  "ece.distocia.detectada": {
+    label: "Distocia detectada",
+    className: "border-rose-400 bg-rose-50 dark:border-rose-600 dark:bg-rose-950/40",
+    iconClass: "text-rose-600 dark:text-rose-400",
+  },
 };
 
-function AlertaCard({ alerta }: { alerta: AlertaClinica }) {
-  const cfg = ALERTA_CONFIG[alerta.tipo];
+const ALERTA_DEFAULT_CFG = {
+  label: "Alerta clínica",
+  className: "border-amber-400 bg-amber-50 dark:border-amber-600 dark:bg-amber-950/40",
+  iconClass: "text-amber-600 dark:text-amber-400",
+};
+
+function AlertaCard({ alerta }: { alerta: Alerta }) {
+  const cfg = ALERTA_CONFIG[alerta.tipo] ?? ALERTA_DEFAULT_CFG;
   return (
     <li
       className={cn(
@@ -314,11 +232,11 @@ function AlertaCard({ alerta }: { alerta: AlertaClinica }) {
           {cfg.label}
         </p>
         <p className="mt-0.5 truncate text-sm font-medium">
-          {alerta.pacienteNombre} — Sala {alerta.salaCodigo}
+          {alerta.paciente_nombre}{alerta.sala_codigo ? ` — Sala ${alerta.sala_codigo}` : ""}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">{alerta.mensaje}</p>
         <p className="mt-1 text-xs font-medium text-foreground/60">
-          Tiempo transcurrido: {formatMinutos(alerta.minutosTranscurridos)}
+          Tiempo transcurrido: {formatMinutos(alerta.minutos_transcurridos)}
         </p>
       </div>
     </li>
@@ -327,25 +245,24 @@ function AlertaCard({ alerta }: { alerta: AlertaClinica }) {
 
 // ─── Sección mosaico de salas ──────────────────────────────────────────────────
 
-const GRUPOS: { tipo: SalaMock["tipo"]; label: string }[] = [
+const GRUPOS: { tipo: string; label: string }[] = [
   { tipo: "pre-parto", label: "Pre-parto" },
   { tipo: "expulsion", label: "Expulsión" },
   { tipo: "post-parto", label: "Post-parto" },
 ];
 
-function MosaicoSalas({ salas }: { salas: SalaMock[] }) {
+function MosaicoSalas({ salas }: { salas: Sala[] }) {
   return (
     <div className="space-y-4">
       {GRUPOS.map(({ tipo, label }) => {
         const salasTipo = salas.filter((s) => s.tipo === tipo);
+        if (salasTipo.length === 0) return null;
         return (
           <div key={tipo}>
             <h3 className="mb-2 text-sm font-semibold text-muted-foreground">{label}</h3>
             <div
               className="grid gap-3"
-              style={{
-                gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))",
-              }}
+              style={{ gridTemplateColumns: "repeat(auto-fill, minmax(11rem, 1fr))" }}
             >
               {salasTipo.map((sala) => (
                 <SalaCard key={sala.id} sala={sala} />
@@ -358,24 +275,45 @@ function MosaicoSalas({ salas }: { salas: SalaMock[] }) {
   );
 }
 
+// ─── Estado de carga / error ──────────────────────────────────────────────────
+
+function LoadingPlaceholder({ label }: { label: string }) {
+  return (
+    <div
+      role="status"
+      aria-label={`Cargando ${label}`}
+      className="animate-pulse rounded-lg border bg-muted/20 p-4 text-xs text-muted-foreground"
+    >
+      Cargando {label}…
+    </div>
+  );
+}
+
 // ─── Page principal ────────────────────────────────────────────────────────────
 
 export default function MaternidadDashboardPage() {
-  // Auto-refresh: el intervalo simula refetchInterval cuando tRPC esté cableado.
-  // Con datos mock usamos un contador que fuerza re-render cada 30 s
-  const [tick, setTick] = React.useState(0);
-  React.useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), REFRESH_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, []);
+  const { data: kpis, isLoading: kpisLoading } =
+    trpc.eceObstetricia.kpis.useQuery(undefined, { refetchInterval: REFRESH_INTERVAL_MS });
 
-  // Suprime warning de "tick no usado" — fuerza re-render intencionalmente
-  void tick;
+  const { data: salas = [], isLoading: salasLoading } =
+    trpc.eceObstetricia.salas.useQuery(undefined, { refetchInterval: REFRESH_INTERVAL_MS });
 
-  const { data: kpis } = useMockKpis();
-  const salas: SalaMock[] = SALAS_MOCK;
-  const alertas: AlertaClinica[] = ALERTAS_MOCK;
-  const cola: PacienteEsperada[] = COLA_MOCK;
+  const { data: alertas = [], isLoading: alertasLoading } =
+    trpc.eceObstetricia.alertas.useQuery(undefined, { refetchInterval: REFRESH_INTERVAL_MS });
+
+  const { data: cola = [], isLoading: colaLoading } =
+    trpc.eceObstetricia.cola.useQuery(undefined, { refetchInterval: REFRESH_INTERVAL_MS });
+
+  const kpiData: Kpis = kpis ?? {
+    partos_hoy: 0,
+    partos_pendientes: 0,
+    cesareas_hoy: 0,
+    fallecidos_maternos_hoy: 0,
+  };
+
+  const hppActivo = (alertas as Alerta[]).some(
+    (a: Alerta) => a.tipo === "ece.hpp.activo" || a.tipo === "ece.hemorragia.postparto.sospecha",
+  );
 
   return (
     <div className="space-y-6">
@@ -394,36 +332,40 @@ export default function MaternidadDashboardPage() {
         <h2 id="kpis-heading" className="sr-only">
           Indicadores clave
         </h2>
-        <div
-          role="status"
-          aria-label="Indicadores operacionales de maternidad"
-          className="grid grid-cols-2 gap-3 sm:grid-cols-4"
-        >
-          <KpiCard
-            label="En trabajo de parto"
-            value={kpis.trabajoParto}
-            icon={Users}
-            colorClass="border-blue-200 dark:border-blue-800"
-          />
-          <KpiCard
-            label="Salas expulsión ocupadas"
-            value={kpis.salasExpulsionOcupadas}
-            icon={BedDouble}
-            colorClass="border-rose-200 dark:border-rose-800"
-          />
-          <KpiCard
-            label="Nacimientos hoy"
-            value={kpis.nacimientosHoy}
-            icon={Baby}
-            colorClass="border-emerald-200 dark:border-emerald-800"
-          />
-          <KpiCard
-            label="RN en UCIN"
-            value={kpis.rnUcin}
-            icon={Bed}
-            colorClass="border-amber-200 dark:border-amber-800"
-          />
-        </div>
+        {kpisLoading ? (
+          <LoadingPlaceholder label="indicadores" />
+        ) : (
+          <div
+            role="status"
+            aria-label="Indicadores operacionales de maternidad"
+            className="grid grid-cols-2 gap-3 sm:grid-cols-4"
+          >
+            <KpiCard
+              label="Partos hoy"
+              value={kpiData.partos_hoy}
+              icon={Baby}
+              colorClass="border-emerald-200 dark:border-emerald-800"
+            />
+            <KpiCard
+              label="En labor activa"
+              value={kpiData.partos_pendientes}
+              icon={Users}
+              colorClass="border-blue-200 dark:border-blue-800"
+            />
+            <KpiCard
+              label="Cesáreas hoy"
+              value={kpiData.cesareas_hoy}
+              icon={BedDouble}
+              colorClass="border-rose-200 dark:border-rose-800"
+            />
+            <KpiCard
+              label="Fallecidos maternos"
+              value={kpiData.fallecidos_maternos_hoy}
+              icon={Bed}
+              colorClass="border-amber-200 dark:border-amber-800"
+            />
+          </div>
+        )}
       </section>
 
       {/* ── Mosaico de salas + alertas (2 columnas en lg) ─────────────────── */}
@@ -436,7 +378,13 @@ export default function MaternidadDashboardPage() {
           >
             Salas — estado actual
           </h2>
-          <MosaicoSalas salas={salas} />
+          {salasLoading ? (
+            <LoadingPlaceholder label="salas" />
+          ) : salas.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Sin salas activas.</p>
+          ) : (
+            <MosaicoSalas salas={salas} />
+          )}
         </section>
 
         {/* Alertas ocupa 1/3 */}
@@ -449,7 +397,9 @@ export default function MaternidadDashboardPage() {
             Alertas clínicas
           </h2>
 
-          {alertas.length === 0 ? (
+          {alertasLoading ? (
+            <LoadingPlaceholder label="alertas" />
+          ) : alertas.length === 0 ? (
             <div
               role="status"
               aria-label="Sin alertas clínicas activas"
@@ -464,7 +414,7 @@ export default function MaternidadDashboardPage() {
               aria-live="polite"
               className="space-y-3"
             >
-              {alertas.map((alerta) => (
+              {(alertas as Alerta[]).map((alerta: Alerta) => (
                 <AlertaCard key={alerta.id} alerta={alerta} />
               ))}
             </ul>
@@ -472,18 +422,20 @@ export default function MaternidadDashboardPage() {
         </section>
       </div>
 
-      {/* ── Cola de próximas pacientes ─────────────────────────────────────── */}
+      {/* ── Cola de episodios en labor ─────────────────────────────────────── */}
       <section aria-labelledby="cola-heading">
         <h2
           id="cola-heading"
           className="mb-3 text-base font-semibold text-foreground"
         >
-          Próximas pacientes esperadas
+          Episodios en labor activa
         </h2>
 
-        {cola.length === 0 ? (
+        {colaLoading ? (
+          <LoadingPlaceholder label="cola" />
+        ) : cola.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No hay pacientes en cola.
+            No hay episodios activos en labor.
           </p>
         ) : (
           <div className="overflow-x-auto rounded-lg border bg-card">
@@ -506,7 +458,7 @@ export default function MaternidadDashboardPage() {
                     scope="col"
                     className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground"
                   >
-                    Hora est.
+                    Hora ingreso
                   </th>
                   <th
                     scope="col"
@@ -517,7 +469,7 @@ export default function MaternidadDashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {cola.map((p, idx) => (
+                {(cola as PacienteEsperada[]).map((p: PacienteEsperada, idx: number) => (
                   <tr
                     key={p.id}
                     className={cn(
@@ -525,10 +477,12 @@ export default function MaternidadDashboardPage() {
                       idx % 2 === 1 && "bg-muted/10",
                     )}
                   >
-                    <td className="px-4 py-2.5 font-medium">{p.nombre}</td>
-                    <td className="px-4 py-2.5 tabular-nums">{p.semanas} sem</td>
-                    <td className="px-4 py-2.5 font-mono tabular-nums">{p.horaEstimadaIngreso}</td>
-                    <td className="px-4 py-2.5 text-muted-foreground">{p.motivo}</td>
+                    <td className="px-4 py-2.5 font-medium">{p.paciente_nombre}</td>
+                    <td className="px-4 py-2.5 tabular-nums">
+                      {p.semanas_gestacion !== null ? `${p.semanas_gestacion} sem` : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 font-mono tabular-nums">{p.hora_ingreso}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{p.motivo ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -537,17 +491,37 @@ export default function MaternidadDashboardPage() {
         )}
       </section>
 
-      {/* Indicador de hemorragia post-parto — simulado aparte como señal crítica */}
-      <section aria-labelledby="hpp-heading" className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950/30">
+      {/* Protocolo HPP — visible solo cuando hay alerta activa o siempre como referencia */}
+      <section
+        aria-labelledby="hpp-heading"
+        className={cn(
+          "rounded-lg border p-4",
+          hppActivo
+            ? "border-red-500 bg-red-100 dark:border-red-700 dark:bg-red-950/60"
+            : "border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950/30",
+        )}
+      >
         <h2
           id="hpp-heading"
-          className="flex items-center gap-2 text-sm font-semibold text-red-700 dark:text-red-400"
+          className={cn(
+            "flex items-center gap-2 text-sm font-semibold",
+            hppActivo
+              ? "text-red-800 dark:text-red-200"
+              : "text-red-700 dark:text-red-400",
+          )}
         >
           <Droplets className="h-4 w-4" aria-hidden />
           Protocolo hemorragia post-parto
+          {hppActivo && (
+            <span className="ml-auto rounded bg-red-600 px-2 py-0.5 text-xs text-white">
+              ACTIVO
+            </span>
+          )}
         </h2>
         <p className="mt-1 text-xs text-red-600 dark:text-red-300">
-          Sin casos activos reportados. Ante sospecha activa el código rojo desde sala de expulsión.
+          {hppActivo
+            ? "Alerta HPP activa — revisar panel de alertas y activar código rojo si corresponde."
+            : "Sin casos activos reportados. Ante sospecha activa el código rojo desde sala de expulsión."}
         </p>
       </section>
     </div>
