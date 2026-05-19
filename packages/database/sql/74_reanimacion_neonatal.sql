@@ -17,7 +17,7 @@
 --   adrenalina_dosis_ml   NUMERIC       + adrenalina_via, adrenalina_concentracion, adrenalina_en
 --   volumen_expansor_ml   NUMERIC       + volumen_expansor_tipo, volumen_expansor_en
 --   fc_post_intervencion  SMALLINT      + fc_post_en
---   resultado             ece.resultado_reanimacion (ENUM)
+--   resultado             ece.resultado_nrp (ENUM)
 --   cerrado_en            TIMESTAMPTZ   — NULL = en curso, NOT NULL = cerrado
 --   cerrado_por           UUID → ece.personal_salud(id)
 --   notas_cierre          TEXT

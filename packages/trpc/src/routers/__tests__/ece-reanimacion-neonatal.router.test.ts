@@ -159,7 +159,7 @@ describe("eceReanimacionNeonatalRouter", () => {
 
     const caller = eceReanimacionNeonatalRouter.createCaller(makeCtx({ prisma }));
     await expect(
-      caller.cerrar({ id: NRP_ID, resultado: "ucin" }),
+      caller.cerrar({ id: NRP_ID, resultado: "UCIN" }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });

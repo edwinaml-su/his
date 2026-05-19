@@ -59,7 +59,7 @@ const registrarPasoSchema = z.object({
 
 const cerrarSchema = z.object({
   id: z.string().uuid(),
-  resultado: z.enum(["estable", "cuidados_intermedios", "ucin", "defuncion"]),
+  resultado: z.enum(["estable", "cuidados_intermedios", "UCIN", "defuncion"]),
   notasCierre: z.string().max(2000).optional(),
   fcPostIntervencion: z.number().int().min(0).max(400).optional(),
 });
@@ -377,7 +377,7 @@ export const eceReanimacionNeonatalRouter = router({
 
     await ctx.prisma.$executeRaw`
       UPDATE ece.reanimacion_neonatal
-      SET resultado            = ${input.resultado}::ece.resultado_reanimacion,
+      SET resultado            = ${input.resultado}::ece.resultado_nrp,
           cerrado_en           = now(),
           cerrado_por          = ${personalId}::uuid,
           notas_cierre         = ${notas},
