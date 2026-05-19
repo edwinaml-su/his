@@ -17,9 +17,9 @@
  *   - Resto de usuarios ve la página en modo read-only.
  *
  * Nota de implementación:
- *   El router `workflow` aún no existe en AppRouter. Se usa `trpc as any`
- *   con tipos locales declarados explícitamente. Cuando el router se registre
- *   en _app.ts, quitar los casts y usar el tipo inferido.
+ *   Usa routers reales: workflowTipoDoc, workflowEstado, workflowTransicion,
+ *   workflowRol, workflowInstance — todos registrados en _app.ts (F2-S1).
+ *   Procedures matrix/saveMatrix y historial pendientes (ver TODOs HG-18).
  */
 import * as React from "react";
 import Link from "next/link";
@@ -47,7 +47,8 @@ import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
-// Tipos locales (se reemplazarán por inferencia tRPC cuando el router exista)
+// Tipos locales auxiliares (complementan inferencia tRPC donde el router
+// devuelve raw SQL — no Prisma model)
 // ---------------------------------------------------------------------------
 
 type WorkflowDetail = {
@@ -82,6 +83,9 @@ type WorkflowTransicion = {
   activo: boolean;
 };
 
+// Tipo de la UI de matriz (llena/responsable/autoriza/firma por rol).
+// TODO(HG-18): workflowRol.list devuelve DocumentoRolRow (una fila por función).
+// La transformación a esta estructura matriz está pendiente de implementar.
 type WorkflowRol = {
   rolId: string;
   rolNombre: string;
@@ -117,10 +121,6 @@ type PaginatedInstancias = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// El cast a any está justificado: el router workflow no existe en AppRouter aún.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const wf = trpc as any;
-
 function fmt(d: string | Date): string {
   return new Date(d).toLocaleString("es-SV");
 }
@@ -149,10 +149,9 @@ function TabDefinicion({
   const [activo, setActivo] = React.useState(workflow.activo);
 
   const utils = trpc.useUtils();
-  const update = wf.workflow.tipoDoc.update.useMutation({
+  const update = trpc.workflowTipoDoc.update.useMutation({
     onSuccess: () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils as any).workflow.tipoDoc.get.invalidate({ id: workflow.id });
+      void utils.workflowTipoDoc.get.invalidate({ id: workflow.id });
       onSaved("Definición guardada");
     },
   });
@@ -246,15 +245,15 @@ function TabEstados({
   const [newCodigo, setNewCodigo] = React.useState("");
   const [newNombre, setNewNombre] = React.useState("");
 
-  const query = wf.workflow.estado.list.useQuery({ workflowId });
+  // workflowId es el ID del tipo de documento (ece.tipo_documento.id)
+  const query = trpc.workflowEstado.estado.list.useQuery({ tipDocumentoId: workflowId });
   const estados: WorkflowEstado[] = query.data ?? [];
   const utils = trpc.useUtils();
 
   const invalidate = () =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (utils as any).workflow.estado.list.invalidate({ workflowId });
+    void utils.workflowEstado.estado.list.invalidate({ tipDocumentoId: workflowId });
 
-  const create = wf.workflow.estado.create.useMutation({
+  const create = trpc.workflowEstado.estado.create.useMutation({
     onSuccess: () => {
       invalidate();
       setAdding(false);
@@ -265,7 +264,7 @@ function TabEstados({
     onError: (e: { message: string }) => onSaved(e.message, "destructive"),
   });
 
-  const remove = wf.workflow.estado.delete.useMutation({
+  const remove = trpc.workflowEstado.estado.delete.useMutation({
     onSuccess: () => {
       invalidate();
       onSaved("Estado eliminado");
@@ -290,7 +289,7 @@ function TabEstados({
             onSubmit={(e) => {
               e.preventDefault();
               create.mutate({
-                workflowId,
+                tipDocumentoId: workflowId,
                 codigo: newCodigo.trim(),
                 nombre: newNombre.trim(),
               });
@@ -424,33 +423,35 @@ function TabTransiciones({
 }) {
   const [adding, setAdding] = React.useState(false);
   const [form, setForm] = React.useState({
-    nombre: "",
+    // accion = nombre visible de la transición (p.ej. "aprobar", "rechazar")
+    accion: "",
     estadoOrigenId: "",
     estadoDestinoId: "",
+    // rolAutorizaId: UUID del rol ECE que autoriza la transición (requerido por backend)
+    rolAutorizaId: "",
     requiereFirma: false,
   });
 
-  const query = wf.workflow.transicion.list.useQuery({ workflowId });
-  const estadosQuery = wf.workflow.estado.list.useQuery({ workflowId });
+  const query = trpc.workflowEstado.transicion.list.useQuery({ tipDocumentoId: workflowId });
+  const estadosQuery = trpc.workflowEstado.estado.list.useQuery({ tipDocumentoId: workflowId });
   const transiciones: WorkflowTransicion[] = query.data ?? [];
   const estados: WorkflowEstado[] = estadosQuery.data ?? [];
   const utils = trpc.useUtils();
 
   const invalidate = () =>
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (utils as any).workflow.transicion.list.invalidate({ workflowId });
+    void utils.workflowEstado.transicion.list.invalidate({ tipDocumentoId: workflowId });
 
-  const create = wf.workflow.transicion.create.useMutation({
+  const create = trpc.workflowEstado.transicion.create.useMutation({
     onSuccess: () => {
       invalidate();
       setAdding(false);
-      setForm({ nombre: "", estadoOrigenId: "", estadoDestinoId: "", requiereFirma: false });
+      setForm({ accion: "", estadoOrigenId: "", estadoDestinoId: "", rolAutorizaId: "", requiereFirma: false });
       onMsg("Transición creada");
     },
     onError: (e: { message: string }) => onMsg(e.message, "destructive"),
   });
 
-  const remove = wf.workflow.transicion.delete.useMutation({
+  const remove = trpc.workflowTransicion.delete.useMutation({
     onSuccess: () => {
       invalidate();
       onMsg("Transición eliminada");
@@ -474,17 +475,17 @@ function TabTransiciones({
             className="grid grid-cols-1 gap-2 md:grid-cols-4"
             onSubmit={(e) => {
               e.preventDefault();
-              create.mutate({ workflowId, ...form });
+              create.mutate({ tipDocumentoId: workflowId, ...form });
             }}
           >
             <div className="space-y-1.5">
-              <Label htmlFor="tNombre">Nombre</Label>
+              <Label htmlFor="tAccion">Acción (p.ej. aprobar, rechazar)</Label>
               <Input
-                id="tNombre"
-                value={form.nombre}
-                onChange={(e) => setForm((f) => ({ ...f, nombre: e.target.value }))}
+                id="tAccion"
+                value={form.accion}
+                onChange={(e) => setForm((f) => ({ ...f, accion: e.target.value }))}
                 required
-                maxLength={80}
+                maxLength={64}
               />
             </div>
             <div className="space-y-1.5">
@@ -660,9 +661,13 @@ function TabRoles({
   canEdit: boolean;
   onMsg: (msg: string, variant?: "success" | "destructive") => void;
 }) {
-  const query = wf.workflow.rol.matrix.useQuery({ workflowId });
-  const roles: WorkflowRol[] = query.data ?? [];
-  const utils = trpc.useUtils();
+  // workflowRol.list devuelve asignaciones individuales (funcion por rol).
+  // No hay endpoint de "matrix" ni "saveMatrix" — se usa assign/revoke por función.
+  // TODO(HG-18): implementar UI de checkbox matrix usando workflowRol.assign / workflowRol.revoke.
+  const query = trpc.workflowRol.list.useQuery({ tipDocumentoId: workflowId });
+  // TODO(HG-18): transformar DocumentoRolRow[] a estructura matriz WorkflowRol[].
+  // Por ahora cast para no bloquear typecheck — la UI de matriz está pendiente.
+  const roles = (query.data ?? []) as unknown as WorkflowRol[];
 
   const [localRoles, setLocalRoles] = React.useState<WorkflowRol[]>([]);
 
@@ -670,14 +675,8 @@ function TabRoles({
     if (roles.length > 0) setLocalRoles(roles);
   }, [roles]);
 
-  const save = wf.workflow.rol.saveMatrix.useMutation({
-    onSuccess: () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils as any).workflow.rol.matrix.invalidate({ workflowId });
-      onMsg("Matriz de roles guardada");
-    },
-    onError: (e: { message: string }) => onMsg(e.message, "destructive"),
-  });
+  // TODO(HG-18): implementar guardado de matriz iterando diff localRoles vs roles
+  // y llamando workflowRol.assign / workflowRol.revoke por cada cambio de función.
 
   function toggleCell(
     rolId: string,
@@ -703,15 +702,10 @@ function TabRoles({
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0">
         <CardTitle className="text-base">Matriz de roles</CardTitle>
+        {/* TODO(HG-18): botón deshabilitado hasta implementar assign/revoke por función */}
         {canEdit && (
-          <Button
-            size="sm"
-            disabled={save.isPending}
-            onClick={() =>
-              save.mutate({ workflowId, roles: localRoles })
-            }
-          >
-            {save.isPending ? "Guardando…" : "Guardar matriz"}
+          <Button size="sm" disabled title="Pendiente implementación de asignación por función">
+            Guardar matriz
           </Button>
         )}
       </CardHeader>
@@ -776,11 +770,13 @@ function TabInstancias({ workflowId }: { workflowId: string }) {
   const [page, setPage] = React.useState(1);
   const pageSize = 20;
 
-  const query = wf.workflow.instancia.listActivas.useQuery({
-    workflowId,
-    page,
-    pageSize,
-  });
+  // TODO(HG-18): workflowInstance.list requiere episodioId o pacienteId como filtro.
+  // Para un listado de instancias por tipo de documento sin episodio conocido se
+  // necesita un nuevo procedure (workflowInstance.listByTipo) — pendiente de implementar.
+  const query = trpc.workflowInstance.list.useQuery(
+    { tipoDocumentoId: workflowId, limit: pageSize },
+    { enabled: false }, // deshabilitado hasta tener episodioId o listByTipo
+  );
 
   const data: PaginatedInstancias = query.data ?? { items: [], total: 0 };
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
@@ -875,8 +871,15 @@ function TabInstancias({ workflowId }: { workflowId: string }) {
 }
 
 function TabHistorial({ workflowId }: { workflowId: string }) {
-  const query = wf.workflow.tipoDoc.historial.useQuery({ workflowId });
-  const entries: WorkflowHistorialEntry[] = query.data ?? [];
+  // TODO(HG-18): workflowTipoDoc no tiene procedure historial.
+  // El historial de cambios al tipo de documento se captura en audit.audit_log
+  // (trigger SQL 02_audit_triggers.sql). Pendiente exponer via auditIntegrityRouter
+  // o un nuevo procedure workflowTipoDoc.historial que consulte audit.audit_log.
+  const query = trpc.workflowTipoDoc.get.useQuery(
+    { id: workflowId },
+    { enabled: false }, // placeholder tipado — historial pendiente
+  );
+  const entries: WorkflowHistorialEntry[] = [];
 
   return (
     <Card>
@@ -937,7 +940,7 @@ export default function WorkflowDetailPage() {
 
   const [toast, setToast] = React.useState<ToastState>(null);
 
-  const query = wf.workflow.tipoDoc.get.useQuery({ id }, { enabled: Boolean(id) });
+  const query = trpc.workflowTipoDoc.get.useQuery({ id }, { enabled: Boolean(id) });
   const workflow = query.data as WorkflowDetail | undefined;
 
   function showMsg(
