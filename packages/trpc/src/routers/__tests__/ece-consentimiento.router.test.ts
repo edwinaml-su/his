@@ -24,8 +24,8 @@ import { MOCK_TENANT } from "@his/test-utils";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     argon2id: 2,
     hash: vi.fn().mockResolvedValue("$argon2id$test$hash"),
     verify: vi.fn().mockResolvedValue(true),

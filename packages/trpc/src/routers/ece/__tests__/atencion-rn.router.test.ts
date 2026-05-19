@@ -54,8 +54,8 @@ vi.mock("@his/database", () => ({
   emitDomainEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("argon2", () => ({
-  default: { verify: vi.fn(async () => true) },
+vi.mock("@his/infrastructure", () => ({
+  argon2: { verify: vi.fn(async () => true) },
 }));
 
 import { eceAtencionRnRouter } from "../atencion-rn.router";

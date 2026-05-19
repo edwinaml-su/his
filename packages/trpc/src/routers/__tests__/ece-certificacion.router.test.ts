@@ -20,8 +20,8 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
 
 // Mock argon2 para tests rápidos
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     argon2id: 2,
     hash: vi.fn().mockResolvedValue("$argon2id$test$hash"),
     verify: vi.fn().mockResolvedValue(true),
@@ -64,9 +64,9 @@ describe("eceCertificacionRouter", () => {
     vi.clearAllMocks();
 
     // Restaurar verify tras clearAllMocks
-    const argon2Module = vi.mocked(require("argon2"));
-    argon2Module.default ??= {};
-    argon2Module.default.verify = vi.fn().mockResolvedValue(true);
+    const argon2Module = vi.mocked(require("@his/infrastructure"));
+    
+    argon2Module.argon2.verify = vi.fn().mockResolvedValue(true);
   });
 
   // -------------------------------------------------------------------------

@@ -20,8 +20,8 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 // Mock argon2 para evitar bcrypt real en unit tests (demasiado lento + sin salt fijo).
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     argon2id: 2,
     hash: vi.fn().mockResolvedValue("$argon2id$test$hash"),
     verify: vi.fn().mockResolvedValue(true),

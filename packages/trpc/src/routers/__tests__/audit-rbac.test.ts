@@ -23,14 +23,14 @@ import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
 // ---------------------------------------------------------------------------
 // Mock argon2 para velocidad
 // ---------------------------------------------------------------------------
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     argon2id: 2,
     hash: vi.fn(async (pin: string) => `hashed:${pin}`),
     verify: vi.fn(async (storedHash: string, pin: string) =>
       storedHash === `hashed:${pin}`
     ),
-  },
+    },
 }));
 
 // ---------------------------------------------------------------------------

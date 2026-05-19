@@ -33,14 +33,14 @@ import { MOCK_USER_ADMIN } from "@his/test-utils";
 // La validación lógica (PIN correcto vs incorrecto) se controla en los mocks
 // de $queryRaw que devuelven pin_hash = "hashed:<pin>".
 // ---------------------------------------------------------------------------
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     argon2id: 2,
     hash: vi.fn(async (pin: string) => `hashed:${pin}`),
     verify: vi.fn(async (storedHash: string, pin: string) =>
       storedHash === `hashed:${pin}`
     ),
-  },
+    },
 }));
 
 // ---------------------------------------------------------------------------

@@ -34,10 +34,10 @@ const ESTADO_FIRM   = "44444444-4444-4444-4444-444444444444";
 // argon2.verify se mockea globalmente para no ejecutar hash real en tests.
 // Uso de implementación in-line (no mockResolvedValue) por compatibilidad
 // con el orden de hoist de vi.mock + import default (patrón de cert-defuncion).
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     verify: vi.fn(async () => true),
-  },
+    },
 }));
 
 // emitDomainEvent mockeado para no depender de @his/database real
