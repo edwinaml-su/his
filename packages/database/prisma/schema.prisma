@@ -370,6 +370,12 @@ model Organization {
   solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
   // F2-S15-D — Audit Dashboard Config
   auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
+  // F2-S14 Stream A — Modo Rondas
+  eceRondaSessions          EceRondaSession[]         @relation("OrgEceRondaSessions")
+  // F2-S14-B — Modo STAT
+  eceStatEvents             EceStatEvent[]            @relation("OrgEceStatEvent")
+  // F2-S14-D — Window Alert
+  medicationWindowAlerts    EceMedicationWindowAlert[] @relation("OrgMedicationWindowAlerts")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -509,6 +515,12 @@ model User {
   expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
   eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
   arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
+  // F2-S14 Stream A — Modo Rondas
+  eceRondaSessions          EceRondaSession[]            @relation("UserEceRondaSessions")
+  // F2-S14-B — Modo STAT
+  eceStatEventsActivados    EceStatEvent[]               @relation("EceStatEventActivador")
+  // F2-S14-D — Window Alert
+  windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
 
   @@schema("public")
 }
@@ -6338,4 +6350,88 @@ model AuditDashboardConfig {
   organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@schema("public")
+}
+
+// =============================================================================
+// F2-S14 Stream A — Modo Rondas
+// US.F2.6.46 (flujo optimizado) · US.F2.6.50 (ruta optimizada) · US.F2.6.51 (pausa)
+// =============================================================================
+
+/// Sesión de ronda de enfermería — persiste estado para pausa/reanudación.
+model EceRondaSession {
+  id                      String    @id @default(uuid()) @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  organizationId          String    @map("organization_id") @db.Uuid
+  modo                    String    @default("POR_HORA") @db.VarChar(20)
+  iniciadoEn              DateTime  @default(now()) @map("iniciado_en") @db.Timestamptz()
+  pausadoEn               DateTime? @map("pausado_en") @db.Timestamptz()
+  reanudadoEn             DateTime? @map("reanudado_en") @db.Timestamptz()
+  completadoEn            DateTime? @map("completado_en") @db.Timestamptz()
+  totalPacientes          Int       @default(0) @map("total_pacientes")
+  indicacionesPending     Json      @default("[]") @map("indicaciones_pending")
+  indicacionesCompletadas Json      @default("[]") @map("indicaciones_completadas")
+
+  organization Organization @relation("OrgEceRondaSessions", fields: [organizationId], references: [id], onDelete: Restrict)
+  user         User         @relation("UserEceRondaSessions", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, organizationId, completadoEn])
+  @@index([organizationId, iniciadoEn(sort: Desc)])
+  @@map("ronda_session")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S14 Stream B — Modo STAT
+// US.F2.6.47 — Administración urgente con bypass justificado
+// =============================================================================
+
+/// Sesión STAT activa para administración urgente bedside.
+model EceStatEvent {
+  id                       String    @id @default(uuid()) @db.Uuid
+  organizationId           String    @map("organization_id") @db.Uuid
+  encounterId              String?   @map("encounter_id") @db.Uuid
+  patientId                String    @map("patient_id") @db.Uuid
+  indicationId             String    @map("indication_id")
+  activadoPorId            String    @map("activado_por_id") @db.Uuid
+  motivo                   String    @db.VarChar(40)
+  motivoLibre              String?   @map("motivo_libre") @db.Text
+  testigosIds              String[]  @map("testigos_ids") @db.Uuid
+  hardStopsBypassed        Json      @default("[]") @map("hard_stops_bypassed")
+  firmaMedicoHash          String?   @map("firma_medico_hash") @db.VarChar(200)
+  activadoEn               DateTime  @default(now()) @map("activado_en") @db.Timestamptz()
+  completadoEn             DateTime? @map("completado_en") @db.Timestamptz()
+  medicationAdministrationId String? @map("medication_administration_id") @db.Uuid
+  completado               Boolean   @default(false)
+
+  organization Organization @relation("OrgEceStatEvent", fields: [organizationId], references: [id], onDelete: Restrict)
+  activadoPor  User         @relation("EceStatEventActivador", fields: [activadoPorId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, activadoEn(sort: Desc)], name: "idx_stat_event_org_activado")
+  @@index([activadoPorId, completado], name: "idx_stat_event_activado_por_activo")
+  @@map("stat_event")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S14 Stream D — Window Alert + Hardware
+// US.F2.6.52 — Alerta ventana terapéutica próxima a cerrar
+// =============================================================================
+
+/// Alerta enviada cuando una indicación está < 15 min de cerrar su ventana terapéutica.
+model EceMedicationWindowAlert {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicationId     String    @db.Text
+  organizationId   String    @db.Uuid
+  ventanaCierreEn  DateTime  @db.Timestamptz()
+  enviadoEn        DateTime  @default(now()) @db.Timestamptz()
+  atendidoEn       DateTime? @db.Timestamptz()
+  atendidoPorId    String?   @db.Uuid
+
+  organization  Organization @relation("OrgMedicationWindowAlerts", fields: [organizationId], references: [id], onDelete: Restrict)
+  atendidoPor   User?        @relation("MedicationWindowAlertAttendedBy", fields: [atendidoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, enviadoEn])
+  @@index([indicationId])
+  @@map("medication_window_alert")
+  @@schema("ece")
 }
