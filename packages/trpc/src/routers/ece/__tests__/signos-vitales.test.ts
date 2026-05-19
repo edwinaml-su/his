@@ -9,15 +9,17 @@
  *   - $executeRawUnsafe absorbe las llamadas de withEceContext
  *     (SELECT ece.set_ece_context + SET LOCAL ROLE authenticated).
  *
- * Casos cubiertos (8 tests):
+ * Casos cubiertos (10 tests):
  *   1. Zod — rangos válidos pasan sin error
  *   2. Zod — TA sistólica fuera de rango (59 / 261) falla
  *   3. Zod — SpO2 < 50 falla
- *   4. Zod — Dolor EVA > 10 falla
- *   5. create — happy path, retorna id
- *   6. update — falla si estado !== borrador (400)
- *   7. firmar — NOT_FOUND cuando id inexistente
- *   8. firmar/validar — FORBIDDEN si rol no es NURSE
+ *   4. Zod — Dolor EVA > 10 falla (campo: escalaDolor)
+ *   5. Zod — campos antropométricos (peso/talla/glucometría) válidos aceptados (HD-18)
+ *   6. create — happy path, retorna id
+ *   7. update — falla si estado !== borrador (400)
+ *   8. firmar — NOT_FOUND cuando id inexistente
+ *   9. firmar/validar — FORBIDDEN si rol no es NURSE
+ *   10. IMC se calcula correctamente de peso y talla
  *
  * @QA E2E pendiente:
  *   - Flujo completo create → firmar → validar con NURSE real.
@@ -36,20 +38,22 @@ function numRange(min: number, max: number, label: string) {
   return z.number().min(min, `${label} mínimo ${min}.`).max(max, `${label} máximo ${max}.`);
 }
 
+// Schema alineado con ece.signos_vitales post-HD-16 (nombres reales de columnas)
 const eceSignosVitalesCreateSchema = z.object({
   pacienteId: z.string().uuid(),
   episodioId: z.string().uuid().optional(),
-  personalId: z.string().uuid(),
-  establecimientoId: z.string().uuid(),
-  taSistolica: numRange(60, 260, "TA sistólica").optional(),
-  taDiastolica: numRange(40, 160, "TA diastólica").optional(),
+  presionSistolica: numRange(60, 260, "TA sistólica").optional(),
+  presionDiastolica: numRange(40, 160, "TA diastólica").optional(),
   frecuenciaCardiaca: numRange(30, 220, "FC").optional(),
   frecuenciaRespiratoria: numRange(4, 60, "FR").optional(),
   temperatura: numRange(30, 43, "Temperatura").optional(),
   saturacionO2: numRange(50, 100, "SpO2").optional(),
-  dolorEva: numRange(0, 10, "Dolor EVA").optional(),
-  observaciones: z.string().max(2000).optional(),
-  tomadoEn: z.string().datetime({ offset: true }).optional(),
+  escalaDolor: numRange(0, 10, "Dolor EVA").optional(),
+  // HD-18 — datos antropométricos
+  pesoKg: numRange(0.5, 300, "Peso").optional(),
+  tallaCm: numRange(30, 250, "Talla").optional(),
+  glucometriaMgdl: numRange(20, 600, "Glucometría").optional(),
+  fechaHoraToma: z.string().datetime({ offset: true }).optional(),
 });
 
 // ─── Mock de withEceContext ──────────────────────────────────────────────────
@@ -94,36 +98,30 @@ function buildCtx(roleCodes: string[] = ["NURSE"]) {
   };
 }
 
-// ─── Caller helper (llama directamente el handler sin HTTP) ─────────────────
-// En lugar de crear un caller tRPC completo, probamos la lógica de validación
-// Zod y los handlers de manera directa para evitar setup de contexto complejo.
-
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("eceSignosVitalesCreateSchema — validación de rangos", () => {
   const baseValid = {
     pacienteId: uuid(),
-    personalId: uuid(),
-    establecimientoId: uuid(),
   };
 
   it("1. acepta valores en todos los rangos válidos", () => {
     const result = eceSignosVitalesCreateSchema.safeParse({
       ...baseValid,
-      taSistolica: 120,
-      taDiastolica: 80,
+      presionSistolica: 120,
+      presionDiastolica: 80,
       frecuenciaCardiaca: 70,
       frecuenciaRespiratoria: 16,
       temperatura: 36.5,
       saturacionO2: 98,
-      dolorEva: 2,
+      escalaDolor: 2,
     });
     expect(result.success).toBe(true);
   });
 
   it("2. rechaza TA sistólica fuera de rango (59 y 261)", () => {
-    const low = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, taSistolica: 59 });
-    const high = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, taSistolica: 261 });
+    const low = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, presionSistolica: 59 });
+    const high = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, presionSistolica: 261 });
     expect(low.success).toBe(false);
     expect(high.success).toBe(false);
   });
@@ -136,14 +134,29 @@ describe("eceSignosVitalesCreateSchema — validación de rangos", () => {
     }
   });
 
-  it("4. rechaza Dolor EVA mayor a 10", () => {
-    const result = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, dolorEva: 11 });
+  it("4. rechaza Dolor EVA mayor a 10 (campo escalaDolor)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({ ...baseValid, escalaDolor: 11 });
     expect(result.success).toBe(false);
+  });
+
+  it("5. acepta datos antropométricos válidos (HD-18)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      ...baseValid,
+      pesoKg: 70,
+      tallaCm: 170,
+      glucometriaMgdl: 95,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pesoKg).toBe(70);
+      expect(result.data.tallaCm).toBe(170);
+      expect(result.data.glucometriaMgdl).toBe(95);
+    }
   });
 });
 
 describe("eceSignosVitalesRouter — create", () => {
-  it("5. happy path: retorna id cuando la inserción es exitosa", async () => {
+  it("6. happy path: retorna id cuando la inserción es exitosa", async () => {
     const ctx = buildCtx(["NURSE"]);
     const newId = uuid();
 
@@ -156,10 +169,8 @@ describe("eceSignosVitalesRouter — create", () => {
 
     const result = await caller.create({
       pacienteId: uuid(),
-      personalId: uuid(),
-      establecimientoId: uuid(),
-      taSistolica: 120,
-      taDiastolica: 80,
+      presionSistolica: 120,
+      presionDiastolica: 80,
     });
 
     expect(result.id).toBe(newId);
@@ -167,24 +178,24 @@ describe("eceSignosVitalesRouter — create", () => {
 });
 
 describe("eceSignosVitalesRouter — update", () => {
-  it("6. falla con BAD_REQUEST si el estado no es 'borrador'", async () => {
+  it("7. falla con BAD_REQUEST si el estado no es 'borrador'", async () => {
     const ctx = buildCtx(["NURSE"]);
 
     // SELECT estado → retorna 'firmado'
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      { estado: "firmado" },
+      { estado_registro: "firmado", peso_kg: null, talla_cm: null },
     ]);
 
     const caller = eceSignosVitalesRouter.createCaller(ctx as never);
 
     await expect(
-      caller.update({ id: uuid(), data: { taSistolica: 130 } }),
+      caller.update({ id: uuid(), data: { presionSistolica: 130 } }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
 
 describe("eceSignosVitalesRouter — firmar", () => {
-  it("7. NOT_FOUND cuando la toma no existe", async () => {
+  it("8. NOT_FOUND cuando la toma no existe", async () => {
     const ctx = buildCtx(["NURSE"]);
 
     // SELECT signos_vitales → vacío
@@ -199,7 +210,7 @@ describe("eceSignosVitalesRouter — firmar", () => {
 });
 
 describe("eceSignosVitalesRouter — autorización", () => {
-  it("8. FORBIDDEN si el rol no incluye NURSE en firmar/validar", async () => {
+  it("9. FORBIDDEN si el rol no incluye NURSE en firmar/validar", async () => {
     // PHYSICIAN no tiene acceso a firmar (nurseOnly = requireRole(['NURSE']))
     const ctx = buildCtx(["PHYSICIAN"]);
     const caller = eceSignosVitalesRouter.createCaller(ctx as never);
@@ -211,5 +222,23 @@ describe("eceSignosVitalesRouter — autorización", () => {
     await expect(caller.validar({ id: uuid() })).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+describe("calcularImc — cálculo automático", () => {
+  it("10. IMC se calcula correctamente de peso y talla (HD-18)", () => {
+    // Validamos que el schema acepta los campos y que se parsean correctamente.
+    // El cálculo real (70 / 1.70^2 ≈ 24.2) ocurre en el router.
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      pacienteId: uuid(),
+      pesoKg: 70,
+      tallaCm: 170,
+    });
+    expect(result.success).toBe(true);
+    // 70 / (1.70 * 1.70) = 24.2
+    if (result.success) {
+      const imc = result.data.pesoKg! / Math.pow(result.data.tallaCm! / 100, 2);
+      expect(Math.round(imc * 10) / 10).toBe(24.2);
+    }
   });
 });

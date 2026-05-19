@@ -31,10 +31,11 @@
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.signos_vitales                — fila principal: episodio_id, fecha_hora,
- *                                       temperatura, presion_sistolica,
- *                                       presion_diastolica, frecuencia_cardiaca,
- *                                       frecuencia_respiratoria, spo2, peso, talla
+ *   ece.signos_vitales                — fila principal: episodio_id, fecha_hora_toma,
+ *                                       presion_sistolica, presion_diastolica,
+ *                                       frecuencia_cardiaca, frecuencia_respiratoria,
+ *                                       saturacion_o2, escala_dolor,
+ *                                       peso_kg, talla_cm, imc, glucometria_mgdl
  *   ece.documento_instancia           — instancia de workflow del documento
  *   ece.documento_instancia_historial — log de transiciones + SHA-256 payload
  *   ece.tipo_documento                — resolución de tipoDocumentoId por código 'SIG_VIT'
@@ -59,32 +60,35 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+// Importar desde schemas locales del worktree para evitar el symlink de node_modules
+// que apunta al main branch. Post-merge consolida en @his/contracts.
 import {
   eceSignosVitalesCreateSchema,
   eceSignosVitalesUpdateSchema,
   type EceSignosVitalesUpdateInput,
-} from "@his/contracts";
+} from "./signos-vitales.schemas";
 
 // ─── Tipos de fila raw ───────────────────────────────────────────────────────
 
 export interface SignosVitalesRow {
   id: string;
-  paciente_id: string;
   episodio_id: string | null;
-  personal_id: string;
-  establecimiento_id: string;
-  ta_sistolica: number | null;
-  ta_diastolica: number | null;
+  instancia_id: string | null;
+  registrado_por: string;
+  presion_sistolica: number | null;
+  presion_diastolica: number | null;
   frecuencia_cardiaca: number | null;
   frecuencia_respiratoria: number | null;
   temperatura: number | null;
   saturacion_o2: number | null;
-  dolor_eva: number | null;
-  observaciones: string | null;
-  tomado_en: Date;
-  estado: string;
-  creado_en: Date;
-  actualizado_en: Date;
+  escala_dolor: number | null;
+  peso_kg: number | null;
+  talla_cm: number | null;
+  imc: number | null;
+  glucometria_mgdl: number | null;
+  fecha_hora_toma: Date;
+  estado_registro: string;
+  registrado_en: Date;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -94,6 +98,16 @@ function hashPayload(payload: unknown): string {
   return createHash("sha256")
     .update(JSON.stringify(payload))
     .digest("hex");
+}
+
+/**
+ * Calcula IMC si peso y talla están disponibles.
+ * Retorna null si alguno falta o talla es cero.
+ */
+function calcularImc(pesoKg: number | null | undefined, tallaCm: number | null | undefined): number | null {
+  if (!pesoKg || !tallaCm || tallaCm === 0) return null;
+  const tallaM = tallaCm / 100;
+  return Math.round((pesoKg / (tallaM * tallaM)) * 10) / 10;
 }
 
 /**
@@ -146,7 +160,6 @@ async function upsertDocInstancia(
   },
   opts: {
     signosVitalesId: string;
-    pacienteId: string;
     episodioId: string | null | undefined;
     tipoDocumentoId: string;
     estadoId: string;
@@ -167,11 +180,10 @@ async function upsertDocInstancia(
 
   const rows = await tx.$queryRaw<{ id: string }[]>`
     INSERT INTO ece.documento_instancia
-      (tipo_documento_id, episodio_id, paciente_id, registro_id, estado_actual_id, creado_por)
+      (tipo_documento_id, episodio_id, registro_id, estado_actual_id, creado_por)
     VALUES (
       ${opts.tipoDocumentoId}::uuid,
       ${opts.episodioId ?? null}::uuid,
-      ${opts.pacienteId}::uuid,
       ${opts.signosVitalesId}::uuid,
       ${opts.estadoId}::uuid,
       ${opts.personalId}::uuid
@@ -225,12 +237,11 @@ const nurseOnly = requireRole(["NURSE"]);
 export const eceSignosVitalesRouter = router({
   /**
    * Lista tomas de signos vitales con filtros opcionales.
-   * Al menos pacienteId o episodioId es requerido.
+   * Al menos episodioId es requerido.
    */
   list: base
     .input(
       z.object({
-        pacienteId: z.string().uuid().optional(),
         episodioId: z.string().uuid().optional(),
         desde: z.string().datetime({ offset: true }).optional(),
         hasta: z.string().datetime({ offset: true }).optional(),
@@ -239,10 +250,10 @@ export const eceSignosVitalesRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      if (!input.pacienteId && !input.episodioId) {
+      if (!input.episodioId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Se requiere pacienteId o episodioId.",
+          message: "Se requiere episodioId.",
         });
       }
 
@@ -252,35 +263,32 @@ export const eceSignosVitalesRouter = router({
         const rows = await tx.$queryRaw<SignosVitalesRow[]>`
           SELECT
             sv.id::text,
-            sv.paciente_id::text,
             sv.episodio_id::text,
-            sv.personal_id::text,
-            sv.establecimiento_id::text,
-            sv.ta_sistolica,
-            sv.ta_diastolica,
+            sv.instancia_id::text,
+            sv.registrado_por::text,
+            sv.presion_sistolica,
+            sv.presion_diastolica,
             sv.frecuencia_cardiaca,
             sv.frecuencia_respiratoria,
             sv.temperatura,
             sv.saturacion_o2,
-            sv.dolor_eva,
-            sv.observaciones,
-            sv.tomado_en,
-            sv.estado,
-            sv.creado_en,
-            sv.actualizado_en
+            sv.escala_dolor,
+            sv.peso_kg,
+            sv.talla_cm,
+            sv.imc,
+            sv.glucometria_mgdl,
+            sv.fecha_hora_toma,
+            sv.estado_registro,
+            sv.registrado_en
           FROM ece.signos_vitales sv
-          WHERE
-            (${input.pacienteId ?? null}::uuid IS NULL
-              OR sv.paciente_id = ${input.pacienteId ?? null}::uuid)
-            AND (${input.episodioId ?? null}::uuid IS NULL
-              OR sv.episodio_id = ${input.episodioId ?? null}::uuid)
+          WHERE sv.episodio_id = ${input.episodioId}::uuid
             AND (${input.desde ?? null}::timestamptz IS NULL
-              OR sv.tomado_en >= ${input.desde ?? null}::timestamptz)
+              OR sv.fecha_hora_toma >= ${input.desde ?? null}::timestamptz)
             AND (${input.hasta ?? null}::timestamptz IS NULL
-              OR sv.tomado_en <= ${input.hasta ?? null}::timestamptz)
+              OR sv.fecha_hora_toma <= ${input.hasta ?? null}::timestamptz)
             AND (${input.cursor ?? null}::uuid IS NULL
               OR sv.id > ${input.cursor ?? null}::uuid)
-          ORDER BY sv.tomado_en DESC, sv.id DESC
+          ORDER BY sv.fecha_hora_toma DESC, sv.id DESC
           LIMIT ${input.limit + 1}
         `;
 
@@ -302,22 +310,23 @@ export const eceSignosVitalesRouter = router({
         const rows = await tx.$queryRaw<SignosVitalesRow[]>`
           SELECT
             sv.id::text,
-            sv.paciente_id::text,
             sv.episodio_id::text,
-            sv.personal_id::text,
-            sv.establecimiento_id::text,
-            sv.ta_sistolica,
-            sv.ta_diastolica,
+            sv.instancia_id::text,
+            sv.registrado_por::text,
+            sv.presion_sistolica,
+            sv.presion_diastolica,
             sv.frecuencia_cardiaca,
             sv.frecuencia_respiratoria,
             sv.temperatura,
             sv.saturacion_o2,
-            sv.dolor_eva,
-            sv.observaciones,
-            sv.tomado_en,
-            sv.estado,
-            sv.creado_en,
-            sv.actualizado_en
+            sv.escala_dolor,
+            sv.peso_kg,
+            sv.talla_cm,
+            sv.imc,
+            sv.glucometria_mgdl,
+            sv.fecha_hora_toma,
+            sv.estado_registro,
+            sv.registrado_en
           FROM ece.signos_vitales sv
           WHERE sv.id = ${input.id}::uuid
           LIMIT 1
@@ -337,33 +346,38 @@ export const eceSignosVitalesRouter = router({
   /**
    * Crea una nueva toma de signos vitales en estado "borrador".
    * Valida rangos plausibles vía Zod antes de llegar a la BD.
+   * IMC se calcula automáticamente si peso y talla están provistos.
    */
   create: nurseOnly
     .input(eceSignosVitalesCreateSchema)
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = resolveEceIds(ctx);
+      const imc = calcularImc(input.pesoKg, input.tallaCm);
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
         const rows = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.signos_vitales (
-            paciente_id, episodio_id, personal_id, establecimiento_id,
-            ta_sistolica, ta_diastolica, frecuencia_cardiaca, frecuencia_respiratoria,
-            temperatura, saturacion_o2, dolor_eva, observaciones,
-            tomado_en, estado
+            episodio_id, registrado_por,
+            presion_sistolica, presion_diastolica,
+            frecuencia_cardiaca, frecuencia_respiratoria,
+            temperatura, saturacion_o2, escala_dolor,
+            peso_kg, talla_cm, imc, glucometria_mgdl,
+            fecha_hora_toma, estado_registro
           ) VALUES (
-            ${input.pacienteId}::uuid,
             ${input.episodioId ?? null}::uuid,
-            ${input.personalId}::uuid,
-            ${input.establecimientoId}::uuid,
-            ${input.taSistolica ?? null},
-            ${input.taDiastolica ?? null},
+            ${personalId}::uuid,
+            ${input.presionSistolica ?? null},
+            ${input.presionDiastolica ?? null},
             ${input.frecuenciaCardiaca ?? null},
             ${input.frecuenciaRespiratoria ?? null},
             ${input.temperatura ?? null},
             ${input.saturacionO2 ?? null},
-            ${input.dolorEva ?? null},
-            ${input.observaciones ?? null},
-            ${input.tomadoEn ? new Date(input.tomadoEn) : new Date()},
+            ${input.escalaDolor ?? null},
+            ${input.pesoKg ?? null},
+            ${input.tallaCm ?? null},
+            ${imc},
+            ${input.glucometriaMgdl ?? null},
+            ${input.fechaHoraToma ? new Date(input.fechaHoraToma) : new Date()},
             'borrador'
           )
           RETURNING id::text
@@ -388,34 +402,44 @@ export const eceSignosVitalesRouter = router({
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
         // Verificar que existe y está en borrador
-        const rows = await tx.$queryRaw<{ estado: string }[]>`
-          SELECT estado FROM ece.signos_vitales WHERE id = ${input.id}::uuid LIMIT 1
+        const rows = await tx.$queryRaw<{ estado_registro: string; peso_kg: number | null; talla_cm: number | null }[]>`
+          SELECT estado_registro, peso_kg, talla_cm
+          FROM ece.signos_vitales WHERE id = ${input.id}::uuid LIMIT 1
         `;
 
         if (!rows[0]) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Toma no encontrada." });
         }
 
-        if (rows[0].estado !== "borrador") {
+        if (rows[0].estado_registro !== "borrador") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Solo se pueden editar tomas en estado 'borrador'. Estado actual: '${rows[0].estado}'.`,
+            message: `Solo se pueden editar tomas en estado 'borrador'. Estado actual: '${rows[0].estado_registro}'.`,
           });
         }
 
         const d: EceSignosVitalesUpdateInput = input.data;
+
+        // Recalcular IMC si peso o talla cambian
+        const newPeso = d.pesoKg ?? rows[0].peso_kg;
+        const newTalla = d.tallaCm ?? rows[0].talla_cm;
+        const imc = calcularImc(newPeso, newTalla);
+
         await tx.$executeRaw`
           UPDATE ece.signos_vitales SET
-            ta_sistolica           = COALESCE(${d.taSistolica ?? null}, ta_sistolica),
-            ta_diastolica          = COALESCE(${d.taDiastolica ?? null}, ta_diastolica),
-            frecuencia_cardiaca    = COALESCE(${d.frecuenciaCardiaca ?? null}, frecuencia_cardiaca),
+            presion_sistolica       = COALESCE(${d.presionSistolica ?? null}, presion_sistolica),
+            presion_diastolica      = COALESCE(${d.presionDiastolica ?? null}, presion_diastolica),
+            frecuencia_cardiaca     = COALESCE(${d.frecuenciaCardiaca ?? null}, frecuencia_cardiaca),
             frecuencia_respiratoria = COALESCE(${d.frecuenciaRespiratoria ?? null}, frecuencia_respiratoria),
-            temperatura            = COALESCE(${d.temperatura ?? null}, temperatura),
-            saturacion_o2          = COALESCE(${d.saturacionO2 ?? null}, saturacion_o2),
-            dolor_eva              = COALESCE(${d.dolorEva ?? null}, dolor_eva),
-            observaciones          = COALESCE(${d.observaciones ?? null}, observaciones),
-            tomado_en              = COALESCE(${d.tomadoEn ? new Date(d.tomadoEn) : null}::timestamptz, tomado_en),
-            actualizado_en         = now()
+            temperatura             = COALESCE(${d.temperatura ?? null}, temperatura),
+            saturacion_o2           = COALESCE(${d.saturacionO2 ?? null}, saturacion_o2),
+            escala_dolor            = COALESCE(${d.escalaDolor ?? null}, escala_dolor),
+            peso_kg                 = COALESCE(${d.pesoKg ?? null}, peso_kg),
+            talla_cm                = COALESCE(${d.tallaCm ?? null}, talla_cm),
+            imc                     = COALESCE(${imc}, imc),
+            glucometria_mgdl        = COALESCE(${d.glucometriaMgdl ?? null}, glucometria_mgdl),
+            fecha_hora_toma         = COALESCE(${d.fechaHoraToma ? new Date(d.fechaHoraToma) : null}::timestamptz, fecha_hora_toma),
+            registrado_en           = now()
           WHERE id = ${input.id}::uuid
         `;
 
@@ -435,8 +459,8 @@ export const eceSignosVitalesRouter = router({
       const { personalId, establecimientoId } = resolveEceIds(ctx);
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
-        const rows = await tx.$queryRaw<SignosVitalesRow[]>`
-          SELECT sv.*, sv.episodio_id::text AS episodio_id, sv.paciente_id::text AS paciente_id
+        const rows = await tx.$queryRaw<(SignosVitalesRow & { estado_registro: string })[]>`
+          SELECT sv.*, sv.episodio_id::text AS episodio_id
           FROM ece.signos_vitales sv
           WHERE sv.id = ${input.id}::uuid LIMIT 1
         `;
@@ -447,10 +471,10 @@ export const eceSignosVitalesRouter = router({
 
         const sv = rows[0];
 
-        if (sv.estado !== "borrador") {
+        if (sv.estado_registro !== "borrador") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Solo se pueden firmar tomas en 'borrador'. Estado actual: '${sv.estado}'.`,
+            message: `Solo se pueden firmar tomas en 'borrador'. Estado actual: '${sv.estado_registro}'.`,
           });
         }
 
@@ -472,14 +496,13 @@ export const eceSignosVitalesRouter = router({
         // Transición en signos_vitales
         await tx.$executeRaw`
           UPDATE ece.signos_vitales
-          SET estado = 'firmado', actualizado_en = now()
+          SET estado_registro = 'firmado', registrado_en = now()
           WHERE id = ${input.id}::uuid
         `;
 
         // Upsert instancia de documento
         const { instanciaId, isNew } = await upsertDocInstancia(tx, {
           signosVitalesId: input.id,
-          pacienteId: sv.paciente_id,
           episodioId: sv.episodio_id,
           tipoDocumentoId,
           estadoId: estadoFirmadoId,
@@ -519,7 +542,7 @@ export const eceSignosVitalesRouter = router({
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
         const rows = await tx.$queryRaw<SignosVitalesRow[]>`
-          SELECT sv.*, sv.episodio_id::text AS episodio_id, sv.paciente_id::text AS paciente_id
+          SELECT sv.*, sv.episodio_id::text AS episodio_id
           FROM ece.signos_vitales sv
           WHERE sv.id = ${input.id}::uuid LIMIT 1
         `;
@@ -530,10 +553,10 @@ export const eceSignosVitalesRouter = router({
 
         const sv = rows[0];
 
-        if (sv.estado !== "firmado") {
+        if (sv.estado_registro !== "firmado") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Solo se pueden validar tomas en estado 'firmado'. Estado actual: '${sv.estado}'.`,
+            message: `Solo se pueden validar tomas en estado 'firmado'. Estado actual: '${sv.estado_registro}'.`,
           });
         }
 
@@ -549,7 +572,7 @@ export const eceSignosVitalesRouter = router({
 
         await tx.$executeRaw`
           UPDATE ece.signos_vitales
-          SET estado = 'validado', actualizado_en = now()
+          SET estado_registro = 'validado', registrado_en = now()
           WHERE id = ${input.id}::uuid
         `;
 

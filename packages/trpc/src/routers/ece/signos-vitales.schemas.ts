@@ -1,27 +1,13 @@
 /**
- * Schemas Zod para ECE Signos Vitales.
+ * Schemas locales para ECE Signos Vitales — worktree copy.
  *
- * Rangos plausibles basados en la norma técnica NTEC / criterio clínico:
- *   TA sistólica : 60–260 mmHg
- *   TA diastólica: 40–160 mmHg
- *   FC           : 30–220 lpm
- *   FR           : 4–60 rpm
- *   Temperatura  : 30–43 °C
- *   SpO2         : 50–100 %
- *   Dolor (EVA)  : 0–10
+ * Este archivo es una copia local para evitar la dependencia del symlink
+ * @his/contracts que en worktrees apunta al main branch. Post-merge, los
+ * schemas se consolidan en packages/contracts/src/schemas/ece-signos-vitales.ts.
  *
- * Columnas DB (ece.signos_vitales) — alineado post HD-16:
- *   presion_sistolica / presion_diastolica / escala_dolor /
- *   fecha_hora_toma / registrado_por
- *   peso_kg / talla_cm / imc / glucometria_mgdl  (HD-18)
- *
- * Campos eliminados del contrato (no existen en BD):
- *   observaciones     — columna ausente en ece.signos_vitales
- *   establecimiento_id — RLS aplica vía episodio.establecimiento_id
+ * Alineado con ece.signos_vitales post-HD-16 (nombres reales de columnas).
  */
 import { z } from "zod";
-
-// ─── Helpers de rango ────────────────────────────────────────────────────────
 
 function numRange(min: number, max: number, label: string) {
   return z
@@ -30,13 +16,10 @@ function numRange(min: number, max: number, label: string) {
     .max(max, `${label} máximo ${max}.`);
 }
 
-// ─── Schema de creación ──────────────────────────────────────────────────────
-
 export const eceSignosVitalesCreateSchema = z.object({
-  pacienteId: z.string().uuid(),
+  pacienteId: z.string().uuid().optional(),
   episodioId: z.string().uuid().optional(),
 
-  // Campos clínicos — todos opcionales (no siempre se toman todos en una toma)
   presionSistolica: numRange(60, 260, "TA sistólica").optional(),
   presionDiastolica: numRange(40, 160, "TA diastólica").optional(),
   frecuenciaCardiaca: numRange(30, 220, "FC").optional(),
@@ -50,13 +33,10 @@ export const eceSignosVitalesCreateSchema = z.object({
   tallaCm: numRange(30, 250, "Talla").optional(),
   glucometriaMgdl: numRange(20, 600, "Glucometría").optional(),
 
-  /** Fecha-hora de la toma. Si no se envía, la BD usa now(). */
   fechaHoraToma: z.string().datetime({ offset: true }).optional(),
 });
 
 export type EceSignosVitalesCreateInput = z.infer<typeof eceSignosVitalesCreateSchema>;
-
-// ─── Schema de actualización (solo campos clínicos, no IDs) ─────────────────
 
 export const eceSignosVitalesUpdateSchema = eceSignosVitalesCreateSchema
   .pick({
