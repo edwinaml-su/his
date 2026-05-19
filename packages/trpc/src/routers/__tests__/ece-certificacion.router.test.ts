@@ -207,8 +207,8 @@ describe("eceCertificacionRouter", () => {
       }]);
 
       // PIN incorrecto
-      const { argon2 } = await import("@his/infrastructure");
-      vi.mocked(argon2.default.verify).mockResolvedValueOnce(false);
+      const { argon2: argon2Mod } = await import("@his/infrastructure");
+      vi.mocked(argon2Mod.verify).mockResolvedValueOnce(false);
 
       const caller = eceCertificacionRouter.createCaller(
         makeCtx({ prisma, tenant: DIR_TENANT }),
