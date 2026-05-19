@@ -42,8 +42,9 @@
  * ---------------------------------------------------------------------------
  * ROLES tRPC
  * ---------------------------------------------------------------------------
- *   listCola    → requireRole(["DIR"])  — cola de documentos pendientes de certificar
- *   certificar  → requireRole(["DIR"])  + requireEcePermission("ece.documento.certificar")
+ *   listCola        → requireRole(["DIR"])  — cola de documentos pendientes de certificar
+ *   certificar      → requireRole(["DIR"])  + requireEcePermission("ece.documento.certificar")
+ *   certificarBulk  → requireRole(["DIR"])  — verifica PIN una vez, certifica todos en serie
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -67,6 +68,11 @@ const listColaCertificacionInput = z.object({
 
 const certificarInput = z.object({
   instanciaId: z.string().uuid(),
+  pin: pinSchema,
+});
+
+const certificarBulkInput = z.object({
+  instanciaIds: z.array(z.string().uuid()).min(1).max(100),
   pin: pinSchema,
 });
 
@@ -119,23 +125,8 @@ async function findPersonal(
   return rows[0] ?? null;
 }
 
-async function findFirmaDir(
-  prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
-  personalId: string,
-): Promise<FirmaRow | null> {
-  const rows = await (prisma.$queryRaw as (
-    q: TemplateStringsArray, ...v: unknown[]
-  ) => Promise<FirmaRow[]>)`
-    SELECT id, failed_attempts, locked_until, revoked_at
-    FROM ece.firma_electronica
-    WHERE personal_id = ${personalId}::uuid
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
-}
-
-/** Verifica PIN argon2id contra la firma del DIR. */
-async function checkPinDir(firmaRow: FirmaRow, pin: string): Promise<void> {
+/** Verifica PIN argon2id contra la firma del DIR. Lanza TRPCError si falla. */
+async function checkPinDir(firmaRow: FirmaRow & { pin_hash: string }, pin: string): Promise<void> {
   if (firmaRow.revoked_at !== null) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -149,16 +140,8 @@ async function checkPinDir(firmaRow: FirmaRow, pin: string): Promise<void> {
       message: `Firma bloqueada. Inténtelo en ${mins} min.`,
     });
   }
-  // Verificación argon2id delegada al módulo firma.verify ya existente.
-  // Aquí solo necesitamos que el router de firma confirme el PIN; lo hacemos
-  // mediante import lazy para evitar duplicar la lógica argon2.
   const { argon2 } = await import("@his/infrastructure");
-  const valid = await argon2.verify(
-    // pin_hash viene de la query — necesitamos incluirlo en FirmaRow.
-    // Nota: FirmaRow debe incluir pin_hash; se amplía la query en findFirmaDir.
-    (firmaRow as FirmaRow & { pin_hash: string }).pin_hash,
-    pin,
-  );
+  const valid = await argon2.verify(firmaRow.pin_hash, pin);
   if (!valid) {
     throw new TRPCError({
       code: "UNAUTHORIZED",
@@ -168,11 +151,178 @@ async function checkPinDir(firmaRow: FirmaRow, pin: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Base procedure
+// Core — certifica un documento dentro de una transacción ya abierta.
+// Reutilizado por `certificar` (individual) y `certificarBulk` (loop).
+// La verificación de PIN NO está aquí — el caller es responsable de
+// verificarla antes de invocar esta función.
 // ---------------------------------------------------------------------------
 
-// requireRole sigue usado en listCola (sin cambio semántico).
-// certificar usa requireEcePermission para lógica granular ECE.
+type TxLike = {
+  $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+  $executeRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>;
+};
+
+interface CertificarOneParams {
+  tx: TxLike;
+  instanciaId: string;
+  firmaId: string;
+  userId: string;
+  organizationId: string;
+}
+
+async function certificarOneInTx({
+  tx,
+  instanciaId,
+  firmaId,
+  userId,
+  organizationId,
+}: CertificarOneParams): Promise<{ instanciaId: string; payloadHash: string }> {
+  const TIPOS_CERTIFICABLES = new Set(["FICHA_ID", "EPICRISIS", "CERT_DEF"]);
+
+  // 1. Leer instancia con lock optimista.
+  const instancias = await (tx.$queryRaw as (
+    q: TemplateStringsArray, ...v: unknown[]
+  ) => Promise<Array<{
+    id: string;
+    estado_actual_id: string;
+    estado_codigo: string;
+    tipo_documento_codigo: string;
+    paciente_id: string;
+    version: number;
+  }>>)`
+    SELECT
+      di.id,
+      di.estado_actual_id,
+      fe.codigo AS estado_codigo,
+      td.codigo AS tipo_documento_codigo,
+      di.paciente_id,
+      di.version
+    FROM ece.documento_instancia di
+    JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
+    JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
+    WHERE di.id = ${instanciaId}::uuid
+      AND di.estado_registro = 'activo'
+    FOR UPDATE
+  `;
+
+  const instancia = instancias[0];
+  if (!instancia) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Documento ${instanciaId} no encontrado o inactivo.`,
+    });
+  }
+
+  if (instancia.estado_codigo !== "validado") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Documento ${instanciaId}: solo se pueden certificar documentos en estado 'validado'. Estado actual: ${instancia.estado_codigo}.`,
+    });
+  }
+
+  if (!TIPOS_CERTIFICABLES.has(instancia.tipo_documento_codigo)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `El tipo '${instancia.tipo_documento_codigo}' no es certificable por DIR (Art. 21 NTEC).`,
+    });
+  }
+
+  // 2. Resolver estado 'certificado' para este tipo de documento.
+  const estadosCertificado = await (tx.$queryRaw as (
+    q: TemplateStringsArray, ...v: unknown[]
+  ) => Promise<Array<{ id: string }>>)`
+    SELECT fe.id
+    FROM ece.flujo_estado fe
+    JOIN ece.tipo_documento td ON td.id = fe.tipo_documento_id
+    WHERE td.codigo = ${instancia.tipo_documento_codigo}
+      AND fe.codigo = 'certificado'
+    LIMIT 1
+  `;
+
+  const estadoCertificado = estadosCertificado[0];
+  if (!estadoCertificado) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Estado 'certificado' no configurado en el workflow.",
+    });
+  }
+
+  // 3. Hash de integridad del payload clínico.
+  const payloadHash = createHash("sha256")
+    .update(JSON.stringify({
+      instanciaId: instancia.id,
+      tipoCodigo: instancia.tipo_documento_codigo,
+      version: instancia.version,
+      dirUserId: userId,
+      firmaId,
+    }))
+    .digest("hex");
+
+  // 4. Actualizar estado (optimistic locking por version).
+  const updated = await (tx.$executeRaw as (
+    q: TemplateStringsArray, ...v: unknown[]
+  ) => Promise<number>)`
+    UPDATE ece.documento_instancia
+    SET
+      estado_actual_id = ${estadoCertificado.id}::uuid,
+      version          = version + 1,
+      actualizado_en   = now()
+    WHERE id      = ${instancia.id}::uuid
+      AND version = ${instancia.version}
+  `;
+
+  if (updated === 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Documento ${instanciaId} fue modificado concurrentemente. Recargue e intente de nuevo.`,
+    });
+  }
+
+  // 5. Historial inmutable.
+  const observacion = `Certificación DIR Art. 21 NTEC — hash: ${payloadHash.slice(0, 16)}…`;
+  await (tx.$executeRaw as (
+    q: TemplateStringsArray, ...v: unknown[]
+  ) => Promise<number>)`
+    INSERT INTO ece.documento_instancia_historial
+      (instancia_id, estado_anterior_id, estado_nuevo_id,
+       accion, ejecutado_por, firma_id, observacion, ejecutado_en)
+    VALUES (
+      ${instancia.id}::uuid,
+      ${instancia.estado_actual_id}::uuid,
+      ${estadoCertificado.id}::uuid,
+      'certificar',
+      ${userId}::uuid,
+      ${firmaId}::uuid,
+      ${observacion},
+      now()
+    )
+  `;
+
+  // 6. Evento outbox transaccional.
+  await emitDomainEvent(tx as Parameters<typeof emitDomainEvent>[0], {
+    organizationId,
+    eventType: "ece.documento.certificado",
+    aggregateType: "DocumentoInstancia",
+    aggregateId: instancia.id,
+    emittedById: userId,
+    payload: {
+      instanciaId: instancia.id,
+      tipoDocumentoCodigo: instancia.tipo_documento_codigo,
+      fromEstadoCodigo: "validado",
+      firmaId,
+      payloadHash,
+      dirUserId: userId,
+      pacienteId: instancia.paciente_id,
+    },
+  });
+
+  return { instanciaId: instancia.id, payloadHash };
+}
+
+// ---------------------------------------------------------------------------
+// Base procedures
+// ---------------------------------------------------------------------------
+
 const dirProcedure = requireRole(["DIR"]);
 const certificarProcedure = requireEcePermission("ece.documento.certificar");
 
@@ -275,7 +425,7 @@ export const eceCertificacionRouter = router({
     }),
 
   /**
-   * Certifica un documento: avanza estado 'validado' → 'certificado',
+   * Certifica un documento individual: avanza estado 'validado' → 'certificado',
    * valida PIN del DIR, registra historial e inserta evento outbox.
    */
   certificar: certificarProcedure
@@ -295,57 +445,7 @@ export const eceCertificacionRouter = router({
       };
 
       return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        // 1. Leer la instancia + estado actual (con FOR UPDATE para serializar).
-        const instancias = await (tx.$queryRaw as (
-          q: TemplateStringsArray, ...v: unknown[]
-        ) => Promise<Array<{
-          id: string;
-          estado_actual_id: string;
-          estado_codigo: string;
-          tipo_documento_codigo: string;
-          paciente_id: string;
-          version: number;
-        }>>)`
-          SELECT
-            di.id,
-            di.estado_actual_id,
-            fe.codigo AS estado_codigo,
-            td.codigo AS tipo_documento_codigo,
-            di.paciente_id,
-            di.version
-          FROM ece.documento_instancia di
-          JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
-          JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
-          WHERE di.id = ${input.instanciaId}::uuid
-            AND di.estado_registro = 'activo'
-          FOR UPDATE
-        `;
-
-        const instancia = instancias[0];
-        if (!instancia) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Documento no encontrado o inactivo.",
-          });
-        }
-
-        if (instancia.estado_codigo !== "validado") {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Solo se pueden certificar documentos en estado 'validado'. Estado actual: ${instancia.estado_codigo}.`,
-          });
-        }
-
-        // 2. Validar documentos certificables (Art. 21 NTEC).
-        const TIPOS_CERTIFICABLES = new Set(["FICHA_ID", "EPICRISIS", "CERT_DEF"]);
-        if (!TIPOS_CERTIFICABLES.has(instancia.tipo_documento_codigo)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: `El tipo '${instancia.tipo_documento_codigo}' no es certificable por DIR (Art. 21 NTEC).`,
-          });
-        }
-
-        // 3. Verificar firma del DIR.
+        // Verificar firma del DIR.
         const personal = await findPersonal(tx, ctx.user.id);
         if (!personal) {
           throw new TRPCError({
@@ -354,7 +454,6 @@ export const eceCertificacionRouter = router({
           });
         }
 
-        // Incluir pin_hash en la query de firma
         const firmas = await (tx.$queryRaw as (
           q: TemplateStringsArray, ...v: unknown[]
         ) => Promise<Array<FirmaRow & { pin_hash: string }>>)`
@@ -374,100 +473,106 @@ export const eceCertificacionRouter = router({
 
         await checkPinDir(firma, input.pin);
 
-        // 4. Resolver el estado 'certificado' para este tipo de documento.
-        const estadosCertificado = await (tx.$queryRaw as (
+        const resultado = await certificarOneInTx({
+          tx,
+          instanciaId: input.instanciaId,
+          firmaId: firma.id,
+          userId: ctx.user.id,
+          organizationId: ctx.tenant.organizationId,
+        });
+        return { ok: true as const, ...resultado };
+      });
+    }),
+
+  /**
+   * Certifica múltiples documentos en una sola operación bulk.
+   *
+   * El PIN se verifica UNA SOLA VEZ al inicio. Luego cada documento se
+   * certifica en serie dentro de su propia transacción independiente
+   * (no se hace rollback global si un documento falla — los exitosos
+   * quedan certificados y se reportan como tales).
+   *
+   * Retorna { exitosos, fallidos } para feedback granular en UI.
+   *
+   * Límite: 100 documentos por llamada (protección contra abusos de timeout).
+   */
+  certificarBulk: dirProcedure
+    .input(certificarBulkInput)
+    .mutation(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo.",
+        });
+      }
+
+      const eceCtx = {
+        personalId: ctx.user.id,
+        establecimientoId: ctx.tenant.establishmentId,
+        roles: ctx.tenant.roleCodes,
+      };
+
+      // Fase 1: verificar PIN una sola vez (fuera del loop de documentos).
+      const firmaVerificada = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        const personal = await findPersonal(tx, ctx.user.id);
+        if (!personal) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No se encontró personal ECE asociado a su cuenta.",
+          });
+        }
+
+        const firmas = await (tx.$queryRaw as (
           q: TemplateStringsArray, ...v: unknown[]
-        ) => Promise<Array<{ id: string }>>)`
-          SELECT fe.id
-          FROM ece.flujo_estado fe
-          JOIN ece.tipo_documento td ON td.id = fe.tipo_documento_id
-          WHERE td.codigo = ${instancia.tipo_documento_codigo}
-            AND fe.codigo = 'certificado'
+        ) => Promise<Array<FirmaRow & { pin_hash: string }>>)`
+          SELECT id, pin_hash, failed_attempts, locked_until, revoked_at
+          FROM ece.firma_electronica
+          WHERE personal_id = ${personal.id}::uuid
           LIMIT 1
         `;
 
-        const estadoCertificado = estadosCertificado[0];
-        if (!estadoCertificado) {
+        const firma = firmas[0];
+        if (!firma) {
           throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: "Estado 'certificado' no configurado en el workflow.",
+            code: "PRECONDITION_FAILED",
+            message: "Firma electrónica no configurada. Use firma.setup.",
           });
         }
 
-        // 5. Calcular hash del payload clínico para integridad.
-        const payloadHash = createHash("sha256")
-          .update(JSON.stringify({
-            instanciaId: instancia.id,
-            tipoCodigo: instancia.tipo_documento_codigo,
-            version: instancia.version,
-            dirUserId: ctx.user.id,
-            firmaId: firma.id,
-          }))
-          .digest("hex");
+        // Lanza UNAUTHORIZED si el PIN es incorrecto — aborta antes de procesar cualquier doc.
+        await checkPinDir(firma, input.pin);
 
-        // 6. Actualizar estado + versión (optimistic locking).
-        const updated = await (tx.$executeRaw as (
-          q: TemplateStringsArray, ...v: unknown[]
-        ) => Promise<number>)`
-          UPDATE ece.documento_instancia
-          SET
-            estado_actual_id = ${estadoCertificado.id}::uuid,
-            version          = version + 1,
-            actualizado_en   = now()
-          WHERE id      = ${instancia.id}::uuid
-            AND version = ${instancia.version}
-        `;
-
-        if (updated === 0) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "El documento fue modificado concurrentemente. Recargue e intente de nuevo.",
-          });
-        }
-
-        // 7. Insertar historial inmutable (estado_anterior_id capturado antes del UPDATE).
-        const observacion = `Certificación DIR Art. 21 NTEC — hash: ${payloadHash.slice(0, 16)}…`;
-        await (tx.$executeRaw as (
-          q: TemplateStringsArray, ...v: unknown[]
-        ) => Promise<number>)`
-          INSERT INTO ece.documento_instancia_historial
-            (instancia_id, estado_anterior_id, estado_nuevo_id,
-             accion, ejecutado_por, firma_id, observacion, ejecutado_en)
-          VALUES (
-            ${instancia.id}::uuid,
-            ${instancia.estado_actual_id}::uuid,
-            ${estadoCertificado.id}::uuid,
-            'certificar',
-            ${ctx.user.id}::uuid,
-            ${firma.id}::uuid,
-            ${observacion},
-            now()
-          )
-        `;
-
-        // 8. Emitir evento outbox (transaccional — rollback cancela el evento).
-        await emitDomainEvent(tx, {
-          organizationId: ctx.tenant.organizationId,
-          eventType: "ece.documento.certificado",
-          aggregateType: "DocumentoInstancia",
-          aggregateId: instancia.id,
-          emittedById: ctx.user.id,
-          payload: {
-            instanciaId: instancia.id,
-            tipoDocumentoCodigo: instancia.tipo_documento_codigo,
-            fromEstadoCodigo: "validado",
-            firmaId: firma.id,
-            payloadHash,
-            dirUserId: ctx.user.id,
-            pacienteId: instancia.paciente_id,
-          },
-        });
-
-        return {
-          ok: true as const,
-          instanciaId: instancia.id,
-          payloadHash,
-        };
+        return { firmaId: firma.id };
       });
+
+      // Fase 2: certificar cada documento en serie, transacción independiente por doc.
+      const exitosos: Array<{ instanciaId: string; payloadHash: string }> = [];
+      const fallidos: Array<{ instanciaId: string; error: string }> = [];
+
+      for (const instanciaId of input.instanciaIds) {
+        try {
+          const resultado = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+            return certificarOneInTx({
+              tx,
+              instanciaId,
+              firmaId: firmaVerificada.firmaId,
+              userId: ctx.user.id,
+              organizationId: ctx.tenant.organizationId,
+            });
+          });
+          exitosos.push(resultado);
+        } catch (err) {
+          // Capturar error del documento individual sin abortar el bulk.
+          const message =
+            err instanceof TRPCError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : "Error desconocido";
+          fallidos.push({ instanciaId, error: message });
+        }
+      }
+
+      return { exitosos, fallidos };
     }),
 });
