@@ -25,6 +25,7 @@ import {
   type ConsentPurpose,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ----- Plantillas hardcoded por país y propósito (TDR §6.4) -----
 // TODO(Sprint 2): mover a tabla `ConsentTemplate` con versionado en BD.
@@ -253,58 +254,62 @@ export const consentRouter = router({
    * (no hay columna). Queda registrada vía audit log (TDR §6.3) cuando se habilite
    * el middleware de auditoría para este modelo. TODO(Sprint 5).
    */
+  // C-06: mutaciones envueltas en withTenantContext para que RLS aplique
+  // en BD si se añaden políticas a PatientConsent en el futuro.
   create: tenantProcedure.input(consentCreateInput).mutation(async ({ ctx, input }) => {
-    // 1. Verificar paciente del tenant
-    const patient = await ctx.prisma.patient.findUnique({
-      where: { id: input.patientId },
-      select: { id: true, organizationId: true },
-    });
-    if (!patient || patient.organizationId !== ctx.tenant.organizationId) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
-    }
-
-    // 2. Validar plantilla / versión
-    const iso = await resolveCountryIso(ctx.prisma, ctx.tenant.countryId);
-    const tpl = getTemplate(iso, input.purpose);
-    if (tpl.version !== input.version) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `La versión vigente es ${tpl.version}; recibida ${input.version}.`,
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      // 1. Verificar paciente del tenant
+      const patient = await tx.patient.findUnique({
+        where: { id: input.patientId },
+        select: { id: true, organizationId: true },
       });
-    }
+      if (!patient || patient.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+      }
 
-    // 3. Calcular validez
-    const validFrom = input.validFrom ?? new Date();
-    const validTo =
-      input.validTo ??
-      (tpl.validForDays
-        ? new Date(validFrom.getTime() + tpl.validForDays * 86_400_000)
-        : null);
-
-    // 4. signedBy: el operador que registra (el usuario en sesión por defecto).
-    const signedById = input.signedByUserId ?? ctx.tenant.userId;
-
-    try {
-      return await ctx.prisma.patientConsent.create({
-        data: {
-          patientId: input.patientId,
-          purpose: input.purpose,
-          granted: input.granted,
-          scope: (input.scope ?? Prisma.JsonNull) as Prisma.InputJsonValue,
-          signedById,
-          validFrom,
-          validTo,
-        },
-      });
-    } catch (err) {
-      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2003") {
+      // 2. Validar plantilla / versión
+      const iso = await resolveCountryIso(tx, ctx.tenant.countryId);
+      const tpl = getTemplate(iso, input.purpose);
+      if (tpl.version !== input.version) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Referencia inválida (paciente o usuario firmante).",
+          message: `La versión vigente es ${tpl.version}; recibida ${input.version}.`,
         });
       }
-      throw err;
-    }
+
+      // 3. Calcular validez
+      const validFrom = input.validFrom ?? new Date();
+      const validTo =
+        input.validTo ??
+        (tpl.validForDays
+          ? new Date(validFrom.getTime() + tpl.validForDays * 86_400_000)
+          : null);
+
+      // 4. signedBy: el operador que registra (el usuario en sesión por defecto).
+      const signedById = input.signedByUserId ?? ctx.tenant.userId;
+
+      try {
+        return await tx.patientConsent.create({
+          data: {
+            patientId: input.patientId,
+            purpose: input.purpose,
+            granted: input.granted,
+            scope: (input.scope ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+            signedById,
+            validFrom,
+            validTo,
+          },
+        });
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2003") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Referencia inválida (paciente o usuario firmante).",
+          });
+        }
+        throw err;
+      }
+    });
   }),
 
   /**
@@ -312,24 +317,27 @@ export const consentRouter = router({
    * Devuelve el registro actualizado.
    */
   revoke: tenantProcedure.input(consentRevokeInput).mutation(async ({ ctx, input }) => {
-    const existing = await ctx.prisma.patientConsent.findUnique({
-      where: { id: input.id },
-      include: { patient: { select: { organizationId: true } } },
-    });
-    if (!existing || existing.patient.organizationId !== ctx.tenant.organizationId) {
-      throw new TRPCError({ code: "NOT_FOUND" });
-    }
-    if (existing.revokedAt) {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "El consentimiento ya fue revocado previamente.",
+    // C-06: withTenantContext para que RLS aplique en BD.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const existing = await tx.patientConsent.findUnique({
+        where: { id: input.id },
+        include: { patient: { select: { organizationId: true } } },
       });
-    }
-    // Nota: `reason` no se persiste en columna (no existe en schema). Queda en audit log.
-    // TODO(Sprint 2): añadir columna `revocationReason` cuando se amplíe schema.
-    return ctx.prisma.patientConsent.update({
-      where: { id: input.id },
-      data: { revokedAt: new Date() },
+      if (!existing || existing.patient.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({ code: "NOT_FOUND" });
+      }
+      if (existing.revokedAt) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "El consentimiento ya fue revocado previamente.",
+        });
+      }
+      // Nota: `reason` no se persiste en columna (no existe en schema). Queda en audit log.
+      // TODO(Sprint 2): añadir columna `revocationReason` cuando se amplíe schema.
+      return tx.patientConsent.update({
+        where: { id: input.id },
+        data: { revokedAt: new Date() },
+      });
     });
   }),
 });

@@ -5118,23 +5118,33 @@ model EceEvolucionMedica {
   @@schema("ece")
 }
 
-/// 3.9 Consentimiento Informado — HISTORICO, inmutable tras firma
+/// 3.9 Consentimiento Informado — HISTORICO, inmutable post-firma (Art. 40 NTEC)
+/// Doble firma requerida: paciente + MC (Art. 39 NTEC).
+/// C-03: columnas firma_mc_* añadidas en 99_consentimiento_doble_firma_workflow.sql
+/// C-04: columna estado añadida; trigger condicional en fn_bloquea_mutacion_consentimiento.
 model EceConsentimientoInformado {
-  id                    String   @id @default(uuid()) @db.Uuid
-  instanciaId           String?  @map("instancia_id") @db.Uuid
-  pacienteId            String   @map("paciente_id") @db.Uuid
-  episodioId            String?  @map("episodio_id") @db.Uuid
-  tipo                  String   @db.VarChar(20)
-  procedimientoDescrito String   @map("procedimiento_descrito")
-  riesgosExplicados     String?  @map("riesgos_explicados")
+  id                    String    @id @default(uuid()) @db.Uuid
+  instanciaId           String?   @map("instancia_id") @db.Uuid
+  pacienteId            String    @map("paciente_id") @db.Uuid
+  episodioId            String?   @map("episodio_id") @db.Uuid
+  tipo                  String    @db.VarChar(20)
+  procedimientoDescrito String    @map("procedimiento_descrito")
+  riesgosExplicados     String?   @map("riesgos_explicados")
   alternativas          String?
-  medicoQueInformaId    String   @map("medico_que_informa") @db.Uuid
-  firmanteRol           String   @map("firmante_rol") @db.VarChar(30)
-  firmanteNombre        String   @map("firmante_nombre") @db.VarChar(200)
-  firmanteDocumento     String   @map("firmante_documento") @db.VarChar(40)
-  evidenciaFirma        String?  @map("evidencia_firma")
+  medicoQueInformaId    String    @map("medico_que_informa") @db.Uuid
+  /// Nullable: se completa en firmarPaciente (no en create)
+  firmanteRol           String?   @map("firmante_rol") @db.VarChar(30)
+  firmanteNombre        String?   @map("firmante_nombre") @db.VarChar(200)
+  firmanteDocumento     String?   @map("firmante_documento") @db.VarChar(40)
+  evidenciaFirmaRef     String?   @map("evidencia_firma_ref")
+  /// Estado del workflow: 'borrador' | 'firmado' | 'revocado'
+  estado                String    @default("borrador")
+  /// Firma del médico cirujano (Art. 39 NTEC — doble firma)
+  firmaMcId             String?   @map("firma_mc_id") @db.Uuid
+  firmaMcEn             DateTime? @map("firma_mc_en") @db.Timestamptz()
+  evidenciaFirmaMcRef   String?   @map("evidencia_firma_mc_ref")
   data                  Json?
-  fechaHora             DateTime @default(now()) @map("fecha_hora") @db.Timestamptz()
+  fechaHora             DateTime  @default(now()) @map("fecha_hora") @db.Timestamptz()
 
   paciente         EcePaciente          @relation(fields: [pacienteId], references: [id])
   episodio         EceEpisodioAtencion? @relation(fields: [episodioId], references: [id])

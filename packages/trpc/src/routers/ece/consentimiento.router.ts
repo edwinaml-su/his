@@ -101,6 +101,12 @@ export interface ConsentimientoRow {
   firmante_nombre: string | null;
   firmante_documento: string | null;
   evidencia_firma_ref: string | null;
+  /** Estado de inmutabilidad del consentimiento (C-04). */
+  estado: string;
+  /** Firma del médico cirujano — columnas C-03. */
+  firma_mc_id: string | null;
+  firma_mc_en: Date | null;
+  evidencia_firma_mc_ref: string | null;
   fecha_hora: Date;
   /** Estado del documento_instancia asociado. */
   estado_codigo: string;
@@ -178,6 +184,10 @@ async function findConsentimiento(
       ci.firmante_nombre,
       ci.firmante_documento,
       ci.evidencia_firma_ref,
+      ci.estado,
+      ci.firma_mc_id::text,
+      ci.firma_mc_en,
+      ci.evidencia_firma_mc_ref,
       ci.fecha_hora,
       fe.codigo AS estado_codigo,
       fe.id::text AS estado_id
@@ -445,6 +455,10 @@ export const eceConsentimientoRouter = router({
           ci.firmante_nombre,
           ci.firmante_documento,
           ci.evidencia_firma_ref,
+          ci.estado,
+          ci.firma_mc_id::text,
+          ci.firma_mc_en,
+          ci.evidencia_firma_mc_ref,
           ci.fecha_hora,
           fe.codigo AS estado_codigo,
           fe.id::text AS estado_id
@@ -619,21 +633,25 @@ export const eceConsentimientoRouter = router({
           });
         }
 
-        if (ci.estado_codigo !== "borrador") {
+        // Verificar inmutabilidad via columna estado (C-04)
+        if (ci.estado !== "borrador") {
           throw new TRPCError({
             code: "CONFLICT",
-            message: `El consentimiento ya no está en borrador (estado: ${ci.estado_codigo}). No se puede registrar la firma del paciente.`,
+            message: `El consentimiento ya no está en borrador (estado: ${ci.estado}). No se puede registrar la firma del paciente.`,
           });
         }
 
+        // Registrar firma del paciente. El estado permanece 'borrador' hasta que
+        // el MC firme con PIN (paso siguiente). La inmutabilidad (Art. 40) se activa
+        // cuando la firma del MC setea estado='firmado'.
         await (tx.$executeRaw as (
           q: TemplateStringsArray,
           ...v: unknown[]
         ) => Promise<number>)`
           UPDATE ece.consentimiento_informado
-          SET firmante_rol      = ${input.firmanteTipo},
-              firmante_nombre   = ${input.firmanteNombre},
-              firmante_documento = ${input.firmanteDocumento},
+          SET firmante_rol        = ${input.firmanteTipo},
+              firmante_nombre     = ${input.firmanteNombre},
+              firmante_documento  = ${input.firmanteDocumento},
               evidencia_firma_ref = ${input.firmaImagenUri}
           WHERE id = ${input.consentimientoId}::uuid
         `;
@@ -671,10 +689,11 @@ export const eceConsentimientoRouter = router({
           });
         }
 
-        if (ci.estado_codigo !== "borrador") {
+        // Verificar inmutabilidad via columna estado (C-04)
+        if (ci.estado !== "borrador") {
           throw new TRPCError({
             code: "CONFLICT",
-            message: `El consentimiento no está en borrador (estado: ${ci.estado_codigo}). Inmutabilidad enforced.`,
+            message: `El consentimiento no está en borrador (estado: ${ci.estado}). Inmutabilidad enforced.`,
           });
         }
 
@@ -687,6 +706,29 @@ export const eceConsentimientoRouter = router({
 
         // Verificar PIN del MC
         const { firmaId } = await verifyPinOrThrow(tx, ctx.user.id, input.pin);
+
+        // C-05: Registrar firma del MC en consentimiento_informado y activar
+        // inmutabilidad (estado='firmado'). El trigger fn_bloquea_mutacion_consentimiento
+        // protegerá el documento de cualquier mutación posterior (Art. 40 NTEC).
+        const personal = await findPersonal(tx, ctx.user.id);
+        if (!personal) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No se encontró un profesional de salud asociado a su cuenta.",
+          });
+        }
+
+        await (tx.$executeRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<number>)`
+          UPDATE ece.consentimiento_informado
+          SET firma_mc_id            = ${personal.id}::uuid,
+              firma_mc_en            = now(),
+              evidencia_firma_mc_ref = ${firmaId},
+              estado                 = 'firmado'
+          WHERE id = ${input.consentimientoId}::uuid
+        `;
 
         // Avanzar workflow borrador → firmado (rol MC o ESP según el que ejecuta)
         const rolEjecutor = ctx.tenant.roleCodes.includes("MC") ? "MC" : "ESP";
