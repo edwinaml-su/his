@@ -159,7 +159,7 @@ describe("triageRouter", () => {
       expect(createManyArgs.skipDuplicates).toBe(true);
       expect(createManyArgs.data).toEqual([
         expect.objectContaining({
-          triageEvaluationId: EVAL_ID,
+          evaluationId: EVAL_ID,
           discriminatorId: DISC_ID,
           positive: true,
           notes: "Dolor irradiado",
@@ -224,6 +224,73 @@ describe("triageRouter", () => {
       ).rejects.toMatchObject({ code: "CONFLICT" });
 
       expect(prisma.triageEvaluation.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("quickIntake (NN) — birthDate UTC anchor", () => {
+    /**
+     * Regresión: anteriormente la fecha estimada se construía con
+     * `new Date(year, 0, 1)` (constructor local), lo que en TZ negativa
+     * (ej. UTC-6) producía `<year-1>-12-31T18:00:00Z` y al persistirse en
+     * `@db.Date` quedaba como 31-dic del año anterior. La fix usa
+     * `Date.UTC(year, 0, 1, 12)` para anclar al mediodía UTC del 1-ene del
+     * año esperado, inmune al offset local.
+     */
+    it("calcula birthDate como UTC noon del 1-ene del año esperado", async () => {
+      // Mock secuencial del happy-path completo del quickIntake NN.
+      prisma.patient.create.mockResolvedValue({ id: "p-nn-1" } as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.encounter.count.mockResolvedValue(0 as never);
+      prisma.encounter.create.mockResolvedValue({ id: "enc1" } as never);
+      prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);
+      prisma.triageLevel.findFirst.mockResolvedValue({ id: "lv-blue" } as never);
+      prisma.triageEvaluation.create.mockResolvedValue({ id: "tev-nn" } as never);
+
+      const caller = triageRouter.createCaller(makeCtx({ prisma }));
+      const ESTIMATED_AGE = 30;
+      const expectedYear = new Date().getFullYear() - ESTIMATED_AGE;
+
+      await caller.quickIntake({
+        mode: "NN",
+        nnFields: {
+          estimatedAge: ESTIMATED_AGE,
+          sexAtBirthId: "00000000-0000-0000-0000-000000000050",
+          description: "Hombre adulto sin identificación, camisa azul.",
+        },
+      } as never);
+
+      const args = prisma.patient.create.mock.calls[0]![0];
+      const bd = args.data.birthDate as Date;
+      expect(bd).toBeInstanceOf(Date);
+      // En cualquier zona horaria del mundo (±12h del UTC), el día UTC
+      // serializado debe ser 1-ene del año esperado — no 31-dic del previo.
+      expect(bd.toISOString().slice(0, 10)).toBe(`${expectedYear}-01-01`);
+      expect(bd.getUTCHours()).toBe(12); // anchor de mediodía UTC
+    });
+
+    it("no setea birthDate si estimatedAge es nulo", async () => {
+      prisma.patient.create.mockResolvedValue({ id: "p-nn-2" } as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.encounter.count.mockResolvedValue(0 as never);
+      prisma.encounter.create.mockResolvedValue({ id: "enc2" } as never);
+      prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);
+      prisma.triageLevel.findFirst.mockResolvedValue({ id: "lv-blue" } as never);
+      prisma.triageEvaluation.create.mockResolvedValue({ id: "tev-nn2" } as never);
+
+      const caller = triageRouter.createCaller(makeCtx({ prisma }));
+      await caller.quickIntake({
+        mode: "NN",
+        nnFields: {
+          sexAtBirthId: "00000000-0000-0000-0000-000000000050",
+          description: "Persona sin identificación, edad desconocida.",
+        },
+      } as never);
+
+      const args = prisma.patient.create.mock.calls[0]![0];
+      expect(args.data.birthDate).toBeNull();
+      expect(args.data.birthDateEstimated).toBe(false);
     });
   });
 });

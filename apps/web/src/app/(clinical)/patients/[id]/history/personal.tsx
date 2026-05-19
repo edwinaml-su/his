@@ -15,6 +15,7 @@ import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import type { PersonalHistory } from "@his/contracts";
+import { parseDateOnly } from "@/lib/date-only";
 
 export function PersonalHistoryForm({
   value,
@@ -128,7 +129,7 @@ export function PersonalHistoryForm({
                   surgeries: [
                     ...value.surgeries,
                     {
-                      date: surgeryDraft.date ? new Date(surgeryDraft.date) : null,
+                      date: parseDateOnly(surgeryDraft.date),
                       procedure: surgeryDraft.procedure.trim(),
                       notes: surgeryDraft.notes || null,
                     },
