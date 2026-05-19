@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import type { GynecoHistory } from "@his/contracts";
+import { parseDateOnly } from "@/lib/date-only";
 
 const CYCLE_OPTIONS: Array<{ value: NonNullable<GynecoHistory["cycle"]>; label: string }> = [
   { value: "regular", label: "Regular" },
@@ -110,7 +111,7 @@ export function GynecoHistoryForm({
               onChange={(e) =>
                 onChange({
                   ...value,
-                  lastPeriod: e.target.value ? new Date(e.target.value) : null,
+                  lastPeriod: parseDateOnly(e.target.value),
                 })
               }
             />

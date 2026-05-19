@@ -11,6 +11,7 @@ import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
+import { parseDateOnly } from "@/lib/date-only";
 
 interface FormState {
   establishmentId: string;
@@ -73,7 +74,7 @@ export default function NewEquipmentPage() {
       serialNumber: form.serialNumber.trim() || undefined,
       category: form.category.trim() || undefined,
       location: form.location.trim() || undefined,
-      installDate: form.installDate ? new Date(form.installDate) : undefined,
+      installDate: parseDateOnly(form.installDate) ?? undefined,
     });
   }
 

@@ -9,6 +9,7 @@ import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { parseDateOnly } from "@/lib/date-only";
 
 /**
  * Registro nuevo paciente (TDR §8.1). Formulario mínimo MVP.
@@ -36,7 +37,7 @@ export default function NewPatientPage() {
       firstName: form.firstName,
       lastName: form.lastName,
       biologicalSexId: form.biologicalSexId,
-      birthDate: form.birthDate ? new Date(form.birthDate) : null,
+      birthDate: parseDateOnly(form.birthDate),
       birthDateEstimated: false,
       isUnknown: false,
     });

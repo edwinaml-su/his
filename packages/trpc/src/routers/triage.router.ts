@@ -233,8 +233,9 @@ export const triageRouter = router({
 
         if (input.discriminatorHits.length > 0) {
           await tx.triageDiscriminatorHit.createMany({
+            // Prisma model field es `evaluationId` (schema.prisma:1646).
             data: input.discriminatorHits.map((hit) => ({
-              triageEvaluationId: input.triageEvaluationId,
+              evaluationId: input.triageEvaluationId,
               discriminatorId: hit.discriminatorId,
               positive: hit.positive,
               notes: hit.notes ?? null,
@@ -320,7 +321,7 @@ export const triageRouter = router({
             birthDateEstimated: input.nnFields.estimatedAge != null,
             birthDate:
               input.nnFields.estimatedAge != null
-                ? new Date(now.getFullYear() - input.nnFields.estimatedAge, 0, 1)
+                ? new Date(Date.UTC(now.getFullYear() - input.nnFields.estimatedAge, 0, 1, 12, 0, 0))
                 : null,
             isUnknown: true,
             unknownLabel: mrn,

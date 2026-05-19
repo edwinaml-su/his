@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { parseDateOnly } from "@/lib/date-only";
 
 const NEWBORN_MAX_AGE_DAYS = 28;
 
@@ -259,7 +260,7 @@ function CreateNewbornForm({
       firstName: form.firstName,
       lastName: form.lastName,
       secondLastName: form.secondLastName || null,
-      birthDate: new Date(form.birthDate),
+      birthDate: parseDateOnly(form.birthDate) ?? new Date(form.birthDate),
       biologicalSexId: form.biologicalSexId,
       weightGrams: form.weightGrams ? Number(form.weightGrams) : null,
       lengthCm: form.lengthCm ? Number(form.lengthCm) : null,
