@@ -39,6 +39,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { computeScheduledSlot } from "@/lib/medication-slot";
 
 // ─── Tipos internos ─────────────────────────────────────────────────────────
 
@@ -67,7 +68,14 @@ type AdminStatus =
 interface BcmaForm {
   prescriptionItemId: string;
   drugName: string;
-  scheduledTime: string;
+  /**
+   * Slot programado derivado de `computeScheduledSlot(signedAt, frequency)`.
+   * Se envía al endpoint para que la 5R Right Time pueda evaluar la ventana
+   * de tiempo real (±N min). `null` cuando no hay grilla (admin manual o
+   * frecuencia desconocida) — el guard del backend solo activa cuando llega
+   * un Date.
+   */
+  scheduledTime: Date | null;
   // 5 correctos
   patientBarcodeScanned: boolean;
   drugBarcodeScanned: boolean;
@@ -87,7 +95,7 @@ interface BcmaForm {
 const BCMA_INITIAL: BcmaForm = {
   prescriptionItemId: "",
   drugName: "",
-  scheduledTime: "",
+  scheduledTime: null,
   patientBarcodeScanned: false,
   drugBarcodeScanned: false,
   providerBadgeScanned: false,
@@ -227,7 +235,7 @@ function BcmaModal({
             </p>
             <p>
               <span className="font-medium">Hora programada:</span>{" "}
-              {form.scheduledTime || "—"}
+              {form.scheduledTime ? dtFmt.format(form.scheduledTime) : "—"}
             </p>
           </div>
 
@@ -390,7 +398,7 @@ export default function MarPage() {
     },
   });
 
-  function openBcmaModal(prescriptionItemId: string, drugName: string, scheduledTime: string) {
+  function openBcmaModal(prescriptionItemId: string, drugName: string, scheduledTime: Date | null) {
     setBcmaForm({
       ...BCMA_INITIAL,
       prescriptionItemId,
@@ -426,16 +434,22 @@ export default function MarPage() {
       route: bcmaForm.route || undefined,
       site: bcmaForm.site || undefined,
       notes: bcmaForm.notes || undefined,
+      // Sólo enviar scheduledTime cuando se conoce el slot (admin desde
+      // pendingRows). En admin manual queda `null` y el backend omite la
+      // regla Right Time.
+      scheduledTime: bcmaForm.scheduledTime ?? undefined,
     });
   }
 
   /**
    * Tabla de horarios pendientes — MVP stub.
-   * En producción se obtendrá de ece.indicacion_item; aquí mostramos un
-   * placeholder orientativo con botón "Administrar" funcional si hay
-   * prescriptionItemId disponible via query string futuro.
+   * En producción se obtendrá de ece.indicacion_item; el `scheduledTime` de
+   * cada fila se calculará con `computeScheduledSlot(signedAt, frequency)`
+   * (no con `new Date()`) para que la regla 5R Right Time del backend
+   * funcione efectivamente. Hoy la lista queda vacía y se utiliza el botón
+   * "Administrar manual" que crea un slot null (sin Right Time).
    */
-  const pendingRows: { id: string; drugName: string; dose: string; route: string; scheduledTime: string }[] = [];
+  const pendingRows: { id: string; drugName: string; dose: string; route: string; scheduledTime: Date }[] = [];
 
   const historyRows = historyQuery.data ?? [];
 
@@ -484,7 +498,7 @@ export default function MarPage() {
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => openBcmaModal("", "Medicamento manual", "")}
+                  onClick={() => openBcmaModal("", "Medicamento manual", null)}
                 >
                   Administrar manual
                 </Button>
@@ -506,7 +520,7 @@ export default function MarPage() {
                       <TableCell>{row.drugName}</TableCell>
                       <TableCell>{row.dose}</TableCell>
                       <TableCell>{row.route}</TableCell>
-                      <TableCell className="tabular-nums">{row.scheduledTime}</TableCell>
+                      <TableCell className="tabular-nums">{dtFmt.format(row.scheduledTime)}</TableCell>
                       <TableCell>
                         <Button
                           type="button"
