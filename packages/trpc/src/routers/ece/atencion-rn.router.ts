@@ -179,8 +179,8 @@ async function verifyPin(tx: RawTx, hisUserId: string, pin: string): Promise<{ f
   }
 
   // Importación dinámica para permitir mock en tests sin resolución de módulo.
-  const argon2 = await import("@his/infrastructure/firma/argon2");
-  const valid = await argon2.default.verify(firma.pin_hash, pin);
+  const { argon2 } = await import("@his/infrastructure");
+  const valid = await argon2.verify(firma.pin_hash, pin);
   if (!valid) {
     await (tx.$executeRaw as (tpl: TemplateStringsArray, ...args: unknown[]) => Promise<number>)`
       UPDATE ece.firma_electronica SET failed_attempts = failed_attempts + 1 WHERE id = ${firma.id}::uuid
