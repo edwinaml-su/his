@@ -211,31 +211,38 @@ export const registroEnfermeriaRouter = router({
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      return (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<RegistroRow[]>)`
-        SELECT id, episodio_id, personal_id, organization_id,
-               fecha, turno, estado, observaciones, creado_en
-        FROM ece.registro_enfermeria
-        WHERE organization_id = ${orgId}::uuid
-          AND (${input.episodioId ?? null}::uuid IS NULL
-               OR episodio_id = ${input.episodioId ?? null}::uuid)
-          AND (${input.fecha ?? null}::date IS NULL
-               OR fecha = ${input.fecha ?? null}::date)
-        ORDER BY fecha DESC, creado_en DESC
-        LIMIT ${input.limit}
-      `;
+      // HD-24 — withEceContext garantiza demote a `authenticated` para que
+      // RLS de `ece.registro_enfermeria` aplique. El filtro WHERE
+      // organization_id sigue como defensa en profundidad.
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        return (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<RegistroRow[]>)`
+          SELECT id, episodio_id, personal_id, organization_id,
+                 fecha, turno, estado, observaciones, creado_en
+          FROM ece.registro_enfermeria
+          WHERE organization_id = ${orgId}::uuid
+            AND (${input.episodioId ?? null}::uuid IS NULL
+                 OR episodio_id = ${input.episodioId ?? null}::uuid)
+            AND (${input.fecha ?? null}::date IS NULL
+                 OR fecha = ${input.fecha ?? null}::date)
+          ORDER BY fecha DESC, creado_en DESC
+          LIMIT ${input.limit}
+        `;
+      });
     }),
 
   /** Obtiene un registro de jornada por id. */
   get: nurseRole
     .input(eceRegistroGetSchema)
     .query(async ({ ctx, input }) => {
-      const row = await findRegistro(
+      // HD-24 — findRegistro hace $queryRaw; debe ejecutarse con rol demoted.
+      const row = await withEceContext(
         ctx.prisma,
-        input.id,
-        ctx.tenant.organizationId,
+        ctx.tenant,
+        ctx.user.id,
+        async (tx) => findRegistro(tx, input.id, ctx.tenant.organizationId),
       );
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       return row;

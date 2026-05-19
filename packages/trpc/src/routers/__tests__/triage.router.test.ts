@@ -227,7 +227,7 @@ describe("triageRouter", () => {
     });
   });
 
-  describe("quickIntake (NN) — birthDate UTC anchor", () => {
+  describe("quickIntake (NN) — birthDate UTC anchor + RLS demote", () => {
     /**
      * Regresión: anteriormente la fecha estimada se construía con
      * `new Date(year, 0, 1)` (constructor local), lo que en TZ negativa
@@ -235,8 +235,22 @@ describe("triageRouter", () => {
      * `@db.Date` quedaba como 31-dic del año anterior. La fix usa
      * `Date.UTC(year, 0, 1, 12)` para anclar al mediodía UTC del 1-ene del
      * año esperado, inmune al offset local.
+     *
+     * Tras H3-07 (S0 Tier 1), el flujo completo NN se ejecuta dentro de
+     * `withTenantContext`. El mock de `$transaction` ejecuta el callback
+     * pasándole el mismo `prisma` deep-mock como `tx`.
      */
+    function setupTx() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void }).mockImplementation(
+        async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma),
+      );
+      // applyTenantContext usa $executeRawUnsafe.
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
     it("calcula birthDate como UTC noon del 1-ene del año esperado", async () => {
+      setupTx();
       // Mock secuencial del happy-path completo del quickIntake NN.
       prisma.patient.create.mockResolvedValue({ id: "p-nn-1" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
@@ -270,6 +284,7 @@ describe("triageRouter", () => {
     });
 
     it("no setea birthDate si estimatedAge es nulo", async () => {
+      setupTx();
       prisma.patient.create.mockResolvedValue({ id: "p-nn-2" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
@@ -291,6 +306,34 @@ describe("triageRouter", () => {
       const args = prisma.patient.create.mock.calls[0]![0];
       expect(args.data.birthDate).toBeNull();
       expect(args.data.birthDateEstimated).toBe(false);
+    });
+
+    it("RLS — toda la mutation ocurre dentro de $transaction + SET LOCAL ROLE", async () => {
+      setupTx();
+      prisma.patient.create.mockResolvedValue({ id: "p-rls-1" } as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.encounter.count.mockResolvedValue(0 as never);
+      prisma.encounter.create.mockResolvedValue({ id: "enc-rls" } as never);
+      prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);
+      prisma.triageLevel.findFirst.mockResolvedValue({ id: "lv-blue" } as never);
+      prisma.triageEvaluation.create.mockResolvedValue({ id: "tev-rls" } as never);
+
+      const caller = triageRouter.createCaller(makeCtx({ prisma }));
+      await caller.quickIntake({
+        mode: "NN",
+        nnFields: {
+          sexAtBirthId: "00000000-0000-0000-0000-000000000050",
+          description: "Test RLS demote.",
+        },
+      } as never);
+
+      // applyTenantContext invoca set_tenant_context + SET LOCAL ROLE.
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.$executeRawUnsafe).toHaveBeenCalled();
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
     });
   });
 });

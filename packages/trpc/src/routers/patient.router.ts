@@ -14,6 +14,7 @@ import {
   type PatientMergeFieldKey,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // =============================================================================
 // US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
@@ -165,44 +166,54 @@ const MERGE_REVERSE_WINDOW_DAYS = 7;
 export const patientRouter = router({
   search: tenantProcedure.input(patientSearchSchema).query(async ({ ctx, input }) => {
     const q = input.query.trim();
-    return ctx.prisma.patient.findMany({
-      where: {
-        organizationId: ctx.tenant.organizationId,
-        deletedAt: null,
-        OR: [
-          { mrn: { contains: q, mode: "insensitive" } },
-          { firstName: { contains: q, mode: "insensitive" } },
-          { lastName: { contains: q, mode: "insensitive" } },
-          { secondLastName: { contains: q, mode: "insensitive" } },
-          { identifiers: { some: { value: { contains: q.replace(/\D/g, "") || q } } } },
-        ],
-      },
-      take: input.limit,
-      orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
-      include: { identifiers: { take: 1, where: { isPrimary: true } } },
+    // H1-06 — envuelto en withTenantContext: el rol Supabase original tiene
+    // BYPASSRLS, así que sin demote a `authenticated` el filtro por
+    // organizationId vive solo en JS y puede bypaseado por una query con SQL
+    // injection o un bug en el `where`.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      return tx.patient.findMany({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          deletedAt: null,
+          OR: [
+            { mrn: { contains: q, mode: "insensitive" } },
+            { firstName: { contains: q, mode: "insensitive" } },
+            { lastName: { contains: q, mode: "insensitive" } },
+            { secondLastName: { contains: q, mode: "insensitive" } },
+            { identifiers: { some: { value: { contains: q.replace(/\D/g, "") || q } } } },
+          ],
+        },
+        take: input.limit,
+        orderBy: [{ lastName: "asc" }, { firstName: "asc" }],
+        include: { identifiers: { take: 1, where: { isPrimary: true } } },
+      });
     });
   }),
 
   get: tenantProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
-      const patient = await ctx.prisma.patient.findFirst({
-        where: {
-          id: input.id,
-          organizationId: ctx.tenant.organizationId,
-          deletedAt: null,
-        },
-        include: {
-          identifiers: { include: { identifierType: true } },
-          addresses: true,
-          phones: true,
-          emails: true,
-          emergencyContacts: true,
-          allergies: { where: { active: true } },
-          biologicalSex: true,
-          gender: true,
-          maritalStatus: true,
-        },
+      // H1-06 — RLS demote para evitar leer pacientes de otra org si el
+      // `where` por organizationId fallara por cualquier motivo.
+      const patient = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.patient.findFirst({
+          where: {
+            id: input.id,
+            organizationId: ctx.tenant.organizationId,
+            deletedAt: null,
+          },
+          include: {
+            identifiers: { include: { identifierType: true } },
+            addresses: true,
+            phones: true,
+            emails: true,
+            emergencyContacts: true,
+            allergies: { where: { active: true } },
+            biologicalSex: true,
+            gender: true,
+            maritalStatus: true,
+          },
+        });
       });
       if (!patient) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });

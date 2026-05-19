@@ -198,34 +198,43 @@ export const eceValoracionInicialRouter = router({
   list: nurseRole
     .input(eceValoracionInicialListSchema)
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<ValoracionInicialRow[]>)`
-        SELECT id, episodio_hospitalario_id, instancia_id, fecha_hora,
-               antecedentes_personales, antecedentes_familiares,
-               alergias_conocidas, medicamentos_actuales,
-               escala_braden, escala_morse, escala_dolor,
-               estado_consciencia, dispositivos_invasivos,
-               educacion_brindada, plan_cuidados_inicial,
-               registrado_por, estado_registro,
-               firmado_por, firmado_en, validado_por, validado_en,
-               registrado_en
-          FROM ece.valoracion_inicial_enfermeria
-         WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
-                OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
-           AND (${input.estado ?? null}::text IS NULL
-                OR estado_registro = ${input.estado ?? null})
-         ORDER BY registrado_en DESC
-         LIMIT ${input.limit}
-      `;
+      // HD-19 — envuelto en withEceContext para que el rol Supabase se
+      // demote a `authenticated` y las RLS de `ece.*` apliquen. Sin esto,
+      // el rol original con BYPASSRLS regresaba filas de otra organización.
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        return (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<ValoracionInicialRow[]>)`
+          SELECT id, episodio_hospitalario_id, instancia_id, fecha_hora,
+                 antecedentes_personales, antecedentes_familiares,
+                 alergias_conocidas, medicamentos_actuales,
+                 escala_braden, escala_morse, escala_dolor,
+                 estado_consciencia, dispositivos_invasivos,
+                 educacion_brindada, plan_cuidados_inicial,
+                 registrado_por, estado_registro,
+                 firmado_por, firmado_en, validado_por, validado_en,
+                 registrado_en
+            FROM ece.valoracion_inicial_enfermeria
+           WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
+                  OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
+             AND (${input.estado ?? null}::text IS NULL
+                  OR estado_registro = ${input.estado ?? null})
+           ORDER BY registrado_en DESC
+           LIMIT ${input.limit}
+        `;
+      });
     }),
 
   /** Obtiene una valoración por id. */
   get: nurseRole
     .input(eceValoracionInicialIdSchema)
     .query(async ({ ctx, input }) => {
-      const row = await findValoracion(ctx.prisma, input.id);
+      // HD-19 — mismo motivo que list. findValoracion hace $queryRaw, debe
+      // ejecutarse con el rol demoted dentro de la transacción.
+      const row = await withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        return findValoracion(tx, input.id);
+      });
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       return row;
     }),
