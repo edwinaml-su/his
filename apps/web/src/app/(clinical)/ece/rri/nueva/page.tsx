@@ -4,6 +4,13 @@
  * ECE — Wizard nueva solicitud RRI (2 pasos).
  * Paso 1: datos de la solicitud.
  * Paso 2: firma MC con PIN electrónico.
+ *
+ * HD-25 (S1): campos renombrados para alinear con BD:
+ *   destinoServicioId → establecimientoDestinoId
+ *   datosClinicosRelevantes → resumenClinico
+ *   urgencia → eliminado (no existe en ece.rri)
+ *
+ * HD-26 (S1): validación UUID client-side en episodioId antes de submit.
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -24,15 +31,13 @@ import { trpc } from "@/lib/trpc/react";
 // ─── Tipos locales ────────────────────────────────────────────────────────────
 
 type TipoRri = "referencia" | "retorno" | "interconsulta";
-type UrgenciaRri = "rutinaria" | "prioritaria" | "urgente";
 
 interface DatosSolicitud {
   episodioId: string;
   tipo: TipoRri | "";
-  destinoServicioId: string;
-  urgencia: UrgenciaRri | "";
+  establecimientoDestinoId: string;
   motivo: string;
-  datosClinicosRelevantes: string;
+  resumenClinico: string;
 }
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
@@ -43,13 +48,15 @@ const TIPO_OPTIONS: { value: TipoRri; label: string }[] = [
   { value: "interconsulta", label: "Interconsulta" },
 ];
 
-const URGENCIA_OPTIONS: { value: UrgenciaRri; label: string }[] = [
-  { value: "rutinaria", label: "Rutinaria" },
-  { value: "prioritaria", label: "Prioritaria" },
-  { value: "urgente", label: "Urgente" },
-];
-
 const STEPS = ["Datos solicitud", "Firma MC"];
+
+// ─── Validación UUID (RFC 4122) ───────────────────────────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value.trim());
+}
 
 // ─── Indicador de pasos ───────────────────────────────────────────────────────
 
@@ -97,13 +104,19 @@ function Step1({
   onChange: (patch: Partial<DatosSolicitud>) => void;
   onNext: () => void;
 }) {
+  const [episodioTouched, setEpisodioTouched] = React.useState(false);
+
+  const episodioError =
+    episodioTouched && datos.episodioId.length > 0 && !isUuid(datos.episodioId)
+      ? "El ID del episodio debe ser un UUID válido (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+      : null;
+
   const isValid =
-    datos.episodioId.trim().length > 0 &&
+    isUuid(datos.episodioId) &&
     datos.tipo !== "" &&
-    datos.destinoServicioId.trim().length > 0 &&
-    datos.urgencia !== "" &&
+    isUuid(datos.establecimientoDestinoId) &&
     datos.motivo.trim().length > 0 &&
-    datos.datosClinicosRelevantes.trim().length > 0;
+    datos.resumenClinico.trim().length > 0;
 
   return (
     <div className="space-y-4">
@@ -114,10 +127,19 @@ function Step1({
           </Label>
           <Input
             id="episodio-id"
-            placeholder="xxxxxxxx-xxxx-..."
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             value={datos.episodioId}
             onChange={(e) => onChange({ episodioId: e.target.value })}
+            onBlur={() => setEpisodioTouched(true)}
+            aria-describedby={episodioError ? "episodio-id-error" : undefined}
+            aria-invalid={episodioError ? true : undefined}
+            className={episodioError ? "border-destructive" : ""}
           />
+          {episodioError && (
+            <p id="episodio-id-error" role="alert" className="text-xs text-destructive">
+              {episodioError}
+            </p>
+          )}
         </div>
 
         <div className="space-y-1.5">
@@ -141,37 +163,16 @@ function Step1({
           </Select>
         </div>
 
-        <div className="space-y-1.5">
-          <Label htmlFor="destino-servicio">
-            Servicio destino (UUID) <span aria-hidden className="text-destructive">*</span>
+        <div className="space-y-1.5 md:col-span-2">
+          <Label htmlFor="estab-destino">
+            Establecimiento destino (UUID) <span aria-hidden className="text-destructive">*</span>
           </Label>
           <Input
-            id="destino-servicio"
-            placeholder="xxxxxxxx-xxxx-..."
-            value={datos.destinoServicioId}
-            onChange={(e) => onChange({ destinoServicioId: e.target.value })}
+            id="estab-destino"
+            placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+            value={datos.establecimientoDestinoId}
+            onChange={(e) => onChange({ establecimientoDestinoId: e.target.value })}
           />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="urgencia">
-            Urgencia <span aria-hidden className="text-destructive">*</span>
-          </Label>
-          <Select
-            value={datos.urgencia}
-            onValueChange={(v) => onChange({ urgencia: v as UrgenciaRri })}
-          >
-            <SelectTrigger id="urgencia">
-              <SelectValue placeholder="Seleccione urgencia…" />
-            </SelectTrigger>
-            <SelectContent>
-              {URGENCIA_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
@@ -191,17 +192,17 @@ function Step1({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="datos-clinicos">
-          Datos clinicos relevantes <span aria-hidden className="text-destructive">*</span>
+        <Label htmlFor="resumen-clinico">
+          Resumen clinico <span aria-hidden className="text-destructive">*</span>
         </Label>
         <textarea
-          id="datos-clinicos"
+          id="resumen-clinico"
           rows={4}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          placeholder="Antecedentes, diagnóstico, medicamentos actuales…"
+          placeholder="Antecedentes, diagnóstico, medicamentos actuales, diagnóstico CIE-10…"
           maxLength={4000}
-          value={datos.datosClinicosRelevantes}
-          onChange={(e) => onChange({ datosClinicosRelevantes: e.target.value })}
+          value={datos.resumenClinico}
+          onChange={(e) => onChange({ resumenClinico: e.target.value })}
         />
       </div>
 
@@ -232,23 +233,21 @@ function Step2({
   const createMutation = trpc.eceRri.create.useMutation();
   const firmarMutation = trpc.eceRri.firmar.useMutation();
 
-  const isReady = datos.tipo !== "" && datos.urgencia !== "";
+  const isReady = datos.tipo !== "";
 
   const handleFirmar = async () => {
     if (!isReady || pin.length < 6) return;
     setError(null);
 
     try {
-      // Si no creamos aún la RRI, la creamos primero
       let rriId: string = createdRriId ?? "";
       if (!rriId) {
         const created = await createMutation.mutateAsync({
           episodioId: datos.episodioId,
           tipo: datos.tipo as TipoRri,
-          destinoServicioId: datos.destinoServicioId,
+          establecimientoDestinoId: datos.establecimientoDestinoId,
           motivo: datos.motivo,
-          datosClinicosRelevantes: datos.datosClinicosRelevantes,
-          urgencia: datos.urgencia as UrgenciaRri,
+          resumenClinico: datos.resumenClinico,
         });
         rriId = created.rriId;
         setCreatedRriId(rriId);
@@ -273,8 +272,6 @@ function Step2({
         <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
           <dt className="text-muted-foreground">Tipo</dt>
           <dd className="font-medium capitalize">{datos.tipo}</dd>
-          <dt className="text-muted-foreground">Urgencia</dt>
-          <dd className="font-medium capitalize">{datos.urgencia}</dd>
           <dt className="text-muted-foreground">Episodio</dt>
           <dd className="font-mono">{datos.episodioId.slice(0, 16)}…</dd>
         </dl>
@@ -332,10 +329,9 @@ export default function NuevaRriPage() {
   const [datos, setDatos] = React.useState<DatosSolicitud>({
     episodioId: "",
     tipo: "",
-    destinoServicioId: "",
-    urgencia: "",
+    establecimientoDestinoId: "",
     motivo: "",
-    datosClinicosRelevantes: "",
+    resumenClinico: "",
   });
 
   const patchDatos = (patch: Partial<DatosSolicitud>) =>

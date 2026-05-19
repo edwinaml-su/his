@@ -2,8 +2,13 @@
 
 /**
  * ECE — Formulario respuesta IC para RRI.
- * Rol IC: completa respuesta, diagnóstico, plan y firma con PIN.
+ * Rol IC: completa respuesta y firma con PIN.
  * Solo accesible cuando estado=firmado.
+ *
+ * HD-25 (S1): respuesta → respuesta_interconsultante.
+ *   Campos diagnostico y plan eliminados (no existen en ece.rri).
+ *   El IC puede incluir diagnóstico CIE-10 y plan dentro del campo
+ *   respuestaInterconsultante (texto libre, max 4000 chars).
  */
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -23,9 +28,7 @@ export default function RriResponderPage() {
   const responderMutation = trpc.eceRri.responder.useMutation();
 
   const [form, setForm] = React.useState({
-    respuesta: "",
-    diagnostico: "",
-    plan: "",
+    respuestaInterconsultante: "",
     pin: "",
   });
   const [submitError, setSubmitError] = React.useState<string | null>(null);
@@ -34,9 +37,7 @@ export default function RriResponderPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const isValid =
-    form.respuesta.trim().length > 0 &&
-    form.diagnostico.trim().length > 0 &&
-    form.plan.trim().length > 0 &&
+    form.respuestaInterconsultante.trim().length > 0 &&
     form.pin.length >= 6;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -47,9 +48,7 @@ export default function RriResponderPage() {
     try {
       await responderMutation.mutateAsync({
         rriId: id,
-        respuesta: form.respuesta,
-        diagnostico: form.diagnostico,
-        plan: form.plan,
+        respuestaInterconsultante: form.respuestaInterconsultante,
         pin: form.pin,
       });
       router.push(`/ece/rri/${id}`);
@@ -75,7 +74,6 @@ export default function RriResponderPage() {
 
   if (!rri) return null;
 
-  // Si no está firmado, no se puede responder
   if (rri.estado_codigo !== "firmado") {
     return (
       <div className="space-y-4">
@@ -113,17 +111,13 @@ export default function RriResponderPage() {
               <dt className="text-xs text-muted-foreground">Tipo</dt>
               <dd className="capitalize">{rri.tipo}</dd>
             </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Urgencia</dt>
-              <dd className="capitalize">{rri.urgencia}</dd>
-            </div>
             <div className="md:col-span-2">
               <dt className="text-xs text-muted-foreground">Motivo</dt>
               <dd className="mt-0.5 whitespace-pre-wrap">{rri.motivo}</dd>
             </div>
             <div className="md:col-span-2">
-              <dt className="text-xs text-muted-foreground">Datos clinicos</dt>
-              <dd className="mt-0.5 whitespace-pre-wrap">{rri.datos_clinicos_relevantes}</dd>
+              <dt className="text-xs text-muted-foreground">Resumen clinico</dt>
+              <dd className="mt-0.5 whitespace-pre-wrap">{rri.resumen_clinico}</dd>
             </div>
           </dl>
         </CardContent>
@@ -136,47 +130,20 @@ export default function RriResponderPage() {
         <CardContent>
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4" noValidate>
             <div className="space-y-1.5">
-              <Label htmlFor="respuesta">
+              <Label htmlFor="respuesta-ic">
                 Respuesta <span aria-hidden className="text-destructive">*</span>
               </Label>
+              <p className="text-xs text-muted-foreground">
+                Incluya diagnóstico CIE-10 y plan de manejo en este campo.
+              </p>
               <textarea
-                id="respuesta"
-                rows={4}
+                id="respuesta-ic"
+                rows={6}
                 className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="Descripcion detallada de la respuesta…"
+                placeholder="Descripcion detallada: diagnóstico (ej. K35.2), plan de manejo, indicaciones de seguimiento…"
                 maxLength={4000}
-                value={form.respuesta}
-                onChange={(e) => patch("respuesta", e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="diagnostico">
-                Diagnostico (CIE-10) <span aria-hidden className="text-destructive">*</span>
-              </Label>
-              <textarea
-                id="diagnostico"
-                rows={2}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="Ej. K35.2 — Apendicitis aguda con peritonitis generalizada"
-                maxLength={2000}
-                value={form.diagnostico}
-                onChange={(e) => patch("diagnostico", e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="plan">
-                Plan <span aria-hidden className="text-destructive">*</span>
-              </Label>
-              <textarea
-                id="plan"
-                rows={4}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                placeholder="Plan de manejo, seguimiento, indicaciones…"
-                maxLength={4000}
-                value={form.plan}
-                onChange={(e) => patch("plan", e.target.value)}
+                value={form.respuestaInterconsultante}
+                onChange={(e) => patch("respuestaInterconsultante", e.target.value)}
               />
             </div>
 
