@@ -29,12 +29,6 @@ const TIPO_LABEL: Record<string, string> = {
   interconsulta: "Interconsulta",
 };
 
-const URGENCIA_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  rutinaria: "outline",
-  prioritaria: "secondary",
-  urgente: "destructive",
-};
-
 const ESTADO_LABEL: Record<string, string> = {
   borrador: "Borrador",
   en_revision: "En revisión",
@@ -58,11 +52,10 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", { dateStyle: "medium", timeStyl
 type RriItem = {
   id: string;
   tipo: string;
-  urgencia: string;
   motivo: string;
   episodio_id: string;
   estado_codigo: string;
-  fecha_solicitud: Date | string;
+  registrado_en: Date | string;
 };
 
 function RriTable({
@@ -87,7 +80,6 @@ function RriTable({
       <TableHeader>
         <TableRow>
           <TableHead>Tipo</TableHead>
-          <TableHead>Urgencia</TableHead>
           <TableHead>Motivo</TableHead>
           <TableHead>Episodio</TableHead>
           <TableHead>Estado</TableHead>
@@ -99,11 +91,6 @@ function RriTable({
         {items.map((r) => (
           <TableRow key={r.id}>
             <TableCell>{TIPO_LABEL[r.tipo] ?? r.tipo}</TableCell>
-            <TableCell>
-              <Badge variant={URGENCIA_VARIANT[r.urgencia] ?? "outline"}>
-                {r.urgencia}
-              </Badge>
-            </TableCell>
             <TableCell className="max-w-xs truncate text-sm">{r.motivo}</TableCell>
             <TableCell className="font-mono text-xs">
               {r.episodio_id.slice(0, 8)}…
@@ -114,7 +101,7 @@ function RriTable({
               </Badge>
             </TableCell>
             <TableCell className="tabular-nums text-xs">
-              {dateFmt.format(new Date(r.fecha_solicitud))}
+              {dateFmt.format(new Date(r.registrado_en))}
             </TableCell>
             <TableCell>
               <Button asChild variant="outline" size="sm">
