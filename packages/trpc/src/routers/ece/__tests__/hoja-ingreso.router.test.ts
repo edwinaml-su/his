@@ -47,23 +47,28 @@ vi.mock("@his/database", () => ({
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Fixture con columnas reales de ece.hoja_ingreso (post HD-01/02 fix)
+const EPISODIO_ID = "77777777-7777-7777-7777-777777777777";
+
 function makeHojaRow(
   overrides: Partial<{
     id: string;
     estado_codigo: string;
     instancia_id: string;
-    paciente_id: string;
+    episodio_id: string;
     orden_ingreso_id: string;
-    servicio_ingreso_id: string;
-    modalidad: string;
-    procedencia: string;
-    cama_asignada_id: string | null;
-    diagnostico_ingreso: string | null;
-    motivo_consulta: string | null;
-    notas_adicionales: string | null;
-    admisionista_id: string;
-    episodio_hospitalario_id: string | null;
+    servicio_id: string | null;
+    cama_id: string | null;
+    datos_administrativos: {
+      modalidad: string;
+      procedencia: string;
+      diagnosticoIngreso: string | null;
+      motivoConsulta: string | null;
+      notasAdicionales: string | null;
+    } | null;
+    responsable_admision: string;
     estado_id: string;
+    registrado_en: Date;
     creado_en: Date;
     fecha_hora_ingreso: Date;
   }> = {},
@@ -71,20 +76,25 @@ function makeHojaRow(
   return {
     id: overrides.id ?? HOJA_ID,
     instancia_id: overrides.instancia_id ?? INSTANCIA_ID,
-    paciente_id: overrides.paciente_id ?? PACIENTE_ID,
-    episodio_hospitalario_id: overrides.episodio_hospitalario_id ?? null,
+    episodio_id: overrides.episodio_id ?? EPISODIO_ID,
     orden_ingreso_id: overrides.orden_ingreso_id ?? ORDEN_ID,
     fecha_hora_ingreso: overrides.fecha_hora_ingreso ?? new Date("2026-05-17T10:00:00Z"),
-    servicio_ingreso_id: overrides.servicio_ingreso_id ?? SERVICIO_ID,
-    cama_asignada_id: overrides.cama_asignada_id ?? null,
-    modalidad: overrides.modalidad ?? "urgente",
-    procedencia: overrides.procedencia ?? "Urgencias",
-    diagnostico_ingreso: overrides.diagnostico_ingreso ?? null,
-    motivo_consulta: overrides.motivo_consulta ?? null,
-    notas_adicionales: overrides.notas_adicionales ?? null,
-    admisionista_id: overrides.admisionista_id ?? PERSONAL_ID,
+    servicio_id: overrides.servicio_id !== undefined ? overrides.servicio_id : SERVICIO_ID,
+    cama_id: overrides.cama_id ?? null,
+    datos_administrativos: overrides.datos_administrativos !== undefined
+      ? overrides.datos_administrativos
+      : {
+          modalidad: "urgente",
+          procedencia: "Urgencias",
+          diagnosticoIngreso: null,
+          motivoConsulta: null,
+          notasAdicionales: null,
+        },
+    responsable_admision: overrides.responsable_admision ?? PERSONAL_ID,
     estado_codigo: overrides.estado_codigo ?? "borrador",
+    estado_registro: overrides.estado_codigo ?? "borrador",
     estado_id: overrides.estado_id ?? ESTADO_INIT,
+    registrado_en: overrides.registrado_en ?? new Date("2026-05-17T10:00:00Z"),
     creado_en: overrides.creado_en ?? new Date("2026-05-17T10:00:00Z"),
   };
 }
@@ -140,7 +150,7 @@ describe("eceHojaIngresoRouter", () => {
       prisma.$executeRawUnsafe.mockResolvedValue(0);
       prisma.$queryRaw
         .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INIT }])
-        .mockResolvedValueOnce([{ id: ORDEN_ID, paciente_id: PACIENTE_ID, episodio_hospitalario_id: null }])
+        .mockResolvedValueOnce([{ id: ORDEN_ID, paciente_id: PACIENTE_ID, episodio_origen_id: null }])
         .mockResolvedValueOnce([])             // sin duplicado
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])
         .mockResolvedValueOnce([{ id: INSTANCIA_ID }])
@@ -185,7 +195,7 @@ describe("eceHojaIngresoRouter", () => {
       prisma.$executeRawUnsafe.mockResolvedValue(0);
       prisma.$queryRaw
         .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INIT }])
-        .mockResolvedValueOnce([{ id: ORDEN_ID, paciente_id: PACIENTE_ID, episodio_hospitalario_id: null }])
+        .mockResolvedValueOnce([{ id: ORDEN_ID, paciente_id: PACIENTE_ID, episodio_origen_id: null }])
         .mockResolvedValueOnce([{ id: HOJA_ID, estado: "borrador" }]); // duplicado
 
       const caller = eceHojaIngresoRouter.createCaller(makeAdmCtx(prisma));

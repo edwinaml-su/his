@@ -34,10 +34,10 @@
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.hoja_ingreso              — fila principal: episodio_hospitalario_id,
- *                                   orden_ingreso_id (FK nullable),
- *                                   fecha_ingreso, motivo_ingreso, estado,
- *                                   firmado_por, firmado_en, validado_por
+ *   ece.hoja_ingreso              — fila principal: episodio_id, orden_ingreso_id,
+ *                                   servicio_id, cama_id, fecha_hora_ingreso,
+ *                                   datos_administrativos (JSONB), responsable_admision,
+ *                                   estado_registro
  *   ece.orden_ingreso             — consultada para validar la orden médica
  *   ece.documento_instancia       — instancia de flujo vinculada
  *   ece.firma_electronica         — credencial de firma del ADM
@@ -90,7 +90,7 @@ interface TipoDocRow {
 interface OrdenIngresoRow {
   id: string;
   paciente_id: string;
-  episodio_hospitalario_id: string | null;
+  episodio_origen_id: string | null;
 }
 
 // =============================================================================
@@ -142,18 +142,15 @@ async function findHojaIngreso(tx: RawTx, id: string): Promise<HojaIngresoRow | 
     SELECT
       hi.id::text,
       hi.instancia_id::text,
-      hi.paciente_id::text,
-      hi.episodio_hospitalario_id::text,
+      hi.episodio_id::text,
       hi.orden_ingreso_id::text,
       hi.fecha_hora_ingreso,
-      hi.servicio_ingreso_id::text,
-      hi.cama_asignada_id::text,
-      hi.modalidad,
-      hi.procedencia,
-      hi.diagnostico_ingreso,
-      hi.motivo_consulta,
-      hi.notas_adicionales,
-      hi.admisionista_id::text,
+      hi.servicio_id::text,
+      hi.cama_id::text,
+      hi.datos_administrativos,
+      hi.responsable_admision::text,
+      hi.registrado_en,
+      hi.estado_registro,
       fe.codigo AS estado_codigo,
       fe.id::text AS estado_id,
       di.creado_en
@@ -197,7 +194,7 @@ async function findOrdenIngreso(tx: RawTx, ordenId: string): Promise<OrdenIngres
     SELECT
       id::text,
       paciente_id::text,
-      episodio_hospitalario_id::text
+      episodio_origen_id::text
     FROM ece.orden_ingreso
     WHERE id = ${ordenId}::uuid
     LIMIT 1
@@ -359,13 +356,12 @@ async function avanzarEstado(
 function computePayloadHash(row: HojaIngresoRow): string {
   const payload = JSON.stringify({
     id: row.id,
-    paciente_id: row.paciente_id,
+    episodio_id: row.episodio_id,
     orden_ingreso_id: row.orden_ingreso_id,
     fecha_hora_ingreso: row.fecha_hora_ingreso,
-    servicio_ingreso_id: row.servicio_ingreso_id,
-    modalidad: row.modalidad,
-    procedencia: row.procedencia,
-    diagnostico_ingreso: row.diagnostico_ingreso,
+    servicio_id: row.servicio_id,
+    responsable_admision: row.responsable_admision,
+    datos_administrativos: row.datos_administrativos,
   });
   return createHash("sha256").update(payload, "utf8").digest("hex");
 }
@@ -398,8 +394,8 @@ export const eceHojaIngresoRouter = router({
         FROM ece.hoja_ingreso hi
         JOIN ece.documento_instancia di ON di.id = hi.instancia_id
         JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
-        WHERE (${input.pacienteId ?? null}::uuid IS NULL OR hi.paciente_id = ${input.pacienteId ?? null}::uuid)
-          AND (${input.servicioId ?? null}::uuid IS NULL OR hi.servicio_ingreso_id = ${input.servicioId ?? null}::uuid)
+        WHERE (${input.pacienteId ?? null}::uuid IS NULL OR di.paciente_id = ${input.pacienteId ?? null}::uuid)
+          AND (${input.servicioId ?? null}::uuid IS NULL OR hi.servicio_id = ${input.servicioId ?? null}::uuid)
           AND (${input.estado ?? null}::text IS NULL OR fe.codigo = ${input.estado ?? null}::text)
           AND (${input.fecha ?? null}::date IS NULL OR hi.fecha_hora_ingreso::date = ${input.fecha ?? null}::date)
       `;
@@ -411,26 +407,23 @@ export const eceHojaIngresoRouter = router({
         SELECT
           hi.id::text,
           hi.instancia_id::text,
-          hi.paciente_id::text,
-          hi.episodio_hospitalario_id::text,
+          hi.episodio_id::text,
           hi.orden_ingreso_id::text,
           hi.fecha_hora_ingreso,
-          hi.servicio_ingreso_id::text,
-          hi.cama_asignada_id::text,
-          hi.modalidad,
-          hi.procedencia,
-          hi.diagnostico_ingreso,
-          hi.motivo_consulta,
-          hi.notas_adicionales,
-          hi.admisionista_id::text,
+          hi.servicio_id::text,
+          hi.cama_id::text,
+          hi.datos_administrativos,
+          hi.responsable_admision::text,
+          hi.registrado_en,
+          hi.estado_registro,
           fe.codigo AS estado_codigo,
           fe.id::text AS estado_id,
           di.creado_en
         FROM ece.hoja_ingreso hi
         JOIN ece.documento_instancia di ON di.id = hi.instancia_id
         JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
-        WHERE (${input.pacienteId ?? null}::uuid IS NULL OR hi.paciente_id = ${input.pacienteId ?? null}::uuid)
-          AND (${input.servicioId ?? null}::uuid IS NULL OR hi.servicio_ingreso_id = ${input.servicioId ?? null}::uuid)
+        WHERE (${input.pacienteId ?? null}::uuid IS NULL OR di.paciente_id = ${input.pacienteId ?? null}::uuid)
+          AND (${input.servicioId ?? null}::uuid IS NULL OR hi.servicio_id = ${input.servicioId ?? null}::uuid)
           AND (${input.estado ?? null}::text IS NULL OR fe.codigo = ${input.estado ?? null}::text)
           AND (${input.fecha ?? null}::date IS NULL OR hi.fecha_hora_ingreso::date = ${input.fecha ?? null}::date)
         ORDER BY hi.fecha_hora_ingreso DESC, hi.id DESC
@@ -518,9 +511,10 @@ export const eceHojaIngresoRouter = router({
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.documento_instancia
-          (tipo_documento_id, paciente_id, estado_actual_id, creado_por)
+          (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
         VALUES (
           ${tipoDoc.tipo_doc_id}::uuid,
+          ${orden.episodio_origen_id ?? null}::uuid,
           ${orden.paciente_id}::uuid,
           ${tipoDoc.estado_inicial_id}::uuid,
           ${eceCtx.personalId}::uuid
@@ -529,28 +523,30 @@ export const eceHojaIngresoRouter = router({
       `;
       const instanciaId = instanciaRows[0]!.id;
 
-      // 6. Insertar hoja de ingreso
+      // 6. Insertar hoja de ingreso: campos sin columna propia se serializan en datos_administrativos JSONB
+      const datosAdmin = JSON.stringify({
+        modalidad: input.modalidad,
+        procedencia: input.procedencia,
+        diagnosticoIngreso: input.diagnosticoIngreso ?? null,
+        motivoConsulta: input.motivoConsulta ?? null,
+        notasAdicionales: input.notasAdicionales ?? null,
+      });
+
       const hojaRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.hoja_ingreso
-          (instancia_id, paciente_id, episodio_hospitalario_id, orden_ingreso_id,
-           fecha_hora_ingreso, servicio_ingreso_id, cama_asignada_id,
-           modalidad, procedencia, diagnostico_ingreso, motivo_consulta,
-           notas_adicionales, admisionista_id)
+          (instancia_id, episodio_id, orden_ingreso_id,
+           fecha_hora_ingreso, servicio_id, cama_id,
+           datos_administrativos, responsable_admision)
         VALUES (
           ${instanciaId}::uuid,
-          ${orden.paciente_id}::uuid,
-          ${orden.episodio_hospitalario_id ?? null}::uuid,
+          ${orden.episodio_origen_id ?? null}::uuid,
           ${input.ordenIngresoId}::uuid,
           ${input.fechaHoraIngreso.toISOString()},
           ${input.servicioIngresoId}::uuid,
           ${input.camaAsignadaId ?? null}::uuid,
-          ${input.modalidad},
-          ${input.procedencia},
-          ${input.diagnosticoIngreso ?? null},
-          ${input.motivoConsulta ?? null},
-          ${input.notasAdicionales ?? null},
+          ${datosAdmin}::jsonb,
           ${personal.id}::uuid
         )
         RETURNING id::text
@@ -582,18 +578,21 @@ export const eceHojaIngresoRouter = router({
         });
       }
 
+      // Campos escalares actualizados directamente; campos JSONB se fusionan con jsonb_build_object
       await (tx.$executeRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<number>)`
         UPDATE ece.hoja_ingreso SET
-          fecha_hora_ingreso  = COALESCE(${input.fechaHoraIngreso?.toISOString() ?? null}::timestamptz, fecha_hora_ingreso),
-          servicio_ingreso_id = COALESCE(${input.servicioIngresoId ?? null}::uuid, servicio_ingreso_id),
-          cama_asignada_id    = ${input.camaAsignadaId !== undefined ? (input.camaAsignadaId ?? null) : null}::uuid,
-          modalidad           = COALESCE(${input.modalidad ?? null}, modalidad),
-          procedencia         = COALESCE(${input.procedencia ?? null}, procedencia),
-          diagnostico_ingreso = COALESCE(${input.diagnosticoIngreso ?? null}, diagnostico_ingreso),
-          motivo_consulta     = COALESCE(${input.motivoConsulta ?? null}, motivo_consulta),
-          notas_adicionales   = COALESCE(${input.notasAdicionales ?? null}, notas_adicionales)
+          fecha_hora_ingreso = COALESCE(${input.fechaHoraIngreso?.toISOString() ?? null}::timestamptz, fecha_hora_ingreso),
+          servicio_id        = COALESCE(${input.servicioIngresoId ?? null}::uuid, servicio_id),
+          cama_id            = ${input.camaAsignadaId !== undefined ? (input.camaAsignadaId ?? null) : null}::uuid,
+          datos_administrativos = datos_administrativos || jsonb_build_object(
+            'modalidad',        COALESCE(${input.modalidad ?? null}::text,        datos_administrativos->>'modalidad'),
+            'procedencia',      COALESCE(${input.procedencia ?? null}::text,      datos_administrativos->>'procedencia'),
+            'diagnosticoIngreso', COALESCE(${input.diagnosticoIngreso ?? null}::text, datos_administrativos->>'diagnosticoIngreso'),
+            'motivoConsulta',   COALESCE(${input.motivoConsulta ?? null}::text,   datos_administrativos->>'motivoConsulta'),
+            'notasAdicionales', COALESCE(${input.notasAdicionales ?? null}::text, datos_administrativos->>'notasAdicionales')
+          )
         WHERE id = ${input.id}::uuid
       `;
 
@@ -716,15 +715,17 @@ export const eceHojaIngresoRouter = router({
 
       await avanzarEstado(tx, hoja.instancia_id, "anular", eceCtx.personalId, "DIR");
 
-      // Registrar motivo en notas (campo libre, no hay tabla dedicada)
+      // Motivo de anulación se persiste en datos_administrativos JSONB
       await (tx.$executeRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<number>)`
         UPDATE ece.hoja_ingreso
-        SET notas_adicionales = CONCAT(
-          COALESCE(notas_adicionales || E'\n', ''),
-          '[ANULACIÓN] ',
-          ${input.motivoAnulacion}
+        SET datos_administrativos = COALESCE(datos_administrativos, '{}'::jsonb) || jsonb_build_object(
+          'notasAdicionales', CONCAT(
+            COALESCE(datos_administrativos->>'notasAdicionales' || E'\n', ''),
+            '[ANULACIÓN] ',
+            ${input.motivoAnulacion}
+          )
         )
         WHERE id = ${input.id}::uuid
       `;
