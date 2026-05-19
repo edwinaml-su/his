@@ -1,4 +1,7 @@
 export * from "./abac";
+export * from "./gs1-inbound";
+export * from "./gs1-devoluciones";
+export * from "./gs1-proceso-c";
 export * from "./allergy";
 export * from "./audit";
 export * from "./audit-integrity";

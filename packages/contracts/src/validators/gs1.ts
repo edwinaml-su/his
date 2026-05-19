@@ -77,6 +77,7 @@ export function buildGSRN(companyPrefix: string, patientSerial: number): string 
  * Utilidad de bajo nivel expuesta para tests y paridad SQL.
  */
 export { gs1Mod10CheckDigit };
+
 /**
  * Parser GS1 Application Identifiers (AI) para strings DataMatrix.
  * Ref: GS1 General Specifications v23, sección 7.

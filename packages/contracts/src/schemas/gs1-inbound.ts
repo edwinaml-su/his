@@ -1,10 +1,15 @@
 import { z } from "zod";
+import { validateGtinChecksum } from "../validators/gs1";
 
 // ---------------------------------------------------------------------------
 // Producto escaneado en muelle: un ítem dentro del JSONB `productos`
 // ---------------------------------------------------------------------------
 export const gs1ProductoRecibidoSchema = z.object({
-  gtin: z.string().min(14).max(14).regex(/^\d+$/, "GTIN debe ser 14 dígitos"),
+  gtin: z
+    .string()
+    .length(14)
+    .regex(/^\d{14}$/, "GTIN debe ser 14 dígitos numéricos")
+    .refine(validateGtinChecksum, "GTIN check-digit GS1 Módulo-10 inválido"),
   cantidad: z.number().int().positive(),
   lote: z.string().min(1).max(50),
   expiry: z

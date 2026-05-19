@@ -26,6 +26,12 @@ import { withTenantContext } from "../rls-context";
 // Schemas
 // ---------------------------------------------------------------------------
 
+/**
+ * Validación check-digit GS1 Módulo-10 para GTIN-14.
+ * Equivalente a validateGtinChecksum en @his/contracts/validators/gs1 (HI-08).
+ * Mantenida local por limitación de resolución de workspace en el worktree;
+ * la función canónica está en packages/contracts/src/validators/gs1.ts.
+ */
 function gs1CheckDigitValid(code: string): boolean {
   const len = code.length;
   let sum = 0;

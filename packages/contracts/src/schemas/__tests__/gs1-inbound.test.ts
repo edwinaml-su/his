@@ -13,7 +13,7 @@ import {
 // ---------------------------------------------------------------------------
 describe("gs1ProductoRecibidoSchema", () => {
   const validProducto = {
-    gtin: "07501000001234",
+    gtin: "07501000001231",
     cantidad: 10,
     lote: "L2026A",
     expiry: "2027-12-31",
@@ -99,7 +99,7 @@ describe("recibirMercanciaInput", () => {
     numero_documento_recepcion: "REC-2026-001",
     proveedor_gln: "7413000000001",
     productos: [
-      { gtin: "07501000001234", cantidad: 5, lote: "L001", expiry: "2027-06-30" },
+      { gtin: "07501000001231", cantidad: 5, lote: "L001", expiry: "2027-06-30" },
     ],
     verificacion_5correctos: {
       paciente_n_a: true as const,

@@ -19,7 +19,7 @@ import {
   rechazarRecepcionInput,
   listarRecepcionesInput,
 } from "@his/contracts";
-import { emitDomainEvent } from "@his/database";
+import { emitDomainEvent, Prisma } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 export const gs1ProcesoARouter = router({
@@ -182,39 +182,51 @@ export const gs1ProcesoARouter = router({
 
   /**
    * Lista recepciones filtradas por establecimiento y estado opcional.
+   *
+   * HI-07: usa Prisma.sql template literal — NO $queryRawUnsafe con interpolación.
+   * El filtro de estado, aunque restringido por el enum Zod, se parametriza
+   * correctamente para evitar el patrón de interpolación de strings en SQL.
    */
   listar: tenantProcedure
     .input(listarRecepcionesInput)
     .query(async ({ ctx, input }) => {
-      const estadoFilter = input.estado
-        ? `AND estado = '${input.estado}'`
-        : "";
+      type RecepcionRow = {
+        id: string;
+        numero_documento_recepcion: string;
+        fecha: string;
+        proveedor_gln: string;
+        sscc_pallet: string | null;
+        productos: unknown;
+        verificacion_5correctos: unknown;
+        estado: string;
+        motivo_rechazo: string | null;
+        creado_en: string;
+      };
 
-      const rows = await ctx.prisma.$queryRawUnsafe<
-        {
-          id: string;
-          numero_documento_recepcion: string;
-          fecha: string;
-          proveedor_gln: string;
-          sscc_pallet: string | null;
-          productos: unknown;
-          verificacion_5correctos: unknown;
-          estado: string;
-          motivo_rechazo: string | null;
-          creado_en: string;
-        }[]
-      >(
-        `SELECT id, numero_documento_recepcion, fecha, proveedor_gln,
-                sscc_pallet, productos, verificacion_5correctos,
-                estado, motivo_rechazo, creado_en
-         FROM ece.recepcion_mercancia
-         WHERE establecimiento_id = $1::uuid ${estadoFilter}
-         ORDER BY fecha DESC
-         LIMIT $2 OFFSET $3`,
-        input.establecimiento_id,
-        input.limit,
-        input.offset,
-      );
+      const estId = input.establecimiento_id;
+      const lim   = input.limit;
+      const off   = input.offset;
+
+      const rows = input.estado
+        ? await ctx.prisma.$queryRaw<RecepcionRow[]>`
+            SELECT id, numero_documento_recepcion, fecha, proveedor_gln,
+                   sscc_pallet, productos, verificacion_5correctos,
+                   estado, motivo_rechazo, creado_en
+            FROM ece.recepcion_mercancia
+            WHERE establecimiento_id = ${estId}::uuid
+              AND estado = ${input.estado}
+            ORDER BY fecha DESC
+            LIMIT ${lim} OFFSET ${off}
+          `
+        : await ctx.prisma.$queryRaw<RecepcionRow[]>`
+            SELECT id, numero_documento_recepcion, fecha, proveedor_gln,
+                   sscc_pallet, productos, verificacion_5correctos,
+                   estado, motivo_rechazo, creado_en
+            FROM ece.recepcion_mercancia
+            WHERE establecimiento_id = ${estId}::uuid
+            ORDER BY fecha DESC
+            LIMIT ${lim} OFFSET ${off}
+          `;
 
       return rows;
     }),
