@@ -4,10 +4,12 @@ import {
   triageEvaluationCreateSchema,
   quickIntakeInputSchema,
   recordVitalsInputSchema,
+  setAssignedLevelInputSchema,
   VITAL_REASONABLE_RANGES,
   type TriageVitalCode,
   type VitalAlert,
 } from "@his/contracts";
+import { withTenantContext } from "../rls-context";
 import { router, tenantProcedure } from "../trpc";
 
 /** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
@@ -185,6 +187,76 @@ export const triageRouter = router({
           discriminatorHits: { create: discriminatorHits },
         },
         include: { assignedLevel: true, vitalSigns: true, discriminatorHits: true },
+      });
+    }),
+
+  /**
+   * US-3.4 — Cerrar wizard de discriminadores: confirma nivel Manchester.
+   *
+   * Acciones atómicas (transacción dentro de `withTenantContext`):
+   *  1. Carga la `TriageEvaluation` y valida que pertenece al tenant + esté IN_PROGRESS.
+   *  2. (Opcional) Crea filas `TriageDiscriminatorHit` con el razonamiento del triagista.
+   *  3. UPDATE evaluation: `assignedLevelId`, `status='COMPLETED'`, `completedAt=now()`,
+   *     `overrideJustification` si vino, `updatedBy=ctx.user.id`.
+   *  4. Retorna la evaluación con relaciones (`assignedLevel`, `discriminatorHits`).
+   *
+   * Errores:
+   *  - NOT_FOUND   — evaluation inexistente o de otro tenant.
+   *  - CONFLICT    — evaluation ya `COMPLETED` (transición irreversible).
+   */
+  setAssignedLevel: tenantProcedure
+    .input(setAssignedLevelInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const existing = await tx.triageEvaluation.findFirst({
+          where: {
+            id: input.triageEvaluationId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          select: { id: true, status: true },
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Evaluación de triage no encontrada en la organización activa.",
+          });
+        }
+
+        if (existing.status === "COMPLETED") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "La evaluación ya está COMPLETED. La transición de nivel es irreversible.",
+          });
+        }
+
+        if (input.discriminatorHits.length > 0) {
+          await tx.triageDiscriminatorHit.createMany({
+            data: input.discriminatorHits.map((hit) => ({
+              triageEvaluationId: input.triageEvaluationId,
+              discriminatorId: hit.discriminatorId,
+              positive: hit.positive,
+              notes: hit.notes ?? null,
+            })),
+            skipDuplicates: true,
+          });
+        }
+
+        return tx.triageEvaluation.update({
+          where: { id: input.triageEvaluationId },
+          data: {
+            assignedLevelId: input.assignedLevelId,
+            status: "COMPLETED",
+            completedAt: new Date(),
+            overrideJustification: input.overrideJustification ?? null,
+            updatedBy: ctx.user.id,
+          },
+          include: {
+            assignedLevel: true,
+            discriminatorHits: true,
+          },
+        });
       });
     }),
 
