@@ -2,16 +2,21 @@
  * /audit/stat-events — Dashboard mensual eventos STAT para DIR (US.F2.6.47)
  *
  * Permite filtrar por mes/año y ver agregados por motivo + drill-down de eventos.
+ * El orgId se resuelve server-side (cookie his.org) y se pasa al client.
  */
 
 import type { Metadata } from "next";
+import { getTenantContext } from "@/lib/auth/session";
 import { StatEventsDashboardClient } from "./_components/stat-events-dashboard-client";
 
 export const metadata: Metadata = {
   title: "Eventos STAT | Auditoría — HIS Avante",
 };
 
-export default function StatEventsPage() {
+export default async function StatEventsPage() {
+  const tenant = await getTenantContext();
+  const orgId = tenant?.organizationId ?? "";
+
   return (
     <main className="container mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6">
@@ -21,7 +26,7 @@ export default function StatEventsPage() {
           Solo visible para Director Médico (DIR).
         </p>
       </div>
-      <StatEventsDashboardClient />
+      <StatEventsDashboardClient orgId={orgId} />
     </main>
   );
 }

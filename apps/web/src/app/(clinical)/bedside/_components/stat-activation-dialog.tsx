@@ -16,7 +16,9 @@
 
 import { useState } from "react";
 import { trpc } from "@/lib/trpc/react";
-import { STAT_MOTIVOS, type StatMotivo } from "@his/trpc/src/routers/bedside-stat.router";
+// STAT_MOTIVOS inline porque @his/trpc no exporta el router module directamente
+const STAT_MOTIVOS = ["PARO_CARDIORRESPIRATORIO", "HIPOGLUCEMIA_SEVERA", "ANAFILAXIA", "OTRO_URGENTE"] as const;
+type StatMotivo = typeof STAT_MOTIVOS[number];
 
 const MOTIVO_LABELS: Record<StatMotivo, string> = {
   PARO_CARDIORRESPIRATORIO: "Paro cardiorrespiratorio",

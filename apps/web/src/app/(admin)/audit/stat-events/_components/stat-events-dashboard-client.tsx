@@ -8,7 +8,6 @@
 
 import { useState } from "react";
 import { trpc } from "@/lib/trpc/react";
-import { useSession } from "next-auth/react";
 
 const MOTIVO_LABELS: Record<string, string> = {
   PARO_CARDIORRESPIRATORIO: "Paro cardiorrespiratorio",
@@ -17,13 +16,14 @@ const MOTIVO_LABELS: Record<string, string> = {
   OTRO_URGENTE:             "Otro urgente",
 };
 
-export function StatEventsDashboardClient() {
-  const { data: session } = useSession();
+interface StatEventsDashboardClientProps {
+  orgId: string;
+}
+
+export function StatEventsDashboardClient({ orgId }: StatEventsDashboardClientProps) {
   const now = new Date();
   const [mes, setMes]   = useState(now.getMonth() + 1);
   const [anio, setAnio] = useState(now.getFullYear());
-
-  const orgId = (session?.user as { organizationId?: string } | undefined)?.organizationId ?? "";
 
   const { data, isLoading, error } = trpc.bedsideStat.monthlyReport.useQuery(
     { organizationId: orgId, mes, anio },
