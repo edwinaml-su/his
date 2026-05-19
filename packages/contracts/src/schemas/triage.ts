@@ -154,3 +154,23 @@ export const triageEvaluationCreateSchema = z.object({
 export type TriageEvaluationCreateInput = z.infer<typeof triageEvaluationCreateSchema>;
 export type VitalSignInput = z.infer<typeof vitalSignSchema>;
 export type DiscriminatorHitInput = z.infer<typeof discriminatorHitSchema>;
+
+/**
+ * US-3.4 — Cierre de triage Manchester desde wizard de discriminadores.
+ *
+ * Confirma el nivel asignado para una `TriageEvaluation` IN_PROGRESS:
+ *   - Persiste los hits de discriminadores (audit del razonamiento del triagista).
+ *   - Actualiza assignedLevelId + status COMPLETED + completedAt.
+ *   - overrideJustification es obligatorio cuando el triagista elige un nivel
+ *     distinto al sugerido por el primer discriminador positivo (control de calidad).
+ *
+ * El triagista NO puede regresar al estado IN_PROGRESS (transición irreversible).
+ */
+export const setAssignedLevelInputSchema = z.object({
+  triageEvaluationId: z.string().uuid(),
+  assignedLevelId: z.string().uuid(),
+  overrideJustification: z.string().trim().min(10).max(2000).optional(),
+  discriminatorHits: z.array(discriminatorHitSchema).default([]),
+});
+
+export type SetAssignedLevelInput = z.infer<typeof setAssignedLevelInputSchema>;
