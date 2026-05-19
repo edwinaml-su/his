@@ -9,6 +9,10 @@
  * - `result.validate` ya tenía 4-eyes; añadido append-only history en notes.
  * - state machine LabOrder con `canTransitionLabOrder`.
  * - critical value alerts inline en response.
+ *
+ * HH-06 (2026-05-19):
+ * - Todos los resolvers tenant-scoped envueltos en withTenantContext para
+ *   garantizar demote a rol `authenticated` y aplicación de RLS de Postgres.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -31,6 +35,7 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 /**
  * Beta.15 — convierte Prisma Decimal-or-null a number-or-null para el payload
@@ -93,92 +98,101 @@ export const lisRouter = router({
 
   order: router({
     list: tenantProcedure.input(labOrderListInput).query(async ({ ctx, input }) => {
-      return ctx.prisma.labOrder.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          ...(input.encounterId && { encounterId: input.encounterId }),
-          ...(input.patientId && { patientId: input.patientId }),
-          ...(input.priority && { priority: input.priority }),
-          ...(input.status && { status: input.status }),
-          ...(input.fromDate && { orderedAt: { gte: input.fromDate } }),
-        },
-        include: { items: { include: { test: true } } },
-        orderBy: { orderedAt: "desc" },
-        take: input.limit,
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.labOrder.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            ...(input.encounterId && { encounterId: input.encounterId }),
+            ...(input.patientId && { patientId: input.patientId }),
+            ...(input.priority && { priority: input.priority }),
+            ...(input.status && { status: input.status }),
+            ...(input.fromDate && { orderedAt: { gte: input.fromDate } }),
+          },
+          include: { items: { include: { test: true } } },
+          orderBy: { orderedAt: "desc" },
+          take: input.limit,
+        });
       });
     }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const o = await ctx.prisma.labOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          include: {
-            items: { include: { test: true, results: true } },
-            specimens: true,
-          },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const o = await tx.labOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            include: {
+              items: { include: { test: true, results: true } },
+              specimens: true,
+            },
+          });
+          if (!o) throw new TRPCError({ code: "NOT_FOUND" });
+          return o;
         });
-        if (!o) throw new TRPCError({ code: "NOT_FOUND" });
-        return o;
       }),
 
     create: tenantProcedure.input(labOrderCreateInput).mutation(async ({ ctx, input }) => {
-      const enc = await ctx.prisma.encounter.findFirst({
-        where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-        select: { id: true, patientId: true },
-      });
-      if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
-      if (enc.patientId !== input.patientId) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
-      }
-      return ctx.prisma.labOrder.create({
-        data: {
-          organizationId: ctx.tenant.organizationId,
-          encounterId: input.encounterId,
-          patientId: input.patientId,
-          prescriberId: ctx.user.id,
-          priority: input.priority,
-          status: "ORDERED",
-          clinicalIndication: input.clinicalIndication ?? null,
-          items: {
-            create: input.items.map((i) => ({ testId: i.testId, notes: i.notes ?? null })),
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const enc = await tx.encounter.findFirst({
+          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
+          select: { id: true, patientId: true },
+        });
+        if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
+        if (enc.patientId !== input.patientId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
+        }
+        return tx.labOrder.create({
+          data: {
+            organizationId: ctx.tenant.organizationId,
+            encounterId: input.encounterId,
+            patientId: input.patientId,
+            prescriberId: ctx.user.id,
+            priority: input.priority,
+            status: "ORDERED",
+            clinicalIndication: input.clinicalIndication ?? null,
+            items: {
+              create: input.items.map((i) => ({ testId: i.testId, notes: i.notes ?? null })),
+            },
           },
-        },
-        include: { items: true },
+          include: { items: true },
+        });
       });
     }),
   }),
 
   specimen: router({
     collect: tenantProcedure.input(specimenCollectInput).mutation(async ({ ctx, input }) => {
-      // Verifica que la orden pertenezca a la tenant.
-      const order = await ctx.prisma.labOrder.findFirst({
-        where: { id: input.orderId, organizationId: ctx.tenant.organizationId },
-        select: { id: true },
-      });
-      if (!order) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.prisma.labSpecimen.create({
-        data: {
-          orderId: input.orderId,
-          type: input.type,
-          barcode: input.barcode,
-          collectedAt: input.collectedAt ?? new Date(),
-          collectedById: ctx.user.id,
-          condition: "ACCEPTABLE",
-        },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const order = await tx.labOrder.findFirst({
+          where: { id: input.orderId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!order) throw new TRPCError({ code: "NOT_FOUND" });
+        return tx.labSpecimen.create({
+          data: {
+            orderId: input.orderId,
+            type: input.type,
+            barcode: input.barcode,
+            collectedAt: input.collectedAt ?? new Date(),
+            collectedById: ctx.user.id,
+            condition: "ACCEPTABLE",
+          },
+        });
       });
     }),
 
     reject: tenantProcedure.input(specimenRejectInput).mutation(async ({ ctx, input }) => {
-      const updated = await ctx.prisma.labSpecimen.updateMany({
-        where: {
-          id: input.id,
-          order: { organizationId: ctx.tenant.organizationId },
-        },
-        data: { condition: "REJECTED", rejectionReason: input.rejectionReason },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const updated = await tx.labSpecimen.updateMany({
+          where: {
+            id: input.id,
+            order: { organizationId: ctx.tenant.organizationId },
+          },
+          data: { condition: "REJECTED", rejectionReason: input.rejectionReason },
+        });
+        if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+        return { ok: true as const };
       });
-      if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
-      return { ok: true as const };
     }),
   }),
 
@@ -189,50 +203,53 @@ export const lisRouter = router({
      * - Si `forceFlagOverride=false` (default) recalcula el flag desde refs.
      * - Si `valueNumeric` provisto y tests con criticalFlag → mapea a CRITICAL_*.
      * - Retorna alerts inline si el flag es crítico.
+     *
+     * HH-06: withTenantContext provee la transacción y el demote de rol.
+     * El outbox de emitDomainEvent ocurre dentro del mismo tx.
      */
     enter: tenantProcedure
       .input(resultEnterWithPatientContextInput)
       .mutation(async ({ ctx, input }) => {
-        const item = await ctx.prisma.labOrderItem.findFirst({
-          where: {
-            id: input.orderItemId,
-            order: { organizationId: ctx.tenant.organizationId },
-          },
-          include: {
-            test: true,
-            // Beta.15: prescriberId es el destinatario canónico del evento
-            // `lab.criticalValue` (backlog US.B15.4.2).
-            order: { select: { prescriberId: true } },
-          },
-        });
-        if (!item) throw new TRPCError({ code: "NOT_FOUND" });
-
-        // Beta.3 — Determinar el flag final.
-        let finalFlag: LisResultFlag = input.flag;
-        if (!input.forceFlagOverride && input.valueNumeric != null) {
-          // Construir reference range desde el test (Wave 1: solo BOTH/adult).
-          const ranges: LabReferenceRange[] = buildReferenceRangesFromTest({
-            refRangeLow: item.test.refRangeLow,
-            refRangeHigh: item.test.refRangeHigh,
-            critical: item.test.critical,
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const item = await tx.labOrderItem.findFirst({
+            where: {
+              id: input.orderItemId,
+              order: { organizationId: ctx.tenant.organizationId },
+            },
+            include: {
+              test: true,
+              // Beta.15: prescriberId es el destinatario canónico del evento
+              // `lab.criticalValue` (backlog US.B15.4.2).
+              order: { select: { prescriberId: true } },
+            },
           });
-          finalFlag = evaluateLabResultFlag({
-            valueNumeric: input.valueNumeric,
-            ranges,
-            patientAgeYears: input.patientAgeYears ?? null,
-            patientSex: (input.patientSex as LisSex | undefined) ?? null,
-          });
-        }
+          if (!item) throw new TRPCError({ code: "NOT_FOUND" });
 
-        const isCritical = isCriticalFlag(finalFlag);
+          // Beta.3 — Determinar el flag final.
+          let finalFlag: LisResultFlag = input.flag;
+          if (!input.forceFlagOverride && input.valueNumeric != null) {
+            // Construir reference range desde el test (Wave 1: solo BOTH/adult).
+            const ranges: LabReferenceRange[] = buildReferenceRangesFromTest({
+              refRangeLow: item.test.refRangeLow,
+              refRangeHigh: item.test.refRangeHigh,
+              critical: item.test.critical,
+            });
+            finalFlag = evaluateLabResultFlag({
+              valueNumeric: input.valueNumeric,
+              ranges,
+              patientAgeYears: input.patientAgeYears ?? null,
+              patientSex: (input.patientSex as LisSex | undefined) ?? null,
+            });
+          }
 
-        // Beta.15 (US.B15.4.2): si flag final es CRITICAL_LOW/CRITICAL_HIGH
-        // y tenemos valueNumeric, emitimos `lab.criticalValue` dentro de la
-        // misma transacción que el create del LabResult (outbox transaccional).
-        // Sin valueNumeric el payload Zod no es válido — no se emite.
-        const shouldEmit = isCritical && input.valueNumeric != null;
+          const isCritical = isCriticalFlag(finalFlag);
 
-        const created = await ctx.prisma.$transaction(async (tx) => {
+          // Beta.15 (US.B15.4.2): si flag final es CRITICAL_LOW/CRITICAL_HIGH
+          // y tenemos valueNumeric, emitimos `lab.criticalValue` dentro de la
+          // misma transacción (outbox transaccional).
+          // Sin valueNumeric el payload Zod no es válido — no se emite.
+          const shouldEmit = isCritical && input.valueNumeric != null;
+
           const result = await tx.labResult.create({
             data: {
               orderItemId: input.orderItemId,
@@ -245,6 +262,7 @@ export const lisRouter = router({
               notes: input.notes ?? null,
             },
           });
+
           if (shouldEmit) {
             const payload: LabCriticalValuePayload = {
               orderItemId: input.orderItemId,
@@ -268,25 +286,24 @@ export const lisRouter = router({
               payload,
             });
           }
-          return result;
-        });
 
-        return {
-          result: created,
-          finalFlag,
-          isCritical,
-          alerts: isCritical
-            ? [
-                {
-                  testCode: item.test.code,
-                  testName: item.test.name,
-                  flag: finalFlag,
-                  value: input.valueNumeric,
-                  unit: input.valueUnit ?? item.test.unit,
-                },
-              ]
-            : [],
-        };
+          return {
+            result,
+            finalFlag,
+            isCritical,
+            alerts: isCritical
+              ? [
+                  {
+                    testCode: item.test.code,
+                    testName: item.test.name,
+                    flag: finalFlag,
+                    value: input.valueNumeric,
+                    unit: input.valueUnit ?? item.test.unit,
+                  },
+                ]
+              : [],
+          };
+        });
       }),
 
     /**
@@ -294,38 +311,40 @@ export const lisRouter = router({
      * Las validaciones anteriores se mantienen en notes (formato auditable).
      */
     validate: tenantProcedure.input(resultValidateInput).mutation(async ({ ctx, input }) => {
-      const result = await ctx.prisma.labResult.findFirst({
-        where: {
-          id: input.resultId,
-          orderItem: { order: { organizationId: ctx.tenant.organizationId } },
-          validatedAt: null,
-        },
-        select: { id: true, resultedById: true, notes: true, flag: true },
-      });
-      if (!result) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Resultado no existe o ya validado." });
-      }
-      // Regla 4-eyes: el que valida debe ser distinto del que ingresó.
-      if (result.resultedById === ctx.user.id) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "El validador debe ser distinto del que ingresó el resultado.",
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const result = await tx.labResult.findFirst({
+          where: {
+            id: input.resultId,
+            orderItem: { order: { organizationId: ctx.tenant.organizationId } },
+            validatedAt: null,
+          },
+          select: { id: true, resultedById: true, notes: true, flag: true },
         });
-      }
-      const validatedAt = new Date();
-      const historyLine = `[${validatedAt.toISOString()}] [VALIDATED by ${ctx.user.id}] flag=${result.flag}`;
-      const newNotes =
-        result.notes && result.notes.length > 0
-          ? `${result.notes}\n${historyLine}`
-          : historyLine;
+        if (!result) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Resultado no existe o ya validado." });
+        }
+        // Regla 4-eyes: el que valida debe ser distinto del que ingresó.
+        if (result.resultedById === ctx.user.id) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El validador debe ser distinto del que ingresó el resultado.",
+          });
+        }
+        const validatedAt = new Date();
+        const historyLine = `[${validatedAt.toISOString()}] [VALIDATED by ${ctx.user.id}] flag=${result.flag}`;
+        const newNotes =
+          result.notes && result.notes.length > 0
+            ? `${result.notes}\n${historyLine}`
+            : historyLine;
 
-      return ctx.prisma.labResult.update({
-        where: { id: input.resultId },
-        data: {
-          validatedAt,
-          validatedById: ctx.user.id,
-          notes: newNotes,
-        },
+        return tx.labResult.update({
+          where: { id: input.resultId },
+          data: {
+            validatedAt,
+            validatedById: ctx.user.id,
+            notes: newNotes,
+          },
+        });
       });
     }),
   }),

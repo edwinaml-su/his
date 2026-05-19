@@ -19,10 +19,25 @@ import { makeCtx } from "../../__tests__/helpers/caller";
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
 
+/**
+ * withTenantContext usa $transaction internamente.
+ * applyTenantContext usa $executeRawUnsafe para SET LOCAL / set_tenant_context.
+ */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  prisma.$transaction.mockImplementation(async (cb: unknown) => {
+    if (typeof cb === "function") {
+      return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+    }
+    return cb;
+  });
+  prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+}
+
 describe("imagingRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
   });
 
   // ---------------------------------------------------------------------------
@@ -352,6 +367,52 @@ describe("imagingRouter", () => {
       await expect(caller.report.sign({ orderId: u })).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // HH-13 — RLS demote (withTenantContext)
+  // ---------------------------------------------------------------------------
+
+  describe("HH-13 RLS demote — withTenantContext activo", () => {
+    it("order.list — demote a authenticated + set_tenant_context", async () => {
+      prisma.imagingOrder.findMany.mockResolvedValue([] as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.list({ limit: 10 });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+    });
+
+    it("order.create — demote a authenticated + set_tenant_context", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.imagingOrder.create.mockResolvedValue({ id: u } as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        encounterId: u,
+        establishmentId: u,
+        patientId: u,
+        modalityType: "CT",
+        studyDescription: "TC cráneo",
+        clinicalIndication: "TCE",
+      });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+    });
+
+    it("report.validate — demote a authenticated + set_tenant_context", async () => {
+      prisma.imagingOrder.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.imagingReport.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.imagingOrder.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.report.validate({ orderId: u });
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
     });
   });
 
