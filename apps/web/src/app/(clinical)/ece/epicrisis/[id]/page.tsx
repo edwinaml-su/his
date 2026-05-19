@@ -252,13 +252,16 @@ export default function EpicrisisDetailPage({
   }
 
   function onCertificarConfirm(pin: string) {
-    // El router eceEpicrisis.certificar requiere id + firmaId (UUID de firma_electronica).
-    // La sesión DIR obtiene firmaId tras validar el PIN — aquí usamos el PIN como
-    // lookup key. En producción, este paso llama a firma.confirm primero.
-    // Por ahora usamos el PIN para demostrar el flujo UI; la mutación fallará
-    // con error del servidor si firmaId no es UUID válido (comportamiento esperado).
-    void pin; // TODO: integrar con trpc.firma.confirm para obtener firmaId real
+    // A-03: invocar la mutación efectivamente.
+    // El PIN actúa como lookup key para obtener el firmaId del servidor.
+    // Mientras `trpc.firma.confirm` no esté disponible, usamos el PIN
+    // como firmaId provisional — el servidor retornará error tipado si no
+    // es UUID válido, que se muestra en el banner de error del sidebar.
+    // Cuando firma.confirm se implemente, reemplazar esta línea por:
+    //   const { firmaId } = await firmaConfirm.mutateAsync({ pin, resource: `epicrisis/${id}` });
+    //   certificar.mutate({ id, firmaId });
     setShowCertDialog(false);
+    certificar.mutate({ id, firmaId: pin });
   }
 
   const isMutating =

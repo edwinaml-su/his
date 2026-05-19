@@ -5300,6 +5300,23 @@ model EceEpicrisisEgreso {
   vistoJefeServicioId      String?  @map("visto_jefe_servicio") @db.Uuid
   registradoEn             DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro           String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  // A-01: CIE-10 estructurado (Art. 17 NTEC)
+  cie10Principal           String?  @map("cie10_principal")
+  cie10Secundarios         String[] @map("cie10_secundarios")
+  // A-02: workflow de firmas progresivas (Art. 40 NTEC)
+  estadoWorkflow           String   @default("borrador") @map("estado_workflow")
+  firmaMcId                String?  @map("firma_mc_id") @db.Uuid
+  firmaEspId               String?  @map("firma_esp_id") @db.Uuid
+  firmaDirId               String?  @map("firma_dir_id") @db.Uuid
+  resumenIngreso           String?  @map("resumen_ingreso")
+  evolucionHospitalaria    String?  @map("evolucion_hospitalaria")
+  tratamientoEgreso        String?  @map("tratamiento_egreso")
+  indicacionesEgreso       String?  @map("indicaciones_egreso")
+  firmadoEn                DateTime? @map("firmado_en") @db.Timestamptz()
+  validadoEn               DateTime? @map("validado_en") @db.Timestamptz()
+  certificadoEn            DateTime? @map("certificado_en") @db.Timestamptz()
+  anuladoEn                DateTime? @map("anulado_en") @db.Timestamptz()
+  motivoAnulacion          String?  @map("motivo_anulacion")
 
   episodio          EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   medicoTratante    EcePersonalSalud    @relation("EEMedicoTratante", fields: [medicoTratanteId], references: [id])
