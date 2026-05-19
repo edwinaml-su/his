@@ -1,14 +1,10 @@
 "use client";
 
 /**
- * ECE — Indicaciones Médicas (TDR §ECE).
+ * ECE — Indicaciones Médicas: lista paginada del episodio.
  *
- * Lista paginada de indicaciones del episodio activo.
- * Filtros: estado del workflow (BORRADOR | FIRMADA_MC | VALIDADA_ENF | ANULADA).
- * La query usa `trpc.eceIndicaciones.list` (router pendiente de merge).
- *
- * Mientras el AppRouter no exponga `eceIndicaciones`, se castea con
- * eslint-disable siguiendo el patrón de /pharmacy.
+ * Filtros: vigencia (ACTIVA | SUSPENDIDA | CANCELADA).
+ * Usa trpc.eceIndicaciones.list (IND_MED, Sprint S2).
  */
 import * as React from "react";
 import Link from "next/link";
@@ -36,43 +32,42 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
-import { IndicacionEstadoBadge, type IndicacionEstado } from "./_components/indicacion-estado-badge";
+import {
+  IndicacionEstadoBadge,
+  type Vigencia,
+} from "./_components/indicacion-estado-badge";
 
-const ESTADOS: Array<{ value: IndicacionEstado | "TODOS"; label: string }> = [
-  { value: "TODOS", label: "Todos" },
-  { value: "BORRADOR", label: "Borrador" },
-  { value: "FIRMADA_MC", label: "Firmada MC" },
-  { value: "VALIDADA_ENF", label: "Validada Enfermería" },
-  { value: "ANULADA", label: "Anulada" },
-];
-
-interface IndicacionListItem {
+interface IndicacionListRow {
   id: string;
-  creadoEn: string | Date;
-  estado: IndicacionEstado;
-  observaciones?: string | null;
-  episodioId: string;
-  medico: { id: string; firstName: string; lastName: string };
-  _count: { items: number };
+  medico_prescriptor: string;
+  registrado_en: string | Date;
+  estado_registro: string;
+  vigencia: string;
 }
+
+const VIGENCIAS: Array<{ value: Vigencia | "TODAS"; label: string }> = [
+  { value: "TODAS", label: "Todas" },
+  { value: "ACTIVA", label: "Activa" },
+  { value: "SUSPENDIDA", label: "Suspendida" },
+  { value: "CANCELADA", label: "Cancelada" },
+];
 
 export default function IndicacionesListPage(): React.ReactElement {
   const [episodioId, setEpisodioId] = React.useState("");
-  const [estado, setEstado] = React.useState<IndicacionEstado | "TODOS">("TODOS");
+  const [vigencia, setVigencia] = React.useState<Vigencia | "TODAS">("TODAS");
 
-  // El router exige `episodioId` UUID válido. Solo ejecutamos query cuando
-  // el usuario lo proporciona. El filtro por estado se aplica client-side
-  // post-fetch (el router actual no expone ese filtro).
+  const validUuid = /^[0-9a-f-]{36}$/i.test(episodioId.trim());
+
   const list = trpc.eceIndicaciones.list.useQuery(
-    { episodioId: episodioId.trim() },
-    { enabled: /^[0-9a-f-]{36}$/i.test(episodioId.trim()) },
+    {
+      episodioId: episodioId.trim(),
+      vigencia: vigencia === "TODAS" ? undefined : vigencia,
+      limit: 50,
+    },
+    { enabled: validUuid },
   );
 
-  const allItems = (list.data ?? []) as unknown as IndicacionListItem[];
-  const items =
-    estado === "TODOS"
-      ? allItems
-      : allItems.filter((it) => it.estado === estado);
+  const items = list.data?.items ?? [];
 
   return (
     <div className="space-y-4">
@@ -80,8 +75,8 @@ export default function IndicacionesListPage(): React.ReactElement {
         <div>
           <h1 className="text-2xl font-bold">Indicaciones Médicas</h1>
           <p className="text-sm text-muted-foreground">
-            Indicaciones del episodio activo con trazabilidad de firma MC y
-            validación de enfermería (TDR §ECE).
+            Órdenes CPOE del episodio con trazabilidad de firma MC y
+            administración de enfermería (NTEC Doc 6).
           </p>
         </div>
         <Button asChild>
@@ -100,26 +95,25 @@ export default function IndicacionesListPage(): React.ReactElement {
               <input
                 id="filter-episodio"
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                placeholder="episodioId"
+                placeholder="UUID del episodio activo"
                 value={episodioId}
                 onChange={(e) => setEpisodioId(e.target.value)}
+                data-testid="input-episodio-id"
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="filter-estado">Estado</Label>
+              <Label htmlFor="filter-vigencia">Vigencia</Label>
               <Select
-                value={estado}
-                onValueChange={(v) =>
-                  setEstado(v as IndicacionEstado | "TODOS")
-                }
+                value={vigencia}
+                onValueChange={(v) => setVigencia(v as Vigencia | "TODAS")}
               >
-                <SelectTrigger id="filter-estado">
+                <SelectTrigger id="filter-vigencia">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ESTADOS.map((e) => (
-                    <SelectItem key={e.value} value={e.value}>
-                      {e.label}
+                  {VIGENCIAS.map((v) => (
+                    <SelectItem key={v.value} value={v.value}>
+                      {v.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -134,7 +128,11 @@ export default function IndicacionesListPage(): React.ReactElement {
           <CardTitle>Indicaciones</CardTitle>
         </CardHeader>
         <CardContent>
-          {list.isLoading ? (
+          {!validUuid ? (
+            <p className="text-sm text-muted-foreground">
+              Ingrese el UUID del episodio para ver las indicaciones.
+            </p>
+          ) : list.isLoading ? (
             <p className="text-sm text-muted-foreground">Cargando…</p>
           ) : items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
@@ -144,31 +142,36 @@ export default function IndicacionesListPage(): React.ReactElement {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Médico</TableHead>
-                  <TableHead>Episodio</TableHead>
-                  <TableHead>Fecha</TableHead>
+                  <TableHead>Médico prescriptor</TableHead>
+                  <TableHead>Fecha registro</TableHead>
                   <TableHead>Estado</TableHead>
-                  <TableHead className="text-right"># ítems</TableHead>
+                  <TableHead>Vigencia</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((ind) => (
+                {(items as IndicacionListRow[]).map((ind) => (
                   <TableRow key={ind.id}>
-                    <TableCell>
-                      {ind.medico.firstName} {ind.medico.lastName}
-                    </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {ind.episodioId.slice(0, 8)}…
+                      {ind.medico_prescriptor.slice(0, 8)}…
                     </TableCell>
-                    <TableCell className="tabular-nums">
-                      {new Date(ind.creadoEn).toLocaleString("es-SV")}
+                    <TableCell className="tabular-nums text-sm">
+                      {new Date(ind.registrado_en).toLocaleString("es-SV")}
                     </TableCell>
                     <TableCell>
-                      <IndicacionEstadoBadge estado={ind.estado} />
+                      <IndicacionEstadoBadge
+                        estadoRegistro={
+                          ind.estado_registro as "borrador" | "firmado" | "validado"
+                        }
+                      />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {ind._count.items}
+                    <TableCell>
+                      <IndicacionEstadoBadge
+                        estadoRegistro={
+                          ind.estado_registro as "borrador" | "firmado" | "validado"
+                        }
+                        vigencia={ind.vigencia as Vigencia}
+                      />
                     </TableCell>
                     <TableCell>
                       <Button asChild size="sm" variant="outline">

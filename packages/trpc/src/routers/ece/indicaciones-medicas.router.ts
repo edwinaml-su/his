@@ -3,143 +3,204 @@
  *
  * Documento NTEC: Doc 6 — Indicaciones Médicas / Prescripción Farmacológica.
  * Norma: MINSAL Acuerdo n.° 1616 (2024), §3.6.
- * Código de tipo_documento: IND_MED.
+ * Código tipo_documento: IND_MED.
  *
  * ---------------------------------------------------------------------------
- * WORKFLOW  (código tipo: IND_MED)
+ * ESTRUCTURA BD (raw SQL — ece.* no en schema.prisma)
  * ---------------------------------------------------------------------------
- *   borrador    → en_revision  (MC: enviar a validar por enfermería)
- *   en_revision → firmado      (MC: firma con firma electrónica + hash SHA-256)
- *   firmado     → validado     (ENF/NURSE: transcripción confirmada al MAR/Kardex)
- *   cualquiera  → anulado      (MC | ENF, pre-validado)
+ *   ece.indicaciones_medicas
+ *     id, instancia_id, episodio_id, fecha_hora, version (optimistic lock),
+ *     vigencia (ACTIVA|SUSPENDIDA|CANCELADA), medico_prescriptor,
+ *     transcripcion_enf, registrado_en, estado_registro (borrador|firmado|validado),
+ *     digitado_retroactivamente, timestamp_real_papel, contingencia_evento_id
  *
- *   Items de la orden (ece.indicacion_item) se pueden agregar/eliminar mientras
- *   el encabezado está en estado borrador o en_revision. Post-firma son inmutables.
+ *   ece.indicacion_item
+ *     id, indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion
+ *
+ *   ece.administracion_medicamento
+ *     id, registro_enf_id, indicacion_item_id, hora_programada,
+ *     hora_aplicada, estado, motivo_omision, responsable
  *
  * ---------------------------------------------------------------------------
- * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * OUTBOX
  * ---------------------------------------------------------------------------
- *   'ece.indicaciones.firmadas'  — emitido por firmar().
+ *   'ece.indicaciones.firmadas'  — emitido en firmar().
  *     Payload: { indicacionId, episodioId, medicoId, itemCount, organizationId }
- *     Consumido por el motor de MAR (Stream 30) para crear las líneas de
- *     ece.administracion_medicamento pendientes de enfermería.
+ *     Consumido por motor MAR (Stream 30) para crear líneas de admin pendientes.
  *
  * ---------------------------------------------------------------------------
- * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * ROLES
  * ---------------------------------------------------------------------------
- *   ece.indicaciones_medicas  — encabezado: episodio_id, observaciones, estado,
- *                               firmado_por, firmado_en
- *   ece.indicacion_item       — línea: indicacion_id, medicamento_codigo, dosis,
- *                               via, frecuencia, duracion_dias, observaciones
+ *   list, get, listAdministraciones → PHYSICIAN | NURSE
+ *   create, update, firmar          → PHYSICIAN
+ *   suspender, cancelar             → PHYSICIAN | NURSE
+ *   registrarAdministracion         → NURSE
  *
  * ---------------------------------------------------------------------------
- * ROLES tRPC
+ * HALLAZGOS CERRADOS (audit Stream B)
  * ---------------------------------------------------------------------------
- *   list, get                 → requireRole(["MC","PHYSICIAN","NURSE","ENF"])
- *   create, firmar            → requireRole(["MC","PHYSICIAN"])
- *   addItem, removeItem       → requireRole(["MC","PHYSICIAN"])
- *   validar                   → requireRole(["NURSE","ENF"])
- *   anular                    → requireRole(["MC","PHYSICIAN","NURSE","ENF"])
+ *   IND-001 [P0] Router + UI completamente ausentes → este archivo cierra.
+ *   IND-005 [P2] vigencia sin enum constraint → migration NN_ind_constraints.sql.
  *
- * Raw SQL es obligatorio porque ece.* usa schema Postgres separado (opción B)
- * y no está mapeado en schema.prisma. Queries con Prisma.sql para prevenir SQLi.
+ * HALLAZGOS FOLLOW-UP (no implementados aquí)
+ *   IND-002 [P1] Columnas estructuradas dosis_valor/dosis_unidad/via_codigo
+ *   IND-003 [P1] Trigger inmutabilidad post-ADMINISTRADO en administracion_medicamento
+ *   IND-004 [P2] CHECK condicional motivo_omision NOT NULL cuando estado OMITIDA|RECHAZADA
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
-import { withWorkflowContext } from "../../workflow/context";
+import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
 
-// ─── Input schemas (inline — evita problemas de resolución monorepo en tests)
-// Los mismos tipos se exportan desde @his/contracts/src/schemas/ece-indicaciones
-// para uso en el cliente (Next.js).
+// ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
+// La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
 
-const eceIndicacionItemSchema = z.object({
-  medicamentoCodigo: z.string().trim().min(1).max(50),
-  dosis: z.string().trim().min(1).max(100),
-  via: z.string().trim().min(1).max(50),
-  frecuencia: z.string().trim().min(1).max(100),
-  duracionDias: z.number().int().min(1).max(365),
-  observaciones: z.string().trim().max(500).optional(),
+const tipoIndicacionEnum = z.enum([
+  "MEDICAMENTO",
+  "PROCEDIMIENTO",
+  "DIETA",
+  "CUIDADO_GENERAL",
+  "ESTUDIO",
+]);
+
+const viaAdminEnum = z.enum([
+  "ORAL",
+  "IV",
+  "IM",
+  "SC",
+  "TOPICAL",
+  "INHALED",
+  "RECTAL",
+  "SUBLINGUAL",
+  "OPHTHALMIC",
+  "OTIC",
+  "NASAL",
+]);
+
+const frecuenciaEnum = z.enum([
+  "QD",
+  "BID",
+  "TID",
+  "QID",
+  "Q4H",
+  "Q6H",
+  "Q8H",
+  "Q12H",
+  "Q24H",
+  "STAT",
+  "PRN",
+]);
+
+const vigenciaEnum = z.enum(["ACTIVA", "SUSPENDIDA", "CANCELADA"]);
+
+const estadoAdminEnum = z.enum([
+  "PROGRAMADA",
+  "ADMINISTRADO",
+  "OMITIDA",
+  "RECHAZADA",
+]);
+
+const indicacionItemSchema = z.object({
+  tipo: tipoIndicacionEnum,
+  descripcion: z.string().trim().min(1).max(500),
+  dosis: z.string().trim().max(100).optional(),
+  via: viaAdminEnum.optional(),
+  frecuencia: frecuenciaEnum.optional(),
+  duracion: z.string().trim().max(100).optional(),
 });
 
-const eceIndicacionesCreateSchema = z.object({
+const createSchema = z.object({
   episodioId: z.string().uuid(),
-  observaciones: z.string().trim().max(1000).optional(),
-  items: z.array(eceIndicacionItemSchema).min(1).max(50),
+  medicoPrescriptor: z.string().uuid(),
+  items: z.array(indicacionItemSchema).min(1).max(50),
 });
 
-const eceIndicacionIdSchema = z.object({ id: z.string().uuid() });
-
-const eceAddItemSchema = z.object({
-  indicacionId: z.string().uuid(),
-  item: eceIndicacionItemSchema,
+const updateSchema = z.object({
+  id: z.string().uuid(),
+  items: z.array(indicacionItemSchema).min(1).max(50),
 });
 
-const eceRemoveItemSchema = z.object({
-  indicacionId: z.string().uuid(),
-  itemId: z.string().uuid(),
+const listSchema = z.object({
+  episodioId: z.string().uuid(),
+  vigencia: vigenciaEnum.optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+  cursor: z.string().uuid().optional(),
 });
 
-const eceAnularSchema = z.object({
+const idSchema = z.object({ id: z.string().uuid() });
+
+const suspenderSchema = z.object({
   id: z.string().uuid(),
   motivo: z.string().trim().min(1).max(500),
 });
 
-const eceIndicacionesListSchema = z.object({
-  episodioId: z.string().uuid(),
-  cursor: z.string().uuid().optional(),
-  limit: z.number().int().min(1).max(100).default(20),
+const administracionSchema = z
+  .object({
+    indicacionItemId: z.string().uuid(),
+    registroEnfId: z.string().uuid(),
+    horaAplicada: z.coerce.date(),
+    estado: estadoAdminEnum,
+    motivoOmision: z.string().trim().min(10).max(1000).optional(),
+    responsable: z.string().uuid(),
+  })
+  .superRefine((val, ctx) => {
+    if (
+      (val.estado === "OMITIDA" || val.estado === "RECHAZADA") &&
+      !val.motivoOmision
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "motivo_omision es obligatorio cuando estado es OMITIDA o RECHAZADA (NTEC §3.6).",
+        path: ["motivoOmision"],
+      });
+    }
+  });
+
+const listAdminSchema = z.object({
+  indicacionItemId: z.string().uuid(),
+  fromDate: z.coerce.date().optional(),
+  toDate: z.coerce.date().optional(),
 });
-
-// ─── Estados permitidos para mutación de ítems ────────────────────────────────
-
-const ESTADOS_EDITABLE = new Set(["borrador", "en_revision"]);
 
 // ─── Tipos de fila raw ────────────────────────────────────────────────────────
 
 export interface IndicacionRow {
   id: string;
+  instancia_id: string | null;
   episodio_id: string;
-  estado: string;
-  observaciones: string | null;
-  creado_por: string;
-  creado_en: Date;
-  firmado_por: string | null;
-  firmado_en: Date | null;
-  validado_por: string | null;
-  validado_en: Date | null;
+  fecha_hora: Date;
+  version: number;
+  vigencia: string;
+  medico_prescriptor: string;
+  transcripcion_enf: string | null;
+  registrado_en: Date;
+  estado_registro: string;
+  digitado_retroactivamente: boolean;
 }
 
 export interface IndicacionItemRow {
   id: string;
   indicacion_id: string;
-  medicamento_codigo: string;
-  dosis: string;
-  via: string;
-  frecuencia: string;
-  duracion_dias: number;
-  observaciones: string | null;
+  tipo: string;
+  descripcion: string;
+  dosis: string | null;
+  via: string | null;
+  frecuencia: string | null;
+  duracion: string | null;
 }
 
-// ─── Helper: construye EceContext desde ctx ───────────────────────────────────
-
-function buildEceCtx(ctx: {
-  user: { id: string };
-  tenant: { establishmentId?: string; roleCodes: string[] };
-}) {
-  if (!ctx.tenant.establishmentId) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Se requiere un establecimiento activo para operar indicaciones ECE.",
-    });
-  }
-  return {
-    personalId: ctx.user.id,
-    establecimientoId: ctx.tenant.establishmentId,
-    roles: ctx.tenant.roleCodes,
-  };
+export interface AdminRow {
+  id: string;
+  registro_enf_id: string;
+  indicacion_item_id: string;
+  hora_programada: Date | null;
+  hora_aplicada: Date | null;
+  estado: string;
+  motivo_omision: string | null;
+  responsable: string;
 }
 
 // ─── Helper: leer encabezado + verificar existencia ──────────────────────────
@@ -150,11 +211,10 @@ async function getIndicacionOrThrow(
 ): Promise<IndicacionRow> {
   const rows = await tx.$queryRaw<IndicacionRow[]>`
     SELECT
-      id::text, episodio_id::text, estado,
-      observaciones,
-      creado_por::text, creado_en,
-      firmado_por::text, firmado_en,
-      validado_por::text, validado_en
+      id::text, instancia_id::text, episodio_id::text,
+      fecha_hora, version, vigencia,
+      medico_prescriptor::text, transcripcion_enf::text,
+      registrado_en, estado_registro, digitado_retroactivamente
     FROM ece.indicaciones_medicas
     WHERE id = ${id}::uuid
     LIMIT 1
@@ -169,6 +229,24 @@ async function getIndicacionOrThrow(
   return row;
 }
 
+// ─── Helper: armar contexto ECE desde ctx tRPC ───────────────────────────────
+
+function eceIds(ctx: {
+  user: { id: string };
+  tenant: { establishmentId?: string };
+}): { personalId: string; establecimientoId: string } {
+  if (!ctx.tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar indicaciones ECE.",
+    });
+  }
+  return {
+    personalId: ctx.user.id,
+    establecimientoId: ctx.tenant.establishmentId,
+  };
+}
+
 // ─── Procedures base ─────────────────────────────────────────────────────────
 
 const physicianProcedure = requireRole(["PHYSICIAN", "MC"]);
@@ -179,26 +257,31 @@ const clinicalProcedure = requireRole(["PHYSICIAN", "MC", "NURSE", "ENF"]);
 
 export const indicacionesMedicasRouter = router({
   /**
-   * Lista indicaciones de un episodio (paginación cursor-based).
+   * Lista indicaciones de un episodio. Agrupa por vigencia (ACTIVA/SUSPENDIDA/CANCELADA).
    */
-  list: clinicalProcedure
-    .input(eceIndicacionesListSchema)
-    .query(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+  list: clinicalProcedure.input(listSchema).query(async ({ ctx, input }) => {
+    const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(
+      ctx.prisma,
+      personalId,
+      establecimientoId,
+      async (tx) => {
+        // vigencia null = sin filtro; string = filtrar por ese valor
+        const vigenciaFilter = input.vigencia ?? null;
+        const cursorFilter = input.cursor ?? null;
+
         const rows = await tx.$queryRaw<IndicacionRow[]>`
           SELECT
-            id::text, episodio_id::text, estado,
-            observaciones,
-            creado_por::text, creado_en,
-            firmado_por::text, firmado_en,
-            validado_por::text, validado_en
+            id::text, instancia_id::text, episodio_id::text,
+            fecha_hora, version, vigencia,
+            medico_prescriptor::text, transcripcion_enf::text,
+            registrado_en, estado_registro, digitado_retroactivamente
           FROM ece.indicaciones_medicas
           WHERE episodio_id = ${input.episodioId}::uuid
-            AND (${input.cursor ?? null}::uuid IS NULL
-                 OR id > ${input.cursor ?? null}::uuid)
-          ORDER BY id ASC
+            AND (${vigenciaFilter}::text IS NULL OR vigencia = ${vigenciaFilter})
+            AND (${cursorFilter}::uuid IS NULL OR id > ${cursorFilter}::uuid)
+          ORDER BY registrado_en DESC, id ASC
           LIMIT ${input.limit + 1}
         `;
 
@@ -207,258 +290,349 @@ export const indicacionesMedicasRouter = router({
         const nextCursor = hasMore ? items[items.length - 1]!.id : null;
 
         return { items, nextCursor };
-      });
-    }),
+      },
+    );
+  }),
 
   /**
-   * Devuelve encabezado + ítems de una indicación.
+   * Detalle de indicación: encabezado + items.
    */
-  get: clinicalProcedure
-    .input(eceIndicacionIdSchema)
-    .query(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+  get: clinicalProcedure.input(idSchema).query(async ({ ctx, input }) => {
+    const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+    return withEceContext(
+      ctx.prisma,
+      personalId,
+      establecimientoId,
+      async (tx) => {
         const indicacion = await getIndicacionOrThrow(tx, input.id);
 
         const items = await tx.$queryRaw<IndicacionItemRow[]>`
           SELECT
             id::text, indicacion_id::text,
-            medicamento_codigo, dosis, via, frecuencia,
-            duracion_dias, observaciones
+            tipo, descripcion, dosis, via, frecuencia, duracion
           FROM ece.indicacion_item
           WHERE indicacion_id = ${input.id}::uuid
           ORDER BY id ASC
         `;
 
         return { ...indicacion, items };
-      });
-    }),
+      },
+    );
+  }),
 
   /**
-   * Crea encabezado + ítems en una sola transacción.
-   * Estado inicial: borrador.
+   * Crea encabezado + ítems en una transacción.
+   * Estado inicial: borrador, vigencia: ACTIVA, version: 1.
+   * Solo PHYSICIAN.
    */
   create: physicianProcedure
-    .input(eceIndicacionesCreateSchema)
+    .input(createSchema)
     .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+      const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        // 1. Insertar encabezado
-        const headRows = await tx.$queryRaw<{ id: string }[]>`
-          INSERT INTO ece.indicaciones_medicas
-            (episodio_id, estado, observaciones, creado_por)
-          VALUES (
-            ${input.episodioId}::uuid,
-            'borrador',
-            ${input.observaciones ?? null},
-            ${eceCtx.personalId}::uuid
-          )
-          RETURNING id::text
-        `;
-        const indicacionId = headRows[0]!.id;
-
-        // 2. Insertar ítems
-        for (const item of input.items) {
-          await tx.$executeRaw`
-            INSERT INTO ece.indicacion_item
-              (indicacion_id, medicamento_codigo, dosis, via,
-               frecuencia, duracion_dias, observaciones)
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          // Insertar encabezado
+          const headRows = await tx.$queryRaw<{ id: string }[]>`
+            INSERT INTO ece.indicaciones_medicas
+              (episodio_id, medico_prescriptor, version, vigencia, estado_registro,
+               digitado_retroactivamente, registrado_en, fecha_hora)
             VALUES (
-              ${indicacionId}::uuid,
-              ${item.medicamentoCodigo},
-              ${item.dosis},
-              ${item.via},
-              ${item.frecuencia},
-              ${item.duracionDias},
-              ${item.observaciones ?? null}
+              ${input.episodioId}::uuid,
+              ${input.medicoPrescriptor}::uuid,
+              1,
+              'ACTIVA',
+              'borrador',
+              false,
+              now(),
+              now()
             )
+            RETURNING id::text
           `;
-        }
+          const indicacionId = headRows[0]!.id;
 
-        return { id: indicacionId, estado: "borrador" as const };
-      });
+          // Insertar ítems
+          for (const item of input.items) {
+            await tx.$executeRaw`
+              INSERT INTO ece.indicacion_item
+                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion)
+              VALUES (
+                ${indicacionId}::uuid,
+                ${item.tipo},
+                ${item.descripcion},
+                ${item.dosis ?? null},
+                ${item.via ?? null},
+                ${item.frecuencia ?? null},
+                ${item.duracion ?? null}
+              )
+            `;
+          }
+
+          return { id: indicacionId, estadoRegistro: "borrador" as const, vigencia: "ACTIVA" as const };
+        },
+      );
     }),
 
   /**
-   * Agrega un ítem. Solo si la indicación está en borrador o en_revision.
+   * Actualiza ítems de una indicación en borrador.
+   * Incrementa version (optimistic lock).
+   * Solo PHYSICIAN.
    */
-  addItem: clinicalProcedure
-    .input(eceAddItemSchema)
+  update: physicianProcedure
+    .input(updateSchema)
     .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+      const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const indicacion = await getIndicacionOrThrow(tx, input.indicacionId);
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const indicacion = await getIndicacionOrThrow(tx, input.id);
 
-        if (!ESTADOS_EDITABLE.has(indicacion.estado)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `No se pueden agregar ítems en estado '${indicacion.estado}'.`,
-          });
-        }
+          if (indicacion.estado_registro !== "borrador") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Solo se pueden editar indicaciones en estado 'borrador'. Estado actual: '${indicacion.estado_registro}'.`,
+            });
+          }
 
-        const itemRows = await tx.$queryRaw<{ id: string }[]>`
-          INSERT INTO ece.indicacion_item
-            (indicacion_id, medicamento_codigo, dosis, via,
-             frecuencia, duracion_dias, observaciones)
-          VALUES (
-            ${input.indicacionId}::uuid,
-            ${input.item.medicamentoCodigo},
-            ${input.item.dosis},
-            ${input.item.via},
-            ${input.item.frecuencia},
-            ${input.item.duracionDias},
-            ${input.item.observaciones ?? null}
-          )
-          RETURNING id::text
-        `;
+          // Eliminar items existentes y reinsertar (replace strategy)
+          await tx.$executeRaw`
+            DELETE FROM ece.indicacion_item
+            WHERE indicacion_id = ${input.id}::uuid
+          `;
 
-        return { id: itemRows[0]!.id };
-      });
+          for (const item of input.items) {
+            await tx.$executeRaw`
+              INSERT INTO ece.indicacion_item
+                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion)
+              VALUES (
+                ${input.id}::uuid,
+                ${item.tipo},
+                ${item.descripcion},
+                ${item.dosis ?? null},
+                ${item.via ?? null},
+                ${item.frecuencia ?? null},
+                ${item.duracion ?? null}
+              )
+            `;
+          }
+
+          // Incrementar version para optimistic lock
+          await tx.$executeRaw`
+            UPDATE ece.indicaciones_medicas
+            SET version = ${indicacion.version + 1}
+            WHERE id = ${input.id}::uuid
+          `;
+
+          return { id: input.id, version: indicacion.version + 1 };
+        },
+      );
     }),
 
   /**
-   * Elimina un ítem. Solo si la indicación está en borrador o en_revision.
-   */
-  removeItem: clinicalProcedure
-    .input(eceRemoveItemSchema)
-    .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
-
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const indicacion = await getIndicacionOrThrow(tx, input.indicacionId);
-
-        if (!ESTADOS_EDITABLE.has(indicacion.estado)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `No se pueden eliminar ítems en estado '${indicacion.estado}'.`,
-          });
-        }
-
-        const deleted = await tx.$executeRaw`
-          DELETE FROM ece.indicacion_item
-          WHERE id = ${input.itemId}::uuid
-            AND indicacion_id = ${input.indicacionId}::uuid
-        `;
-
-        if ((deleted as number) === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `Ítem no encontrado: ${input.itemId}`,
-          });
-        }
-
-        return { ok: true as const };
-      });
-    }),
-
-  /**
-   * MC firma la indicación: borrador|en_revision → firmado.
-   * Emite evento `ece.indicaciones.firmadas` (outbox transaccional).
+   * MC firma la indicación: borrador → firmado.
+   * Emite evento 'ece.indicaciones.firmadas' en outbox transaccional.
+   * Solo PHYSICIAN.
    */
   firmar: physicianProcedure
-    .input(eceIndicacionIdSchema)
+    .input(idSchema)
     .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+      const { personalId, establecimientoId } = eceIds(ctx);
 
-      const result = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const indicacion = await getIndicacionOrThrow(tx, input.id);
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const indicacion = await getIndicacionOrThrow(tx, input.id);
 
-        if (!ESTADOS_EDITABLE.has(indicacion.estado)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Solo se pueden firmar indicaciones en estado borrador o en_revision. Estado actual: '${indicacion.estado}'.`,
+          if (indicacion.estado_registro !== "borrador") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Solo se pueden firmar indicaciones en estado 'borrador'. Estado actual: '${indicacion.estado_registro}'.`,
+            });
+          }
+
+          if (indicacion.vigencia !== "ACTIVA") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `No se puede firmar una indicación con vigencia '${indicacion.vigencia}'.`,
+            });
+          }
+
+          await tx.$executeRaw`
+            UPDATE ece.indicaciones_medicas
+            SET estado_registro = 'firmado',
+                transcripcion_enf = null
+            WHERE id = ${input.id}::uuid
+          `;
+
+          // Contar items para el payload del evento
+          const countRows = await tx.$queryRaw<{ cnt: number }[]>`
+            SELECT count(*)::int AS cnt
+            FROM ece.indicacion_item
+            WHERE indicacion_id = ${input.id}::uuid
+          `;
+          const itemCount = countRows[0]?.cnt ?? 0;
+
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "ece.indicaciones.firmadas",
+            aggregateType: "IndicacionMedica",
+            aggregateId: input.id,
+            emittedById: ctx.user.id,
+            payload: {
+              indicacionId: input.id,
+              episodioId: indicacion.episodio_id,
+              medicoId: personalId,
+              itemCount,
+              organizationId: ctx.tenant.organizationId,
+            },
           });
-        }
 
-        await tx.$executeRaw`
-          UPDATE ece.indicaciones_medicas
-          SET estado = 'firmado',
-              firmado_por = ${eceCtx.personalId}::uuid,
-              firmado_en  = now()
-          WHERE id = ${input.id}::uuid
-        `;
-
-        // Emitir evento outbox dentro de la misma transacción
-        await emitDomainEvent(tx, {
-          organizationId: ctx.tenant.organizationId,
-          eventType: "ece.indicaciones.firmadas",
-          aggregateType: "IndicacionMedica",
-          aggregateId: input.id,
-          emittedById: ctx.user.id,
-          payload: {
-            indicacionId: input.id,
-            episodioId: indicacion.episodio_id,
-            firmadoPor: eceCtx.personalId,
-            estadoAnterior: indicacion.estado,
-          },
-        });
-
-        return { id: input.id, estado: "firmado" as const };
-      });
-
-      return result;
+          return { id: input.id, estadoRegistro: "firmado" as const };
+        },
+      );
     }),
 
   /**
-   * ENF valida la transcripción: firmado → validado.
+   * Suspende una indicación activa.
+   * vigencia ACTIVA → SUSPENDIDA. Solo NURSE | PHYSICIAN.
    */
-  validar: nurseProcedure
-    .input(eceIndicacionIdSchema)
+  suspender: clinicalProcedure
+    .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+      const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const indicacion = await getIndicacionOrThrow(tx, input.id);
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const indicacion = await getIndicacionOrThrow(tx, input.id);
 
-        if (indicacion.estado !== "firmado") {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Solo se pueden validar indicaciones en estado 'firmado'. Estado actual: '${indicacion.estado}'.`,
-          });
-        }
+          if (indicacion.vigencia !== "ACTIVA") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Solo se pueden suspender indicaciones ACTIVAS. Vigencia actual: '${indicacion.vigencia}'.`,
+            });
+          }
 
-        await tx.$executeRaw`
-          UPDATE ece.indicaciones_medicas
-          SET estado = 'validado',
-              validado_por = ${eceCtx.personalId}::uuid,
-              validado_en  = now()
-          WHERE id = ${input.id}::uuid
-        `;
+          await tx.$executeRaw`
+            UPDATE ece.indicaciones_medicas
+            SET vigencia = 'SUSPENDIDA'
+            WHERE id = ${input.id}::uuid
+          `;
 
-        return { id: input.id, estado: "validado" as const };
-      });
+          return { id: input.id, vigencia: "SUSPENDIDA" as const, motivo: input.motivo };
+        },
+      );
     }),
 
   /**
-   * Anula una indicación desde cualquier estado editable (borrador|en_revision|firmado).
-   * Validado no se puede anular — requiere flujo administrativo distinto.
+   * Cancela una indicación. vigencia ACTIVA → CANCELADA. Solo PHYSICIAN.
    */
-  anular: clinicalProcedure
-    .input(eceAnularSchema)
+  cancelar: physicianProcedure
+    .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const eceCtx = buildEceCtx(ctx);
+      const { personalId, establecimientoId } = eceIds(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-        const indicacion = await getIndicacionOrThrow(tx, input.id);
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const indicacion = await getIndicacionOrThrow(tx, input.id);
 
-        if (indicacion.estado === "anulado" || indicacion.estado === "validado") {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `No se puede anular una indicación en estado '${indicacion.estado}'.`,
-          });
-        }
+          if (indicacion.vigencia !== "ACTIVA") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `Solo se pueden cancelar indicaciones ACTIVAS. Vigencia actual: '${indicacion.vigencia}'.`,
+            });
+          }
 
-        await tx.$executeRaw`
-          UPDATE ece.indicaciones_medicas
-          SET estado = 'anulado',
-              observaciones = concat_ws(' | ', observaciones, ${"ANULADO: " + input.motivo})
-          WHERE id = ${input.id}::uuid
-        `;
+          await tx.$executeRaw`
+            UPDATE ece.indicaciones_medicas
+            SET vigencia = 'CANCELADA'
+            WHERE id = ${input.id}::uuid
+          `;
 
-        return { id: input.id, estado: "anulado" as const };
-      });
+          return { id: input.id, vigencia: "CANCELADA" as const, motivo: input.motivo };
+        },
+      );
+    }),
+
+  /**
+   * NURSE registra administración de un item (eMAR).
+   * Si estado=OMITIDA|RECHAZADA, motivoOmision es obligatorio (validado en Zod).
+   * Solo NURSE.
+   */
+  registrarAdministracion: nurseProcedure
+    .input(administracionSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { personalId, establecimientoId } = eceIds(ctx);
+
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const adminRows = await tx.$queryRaw<{ id: string }[]>`
+            INSERT INTO ece.administracion_medicamento
+              (registro_enf_id, indicacion_item_id, hora_programada,
+               hora_aplicada, estado, motivo_omision, responsable)
+            VALUES (
+              ${input.registroEnfId}::uuid,
+              ${input.indicacionItemId}::uuid,
+              null,
+              ${input.horaAplicada.toISOString()},
+              ${input.estado},
+              ${input.motivoOmision ?? null},
+              ${input.responsable}::uuid
+            )
+            RETURNING id::text
+          `;
+
+          return { id: adminRows[0]!.id, estado: input.estado };
+        },
+      );
+    }),
+
+  /**
+   * Lista historial de administraciones de un item. NURSE | PHYSICIAN.
+   */
+  listAdministraciones: clinicalProcedure
+    .input(listAdminSchema)
+    .query(async ({ ctx, input }) => {
+      const { personalId, establecimientoId } = eceIds(ctx);
+
+      return withEceContext(
+        ctx.prisma,
+        personalId,
+        establecimientoId,
+        async (tx) => {
+          const rows = await tx.$queryRaw<AdminRow[]>`
+            SELECT
+              id::text, registro_enf_id::text, indicacion_item_id::text,
+              hora_programada, hora_aplicada, estado, motivo_omision,
+              responsable::text
+            FROM ece.administracion_medicamento
+            WHERE indicacion_item_id = ${input.indicacionItemId}::uuid
+              AND (${input.fromDate ?? null}::timestamptz IS NULL
+                   OR hora_aplicada >= ${input.fromDate ?? null}::timestamptz)
+              AND (${input.toDate ?? null}::timestamptz IS NULL
+                   OR hora_aplicada <= ${input.toDate ?? null}::timestamptz)
+            ORDER BY hora_aplicada DESC NULLS LAST
+          `;
+
+          return rows;
+        },
+      );
     }),
 });

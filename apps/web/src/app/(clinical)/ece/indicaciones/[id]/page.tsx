@@ -1,23 +1,20 @@
 "use client";
 
 /**
- * ECE — Detalle de indicación médica.
+ * ECE — Detalle de indicación médica (IND_MED).
  *
- * Muestra encabezado + tabla de items (medicamento, dosis, vía,
- * frecuencia, duración) + indicador visual de estado workflow.
+ * Muestra encabezado + tabla de items (tipo, descripción, dosis, vía,
+ * frecuencia, duración) + estado/vigencia.
  *
- * Acciones disponibles según estado:
- *  BORRADOR     → botón "Firmar" (solo MC)
- *  FIRMADA_MC   → botón "Verificar transcripción" (solo ENF)
- *  VALIDADA_ENF → read-only
- *  ANULADA      → read-only
- *
- * La firma MC se delega a /api/firma-electronica mediante el modal
- * de PIN compartido. La verificación ENF llama a
- * trpc.eceIndicaciones.validarEnfermeria.
+ * Acciones disponibles según estado_registro y rol:
+ *   borrador  + PHYSICIAN → botón "Firmar"
+ *   ACTIVA    + PHYSICIAN → botón "Cancelar"
+ *   ACTIVA    + NURSE     → botón "Suspender"
+ *   cualquiera + NURSE    → botón "Registrar administración" por item
  */
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -36,30 +33,18 @@ import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 import {
   IndicacionEstadoBadge,
-  type IndicacionEstado,
+  type EstadoRegistro,
+  type Vigencia,
 } from "../_components/indicacion-estado-badge";
 
-interface IndicacionItem {
+interface ItemRow {
   id: string;
-  medicamentoNombre: string;
-  dosis: string;
-  via: string;
-  frecuencia: string;
-  duracionDias?: number | null;
-  observaciones?: string | null;
-}
-
-interface IndicacionDetalle {
-  id: string;
-  estado: IndicacionEstado;
-  creadoEn: string | Date;
-  observaciones?: string | null;
-  episodioId: string;
-  medico: { id: string; firstName: string; lastName: string };
-  firmadoEn?: string | Date | null;
-  validadoEn?: string | Date | null;
-  enfermero?: { id: string; firstName: string; lastName: string } | null;
-  items: IndicacionItem[];
+  tipo: string;
+  descripcion: string;
+  dosis: string | null;
+  via: string | null;
+  frecuencia: string | null;
+  duracion: string | null;
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -67,12 +52,12 @@ const ROUTE_LABELS: Record<string, string> = {
   IV: "Intravenosa",
   IM: "Intramuscular",
   SC: "Subcutánea",
-  TOPICAL: "Tópica",
+  TOPICAL: "Topica",
   INHALED: "Inhalada",
   RECTAL: "Rectal",
   SUBLINGUAL: "Sublingual",
-  OPHTHALMIC: "Oftálmica",
-  OTIC: "Ótica",
+  OPHTHALMIC: "Oftalmica",
+  OTIC: "Otica",
   NASAL: "Nasal",
 };
 
@@ -80,53 +65,53 @@ export default function IndicacionDetallePage(): React.ReactElement {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [serverError, setServerError] = React.useState<string | null>(null);
-  const [pinModal, setPinModal] = React.useState<
-    "firma_mc" | "valida_enf" | null
+  const [motivoModal, setMotivoModal] = React.useState<
+    "suspender" | "cancelar" | null
   >(null);
-  const [pin, setPin] = React.useState("");
+  const [motivo, setMotivo] = React.useState("");
 
-
-  const detail = trpc.eceIndicaciones?.get?.useQuery(
+  const detail = trpc.eceIndicaciones.get.useQuery(
     { id: params.id },
     { enabled: Boolean(params.id) },
-  ) ?? { data: undefined, isLoading: false };
+  );
 
   const firmaMutation = trpc.eceIndicaciones.firmar.useMutation({
-    onSuccess: () => {
-      setPinModal(null);
-      setPin("");
-      detail.refetch?.();
-    },
-    onError: (err) => setServerError(err.message),
+    onSuccess: () => void detail.refetch(),
+    onError: (err: { message: string }) => setServerError(err.message),
   });
 
-  const validarMutation = trpc.eceIndicaciones.validar.useMutation({
+  const suspenderMutation = trpc.eceIndicaciones.suspender.useMutation({
     onSuccess: () => {
-      setPinModal(null);
-      setPin("");
-      detail.refetch?.();
+      setMotivoModal(null);
+      setMotivo("");
+      void detail.refetch();
     },
-    onError: (err) => setServerError(err.message),
+    onError: (err: { message: string }) => setServerError(err.message),
   });
 
-  const ind = detail.data as IndicacionDetalle | undefined;
+  const cancelarMutation = trpc.eceIndicaciones.cancelar.useMutation({
+    onSuccess: () => {
+      setMotivoModal(null);
+      setMotivo("");
+      void detail.refetch();
+    },
+    onError: (err: { message: string }) => setServerError(err.message),
+  });
 
-  const handleFirmar = () => {
-    if (!pin.trim()) return;
-    // PIN se valida vía firma electrónica separada; aquí solo se ejecuta el firmar workflow.
-    void pin;
-    firmaMutation.mutate({ id: params.id });
-  };
+  const ind = detail.data;
 
-  const handleValidar = () => {
-    if (!pin.trim()) return;
-    void pin;
-    validarMutation.mutate({ id: params.id });
+  const handleMotivo = () => {
+    if (!motivo.trim() || !params.id) return;
+    if (motivoModal === "suspender") {
+      suspenderMutation.mutate({ id: params.id, motivo: motivo.trim() });
+    } else if (motivoModal === "cancelar") {
+      cancelarMutation.mutate({ id: params.id, motivo: motivo.trim() });
+    }
   };
 
   if (detail.isLoading) {
     return (
-      <p className="text-sm text-muted-foreground">Cargando indicación…</p>
+      <p className="text-sm text-muted-foreground">Cargando indicacion…</p>
     );
   }
 
@@ -134,7 +119,7 @@ export default function IndicacionDetallePage(): React.ReactElement {
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Indicación no encontrada.
+          Indicacion no encontrada.
         </p>
         <Button
           variant="outline"
@@ -146,21 +131,26 @@ export default function IndicacionDetallePage(): React.ReactElement {
     );
   }
 
+  const estadoRegistro = ind.estado_registro as EstadoRegistro;
+  const vigencia = ind.vigencia as Vigencia;
+
   return (
     <div className="space-y-4">
       {/* Encabezado */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold">Indicación médica</h1>
-            <IndicacionEstadoBadge estado={ind.estado} />
+            <h1 className="text-2xl font-bold">Indicacion medica</h1>
+            <IndicacionEstadoBadge
+              estadoRegistro={estadoRegistro}
+              vigencia={vigencia}
+            />
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Episodio{" "}
-            <span className="font-mono">{ind.episodioId.slice(0, 8)}…</span>
-            {" · "}Dr/a. {ind.medico.firstName} {ind.medico.lastName}
+            <span className="font-mono">{ind.episodio_id.slice(0, 8)}…</span>
             {" · "}
-            {new Date(ind.creadoEn).toLocaleString("es-SV")}
+            {new Date(ind.registrado_en).toLocaleString("es-SV")}
           </p>
         </div>
         <Button
@@ -171,123 +161,39 @@ export default function IndicacionDetallePage(): React.ReactElement {
         </Button>
       </div>
 
-      {/* Timeline de workflow */}
+      {/* Items de indicaciones */}
       <Card>
         <CardHeader>
-          <CardTitle>Trazabilidad del workflow</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ol className="flex items-center gap-0">
-            {(
-              [
-                {
-                  key: "BORRADOR",
-                  label: "Borrador",
-                  done: true,
-                  date: ind.creadoEn,
-                },
-                {
-                  key: "FIRMADA_MC",
-                  label: "Firma MC",
-                  done:
-                    ind.estado === "FIRMADA_MC" ||
-                    ind.estado === "VALIDADA_ENF",
-                  date: ind.firmadoEn,
-                },
-                {
-                  key: "VALIDADA_ENF",
-                  label: "Validación ENF",
-                  done: ind.estado === "VALIDADA_ENF",
-                  date: ind.validadoEn,
-                },
-              ] as const
-            ).map((step, idx, arr) => (
-              <React.Fragment key={step.key}>
-                <li className="flex flex-col items-center gap-1 text-center">
-                  <span
-                    className={[
-                      "flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold",
-                      step.done
-                        ? "bg-primary text-primary-foreground"
-                        : "border-2 border-muted-foreground/30 text-muted-foreground/50",
-                    ].join(" ")}
-                    aria-label={step.done ? `${step.label}: completado` : `${step.label}: pendiente`}
-                  >
-                    {idx + 1}
-                  </span>
-                  <span
-                    className={
-                      step.done
-                        ? "text-xs font-medium text-foreground"
-                        : "text-xs text-muted-foreground"
-                    }
-                  >
-                    {step.label}
-                  </span>
-                  {step.date ? (
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {new Date(step.date).toLocaleDateString("es-SV")}
-                    </span>
-                  ) : null}
-                </li>
-                {idx < arr.length - 1 ? (
-                  <div className="h-px flex-1 bg-border mx-2" aria-hidden="true" />
-                ) : null}
-              </React.Fragment>
-            ))}
-          </ol>
-        </CardContent>
-      </Card>
-
-      {/* Observaciones generales */}
-      {ind.observaciones ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Observaciones generales</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm">{ind.observaciones}</p>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {/* Items de medicamentos */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Medicamentos indicados</CardTitle>
+          <CardTitle>Items indicados</CardTitle>
         </CardHeader>
         <CardContent>
           {ind.items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Sin medicamentos.</p>
+            <p className="text-sm text-muted-foreground">Sin items.</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Medicamento</TableHead>
+                  <TableHead>Tipo</TableHead>
+                  <TableHead>Descripcion</TableHead>
                   <TableHead>Dosis</TableHead>
-                  <TableHead>Vía</TableHead>
+                  <TableHead>Via</TableHead>
                   <TableHead>Frecuencia</TableHead>
-                  <TableHead>Duración (días)</TableHead>
-                  <TableHead>Observaciones</TableHead>
+                  <TableHead>Duracion</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {ind.items.map((item) => (
+                {(ind.items as ItemRow[]).map((item) => (
                   <TableRow key={item.id}>
-                    <TableCell className="font-medium">
-                      {item.medicamentoNombre}
+                    <TableCell className="text-xs font-medium">
+                      {item.tipo}
                     </TableCell>
-                    <TableCell>{item.dosis}</TableCell>
+                    <TableCell>{item.descripcion}</TableCell>
+                    <TableCell>{item.dosis ?? "—"}</TableCell>
                     <TableCell>
-                      {ROUTE_LABELS[item.via] ?? item.via}
+                      {item.via ? (ROUTE_LABELS[item.via] ?? item.via) : "—"}
                     </TableCell>
-                    <TableCell>{item.frecuencia}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {item.duracionDias ?? "—"}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {item.observaciones ?? "—"}
-                    </TableCell>
+                    <TableCell>{item.frecuencia ?? "—"}</TableCell>
+                    <TableCell>{item.duracion ?? "—"}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -296,65 +202,97 @@ export default function IndicacionDetallePage(): React.ReactElement {
         </CardContent>
       </Card>
 
+      {serverError ? (
+        <p
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {serverError}
+        </p>
+      ) : null}
+
       {/* Acciones por estado */}
-      {ind.estado === "BORRADOR" ? (
-        <div className="flex justify-end">
-          <Button onClick={() => { setPinModal("firma_mc"); setPin(""); }}>
-            Firmar indicación (MC)
-          </Button>
-        </div>
-      ) : null}
-
-      {ind.estado === "FIRMADA_MC" ? (
-        <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        {estadoRegistro === "borrador" ? (
           <Button
-            variant="secondary"
-            onClick={() => { setPinModal("valida_enf"); setPin(""); }}
-            data-testid="btn-verificar-transcripcion"
+            onClick={() => {
+              setServerError(null);
+              firmaMutation.mutate({ id: params.id });
+            }}
+            disabled={firmaMutation.isPending}
+            data-testid="btn-firmar"
           >
-            Verificar transcripción (ENF)
+            {firmaMutation.isPending ? "Firmando…" : "Firmar (MC)"}
           </Button>
-        </div>
-      ) : null}
+        ) : null}
 
-      {/* Modal PIN inline */}
-      {pinModal !== null ? (
+        {vigencia === "ACTIVA" ? (
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setMotivoModal("suspender");
+                setMotivo("");
+                setServerError(null);
+              }}
+              data-testid="btn-suspender"
+            >
+              Suspender
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setMotivoModal("cancelar");
+                setMotivo("");
+                setServerError(null);
+              }}
+              data-testid="btn-cancelar"
+            >
+              Cancelar indicacion
+            </Button>
+          </>
+        ) : null}
+
+        <Button asChild variant="secondary" size="sm">
+          <Link href={`/ece/indicaciones/${params.id}/admin`}>
+            Registrar administracion
+          </Link>
+        </Button>
+      </div>
+
+      {/* Modal motivo (suspender / cancelar) */}
+      {motivoModal !== null ? (
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="modal-pin-title"
+          aria-labelledby="modal-motivo-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
         >
           <div className="w-full max-w-sm rounded-lg border bg-background p-6 shadow-xl">
             <h2
-              id="modal-pin-title"
+              id="modal-motivo-title"
               className="mb-4 text-lg font-semibold"
             >
-              {pinModal === "firma_mc"
-                ? "Firma electrónica — Médico"
-                : "Verificación de transcripción — Enfermería"}
+              {motivoModal === "suspender"
+                ? "Suspender indicacion"
+                : "Cancelar indicacion"}
             </h2>
             <label
-              htmlFor="pin-input"
+              htmlFor="motivo-input"
               className="mb-1 block text-sm font-medium"
             >
-              PIN de firma
+              Motivo <span className="text-destructive">*</span>
             </label>
-            <input
-              id="pin-input"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={12}
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            <textarea
+              id="motivo-input"
+              value={motivo}
+              onChange={(e) => setMotivo(e.target.value)}
+              rows={3}
+              className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="Motivo clinico documentado…"
               autoFocus
-              aria-describedby="pin-hint"
+              data-testid="input-motivo"
             />
-            <p id="pin-hint" className="mt-1 text-xs text-muted-foreground">
-              PIN de 6–12 dígitos registrado en su perfil.
-            </p>
             {serverError ? (
               <p
                 role="alert"
@@ -368,8 +306,8 @@ export default function IndicacionDetallePage(): React.ReactElement {
                 type="button"
                 variant="outline"
                 onClick={() => {
-                  setPinModal(null);
-                  setPin("");
+                  setMotivoModal(null);
+                  setMotivo("");
                   setServerError(null);
                 }}
               >
@@ -378,20 +316,14 @@ export default function IndicacionDetallePage(): React.ReactElement {
               <Button
                 type="button"
                 disabled={
-                  pin.trim().length < 6 ||
-                  firmaMutation.isPending ||
-                  validarMutation.isPending
+                  motivo.trim().length < 1 ||
+                  suspenderMutation.isPending ||
+                  cancelarMutation.isPending
                 }
-                onClick={
-                  pinModal === "firma_mc" ? handleFirmar : handleValidar
-                }
-                data-testid={
-                  pinModal === "firma_mc"
-                    ? "btn-confirmar-firma"
-                    : "btn-confirmar-validacion"
-                }
+                onClick={handleMotivo}
+                data-testid="btn-confirmar-motivo"
               >
-                {firmaMutation.isPending || validarMutation.isPending
+                {suspenderMutation.isPending || cancelarMutation.isPending
                   ? "Procesando…"
                   : "Confirmar"}
               </Button>
