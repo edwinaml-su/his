@@ -52,6 +52,10 @@ interface Step2State {
   firmaMetodo: "canvas" | "upload";
   firmaArchivoNombre: string;
   firmaDataUrl: string;
+  // Datos del firmante requeridos por firmarPaciente (NTEC Art. 39)
+  firmanteTipo: "paciente" | "representante_legal";
+  firmanteNombre: string;
+  firmanteDocumento: string;
 }
 
 interface Step3State {
@@ -249,6 +253,9 @@ export default function NuevoConsentimientoQxPage() {
     firmaMetodo: "canvas",
     firmaArchivoNombre: "",
     firmaDataUrl: "",
+    firmanteTipo: "paciente",
+    firmanteNombre: "",
+    firmanteDocumento: "",
   });
 
   const [s3, setS3] = React.useState<Step3State>({
@@ -256,10 +263,9 @@ export default function NuevoConsentimientoQxPage() {
     firmaId: "",
   });
 
-  // Crear borrador quirúrgico vía tRPC
-  const crearQx = trpc.eceConsentimiento.crearQuirurgico.useMutation({
-    onSuccess: () => router.push("/ece/quirofano/consentimiento-qx"),
-  });
+  const crearQx = trpc.eceConsentimiento.crearQuirurgico.useMutation();
+  const firmarPacienteMut = trpc.eceConsentimiento.firmarPaciente.useMutation();
+  const firmarMcMut = trpc.eceConsentimiento.firmar.useMutation();
 
   // ── Validaciones ──────────────────────────────────────────────────────────
 
@@ -278,6 +284,8 @@ export default function NuevoConsentimientoQxPage() {
 
   function validateStep2(): string | null {
     if (!s2.firmaDataUrl) return "La firma del paciente es requerida.";
+    if (!s2.firmanteNombre.trim()) return "El nombre del firmante es requerido.";
+    if (!s2.firmanteDocumento.trim()) return "El documento del firmante es requerido.";
     return null;
   }
 
@@ -295,27 +303,55 @@ export default function NuevoConsentimientoQxPage() {
     if (!err) setStep((s) => s + 1);
   }
 
-  function onSubmit(e: React.FormEvent) {
+  // HE-21: Secuencia de doble firma NTEC Art. 39 + Art. 40:
+  //   1. crearQuirurgico  → genera borrador + fila consentimiento_quirurgico
+  //   2. firmarPaciente   → registra firma canvas/upload del paciente
+  //   3. firmar           → firma MC con PIN → avanza workflow a 'firmado' (inmutable)
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     const err = validateStep3();
     setClientError(err);
     if (err) return;
 
-    crearQx.mutate({
-      episodioId: s0.episodioId.trim(),
-      tipoConsentimiento: "quirurgico",
-      procedimientoDescrito: s0.procedimiento,
-      riesgos: s0.riesgos,
-      alternativas: s0.alternativas,
-      tipoAnestesia: s1.tipoAnestesia as TipoAnestesia,
-      transfusionAutorizada: s1.transfusionAutorizada,
-      ampliacionQuirurgicaAutorizada: s1.ampliacionQuirurgicaAutorizada,
-      fotografiaGrabacionAutorizada: s1.fotografiaGrabacionAutorizada,
-    });
+    try {
+      const created = await crearQx.mutateAsync({
+        episodioId: s0.episodioId.trim(),
+        tipoConsentimiento: "quirurgico",
+        procedimientoDescrito: s0.procedimiento,
+        riesgos: s0.riesgos,
+        alternativas: s0.alternativas,
+        tipoAnestesia: s1.tipoAnestesia as TipoAnestesia,
+        transfusionAutorizada: s1.transfusionAutorizada,
+        ampliacionQuirurgicaAutorizada: s1.ampliacionQuirurgicaAutorizada,
+        fotografiaGrabacionAutorizada: s1.fotografiaGrabacionAutorizada,
+      });
+
+      await firmarPacienteMut.mutateAsync({
+        consentimientoId: created.consentimientoId,
+        firmanteTipo: s2.firmanteTipo,
+        firmanteNombre: s2.firmanteNombre.trim(),
+        firmanteDocumento: s2.firmanteDocumento.trim(),
+        firmaImagenUri: s2.firmaDataUrl,
+      });
+
+      await firmarMcMut.mutateAsync({
+        consentimientoId: created.consentimientoId,
+        pin: s3.firmaId,
+      });
+
+      router.push(`/ece/quirofano/consentimiento-qx/${created.consentimientoId}`);
+    } catch (err) {
+      setClientError(err instanceof Error ? err.message : "Error al registrar el consentimiento.");
+    }
   }
 
-  const isSubmitting = crearQx.isPending;
-  const errorMessage = clientError ?? crearQx.error?.message ?? null;
+  const isSubmitting = crearQx.isPending || firmarPacienteMut.isPending || firmarMcMut.isPending;
+  const errorMessage =
+    clientError ??
+    crearQx.error?.message ??
+    firmarPacienteMut.error?.message ??
+    firmarMcMut.error?.message ??
+    null;
 
   return (
     <div className="space-y-4">
@@ -481,6 +517,57 @@ export default function NuevoConsentimientoQxPage() {
           </CardHeader>
           <CardContent>
             <Form onSubmit={(e) => { e.preventDefault(); nextStep(); }}>
+              {/* Datos del firmante — requeridos por NTEC Art. 39 */}
+              <fieldset className="mb-4 space-y-3">
+                <legend className="text-sm font-medium">Datos del firmante</legend>
+                <div className="flex gap-3">
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="firmanteTipo"
+                      value="paciente"
+                      checked={s2.firmanteTipo === "paciente"}
+                      onChange={() => setS2((p) => ({ ...p, firmanteTipo: "paciente" }))}
+                      className="accent-[#1a3c6e]"
+                    />
+                    Paciente
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="firmanteTipo"
+                      value="representante_legal"
+                      checked={s2.firmanteTipo === "representante_legal"}
+                      onChange={() => setS2((p) => ({ ...p, firmanteTipo: "representante_legal" }))}
+                      className="accent-[#1a3c6e]"
+                    />
+                    Representante legal
+                  </label>
+                </div>
+                <FormField>
+                  <Label htmlFor="firmanteNombre">Nombre completo del firmante</Label>
+                  <Input
+                    id="firmanteNombre"
+                    required
+                    value={s2.firmanteNombre}
+                    onChange={(e) => setS2((p) => ({ ...p, firmanteNombre: e.target.value }))}
+                    maxLength={200}
+                    placeholder="Nombre tal como aparece en el documento de identidad"
+                  />
+                </FormField>
+                <FormField>
+                  <Label htmlFor="firmanteDocumento">Documento de identidad</Label>
+                  <Input
+                    id="firmanteDocumento"
+                    required
+                    value={s2.firmanteDocumento}
+                    onChange={(e) => setS2((p) => ({ ...p, firmanteDocumento: e.target.value }))}
+                    maxLength={50}
+                    placeholder="DUI, NIT o pasaporte"
+                  />
+                </FormField>
+              </fieldset>
+
               <div className="mb-4 flex gap-3">
                 <Button
                   type="button"
