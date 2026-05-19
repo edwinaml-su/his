@@ -33,10 +33,10 @@ const PIN_CORRECTO = "123456";
 // Mock argon2 (evita dependencia nativa en unit tests)
 // ──────────────────────────────────────────────────────────────────────────────
 
-vi.mock("argon2", () => ({
-  default: {
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
     verify: vi.fn(async (_hash: string, pin: string) => pin === PIN_CORRECTO),
-  },
+    },
 }));
 
 // ──────────────────────────────────────────────────────────────────────────────
