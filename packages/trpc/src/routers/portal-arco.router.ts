@@ -123,26 +123,32 @@ export const portalArcoRouter = router({
 
   /**
    * US.F2.7.44-45 — DIR/ADM lista solicitudes pendientes para revisar.
+   *
+   * HG-28 (LOPD): envuelto en withTenantContext para que RLS aplique vía rol
+   * `authenticated`. Sin esto, el rol Postgres (BYPASSRLS) ignoraba las policies
+   * y el filtro JS `organizacionId` era la única barrera tenant — defensa débil.
    */
   listParaRevisar: requireRole(["DIR", "ADM", "ADMIN"]).query(async ({ ctx }) => {
-    return ctx.prisma.solicitudArco.findMany({
-      where: {
-        organizacionId: ctx.tenant.organizationId,
-        estado: "PENDIENTE",
-      },
-      select: {
-        id: true,
-        tipo: true,
-        documentoTarget: true,
-        motivo: true,
-        estado: true,
-        creadoEn: true,
-        paciente: {
-          select: { id: true, firstName: true, lastName: true, mrn: true },
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      return tx.solicitudArco.findMany({
+        where: {
+          organizacionId: ctx.tenant.organizationId,
+          estado: "PENDIENTE",
         },
-      },
-      orderBy: { creadoEn: "asc" },
-      take: 100,
+        select: {
+          id: true,
+          tipo: true,
+          documentoTarget: true,
+          motivo: true,
+          estado: true,
+          creadoEn: true,
+          paciente: {
+            select: { id: true, firstName: true, lastName: true, mrn: true },
+          },
+        },
+        orderBy: { creadoEn: "asc" },
+        take: 100,
+      });
     });
   }),
 
