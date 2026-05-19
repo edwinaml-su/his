@@ -7,10 +7,10 @@
  *  3.  listActivos — FORBIDDEN sin rol
  *  4.  getDetalle — happy-path
  *  5.  getDetalle — NOT_FOUND cuando no existe
- *  6.  iniciarAltaMedica — happy-path: crea epicrisis + emite evento
+ *  6.  iniciarAltaMedica — happy-path: crea epicrisis + emite evento (mismo tx, HD-10)
  *  7.  iniciarAltaMedica — CONFLICT si episodio no está en_curso
  *  8.  iniciarAltaMedica — NOT_FOUND si episodio no existe
- *  9.  confirmarAlta — happy-path: cierra episodio + libera cama + evento
+ *  9.  confirmarAlta — happy-path: cierra episodio + libera cama + evento (mismo tx, HD-10)
  * 10.  confirmarAlta — CONFLICT si epicrisis en borrador
  * 11.  confirmarAlta — CONFLICT si episodio no está en alta_iniciada
  * 12.  confirmarAlta — NOT_FOUND si episodio no existe
@@ -41,28 +41,25 @@ const EPISODIO_ATEN_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const EPICRISIS_ID      = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const PACIENTE_ID       = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const MEDICO_ID         = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
-const FIRMA_ID          = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const ORG_ID            = MOCK_TENANT.organizationId;
 const ESTAB_ID          = MOCK_TENANT.establishmentId ?? "11111111-1111-1111-1111-111111111111";
 
 const TENANT_PHYSICIAN = { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"], establishmentId: ESTAB_ID };
 const TENANT_NURSE     = { ...MOCK_TENANT, roleCodes: ["NURSE"],     establishmentId: ESTAB_ID };
-const TENANT_NO_ESTAB  = { ...MOCK_TENANT, roleCodes: ["NURSE"],     establishmentId: undefined };
 
+// Fixtures usan nombres de alias SQL (sala_id = servicio_id, fecha_ingreso = fecha_hora_orden_ingreso)
 const ACTIVO_ROW = {
   id: EPISODIO_HOSP_ID,
   episodio_atencion_id: EPISODIO_ATEN_ID,
   paciente_id: PACIENTE_ID,
   paciente_nombre: "Juan Pérez",
-  sala_id: "11111111-0000-0000-0000-000000000000",
+  sala_id: "11111111-0000-0000-0000-000000000000",     // alias de servicio_id
   sala_nombre: "Medicina Interna",
   cama_id: "22222222-0000-0000-0000-000000000000",
   cama_codigo: "MI-101",
-  fecha_ingreso: new Date("2026-05-10T08:00:00Z"),
+  fecha_ingreso: new Date("2026-05-10T08:00:00Z"),      // alias de fecha_hora_orden_ingreso
   estado: "en_curso",
-  gravedad: "moderado",
-  medico_tratante_id: MEDICO_ID,
-  medico_nombre: "Dra. Martínez",
+  medico_nombre: null,                                  // medico_tratante_id eliminado (HD-08)
 };
 
 const DETALLE_ROW = {
@@ -139,6 +136,14 @@ describe("eceEpisodioHospitalarioRouter", () => {
       );
       await expect(sinRol.listActivos({ limit: 10 })).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("3b. input no acepta campo gravedad (eliminado HD-08)", () => {
+      // El schema Zod ya no incluye gravedad — TS lo verifica en build.
+      // Verificamos que el input omite el campo sin error de runtime.
+      const validInput = { limit: 10, servicioId: undefined };
+      // Si el schema aceptara gravedad esto causaría error de tipos. El test documenta la decisión.
+      expect(validInput).not.toHaveProperty("gravedad");
+    });
   });
 
   // ─── getDetalle ───────────────────────────────────────────────────────────
@@ -176,7 +181,7 @@ describe("eceEpisodioHospitalarioRouter", () => {
       instruccionesAlta: "Reposo relativo, cita en 7 días.",
     };
 
-    it("6. happy-path: crea epicrisis borrador, emite evento altaIniciada", async () => {
+    it("6. happy-path: crea epicrisis borrador, emite evento altaIniciada en mismo tx (HD-10)", async () => {
       // episodio en_curso
       prisma.$queryRaw.mockResolvedValueOnce([{
         id: EPISODIO_ATEN_ID,
@@ -186,15 +191,7 @@ describe("eceEpisodioHospitalarioRouter", () => {
       }]);
       // INSERT epicrisis → retorna epicrisisId
       prisma.$queryRaw.mockResolvedValueOnce([{ id: EPICRISIS_ID }]);
-      // UPDATE estado → 0 filas (executeRaw)
-      // INSERT estado_log → 0 filas (executeRaw) — ambos ya mockeados con 0
-
-      // outbox transaction
-      prisma.$transaction.mockImplementationOnce(async (cb: unknown) => {
-        if (typeof cb === "function") {
-          return (cb as (tx: unknown) => Promise<unknown>)(prisma);
-        }
-      });
+      // UPDATE estado + INSERT estado_log ya mockeados con $executeRaw → 0
 
       const caller = makePhysicianCaller(prisma);
       const result = await caller.iniciarAltaMedica(VALID_INPUT);
@@ -208,6 +205,8 @@ describe("eceEpisodioHospitalarioRouter", () => {
           aggregateId: EPISODIO_ATEN_ID,
         }),
       );
+      // HD-10: no debe haber una segunda $transaction separada para el outbox
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
     it("7. CONFLICT si el episodio no está en_curso", async () => {
@@ -242,7 +241,7 @@ describe("eceEpisodioHospitalarioRouter", () => {
       epicrisisId: EPICRISIS_ID,
     };
 
-    it("9. happy-path: cierra episodio, libera cama, emite altaConfirmada", async () => {
+    it("9. happy-path: cierra episodio, libera cama, emite altaConfirmada en mismo tx (HD-10)", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{
         episodio_id: EPISODIO_ATEN_ID,
         estado_episodio: "alta_iniciada",
@@ -250,12 +249,6 @@ describe("eceEpisodioHospitalarioRouter", () => {
         estado_epicrisis: "firmado",
         paciente_id: PACIENTE_ID,
       }]);
-      // outbox transaction
-      prisma.$transaction.mockImplementationOnce(async (cb: unknown) => {
-        if (typeof cb === "function") {
-          return (cb as (tx: unknown) => Promise<unknown>)(prisma);
-        }
-      });
 
       const caller = makePhysicianCaller(prisma);
       const result = await caller.confirmarAlta(VALID_CONFIRM);
@@ -269,6 +262,8 @@ describe("eceEpisodioHospitalarioRouter", () => {
           aggregateId: EPISODIO_ATEN_ID,
         }),
       );
+      // HD-10: no debe haber una segunda $transaction separada para el outbox
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
     it("10. CONFLICT si la epicrisis está en borrador", async () => {

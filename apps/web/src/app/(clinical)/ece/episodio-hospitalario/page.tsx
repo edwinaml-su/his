@@ -2,44 +2,19 @@
 
 /**
  * ECE — Tablero de episodios hospitalarios activos.
- * Agrupados por servicio/sala. Filtros: servicio, fecha, gravedad.
+ * Agrupados por servicio/sala. Filtros: servicio, fecha.
  * Solo lectura. Navegación a detalle desde cada card.
+ *
+ * HD-08: filtro gravedad eliminado — columna no existe en ece.episodio_hospitalario.
  */
 import * as React from "react";
 import Link from "next/link";
 import { BedDouble, Filter, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
-import { Badge } from "@his/ui/components/badge";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
-import type { GravedadEpisodio } from "@his/contracts";
-
-// ─── Helpers de presentación ─────────────────────────────────────────────────
-
-const GRAVEDAD_VARIANT = {
-  leve: "secondary",
-  moderado: "outline",
-  grave: "default",
-  critico: "destructive",
-} as const satisfies Record<GravedadEpisodio, "secondary" | "outline" | "default" | "destructive">;
-
-const GRAVEDAD_LABEL: Record<GravedadEpisodio, string> = {
-  leve: "Leve",
-  moderado: "Moderado",
-  grave: "Grave",
-  critico: "Crítico",
-};
-
-type GravedadFilter = GravedadEpisodio | "ALL";
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", { dateStyle: "medium" });
 
@@ -52,26 +27,23 @@ function diasDesde(fecha: Date | string): number {
 
 interface Filters {
   servicioId: string;
-  gravedad: GravedadFilter;
 }
 
 export default function EpisodioHospitalarioListPage() {
   const [filters, setFilters] = React.useState<Filters>({
     servicioId: "",
-    gravedad: "ALL",
   });
 
   const queryInput = React.useMemo(() => {
     const i: Record<string, unknown> = { limit: 100 };
     if (filters.servicioId.trim()) i.servicioId = filters.servicioId.trim();
-    if (filters.gravedad !== "ALL") i.gravedad = filters.gravedad;
     return i;
   }, [filters]);
 
   const query = trpc.eceEpisodioHospitalario.listActivos.useQuery(queryInput);
   const episodios = query.data?.items ?? [];
 
-  // Agrupar por sala_nombre
+  // Agrupar por sala_nombre (sala_id es alias de servicio_id)
   const grupos = React.useMemo(() => {
     const map = new Map<string, typeof episodios>();
     for (const ep of episodios) {
@@ -117,24 +89,6 @@ export default function EpisodioHospitalarioListPage() {
                 onChange={(e) => setFilters((f) => ({ ...f, servicioId: e.target.value }))}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="f-gravedad">Gravedad</Label>
-              <Select
-                value={filters.gravedad}
-                onValueChange={(v) => setFilters((f) => ({ ...f, gravedad: v as GravedadFilter }))}
-              >
-                <SelectTrigger id="f-gravedad">
-                  <SelectValue placeholder="Todas" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">Todas</SelectItem>
-                  <SelectItem value="leve">Leve</SelectItem>
-                  <SelectItem value="moderado">Moderado</SelectItem>
-                  <SelectItem value="grave">Grave</SelectItem>
-                  <SelectItem value="critico">Crítico</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </div>
         </CardContent>
       </Card>
@@ -165,7 +119,6 @@ export default function EpisodioHospitalarioListPage() {
           <CardContent>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {eps.map((ep) => {
-                const gravedad = ep.gravedad as GravedadEpisodio | null;
                 const dias = diasDesde(ep.fecha_ingreso);
                 return (
                   <div
@@ -179,11 +132,6 @@ export default function EpisodioHospitalarioListPage() {
                           Cama: <span className="font-mono">{ep.cama_codigo ?? "—"}</span>
                         </p>
                       </div>
-                      {gravedad && (
-                        <Badge variant={GRAVEDAD_VARIANT[gravedad]}>
-                          {GRAVEDAD_LABEL[gravedad]}
-                        </Badge>
-                      )}
                     </div>
                     <div className="text-xs text-muted-foreground space-y-0.5">
                       <p>Ingreso: {dateFmt.format(new Date(ep.fecha_ingreso))}</p>
