@@ -319,39 +319,35 @@ export default function WorkflowGrafoPage() {
   const codigo = typeof params.codigo === "string" ? params.codigo : "";
   const isMobile = useIsMobile();
 
-  // Leer roles del tenant context (mismo patrón que workflows/page.tsx)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const sessionQuery = (trpc as any).userAdmin?.me?.useQuery?.() ?? { data: null };
-  const roleCodes: string[] = sessionQuery.data?.roleCodes ?? [];
+  // TODO(HG-19): userAdmin.me no existe aún en el router — se necesita un
+  // procedure que devuelva los roleCodes del usuario actual. Por ahora se
+  // pasa array vacío y el acceso de edición queda deshabilitado hasta que
+  // el backend implemente el endpoint.
+  const roleCodes: string[] = [];
   const { canEdit, isReadOnly } = useWorkflowAccess(roleCodes);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tiposDocs, isLoading: loadingDoc } = (trpc as any).workflowTipoDoc.list.useQuery(
+  const { data: tiposDocs, isLoading: loadingDoc } = trpc.workflowTipoDoc.list.useQuery(
     { soloActivos: false },
   );
 
   const tipoDoc = tiposDocs?.find((d: { codigo: string }) => d.codigo === codigo);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: estados, isLoading: loadingEstados } = (trpc as any).workflowEstado.estado.list.useQuery(
+  const { data: estados, isLoading: loadingEstados } = trpc.workflowEstado.estado.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: transiciones, isLoading: loadingTransiciones } = (trpc as any).workflowEstado.transicion.list.useQuery(
+  const { data: transiciones, isLoading: loadingTransiciones } = trpc.workflowEstado.transicion.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: roles, isLoading: loadingRoles } = (trpc as any).workflowEstado.role.list.useQuery(
+  const { data: roles, isLoading: loadingRoles } = trpc.workflowEstado.role.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: validacion, isLoading: loadingValidacion, refetch: refetchValidacion } = (trpc as any).workflowValidator.validate.useQuery(
+  const { data: validacion, isLoading: loadingValidacion, refetch: refetchValidacion } = trpc.workflowValidator.validate.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );

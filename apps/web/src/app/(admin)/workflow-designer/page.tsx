@@ -33,8 +33,7 @@ const TIPO_REGISTRO_VARIANT: Record<string, "default" | "secondary" | "outline">
 };
 
 export default function WorkflowDesignerPage() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tiposDocs, isLoading, error } = (trpc as any).workflowTipoDoc.list.useQuery({
+  const { data: tiposDocs, isLoading, error } = trpc.workflowTipoDoc.list.useQuery({
     soloActivos: false,
   });
 
