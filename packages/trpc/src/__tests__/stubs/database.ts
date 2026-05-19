@@ -6,10 +6,10 @@
  *
  * Nota: este archivo SOLO se usa vía el alias en `vitest.config.ts`.
  *
- * Beta.15: re-exportamos `emitDomainEvent` del fuente real porque su
- * implementación es código TS puro (recibe `tx` del caller, no instancia
- * Prisma) y los tests necesitan que la validación Zod + el `tx.domainEvent.create`
- * se ejecuten para verificar payload shape.
+ * Beta.15: `emitDomainEvent` se implementa aquí directamente (no importando
+ * emit.ts real) para evitar el ciclo ESM que `emit.ts` introduce via
+ * `@his/contracts/events` barrel. La implementación stub persiste en
+ * `tx.domainEvent.create` igual que la real — los tests verifican el payload.
  */
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
@@ -23,8 +23,41 @@ export type { PrismaClient };
 // encuentren resuelto en tests via el alias del vitest.config.
 export { Prisma };
 
-export { emitDomainEvent } from "../../../../database/src/outbox/emit";
-export type {
-  EmitDomainEventInput,
-  EmitDomainEventTx,
-} from "../../../../database/src/outbox/emit";
+// ---------------------------------------------------------------------------
+// emitDomainEvent — implementación stub sin ciclo ESM de @his/contracts/events.
+// ---------------------------------------------------------------------------
+
+export interface EmitDomainEventInput {
+  organizationId: string;
+  eventType: string;
+  aggregateType: string;
+  aggregateId: string;
+  emittedById: string;
+  payload: unknown;
+  correlationId?: string | null;
+}
+
+// El tipo `tx` es el PrismaClient (o TransactionClient) pasado por el caller.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type EmitDomainEventTx = any;
+
+/**
+ * Implementación stub: valida que `tx.domainEvent.create` exista y lo llama.
+ * Los tests de farmacia verifican el payload a través del mock de `prisma.domainEvent.create`.
+ */
+export async function emitDomainEvent(
+  tx: EmitDomainEventTx,
+  input: EmitDomainEventInput,
+): Promise<void> {
+  await tx.domainEvent.create({
+    data: {
+      organizationId: input.organizationId,
+      eventType: input.eventType,
+      aggregateType: input.aggregateType,
+      aggregateId: input.aggregateId,
+      emittedById: input.emittedById,
+      payload: input.payload,
+      correlationId: input.correlationId ?? null,
+    },
+  });
+}
