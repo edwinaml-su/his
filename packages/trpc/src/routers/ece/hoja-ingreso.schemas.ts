@@ -86,21 +86,27 @@ export const eceHojaIngresoAnularSchema = z.object({
 
 export type EceHojaIngresoAnularInput = z.infer<typeof eceHojaIngresoAnularSchema>;
 
+export interface DatosAdministrativos {
+  modalidad: ModalidadIngreso | null;
+  procedencia: string | null;
+  diagnosticoIngreso: string | null;
+  motivoConsulta: string | null;
+  notasAdicionales: string | null;
+}
+
 export interface HojaIngresoRow {
   id: string;
   instancia_id: string;
-  paciente_id: string;
-  episodio_hospitalario_id: string | null;
+  episodio_id: string;
   orden_ingreso_id: string;
   fecha_hora_ingreso: Date;
-  servicio_ingreso_id: string;
-  cama_asignada_id: string | null;
-  modalidad: ModalidadIngreso;
-  procedencia: string;
-  diagnostico_ingreso: string | null;
-  motivo_consulta: string | null;
-  notas_adicionales: string | null;
-  admisionista_id: string;
+  servicio_id: string | null;
+  cama_id: string | null;
+  datos_administrativos: DatosAdministrativos | null;
+  responsable_admision: string;
+  estado_registro: EstadoHojaIngreso;
+  registrado_en: Date;
+  // Campos derivados del JOIN con documento_instancia / flujo_estado
   estado_codigo: EstadoHojaIngreso;
   estado_id: string;
   creado_en: Date;
