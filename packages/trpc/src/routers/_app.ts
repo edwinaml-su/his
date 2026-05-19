@@ -174,6 +174,8 @@ import { bedsideStatRouter } from "./bedside-stat.router";
 import { medicationWindowRouter } from "./medication-window.router";
 // S5 — HF-01: Dashboard Maternidad real (NTEC Art. 25)
 import { eceObstetriciaRouter } from "./ece/obstetricia.router";
+// S8 — HI-10/11: Trazabilidad lote + recall RTCA
+import { gs1LoteTraceRouter } from "./gs1-lote-trace.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -350,6 +352,8 @@ export const appRouter = router({
   medicationWindow: medicationWindowRouter,
   // S5 — HF-01: Dashboard Maternidad real (NTEC Art. 25)
   eceObstetricia: eceObstetriciaRouter,
+  // S8 — HI-10/11: Trazabilidad lote + recall RTCA
+  gs1LoteTrace: gs1LoteTraceRouter,
 });
 
 export type AppRouter = typeof appRouter;
