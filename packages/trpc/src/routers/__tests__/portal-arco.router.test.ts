@@ -73,8 +73,9 @@ describe("portalArcoRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
-    // withPortalContext / withTenantContext necesitan $transaction
+    // withPortalContext / withTenantContext necesitan $transaction + SET LOCAL
     prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   // ===========================================================================
@@ -229,9 +230,24 @@ describe("portalArcoRouter", () => {
       );
     });
 
-    it("lanza UNAUTHORIZED si no hay sesión de tenant", async () => {
+    // HG-28: verifica que la query corre dentro de withTenantContext (RLS demote activo)
+    it("HG-28 — RLS demote: ejecuta la query dentro de $transaction con SET LOCAL ROLE", async () => {
+      prisma.solicitudArco.findMany.mockResolvedValue([] as never);
+
+      const caller = portalArcoRouter.createCaller(makeTenantCtx({ prisma }));
+      await caller.listParaRevisar();
+
+      // $transaction debe haber sido llamado (withTenantContext lo requiere)
+      expect(prisma.$transaction).toHaveBeenCalledOnce();
+
+      // $executeRawUnsafe debe incluir SET LOCAL ROLE authenticated (demote)
+      const rawCalls = prisma.$executeRawUnsafe.mock.calls.map((c) => c[0]);
+      expect(rawCalls.some((sql) => /SET LOCAL ROLE authenticated/i.test(String(sql)))).toBe(true);
+    });
+
+    it("lanza FORBIDDEN si no hay sesión de tenant", async () => {
       const caller = portalArcoRouter.createCaller(
-        makeCtx({ tenant: null, portalAccount: null }),
+        makeCtx({ tenant: null }),
       );
       // requireRole devuelve FORBIDDEN cuando no hay tenant (no UNAUTHORIZED)
       await expect(caller.listParaRevisar()).rejects.toMatchObject({
