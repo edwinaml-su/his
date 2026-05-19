@@ -170,6 +170,8 @@ import { workflowSimulacionRouter } from "./workflow-simulacion.router";
 import { bedsideRondaRouter } from "./bedside-ronda.router";
 // F2-S14 Stream B — Modo STAT: bypass justificado bedside (US.F2.6.47)
 import { bedsideStatRouter } from "./bedside-stat.router";
+// F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters (US.F2.6.41-45, 52)
+import { medicationWindowRouter } from "./medication-window.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -342,6 +344,8 @@ export const appRouter = router({
   bedsideRonda: bedsideRondaRouter,
   // F2-S14 Stream B — Modo STAT
   bedsideStat: bedsideStatRouter,
+  // F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters
+  medicationWindow: medicationWindowRouter,
 });
 
 export type AppRouter = typeof appRouter;

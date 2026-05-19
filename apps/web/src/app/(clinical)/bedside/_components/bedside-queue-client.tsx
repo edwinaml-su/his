@@ -5,11 +5,14 @@
  *
  * Usa bedside.shiftQueue.pending (restaurado en F2-S7 Wave 2).
  * Refresca automáticamente cada minuto para mantener la ventana terapéutica.
+ * F2-S14-D: integra WindowAlertBadge + filtro "Solo próximas a vencer".
  */
 
+import { useState, useCallback } from "react";
 import Link from "next/link";
 import { trpc } from "@/lib/trpc/react";
 import { cn } from "@his/ui/lib/utils";
+import { WindowAlertBadge } from "./window-alert-badge";
 
 type QueueItem = {
   indicationId: string;
@@ -20,7 +23,15 @@ type QueueItem = {
   status: "PENDING" | "DONE" | "OVERDUE";
 };
 
+const WINDOW_ALERT_THRESHOLD_MIN = 15;
+
 export function BedsideQueueClient() {
+  const [soloProximas, setSoloProximas] = useState(false);
+
+  const handleFilterChange = useCallback((active: boolean) => {
+    setSoloProximas(active);
+  }, []);
+
   const { data, isLoading, error, refetch } = trpc.bedside.shiftQueue.pending.useQuery(
     {},
     { refetchInterval: 60_000 },
@@ -50,22 +61,46 @@ export function BedsideQueueClient() {
     );
   }
 
-  const items = data?.items ?? [];
+  const allItems = (data?.items ?? []) as QueueItem[];
+  const now = Date.now();
 
-  if (items.length === 0) {
-    return (
-      <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
-        <p className="text-lg font-medium text-gray-700">Sin indicaciones pendientes</p>
-        <p className="mt-1 text-sm text-gray-500">
-          Todos los medicamentos del turno han sido administrados.
-        </p>
-      </div>
-    );
-  }
+  // Filtro "Solo próximas a vencer": muestra solo indicaciones con < 15 min o vencidas
+  const items = soloProximas
+    ? allItems.filter((item) => {
+        if (!item.horaProgramada) return false;
+        const minutos = Math.round(
+          (new Date(item.horaProgramada).getTime() - now) / 60_000,
+        );
+        return minutos < WINDOW_ALERT_THRESHOLD_MIN || item.status === "OVERDUE";
+      })
+    : allItems;
 
   return (
     <div className="flex flex-col gap-3">
-      {(items as QueueItem[]).map((item) => (
+      {/* Badge de alertas de ventana terapéutica — F2-S14-D */}
+      <div className="flex items-center gap-2">
+        <WindowAlertBadge onFilterChange={handleFilterChange} />
+        {soloProximas && (
+          <span className="text-xs text-gray-500">
+            Filtrando: solo próximas a vencer
+          </span>
+        )}
+      </div>
+
+      {items.length === 0 && (
+        <div className="rounded-xl border border-gray-200 bg-white p-8 text-center">
+          <p className="text-lg font-medium text-gray-700">
+            {soloProximas ? "Sin indicaciones próximas a vencer" : "Sin indicaciones pendientes"}
+          </p>
+          <p className="mt-1 text-sm text-gray-500">
+            {soloProximas
+              ? "Todas las ventanas terapéuticas están dentro del margen."
+              : "Todos los medicamentos del turno han sido administrados."}
+          </p>
+        </div>
+      )}
+
+      {items.map((item) => (
         <IndicationCard key={item.indicationId} item={item} />
       ))}
     </div>

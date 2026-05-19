@@ -374,6 +374,8 @@ model Organization {
   eceRondaSessions          EceRondaSession[]         @relation("OrgEceRondaSessions")
   // F2-S14-B — Modo STAT
   eceStatEvents             EceStatEvent[]            @relation("OrgEceStatEvent")
+  // F2-S14-D — Window Alert
+  medicationWindowAlerts    EceMedicationWindowAlert[] @relation("OrgMedicationWindowAlerts")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -517,6 +519,8 @@ model User {
   eceRondaSessions          EceRondaSession[]            @relation("UserEceRondaSessions")
   // F2-S14-B — Modo STAT
   eceStatEventsActivados    EceStatEvent[]               @relation("EceStatEventActivador")
+  // F2-S14-D — Window Alert
+  windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
 
   @@schema("public")
 }
@@ -6349,6 +6353,7 @@ model AuditDashboardConfig {
 }
 
 // =============================================================================
+<<<<<<< HEAD
 // F2-S14 Stream A — Modo Rondas
 // US.F2.6.46 (flujo optimizado) · US.F2.6.50 (ruta optimizada) · US.F2.6.51 (pausa)
 // =============================================================================
@@ -6405,5 +6410,29 @@ model EceStatEvent {
   @@index([organizationId, activadoEn(sort: Desc)], name: "idx_stat_event_org_activado")
   @@index([activadoPorId, completado], name: "idx_stat_event_activado_por_activo")
   @@map("stat_event")
+  @@schema("ece")
+}
+
+// =============================================================================
+// F2-S14 Stream D — Window Alert + Hardware
+// US.F2.6.52 — Alerta ventana terapéutica próxima a cerrar
+// =============================================================================
+
+/// Alerta enviada cuando una indicación está < 15 min de cerrar su ventana terapéutica.
+model EceMedicationWindowAlert {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicationId     String    @db.Text
+  organizationId   String    @db.Uuid
+  ventanaCierreEn  DateTime  @db.Timestamptz()
+  enviadoEn        DateTime  @default(now()) @db.Timestamptz()
+  atendidoEn       DateTime? @db.Timestamptz()
+  atendidoPorId    String?   @db.Uuid
+
+  organization  Organization @relation("OrgMedicationWindowAlerts", fields: [organizationId], references: [id], onDelete: Restrict)
+  atendidoPor   User?        @relation("MedicationWindowAlertAttendedBy", fields: [atendidoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, enviadoEn])
+  @@index([indicationId])
+  @@map("medication_window_alert")
   @@schema("ece")
 }
