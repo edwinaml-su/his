@@ -370,6 +370,8 @@ model Organization {
   solicitudesArco           SolicitudArco[]           @relation("OrgSolicitudesArco")
   // F2-S15-D — Audit Dashboard Config
   auditDashboardConfig      AuditDashboardConfig?     @relation("OrgAuditDashboardConfig")
+  // F2-S14-D — Window Alert
+  medicationWindowAlerts    EceMedicationWindowAlert[] @relation("OrgMedicationWindowAlerts")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -509,6 +511,8 @@ model User {
   expedienteFormatsCreados  ExpedienteFormatConfig[]     @relation("ExpedienteFormatCreador")
   eceMergesSolicitados      EcePatientMerge[]            @relation("EceMergeSolicitante")
   arcoRevisiones            SolicitudArco[]              @relation("ArcoRevisor")
+  // F2-S14-D — Window Alert
+  windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
 
   @@schema("public")
 }
@@ -6338,4 +6342,32 @@ model AuditDashboardConfig {
   organization Organization @relation("OrgAuditDashboardConfig", fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@schema("public")
+}
+
+// =============================================================================
+// F2-S14 Stream D — Window Alert + Hardware
+// US.F2.6.52 — Alerta ventana terapéutica próxima a cerrar
+// =============================================================================
+
+/// US.F2.6.52 — Alerta enviada cuando una indicación está < 15 min de cerrar su ventana terapéutica.
+/// Append-only: no DELETE. UPDATE solo para marcar atendidaEn (mark-as-attended).
+/// Tabla física en schema ece (see sql/96_medication_window_alert.sql); modelo Prisma en public
+/// para que el client tipado esté disponible — la tabla real vive en ece.medication_window_alert.
+model EceMedicationWindowAlert {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicationId     String    @db.Text
+  organizationId   String    @db.Uuid
+  /// Timestamp en que cierra la ventana terapéutica.
+  ventanaCierreEn  DateTime  @db.Timestamptz()
+  enviadoEn        DateTime  @default(now()) @db.Timestamptz()
+  atendidoEn       DateTime? @db.Timestamptz()
+  atendidoPorId    String?   @db.Uuid
+
+  organization  Organization @relation("OrgMedicationWindowAlerts", fields: [organizationId], references: [id], onDelete: Restrict)
+  atendidoPor   User?        @relation("MedicationWindowAlertAttendedBy", fields: [atendidoPorId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, enviadoEn])
+  @@index([indicationId])
+  @@map("medication_window_alert")
+  @@schema("ece")
 }

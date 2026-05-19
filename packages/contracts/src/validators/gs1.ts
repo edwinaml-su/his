@@ -234,3 +234,76 @@ function applyAi(result: Gs1Data, ai: string, value: string): void {
     // Otros AIs ignorados — extensible sin romper API.
   }
 }
+
+// =============================================================================
+// US.F2.6.44 — Validador checksums multi-AI (GS1 Módulo-10)
+// Soporta: AI 01 (GTIN-14), AI 8018 (GSRN-18), AI 00 (SSCC-18), AI 8003 (GRAI)
+// =============================================================================
+
+/**
+ * AIs con regla Módulo-10 GS1.
+ * Cada entrada define la longitud total esperada del payload numérico.
+ * GRAI (AI 8003): longitud variable — el prefijo es 14 dígitos con checksum;
+ * el resto es referencia de activo (variable). Validamos solo los primeros 14.
+ */
+const GS1_MOD10_AI_LENGTHS: Record<string, number> = {
+  "01":   14, // GTIN-14
+  "8018": 18, // GSRN-18
+  "00":   18, // SSCC-18
+  "8003": 14, // GRAI — validamos los primeros 14 dígitos (prefijo + checksum)
+};
+
+/**
+ * Calcula el dígito verificador Módulo-10 GS1 para un string de dígitos (sin el check digit).
+ * Posiciones desde la derecha: posición impar × 3, posición par × 1.
+ * Idéntico al algoritmo en gs1Mod10CheckDigit exportado arriba; re-expuesto aquí
+ * para uso local sin dependencia circular.
+ */
+function mod10CheckDigit(digits: string): number {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    const d = Number.parseInt(digits.charAt(i), 10);
+    const fromRight = digits.length - i; // 1-based desde la derecha
+    sum += fromRight % 2 === 0 ? d : d * 3;
+  }
+  const mod = sum % 10;
+  return mod === 0 ? 0 : 10 - mod;
+}
+
+/**
+ * Valida el checksum de un Application Identifier GS1.
+ *
+ * Soporta:
+ *  - AI "01"   → GTIN-14 (14 dígitos totales)
+ *  - AI "8018" → GSRN-18 (18 dígitos totales)
+ *  - AI "00"   → SSCC-18 (18 dígitos totales)
+ *  - AI "8003" → GRAI (valida los primeros 14 dígitos del payload)
+ *
+ * @param ai     - Application Identifier como string ("01", "8018", "00", "8003")
+ * @param value  - payload numérico completo (sin el AI, con el check digit incluido)
+ * @returns      - true si el checksum es correcto, false en caso contrario
+ */
+export function validateGS1Checksum(ai: string, value: string): boolean {
+  const expectedTotalLen = GS1_MOD10_AI_LENGTHS[ai];
+  if (expectedTotalLen === undefined) {
+    // AI no soportado — no validamos
+    return false;
+  }
+
+  // Extraer la porción numérica a validar (para GRAI son los primeros 14)
+  const numeric = value.replace(/\D/g, "");
+
+  // La longitud mínima debe ser al menos expectedTotalLen para los AIs de longitud fija
+  if (numeric.length < expectedTotalLen) return false;
+
+  // Para GRAI (8003): los primeros 14 dígitos son el segmento con checksum
+  const segment = numeric.slice(0, expectedTotalLen);
+
+  const body      = segment.slice(0, segment.length - 1);
+  const checkChar = segment.charAt(segment.length - 1);
+  const check     = Number.parseInt(checkChar, 10);
+
+  if (Number.isNaN(check)) return false;
+
+  return mod10CheckDigit(body) === check;
+}

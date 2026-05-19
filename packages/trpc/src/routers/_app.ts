@@ -166,6 +166,8 @@ import { workflowValidatorVisualRouter } from "./workflow-validator-visual.route
 // F2-S16 Stream C — Workflow Power Features (plantillas + simulación)
 import { workflowPlantillaRouter } from "./workflow-plantilla.router";
 import { workflowSimulacionRouter } from "./workflow-simulacion.router";
+// F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters (US.F2.6.41-45, 52)
+import { medicationWindowRouter } from "./medication-window.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -334,6 +336,8 @@ export const appRouter = router({
   // F2-S16 Stream C — Workflow Power Features
   workflowPlantilla: workflowPlantillaRouter,
   workflowSimulacion: workflowSimulacionRouter,
+  // F2-S14 Stream D — Alerta ventana terapéutica + Hardware adapters
+  medicationWindow: medicationWindowRouter,
 });
 
 export type AppRouter = typeof appRouter;
