@@ -18,6 +18,7 @@ import type { PrismaClient } from "@prisma/client";
 import { eceCertificacionRouter } from "../ece/certificacion.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { argon2 } from "@his/infrastructure";
 
 // Mock argon2 para tests rápidos
 vi.mock("@his/infrastructure", () => ({
@@ -63,10 +64,9 @@ describe("eceCertificacionRouter", () => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
 
-    // Restaurar verify tras clearAllMocks
-    const argon2Module = vi.mocked(require("@his/infrastructure"));
-    
-    argon2Module.argon2.verify = vi.fn().mockResolvedValue(true);
+    // Restaurar verify tras clearAllMocks — usa import estático (no require)
+    // para evitar SyntaxError al cargar el módulo ESM de @his/infrastructure.
+    vi.mocked(argon2.verify).mockResolvedValue(true);
   });
 
   // -------------------------------------------------------------------------
