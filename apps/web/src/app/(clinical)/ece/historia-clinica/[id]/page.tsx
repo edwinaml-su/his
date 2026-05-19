@@ -3,10 +3,11 @@
 /**
  * §ECE — Historia Clínica Electrónica — Detalle con firma electrónica.
  *
+ * HC-001: cubre la ausencia total de UI para ver/firmar una HC.
  * - Carga HC por ID vía `eceHistoriaClinica.get`.
  * - Muestra estado workflow y secciones clínicas en modo lectura.
- * - Botón "Firmar" disponible solo en estado BORRADOR; abre modal PIN.
- * - Modal PIN llama a `eceHistoriaClinica.firmar` con el código.
+ * - Botón "Firmar" disponible solo en estado 'borrador'.
+ * - Modal PIN llama a `eceHistoriaClinica.firmar`.
  */
 
 import * as React from "react";
@@ -30,12 +31,20 @@ import {
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { trpc } from "@/lib/trpc/react";
-import { WorkflowBadge, type HcEstado } from "../_components/workflow-badge";
+import { WorkflowBadge } from "../_components/workflow-badge";
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
   dateStyle: "long",
   timeStyle: "medium",
 });
+
+const TIPO_LABELS: Record<string, string> = {
+  ingreso: "Ingreso hospitalario",
+  control: "Control",
+  urgencia: "Urgencia",
+  ambulatoria: "Consulta ambulatoria",
+  interconsulta: "Interconsulta",
+};
 
 export default function EceHistoriaClinicaDetailPage() {
   const params = useParams<{ id: string }>();
@@ -52,10 +61,9 @@ export default function EceHistoriaClinicaDetailPage() {
       setPinOpen(false);
       setPin("");
       setPinError(null);
-      // Re-fetch para actualizar estado workflow
       void query.refetch();
     },
-    onError: (err) => {
+    onError: (err: { message: string }) => {
       setPinError(err.message);
     },
   });
@@ -67,9 +75,8 @@ export default function EceHistoriaClinicaDetailPage() {
       return;
     }
     setPinError(null);
-    // El router firmar acepta {id, firmaId?, observacion?}. El PIN se valida
-    // en el router de firma electrónica por separado; aquí pasa el PIN como
-    // observación temporal hasta integrar firmaId vía flow PIN→firmaId.
+    // firmaId se resuelve en el server contra ece.firma_electronica;
+    // por ahora se pasa el PIN como observación hasta integrar el flujo PIN→firmaId.
     firmar.mutate({ id: params.id, observacion: `pin:${pin.trim()}` });
   }
 
@@ -92,14 +99,12 @@ export default function EceHistoriaClinicaDetailPage() {
   }
   if (!query.data) {
     return (
-      <p className="text-sm text-muted-foreground">
-        Historia clínica no encontrada.
-      </p>
+      <p className="text-sm text-muted-foreground">Historia clínica no encontrada.</p>
     );
   }
 
   const hc = query.data;
-  const esBorrador = hc.estado === "BORRADOR" || hc.estado === "borrador";
+  const esBorrador = hc.estadoRegistro === "borrador";
 
   return (
     <>
@@ -109,14 +114,16 @@ export default function EceHistoriaClinicaDetailPage() {
           <div>
             <div className="flex items-center gap-3">
               <h1 className="text-2xl font-bold">Historia Clínica</h1>
-              <WorkflowBadge estado={hc.estado as HcEstado} />
+              <WorkflowBadge estado={hc.estadoRegistro} />
             </div>
             <p className="mt-1 text-sm text-muted-foreground">
               {hc.patient
                 ? `${hc.patient.firstName} ${hc.patient.lastName} · MRN ${hc.patient.mrn ?? "—"}`
                 : "—"}
               {" · "}
-              Creada: {hc.createdAt ? dateFmt.format(hc.createdAt) : "—"}
+              Tipo: {TIPO_LABELS[hc.tipoConsulta] ?? hc.tipoConsulta}
+              {" · "}
+              Registrada: {dateFmt.format(hc.registradoEn)}
             </p>
           </div>
           <div className="flex shrink-0 gap-2">
@@ -135,10 +142,10 @@ export default function EceHistoriaClinicaDetailPage() {
           </div>
         </div>
 
-        {/* Datos generales */}
+        {/* Datos clínicos principales */}
         <Card>
           <CardHeader>
-            <CardTitle>Datos generales</CardTitle>
+            <CardTitle>Datos del episodio</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             <div>
@@ -146,55 +153,90 @@ export default function EceHistoriaClinicaDetailPage() {
               <p className="mt-0.5">{hc.motivoConsulta ?? "—"}</p>
             </div>
             <div>
-              <p className="font-medium text-muted-foreground">Antecedentes</p>
-              <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes ?? "—"}</p>
+              <p className="font-medium text-muted-foreground">Enfermedad actual</p>
+              <p className="mt-0.5 whitespace-pre-wrap">{hc.enfermedadActual ?? "—"}</p>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Examen físico */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Examen físico</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            {hc.signosVitales && (
-              <div className="grid grid-cols-2 gap-2 rounded-md bg-muted/40 p-3 md:grid-cols-4">
-                <div>
-                  <p className="text-xs text-muted-foreground">PA (mmHg)</p>
-                  <p className="font-medium tabular-nums">
-                    {hc.signosVitales.paSistolica ?? "—"}/
-                    {hc.signosVitales.paDiastolica ?? "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">FC (lpm)</p>
-                  <p className="font-medium tabular-nums">
-                    {hc.signosVitales.frecuenciaCardiaca ?? "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">FR (rpm)</p>
-                  <p className="font-medium tabular-nums">
-                    {hc.signosVitales.frecuenciaRespiratoria ?? "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Temp (°C)</p>
-                  <p className="font-medium tabular-nums">
-                    {hc.signosVitales.temperatura ?? "—"}
-                  </p>
-                </div>
+            {hc.disposicion && (
+              <div>
+                <p className="font-medium text-muted-foreground">Disposición</p>
+                <p className="mt-0.5">{hc.disposicion}</p>
               </div>
             )}
-            <div>
-              <p className="font-medium text-muted-foreground">Hallazgos por aparato</p>
-              <p className="mt-0.5 whitespace-pre-wrap">{hc.hallazgosAparato ?? "—"}</p>
-            </div>
           </CardContent>
         </Card>
 
-        {/* Diagnósticos */}
+        {/* Antecedentes */}
+        {hc.antecedentes && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Antecedentes</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              {(() => {
+                type Ant = { personales?: string; familiares?: string; sociales?: string; alergias?: string };
+                const ant = hc.antecedentes as Ant;
+                return (
+                  <>
+                    {ant.personales && (
+                      <div>
+                        <p className="font-medium text-muted-foreground">Personales</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{ant.personales}</p>
+                      </div>
+                    )}
+                    {ant.familiares && (
+                      <div>
+                        <p className="font-medium text-muted-foreground">Familiares</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{ant.familiares}</p>
+                      </div>
+                    )}
+                    {ant.sociales && (
+                      <div>
+                        <p className="font-medium text-muted-foreground">Sociales</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{ant.sociales}</p>
+                      </div>
+                    )}
+                    {ant.alergias && (
+                      <div>
+                        <p className="font-medium text-muted-foreground">Alergias</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{ant.alergias}</p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Examen físico */}
+        {hc.examenFisico && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Examen físico</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm">
+              {(() => {
+                type Ef = { sistemas?: Array<{ sistema: string; hallazgo: string }> };
+                const ef = hc.examenFisico as Ef;
+                if (ef.sistemas?.length) {
+                  return (
+                    <ul className="space-y-2">
+                      {ef.sistemas.map((s, i) => (
+                        <li key={i}>
+                          <span className="font-medium">{s.sistema}: </span>
+                          <span>{s.hallazgo}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  );
+                }
+                return <p className="text-muted-foreground">Sin hallazgos registrados.</p>;
+              })()}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Diagnósticos CIE-10 */}
         <Card>
           <CardHeader>
             <CardTitle>Diagnósticos (CIE-10)</CardTitle>
@@ -202,10 +244,11 @@ export default function EceHistoriaClinicaDetailPage() {
           <CardContent>
             {hc.diagnosticos && hc.diagnosticos.length > 0 ? (
               <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-10">
-                {hc.diagnosticos!.map((dx, i) => (
+                {(hc.diagnosticos as Array<{ code: string; description: string; tipo: string }>).map((dx, i) => (
                   <li key={i} className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{dx.codigoCie10}</span>
-                    <span>{dx.descripcion}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{dx.code}</span>
+                    <span>{dx.description}</span>
+                    <span className="text-xs text-muted-foreground">({dx.tipo})</span>
                   </li>
                 ))}
               </ul>
@@ -215,18 +258,18 @@ export default function EceHistoriaClinicaDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Plan terapéutico */}
+        {/* Plan de manejo */}
         <Card>
           <CardHeader>
-            <CardTitle>Plan terapéutico</CardTitle>
+            <CardTitle>Plan de manejo</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="whitespace-pre-wrap text-sm">{hc.planTerapeutico ?? "—"}</p>
+            <p className="whitespace-pre-wrap text-sm">{hc.planManejo ?? "—"}</p>
           </CardContent>
         </Card>
 
         {/* Info firma */}
-        {hc.estado !== "BORRADOR" && hc.firmadoEn && (
+        {hc.estadoRegistro !== "borrador" && hc.firmadoEn && (
           <Card>
             <CardHeader>
               <CardTitle>Firma electrónica</CardTitle>
@@ -236,7 +279,7 @@ export default function EceHistoriaClinicaDetailPage() {
                 <span className="text-muted-foreground">Firmado: </span>
                 {dateFmt.format(hc.firmadoEn)}
               </p>
-              {hc.estado === "VALIDADO" && hc.validadoEn && (
+              {hc.estadoRegistro === "validado" && hc.validadoEn && (
                 <p className="mt-1">
                   <span className="text-muted-foreground">Validado: </span>
                   {dateFmt.format(hc.validadoEn)}
@@ -245,6 +288,12 @@ export default function EceHistoriaClinicaDetailPage() {
             </CardContent>
           </Card>
         )}
+
+        <div className="flex justify-end">
+          <Button variant="outline" onClick={() => router.push(`/ece/historia-clinica`)}>
+            Volver al listado
+          </Button>
+        </div>
       </div>
 
       {/* Modal PIN firma electrónica */}
@@ -254,7 +303,7 @@ export default function EceHistoriaClinicaDetailPage() {
             <DialogTitle>Firma electrónica</DialogTitle>
             <DialogDescription id="pin-desc">
               Ingrese su PIN de firma para suscribir esta historia clínica.
-              Esta acción no se puede deshacer.
+              Esta acción no se puede deshacer (NTEC Art. 7).
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleFirmar} noValidate>

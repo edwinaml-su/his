@@ -3,8 +3,8 @@
 /**
  * §ECE — Historia Clínica Electrónica — Listado filtrable.
  *
- * Lista HCs del tenant con filtros por paciente y estado de workflow.
- * Navegación a detalle o creación de nueva HC.
+ * HC-001: esta página cubre la ausencia total de UI (hallazgo P0).
+ * Lista HCs del tenant con filtros por episodio y estado de workflow.
  */
 
 import * as React from "react";
@@ -34,21 +34,30 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
-import { WorkflowBadge, type HcEstado } from "./_components/workflow-badge";
+import { WorkflowBadge } from "./_components/workflow-badge";
 
-type EstadoFilter = HcEstado | "ALL";
+type EstadoFilter = "borrador" | "firmado" | "validado" | "anulado" | "ALL";
 
 interface Filters {
-  pacienteId: string;
+  episodioId: string;
   estado: EstadoFilter;
 }
 
 const ESTADO_OPTIONS: { value: EstadoFilter; label: string }[] = [
   { value: "ALL", label: "Todos" },
-  { value: "BORRADOR", label: "Borrador" },
-  { value: "FIRMADO", label: "Firmado" },
-  { value: "VALIDADO", label: "Validado" },
+  { value: "borrador", label: "Borrador" },
+  { value: "firmado", label: "Firmado" },
+  { value: "validado", label: "Validado" },
+  { value: "anulado", label: "Anulado" },
 ];
+
+const TIPO_LABELS: Record<string, string> = {
+  ingreso: "Ingreso",
+  control: "Control",
+  urgencia: "Urgencia",
+  ambulatoria: "Ambulatoria",
+  interconsulta: "Interconsulta",
+};
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
   dateStyle: "medium",
@@ -57,13 +66,13 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
 
 export default function EceHistoriaClinicaListPage() {
   const [filters, setFilters] = React.useState<Filters>({
-    pacienteId: "",
+    episodioId: "",
     estado: "ALL",
   });
 
   const listInput = React.useMemo(() => {
     const input: Record<string, unknown> = {};
-    if (filters.pacienteId.trim()) input.pacienteId = filters.pacienteId.trim();
+    if (filters.episodioId.trim()) input.episodioId = filters.episodioId.trim();
     if (filters.estado !== "ALL") input.estado = filters.estado;
     return input;
   }, [filters]);
@@ -76,7 +85,7 @@ export default function EceHistoriaClinicaListPage() {
         <div>
           <h1 className="text-2xl font-bold">Historia Clínica Electrónica</h1>
           <p className="text-sm text-muted-foreground">
-            Registro clínico electrónico del paciente (§ECE).
+            Registro clínico electrónico del paciente — NTEC Art. 7.
           </p>
         </div>
         <Button asChild>
@@ -93,13 +102,13 @@ export default function EceHistoriaClinicaListPage() {
         <CardContent>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="filter-paciente">Paciente (ID)</Label>
+              <Label htmlFor="filter-episodio">Episodio (ID)</Label>
               <Input
-                id="filter-paciente"
-                placeholder="UUID del paciente"
-                value={filters.pacienteId}
+                id="filter-episodio"
+                placeholder="UUID del episodio"
+                value={filters.episodioId}
                 onChange={(e) =>
-                  setFilters((f) => ({ ...f, pacienteId: e.target.value }))
+                  setFilters((f) => ({ ...f, episodioId: e.target.value }))
                 }
               />
             </div>
@@ -150,28 +159,38 @@ export default function EceHistoriaClinicaListPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Paciente</TableHead>
-                  <TableHead>Motivo consulta</TableHead>
-                  <TableHead>Fecha</TableHead>
+                  <TableHead>Tipo consulta</TableHead>
+                  <TableHead>Motivo</TableHead>
+                  <TableHead>Fecha registro</TableHead>
                   <TableHead>Estado</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {query.data.items.map((hc) => {
+                {(query.data.items as Array<{
+                  id: string;
+                  episodioId: string;
+                  tipoConsulta: string;
+                  motivoConsulta: string | null;
+                  estadoRegistro: string;
+                  registradoEn: Date;
+                  patient: { firstName: string; lastName: string } | null;
+                }>).map((hc) => {
                   const paciente = hc.patient
                     ? `${hc.patient.firstName} ${hc.patient.lastName}`
                     : "—";
                   return (
                     <TableRow key={hc.id}>
                       <TableCell>{paciente}</TableCell>
+                      <TableCell>{TIPO_LABELS[hc.tipoConsulta] ?? hc.tipoConsulta}</TableCell>
                       <TableCell className="max-w-[20rem] truncate">
-                        {hc.motivoConsulta}
+                        {hc.motivoConsulta ?? "—"}
                       </TableCell>
                       <TableCell className="tabular-nums">
-                        {dateFmt.format(hc.createdAt)}
+                        {dateFmt.format(hc.registradoEn)}
                       </TableCell>
                       <TableCell>
-                        <WorkflowBadge estado={hc.estado as HcEstado} />
+                        <WorkflowBadge estado={hc.estadoRegistro} />
                       </TableCell>
                       <TableCell className="text-right">
                         <Button asChild size="sm" variant="outline">
