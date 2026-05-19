@@ -32,7 +32,6 @@ type TipoConsentimiento = "HOSPITALIZACION" | "QUIRURGICO" | "ANESTESICO";
 interface Step1State {
   tipo: TipoConsentimiento | "";
   episodioId: string;
-  pacienteId: string;
 }
 
 interface Step2State {
@@ -191,7 +190,6 @@ export default function NuevoConsentimientoPage() {
   const [s1, setS1] = React.useState<Step1State>({
     tipo: "",
     episodioId: "",
-    pacienteId: "",
   });
 
   const [s2, setS2] = React.useState<Step2State>({
@@ -212,8 +210,10 @@ export default function NuevoConsentimientoPage() {
   const [showPinModal, setShowPinModal] = React.useState(false);
   const [clientError, setClientError] = React.useState<string | null>(null);
 
-  // Workflow: crear instancia en borrador
-  const createInstance = trpc.workflowInstance.create.useMutation({
+  // C-02: llamar a eceConsentimiento.create (no workflowInstance.create).
+  // El router resuelve tipoDocumentoId desde catálogo server-side usando
+  // el campo `tipoConsentimiento` (código de tipo, no UUID).
+  const createInstance = trpc.eceConsentimiento.create.useMutation({
     onSuccess: () => router.push("/ece/consentimiento"),
   });
 
@@ -221,7 +221,7 @@ export default function NuevoConsentimientoPage() {
 
   function validateStep0(): string | null {
     if (!s1.tipo) return "Seleccione el tipo de consentimiento.";
-    if (!s1.pacienteId.trim()) return "Paciente es requerido.";
+    if (!s1.episodioId.trim()) return "Episodio es requerido.";
     return null;
   }
 
@@ -252,10 +252,15 @@ export default function NuevoConsentimientoPage() {
     setClientError(err);
     if (err) return;
 
+    // C-02: payload alineado con eceConsentimientoCreateSchema.
+    // tipoConsentimiento es el código ('hospitalizacion'|'quirurgico'|'anestesico'),
+    // el router resuelve el UUID del tipo_documento desde el catálogo ECE.
     createInstance.mutate({
-      tipoDocumentoId: s1.tipo, // UI simplificada — en producción resolver UUID por código
-      pacienteId: s1.pacienteId.trim(),
-      episodioId: s1.episodioId.trim() || undefined,
+      episodioId: s1.episodioId.trim(),
+      tipoConsentimiento: s1.tipo.toLowerCase() as "hospitalizacion" | "quirurgico" | "anestesico",
+      procedimientoDescrito: s2.procedimiento,
+      riesgos: s2.riesgos || undefined,
+      alternativas: s2.alternativas || undefined,
     });
   }
 
@@ -309,20 +314,10 @@ export default function NuevoConsentimientoPage() {
               </FormField>
 
               <FormField>
-                <Label htmlFor="pacienteId">Paciente (UUID)</Label>
-                <Input
-                  id="pacienteId"
-                  required
-                  placeholder="xxxxxxxx-xxxx-..."
-                  value={s1.pacienteId}
-                  onChange={(e) => setS1((p) => ({ ...p, pacienteId: e.target.value }))}
-                />
-              </FormField>
-
-              <FormField>
-                <Label htmlFor="episodioId">Episodio (UUID, opcional)</Label>
+                <Label htmlFor="episodioId">Episodio (UUID)</Label>
                 <Input
                   id="episodioId"
+                  required
                   placeholder="xxxxxxxx-xxxx-..."
                   value={s1.episodioId}
                   onChange={(e) => setS1((p) => ({ ...p, episodioId: e.target.value }))}
