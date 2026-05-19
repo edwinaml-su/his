@@ -3,28 +3,35 @@
  *
  * Estrategia: Vitest + vitest-mock-extended. Cero I/O real.
  * withTenantContext mockeado para ejecutar callback con prisma mock.
+ * argon2 mockeado para evitar dependencia nativa en tests.
  *
- * Casos cubiertos (10 tests):
+ * Casos cubiertos (14 tests):
  *   list:
  *     1. retorna items y total correctamente
  *     2. retorna lista vacía cuando no hay minutas
  *   create:
  *     3. crea minuta y retorna id
  *     4. lanza error cuando temasAgenda está vacío
- *   firmar:
- *     5. calcula hash chain correcto (prevHash 000...0 para primera minuta)
- *     6. lanza NOT_FOUND cuando minuta no existe
- *     7. lanza CONFLICT cuando minuta ya está firmada
+ *   firmar (HG-08 / NTEC Art. 32):
+ *     5. lanza ZodError cuando no se envía PIN
+ *     6. lanza UNAUTHORIZED cuando PIN es incorrecto
+ *     7. firma correctamente con PIN válido — calcula hash chain
+ *     8. lanza UNAUTHORIZED cuando cuenta está bloqueada (locked_until futuro)
+ *     9. lanza NOT_FOUND cuando minuta no existe
+ *    10. lanza CONFLICT cuando minuta ya está firmada
  *   dashboard:
- *     8. retorna kpis con conversión de bigint a number
- *     9. retorna mensaje cuando no hay datos (rows vacíos)
+ *    11. retorna kpis con conversión de bigint a number
+ *    12. retorna mensaje cuando no hay datos (rows vacíos)
  *   exportReport:
- *     10. retorna estructura correcta con periodoStats
+ *    13. retorna estructura correcta con periodoStats
+ *   (extra)
+ *    14. usa prev_hash de la última minuta firmada cuando existe
  *
  * @QA E2E pendiente:
  *   - Flujo completo: crear minuta → firmar → verificar inmutabilidad (trigger BD).
  *   - Hash chain: firma2.prev_hash === firma1.chain_hash.
  *   - Rol ARCH puede listar pero NO crear (UNAUTHORIZED).
+ *   - Lockout: 3 intentos fallidos → cuenta bloqueada 15 min.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockDeep } from "vitest-mock-extended";
@@ -40,6 +47,13 @@ vi.mock("../../../rls-context", () => ({
   ) => fn(prisma),
 }));
 
+// Mock argon2 — evita dependencia nativa (bindings C++) en entorno vitest.
+// argon2.verify retorna true/false según el control de cada test.
+const argon2VerifyMock = vi.fn<[string, string], Promise<boolean>>();
+vi.mock("@his/infrastructure", () => ({
+  argon2: { verify: argon2VerifyMock },
+}));
+
 import { comiteEceRouter } from "../comite-ece.router";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +65,16 @@ const ESTAB_ID = "00000000-0000-4000-8000-000000000002";
 const MINUTA_ID = "00000000-0000-4000-8000-000000000003";
 const USER_ID = "00000000-0000-4000-8000-000000000004";
 const FIRMA_ID = "00000000-0000-4000-8000-000000000005";
+const PERSONAL_ID = "00000000-0000-4000-8000-000000000006";
+
+/** Fila de ece.firma_electronica para tests de firmar. */
+const FIRMA_ROW = {
+  id: FIRMA_ID,
+  pin_hash: "$argon2id$v=19$...(hash-mock)",
+  failed_attempts: 0,
+  locked_until: null,
+  revoked_at: null,
+};
 
 const BASE_MINUTA = {
   id: MINUTA_ID,
@@ -161,26 +185,70 @@ describe("comiteEceRouter.create", () => {
 });
 
 // ---------------------------------------------------------------------------
-// firmar
+// firmar (HG-08 / NTEC Art. 32)
 // ---------------------------------------------------------------------------
 
 describe("comiteEceRouter.firmar", () => {
-  it("calcula hash chain con prev_hash '000...' para primera minuta del tenant", async () => {
+  beforeEach(() => {
+    argon2VerifyMock.mockReset();
+  });
+
+  it("lanza ZodError cuando no se envía PIN", async () => {
     const ctx = buildCtx();
+    const caller = comiteEceRouter.createCaller(ctx as never);
+    // @ts-expect-error — test de schema: input sin pin debe fallar validación
+    await expect(caller.firmar({ id: MINUTA_ID })).rejects.toThrow();
+  });
+
+  it("lanza UNAUTHORIZED cuando PIN es incorrecto", async () => {
+    const ctx = buildCtx();
+    // minuta borrador + personal + firma
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([BASE_MINUTA]) // lectura minuta
-      .mockResolvedValueOnce([]); // sin minutas firmadas previas → prev_hash = 000...
+      .mockResolvedValueOnce([BASE_MINUTA])       // lectura minuta
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // personal_salud lookup
+      .mockResolvedValueOnce([FIRMA_ROW]);          // firma_electronica lookup
+
+    argon2VerifyMock.mockResolvedValue(false); // PIN incorrecto
 
     const caller = comiteEceRouter.createCaller(ctx as never);
-    const result = await caller.firmar({
-      id: MINUTA_ID,
-      firmaPresidenteId: FIRMA_ID,
-    });
+    await expect(
+      caller.firmar({ id: MINUTA_ID, pin: "123456" }),
+    ).rejects.toThrowError(TRPCError);
+  });
+
+  it("firma correctamente con PIN válido — calcula hash chain", async () => {
+    const ctx = buildCtx();
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([BASE_MINUTA])         // lectura minuta
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // personal_salud lookup
+      .mockResolvedValueOnce([FIRMA_ROW])            // firma_electronica lookup
+      .mockResolvedValueOnce([]);                    // sin minutas firmadas previas
+
+    argon2VerifyMock.mockResolvedValue(true); // PIN correcto
+
+    const caller = comiteEceRouter.createCaller(ctx as never);
+    const result = await caller.firmar({ id: MINUTA_ID, pin: "123456" });
 
     expect(result.ok).toBe(true);
-    // payload_hash y chain_hash deben ser strings hex de 64 caracteres
     expect(result.payloadHash).toMatch(/^[0-9a-f]{64}$/);
     expect(result.chainHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("lanza UNAUTHORIZED cuando cuenta está bloqueada (locked_until futuro)", async () => {
+    const ctx = buildCtx();
+    const lockedFirma = {
+      ...FIRMA_ROW,
+      locked_until: new Date(Date.now() + 15 * 60_000), // 15 min futuro
+    };
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([BASE_MINUTA])
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+      .mockResolvedValueOnce([lockedFirma]);
+
+    const caller = comiteEceRouter.createCaller(ctx as never);
+    const err = await caller.firmar({ id: MINUTA_ID, pin: "123456" }).catch((e) => e);
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe("UNAUTHORIZED");
   });
 
   it("lanza NOT_FOUND cuando minuta no existe", async () => {
@@ -189,7 +257,7 @@ describe("comiteEceRouter.firmar", () => {
 
     const caller = comiteEceRouter.createCaller(ctx as never);
     await expect(
-      caller.firmar({ id: MINUTA_ID, firmaPresidenteId: FIRMA_ID }),
+      caller.firmar({ id: MINUTA_ID, pin: "123456" }),
     ).rejects.toThrow(TRPCError);
   });
 
@@ -200,7 +268,7 @@ describe("comiteEceRouter.firmar", () => {
 
     const caller = comiteEceRouter.createCaller(ctx as never);
     await expect(
-      caller.firmar({ id: MINUTA_ID, firmaPresidenteId: FIRMA_ID }),
+      caller.firmar({ id: MINUTA_ID, pin: "123456" }),
     ).rejects.toThrow(TRPCError);
   });
 
@@ -209,18 +277,17 @@ describe("comiteEceRouter.firmar", () => {
     const prevChainHash = "a".repeat(64);
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce([BASE_MINUTA])
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+      .mockResolvedValueOnce([FIRMA_ROW])
       .mockResolvedValueOnce([{ chain_hash: prevChainHash }]);
 
+    argon2VerifyMock.mockResolvedValue(true);
+
     const caller = comiteEceRouter.createCaller(ctx as never);
-    const result = await caller.firmar({
-      id: MINUTA_ID,
-      firmaPresidenteId: FIRMA_ID,
-    });
+    const result = await caller.firmar({ id: MINUTA_ID, pin: "123456" });
 
     expect(result.ok).toBe(true);
-    // Chain hash debe ser SHA-256(prevChainHash + payloadHash) — distinto de la primera vez
     expect(result.chainHash).toMatch(/^[0-9a-f]{64}$/);
-    // No puede ser igual al prevChainHash (es SHA-256 de dos hashes concatenados)
     expect(result.chainHash).not.toBe(prevChainHash);
   });
 });

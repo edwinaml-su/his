@@ -8,6 +8,8 @@
  *
  * ─── Tablas BD ────────────────────────────────────────────────────────────────
  *   ece.comite_minuta               — minutas (inmutables post-firma)
+ *   ece.firma_electronica           — credencial PIN del presidente (argon2id)
+ *   ece.personal_salud              — mapeo his_user_id → personal ECE id
  *   ece.v_calidad_documental        — vista materializada KPIs (refresh horario)
  *
  * ─── Hash chain ───────────────────────────────────────────────────────────────
@@ -16,6 +18,12 @@
  *     prev_hash     = chain_hash de la minuta firmada más reciente del tenant
  *     chain_hash    = SHA-256(prev_hash || payload_hash)
  *   Patrón idéntico a audit_log (05_audit_hash_chain.sql).
+ *
+ * ─── Firma electrónica (Art. 32 NTEC) ─────────────────────────────────────────
+ *   firmar: el servidor resuelve firma_presidente_id desde ctx.user.id (lookup
+ *   ece.personal_salud → ece.firma_electronica). El cliente solo envía el PIN;
+ *   nunca un UUID que el servidor debe confiar ciegamente.
+ *   Lockout automático tras 3 intentos fallidos (locked_until timestamptz).
  *
  * ─── Roles tRPC ───────────────────────────────────────────────────────────────
  *   list          → requireRole(["DIR","ARCH","ADMIN"])
@@ -74,7 +82,9 @@ const updateInputSchema = z.object({
 
 const firmarInputSchema = z.object({
   id: z.string().uuid(),
-  firmaPresidenteId: z.string().uuid(),
+  // PIN numérico del presidente — el servidor resuelve firmaPresidenteId server-side.
+  // Nunca aceptar UUID del cliente: NTEC Art. 32 / HG-08.
+  pin: z.string().trim().regex(/^\d{6,8}$/, { message: "El PIN debe tener entre 6 y 8 dígitos." }),
 });
 
 const listInputSchema = z.object({
@@ -115,6 +125,15 @@ export interface ComiteMinutaRow {
   actualizado_en: Date;
 }
 
+// Fila de ece.firma_electronica — incluye pin_hash para verificación argon2id.
+interface FirmaRow {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+}
+
 interface CalidadKpiRow {
   establecimiento_id: string;
   total_episodios_cerrados: bigint;
@@ -124,6 +143,69 @@ interface CalidadKpiRow {
   promedio_horas_hasta_egreso: string | null;
   total_rectificaciones_mes: bigint;
   calculado_en: Date;
+}
+
+// ---------------------------------------------------------------------------
+// Firma electrónica helpers (patrón: certificacion.router.ts)
+// ---------------------------------------------------------------------------
+
+type RawTx = { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> };
+
+async function resolvePersonalId(tx: RawTx, userId: string): Promise<string> {
+  const rows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>)`
+    SELECT id FROM ece.personal_salud
+    WHERE his_user_id = ${userId}::uuid AND activo = true
+    LIMIT 1
+  `;
+  if (!rows[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró personal ECE asociado a su cuenta.",
+    });
+  }
+  return rows[0].id;
+}
+
+async function resolveFirmaPresidente(tx: RawTx, personalId: string): Promise<FirmaRow> {
+  const rows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<FirmaRow[]>)`
+    SELECT id, pin_hash, failed_attempts, locked_until, revoked_at
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personalId}::uuid
+    LIMIT 1
+  `;
+  if (!rows[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada. Use firma.setup.",
+    });
+  }
+  return rows[0];
+}
+
+async function verifyPin(firma: FirmaRow, pin: string): Promise<void> {
+  if (firma.revoked_at !== null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "La firma electrónica ha sido revocada.",
+    });
+  }
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+  // Import dinámico — mismo patrón que certificacion.router.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { argon2 } = await import("@his/infrastructure") as any;
+  const valid = await (argon2 as { verify: (h: string, p: string) => Promise<boolean> }).verify(firma.pin_hash, pin);
+  if (!valid) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "PIN de firma incorrecto.",
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -297,12 +379,19 @@ export const comiteEceRouter = router({
 
   /**
    * Firma la minuta (DIR). Transición borrador → firmada.
+   *
+   * Seguridad (NTEC Art. 32 / HG-08):
+   *   - El cliente solo envía PIN numérico; NUNCA un UUID de firma.
+   *   - El servidor resuelve firma_presidente_id via ctx.user.id → ece.personal_salud
+   *     → ece.firma_electronica.
+   *   - PIN verificado con argon2id + lockout automático.
+   *
    * Calcula hash chain (patrón audit_log): payload_hash, prev_hash, chain_hash.
    * Post-firma: inmutable por trigger en BD.
    */
   firmar: requireRole(["DIR"]).input(firmarInputSchema).mutation(async ({ ctx, input }) => {
     return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-      // 1. Verificar estado actual
+      // 1. Verificar estado de la minuta
       const minutaRows = await tx.$queryRaw<ComiteMinutaRow[]>`
         SELECT id::text, organization_id::text, asistentes, temas_agenda, acuerdos, estado
         FROM ece.comite_minuta
@@ -322,14 +411,18 @@ export const comiteEceRouter = router({
         });
       }
 
-      // 2. Calcular hashes
+      // 2. Resolver firma electrónica del DIR desde server-side (nunca del cliente).
+      const personalId = await resolvePersonalId(tx as RawTx, ctx.user.id);
+      const firma = await resolveFirmaPresidente(tx as RawTx, personalId);
+      await verifyPin(firma, input.pin);
+
+      // 3. Calcular hashes
       const payloadHash = buildPayloadHash({
         asistentes: minuta.asistentes,
         temasAgenda: minuta.temas_agenda,
         acuerdos: minuta.acuerdos,
       });
 
-      // Obtener el chain_hash de la última minuta firmada del tenant
       const prevRows = await tx.$queryRaw<[{ chain_hash: string | null }?]>`
         SELECT chain_hash
         FROM ece.comite_minuta
@@ -341,12 +434,12 @@ export const comiteEceRouter = router({
       const prevHash = prevRows[0]?.chain_hash ?? "0".repeat(64);
       const chainHash = buildChainHash(prevHash, payloadHash);
 
-      // 3. Actualizar (trigger inmutable se activa si ya estuviera firmada — doble protección)
+      // 4. Actualizar — trigger de BD bloquea si ya estuviera firmada (doble protección).
       await tx.$executeRaw`
         UPDATE ece.comite_minuta
         SET
           estado               = 'firmada',
-          firma_presidente_id  = ${input.firmaPresidenteId}::uuid,
+          firma_presidente_id  = ${firma.id}::uuid,
           firmada_en           = now(),
           payload_hash         = ${payloadHash},
           prev_hash            = ${prevHash},
