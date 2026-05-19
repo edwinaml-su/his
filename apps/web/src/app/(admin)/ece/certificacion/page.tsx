@@ -13,6 +13,7 @@
  *       ámbar  3-7 días   — próximo a vencer
  *       rojo   > 7 días   — urgente
  *   - Bulk select: seleccionar múltiples documentos y certificar con un PIN único
+ *     (usa certificarBulk — todos los documentos se procesan, no solo el primero)
  */
 
 import * as React from "react";
@@ -60,6 +61,12 @@ type DocumentoItem = {
   creadoEn: string;
   ultimoCambioEn: string;
   servicioNombre?: string | null;
+};
+
+type BulkProgress = {
+  done: number;
+  total: number;
+  errors: Array<{ instanciaId: string; error: string }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -122,12 +129,14 @@ function CertificarDialog({
   onClose,
   onConfirm,
   isPending,
+  bulkProgress,
 }: {
   open: boolean;
   count: number;
   onClose: () => void;
   onConfirm: (pin: string) => void;
   isPending: boolean;
+  bulkProgress: BulkProgress | null;
 }) {
   const [pin, setPin] = React.useState("");
   const [pinError, setPinError] = React.useState<string | null>(null);
@@ -147,6 +156,12 @@ function CertificarDialog({
     setPinError(null);
     onConfirm(pin);
   }
+
+  const isBulk = count > 1;
+  const progressPct =
+    bulkProgress && bulkProgress.total > 0
+      ? Math.round((bulkProgress.done / bulkProgress.total) * 100)
+      : 0;
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -189,6 +204,36 @@ function CertificarDialog({
           )}
         </div>
 
+        {/* Barra de progreso bulk */}
+        {isBulk && bulkProgress && (
+          <div className="space-y-1" role="status" aria-live="polite">
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Progreso</span>
+              <span>{bulkProgress.done} / {bulkProgress.total}</span>
+            </div>
+            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full bg-[#1a3c6e] transition-all duration-300"
+                style={{ width: `${progressPct}%` }}
+                aria-valuenow={bulkProgress.done}
+                aria-valuemin={0}
+                aria-valuemax={bulkProgress.total}
+                role="progressbar"
+                aria-label={`Certificando: ${bulkProgress.done} de ${bulkProgress.total}`}
+              />
+            </div>
+            {bulkProgress.errors.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-xs text-destructive" role="list" aria-label="Documentos con error">
+                {bulkProgress.errors.map((e) => (
+                  <li key={e.instanciaId}>
+                    Doc {e.instanciaId.slice(0, 8)}…: {e.error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isPending}>
             Cancelar
@@ -199,7 +244,11 @@ function CertificarDialog({
             className="bg-[#1a3c6e] hover:bg-[#15305a] text-white"
             aria-busy={isPending}
           >
-            {isPending ? "Certificando…" : "Certificar"}
+            {isPending
+              ? isBulk
+                ? `Certificando ${bulkProgress?.done ?? 0}/${count}…`
+                : "Certificando…"
+              : "Certificar"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -332,6 +381,8 @@ export default function CertificacionDirPage() {
   const [bulkMode, setBulkMode] = React.useState(false);
   const [dialogDoc, setDialogDoc] = React.useState<DocumentoItem | null>(null);
   const [mutationError, setMutationError] = React.useState<string | null>(null);
+  const [bulkProgress, setBulkProgress] = React.useState<BulkProgress | null>(null);
+  const [submitting, setSubmitting] = React.useState(false);
 
   const colaQuery = trpc.eceCertificacion.listCola.useQuery({ incluirCertificados });
 
@@ -349,6 +400,36 @@ export default function CertificacionDirPage() {
     },
   });
 
+  const certificarBulkMutation = trpc.eceCertificacion.certificarBulk.useMutation({
+    onSuccess: (data) => {
+      setBulkProgress({
+        done: data.exitosos.length,
+        total: data.exitosos.length + data.fallidos.length,
+        errors: data.fallidos,
+      });
+      setSubmitting(false);
+
+      if (data.fallidos.length === 0) {
+        // Todos exitosos — cerrar dialog y refrescar.
+        setDialogOpen(false);
+        setSelected(new Set());
+        setBulkMode(false);
+        setBulkProgress(null);
+        setMutationError(null);
+      } else {
+        // Hubo errores parciales — mantener dialog abierto con resumen.
+        setMutationError(
+          `${data.exitosos.length} certificado(s) correctamente. ${data.fallidos.length} con error (ver detalle abajo).`,
+        );
+      }
+      colaQuery.refetch();
+    },
+    onError: (err: { message: string }) => {
+      setSubmitting(false);
+      setMutationError(err.message ?? "Error al certificar en bulk. Verifique su PIN.");
+    },
+  });
+
   const documentos: DocumentoItem[] = colaQuery.data?.items ?? [];
 
   // Filtrar por servicio
@@ -361,6 +442,8 @@ export default function CertificacionDirPage() {
     : documentos;
 
   const pendientes = documentosFiltrados.filter((d) => d.estadoCodigo !== "certificado");
+
+  const isPending = submitting || certificarMutation.isPending || certificarBulkMutation.isPending;
 
   function handleToggleSelect(id: string) {
     setSelected((prev) => {
@@ -384,6 +467,7 @@ export default function CertificacionDirPage() {
     setDialogDoc(doc);
     setBulkMode(false);
     setMutationError(null);
+    setBulkProgress(null);
     setDialogOpen(true);
   }
 
@@ -392,26 +476,25 @@ export default function CertificacionDirPage() {
     setBulkMode(true);
     setDialogDoc(null);
     setMutationError(null);
+    setBulkProgress(null);
     setDialogOpen(true);
   }
 
   function handleCloseDialog() {
-    if (certificarMutation.isPending) return;
+    if (isPending) return;
     setDialogOpen(false);
     setDialogDoc(null);
     setMutationError(null);
+    setBulkProgress(null);
   }
 
   function handleConfirmPin(pin: string) {
     if (bulkMode) {
-      // Certificar en serie — primera iteración; el servidor procesa uno a uno.
-      // Versión simplificada: se dispara la primera, las siguientes en onSuccess
-      // (pattern para bulk real requiere server action o loop — aquí certificamos
-      // solo la primera del set para la versión inicial).
-      const [firstId] = selected;
-      if (firstId) {
-        certificarMutation.mutate({ instanciaId: firstId, pin });
-      }
+      // Usa certificarBulk — el servidor verifica PIN una vez y procesa todos.
+      const instanciaIds = Array.from(selected);
+      setSubmitting(true);
+      setBulkProgress({ done: 0, total: instanciaIds.length, errors: [] });
+      certificarBulkMutation.mutate({ instanciaIds, pin });
     } else if (dialogDoc) {
       certificarMutation.mutate({ instanciaId: dialogDoc.id, pin });
     }
@@ -544,7 +627,7 @@ export default function CertificacionDirPage() {
               selected={selected.has(doc.id)}
               onToggleSelect={handleToggleSelect}
               onCertificar={handleCertificarOne}
-              disabled={certificarMutation.isPending}
+              disabled={isPending}
             />
           ))}
         </div>
@@ -556,7 +639,8 @@ export default function CertificacionDirPage() {
         count={dialogCount}
         onClose={handleCloseDialog}
         onConfirm={handleConfirmPin}
-        isPending={certificarMutation.isPending}
+        isPending={isPending}
+        bulkProgress={bulkMode ? bulkProgress : null}
       />
     </div>
   );
