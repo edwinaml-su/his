@@ -137,8 +137,10 @@ interface ServicioRaw {
 
 // ─── Base procedures ──────────────────────────────────────────────────────────
 
-const readBase = requireRole(["NURSE", "ADM", "PHYSICIAN"]);
-const writeBase = requireRole(["NURSE", "ADM"]);
+// Permitir ADMIN/ADMIN_CLINICO también para mapa de camas (lectura admin).
+// Bug: usuario "ADMIN" recibía 403 porque la guard solo aceptaba "ADM".
+const readBase = requireRole(["NURSE", "ADM", "ADMIN", "ADMIN_CLINICO", "PHYSICIAN", "DIR"]);
+const writeBase = requireRole(["NURSE", "ADM", "ADMIN", "ADMIN_CLINICO"]);
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 
