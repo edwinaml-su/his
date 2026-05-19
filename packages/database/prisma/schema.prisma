@@ -5338,19 +5338,28 @@ model EceEpicrisisEgreso {
 }
 
 /// 3.16 Certificado de Defuncion — HISTORICO, inmutable
+/// Columnas workflow agregadas en S2-Tier4 (B-01, NTEC Art. 40): estado_workflow,
+/// firmado_en, validado_en, certificado_en, anulado_en, payload_hash, medico_firmante_id.
 model EceCertificadoDefuncion {
-  id                   String   @id @default(uuid()) @db.Uuid
-  instanciaId          String?  @map("instancia_id") @db.Uuid
-  episodioId           String   @map("episodio_id") @db.Uuid
-  pacienteId           String?  @map("paciente_id") @db.Uuid
-  epicrisisId          String   @map("epicrisis_id") @db.Uuid
-  fechaHoraDefuncion   DateTime @map("fecha_hora_defuncion") @db.Timestamptz()
-  causaBasicaCie10     String   @map("causa_basica_cie10") @db.VarChar(10)
-  causasIntermedias    Json?    @map("causas_intermedias")
-  clasificacion        String   @db.VarChar(30)
+  id                   String    @id @default(uuid()) @db.Uuid
+  instanciaId          String?   @map("instancia_id") @db.Uuid
+  episodioId           String    @map("episodio_id") @db.Uuid
+  pacienteId           String?   @map("paciente_id") @db.Uuid
+  epicrisisId          String    @map("epicrisis_id") @db.Uuid
+  fechaHoraDefuncion   DateTime  @map("fecha_hora_defuncion") @db.Timestamptz()
+  causaBasicaCie10     String    @map("causa_basica_cie10") @db.VarChar(10)
+  causasIntermedias    Json?     @map("causas_intermedias")
+  clasificacion        String    @db.VarChar(30)
   data                 Json?
-  medicoCertificanteId String   @map("medico_certificante") @db.Uuid
-  registradoEn         DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
+  medicoCertificanteId String    @map("medico_certificante") @db.Uuid
+  registradoEn         DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoWorkflow       String    @default("borrador") @map("estado_workflow")
+  firmadoEn            DateTime? @map("firmado_en") @db.Timestamptz()
+  validadoEn           DateTime? @map("validado_en") @db.Timestamptz()
+  certificadoEn        DateTime? @map("certificado_en") @db.Timestamptz()
+  anuladoEn            DateTime? @map("anulado_en") @db.Timestamptz()
+  payloadHash          String?   @map("payload_hash")
+  medicoFirmanteId     String?   @map("medico_firmante_id") @db.Uuid
 
   episodio           EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   epicrisis          EceEpicrisisEgreso  @relation(fields: [epicrisisId], references: [id])

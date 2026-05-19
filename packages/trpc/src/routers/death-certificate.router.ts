@@ -33,37 +33,22 @@ import {
   deathCertificateNotifyCivilRegistrySchema,
   deathCertificateGetSchema,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 
 const ICD10_SYSTEM_CODES = ["ICD-10", "ICD10", "CIE-10", "CIE10"] as const;
 
-const PHYSICIAN_ROLE_CODES = ["PHYSICIAN", "medico", "MEDICO"];
-const ADMIN_ROLE_CODES = ["ADMIN", "admin", "super_admin"];
-
-function hasPhysicianRole(roleCodes: string[]): boolean {
-  return roleCodes.some((r) => PHYSICIAN_ROLE_CODES.includes(r));
-}
-
-function hasAdminRole(roleCodes: string[]): boolean {
-  return roleCodes.some((r) => ADMIN_ROLE_CODES.includes(r));
-}
+// B-05: requireRole reemplaza comprobación JS hasPhysicianRole/hasAdminRole.
+const physicianProc = requireRole(["PHYSICIAN"]);
+const physicianOrAdminProc = requireRole(["PHYSICIAN", "ADMIN"]);
 
 export const deathCertificateRouter = router({
   /**
    * Crea el certificado de defunción + cierra encounter + libera cama.
-   * Sólo PHYSICIAN puede certificar.
+   * B-05: requireRole(["PHYSICIAN"]) — reemplaza comprobación JS manual.
    */
-  create: tenantProcedure
+  create: physicianProc
     .input(deathCertificateCreateSchema)
     .mutation(async ({ ctx, input }) => {
-      // 1) Permisos: sólo médicos certifican.
-      if (!hasPhysicianRole(ctx.tenant.roleCodes)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Solo personal con rol médico (PHYSICIAN) puede emitir un certificado de defunción.",
-        });
-      }
       if (!ctx.tenant.establishmentId) {
         throw new TRPCError({
           code: "FORBIDDEN",
@@ -250,18 +235,9 @@ export const deathCertificateRouter = router({
     }),
 
   /** Lectura individual para el visor. */
-  get: tenantProcedure
+  get: physicianOrAdminProc
     .input(deathCertificateGetSchema)
     .query(async ({ ctx, input }) => {
-      if (
-        !hasPhysicianRole(ctx.tenant.roleCodes) &&
-        !hasAdminRole(ctx.tenant.roleCodes)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Acceso restringido a personal médico o administrativo.",
-        });
-      }
       const cert = await ctx.prisma.deathCertificate.findFirst({
         where: {
           id: input.id,
@@ -298,18 +274,9 @@ export const deathCertificateRouter = router({
   /**
    * Listado paginado de certificados emitidos. Sólo PHYSICIAN o ADMIN.
    */
-  list: tenantProcedure
+  list: physicianOrAdminProc
     .input(deathCertificateListSchema)
     .query(async ({ ctx, input }) => {
-      if (
-        !hasPhysicianRole(ctx.tenant.roleCodes) &&
-        !hasAdminRole(ctx.tenant.roleCodes)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Acceso restringido a personal médico o administrativo.",
-        });
-      }
       const where = {
         organizationId: input.organizationId ?? ctx.tenant.organizationId,
         ...(input.manner ? { manner: input.manner } : {}),
@@ -380,18 +347,9 @@ export const deathCertificateRouter = router({
    * Stub: marca el certificado como notificado al Registro Civil.
    * TODO Sprint 6: integración real con web service del RNPN.
    */
-  notifyCivilRegistry: tenantProcedure
+  notifyCivilRegistry: physicianOrAdminProc
     .input(deathCertificateNotifyCivilRegistrySchema)
     .mutation(async ({ ctx, input }) => {
-      if (
-        !hasPhysicianRole(ctx.tenant.roleCodes) &&
-        !hasAdminRole(ctx.tenant.roleCodes)
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Acceso restringido a personal médico o administrativo.",
-        });
-      }
       const cert = await ctx.prisma.deathCertificate.findFirst({
         where: {
           id: input.certificateId,

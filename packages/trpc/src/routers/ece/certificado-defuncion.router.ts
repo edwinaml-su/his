@@ -10,17 +10,17 @@
  * WORKFLOW  (CERT_DEF — triple firma con PIN)
  * ---------------------------------------------------------------------------
  *   borrador  → firmado     (MC / PHYSICIAN: firma con PIN argon2id verificado)
- *   firmado   → validado    (MC / PHYSICIAN: revisión y validación clínica)
+ *   firmado   → validado    (MC / PHYSICIAN: validación clínica con PIN argon2id — B-03)
  *   validado  → certificado (DIR: certificación formal con PIN argon2id)
  *   cualquiera→ anulado     (DIR: solo si estado != certificado)
  *
- *   INMUTABILIDAD: trigger `trg_certdef_inmutable` en BD bloquea cualquier
+ *   INMUTABILIDAD: trigger `trg_bloquea_certdef` en BD bloquea cualquier
  *   UPDATE o DELETE sobre ece.certificado_defuncion una vez estado = 'firmado'.
  *   El PIN se verifica contra ece.firma_electronica.pin_hash (argon2id) con
  *   lockout automático tras 3 intentos fallidos (locked_until timestamptz).
  *
  * ---------------------------------------------------------------------------
- * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
+ * OUTBOX (emitDomainEvent dentro de withWorkflowContext — B-02)
  * ---------------------------------------------------------------------------
  *   'ece.certificado_defuncion.firmado'      — emitido por firmar().
  *     Payload: { certDefId, pacienteId, medicoId, payloadHash, orgId }
@@ -35,7 +35,7 @@
  *   ece.certificado_defuncion   — fila principal: paciente_id, medico_id,
  *                                 fecha_hora_muerte, causa_directa_cie10,
  *                                 causas_intermedias_cie10 (JSONB), causa_fundamental_cie10,
- *                                 muerte_violenta bool, estado, payload_hash
+ *                                 muerte_violenta bool, estado_workflow, payload_hash
  *   ece.firma_electronica       — credencial de firma: pin_hash, failed_attempts,
  *                                 locked_until (lockout tras 3 intentos)
  *   ece.personal_salud          — mapeo his_user_id → personal ECE id
@@ -46,7 +46,7 @@
  *   list, get   → requireRole(["MC","PHYSICIAN","DIR"])
  *   create      → requireRole(["MC","PHYSICIAN"])
  *   firmar      → requireRole(["MC","PHYSICIAN"])  — requiere PIN
- *   validar     → requireRole(["MC","PHYSICIAN"])
+ *   validar     → requireRole(["MC","PHYSICIAN"])  — requiere PIN (B-03)
  *   certificar  → requireRole(["DIR"])             — requiere PIN
  *   anular      → requireRole(["DIR"])
  */
@@ -54,11 +54,12 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
-import { emitDomainEvent } from "@his/database";
+import { withWorkflowContext, type EceContext } from "../../workflow/context";
+import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
+import { argon2 } from "@his/infrastructure";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Schemas Zod (inline — patrón establecido en routers ECE)
-// La fuente de verdad está en packages/contracts/src/schemas/ece-certificado-defuncion.ts
+// Schemas Zod
 // ──────────────────────────────────────────────────────────────────────────────
 
 const cie10Schema = z
@@ -87,6 +88,7 @@ const getCertDefInput = z.object({ id: z.string().uuid() });
 
 const createCertDefInput = z.object({
   episodioId: z.string().uuid(),
+  epicrisisId: z.string().uuid(),
   fechaHoraDefuncion: z.coerce.date(),
   lugarDefuncion: z.enum(["intrahospitalaria", "extrahospitalaria"]),
   causaPrincipalCie10: cie10Schema,
@@ -102,8 +104,10 @@ const firmarCertDefInput = z.object({
   pin: pinSchema,
 });
 
+// B-03: validar requiere PIN del Director Médico para no-repudio.
 const validarCertDefInput = z.object({
   id: z.string().uuid(),
+  firmaPin: pinSchema,
   observacion: z.string().trim().max(1_000).optional(),
 });
 
@@ -124,6 +128,7 @@ const anularCertDefInput = z.object({
 export interface CertDefRow {
   id: string;
   episodio_id: string;
+  epicrisis_id: string;
   paciente_id: string | null;
   fecha_hora_defuncion: Date;
   lugar_defuncion: string;
@@ -157,10 +162,11 @@ interface PersonalRow {
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-function withEceContext(ctx: {
+/** Construye el EceContext para withWorkflowContext — sustituye withEceContext local (B-02). */
+function buildEceCtx(ctx: {
   user: { id: string };
   tenant: { organizationId: string; establishmentId?: string; roleCodes: string[] };
-}) {
+}): EceContext {
   if (!ctx.tenant.establishmentId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -169,7 +175,6 @@ function withEceContext(ctx: {
   }
   return {
     personalId: ctx.user.id,
-    organizationId: ctx.tenant.organizationId,
     establecimientoId: ctx.tenant.establishmentId,
     roles: ctx.tenant.roleCodes,
   };
@@ -220,7 +225,6 @@ async function verifyPin(firma: PersonalRow, pin: string): Promise<void> {
       message: `Firma bloqueada por intentos fallidos. Inténtelo en ${mins} min.`,
     });
   }
-  const { argon2 } = await import("@his/infrastructure");
   const valid = await argon2.verify(firma.pin_hash, pin);
   if (!valid) {
     throw new TRPCError({
@@ -268,7 +272,7 @@ export const eceCertDefRouter = router({
    * Ordenados por fecha de defunción DESC.
    */
   list: readProc.input(listCertDefInput).query(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
     const offset = (input.page - 1) * input.pageSize;
 
     const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
@@ -317,7 +321,7 @@ export const eceCertDefRouter = router({
    * Retorna un certificado extendido con datos de paciente y episodio.
    */
   get: readProc.input(getCertDefInput).query(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
     const rows = await ctx.prisma.$queryRaw<
       (CertDefRow & {
@@ -351,93 +355,118 @@ export const eceCertDefRouter = router({
   /**
    * Crea un certificado de defunción en estado 'borrador'.
    * Solo MC/PHYSICIAN. 1:1 con episodio (UNIQUE en episodio_id).
+   * B-04: valida que la epicrisis referenciada tenga tipo_egreso = 'fallecido'.
    */
   create: mcProc.input(createCertDefInput).mutation(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
-    // Resolver personal_salud vinculado al usuario HIS.
-    const personalRows = await ctx.prisma.$queryRaw<[{ id: string }?]>`
-      SELECT id::text
-      FROM ece.personal_salud
-      WHERE his_user_id = ${ece.personalId}::uuid AND activo = true
-      LIMIT 1
-    `;
-    if (!personalRows[0]) {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message: "El usuario no tiene un registro de personal de salud activo en ECE.",
-      });
-    }
-    const medicoPersonalId = personalRows[0].id;
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
+      // Resolver personal_salud vinculado al usuario HIS.
+      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
+        SELECT id::text
+        FROM ece.personal_salud
+        WHERE his_user_id = ${ece.personalId}::uuid AND activo = true
+        LIMIT 1
+      `;
+      if (!personalRows[0]) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "El usuario no tiene un registro de personal de salud activo en ECE.",
+        });
+      }
+      const medicoPersonalId = personalRows[0].id;
 
-    // Verificar unicidad 1:1 por episodio.
-    const existing = await ctx.prisma.$queryRaw<[{ id: string }?]>`
-      SELECT id::text
-      FROM ece.certificado_defuncion
-      WHERE episodio_id = ${input.episodioId}::uuid
-        AND estado_workflow != 'anulado'
-      LIMIT 1
-    `;
-    if (existing[0]) {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "Ya existe un certificado de defunción activo para este episodio.",
-      });
-    }
+      // B-04: verificar que la epicrisis tenga tipo_egreso = 'fallecido'.
+      const epicrisisRows = await tx.$queryRaw<[{ tipo_egreso: string }?]>`
+        SELECT tipo_egreso
+        FROM ece.epicrisis_egreso
+        WHERE id = ${input.epicrisisId}::uuid
+        LIMIT 1
+      `;
+      if (!epicrisisRows[0]) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Epicrisis no encontrada: ${input.epicrisisId}`,
+        });
+      }
+      if (epicrisisRows[0].tipo_egreso !== "fallecido") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "epicrisis_no_es_fallecido: solo se puede certificar defunción vinculada a epicrisis con egreso 'fallecido'.",
+        });
+      }
 
-    // Obtener paciente_id desde el episodio.
-    const episodioRows = await ctx.prisma.$queryRaw<[{ paciente_id: string }?]>`
-      SELECT paciente_id::text
-      FROM ece.episodio_atencion
-      WHERE id = ${input.episodioId}::uuid
-        AND establecimiento_id = ${ece.establecimientoId}::uuid
-      LIMIT 1
-    `;
-    if (!episodioRows[0]) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: `Episodio no encontrado o no pertenece al establecimiento: ${input.episodioId}`,
-      });
-    }
-    const pacienteId = episodioRows[0].paciente_id;
+      // Verificar unicidad 1:1 por episodio.
+      const existing = await tx.$queryRaw<[{ id: string }?]>`
+        SELECT id::text
+        FROM ece.certificado_defuncion
+        WHERE episodio_id = ${input.episodioId}::uuid
+          AND estado_workflow != 'anulado'
+        LIMIT 1
+      `;
+      if (existing[0]) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Ya existe un certificado de defunción activo para este episodio.",
+        });
+      }
 
-    const causasJson = JSON.stringify(input.causasIntermediasCie10);
-    const fechaDefuncion = input.fechaHoraDefuncion.toISOString();
+      // Obtener paciente_id desde el episodio.
+      const episodioRows = await tx.$queryRaw<[{ paciente_id: string }?]>`
+        SELECT paciente_id::text
+        FROM ece.episodio_atencion
+        WHERE id = ${input.episodioId}::uuid
+          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        LIMIT 1
+      `;
+      if (!episodioRows[0]) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Episodio no encontrado o no pertenece al establecimiento: ${input.episodioId}`,
+        });
+      }
+      const pacienteId = episodioRows[0].paciente_id;
 
-    const rows = await ctx.prisma.$queryRaw<[{ id: string }]>`
-      INSERT INTO ece.certificado_defuncion (
-        episodio_id,
-        paciente_id,
-        establecimiento_id,
-        fecha_hora_defuncion,
-        lugar_defuncion,
-        causa_principal_cie10,
-        causas_intermedias_cie10,
-        causa_basica_cie10,
-        manera,
-        autopsia_realizada,
-        observaciones,
-        medico_certificante,
-        estado_workflow
-      ) VALUES (
-        ${input.episodioId}::uuid,
-        ${pacienteId}::uuid,
-        ${ece.establecimientoId}::uuid,
-        ${fechaDefuncion}::timestamptz,
-        ${input.lugarDefuncion},
-        ${input.causaPrincipalCie10},
-        ${causasJson}::jsonb,
-        ${input.causaBasicaCie10},
-        ${input.manera},
-        ${input.autopsiaRealizada},
-        ${input.observaciones ?? null},
-        ${medicoPersonalId}::uuid,
-        'borrador'
-      )
-      RETURNING id::text
-    `;
+      const causasJson = JSON.stringify(input.causasIntermediasCie10);
+      const fechaDefuncion = input.fechaHoraDefuncion.toISOString();
 
-    return { id: rows[0]!.id };
+      const rows = await tx.$queryRaw<[{ id: string }]>`
+        INSERT INTO ece.certificado_defuncion (
+          episodio_id,
+          epicrisis_id,
+          paciente_id,
+          establecimiento_id,
+          fecha_hora_defuncion,
+          lugar_defuncion,
+          causa_principal_cie10,
+          causas_intermedias_cie10,
+          causa_basica_cie10,
+          manera,
+          autopsia_realizada,
+          observaciones,
+          medico_certificante,
+          estado_workflow
+        ) VALUES (
+          ${input.episodioId}::uuid,
+          ${input.epicrisisId}::uuid,
+          ${pacienteId}::uuid,
+          ${ece.establecimientoId}::uuid,
+          ${fechaDefuncion}::timestamptz,
+          ${input.lugarDefuncion},
+          ${input.causaPrincipalCie10},
+          ${causasJson}::jsonb,
+          ${input.causaBasicaCie10},
+          ${input.manera},
+          ${input.autopsiaRealizada},
+          ${input.observaciones ?? null},
+          ${medicoPersonalId}::uuid,
+          'borrador'
+        )
+        RETURNING id::text
+      `;
+
+      return { id: rows[0]!.id };
+    });
   }),
 
   /**
@@ -446,9 +475,9 @@ export const eceCertDefRouter = router({
    * Emite outbox `ece.certificado_defuncion.firmado`.
    */
   firmar: mcProc.input(firmarCertDefInput).mutation(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
-    return ctx.prisma.$transaction(async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       // Leer y bloquear el registro.
       const rows = await tx.$queryRaw<CertDefRow[]>`
         SELECT * FROM ece.certificado_defuncion
@@ -486,8 +515,8 @@ export const eceCertDefRouter = router({
       `;
 
       // Outbox transaccional.
-      await emitDomainEvent(tx, {
-        organizationId: ece.organizationId,
+      await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
+        organizationId: ctx.tenant.organizationId,
         eventType: "ece.certificado_defuncion.firmado",
         aggregateType: "CertificadoDefuncion",
         aggregateId: input.id,
@@ -507,37 +536,45 @@ export const eceCertDefRouter = router({
 
   /**
    * MC valida el certificado (firmado → validado).
-   * No requiere PIN (segunda revisión del mismo MC o de otro con rol MC).
+   * B-03: requiere PIN del validador para trazabilidad de identidad (no-repudio).
+   * El validador puede ser diferente al firmante (segunda revisión clínica).
    */
   validar: mcProc.input(validarCertDefInput).mutation(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
-      SELECT * FROM ece.certificado_defuncion
-      WHERE id = ${input.id}::uuid
-        AND establecimiento_id = ${ece.establecimientoId}::uuid
-      LIMIT 1
-    `;
-    const cert = rows[0];
-    if (!cert) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Certificado no encontrado." });
-    }
-    if (cert.estado_workflow !== "firmado") {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: `Para validar se requiere estado firmado. Estado actual: ${cert.estado_workflow}.`,
-      });
-    }
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
+      const rows = await tx.$queryRaw<CertDefRow[]>`
+        SELECT * FROM ece.certificado_defuncion
+        WHERE id = ${input.id}::uuid
+          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        FOR UPDATE
+        LIMIT 1
+      `;
+      const cert = rows[0];
+      if (!cert) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Certificado no encontrado." });
+      }
+      if (cert.estado_workflow !== "firmado") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Para validar se requiere estado firmado. Estado actual: ${cert.estado_workflow}.`,
+        });
+      }
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.certificado_defuncion
-      SET estado_workflow = 'validado',
-          validado_en     = now()
-      WHERE id = ${input.id}::uuid
-        AND estado_workflow = 'firmado'
-    `;
+      // B-03: verificar PIN del validador (Director Médico o MC con rol validador).
+      const personal = await resolvePersonal(tx, ece.personalId);
+      await verifyPin(personal, input.firmaPin);
 
-    return { ok: true as const, estado: "validado" };
+      await tx.$executeRaw`
+        UPDATE ece.certificado_defuncion
+        SET estado_workflow = 'validado',
+            validado_en     = now()
+        WHERE id = ${input.id}::uuid
+          AND estado_workflow = 'firmado'
+      `;
+
+      return { ok: true as const, estado: "validado" };
+    });
   }),
 
   /**
@@ -546,9 +583,9 @@ export const eceCertDefRouter = router({
    * Emite outbox `ece.certificado_defuncion.certificado`.
    */
   certificar: dirProc.input(certificarCertDefInput).mutation(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
-    return ctx.prisma.$transaction(async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<CertDefRow[]>`
         SELECT * FROM ece.certificado_defuncion
         WHERE id = ${input.id}::uuid
@@ -579,8 +616,8 @@ export const eceCertDefRouter = router({
           AND estado_workflow = 'validado'
       `;
 
-      await emitDomainEvent(tx, {
-        organizationId: ece.organizationId,
+      await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
+        organizationId: ctx.tenant.organizationId,
         eventType: "ece.certificado_defuncion.certificado",
         aggregateType: "CertificadoDefuncion",
         aggregateId: input.id,
@@ -603,38 +640,41 @@ export const eceCertDefRouter = router({
    * Un certificado ya certificado no puede anularse — requiere proceso judicial.
    */
   anular: dirProc.input(anularCertDefInput).mutation(async ({ ctx, input }) => {
-    const ece = withEceContext(ctx);
+    const ece = buildEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
-      SELECT * FROM ece.certificado_defuncion
-      WHERE id = ${input.id}::uuid
-        AND establecimiento_id = ${ece.establecimientoId}::uuid
-      LIMIT 1
-    `;
-    const cert = rows[0];
-    if (!cert) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Certificado no encontrado." });
-    }
-    if (cert.estado_workflow === "certificado") {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "Un certificado ya certificado no puede anularse. Requiere proceso judicial (Art. 21 NTEC).",
-      });
-    }
-    if (cert.estado_workflow === "anulado") {
-      throw new TRPCError({ code: "CONFLICT", message: "El certificado ya está anulado." });
-    }
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
+      const rows = await tx.$queryRaw<CertDefRow[]>`
+        SELECT * FROM ece.certificado_defuncion
+        WHERE id = ${input.id}::uuid
+          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        FOR UPDATE
+        LIMIT 1
+      `;
+      const cert = rows[0];
+      if (!cert) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Certificado no encontrado." });
+      }
+      if (cert.estado_workflow === "certificado") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Un certificado ya certificado no puede anularse. Requiere proceso judicial (Art. 21 NTEC).",
+        });
+      }
+      if (cert.estado_workflow === "anulado") {
+        throw new TRPCError({ code: "CONFLICT", message: "El certificado ya está anulado." });
+      }
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.certificado_defuncion
-      SET estado_workflow  = 'anulado',
-          anulado_en       = now(),
-          motivo_anulacion = ${input.motivoAnulacion}
-      WHERE id = ${input.id}::uuid
-        AND estado_workflow != 'certificado'
-    `;
+      await tx.$executeRaw`
+        UPDATE ece.certificado_defuncion
+        SET estado_workflow  = 'anulado',
+            anulado_en       = now(),
+            motivo_anulacion = ${input.motivoAnulacion}
+        WHERE id = ${input.id}::uuid
+          AND estado_workflow != 'certificado'
+      `;
 
-    return { ok: true as const, estado: "anulado" };
+      return { ok: true as const, estado: "anulado" };
+    });
   }),
 });
