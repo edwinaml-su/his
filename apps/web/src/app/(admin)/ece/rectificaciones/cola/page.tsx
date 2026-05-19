@@ -16,6 +16,7 @@ import {
 } from "@his/ui/components/table";
 import { Badge } from "@his/ui/components/badge";
 import { trpc } from "@/lib/trpc/react";
+import { PinInputModal } from "@/components/firma/pin-input-modal";
 
 // Tipo local para evitar dependencia de @his/contracts que no resuelve en worktrees.
 type RectificacionRow = {
@@ -38,7 +39,15 @@ type RectificacionRow = {
  * Admin ECE — Cola de rectificaciones pendientes para DIR.
  * Requiere documentoInstanciaId por query param.
  *
- * @QA: E2E debe cubrir flujo aprobar y rechazar con rol DIR.
+ * HG-16 (NTEC Art. 42): aprobar y rechazar requieren PIN argon2id del DIR.
+ * El flujo: usuario clickea Aprobar/Rechazar → PinInputModal → PIN enviado
+ * inline en el mutation eceRectificacion.aprobar/.rechazar.
+ *
+ * @QA: E2E debe cubrir:
+ *   - aprobar sin PIN → modal se abre, botón Confirmar disabled
+ *   - aprobar con PIN incorrecto → alert UNAUTHORIZED en el modal
+ *   - aprobar con PIN correcto → fila desaparece de la cola
+ *   - rechazar con PIN correcto + motivo → fila desaparece
  */
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
@@ -46,12 +55,49 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
   timeStyle: "short",
 });
 
+// ---------------------------------------------------------------------------
+// AccionRow — maneja los botones Aprobar/Rechazar con PIN modal.
+// ---------------------------------------------------------------------------
+
+type PinPendingAction =
+  | { kind: "aprobar"; rectId: string }
+  | { kind: "rechazar"; rectId: string; motivo: string };
+
 function AccionRow({ rect, onDone }: { rect: RectificacionRow; onDone: () => void }) {
   const [motivoRechazo, setMotivoRechazo] = React.useState("");
   const [showRechazo, setShowRechazo] = React.useState(false);
+  const [pendingAction, setPendingAction] = React.useState<PinPendingAction | null>(null);
 
-  const aprobar = trpc.eceRectificacion.aprobar.useMutation({ onSuccess: onDone });
-  const rechazar = trpc.eceRectificacion.rechazar.useMutation({ onSuccess: onDone });
+  const aprobar = trpc.eceRectificacion.aprobar.useMutation({
+    onSuccess: () => {
+      setPendingAction(null);
+      onDone();
+    },
+  });
+  const rechazar = trpc.eceRectificacion.rechazar.useMutation({
+    onSuccess: () => {
+      setPendingAction(null);
+      setShowRechazo(false);
+      setMotivoRechazo("");
+      onDone();
+    },
+  });
+
+  const handlePinSubmit = React.useCallback(
+    (pin: string) => {
+      if (!pendingAction) return;
+      if (pendingAction.kind === "aprobar") {
+        aprobar.mutate({ rectificacionId: pendingAction.rectId, pin });
+      } else {
+        rechazar.mutate({
+          rectificacionId: pendingAction.rectId,
+          motivoRechazo: pendingAction.motivo,
+          pin,
+        });
+      }
+    },
+    [pendingAction, aprobar, rechazar],
+  );
 
   if (rect.estado !== "PENDIENTE") {
     return (
@@ -63,66 +109,90 @@ function AccionRow({ rect, onDone }: { rect: RectificacionRow; onDone: () => voi
     );
   }
 
+  const isBusy = aprobar.isPending || rechazar.isPending;
+  const serverError = aprobar.error?.message ?? rechazar.error?.message;
+
   return (
-    <div className="space-y-2">
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          onClick={() => aprobar.mutate({ rectificacionId: rect.id })}
-          disabled={aprobar.isPending || rechazar.isPending}
-          aria-label="Aprobar rectificación"
-        >
-          Aprobar
-        </Button>
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={() => setShowRechazo((v) => !v)}
-          disabled={aprobar.isPending || rechazar.isPending}
-          aria-expanded={showRechazo}
-          aria-label="Rechazar rectificación"
-        >
-          Rechazar
-        </Button>
-      </div>
-      {showRechazo && (
-        <div className="space-y-1.5">
-          <Label htmlFor={`motivo-${rect.id}`}>Motivo del rechazo</Label>
-          <Textarea
-            id={`motivo-${rect.id}`}
-            rows={2}
-            value={motivoRechazo}
-            onChange={(e) => setMotivoRechazo(e.target.value)}
-            placeholder="Mínimo 10 caracteres."
-          />
+    <>
+      {/* HG-16: modal PIN abre antes de ejecutar aprobar/rechazar */}
+      {pendingAction && (
+        <PinInputModal
+          open
+          onClose={() => {
+            setPendingAction(null);
+            aprobar.reset();
+            rechazar.reset();
+          }}
+          action={
+            pendingAction.kind === "aprobar"
+              ? "aprobar rectificación"
+              : "rechazar rectificación"
+          }
+          resource={`Rectificación/${rect.id.slice(0, 8)}`}
+          onSubmit={handlePinSubmit}
+          errorMessage={serverError}
+          isPending={isBusy}
+        />
+      )}
+
+      <div className="space-y-2">
+        <div className="flex gap-2">
           <Button
             size="sm"
-            variant="outline"
             onClick={() =>
-              rechazar.mutate({
-                rectificacionId: rect.id,
-                motivoRechazo,
-              })
+              setPendingAction({ kind: "aprobar", rectId: rect.id })
             }
-            disabled={motivoRechazo.length < 10 || rechazar.isPending}
+            disabled={isBusy}
+            aria-label="Aprobar rectificación"
           >
-            Confirmar rechazo
+            Aprobar
           </Button>
-          {rechazar.error && (
-            <p role="alert" className="text-xs text-destructive">
-              {rechazar.error.message}
-            </p>
-          )}
+          <Button
+            size="sm"
+            variant="destructive"
+            onClick={() => setShowRechazo((v) => !v)}
+            disabled={isBusy}
+            aria-expanded={showRechazo}
+            aria-label="Rechazar rectificación"
+          >
+            Rechazar
+          </Button>
         </div>
-      )}
-      {aprobar.error && (
-        <p role="alert" className="text-xs text-destructive">
-          {aprobar.error.message}
-        </p>
-      )}
-    </div>
+
+        {showRechazo && (
+          <div className="space-y-1.5">
+            <Label htmlFor={`motivo-${rect.id}`}>Motivo del rechazo</Label>
+            <Textarea
+              id={`motivo-${rect.id}`}
+              rows={2}
+              value={motivoRechazo}
+              onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setMotivoRechazo(e.target.value)}
+              placeholder="Mínimo 10 caracteres."
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setPendingAction({
+                  kind: "rechazar",
+                  rectId: rect.id,
+                  motivo: motivoRechazo,
+                })
+              }
+              disabled={motivoRechazo.length < 10 || isBusy}
+            >
+              Confirmar rechazo
+            </Button>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Página principal
+// ---------------------------------------------------------------------------
 
 export default function ColaRectificacionesPage() {
   const searchParams = useSearchParams();
@@ -146,7 +216,7 @@ export default function ColaRectificacionesPage() {
       <div>
         <h1 className="text-2xl font-bold">Cola de rectificaciones ECE</h1>
         <p className="text-sm text-muted-foreground">
-          Solicitudes pendientes de aprobación (rol DIR). NTEC Art. 41.
+          Solicitudes pendientes de aprobación (rol DIR). NTEC Art. 41 / Art. 42.
         </p>
       </div>
 
@@ -182,7 +252,7 @@ export default function ColaRectificacionesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {query.data.map((r) => (
+                {query.data.map((r: RectificacionRow) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">{r.campo}</TableCell>
                     <TableCell className="max-w-[10rem] truncate text-sm">

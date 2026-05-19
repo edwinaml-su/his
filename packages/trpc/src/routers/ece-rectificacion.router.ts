@@ -28,6 +28,13 @@ import { requireEcePermission } from "../middleware/ece-permission";
 // Schemas locales (los tipos se re-exportan desde @his/contracts para UI)
 // ---------------------------------------------------------------------------
 
+// PIN de firma: 6-8 dígitos numéricos (NTEC Art. 42 — autenticación DIR).
+// Mismo esquema que eceCertificacionRouter.
+const pinSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{6,8}$/, { message: "PIN debe ser 6-8 dígitos." });
+
 const listInput = z.object({
   documentoInstanciaId: z.string().uuid(),
   estado: z.enum(["PENDIENTE", "APROBADA", "RECHAZADA"]).optional(),
@@ -43,11 +50,15 @@ const solicitarInput = z.object({
 
 const aprobarInput = z.object({
   rectificacionId: z.string().uuid(),
+  // HG-16: NTEC Art. 42 exige autenticación criptográfica del aprobador.
+  pin: pinSchema,
 });
 
 const rechazarInput = z.object({
   rectificacionId: z.string().uuid(),
   motivoRechazo: z.string().min(10).max(500),
+  // HG-16: NTEC Art. 42 — también el rechazo requiere PIN del DIR.
+  pin: pinSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -73,6 +84,97 @@ type RectificacionRow = {
 // ---------------------------------------------------------------------------
 // Helpers raw SQL
 // ---------------------------------------------------------------------------
+
+// Tipo extendido para la query de firma (incluye pin_hash).
+type FirmaRow = {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+};
+
+/**
+ * Carga la firma electrónica del usuario (vía ece.personal_salud → ece.firma_electronica).
+ * Lanza PRECONDITION_FAILED si no existe configuración de firma.
+ */
+async function loadFirmaDir(
+  prisma: {
+    $queryRaw: (
+      query: TemplateStringsArray,
+      ...values: unknown[]
+    ) => Promise<unknown>;
+  },
+  userId: string,
+): Promise<FirmaRow> {
+  // Paso 1: resolver personal_salud a partir del usuario HIS.
+  const personal = await (
+    prisma.$queryRaw as (
+      query: TemplateStringsArray,
+      ...values: unknown[]
+    ) => Promise<Array<{ id: string }>>
+  )`
+    SELECT id FROM ece.personal_salud
+    WHERE his_user_id = ${userId}::uuid AND activo = true
+    LIMIT 1
+  `;
+  if (!personal[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró personal ECE asociado a su cuenta.",
+    });
+  }
+
+  // Paso 2: cargar firma electrónica del personal.
+  const firmas = await (
+    prisma.$queryRaw as (
+      query: TemplateStringsArray,
+      ...values: unknown[]
+    ) => Promise<FirmaRow[]>
+  )`
+    SELECT id, pin_hash, failed_attempts, locked_until, revoked_at
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personal[0].id}::uuid
+    LIMIT 1
+  `;
+  if (!firmas[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada. Use firma.setup.",
+    });
+  }
+  return firmas[0];
+}
+
+/**
+ * Verifica el PIN argon2id contra la firma del DIR.
+ * Lanza UNAUTHORIZED si el PIN es incorrecto, TOO_MANY_REQUESTS si está bloqueada,
+ * FORBIDDEN si fue revocada.
+ * Import lazy idéntico al patrón de eceCertificacionRouter.
+ */
+async function checkPinDir(firma: FirmaRow, pin: string): Promise<void> {
+  if (firma.revoked_at !== null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "La firma electrónica del DIR ha sido revocada.",
+    });
+  }
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+  const { argon2 } = await import("@his/infrastructure");
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "PIN de firma incorrecto.",
+    });
+  }
+}
 
 async function findRectificacion(
   prisma: {
@@ -249,11 +351,16 @@ export const eceRectificacionRouter = router({
 
   /**
    * DIR aprueba una rectificación pendiente.
+   * NTEC Art. 42: requiere PIN argon2id del aprobador antes del UPDATE.
    * Marca estado APROBADA + fecha de aprobación.
    */
   aprobar: requireEcePermission("ece.rectificacion.aprobar")
     .input(aprobarInput)
     .mutation(async ({ ctx, input }) => {
+      // HG-16: verificar identidad criptográfica del DIR antes de cualquier cambio.
+      const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
+      await checkPinDir(firma, input.pin);
+
       const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
 
       if (!rect) {
@@ -294,10 +401,15 @@ export const eceRectificacionRouter = router({
 
   /**
    * DIR rechaza una rectificación pendiente con motivo obligatorio.
+   * NTEC Art. 42: requiere PIN argon2id del aprobador antes del UPDATE.
    */
   rechazar: requireRole(["DIR"])
     .input(rechazarInput)
     .mutation(async ({ ctx, input }) => {
+      // HG-16: verificar identidad criptográfica del DIR antes de cualquier cambio.
+      const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
+      await checkPinDir(firma, input.pin);
+
       const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
 
       if (!rect) {
