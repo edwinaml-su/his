@@ -127,6 +127,8 @@ export const EVENT_TYPES = [
   // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
   "pharmacy.reservation.created",
   "pharmacy.reservation.cancelled",
+  // S1 HD-30 — ECE URPA: alta post-anestésica otorgada (NTEC Art. 36)
+  "ece.urpa.alta_otorgada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

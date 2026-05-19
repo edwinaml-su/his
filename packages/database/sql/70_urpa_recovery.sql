@@ -137,85 +137,23 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 5. RLS (Cat-E: acceso vía establecimiento del acto quirúrgico)
+-- 5. RLS (Cat-E: chain urpa→acto_quirurgico→episodio_atencion→establecimiento_id)
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE ece.urpa_recovery ENABLE ROW LEVEL SECURITY;
 
--- Lectura: personal del mismo establecimiento del acto quirúrgico.
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_policies
-        WHERE schemaname = 'ece'
-          AND tablename  = 'urpa_recovery'
-          AND policyname = 'urpa_select_establecimiento'
-    ) THEN
-        CREATE POLICY urpa_select_establecimiento
-            ON ece.urpa_recovery
-            FOR SELECT
-            TO authenticated
-            USING (
-                EXISTS (
-                    SELECT 1
-                    FROM ece.acto_quirurgico aq
-                    WHERE aq.id = urpa_recovery.acto_quirurgico_id
-                      AND aq.establecimiento_id = ece.current_establecimiento_id()
-                )
-            );
-    END IF;
-END; $$;
+DROP POLICY IF EXISTS urpa_by_acto_estab ON ece.urpa_recovery;
+CREATE POLICY urpa_by_acto_estab
+    ON ece.urpa_recovery
+    FOR ALL TO authenticated
+    USING (EXISTS (
+        SELECT 1
+          FROM ece.acto_quirurgico aq
+          JOIN ece.episodio_atencion ea ON ea.id = aq.episodio_id
+         WHERE aq.id = ece.urpa_recovery.acto_quirurgico_id
+           AND ea.establecimiento_id = ece.current_establecimiento_id_safe()
+    ));
 
--- Inserción: personal activo del establecimiento.
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_policies
-        WHERE schemaname = 'ece'
-          AND tablename  = 'urpa_recovery'
-          AND policyname = 'urpa_insert_personal'
-    ) THEN
-        CREATE POLICY urpa_insert_personal
-            ON ece.urpa_recovery
-            FOR INSERT
-            TO authenticated
-            WITH CHECK (
-                registrado_por = ece.current_personal_id()
-                AND EXISTS (
-                    SELECT 1
-                    FROM ece.acto_quirurgico aq
-                    WHERE aq.id = acto_quirurgico_id
-                      AND aq.establecimiento_id = ece.current_establecimiento_id()
-                )
-            );
-    END IF;
-END; $$;
-
--- Actualización: personal del establecimiento.
-DO $$ BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_policies
-        WHERE schemaname = 'ece'
-          AND tablename  = 'urpa_recovery'
-          AND policyname = 'urpa_update_personal'
-    ) THEN
-        CREATE POLICY urpa_update_personal
-            ON ece.urpa_recovery
-            FOR UPDATE
-            TO authenticated
-            USING (
-                EXISTS (
-                    SELECT 1
-                    FROM ece.acto_quirurgico aq
-                    WHERE aq.id = urpa_recovery.acto_quirurgico_id
-                      AND aq.establecimiento_id = ece.current_establecimiento_id()
-                )
-            )
-            WITH CHECK (
-                EXISTS (
-                    SELECT 1
-                    FROM ece.acto_quirurgico aq
-                    WHERE aq.id = acto_quirurgico_id
-                      AND aq.establecimiento_id = ece.current_establecimiento_id()
-                )
-            );
-    END IF;
-END; $$;
+COMMENT ON POLICY urpa_by_acto_estab ON ece.urpa_recovery IS
+    'RLS Cat-E: filtra por establecimiento del episodio de atención del acto quirúrgico. '
+    'Compatible con withEceContext (SET LOCAL app.establecimiento_id).';
