@@ -24,7 +24,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
-import { firmaElectronicaRouter } from "../firma-electronica.router";
+import { firmaElectronicaRouter, _encryptMfaCredentialForTest } from "../firma-electronica.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 
@@ -93,6 +93,30 @@ const FIRMA_ROW_LOCKED = [{
 const RAW_TOKEN = "a".repeat(64); // 64 hex chars de prueba
 
 // ---------------------------------------------------------------------------
+// Fixtures MFA — se calculan con AUTH_SECRET conocido en test.
+// _encryptMfaCredentialForTest usa AES-256-GCM derivado de AUTH_SECRET.
+// ---------------------------------------------------------------------------
+
+// Secret TOTP base32 válido de 32 chars (A = 0 en base32 → bytes nulos).
+// Lo que importa es consistencia, no que el TOTP sea "real" para HMAC.
+const MFA_TOTP_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".slice(0, 32);
+// Backup code conocido para tests.
+const MFA_BACKUP_CODE = "12345678";
+
+let VALID_MFA_SECRET_HASH: string;
+
+// beforeAll en el describe de completeRecovery no es posible sin refactoring;
+// calculamos sincrónicamente usando process.env.AUTH_SECRET definida abajo.
+// La función _encryptMfaCredentialForTest es síncrona (AES-GCM no es async).
+// AUTH_SECRET se establece en beforeEach global.
+function buildValidSecretHash(): string {
+  return _encryptMfaCredentialForTest({
+    secret: MFA_TOTP_SECRET,
+    codes: [MFA_BACKUP_CODE, "99999999"],
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Helper: crea el caller del router con prisma mock.
 // ---------------------------------------------------------------------------
 function makeCaller(prisma: DeepMockProxy<PrismaClient>, user = MOCK_USER_ADMIN) {
@@ -120,6 +144,8 @@ describe("firmaElectronicaRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    // AUTH_SECRET mínimo 32 chars requerido por getMfaEncryptionKey.
+    process.env["AUTH_SECRET"] = "test-secret-for-unit-tests-only-32chars!";
   });
 
   afterEach(() => {
@@ -349,8 +375,8 @@ describe("firmaElectronicaRouter", () => {
   describe("completeRecovery", () => {
     const NEW_PIN = "654321";
 
-    /** Simula una fila de firma con token de recovery válido. */
-    function mockValidRecoveryToken(prismaM: DeepMockProxy<PrismaClient>) {
+    /** Simula una fila de firma con token de recovery válido y credencial MFA real. */
+    function mockValidRecoveryToken(prismaM: DeepMockProxy<PrismaClient>, secretHash?: string) {
       // 1. findFirma por token hash -> encontrada y no expirada
       prismaM.$queryRaw
         .mockResolvedValueOnce([{
@@ -359,21 +385,46 @@ describe("firmaElectronicaRouter", () => {
         }] as never)
         // 2. buscar his_user_id a partir de firmaId
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      // 3. credencial TOTP del usuario (para validar mfaCode)
+      // 3. credencial TOTP cifrada con AES-256-GCM real
       prismaM.userCredential.findFirst.mockResolvedValue({
         id: CRED_ID,
-        secretHash: "dummy-totp-cred",
+        secretHash: secretHash ?? buildValidSecretHash(),
       } as never);
       prismaM.$executeRaw.mockResolvedValue(1 as never);
     }
 
-    it("token válido + MFA 6 dígitos: actualiza PIN y retorna ok=true", async () => {
-      mockValidRecoveryToken(prisma);
+    it("token válido + TOTP correcto (6 dígitos): actualiza PIN y retorna ok=true", async () => {
+      // Generamos el TOTP real para el secret conocido en el momento del test.
+      // Re-implementamos generateTotp localmente para producir un token válido.
+      const { createHmac: hmac } = await import("node:crypto");
+      const base32Alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      function b32decode(s: string): Buffer {
+        const cleaned = s.replace(/=+$/g, "").toUpperCase();
+        let bits = 0; let value = 0; const out: number[] = [];
+        for (const ch of cleaned) {
+          const idx = base32Alpha.indexOf(ch);
+          value = (value << 5) | idx; bits += 5;
+          if (bits >= 8) { out.push((value >>> (bits - 8)) & 0xff); bits -= 8; }
+        }
+        return Buffer.from(out);
+      }
+      const counter = Math.floor(Date.now() / 1000 / 30);
+      const key = b32decode(MFA_TOTP_SECRET);
+      const buf = Buffer.alloc(8);
+      buf.writeUInt32BE(Math.floor(counter / 0x1_0000_0000), 0);
+      buf.writeUInt32BE(counter & 0xffffffff, 4);
+      const h = hmac("sha1", key).update(buf).digest();
+      const offset = h[h.length - 1]! & 0x0f;
+      const bin =
+        ((h[offset]! & 0x7f) << 24) | ((h[offset + 1]! & 0xff) << 16) |
+        ((h[offset + 2]! & 0xff) << 8) | (h[offset + 3]! & 0xff);
+      const validTotp = (bin % 1_000_000).toString().padStart(6, "0");
 
+      mockValidRecoveryToken(prisma);
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       const result = await caller.completeRecovery({
         token: RAW_TOKEN,
-        mfaCode: "123456",
+        mfaCode: validTotp,
         newPin: NEW_PIN,
         confirmPin: NEW_PIN,
       });
@@ -382,18 +433,60 @@ describe("firmaElectronicaRouter", () => {
       expect(prisma.$executeRaw).toHaveBeenCalledOnce();
     });
 
-    it("token válido + MFA 8 dígitos (backup code): actualiza PIN correctamente", async () => {
+    it("token válido + backup code correcto (8 dígitos): actualiza PIN correctamente", async () => {
       mockValidRecoveryToken(prisma);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       const result = await caller.completeRecovery({
         token: RAW_TOKEN,
-        mfaCode: "12345678",
+        mfaCode: MFA_BACKUP_CODE,  // "12345678" — en la lista de codes
         newPin: NEW_PIN,
         confirmPin: NEW_PIN,
       });
 
       expect(result.ok).toBe(true);
+    });
+
+    it("UNAUTHORIZED si TOTP de 6 dígitos es incorrecto", async () => {
+      mockValidRecoveryToken(prisma);
+
+      const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      await expect(
+        caller.completeRecovery({
+          token: RAW_TOKEN,
+          mfaCode: "000000", // TOTP incorrecto
+          newPin: NEW_PIN,
+          confirmPin: NEW_PIN,
+        })
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    });
+
+    it("UNAUTHORIZED si backup code de 8 dígitos no coincide", async () => {
+      mockValidRecoveryToken(prisma);
+
+      const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      await expect(
+        caller.completeRecovery({
+          token: RAW_TOKEN,
+          mfaCode: "00000000", // backup code que no existe en la lista
+          newPin: NEW_PIN,
+          confirmPin: NEW_PIN,
+        })
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    });
+
+    it("INTERNAL_SERVER_ERROR si secretHash de credencial MFA está corrupto", async () => {
+      mockValidRecoveryToken(prisma, "not-valid-json-garbage");
+
+      const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      await expect(
+        caller.completeRecovery({
+          token: RAW_TOKEN,
+          mfaCode: "123456",
+          newPin: NEW_PIN,
+          confirmPin: NEW_PIN,
+        })
+      ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
     });
 
     it("UNAUTHORIZED si token no existe o está expirado en BD", async () => {
@@ -447,7 +540,11 @@ describe("firmaElectronicaRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: FIRMA_ID, recovery_expires_at: new Date(Date.now() + 60_000) }] as never)
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: "x" } as never);
+      // secretHash real necesario: el descifrado ocurre antes de validar longitud.
+      prisma.userCredential.findFirst.mockResolvedValue({
+        id: CRED_ID,
+        secretHash: buildValidSecretHash(),
+      } as never);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       await expect(
@@ -464,14 +561,18 @@ describe("firmaElectronicaRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: FIRMA_ID, recovery_expires_at: new Date(Date.now() + 60_000) }] as never)
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: "x" } as never);
+      // secretHash real + backup code válido para llegar al UPDATE.
+      prisma.userCredential.findFirst.mockResolvedValue({
+        id: CRED_ID,
+        secretHash: buildValidSecretHash(),
+      } as never);
       prisma.$executeRaw.mockRejectedValue(new Error("disk full") as never);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       await expect(
         caller.completeRecovery({
           token: RAW_TOKEN,
-          mfaCode: "123456",
+          mfaCode: MFA_BACKUP_CODE, // backup code válido para pasar verificación MFA
           newPin: NEW_PIN,
           confirmPin: NEW_PIN,
         })
