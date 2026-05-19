@@ -1,8 +1,10 @@
 /**
  * Tests unitarios — eceCertDefRouter (ECE Certificado de Defunción, NTEC Art. 21).
  *
- * Cubre el workflow completo: borrador → firmado (MC) → validado (MC) → certificado (DIR).
- * Intentos inválidos: doble firma, anular certificado, certificar sin validar, rol incorrecto.
+ * Cubre el workflow completo: borrador → firmado (MC+PIN) → validado (MC+PIN) → certificado (DIR+PIN).
+ * B-03: validar requiere PIN (no-repudio del Director Médico).
+ * B-04: create rechaza epicrisis sin tipo_egreso = 'fallecido'.
+ * B-02: withWorkflowContext demota rol — RLS aplica en transacciones.
  *
  * @QA E2E: ece-defuncion.spec.ts — cubre flujo UI completo con BD efímera.
  */
@@ -11,59 +13,64 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { eceCertDefRouter } from "../certificado-defuncion.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
-import { MOCK_TENANT, MOCK_USER_ADMIN } from "@his/test-utils";
+import { MOCK_TENANT } from "@his/test-utils";
 import { TRPCError } from "@trpc/server";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constantes
 // ──────────────────────────────────────────────────────────────────────────────
 
-const CERT_ID  = "c1000000-0000-0000-0000-000000000001";
-const EPI_ID   = "e1000000-0000-0000-0000-000000000001";
-const PAC_ID   = "p1000000-0000-0000-0000-000000000001";
-const ESTAB_ID = MOCK_TENANT.establishmentId!;
-const ORG_ID   = MOCK_TENANT.organizationId;
+const CERT_ID     = "c1000000-0000-0000-0000-000000000001";
+const EPI_ID      = "e1000000-0000-0000-0000-000000000001";
+const EPICRISIS_ID = "ec000000-0000-0000-0000-000000000001";
+const PAC_ID      = "p1000000-0000-0000-0000-000000000001";
+const ESTAB_ID    = MOCK_TENANT.establishmentId!;
 const PERSONAL_ID = "a1000000-0000-0000-0000-000000000001";
-const FIRMA_ID = "f1000000-0000-0000-0000-000000000001";
 
-// PIN correcto mockeado — argon2.verify se mockea globalmente.
 const PIN_CORRECTO = "123456";
+const PIN_INCORRECTO = "999999";
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Mock argon2 (evita dependencia nativa en unit tests)
+// Mocks globales
 // ──────────────────────────────────────────────────────────────────────────────
 
 vi.mock("@his/infrastructure", () => ({
   argon2: {
     verify: vi.fn(async (_hash: string, pin: string) => pin === PIN_CORRECTO),
-    },
+  },
 }));
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Mock emitDomainEvent (evita BD real)
-// ──────────────────────────────────────────────────────────────────────────────
 
 vi.mock("@his/database", () => ({
   emitDomainEvent: vi.fn().mockResolvedValue(undefined),
   prisma: {},
 }));
 
+// withWorkflowContext envuelve en $transaction — el mock ejecuta el callback inline
+// con el prisma mock para que los $queryRaw mocks funcionen.
+vi.mock("../../../workflow/context", () => ({
+  withWorkflowContext: vi.fn(
+    async (_prisma: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) =>
+      fn(_prisma),
+  ),
+}));
+
 // ──────────────────────────────────────────────────────────────────────────────
-// Helpers de fila
+// Fixtures
 // ──────────────────────────────────────────────────────────────────────────────
 
-function makeCertRow(overrides: {
-  estado_workflow?: string;
-  firmado_en?: Date | null;
-  validado_en?: Date | null;
-  certificado_en?: Date | null;
-  anulado_en?: Date | null;
-  motivo_anulacion?: string | null;
-  payload_hash?: string | null;
-} = {}) {
+function makeCertRow(overrides: Partial<{
+  estado_workflow: string;
+  firmado_en: Date | null;
+  validado_en: Date | null;
+  certificado_en: Date | null;
+  anulado_en: Date | null;
+  motivo_anulacion: string | null;
+  payload_hash: string | null;
+}> = {}) {
   return {
     id: CERT_ID,
     episodio_id: EPI_ID,
+    epicrisis_id: EPICRISIS_ID,
     paciente_id: PAC_ID,
     fecha_hora_defuncion: new Date("2026-05-17T10:00:00Z"),
     lugar_defuncion: "intrahospitalaria",
@@ -97,24 +104,18 @@ function makePersonalFirmaRow(pinHash = "hash-correcto") {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Helpers de contexto
+// Contextos
 // ──────────────────────────────────────────────────────────────────────────────
 
 function makeMcCtx(prisma: DeepMockProxy<PrismaClient>) {
-  return makeCtx({
-    prisma,
-    tenant: { ...MOCK_TENANT, roleCodes: ["MC", "PHYSICIAN"] },
-  });
+  return makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["MC", "PHYSICIAN"] } });
 }
 
 function makeDirCtx(prisma: DeepMockProxy<PrismaClient>) {
-  return makeCtx({
-    prisma,
-    tenant: { ...MOCK_TENANT, roleCodes: ["DIR"] },
-  });
+  return makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["DIR"] } });
 }
 
-// $transaction mock: ejecuta el callback con el mismo prisma mock.
+// $transaction mock: ejecuta callback con el mismo prisma mock.
 function mockTx(prisma: DeepMockProxy<PrismaClient>) {
   prisma.$transaction.mockImplementation(async (fn) =>
     fn(prisma as unknown as Parameters<typeof fn>[0]),
@@ -133,9 +134,9 @@ describe("eceCertDefRouter", () => {
     vi.clearAllMocks();
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   // list
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   describe("list", () => {
     it("devuelve items y total con filtros vacíos", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow()]);
@@ -159,12 +160,13 @@ describe("eceCertDefRouter", () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // create
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // create — incluye B-04
+  // ──────────────────────────────────────────────────────────────────────────
   describe("create", () => {
     const createInput = {
       episodioId: EPI_ID,
+      epicrisisId: EPICRISIS_ID,
       fechaHoraDefuncion: new Date("2026-05-17T10:00:00Z"),
       lugarDefuncion: "intrahospitalaria" as const,
       causaPrincipalCie10: "J18.9",
@@ -174,9 +176,11 @@ describe("eceCertDefRouter", () => {
       autopsiaRealizada: false,
     };
 
-    it("crea certificado en estado borrador", async () => {
+    it("crea certificado en estado borrador cuando epicrisis es fallecido", async () => {
       // personal_salud
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // B-04: epicrisis con tipo_egreso = 'fallecido'
+      prisma.$queryRaw.mockResolvedValueOnce([{ tipo_egreso: "fallecido" }]);
       // unicidad: sin existentes
       prisma.$queryRaw.mockResolvedValueOnce([]);
       // episodio
@@ -190,8 +194,32 @@ describe("eceCertDefRouter", () => {
       expect(result.id).toBe(CERT_ID);
     });
 
+    it("B-04: lanza BAD_REQUEST si epicrisis no tiene tipo_egreso = 'fallecido'", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // Epicrisis con egreso ordinario — no 'fallecido'
+      prisma.$queryRaw.mockResolvedValueOnce([{ tipo_egreso: "alta_medica" }]);
+
+      const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
+      await expect(caller.create(createInput)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("epicrisis_no_es_fallecido"),
+      });
+    });
+
+    it("B-04: lanza NOT_FOUND si la epicrisis no existe", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // Epicrisis no encontrada
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
+      await expect(caller.create(createInput)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
     it("lanza CONFLICT si ya existe un certificado activo para el episodio", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      prisma.$queryRaw.mockResolvedValueOnce([{ tipo_egreso: "fallecido" }]);
       prisma.$queryRaw.mockResolvedValueOnce([{ id: CERT_ID }]); // existente
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -202,6 +230,7 @@ describe("eceCertDefRouter", () => {
 
     it("lanza NOT_FOUND si el episodio no pertenece al establecimiento", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      prisma.$queryRaw.mockResolvedValueOnce([{ tipo_egreso: "fallecido" }]);
       prisma.$queryRaw.mockResolvedValueOnce([]); // sin existentes
       prisma.$queryRaw.mockResolvedValueOnce([]); // episodio no encontrado
 
@@ -212,17 +241,14 @@ describe("eceCertDefRouter", () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   // firmar (borrador → firmado)
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   describe("firmar", () => {
     it("transiciona a firmado con PIN correcto y emite outbox", async () => {
       mockTx(prisma);
-      // FOR UPDATE → cert borrador
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })]);
-      // personal + firma
       prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
-      // UPDATE
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -238,14 +264,13 @@ describe("eceCertDefRouter", () => {
       prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
-      await expect(caller.firmar({ id: CERT_ID, pin: "999999" })).rejects.toMatchObject({
+      await expect(caller.firmar({ id: CERT_ID, pin: PIN_INCORRECTO })).rejects.toMatchObject({
         code: "UNAUTHORIZED",
       });
     });
 
     it("lanza CONFLICT si el certificado no está en borrador", async () => {
       mockTx(prisma);
-      // Cert ya firmado
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })]);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
@@ -255,34 +280,57 @@ describe("eceCertDefRouter", () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // validar (firmado → validado)
-  // ────────────────────────────────────────────────────────────────────────────
-  describe("validar", () => {
-    it("transiciona a validado desde firmado", async () => {
+  // ──────────────────────────────────────────────────────────────────────────
+  // validar (firmado → validado) — B-03: requiere PIN
+  // ──────────────────────────────────────────────────────────────────────────
+  describe("validar (B-03)", () => {
+    it("transiciona a validado con PIN correcto", async () => {
+      mockTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
-      const result = await caller.validar({ id: CERT_ID });
+      const result = await caller.validar({ id: CERT_ID, firmaPin: PIN_CORRECTO });
 
       expect(result.ok).toBe(true);
       expect(result.estado).toBe("validado");
     });
 
+    it("lanza UNAUTHORIZED si PIN es incorrecto (B-03)", async () => {
+      mockTx(prisma);
+      prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
+
+      const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
+      await expect(caller.validar({ id: CERT_ID, firmaPin: PIN_INCORRECTO })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    });
+
     it("lanza CONFLICT si el estado no es firmado", async () => {
+      mockTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })]);
 
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
-      await expect(caller.validar({ id: CERT_ID })).rejects.toMatchObject({
+      await expect(caller.validar({ id: CERT_ID, firmaPin: PIN_CORRECTO })).rejects.toMatchObject({
         code: "CONFLICT",
       });
     });
+
+    it("el schema exige firmaPin — sin PIN falla validación Zod", async () => {
+      const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
+      // firmaPin ausente → error de validación Zod (BAD_REQUEST)
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        caller.validar({ id: CERT_ID } as any),
+      ).rejects.toThrow();
+    });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   // certificar (validado → certificado, DIR)
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   describe("certificar", () => {
     it("certifica el documento con PIN DIR correcto y emite outbox", async () => {
       mockTx(prisma);
@@ -308,47 +356,84 @@ describe("eceCertDefRouter", () => {
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   // anular
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
   describe("anular", () => {
     it("anula un certificado en borrador", async () => {
+      mockTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })]);
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
-      const result = await caller.anular({ id: CERT_ID, motivoAnulacion: "Error de datos ingresados por el médico." });
+      const result = await caller.anular({
+        id: CERT_ID,
+        motivoAnulacion: "Error de datos ingresados por el médico.",
+      });
 
       expect(result.ok).toBe(true);
       expect(result.estado).toBe("anulado");
     });
 
     it("lanza FORBIDDEN si intenta anular un certificado ya certificado", async () => {
+      mockTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "certificado" })]);
 
       const caller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
       await expect(
         caller.anular({ id: CERT_ID, motivoAnulacion: "Error de datos ingresados por el médico." }),
-      ).rejects.toMatchObject({
-        code: "FORBIDDEN",
-      });
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     it("lanza CONFLICT si el certificado ya está anulado", async () => {
+      mockTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "anulado" })]);
 
       const caller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
       await expect(
         caller.anular({ id: CERT_ID, motivoAnulacion: "Error de datos ingresados por el médico." }),
-      ).rejects.toMatchObject({
-        code: "CONFLICT",
-      });
+      ).rejects.toMatchObject({ code: "CONFLICT" });
     });
   });
 
-  // ────────────────────────────────────────────────────────────────────────────
-  // Seguridad: rol incorrecto
-  // ────────────────────────────────────────────────────────────────────────────
+  // ──────────────────────────────────────────────────────────────────────────
+  // Transición completa: borrador → firmado → validado → certificado
+  // ──────────────────────────────────────────────────────────────────────────
+  describe("transición de estados completa", () => {
+    it("completa el workflow borrador→firmado→validado→certificado", async () => {
+      mockTx(prisma);
+
+      // firmar
+      prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "borrador" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+
+      const mcCaller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
+      const firmado = await mcCaller.firmar({ id: CERT_ID, pin: PIN_CORRECTO });
+      expect(firmado.estado).toBe("firmado");
+
+      // validar — B-03: con PIN
+      prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "firmado" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+
+      const validado = await mcCaller.validar({ id: CERT_ID, firmaPin: PIN_CORRECTO });
+      expect(validado.estado).toBe("validado");
+
+      // certificar
+      prisma.$queryRaw.mockResolvedValueOnce([makeCertRow({ estado_workflow: "validado" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makePersonalFirmaRow()]);
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+
+      const dirCaller = eceCertDefRouter.createCaller(makeDirCtx(prisma));
+      const certificado = await dirCaller.certificar({ id: CERT_ID, pin: PIN_CORRECTO });
+      expect(certificado.estado).toBe("certificado");
+    });
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Seguridad de roles
+  // ──────────────────────────────────────────────────────────────────────────
   describe("seguridad de roles", () => {
     it("certificar lanza FORBIDDEN si el rol no es DIR", async () => {
       const caller = eceCertDefRouter.createCaller(makeMcCtx(prisma));
