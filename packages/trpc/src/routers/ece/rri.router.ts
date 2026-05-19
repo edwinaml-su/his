@@ -33,20 +33,33 @@
  *     Payload: { rriId, episodioId, medicoId, tipo ('referencia'|'interconsulta'),
  *                payloadHash, orgId }
  *   'ece.rri.respondida'  — emitido por responder(). Cierra el circuito.
- *     Payload: { rriId, icId, respuesta, payloadHash, orgId }
- *   payloadHash = SHA-256({ motivoReferencia, diagnostico, centroReceptor,
+ *     Payload: { rriId, icId, respuestaInterconsultante, payloadHash, orgId }
+ *   payloadHash = SHA-256({ motivo, resumenClinico, establecimientoDestinoId,
  *                            especialidadSolicitada })
  *
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.rri                  — fila principal: episodio_id, tipo_rri,
- *                              motivo_referencia, diagnostico_cie10,
- *                              centro_receptor, especialidad_solicitada,
- *                              respuesta_ic, estado, instancia_id
+ *   ece.rri                  — fila principal: episodio_id, tipo,
+ *                              motivo, resumen_clinico,
+ *                              establecimiento_destino_id,
+ *                              respuesta_interconsultante,
+ *                              solicitado_por, respondido_por,
+ *                              registrado_en (DEFAULT now()), instancia_id
  *   ece.documento_instancia  — instancia de flujo vinculada
  *   ece.personal_salud       — mapeo his_user_id → personal ECE id
  *   ece.firma_electronica    — credencial PIN (argon2id) del MC y del IC
+ *
+ * ---------------------------------------------------------------------------
+ * HD-25 (S1): schema drift corregido
+ * ---------------------------------------------------------------------------
+ *   destino_servicio_id          → establecimiento_destino_id
+ *   datos_clinicos_relevantes    → resumen_clinico
+ *   respuesta                    → respuesta_interconsultante
+ *   fecha_solicitud              → eliminado (DB usa registrado_en DEFAULT now())
+ *   urgencia                     → eliminado (columna no existe en BD)
+ *   diagnostico_ic               → eliminado (columna no existe en BD)
+ *   plan_ic                      → eliminado (columna no existe en BD)
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -73,7 +86,7 @@ import {
 } from "./rri.schemas";
 
 // =============================================================================
-// Tipos de fila raw
+// Tipos de fila raw — alineados con columnas reales de ece.rri
 // =============================================================================
 
 export interface RriRow {
@@ -82,17 +95,14 @@ export interface RriRow {
   paciente_id: string;
   episodio_id: string;
   tipo: string;
-  destino_servicio_id: string;
+  establecimiento_destino_id: string | null;
   motivo: string;
-  datos_clinicos_relevantes: string;
-  urgencia: string;
+  resumen_clinico: string | null;
+  especialidad_solicitada: string | null;
   solicitado_por: string;
   respondido_por: string | null;
-  respuesta: string | null;
-  diagnostico_ic: string | null;
-  plan_ic: string | null;
-  fecha_solicitud: Date;
-  fecha_respuesta: Date | null;
+  respuesta_interconsultante: string | null;
+  registrado_en: Date;
   estado_codigo: string;
   estado_id: string;
 }
@@ -155,17 +165,14 @@ async function findRri(tx: RawTx, id: string): Promise<RriRow | null> {
       r.paciente_id::text,
       r.episodio_id::text,
       r.tipo,
-      r.destino_servicio_id::text,
+      r.establecimiento_destino_id::text,
       r.motivo,
-      r.datos_clinicos_relevantes,
-      r.urgencia,
+      r.resumen_clinico,
+      r.especialidad_solicitada,
       r.solicitado_por::text,
       r.respondido_por::text,
-      r.respuesta,
-      r.diagnostico_ic,
-      r.plan_ic,
-      r.fecha_solicitud,
-      r.fecha_respuesta,
+      r.respuesta_interconsultante,
+      r.registrado_en,
       fe.codigo AS estado_codigo,
       fe.id::text AS estado_id
     FROM ece.rri r
@@ -349,10 +356,10 @@ function computeRriHash(rri: RriRow): string {
     id: rri.id,
     tipo: rri.tipo,
     motivo: rri.motivo,
-    datos_clinicos_relevantes: rri.datos_clinicos_relevantes,
-    urgencia: rri.urgencia,
+    resumen_clinico: rri.resumen_clinico,
+    establecimiento_destino_id: rri.establecimiento_destino_id,
     solicitado_por: rri.solicitado_por,
-    fecha_solicitud: rri.fecha_solicitud,
+    registrado_en: rri.registrado_en,
   });
   return createHash("sha256").update(payload, "utf8").digest("hex");
 }
@@ -389,17 +396,14 @@ export const eceRriRouter = router({
           r.paciente_id::text,
           r.episodio_id::text,
           r.tipo,
-          r.destino_servicio_id::text,
+          r.establecimiento_destino_id::text,
           r.motivo,
-          r.datos_clinicos_relevantes,
-          r.urgencia,
+          r.resumen_clinico,
+          r.especialidad_solicitada,
           r.solicitado_por::text,
           r.respondido_por::text,
-          r.respuesta,
-          r.diagnostico_ic,
-          r.plan_ic,
-          r.fecha_solicitud,
-          r.fecha_respuesta,
+          r.respuesta_interconsultante,
+          r.registrado_en,
           fe.codigo AS estado_codigo,
           fe.id::text AS estado_id
         FROM ece.rri r
@@ -410,7 +414,7 @@ export const eceRriRouter = router({
           AND (${input.tipo ?? null}::text IS NULL OR r.tipo = ${input.tipo ?? null}::text)
           AND (${input.estado ?? null}::text IS NULL OR fe.codigo = ${input.estado ?? null}::text)
           AND (${input.cursor ?? null}::uuid IS NULL OR r.id < ${input.cursor ?? null}::uuid)
-        ORDER BY r.fecha_solicitud DESC, r.id DESC
+        ORDER BY r.registrado_en DESC, r.id DESC
         LIMIT ${input.limit}
       `;
 
@@ -520,24 +524,23 @@ export const eceRriRouter = router({
 
       const instanciaId = instanciaRows[0]!.id;
 
-      // 5. Insertar registro clínico
+      // 5. Insertar registro clínico con columnas reales de ece.rri
       const rriRows = await (tx.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.rri
           (instancia_id, paciente_id, episodio_id, tipo,
-           destino_servicio_id, motivo, datos_clinicos_relevantes,
-           urgencia, solicitado_por)
+           establecimiento_destino_id, motivo, resumen_clinico,
+           solicitado_por)
         VALUES (
           ${instanciaId}::uuid,
           ${pacienteId}::uuid,
           ${input.episodioId}::uuid,
           ${input.tipo},
-          ${input.destinoServicioId}::uuid,
+          ${input.establecimientoDestinoId}::uuid,
           ${input.motivo},
-          ${input.datosClinicosRelevantes},
-          ${input.urgencia},
+          ${input.resumenClinico},
           ${personal.id}::uuid
         )
         RETURNING id::text
@@ -588,8 +591,7 @@ export const eceRriRouter = router({
         payload: {
           instanceId: rri.instancia_id,
           tipo: rri.tipo,
-          urgencia: rri.urgencia,
-          destinoServicioId: rri.destino_servicio_id,
+          establecimientoDestinoId: rri.establecimiento_destino_id,
           solicitadoPor: rri.solicitado_por,
           payloadHash,
           firmaId,
@@ -630,15 +632,11 @@ export const eceRriRouter = router({
         ...v: unknown[]
       ) => Promise<number>)`
         UPDATE ece.rri
-        SET respuesta          = ${input.respuesta},
-            diagnostico_ic     = ${input.diagnostico},
-            plan_ic            = ${input.plan},
-            respondido_por     = ${personalId}::uuid,
-            fecha_respuesta    = NOW()
+        SET respuesta_interconsultante = ${input.respuestaInterconsultante},
+            respondido_por             = ${personalId}::uuid
         WHERE id = ${input.rriId}::uuid
       `;
 
-      // Rol IC es quien responde; si tiene rol IC lo usamos, si no ES es consultor
       const rolEjecutor = ctx.tenant.roleCodes.includes("IC") ? "IC" : "ESP";
       await avanzarEstado(tx, rri.instancia_id, "responder", eceCtx.personalId, rolEjecutor, firmaId);
 

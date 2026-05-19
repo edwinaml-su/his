@@ -4,21 +4,22 @@
  * Cubre:
  *   1. schema: tipoRriSchema rechaza tipo inválido
  *   2. schema: eceRriCreateSchema acepta los 3 tipos válidos
- *   3. schema: urgenciaRriSchema valida los 3 valores
+ *   3. schema: eceRriCreateSchema requiere establecimientoDestinoId y resumenClinico (HD-25)
  *   4. list — happy path devuelve items y nextCursor nulo
  *   5. get  — NOT_FOUND cuando RRI no existe
- *   6. get  — devuelve RRI existente
+ *   6. get  — devuelve RRI existente con columnas correctas (HD-25)
  *   7. create — NOT_FOUND cuando episodio no existe
  *   8. firmar — CONFLICT cuando estado no es firmable
  *   9. responder — CONFLICT cuando estado no es firmado
  *  10. anular — CONFLICT cuando estado es validado
  *  11. anular — happy path (rol DIR)
+ *  12. schema: eceRriResponderSchema usa respuestaInterconsultante (HD-25)
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { eceRriRouter } from "../rri.router";
-import { tipoRriSchema, urgenciaRriSchema, eceRriCreateSchema } from "../rri.schemas";
+import { tipoRriSchema, eceRriCreateSchema, eceRriResponderSchema } from "../rri.schemas";
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
@@ -38,39 +39,36 @@ const RRI_ID       = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const INSTANCIA_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const EPISODIO_ID  = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const PACIENTE_ID  = "dddddddd-dddd-dddd-dddd-dddddddddddd";
-const SERVICIO_ID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const ESTAB_ID     = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 const PERSONAL_ID  = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const ESTADO_ID    = "11111111-1111-1111-1111-111111111111";
 const USER_ID      = "22222222-2222-2222-2222-222222222222";
 
-const MC_TENANT = { ...MOCK_TENANT, roleCodes: ["MC"], establishmentId: "estab-id-1" };
+const MC_TENANT  = { ...MOCK_TENANT, roleCodes: ["MC"],  establishmentId: "estab-id-1" };
 const DIR_TENANT = { ...MOCK_TENANT, roleCodes: ["DIR"], establishmentId: "estab-id-1" };
-const MC_USER = { id: USER_ID, email: "mc@his.test", name: "Dr. Test" };
+const MC_USER    = { id: USER_ID, email: "mc@his.test", name: "Dr. Test" };
 
+/** Fixture con nombres de columnas reales de ece.rri (HD-25) */
 const RRI_ROW_BORRADOR = {
   id: RRI_ID,
   instancia_id: INSTANCIA_ID,
   paciente_id: PACIENTE_ID,
   episodio_id: EPISODIO_ID,
   tipo: "referencia",
-  destino_servicio_id: SERVICIO_ID,
+  establecimiento_destino_id: ESTAB_ID,
   motivo: "Evaluación especialista",
-  datos_clinicos_relevantes: "HTA controlada",
-  urgencia: "rutinaria",
+  resumen_clinico: "HTA controlada",
+  especialidad_solicitada: null,
   solicitado_por: PERSONAL_ID,
   respondido_por: null,
-  respuesta: null,
-  diagnostico_ic: null,
-  plan_ic: null,
-  fecha_solicitud: new Date("2026-05-17T10:00:00Z"),
-  fecha_respuesta: null,
+  respuesta_interconsultante: null,
+  registrado_en: new Date("2026-05-17T10:00:00Z"),
   estado_codigo: "borrador",
   estado_id: ESTADO_ID,
 };
 
-const RRI_ROW_FIRMADO = { ...RRI_ROW_BORRADOR, estado_codigo: "firmado" };
+const RRI_ROW_FIRMADO  = { ...RRI_ROW_BORRADOR, estado_codigo: "firmado" };
 const RRI_ROW_VALIDADO = { ...RRI_ROW_BORRADOR, estado_codigo: "validado" };
-const RRI_ROW_ANULADO = { ...RRI_ROW_BORRADOR, estado_codigo: "anulado" };
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -96,7 +94,7 @@ describe("eceRriRouter", () => {
     vi.clearAllMocks();
   });
 
-  // 1 — Schemas Zod
+  // 1 — tipoRriSchema
   describe("tipoRriSchema", () => {
     it("rechaza tipo inválido", () => {
       expect(tipoRriSchema.safeParse("consulta").success).toBe(false);
@@ -110,24 +108,33 @@ describe("eceRriRouter", () => {
     );
   });
 
-  // 2 — eceRriCreateSchema acepta los 3 tipos
-  it("eceRriCreateSchema acepta todos los tipos válidos", () => {
+  // 2 — eceRriCreateSchema acepta tipos válidos con campos correctos (HD-25)
+  it("eceRriCreateSchema acepta todos los tipos válidos con columnas correctas", () => {
     const base = {
       episodioId: EPISODIO_ID,
       tipo: "referencia" as const,
-      destinoServicioId: SERVICIO_ID,
+      establecimientoDestinoId: ESTAB_ID,
       motivo: "Motivo de prueba",
-      datosClinicosRelevantes: "Datos clínicos",
-      urgencia: "rutinaria" as const,
+      resumenClinico: "Resumen clínico",
     };
     expect(eceRriCreateSchema.safeParse(base).success).toBe(true);
     expect(eceRriCreateSchema.safeParse({ ...base, tipo: "retorno" }).success).toBe(true);
     expect(eceRriCreateSchema.safeParse({ ...base, tipo: "interconsulta" }).success).toBe(true);
   });
 
-  // 3 — urgenciaRriSchema
-  it("urgenciaRriSchema rechaza urgencia inválida", () => {
-    expect(urgenciaRriSchema.safeParse("alta").success).toBe(false);
+  // 3 — eceRriCreateSchema rechaza nombres legacy
+  it("eceRriCreateSchema rechaza campos con nombres legacy (destinoServicioId, datosClinicosRelevantes)", () => {
+    const legacy = {
+      episodioId: EPISODIO_ID,
+      tipo: "referencia" as const,
+      destinoServicioId: ESTAB_ID,          // nombre antiguo
+      motivo: "Test",
+      datosClinicosRelevantes: "Datos",     // nombre antiguo
+      urgencia: "rutinaria",               // campo eliminado
+    };
+    // El schema no tiene esos campos; los extras son ignorados pero los requeridos faltan
+    const result = eceRriCreateSchema.safeParse(legacy);
+    expect(result.success).toBe(false);
   });
 
   // 4 — list happy path
@@ -154,8 +161,8 @@ describe("eceRriRouter", () => {
     await expect(caller.get({ id: RRI_ID })).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  // 6 — get existente
-  it("get devuelve RRI existente", async () => {
+  // 6 — get existente con campos correctos (HD-25)
+  it("get devuelve RRI existente con columnas reales de BD", async () => {
     prisma.$queryRaw.mockResolvedValueOnce([RRI_ROW_BORRADOR] as never);
 
     const caller = eceRriRouter.createCaller(
@@ -165,15 +172,17 @@ describe("eceRriRouter", () => {
     const result = await caller.get({ id: RRI_ID });
     expect(result.id).toBe(RRI_ID);
     expect(result.tipo).toBe("referencia");
+    // Verificar que el tipo de retorno usa nombres de columnas correctos
+    expect(result.establecimiento_destino_id).toBe(ESTAB_ID);
+    expect(result.resumen_clinico).toBe("HTA controlada");
+    expect(result.respuesta_interconsultante).toBeNull();
   });
 
   // 7 — create NOT_FOUND episodio
   it("create lanza NOT_FOUND cuando episodio no existe", async () => {
-    // tipo_documento RRI existe
     prisma.$queryRaw.mockResolvedValueOnce([
       { tipo_doc_id: "tipo-id", estado_inicial_id: ESTADO_ID },
     ] as never);
-    // episodio no existe
     prisma.$queryRaw.mockResolvedValueOnce([] as never);
 
     const caller = eceRriRouter.createCaller(
@@ -184,17 +193,15 @@ describe("eceRriRouter", () => {
       caller.create({
         episodioId: EPISODIO_ID,
         tipo: "referencia",
-        destinoServicioId: SERVICIO_ID,
+        establecimientoDestinoId: ESTAB_ID,
         motivo: "Test",
-        datosClinicosRelevantes: "Datos",
-        urgencia: "rutinaria",
+        resumenClinico: "Resumen",
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   // 8 — firmar CONFLICT estado incorrecto
   it("firmar lanza CONFLICT cuando estado no es firmable", async () => {
-    // findRri devuelve estado firmado (ya no se puede refirmar)
     prisma.$queryRaw.mockResolvedValueOnce([RRI_ROW_FIRMADO] as never);
 
     const caller = eceRriRouter.createCaller(
@@ -217,9 +224,7 @@ describe("eceRriRouter", () => {
     await expect(
       caller.responder({
         rriId: RRI_ID,
-        respuesta: "Respuesta IC",
-        diagnostico: "CIE-10 test",
-        plan: "Plan de seguimiento",
+        respuestaInterconsultante: "Respuesta IC con diagnóstico K35.2 y plan de seguimiento.",
         pin: "123456",
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
@@ -241,11 +246,9 @@ describe("eceRriRouter", () => {
   // 11 — anular happy path
   it("anular happy path avanza estado cuando RRI está en borrador", async () => {
     prisma.$queryRaw.mockResolvedValueOnce([RRI_ROW_BORRADOR] as never);
-    // avanzarEstado: flujo_transicion
     prisma.$queryRaw.mockResolvedValueOnce([
       { estado_destino_id: "nuevo-estado-id" },
     ] as never);
-    // historial insert (via $queryRaw en el historial)
     prisma.$queryRaw.mockResolvedValueOnce([] as never);
 
     const caller = eceRriRouter.createCaller(
@@ -255,5 +258,19 @@ describe("eceRriRouter", () => {
     const result = await caller.anular({ rriId: RRI_ID, motivo: "Prueba anulación" });
     expect(result.ok).toBe(true);
     expect(result.anuladoEn).toBeDefined();
+  });
+
+  // 12 — eceRriResponderSchema usa respuestaInterconsultante (HD-25)
+  it("eceRriResponderSchema acepta respuestaInterconsultante y rechaza respuesta legacy", () => {
+    const correcto = {
+      rriId: RRI_ID,
+      respuestaInterconsultante: "Diagnóstico K35.2, plan: cirugía en 48h.",
+      pin: "123456",
+    };
+    expect(eceRriResponderSchema.safeParse(correcto).success).toBe(true);
+
+    // Nombre antiguo no satisface el schema (falta respuestaInterconsultante)
+    const legacy = { rriId: RRI_ID, respuesta: "Respuesta", diagnostico: "K35", plan: "Cirugía", pin: "123456" };
+    expect(eceRriResponderSchema.safeParse(legacy).success).toBe(false);
   });
 });
