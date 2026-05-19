@@ -8,6 +8,10 @@
  *
  * Acceso: roles DIR, ARCH, ADMIN.
  * Accesibilidad: WCAG 2.2 AA.
+ *
+ * HG-08 / HG-10: prompt() y alert() eliminados.
+ *   - Firma: modal accesible con PIN argon2id (WCAG 2.2 AA).
+ *   - Errores de validación: estado inline, no alert().
  */
 
 import * as React from "react";
@@ -30,6 +34,14 @@ import {
 } from "@his/ui/components/table";
 import { Badge } from "@his/ui/components/badge";
 import { Separator } from "@his/ui/components/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +71,121 @@ function formatDate(d: Date | string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// Modal firma con PIN — NTEC Art. 32 / HG-08
+// ---------------------------------------------------------------------------
+
+interface FirmarMinutaModalProps {
+  open: boolean;
+  minutaId: string;
+  fechaReunion: Date | string;
+  onClose: () => void;
+}
+
+function FirmarMinutaModal({
+  open,
+  minutaId,
+  fechaReunion,
+  onClose,
+}: FirmarMinutaModalProps) {
+  const utils = trpc.useUtils();
+  const [pin, setPin] = React.useState("");
+  const [pinError, setPinError] = React.useState<string | null>(null);
+
+  const firmar = trpc.comiteEce.firmar.useMutation({
+    onSuccess: () => {
+      void utils.comiteEce.list.invalidate();
+      onClose();
+    },
+    onError: (err) => {
+      setPinError(err.message);
+    },
+  });
+
+  // Resetear al abrir/cerrar
+  React.useEffect(() => {
+    if (!open) {
+      setPin("");
+      setPinError(null);
+    }
+  }, [open]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!/^\d{6,8}$/.test(pin)) {
+      setPinError("El PIN debe tener entre 6 y 8 dígitos numéricos.");
+      return;
+    }
+    setPinError(null);
+    firmar.mutate({ id: minutaId, pin });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Firmar minuta — Art. 32 NTEC</DialogTitle>
+          <DialogDescription>
+            Ingrese su PIN de firma electrónica para firmar la minuta del{" "}
+            <span className="font-medium">{formatDate(fechaReunion)}</span>.
+            La minuta quedará <strong>inmutable</strong> post-firma.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <div className="space-y-1.5">
+            <Label htmlFor="comite-firma-pin">PIN de firma</Label>
+            <Input
+              id="comite-firma-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="current-password"
+              autoFocus
+              maxLength={8}
+              value={pin}
+              onChange={(e) => {
+                setPin(e.target.value.replace(/\D/g, ""));
+                setPinError(null);
+              }}
+              disabled={firmar.isPending}
+              placeholder="6-8 dígitos"
+              aria-describedby={pinError ? "comite-pin-error" : undefined}
+              aria-invalid={pinError ? true : undefined}
+              className="tracking-widest text-center text-lg"
+            />
+            {pinError && (
+              <p
+                id="comite-pin-error"
+                role="alert"
+                className="text-xs text-destructive"
+              >
+                {pinError}
+              </p>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              disabled={firmar.isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              disabled={pin.length < 6 || firmar.isPending}
+              className="bg-[#1a3c6e] hover:bg-[#15305a] text-white"
+              aria-busy={firmar.isPending}
+            >
+              {firmar.isPending ? "Firmando…" : "Firmar minuta"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Formulario nueva minuta
 // ---------------------------------------------------------------------------
 
@@ -84,13 +211,15 @@ function NuevaMinutaForm({ onSuccess }: NuevaMinutaFormProps) {
   const [temas, setTemas] = React.useState<
     Array<{ numero: number; tema: string }>
   >([]);
+  const [formError, setFormError] = React.useState<string | null>(null);
 
   function addAsistente() {
     const parts = asistenteInput.split("|");
     if (parts.length < 2 || !parts[0]?.trim() || !parts[1]?.trim()) {
-      alert('Formato: "Nombre | Rol"');
+      setFormError('Formato incorrecto. Use: "Nombre | Rol"');
       return;
     }
+    setFormError(null);
     setAsistentes((prev) => [
       ...prev,
       { nombre: parts[0]!.trim(), rol: parts[1]!.trim() },
@@ -111,13 +240,14 @@ function NuevaMinutaForm({ onSuccess }: NuevaMinutaFormProps) {
     e.preventDefault();
     if (!fecha) return;
     if (asistentes.length === 0) {
-      alert("Agregue al menos un asistente.");
+      setFormError("Agregue al menos un asistente.");
       return;
     }
     if (temas.length === 0) {
-      alert("Agregue al menos un tema de agenda.");
+      setFormError("Agregue al menos un tema de agenda.");
       return;
     }
+    setFormError(null);
 
     create.mutate({
       fechaReunion: new Date(fecha),
@@ -205,6 +335,11 @@ function NuevaMinutaForm({ onSuccess }: NuevaMinutaFormProps) {
         {create.isPending ? "Guardando…" : "Crear minuta"}
       </Button>
 
+      {formError && (
+        <p role="alert" className="text-sm text-destructive">
+          {formError}
+        </p>
+      )}
       {create.isError && (
         <p role="alert" className="text-sm text-destructive">
           Error: {create.error.message}
@@ -221,14 +356,14 @@ function NuevaMinutaForm({ onSuccess }: NuevaMinutaFormProps) {
 export default function ComiteEcePage() {
   const [page, setPage] = React.useState(1);
   const [showForm, setShowForm] = React.useState(false);
+  const [firmarModal, setFirmarModal] = React.useState<{
+    minutaId: string;
+    fechaReunion: Date | string;
+  } | null>(null);
 
   const { data, isLoading, isError } = trpc.comiteEce.list.useQuery({
     page,
     pageSize: PAGE_SIZE,
-  });
-
-  const firmar = trpc.comiteEce.firmar.useMutation({
-    onSuccess: () => void window.location.reload(),
   });
 
   const items = data?.items ?? [];
@@ -331,18 +466,12 @@ export default function ComiteEcePage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              disabled={firmar.isPending}
-                              onClick={() => {
-                                const firmaId = prompt(
-                                  "Ingrese ID de firma electrónica del presidente del comité (UUID):",
-                                );
-                                if (firmaId?.match(/^[0-9a-f-]{36}$/i)) {
-                                  firmar.mutate({
-                                    id: m.id,
-                                    firmaPresidenteId: firmaId,
-                                  });
-                                }
-                              }}
+                              onClick={() =>
+                                setFirmarModal({
+                                  minutaId: m.id,
+                                  fechaReunion: m.fecha_reunion,
+                                })
+                              }
                               aria-label={`Firmar minuta del ${formatDate(m.fecha_reunion)}`}
                             >
                               Firmar
@@ -388,6 +517,14 @@ export default function ComiteEcePage() {
           )}
         </CardContent>
       </Card>
+      {firmarModal && (
+        <FirmarMinutaModal
+          open={true}
+          minutaId={firmarModal.minutaId}
+          fechaReunion={firmarModal.fechaReunion}
+          onClose={() => setFirmarModal(null)}
+        />
+      )}
     </main>
   );
 }
