@@ -35,15 +35,18 @@ vi.mock("@his/database", () => ({
 }));
 
 // ─── UUIDs constantes ────────────────────────────────────────────────────────
-const PERSONAL_ID   = "a1000000-0000-0000-0000-000000000001";
-const PACIENTE_ID   = "a2000000-0000-0000-0000-000000000002";
-const SALA_QX_ID    = "a3000000-0000-0000-0000-000000000003";
-const CIRUJANO_ID   = "a4000000-0000-0000-0000-000000000004";
-const ANEST_ID      = "a5000000-0000-0000-0000-000000000005";
-const ORDEN_ID      = "a6000000-0000-0000-0000-000000000006";
-const EPISODIO_ID   = "a7000000-0000-0000-0000-000000000007";
-const PREOP_ID      = "a8000000-0000-0000-0000-000000000008";
-const RESERVA_ID    = "a9000000-0000-0000-0000-000000000009";
+const PERSONAL_ID       = "a1000000-0000-0000-0000-000000000001";
+const PACIENTE_ID       = "a2000000-0000-0000-0000-000000000002";
+const SALA_QX_ID        = "a3000000-0000-0000-0000-000000000003";
+const CIRUJANO_ID       = "a4000000-0000-0000-0000-000000000004";
+const ANEST_ID          = "a5000000-0000-0000-0000-000000000005";
+const ORDEN_ID          = "a6000000-0000-0000-0000-000000000006";
+const EPISODIO_ID       = "a7000000-0000-0000-0000-000000000007";
+const PREOP_ID          = "a8000000-0000-0000-0000-000000000008";
+const RESERVA_ID        = "a9000000-0000-0000-0000-000000000009";
+const INSTANCIA_ID      = "b1000000-0000-0000-0000-000000000001";
+const TIPO_DOC_ID       = "b2000000-0000-0000-0000-000000000002";
+const ESTADO_INICIAL_ID = "b3000000-0000-0000-0000-000000000003";
 
 const PERSONAL_ROW = {
   id: PERSONAL_ID,
@@ -133,19 +136,25 @@ describe("eceBridgeCirugiaRouter", () => {
     });
 
     it("3. Happy-path: retorna ordenId, episodioId, preOpId, reservaId", async () => {
+      // Paso 5 ahora hace 3 queries extra (HE-11 fix):
+      //   5a: SELECT tipo_doc_id + estado_inicial_id de PREOP_CHECK
+      //   5b: INSERT documento_instancia → instancia_id
+      //   5c: INSERT preop_checklist con instancia_id + episodio_hospitalario_id
       setupTx(prisma);
       mockQuerySequence(
         prisma,
-        [PERSONAL_ROW],                     // 0: personal
-        [],                                 // 1: detectarConflicto → sin overlap
+        [PERSONAL_ROW],                                              // 0: personal
+        [],                                                          // 1: detectarConflicto → sin overlap
         // dentro de tx:
-        [{ id: ORDEN_ID }],                 // 2: INSERT orden_ingreso
-        [{ id: EPISODIO_ID }],              // 3: INSERT episodio_atencion
-        // $executeRaw: INSERT episodio_hospitalario (call 1)
-        // $executeRaw: UPDATE orden set episodio_id (call 2)
-        [{ id: PREOP_ID }],                 // 4: INSERT preop_checklist
-        [{ id: RESERVA_ID }],              // 5: INSERT reserva_sala_qx
-        // $executeRaw: UPDATE orden set reserva_id (call 3)
+        [{ id: ORDEN_ID }],                                          // 2: INSERT orden_ingreso
+        [{ id: EPISODIO_ID }],                                       // 3: INSERT episodio_atencion
+        // $executeRaw[0]: INSERT episodio_hospitalario
+        // $executeRaw[1]: UPDATE orden set episodio_id
+        [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 4: SELECT PREOP_CHECK
+        [{ id: INSTANCIA_ID }],                                      // 5: INSERT documento_instancia
+        [{ id: PREOP_ID }],                                          // 6: INSERT preop_checklist
+        [{ id: RESERVA_ID }],                                        // 7: INSERT reserva_sala_qx
+        // $executeRaw[2]: UPDATE orden set reserva_id
       );
       prisma.$executeRaw.mockResolvedValue(1);
 
@@ -156,6 +165,39 @@ describe("eceBridgeCirugiaRouter", () => {
       expect(result.episodioId).toBe(EPISODIO_ID);
       expect(result.preOpId).toBe(PREOP_ID);
       expect(result.reservaId).toBe(RESERVA_ID);
+    });
+
+    it("3b. HE-11/13: documento_instancia.episodio_id recibe el episodio_atencion.id (no hospitalario)", async () => {
+      // Verifica que el INSTANCIA INSERT usa episodioId (el de episodio_atencion)
+      // como episodio_id en documento_instancia, lo cual es correcto según el schema:
+      // episodio_hospitalario.episodio_id FK → episodio_atencion.id
+      // documento_instancia.episodio_id FK → episodio_atencion.id
+      const capturedCalls: unknown[][] = [];
+      setupTx(prisma);
+      let qrCall = 0;
+      prisma.$queryRaw.mockImplementation((...args) => {
+        capturedCalls.push(args as unknown[]);
+        qrCall++;
+        const responses: unknown[][] = [
+          [PERSONAL_ROW],
+          [],
+          [{ id: ORDEN_ID }],
+          [{ id: EPISODIO_ID }],
+          [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }],
+          [{ id: INSTANCIA_ID }],
+          [{ id: PREOP_ID }],
+          [{ id: RESERVA_ID }],
+        ];
+        return Promise.resolve(responses[qrCall - 1] ?? []);
+      });
+      prisma.$executeRaw.mockResolvedValue(1);
+
+      const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
+      await caller.programarCirugia(BASE_INPUT);
+
+      // 8 llamadas $queryRaw totales: personal, conflicto, orden, episodio,
+      // tipo_doc, instancia, preop, reserva
+      expect(qrCall).toBe(8);
     });
 
     it("4. Rollback: INSERT episodio_hospitalario falla → tx rechaza", async () => {
@@ -184,17 +226,22 @@ describe("eceBridgeCirugiaRouter", () => {
     });
 
     it("5. Rollback: INSERT preop_checklist falla → tx rechaza (reserva nunca se crea)", async () => {
+      // Con HE-11 fix, el flujo del Paso 5 es:
+      //   5a: SELECT tipo_doc OK
+      //   5b: INSERT documento_instancia OK
+      //   5c: INSERT preop_checklist → vacío → throw
       setupTxWithRollback(prisma);
       let qrCall = 0;
       prisma.$queryRaw.mockImplementation(() => {
         qrCall++;
-        // 0=personal, 1=conflicto, 2=orden, 3=episodio, 4=preop → vacío = error
         const responses: unknown[][] = [
-          [PERSONAL_ROW],
-          [],
-          [{ id: ORDEN_ID }],
-          [{ id: EPISODIO_ID }],
-          [], // preop RETURNING id vacío → throw interno
+          [PERSONAL_ROW],                                                      // 1: personal
+          [],                                                                   // 2: conflicto → sin overlap
+          [{ id: ORDEN_ID }],                                                   // 3: INSERT orden
+          [{ id: EPISODIO_ID }],                                                // 4: INSERT episodio
+          [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 5: tipo_doc PREOP_CHECK
+          [{ id: INSTANCIA_ID }],                                               // 6: INSERT documento_instancia
+          [], // 7: INSERT preop_checklist RETURNING → vacío → throw
         ];
         return Promise.resolve(responses[qrCall - 1] ?? []);
       });
@@ -205,9 +252,9 @@ describe("eceBridgeCirugiaRouter", () => {
         "No se pudo crear preop_checklist.",
       );
 
-      // Verificar que nunca se intentó crear la reserva (queryRaw call 5 no existe)
-      // qrCall debería ser 5 (hasta preop inclusive)
-      expect(qrCall).toBe(5);
+      // 7 llamadas: personal, conflicto, orden, episodio, tipo_doc, instancia, preop
+      // La reserva (call 8) nunca se ejecutó
+      expect(qrCall).toBe(7);
     });
   });
 

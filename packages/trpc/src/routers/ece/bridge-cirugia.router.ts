@@ -335,27 +335,59 @@ export const eceBridgeCirugiaRouter = router({
           WHERE id = ${ordenId}::uuid
         `;
 
-        // Paso 5: preop_checklist (borrador)
+        // Paso 5a: resolver tipo_documento PREOP_CHECK y su estado inicial
+        // (HE-11: preop_checklist requiere instancia_id FK a documento_instancia)
+        const preOpTipoRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ tipo_doc_id: string; estado_inicial_id: string }>>)`
+          SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
+          FROM ece.tipo_documento td
+          JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+          WHERE td.codigo = 'PREOP_CHECK'
+          LIMIT 1
+        `;
+        if (preOpTipoRows.length === 0) {
+          throw new Error("Tipo de documento PREOP_CHECK no configurado en el catálogo ECE.");
+        }
+        const { tipo_doc_id: preOpTipoId, estado_inicial_id: preOpEstadoId } = preOpTipoRows[0]!;
+
+        // Paso 5b: crear documento_instancia para el checklist
+        // episodio_id de documento_instancia referencia episodio_atencion.id (HE-13)
+        const preOpInstanciaRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<IdRow[]>)`
+          INSERT INTO ece.documento_instancia
+            (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+          VALUES (
+            ${preOpTipoId}::uuid,
+            ${episodioId}::uuid,
+            ${input.pacienteId}::uuid,
+            ${preOpEstadoId}::uuid,
+            ${personal.id}::uuid
+          )
+          RETURNING id::text
+        `;
+        const preOpInstanciaId = preOpInstanciaRows[0]?.id;
+        if (!preOpInstanciaId) throw new Error("No se pudo crear documento_instancia para preop_checklist.");
+
+        // Paso 5c: insertar preop_checklist con columnas reales
+        // episodio_hospitalario_id = episodioId (PK de episodio_hospitalario es episodio_id = episodioId)
         const preOpRows = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<IdRow[]>)`
           INSERT INTO ece.preop_checklist (
-            orden_id,
-            episodio_id,
-            paciente_id,
-            estado,
-            creado_por,
-            creado_en
+            instancia_id,
+            episodio_hospitalario_id,
+            registrado_por
           ) VALUES (
-            ${ordenId}::uuid,
+            ${preOpInstanciaId}::uuid,
             ${episodioId}::uuid,
-            ${input.pacienteId}::uuid,
-            'borrador',
-            ${personal.id}::uuid,
-            now()
+            ${personal.id}::uuid
           )
-          RETURNING id
+          RETURNING id::text
         `;
         const preOpId = preOpRows[0]?.id;
         if (!preOpId) throw new Error("No se pudo crear preop_checklist.");
@@ -573,15 +605,19 @@ export const eceBridgeCirugiaRouter = router({
         }
 
         // Paso 2: cancelar preop_checklist
-        await (rawTx.$executeRaw as (
-          tpl: TemplateStringsArray,
-          ...vals: unknown[]
-        ) => Promise<number>)`
-          UPDATE ece.preop_checklist
-          SET estado = 'cancelado'
-          WHERE orden_id = ${input.ordenId}::uuid
-            AND estado <> 'finalizado'
-        `;
+        // Se filtra por episodio_hospitalario_id (no existe orden_id ni columna estado;
+        // el campo correcto es estado_registro — HE-11 fix).
+        if (orden.episodio_id) {
+          await (rawTx.$executeRaw as (
+            tpl: TemplateStringsArray,
+            ...vals: unknown[]
+          ) => Promise<number>)`
+            UPDATE ece.preop_checklist
+            SET estado_registro = 'cancelado'
+            WHERE episodio_hospitalario_id = ${orden.episodio_id}::uuid
+              AND estado_registro <> 'firmado'
+          `;
+        }
 
         // Paso 3: cerrar episodio_atencion si existe
         if (orden.episodio_id) {

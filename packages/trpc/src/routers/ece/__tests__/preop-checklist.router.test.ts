@@ -160,3 +160,37 @@ describe("Schemas completos — parse exitoso", () => {
     }
   });
 });
+
+/**
+ * HE-13: episodio_hospitalario.episodio_id (PK) = episodio_atencion.id
+ * documento_instancia.episodio_id FK → episodio_atencion.id
+ *
+ * El campo Zod `episodioHospitalarioId` en preop-checklist.router.ts
+ * es el ID de episodio_atencion (PK de episodio_hospitalario), NO un ID
+ * independiente de una tabla episodio_hospitalario con PK propia.
+ * Esta suite documenta el contrato semántico para prevenir regresión.
+ */
+describe("HE-13 — contrato semántico episodioHospitalarioId", () => {
+  it("episodioHospitalarioId es un UUID (referencia a episodio_atencion.id)", () => {
+    // episodio_hospitalario.episodio_id FK → episodio_atencion.id
+    // Por tanto, el campo en el schema es el mismo UUID del episodio_atencion
+    const EPISODIO_ATENCION_ID = "c1000000-0000-0000-0000-000000000001";
+    const result = preopChecklistCreateSchema.safeParse({
+      episodioHospitalarioId: EPISODIO_ATENCION_ID,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      // Este UUID debe usarse en documento_instancia.episodio_id (FK episodio_atencion)
+      // y en preop_checklist.episodio_hospitalario_id (FK episodio_hospitalario.episodio_id)
+      expect(result.data.episodioHospitalarioId).toBe(EPISODIO_ATENCION_ID);
+    }
+  });
+
+  it("rechaza episodioHospitalarioId no-uuid (evita pasar ID de otro tipo)", () => {
+    // Previene pasar un ID de episodio_hospitalario con otro formato
+    const result = preopChecklistCreateSchema.safeParse({
+      episodioHospitalarioId: "EH-2026-001",
+    });
+    expect(result.success).toBe(false);
+  });
+});
