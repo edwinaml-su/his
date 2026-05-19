@@ -6,7 +6,9 @@
  *   get:                happy-path; NOT_FOUND
  *   registrarNacimiento: happy-path; CONFLICT si episodio ya tiene registro;
  *                        PRECONDITION_FAILED si no hay personal ECE
- *   firmar:             happy-path; BAD_REQUEST si no es borrador; NOT_FOUND
+ *   firmar:             ZodError sin PIN; UNAUTHORIZED PIN incorrecto;
+ *                       UNAUTHORIZED cuenta bloqueada (TOO_MANY_REQUESTS);
+ *                       happy-path PIN correcto; NOT_FOUND; BAD_REQUEST si no borrador
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -36,14 +38,23 @@ vi.mock("../../../workflow/context", () => ({
   ),
 }));
 
+// argon2: mock para pruebas unitarias sin resolución nativa
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn(),
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const SALA_ID       = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-const EPISODIO_ID   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-const PERSONAL_ID   = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const SALA_ID        = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const EPISODIO_ID    = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const PERSONAL_ID    = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const RN_PLACEHOLDER = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const FIRMA_ID       = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const VALID_PIN      = "123456";
 
 function makeSalaRow(overrides: Partial<{
   id: string;
@@ -84,6 +95,20 @@ function makeSalaRow(overrides: Partial<{
     firmado_por: overrides.firmado_por ?? null,
     firmado_en: overrides.firmado_en ?? null,
     registrado_en: overrides.registrado_en ?? new Date("2026-05-17T14:05:00Z"),
+  };
+}
+
+function makeFirmaRow(overrides: {
+  failed_attempts?: number;
+  locked_until?: Date | null;
+  revoked_at?: Date | null;
+} = {}): { id: string; pin_hash: string; failed_attempts: number; locked_until: Date | null; revoked_at: Date | null } {
+  return {
+    id: FIRMA_ID,
+    pin_hash: "$argon2id$mock",
+    failed_attempts: overrides.failed_attempts ?? 0,
+    locked_until: overrides.locked_until ?? null,
+    revoked_at: overrides.revoked_at ?? null,
   };
 }
 
@@ -214,13 +239,64 @@ describe("eceSalaExpulsionRouter", () => {
   // ── firmar ────────────────────────────────────────────────────────────────
 
   describe("firmar", () => {
-    it("transiciona estado borrador → firmado", async () => {
-      // findSalaExpulsion
+    it("lanza ZodError cuando se omite el PIN", async () => {
+      const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
+      // @ts-expect-error — test intencional de input inválido
+      await expect(caller.firmar({ id: SALA_ID })).rejects.toThrow();
+    });
+
+    it("lanza UNAUTHORIZED cuando el PIN es incorrecto", async () => {
+      const { argon2 } = await import("@his/infrastructure");
+      vi.mocked(argon2.verify).mockResolvedValueOnce(false);
+
+      // findSalaExpulsion → borrador
       prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
+      // findPersonal → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // findFirma → firma activa, sin lockout
+      prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow()]);
+      // UPDATE failed_attempts
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
-      const result = await caller.firmar({ id: SALA_ID });
+      await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
+      });
+    });
+
+    it("lanza TOO_MANY_REQUESTS con cuenta bloqueada", async () => {
+      const lockedUntil = new Date(Date.now() + 10 * 60_000);
+
+      // findSalaExpulsion → borrador
+      prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
+      // findPersonal → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // findFirma → bloqueada
+      prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow({ locked_until: lockedUntil })]);
+
+      const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+    });
+
+    it("transiciona estado borrador → firmado con PIN correcto", async () => {
+      const { argon2 } = await import("@his/infrastructure");
+      vi.mocked(argon2.verify).mockResolvedValueOnce(true);
+
+      // findSalaExpulsion → borrador
+      prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
+      // findPersonal → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // findFirma → activa, sin lockout
+      prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow()]);
+      // UPDATE failed_attempts = 0
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+      // UPDATE sala_expulsion
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+
+      const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.firmar({ id: SALA_ID, pin: VALID_PIN });
 
       expect(result.ok).toBe(true);
     });
@@ -229,7 +305,7 @@ describe("eceSalaExpulsionRouter", () => {
       prisma.$queryRaw.mockResolvedValueOnce([]);
 
       const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
-      await expect(caller.firmar({ id: SALA_ID })).rejects.toMatchObject({
+      await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
     });
@@ -240,7 +316,7 @@ describe("eceSalaExpulsionRouter", () => {
       ]);
 
       const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
-      await expect(caller.firmar({ id: SALA_ID })).rejects.toMatchObject({
+      await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
         code: "BAD_REQUEST",
       });
     });
