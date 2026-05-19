@@ -21,12 +21,6 @@ const TIPO_LABEL: Record<string, string> = {
   interconsulta: "Interconsulta",
 };
 
-const URGENCIA_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  rutinaria: "outline",
-  prioritaria: "secondary",
-  urgente: "destructive",
-};
-
 const ESTADO_LABEL: Record<string, string> = {
   borrador: "Borrador",
   en_revision: "En revision",
@@ -53,15 +47,12 @@ function RespuestaIcSection({
   rri: {
     id: string;
     estado_codigo: string;
-    respuesta: string | null;
-    diagnostico_ic: string | null;
-    plan_ic: string | null;
+    respuesta_interconsultante: string | null;
     respondido_por: string | null;
-    fecha_respuesta: Date | string | null;
   };
 }) {
   const [open, setOpen] = React.useState(false);
-  const hasRespuesta = rri.respuesta !== null;
+  const hasRespuesta = rri.respuesta_interconsultante !== null;
 
   return (
     <div className="rounded-md border">
@@ -86,30 +77,12 @@ function RespuestaIcSection({
               Sin respuesta aun. El IC debe completarla desde la pagina de respuesta.
             </p>
           ) : (
-            <>
-              <dl className="space-y-2">
-                <div>
-                  <dt className="text-xs text-muted-foreground">Respuesta</dt>
-                  <dd className="mt-0.5 whitespace-pre-wrap">{rri.respuesta}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Diagnostico IC</dt>
-                  <dd className="mt-0.5">{rri.diagnostico_ic}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Plan</dt>
-                  <dd className="mt-0.5 whitespace-pre-wrap">{rri.plan_ic}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-muted-foreground">Respondido</dt>
-                  <dd className="mt-0.5 font-mono text-xs">
-                    {rri.fecha_respuesta
-                      ? dateFmt.format(new Date(rri.fecha_respuesta))
-                      : "—"}
-                  </dd>
-                </div>
-              </dl>
-            </>
+            <dl className="space-y-2">
+              <div>
+                <dt className="text-xs text-muted-foreground">Respuesta</dt>
+                <dd className="mt-0.5 whitespace-pre-wrap">{rri.respuesta_interconsultante}</dd>
+              </div>
+            </dl>
           )}
         </div>
       )}
@@ -173,21 +146,13 @@ export default function RriDetallePage() {
               <dd className="font-medium capitalize">{TIPO_LABEL[rri.tipo] ?? rri.tipo}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">Urgencia</dt>
-              <dd>
-                <Badge variant={URGENCIA_VARIANT[rri.urgencia] ?? "outline"}>
-                  {rri.urgencia}
-                </Badge>
-              </dd>
-            </div>
-            <div>
               <dt className="text-xs text-muted-foreground">Episodio</dt>
               <dd className="font-mono text-xs">{rri.episodio_id}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">Fecha solicitud</dt>
+              <dt className="text-xs text-muted-foreground">Registrado</dt>
               <dd className="tabular-nums">
-                {dateFmt.format(new Date(rri.fecha_solicitud))}
+                {dateFmt.format(new Date(rri.registrado_en))}
               </dd>
             </div>
             <div className="md:col-span-2">
@@ -195,8 +160,8 @@ export default function RriDetallePage() {
               <dd className="mt-0.5 whitespace-pre-wrap">{rri.motivo}</dd>
             </div>
             <div className="md:col-span-2">
-              <dt className="text-xs text-muted-foreground">Datos clinicos relevantes</dt>
-              <dd className="mt-0.5 whitespace-pre-wrap">{rri.datos_clinicos_relevantes}</dd>
+              <dt className="text-xs text-muted-foreground">Resumen clinico</dt>
+              <dd className="mt-0.5 whitespace-pre-wrap">{rri.resumen_clinico}</dd>
             </div>
           </dl>
         </CardContent>
