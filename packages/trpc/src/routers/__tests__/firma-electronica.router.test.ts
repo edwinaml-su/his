@@ -56,7 +56,7 @@ describe("firmaElectronicaRouter", () => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
     // Re-establecer implementaciones por defecto después de clearAllMocks.
-    const { default: argon2 } = await import("argon2");
+    const { argon2 } = await import("@his/infrastructure");
     vi.mocked(argon2.hash).mockResolvedValue("$argon2id$test$hash");
     vi.mocked(argon2.verify).mockResolvedValue(true);
   });
@@ -124,7 +124,7 @@ describe("firmaElectronicaRouter", () => {
     });
 
     it("PIN incorrecto devuelve UNAUTHORIZED", async () => {
-      const { default: argon2 } = await import("argon2");
+      const { argon2 } = await import("@his/infrastructure");
       vi.mocked(argon2.verify).mockResolvedValueOnce(false);
 
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
