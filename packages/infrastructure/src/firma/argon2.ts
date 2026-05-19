@@ -16,23 +16,20 @@
  *   - argon2.argon2id (constante de tipo)
  *   - default export con las 3
  */
-import {
-  hash as rsHash,
-  verify as rsVerify,
-  Algorithm,
-} from "@node-rs/argon2";
+import { hash as rsHash, verify as rsVerify } from "@node-rs/argon2";
 
-/** Compatibilidad con `argon2.argon2id` del paquete original. */
-export const argon2id = Algorithm.Argon2id;
-
-/** Compatibilidad con `argon2.argon2i`. */
-export const argon2i = Algorithm.Argon2i;
-
-/** Compatibilidad con `argon2.argon2d`. */
-export const argon2d = Algorithm.Argon2d;
+// `Algorithm` en @node-rs/argon2 es un const enum, incompatible con
+// isolatedModules:true. Usamos literales numéricos (mismo valor) para evitar
+// el TS2748 "Cannot access ambient const enums".
+//   Argon2d  = 0
+//   Argon2i  = 1
+//   Argon2id = 2
+export const argon2id = 2;
+export const argon2i = 1;
+export const argon2d = 0;
 
 interface ArgonHashOptions {
-  type?: Algorithm;
+  type?: number;
   salt?: Buffer | Uint8Array;
   memoryCost?: number;
   timeCost?: number;
@@ -50,7 +47,8 @@ export async function hash(
   options?: ArgonHashOptions,
 ): Promise<string> {
   return rsHash(password, {
-    algorithm: options?.type ?? Algorithm.Argon2id,
+    // cast literal -> Algorithm — el runtime acepta el número directamente.
+    algorithm: (options?.type ?? 2) as never,
     salt: options?.salt as Buffer | undefined,
     memoryCost: options?.memoryCost,
     timeCost: options?.timeCost,

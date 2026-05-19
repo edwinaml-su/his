@@ -152,7 +152,7 @@ async function checkPinDir(firmaRow: FirmaRow, pin: string): Promise<void> {
   // Verificación argon2id delegada al módulo firma.verify ya existente.
   // Aquí solo necesitamos que el router de firma confirme el PIN; lo hacemos
   // mediante import lazy para evitar duplicar la lógica argon2.
-  const argon2 = await import("argon2");
+  const argon2 = await import("@his/infrastructure/firma/argon2");
   const valid = await argon2.default.verify(
     // pin_hash viene de la query — necesitamos incluirlo en FirmaRow.
     // Nota: FirmaRow debe incluir pin_hash; se amplía la query en findFirmaDir.

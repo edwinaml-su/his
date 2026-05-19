@@ -220,7 +220,7 @@ async function verifyPin(firma: PersonalRow, pin: string): Promise<void> {
       message: `Firma bloqueada por intentos fallidos. Inténtelo en ${mins} min.`,
     });
   }
-  const argon2 = await import("argon2");
+  const argon2 = await import("@his/infrastructure/firma/argon2");
   const valid = await argon2.default.verify(firma.pin_hash, pin);
   if (!valid) {
     throw new TRPCError({
