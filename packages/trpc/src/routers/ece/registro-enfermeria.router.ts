@@ -4,7 +4,19 @@
  * Documento NTEC: Doc 7 — Registro de Enfermería y Administración de Medicamento
  *   (MAR = Medication Administration Record / Kardex de Enfermería).
  * Norma: TDR §7 / MINSAL Acuerdo n.° 1616 (2024).
- * Código de tipo_documento: REG_ENF.
+ *
+ * ---------------------------------------------------------------------------
+ * MAPPING BD real (resuelto HD-22)
+ * ---------------------------------------------------------------------------
+ *   ece.registro_enfermeria:
+ *     id, instancia_id, episodio_id, turno, nota_evolucion, plan_cuidados,
+ *     valoracion_enf (jsonb), registrado_por (uuid), registrado_en, estado_registro
+ *     — SIN: fecha, organization_id, personal_id, firmado_por, firmado_en
+ *
+ *   ece.administracion_medicamento:
+ *     id, registro_enf_id, indicacion_item_id, hora_programada (timestamptz),
+ *     hora_aplicada (timestamptz), estado (text), motivo_omision, responsable (uuid)
+ *     — SIN: registro_id, hora_administrada, dosis_administrada, via_usada
  *
  * ---------------------------------------------------------------------------
  * WORKFLOW  (código tipo: REG_ENF)
@@ -13,33 +25,25 @@
  *   en_revision → firmado      (NURSE: firma al final de turno)
  *   firmado     → validado     (NURSE coordinadora: cierre formal)
  *
- *   Estados son por cabecera (ece.registro_enfermeria); los ítems de
- *   administración (ece.administracion_medicamento) se insertan en borrador/en_revision.
+ * ---------------------------------------------------------------------------
+ * HD-23 (P1): scheduledSlot
+ * ---------------------------------------------------------------------------
+ *   registrarAdministracion deriva hora_programada usando computeScheduledSlot
+ *   a partir de ece.indicacion_item.hora_indicada + frequencia.
+ *   Sin este slot la conciliación de omisiones (MISSED) es imposible.
  *
  * ---------------------------------------------------------------------------
- * OUTBOX (emitDomainEvent dentro del callback de withWorkflowContext)
+ * HD-24 (P1): RLS / filtro tenant
  * ---------------------------------------------------------------------------
- *   'ece.administracion.registrada'  — Stream 30. Emitido por registrarAdministracion().
- *     Payload: { registroId, indicacionItemId, horaAdministrada, enfermeroId, orgId }
- *   Usado por el motor de Kardex y BCMA para conciliar administraciones.
+ *   list usa withEceContext (demota a `authenticated` → RLS aplica) y filtra
+ *   por episodio_id en lugar de organization_id (columna que no existe en BD).
  *
  * ---------------------------------------------------------------------------
- * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * OUTBOX
  * ---------------------------------------------------------------------------
- *   ece.registro_enfermeria        — cabecera (episodio_id, fecha, turno,
- *                                    estado, observaciones, firmado_por, firmado_en)
- *   ece.administracion_medicamento — línea de detalle (registro_id,
- *                                    indicacion_item_id, hora_administrada,
- *                                    dosis_administrada, via_usada, observaciones)
- *
- * ---------------------------------------------------------------------------
- * ROLES tRPC (todas las procedures: requireRole(["NURSE"]))
- * ---------------------------------------------------------------------------
- *   list, get, create, update           → NURSE
- *   firmar, validar, registrarAdministracion → NURSE
- *
- * Raw SQL es obligatorio porque ece.* usa schema Postgres separado (opción B)
- * y no está en schema.prisma. Las queries usan prisma.$queryRaw con Prisma.sql.
+ *   'ece.administracion.registrada'  — Stream 30.
+ *   Payload: { administracionId, registroEnfId, indicacionItemId,
+ *              episodioId, enfermeraId, horaProgramada }
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -47,31 +51,32 @@ import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
 import { applyGs1Validation } from "../../gs1/require-gs1-validation";
+import { computeScheduledSlot } from "../../utils/medication-slot";
 import type { TenantContext } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
-// Schemas Zod locales
-// (espejo de packages/contracts/src/schemas/ece-registro-enfermeria.ts)
+// Schemas Zod — espejo de packages/contracts/src/schemas/ece-registro-enfermeria.ts
+// Se definen aquí porque el paquete contracts se resuelve desde el monorepo raíz
+// en contexto de worktree y puede no incluir el export del nuevo schema.
 // ---------------------------------------------------------------------------
 
-const turnoEnum = z.enum(["matutino", "vespertino", "nocturno"]);
+export const turnoEnum = z.enum(["matutino", "vespertino", "nocturno"]);
 
 const eceRegistroCreateSchema = z.object({
   episodioId: z.string().uuid(),
-  fecha: z.coerce.date(),
   turno: turnoEnum,
-  observaciones: z.string().trim().max(2000).optional(),
+  notaEvolucion: z.string().trim().max(2000).optional(),
+  planCuidados: z.string().trim().max(4000).optional(),
+  valoracionEnf: z.record(z.unknown()).optional(),
 });
 
 const eceAdministracionSchema = z.object({
-  registroId: z.string().uuid(),
+  registroEnfId: z.string().uuid(),
   indicacionItemId: z.string().uuid(),
-  horaAdministrada: z.coerce.date(),
-  dosisAdministrada: z.string().trim().min(1).max(100),
-  viaUsada: z.string().trim().min(1).max(80),
-  observaciones: z.string().trim().max(2000).optional(),
-  // Campos GS1 opcionales — cuando presentes activan validación 5 correctos obligatoria
+  horaAplicada: z.coerce.date(),
+  estado: z.enum(["administrado", "omitido", "pospuesto"]).default("administrado"),
+  motivoOmision: z.string().trim().max(500).optional(),
   gs1: z.object({
     gtin: z.string().min(8).max(14),
     lote: z.string().min(1).max(80),
@@ -79,12 +84,13 @@ const eceAdministracionSchema = z.object({
     pacienteId: z.string().uuid(),
     pacienteGsrn: z.string().length(18).optional(),
     episodioId: z.string().uuid().optional(),
+    dosis: z.string().min(1).max(100).optional(),
+    via: z.string().min(1).max(80).optional(),
   }).optional(),
 });
 
 const eceRegistroListSchema = z.object({
   episodioId: z.string().uuid().optional(),
-  fecha: z.coerce.date().optional(),
   limit: z.number().int().min(1).max(100).default(20),
 });
 
@@ -97,45 +103,29 @@ const eceRegistroIdSchema   = z.object({ id: z.string().uuid() });
 
 export interface RegistroRow {
   id: string;
+  instancia_id: string;
   episodio_id: string;
-  personal_id: string;
-  organization_id: string;
-  fecha: Date;
   turno: string;
-  estado: string;
-  observaciones: string | null;
-  creado_en: Date;
+  nota_evolucion: string | null;
+  plan_cuidados: string | null;
+  valoracion_enf: Record<string, unknown> | null;
+  registrado_por: string;
+  registrado_en: Date;
+  estado_registro: string;
 }
 
 export interface IndicacionItemRow {
   id: string;
   estado: string;
   episodio_id: string;
-}
-
-interface AdministracionRow {
-  id: string;
-  registro_id: string;
-  indicacion_item_id: string;
-  hora_administrada: Date;
-  dosis_administrada: string;
-  via_usada: string;
-  observaciones: string | null;
-  registrado_por: string;
-  registrado_en: Date;
+  hora_indicada: Date | null;
+  frequencia: string | null;
 }
 
 // ---------------------------------------------------------------------------
-// Helper de contexto ECE para este router
+// Helper de contexto ECE
 // ---------------------------------------------------------------------------
 
-/**
- * Construye el EceContext desde el tenant+user del trpc ctx.
- * `personalId` se resuelve a partir de `ctx.user.id` — el personal_salud
- * vinculado al usuario HIS se obtiene en la consulta raw del router.
- * Aquí usamos el user.id como personalId provisional; la RLS del schema ece
- * lo valida contra `app.ece_personal_id`.
- */
 function buildEceCtx(tenant: TenantContext, userId: string) {
   return {
     personalId: userId,
@@ -143,10 +133,6 @@ function buildEceCtx(tenant: TenantContext, userId: string) {
   };
 }
 
-/**
- * Aplica contexto ECE + ejecuta fn en una transacción.
- * Alias local de withWorkflowContext con el nombre semántico del módulo.
- */
 async function withEceContext<T>(
   prisma: PrismaClient,
   tenant: TenantContext,
@@ -160,6 +146,11 @@ async function withEceContext<T>(
 // Helpers de consulta raw
 // ---------------------------------------------------------------------------
 
+/**
+ * Busca un registro de enfermería por id.
+ * HD-24: filtra por episodio→establecimiento en lugar de organization_id
+ * (columna inexistente en BD). Ejecutar dentro de withEceContext.
+ */
 async function findRegistro(
   prisma: Pick<PrismaClient, "$queryRaw">,
   id: string,
@@ -169,16 +160,25 @@ async function findRegistro(
     query: TemplateStringsArray,
     ...values: unknown[]
   ) => Promise<RegistroRow[]>)`
-    SELECT id, episodio_id, personal_id, organization_id,
-           fecha, turno, estado, observaciones, creado_en
-    FROM ece.registro_enfermeria
-    WHERE id = ${id}::uuid
-      AND organization_id = ${orgId}::uuid
+    SELECT re.id, re.instancia_id, re.episodio_id, re.turno,
+           re.nota_evolucion, re.plan_cuidados, re.valoracion_enf,
+           re.registrado_por, re.registrado_en, re.estado_registro
+    FROM ece.registro_enfermeria re
+    JOIN ece.episodio_atencion ea ON ea.id = re.episodio_id
+    WHERE re.id = ${id}::uuid
+      AND ea.establecimiento_id IN (
+        SELECT id FROM public."Organization"
+        WHERE "parentId"::text = ${orgId}
+           OR id::text = ${orgId}
+      )
     LIMIT 1
   `;
   return rows[0] ?? null;
 }
 
+/**
+ * Busca indicacion_item con hora_indicada + frequencia para derivar scheduledSlot.
+ */
 async function findIndicacionItem(
   prisma: Pick<PrismaClient, "$queryRaw">,
   id: string,
@@ -188,11 +188,17 @@ async function findIndicacionItem(
     query: TemplateStringsArray,
     ...values: unknown[]
   ) => Promise<IndicacionItemRow[]>)`
-    SELECT ii.id, ii.estado, i.episodio_id
+    SELECT ii.id, ii.estado, i.episodio_id,
+           ii.hora_indicada, ii.frequencia
     FROM ece.indicacion_item ii
     JOIN ece.indicacion i ON i.id = ii.indicacion_id
+    JOIN ece.episodio_atencion ea ON ea.id = i.episodio_id
     WHERE ii.id = ${id}::uuid
-      AND i.organization_id = ${orgId}::uuid
+      AND ea.establecimiento_id IN (
+        SELECT id FROM public."Organization"
+        WHERE "parentId"::text = ${orgId}
+           OR id::text = ${orgId}
+      )
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -205,29 +211,25 @@ async function findIndicacionItem(
 const nurseRole = requireRole(["NURSE"]);
 
 export const registroEnfermeriaRouter = router({
-  /** Lista registros de jornada con filtros por episodioId y/o fecha. */
+  /**
+   * Lista registros de jornada.
+   * HD-24: withEceContext → RLS aplica; filtra por episodio_id (no organization_id).
+   */
   list: nurseRole
     .input(eceRegistroListSchema)
     .query(async ({ ctx, input }) => {
-      const orgId = ctx.tenant.organizationId;
-
-      // HD-24 — withEceContext garantiza demote a `authenticated` para que
-      // RLS de `ece.registro_enfermeria` aplique. El filtro WHERE
-      // organization_id sigue como defensa en profundidad.
       return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
         return (tx.$queryRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<RegistroRow[]>)`
-          SELECT id, episodio_id, personal_id, organization_id,
-                 fecha, turno, estado, observaciones, creado_en
-          FROM ece.registro_enfermeria
-          WHERE organization_id = ${orgId}::uuid
-            AND (${input.episodioId ?? null}::uuid IS NULL
-                 OR episodio_id = ${input.episodioId ?? null}::uuid)
-            AND (${input.fecha ?? null}::date IS NULL
-                 OR fecha = ${input.fecha ?? null}::date)
-          ORDER BY fecha DESC, creado_en DESC
+          SELECT re.id, re.instancia_id, re.episodio_id, re.turno,
+                 re.nota_evolucion, re.plan_cuidados, re.valoracion_enf,
+                 re.registrado_por, re.registrado_en, re.estado_registro
+          FROM ece.registro_enfermeria re
+          WHERE (${input.episodioId ?? null}::uuid IS NULL
+                 OR re.episodio_id = ${input.episodioId ?? null}::uuid)
+          ORDER BY re.registrado_en DESC
           LIMIT ${input.limit}
         `;
       });
@@ -237,7 +239,6 @@ export const registroEnfermeriaRouter = router({
   get: nurseRole
     .input(eceRegistroGetSchema)
     .query(async ({ ctx, input }) => {
-      // HD-24 — findRegistro hace $queryRaw; debe ejecutarse con rol demoted.
       const row = await withEceContext(
         ctx.prisma,
         ctx.tenant,
@@ -248,48 +249,32 @@ export const registroEnfermeriaRouter = router({
       return row;
     }),
 
-  /** Crea la cabecera del registro de jornada (estado inicial: borrador). */
+  /**
+   * Crea la cabecera del registro de jornada (estado inicial: borrador).
+   * HD-22: INSERT usa columnas BD reales. Sin fecha, organization_id, personal_id.
+   */
   create: nurseRole
     .input(eceRegistroCreateSchema)
     .mutation(async ({ ctx, input }) => {
-      const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
-        // Resolver personal_id a partir de his_user_id
-        const personalRows = await (tx.$queryRaw as (
-          query: TemplateStringsArray,
-          ...values: unknown[]
-        ) => Promise<Array<{ id: string }>>)`
-          SELECT id FROM ece.personal_salud
-          WHERE his_user_id = ${userId}::uuid
-            AND activo = true
-          LIMIT 1
-        `;
-        const personal = personalRows[0] ?? null;
-        if (!personal) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "No se encontró un profesional ECE asociado a su cuenta.",
-          });
-        }
-
         const rows = await (tx.$queryRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<Array<{ id: string }>>)`
           INSERT INTO ece.registro_enfermeria
-            (episodio_id, personal_id, organization_id,
-             fecha, turno, estado, observaciones, creado_en)
+            (episodio_id, turno, nota_evolucion, plan_cuidados,
+             valoracion_enf, registrado_por, registrado_en, estado_registro)
           VALUES
             (${input.episodioId}::uuid,
-             ${personal.id}::uuid,
-             ${orgId}::uuid,
-             ${input.fecha}::date,
              ${input.turno},
-             'borrador',
-             ${input.observaciones ?? null},
-             now())
+             ${input.notaEvolucion ?? null},
+             ${input.planCuidados ?? null},
+             ${input.valoracionEnf ? JSON.stringify(input.valoracionEnf) : null}::jsonb,
+             ${userId}::uuid,
+             now(),
+             'borrador')
           RETURNING id
         `;
         const created = rows[0];
@@ -304,9 +289,12 @@ export const registroEnfermeriaRouter = router({
     }),
 
   /**
-   * Agrega una fila a ece.administracion_medicamento para el registro de jornada.
-   * Valida que la indicacion exista y no esté anulada.
-   * Emite `ece.administracion.registrada` vía outbox transaccional.
+   * Agrega una fila a ece.administracion_medicamento.
+   *
+   * HD-23 (P1): deriva hora_programada via computeScheduledSlot usando
+   *   indicacion_item.hora_indicada + frequencia.
+   *
+   * HD-22: INSERT usa columnas BD reales: registro_enf_id, hora_aplicada, responsable.
    */
   registrarAdministracion: nurseRole
     .input(eceAdministracionSchema)
@@ -314,68 +302,63 @@ export const registroEnfermeriaRouter = router({
       const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
-      // Verificar que el registro padre existe y pertenece al tenant
-      const registro = await findRegistro(
-        ctx.prisma,
-        input.registroId,
-        orgId,
-      );
-      if (!registro) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Registro de enfermería no encontrado.",
-        });
-      }
-
-      // Verificar indicacion_item existe y no está anulada
-      const indicacion = await findIndicacionItem(
-        ctx.prisma,
-        input.indicacionItemId,
-        orgId,
-      );
-      if (!indicacion) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "La indicación referenciada no existe en la organización.",
-        });
-      }
-      if (indicacion.estado === "anulada") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "No se puede registrar administración sobre una indicación anulada.",
-        });
-      }
-
-      // Validación 5 correctos GS1 — enforcement obligatorio cuando se proveen campos GS1.
-      // Falla con PRECONDITION_FAILED si algún "correcto" falla (severity=error).
-      if (input.gs1) {
-        await applyGs1Validation(ctx, {
-          ...input.gs1,
-          dosis: input.dosisAdministrada,
-          via: input.viaUsada,
-          hora: input.horaAdministrada,
-          indicacionItemId: input.indicacionItemId,
-        });
-      }
-
+      // Todas las queries en un único withEceContext para minimizar transacciones
+      // y mantener la secuencia de $queryRaw predecible para tests.
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        const registro = await findRegistro(tx, input.registroEnfId, orgId);
+        if (!registro) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Registro de enfermería no encontrado.",
+          });
+        }
+
+        const indicacion = await findIndicacionItem(tx, input.indicacionItemId, orgId);
+        if (!indicacion) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La indicación referenciada no existe en la organización.",
+          });
+        }
+        if (indicacion.estado === "anulada") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "No se puede registrar administración sobre una indicación anulada.",
+          });
+        }
+
+        // HD-23: slot programado desde la indicación médica.
+        // Fallback a horaAplicada si no hay hora_indicada o frequencia disponibles.
+        const horaProgramada: Date =
+          indicacion.hora_indicada !== null && indicacion.frequencia !== null
+            ? computeScheduledSlot(indicacion.hora_indicada, indicacion.frequencia, input.horaAplicada)
+            : input.horaAplicada;
+
+        if (input.gs1) {
+          await applyGs1Validation(ctx, {
+            ...input.gs1,
+            dosis: input.gs1.dosis ?? "",
+            via: input.gs1.via ?? "",
+            hora: input.horaAplicada,
+            indicacionItemId: input.indicacionItemId,
+          });
+        }
+
         const rows = await (tx.$queryRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<Array<{ id: string }>>)`
           INSERT INTO ece.administracion_medicamento
-            (registro_id, indicacion_item_id, hora_administrada,
-             dosis_administrada, via_usada, observaciones,
-             registrado_por, registrado_en)
+            (registro_enf_id, indicacion_item_id, hora_programada,
+             hora_aplicada, estado, motivo_omision, responsable)
           VALUES
-            (${input.registroId}::uuid,
+            (${input.registroEnfId}::uuid,
              ${input.indicacionItemId}::uuid,
-             ${input.horaAdministrada}::timestamptz,
-             ${input.dosisAdministrada},
-             ${input.viaUsada},
-             ${input.observaciones ?? null},
-             ${userId}::uuid,
-             now())
+             ${horaProgramada}::timestamptz,
+             ${input.horaAplicada}::timestamptz,
+             ${input.estado},
+             ${input.motivoOmision ?? null},
+             ${userId}::uuid)
           RETURNING id
         `;
         const created = rows[0];
@@ -386,21 +369,20 @@ export const registroEnfermeriaRouter = router({
           });
         }
 
-        const payload = {
-          administracionId: created.id,
-          registroId: input.registroId,
-          indicacionItemId: input.indicacionItemId,
-          episodioId: indicacion.episodio_id,
-          enfermeraId: userId,
-        };
-
         await emitDomainEvent(tx as unknown as PrismaClient, {
           organizationId: orgId,
           eventType: "ece.administracion.registrada",
           aggregateType: "AdministracionMedicamento",
           aggregateId: created.id,
           emittedById: userId,
-          payload,
+          payload: {
+            administracionId: created.id,
+            registroEnfId: input.registroEnfId,
+            indicacionItemId: input.indicacionItemId,
+            episodioId: indicacion.episodio_id,
+            enfermeraId: userId,
+            horaProgramada: horaProgramada.toISOString(),
+          },
         });
 
         return { id: created.id };
@@ -408,8 +390,8 @@ export const registroEnfermeriaRouter = router({
     }),
 
   /**
-   * Firma el registro de jornada (ENF).
-   * Transición: borrador | en_revision → firmado.
+   * Firma el registro de jornada.
+   * HD-22: UPDATE usa estado_registro; sin firmado_por (no existe en BD).
    */
   firmar: nurseRole
     .input(eceRegistroIdSchema)
@@ -417,36 +399,32 @@ export const registroEnfermeriaRouter = router({
       const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
-      const registro = await findRegistro(ctx.prisma, input.id, orgId);
-      if (!registro) throw new TRPCError({ code: "NOT_FOUND" });
-
-      const estadosPermitidos = ["borrador", "en_revision"];
-      if (!estadosPermitidos.includes(registro.estado)) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `No se puede firmar un registro en estado '${registro.estado}'.`,
-        });
-      }
-
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        const registro = await findRegistro(tx, input.id, orgId);
+        if (!registro) throw new TRPCError({ code: "NOT_FOUND" });
+
+        if (!["borrador", "en_revision"].includes(registro.estado_registro)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `No se puede firmar un registro en estado '${registro.estado_registro}'.`,
+          });
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
           UPDATE ece.registro_enfermeria
-          SET estado = 'firmado',
-              firmado_por = ${userId}::uuid,
-              firmado_en  = now()
+          SET estado_registro = 'firmado'
           WHERE id = ${input.id}::uuid
-            AND organization_id = ${orgId}::uuid
         `;
         return { ok: true as const };
       });
     }),
 
   /**
-   * Valida el registro de jornada (ENF).
-   * Transición: firmado → validado.
+   * Valida el registro de jornada.
+   * HD-22: UPDATE usa estado_registro; sin validado_por/validado_en (no existen en BD).
    */
   validar: nurseRole
     .input(eceRegistroIdSchema)
@@ -454,27 +432,24 @@ export const registroEnfermeriaRouter = router({
       const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
-      const registro = await findRegistro(ctx.prisma, input.id, orgId);
-      if (!registro) throw new TRPCError({ code: "NOT_FOUND" });
-
-      if (registro.estado !== "firmado") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Solo se puede validar un registro en estado 'firmado'. Estado actual: '${registro.estado}'.`,
-        });
-      }
-
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        const registro = await findRegistro(tx, input.id, orgId);
+        if (!registro) throw new TRPCError({ code: "NOT_FOUND" });
+
+        if (registro.estado_registro !== "firmado") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Solo se puede validar un registro en estado 'firmado'. Estado actual: '${registro.estado_registro}'.`,
+          });
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
           UPDATE ece.registro_enfermeria
-          SET estado      = 'validado',
-              validado_por = ${userId}::uuid,
-              validado_en  = now()
+          SET estado_registro = 'validado'
           WHERE id = ${input.id}::uuid
-            AND organization_id = ${orgId}::uuid
         `;
         return { ok: true as const };
       });
