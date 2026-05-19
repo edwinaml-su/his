@@ -5,6 +5,11 @@
  *
  * Visible para roles TEC / PROF_DX / MC / ESP.
  * La precondición (solicitud firmada o validada) la enforcea el backend.
+ *
+ * valores: objeto JSON con los resultados analíticos (ej. { glucosa: 95, unidad: "mg/dL" }).
+ * El formulario acepta texto libre en formato JSON para máxima flexibilidad.
+ * La interpretación es opcional.
+ *
  * Patrón: React.useState (sin react-hook-form, consistente con el resto del repo).
  */
 import * as React from "react";
@@ -16,23 +21,24 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
-import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Textarea } from "@his/ui/components/textarea";
 import { trpc } from "@/lib/trpc/react";
 
-const URL_RE = /^https?:\/\/.+/;
-
 interface FieldErrors {
-  resultado?: string;
-  adjuntoUri?: string;
+  valores?: string;
 }
 
-function validate(resultado: string, adjuntoUri: string): FieldErrors {
+function validate(valoresRaw: string): FieldErrors {
   const errs: FieldErrors = {};
-  if (!resultado.trim()) errs.resultado = "El resultado es obligatorio";
-  if (adjuntoUri.trim() && !URL_RE.test(adjuntoUri.trim())) {
-    errs.adjuntoUri = "Debe ser una URL válida";
+  if (!valoresRaw.trim()) {
+    errs.valores = "Los valores del resultado son obligatorios";
+    return errs;
+  }
+  try {
+    JSON.parse(valoresRaw.trim());
+  } catch {
+    errs.valores = "Debe ser un objeto JSON válido (ej. {\"glucosa\": 95})";
   }
   return errs;
 }
@@ -41,9 +47,8 @@ export default function RegistrarResultadoPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
 
-  const [resultado, setResultado] = React.useState("");
+  const [valoresRaw, setValoresRaw] = React.useState("");
   const [interpretacion, setInterpretacion] = React.useState("");
-  const [adjuntoUri, setAdjuntoUri] = React.useState("");
 
   const [fieldErrors, setFieldErrors] = React.useState<FieldErrors>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
@@ -55,7 +60,7 @@ export default function RegistrarResultadoPage() {
     e.preventDefault();
     setServerError(null);
 
-    const errs = validate(resultado, adjuntoUri);
+    const errs = validate(valoresRaw);
     setFieldErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
@@ -63,9 +68,8 @@ export default function RegistrarResultadoPage() {
     try {
       await registrarMutation.mutateAsync({
         solicitudId: params.id,
-        resultado: resultado.trim(),
+        valores: JSON.parse(valoresRaw.trim()) as Record<string, unknown>,
         interpretacion: interpretacion.trim() || undefined,
-        adjuntoUri: adjuntoUri.trim() || undefined,
       });
       router.push(`/ece/estudios/${params.id}`);
     } catch (err) {
@@ -86,18 +90,22 @@ export default function RegistrarResultadoPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div className="space-y-1.5">
-              <Label htmlFor="resultado">Resultado *</Label>
+              <Label htmlFor="valores">Valores del resultado * (JSON)</Label>
               <Textarea
-                id="resultado"
+                id="valores"
                 rows={5}
-                placeholder="Describe los hallazgos del estudio…"
-                data-testid="input-resultado"
-                value={resultado}
-                onChange={(e) => setResultado(e.target.value)}
+                placeholder={`{\n  "glucosa": 95,\n  "unidad": "mg/dL"\n}`}
+                data-testid="input-valores"
+                value={valoresRaw}
+                onChange={(e) => setValoresRaw(e.target.value)}
+                className="font-mono text-xs"
               />
-              {fieldErrors.resultado && (
-                <p className="text-sm text-destructive">{fieldErrors.resultado}</p>
+              {fieldErrors.valores && (
+                <p className="text-sm text-destructive">{fieldErrors.valores}</p>
               )}
+              <p className="text-xs text-muted-foreground">
+                Ingrese un objeto JSON con los resultados analíticos del estudio.
+              </p>
             </div>
 
             <div className="space-y-1.5">
@@ -109,20 +117,6 @@ export default function RegistrarResultadoPage() {
                 value={interpretacion}
                 onChange={(e) => setInterpretacion(e.target.value)}
               />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="adjuntoUri">URL adjunto (PDF / imagen)</Label>
-              <Input
-                id="adjuntoUri"
-                type="url"
-                placeholder="https://storage.example.com/resultado.pdf"
-                value={adjuntoUri}
-                onChange={(e) => setAdjuntoUri(e.target.value)}
-              />
-              {fieldErrors.adjuntoUri && (
-                <p className="text-sm text-destructive">{fieldErrors.adjuntoUri}</p>
-              )}
             </div>
 
             {serverError && (

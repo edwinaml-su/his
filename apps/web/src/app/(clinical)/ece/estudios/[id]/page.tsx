@@ -5,7 +5,7 @@
  *
  * Muestra:
  *   - Datos de la solicitud con estado del workflow.
- *   - Acciones: validar (MC, si estado = firmado).
+ *   - Acciones: validar (MC, si estado = firmado) — requiere PIN (HH-03).
  *   - Sección resultado si existe (lista de resultados de la solicitud).
  *   - Enlace para registrar resultado (si estado = firmado o validado).
  */
@@ -47,8 +47,8 @@ const ESTADO_VARIANT: Record<string, "default" | "secondary" | "destructive" | "
 };
 
 const RESULTADO_ESTADO_LABEL: Record<string, string> = {
-  pendiente_aprobacion: "Pendiente aprobación",
-  aprobado: "Aprobado",
+  pendiente_validacion: "Pendiente validación",
+  validado: "Validado",
 };
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
@@ -60,28 +60,27 @@ interface SolicitudRow {
   id: string;
   instancia_id: string;
   tipo: string;
-  prioridad: string;
-  estudios_solicitados: unknown;
-  observaciones_clinicas: string | null;
-  fecha_solicitud: string | Date;
+  /** JSONB: { examenes: string[], prioridad: string } */
+  examenes: unknown;
+  indicacion_clinica: string | null;
+  fecha_hora: string | Date;
   estado_codigo: string;
 }
 
 interface ResultadoRow {
   id: string;
-  resultado: string;
+  /** JSONB con los valores analíticos */
+  valores: unknown;
   interpretacion: string | null;
-  adjunto_uri: string | null;
-  registrado_en: string | Date;
-  estado: string;
-  aprobado_en: string | Date | null;
-  comentario_medico: string | null;
+  fecha_hora_informe: string | Date;
+  estado_registro: string;
 }
 
 export default function SolicitudEstudioDetallePage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [validarError, setValidarError] = React.useState<string | null>(null);
+  const [validarPin, setValidarPin] = React.useState("");
 
   const solQuery = trpc.eceSolicitudEstudio.get.useQuery({ id: params.id });
   const resQuery = trpc.eceResultadoEstudio.list.useQuery(
@@ -90,10 +89,14 @@ export default function SolicitudEstudioDetallePage() {
   );
 
   const validarMutation = trpc.eceSolicitudEstudio.validar.useMutation({
-    onSuccess: () => { solQuery.refetch().catch(() => undefined); },
+    onSuccess: () => {
+      setValidarPin("");
+      solQuery.refetch().catch(() => undefined);
+    },
     onError: (e) => setValidarError(e.message),
   });
-  const aprobarMutation = trpc.eceResultadoEstudio.aprobar.useMutation({
+
+  const validarResultadoMutation = trpc.eceResultadoEstudio.validarResultado.useMutation({
     onSuccess: () => { resQuery.refetch().catch(() => undefined); },
   });
 
@@ -112,9 +115,9 @@ export default function SolicitudEstudioDetallePage() {
   const sol = solQuery.data as unknown as SolicitudRow | undefined;
   if (!sol) return null;
 
-  const estudios = Array.isArray(sol.estudios_solicitados)
-    ? (sol.estudios_solicitados as string[]).join(", ")
-    : String(sol.estudios_solicitados ?? "");
+  const examenesData = sol.examenes as { examenes?: string[]; prioridad?: string } | null;
+  const examenesList = examenesData?.examenes ?? [];
+  const prioridad = examenesData?.prioridad ?? "rutina";
 
   const canRegistrarResultado =
     sol.estado_codigo === "firmado" || sol.estado_codigo === "validado";
@@ -144,25 +147,25 @@ export default function SolicitudEstudioDetallePage() {
         <CardContent className="space-y-2 text-sm">
           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <span className="text-muted-foreground">Prioridad</span>
-            <span className="font-medium uppercase">{sol.prioridad}</span>
-            <span className="text-muted-foreground">Estudios</span>
-            <span className="font-mono text-xs">{estudios}</span>
+            <span className="font-medium uppercase">{prioridad}</span>
+            <span className="text-muted-foreground">Exámenes</span>
+            <span className="font-mono text-xs">{examenesList.join(", ") || "—"}</span>
             <span className="text-muted-foreground">Fecha solicitud</span>
             <span className="tabular-nums">
-              {sol.fecha_solicitud ? dateFmt.format(new Date(sol.fecha_solicitud)) : "—"}
+              {sol.fecha_hora ? dateFmt.format(new Date(sol.fecha_hora)) : "—"}
             </span>
           </div>
-          {sol.observaciones_clinicas && (
+          {sol.indicacion_clinica && (
             <div>
-              <p className="text-muted-foreground">Observaciones clínicas</p>
-              <p className="mt-0.5 whitespace-pre-wrap">{sol.observaciones_clinicas}</p>
+              <p className="text-muted-foreground">Indicación clínica</p>
+              <p className="mt-0.5 whitespace-pre-wrap">{sol.indicacion_clinica}</p>
             </div>
           )}
         </CardContent>
       </Card>
 
       {/* Acciones sobre solicitud */}
-      <div className="flex gap-2">
+      <div className="flex flex-col gap-2">
         {canRegistrarResultado && (
           <Button asChild>
             <Link href={`/ece/estudios/${sol.id}/registrar-resultado`}>
@@ -171,16 +174,29 @@ export default function SolicitudEstudioDetallePage() {
           </Button>
         )}
         {canValidar && (
-          <Button
-            variant="secondary"
-            disabled={validarMutation.isPending}
-            onClick={() => {
-              setValidarError(null);
-              validarMutation.mutate({ solicitudId: sol.id });
-            }}
-          >
-            {validarMutation.isPending ? "Validando…" : "Validar solicitud"}
-          </Button>
+          <div className="flex gap-2 items-center">
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="\d{6,8}"
+              maxLength={8}
+              placeholder="PIN (6-8 dígitos)"
+              value={validarPin}
+              onChange={(e) => setValidarPin(e.target.value)}
+              className="flex h-9 w-36 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              aria-label="PIN de firma electrónica"
+            />
+            <Button
+              variant="secondary"
+              disabled={validarMutation.isPending || !/^\d{6,8}$/.test(validarPin)}
+              onClick={() => {
+                setValidarError(null);
+                validarMutation.mutate({ solicitudId: sol.id, pin: validarPin });
+              }}
+            >
+              {validarMutation.isPending ? "Validando…" : "Validar solicitud"}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -202,33 +218,35 @@ export default function SolicitudEstudioDetallePage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Resultado</TableHead>
+                  <TableHead>Valores</TableHead>
                   <TableHead>Estado</TableHead>
-                  <TableHead>Registrado</TableHead>
+                  <TableHead>Fecha informe</TableHead>
                   <TableHead>Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {resultados.map((r) => (
                   <TableRow key={r.id}>
-                    <TableCell className="max-w-xs truncate">{r.resultado}</TableCell>
+                    <TableCell className="max-w-xs truncate font-mono text-xs">
+                      {JSON.stringify(r.valores)}
+                    </TableCell>
                     <TableCell>
-                      <Badge variant={r.estado === "aprobado" ? "default" : "secondary"}>
-                        {RESULTADO_ESTADO_LABEL[r.estado] ?? r.estado}
+                      <Badge variant={r.estado_registro === "validado" ? "default" : "secondary"}>
+                        {RESULTADO_ESTADO_LABEL[r.estado_registro] ?? r.estado_registro}
                       </Badge>
                     </TableCell>
                     <TableCell className="tabular-nums text-xs">
-                      {r.registrado_en ? dateFmt.format(new Date(r.registrado_en)) : "—"}
+                      {r.fecha_hora_informe ? dateFmt.format(new Date(r.fecha_hora_informe)) : "—"}
                     </TableCell>
                     <TableCell>
-                      {r.estado === "pendiente_aprobacion" && (
+                      {r.estado_registro === "pendiente_validacion" && (
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={aprobarMutation.isPending}
-                          onClick={() => aprobarMutation.mutate({ resultadoId: r.id })}
+                          disabled={validarResultadoMutation.isPending}
+                          onClick={() => validarResultadoMutation.mutate({ resultadoId: r.id })}
                         >
-                          Aprobar
+                          Validar
                         </Button>
                       )}
                     </TableCell>

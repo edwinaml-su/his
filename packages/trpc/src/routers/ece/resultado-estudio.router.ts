@@ -8,39 +8,46 @@
  * ---------------------------------------------------------------------------
  * WORKFLOW (dos pasos — no usa ece.flujo_estado genérico)
  * ---------------------------------------------------------------------------
- *   Paso 1 — registrar (estado: 'pendiente_aprobacion')
+ *   Paso 1 — registrar (estado_registro: 'pendiente_validacion')
  *     Roles permitidos: TEC (técnico de diagnóstico), PROF_DX (profesional diagnóstico).
  *     Precondición: ece.solicitud_estudio.estado IN ('firmado','validado').
- *     Acción: INSERT en ece.resultado_estudio con el contenido del resultado,
- *             interpretación opcional y URI de archivo adjunto.
+ *     Acción: INSERT en ece.resultado_estudio con valores jsonb + interpretacion opcional.
  *
- *   Paso 2 — aprobar (estado: 'aprobado')
- *     Roles permitidos: MC | PHYSICIAN (médico certificador).
- *     Acción: UPDATE estado + comentario_medico.
+ *   Paso 2 — validarResultado (estado_registro: 'validado')
+ *     Roles permitidos: MC | ESP (médico certificador).
+ *     Acción: UPDATE estado_registro → 'validado'.
  *
  * ---------------------------------------------------------------------------
  * OUTBOX (domainEvent vía emitDomainEvent inside Prisma.$transaction)
  * ---------------------------------------------------------------------------
  *   'ece.resultado_estudio.registrado'  — emitido por registrar()
- *   'ece.resultado_estudio.aprobado'    — emitido por aprobar()
+ *   'ece.resultado_estudio.validado'    — emitido por validarResultado()
  *
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.resultado_estudio   — fila principal: resultado, interpretacion, adjunto_uri,
- *                             estado, comentario_medico, solicitud_id (FK)
- *   ece.solicitud_estudio   — consultada para validar precondición de estado
+ *   ece.resultado_estudio — columnas reales:
+ *     id, instancia_id, solicitud_id,
+ *     valores (jsonb — objeto con los resultados numéricos/cualitativos),
+ *     interpretacion (text, nullable),
+ *     responsable_validacion_id (uuid),
+ *     fecha_hora_informe (timestamptz),
+ *     estado_registro (text)
+ *
+ *   Columnas NO presentes en BD (eliminadas del router):
+ *     adjunto_uri, aprobado_por, aprobado_en, comentario_medico
+ *     → Si se requieren clínicamente, deben agregarse via ALTER TABLE (tarea separada).
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
  * ---------------------------------------------------------------------------
- *   list, get   → cualquier rol autenticado con tenant (tenantProcedure)
- *   registrar   → requireRole(["TEC","PROF_DX"])
- *   aprobar     → requireRole(["MC","PHYSICIAN"])
+ *   list, get         → requireRole(["MC","ESP","ENF","DIR","ARCH","TEC","PROF_DX"])
+ *   registrar         → requireRole(["TEC","PROF_DX","MC","ESP"])
+ *   validarResultado  → requireRole(["MC","ESP"])
  *
  * Raw SQL es obligatorio porque ece.* vive fuera del modelo Prisma (opción B,
  * schema separado). Todas las queries usan prisma.$queryRaw / $executeRaw con
- * Prisma.sql para evitar interpolación directa (sql injection prevention).
+ * tagged templates para evitar interpolación directa (sql injection prevention).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -54,14 +61,13 @@ import { emitDomainEvent } from "@his/database";
 
 const registrarSchema = z.object({
   solicitudId: z.string().uuid(),
-  resultado: z.string().min(1).max(10000),
+  /** Valores del resultado en formato jsonb. Puede ser un objeto con claves analíticas. */
+  valores: z.record(z.unknown()).or(z.array(z.unknown())),
   interpretacion: z.string().max(4000).optional(),
-  adjuntoUri: z.string().url().max(2000).optional(),
 });
 
-const aprobarSchema = z.object({
+const validarResultadoSchema = z.object({
   resultadoId: z.string().uuid(),
-  comentarioMedico: z.string().max(2000).optional(),
 });
 
 const listSchema = z.object({
@@ -73,21 +79,19 @@ const listSchema = z.object({
 const getSchema = z.object({ id: z.string().uuid() });
 
 // ---------------------------------------------------------------------------
-// Tipos de fila raw
+// Tipos de fila raw — alineados con columnas reales de ece.resultado_estudio
 // ---------------------------------------------------------------------------
 
 export interface ResultadoRow {
   id: string;
+  instancia_id: string;
   solicitud_id: string;
-  resultado: string;
+  /** JSONB con los valores del estudio */
+  valores: unknown;
   interpretacion: string | null;
-  adjunto_uri: string | null;
-  registrado_por: string;
-  registrado_en: Date;
-  aprobado_por: string | null;
-  aprobado_en: Date | null;
-  comentario_medico: string | null;
-  estado: string;
+  responsable_validacion_id: string;
+  fecha_hora_informe: Date;
+  estado_registro: string;
 }
 
 interface SolicitudEstadoRow {
@@ -154,16 +158,13 @@ async function findResultado(tx: RawTx, id: string): Promise<ResultadoRow | null
   ) => Promise<ResultadoRow[]>)`
     SELECT
       id::text,
+      instancia_id::text,
       solicitud_id::text,
-      resultado,
+      valores,
       interpretacion,
-      adjunto_uri,
-      registrado_por::text,
-      registrado_en,
-      aprobado_por::text,
-      aprobado_en,
-      comentario_medico,
-      estado
+      responsable_validacion_id::text,
+      fecha_hora_informe,
+      estado_registro
     FROM ece.resultado_estudio
     WHERE id = ${id}::uuid
     LIMIT 1
@@ -207,20 +208,17 @@ export const eceResultadoEstudioRouter = router({
       ) => Promise<ResultadoRow[]>)`
         SELECT
           id::text,
+          instancia_id::text,
           solicitud_id::text,
-          resultado,
+          valores,
           interpretacion,
-          adjunto_uri,
-          registrado_por::text,
-          registrado_en,
-          aprobado_por::text,
-          aprobado_en,
-          comentario_medico,
-          estado
+          responsable_validacion_id::text,
+          fecha_hora_informe,
+          estado_registro
         FROM ece.resultado_estudio
         WHERE solicitud_id = ${input.solicitudId}::uuid
           AND (${input.cursor ?? null}::uuid IS NULL OR id < ${input.cursor ?? null}::uuid)
-        ORDER BY registrado_en DESC, id DESC
+        ORDER BY fecha_hora_informe DESC, id DESC
         LIMIT ${input.limit}
       `;
       const nextCursor = rows.length === input.limit ? rows[rows.length - 1]!.id : null;
@@ -269,19 +267,19 @@ export const eceResultadoEstudioRouter = router({
         });
       }
 
+      const valoresJson = JSON.stringify(input.valores);
       const resRows = await (tx.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.resultado_estudio
-          (solicitud_id, resultado, interpretacion, adjunto_uri, registrado_por, estado)
+          (solicitud_id, valores, interpretacion, responsable_validacion_id, estado_registro)
         VALUES (
           ${input.solicitudId}::uuid,
-          ${input.resultado},
+          ${valoresJson}::jsonb,
           ${input.interpretacion ?? null},
-          ${input.adjuntoUri ?? null},
           ${personal.id}::uuid,
-          'pendiente_aprobacion'
+          'pendiente_validacion'
         )
         RETURNING id::text
       `;
@@ -305,52 +303,40 @@ export const eceResultadoEstudioRouter = router({
     });
   }),
 
-  /** MC aprueba el resultado clínicamente. */
-  aprobar: mcProc.input(aprobarSchema).mutation(async ({ ctx, input }) => {
+  /** MC valida el resultado clínicamente (estado_registro → 'validado'). */
+  validarResultado: mcProc.input(validarResultadoSchema).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
     return withEceCtx(ctx.prisma, eceCtx, async (tx) => {
       const res = await findResultado(tx, input.resultadoId);
       if (!res) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Resultado no encontrado: ${input.resultadoId}` });
       }
-      if (res.estado !== "pendiente_aprobacion") {
+      if (res.estado_registro !== "pendiente_validacion") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `El resultado no está pendiente de aprobación (estado: ${res.estado}).`,
-        });
-      }
-
-      const personal = await findPersonal(tx, ctx.user.id);
-      if (!personal) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No se encontró un profesional de salud asociado a su cuenta.",
+          message: `El resultado no está pendiente de validación (estado_registro: ${res.estado_registro}).`,
         });
       }
 
       await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
         UPDATE ece.resultado_estudio
-        SET estado = 'aprobado',
-            aprobado_por = ${personal.id}::uuid,
-            aprobado_en = now(),
-            comentario_medico = ${input.comentarioMedico ?? null}
+        SET estado_registro = 'validado'
         WHERE id = ${input.resultadoId}::uuid
       `;
 
       await emitDomainEvent(tx, {
         organizationId: ctx.tenant.organizationId,
-        eventType: "ece.resultado_estudio.aprobado",
+        eventType: "ece.resultado_estudio.validado",
         aggregateType: "ResultadoEstudio",
         aggregateId: res.id,
         emittedById: ctx.user.id,
         payload: {
           solicitudId: res.solicitud_id,
           byUserId: ctx.user.id,
-          comentarioMedico: input.comentarioMedico ?? null,
         },
       });
 
-      return { ok: true as const, aprobadoEn: new Date().toISOString() };
+      return { ok: true as const, validadoEn: new Date().toISOString() };
     });
   }),
 });

@@ -3,8 +3,8 @@
 /**
  * ECE — Nueva Solicitud de Estudio (Doc 18 NTEC).
  *
- * Formulario: episodioId + tipo + estudios_solicitados (códigos, uno por línea)
- * + prioridad + observaciones_clinicas + PIN de firma MC.
+ * Formulario: episodioId + tipo + examenes (códigos LOINC separados por coma)
+ * + prioridad + indicacionClinica + PIN de firma MC.
  *
  * La solicitud se crea y firma en un solo paso para mantener la UX simple.
  * Patrón: React.useState (sin react-hook-form, consistente con el resto del repo).
@@ -78,13 +78,13 @@ export default function NuevaSolicitudEstudioPage() {
 
     setSubmitting(true);
     try {
-      const estudios = estudiosRaw.split(",").map((s) => s.trim()).filter(Boolean);
+      const examenes = estudiosRaw.split(",").map((s) => s.trim()).filter(Boolean);
       const { solicitudId } = await createMutation.mutateAsync({
         episodioId: episodioId.trim(),
         tipo,
-        estudiosSolicitados: estudios,
+        examenes,
         prioridad,
-        observacionesClinicas: observaciones.trim() || undefined,
+        indicacionClinica: observaciones.trim() || undefined,
       });
       await firmarMutation.mutateAsync({ solicitudId, pin });
       router.push(`/ece/estudios/${solicitudId}`);
@@ -163,7 +163,7 @@ export default function NuevaSolicitudEstudioPage() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="observaciones">Observaciones clínicas</Label>
+              <Label htmlFor="observaciones">Indicación clínica</Label>
               <Textarea
                 id="observaciones"
                 rows={3}

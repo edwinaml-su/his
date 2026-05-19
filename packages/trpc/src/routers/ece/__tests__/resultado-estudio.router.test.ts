@@ -2,17 +2,31 @@
  * Tests — eceResultadoEstudioRouter (Doc 18 NTEC).
  *
  * Cubre:
- *   list:      happy-path con solicitudId; nextCursor; FORBIDDEN sin rol.
- *   get:       NOT_FOUND cuando no existe.
- *   registrar: happy-path; PRECONDITION_FAILED si solicitud no firmada; NOT_FOUND si solicitud inexistente.
- *   aprobar:   happy-path; CONFLICT si resultado no está pendiente; NOT_FOUND si resultado inexistente.
+ *   list:             happy-path con solicitudId; nextCursor; FORBIDDEN sin rol.
+ *   get:              NOT_FOUND cuando no existe.
+ *   registrar:        happy-path; PRECONDITION_FAILED si solicitud no firmada; NOT_FOUND si solicitud inexistente.
+ *   validarResultado: happy-path; CONFLICT si resultado no está pendiente; NOT_FOUND si resultado inexistente.
+ *
+ * Columnas BD reales (HH-02):
+ *   valores (jsonb), interpretacion, responsable_validacion_id, fecha_hora_informe, estado_registro
+ *   — eliminadas: resultado (text), adjunto_uri, registrado_por, aprobado_por, aprobado_en, comentario_medico, estado
+ *   — procedure renombrado: aprobar → validarResultado
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { eceResultadoEstudioRouter } from "../resultado-estudio.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { MOCK_TENANT } from "@his/test-utils";
+
+// ─── Mock outbox ──────────────────────────────────────────────────────────────
+vi.mock("@his/database", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@his/database")>();
+  return {
+    ...mod,
+    emitDomainEvent: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -25,23 +39,21 @@ const PERSONAL_ID = "44444444-4444-4444-4444-444444444444";
 
 const ESTABLISHMENT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 
+/** Fixture con columnas reales de ece.resultado_estudio. */
 function makeResultadoRow(overrides: Partial<{
   id: string;
-  estado: string;
+  estado_registro: string;
   solicitud_id: string;
 }> = {}) {
   return {
     id: overrides.id ?? RES_ID,
+    instancia_id: INST_ID,
     solicitud_id: overrides.solicitud_id ?? SOL_ID,
-    resultado: "Glucosa: 95 mg/dL",
+    valores: { glucosa: 95, unidad: "mg/dL" },
     interpretacion: "Dentro de rango normal",
-    adjunto_uri: null,
-    registrado_por: PERSONAL_ID,
-    registrado_en: new Date("2026-01-15T14:00:00Z"),
-    aprobado_por: null,
-    aprobado_en: null,
-    comentario_medico: null,
-    estado: overrides.estado ?? "pendiente_aprobacion",
+    responsable_validacion_id: PERSONAL_ID,
+    fecha_hora_informe: new Date("2026-01-15T14:00:00Z"),
+    estado_registro: overrides.estado_registro ?? "pendiente_validacion",
   };
 }
 
@@ -169,19 +181,18 @@ describe("eceResultadoEstudioRouter", () => {
   });
 
   // -------------------------------------------------------------------------
-  // registrar
+  // registrar — valores (jsonb) en lugar de resultado (text)
   // -------------------------------------------------------------------------
 
   describe("registrar", () => {
     it("lanza NOT_FOUND si la solicitud no existe", async () => {
       setupTransactionPassThrough(prisma);
-      // findSolicitudEstado devuelve vacío
       prisma.$queryRaw.mockResolvedValueOnce([]);
 
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       await expect(
-        caller.registrar({ solicitudId: SOL_ID, resultado: "Normal" }),
+        caller.registrar({ solicitudId: SOL_ID, valores: { glucosa: 95 } }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -192,7 +203,7 @@ describe("eceResultadoEstudioRouter", () => {
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       await expect(
-        caller.registrar({ solicitudId: SOL_ID, resultado: "Normal" }),
+        caller.registrar({ solicitudId: SOL_ID, valores: { glucosa: 95 } }),
       ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
 
@@ -203,7 +214,7 @@ describe("eceResultadoEstudioRouter", () => {
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       await expect(
-        caller.registrar({ solicitudId: SOL_ID, resultado: "Normal" }),
+        caller.registrar({ solicitudId: SOL_ID, valores: { glucosa: 95 } }),
       ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
 
@@ -213,17 +224,14 @@ describe("eceResultadoEstudioRouter", () => {
         .mockResolvedValueOnce([makeSolicitudEstadoRow("firmado")])  // findSolicitudEstado
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])                // findPersonal
         .mockResolvedValueOnce([{ id: RES_ID }])                    // INSERT resultado
-        .mockResolvedValue([]);                                       // resto
-      // Mock del Prisma model usado por emitDomainEvent (mismo patrón que
-      // accounting.test.ts). Sin este mock, `tx.domainEvent.create({data})`
-      // retorna undefined y el desreferenciar `.id` lanza TypeError.
-      prisma.domainEvent.create.mockResolvedValue({ id: "ev-1" } as never);
+        .mockResolvedValue([]);
+      // emitDomainEvent mockeado globalmente vía vi.mock("@his/database")
 
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       const result = await caller.registrar({
         solicitudId: SOL_ID,
-        resultado: "Glucosa: 95 mg/dL",
+        valores: { glucosa: 95, unidad: "mg/dL" },
         interpretacion: "Normal",
       });
 
@@ -238,13 +246,13 @@ describe("eceResultadoEstudioRouter", () => {
         .mockResolvedValueOnce([{ id: PERSONAL_ID }])
         .mockResolvedValueOnce([{ id: RES_ID }])
         .mockResolvedValue([]);
-      prisma.domainEvent.create.mockResolvedValue({ id: "ev-2" } as never);
+      // emitDomainEvent mockeado globalmente vía vi.mock("@his/database")
 
       const ctx = makeTecCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       const result = await caller.registrar({
         solicitudId: SOL_ID,
-        resultado: "Hemoglobina: 14 g/dL",
+        valores: { hemoglobina: 14, unidad: "g/dL" },
       });
 
       expect(result.resultadoId).toBe(RES_ID);
@@ -252,10 +260,10 @@ describe("eceResultadoEstudioRouter", () => {
   });
 
   // -------------------------------------------------------------------------
-  // aprobar
+  // validarResultado (antes: aprobar) — solo actualiza estado_registro
   // -------------------------------------------------------------------------
 
-  describe("aprobar", () => {
+  describe("validarResultado", () => {
     it("lanza NOT_FOUND si el resultado no existe", async () => {
       setupTransactionPassThrough(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([]);
@@ -263,39 +271,35 @@ describe("eceResultadoEstudioRouter", () => {
       const ctx = makeMcCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       await expect(
-        caller.aprobar({ resultadoId: RES_ID }),
+        caller.validarResultado({ resultadoId: RES_ID }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
-    it("lanza CONFLICT si el resultado ya está aprobado", async () => {
+    it("lanza CONFLICT si el resultado ya está validado", async () => {
       setupTransactionPassThrough(prisma);
-      prisma.$queryRaw.mockResolvedValueOnce([makeResultadoRow({ estado: "aprobado" })]);
+      prisma.$queryRaw.mockResolvedValueOnce([makeResultadoRow({ estado_registro: "validado" })]);
 
       const ctx = makeMcCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
       await expect(
-        caller.aprobar({ resultadoId: RES_ID }),
+        caller.validarResultado({ resultadoId: RES_ID }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
-    it("aprueba el resultado y emite evento de dominio", async () => {
+    it("valida el resultado y emite evento de dominio", async () => {
       setupTransactionPassThrough(prisma);
       prisma.$queryRaw
-        .mockResolvedValueOnce([makeResultadoRow()])          // findResultado
-        .mockResolvedValueOnce([{ id: PERSONAL_ID }])         // findPersonal
-        .mockResolvedValue([]);                               // resto
-      prisma.$executeRaw.mockResolvedValue(1);               // UPDATE
-      prisma.domainEvent.create.mockResolvedValue({ id: "ev-3" } as never);
+        .mockResolvedValueOnce([makeResultadoRow()])  // findResultado
+        .mockResolvedValue([]);
+      prisma.$executeRaw.mockResolvedValue(1);  // UPDATE estado_registro
+      // emitDomainEvent mockeado globalmente vía vi.mock("@his/database")
 
       const ctx = makeMcCtx(prisma);
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
-      const result = await caller.aprobar({
-        resultadoId: RES_ID,
-        comentarioMedico: "Valores dentro de rango esperado",
-      });
+      const result = await caller.validarResultado({ resultadoId: RES_ID });
 
       expect(result.ok).toBe(true);
-      expect(result.aprobadoEn).toBeDefined();
+      expect(result.validadoEn).toBeDefined();
     });
 
     it("lanza FORBIDDEN si el rol no es MC ni ESP", async () => {
@@ -304,7 +308,7 @@ describe("eceResultadoEstudioRouter", () => {
         tenant: { ...MOCK_TENANT, roleCodes: ["TEC"], establishmentId: ESTABLISHMENT_ID },
       });
       const caller = eceResultadoEstudioRouter.createCaller(ctx);
-      await expect(caller.aprobar({ resultadoId: RES_ID })).rejects.toMatchObject({
+      await expect(caller.validarResultado({ resultadoId: RES_ID })).rejects.toMatchObject({
         code: "FORBIDDEN",
       });
     });

@@ -68,10 +68,11 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
 interface SolicitudRow {
   id: string;
   tipo: string;
-  prioridad: string;
+  /** JSONB: { examenes: string[], prioridad: string } */
+  examenes: unknown;
   estado_codigo: string;
   episodio_id: string;
-  fecha_solicitud: string | Date;
+  fecha_hora: string | Date;
 }
 
 /** Estados considerados "pendientes" (sin resultado aún). */
@@ -115,9 +116,14 @@ export default function EstudiosListPage() {
             <TableRow key={r.id}>
               <TableCell>{TIPO_LABEL[r.tipo] ?? r.tipo}</TableCell>
               <TableCell>
-                <Badge variant={PRIORIDAD_VARIANT[r.prioridad] ?? "outline"}>
-                  {r.prioridad.toUpperCase()}
-                </Badge>
+                {(() => {
+                  const prioridad = (r.examenes as { prioridad?: string } | null)?.prioridad ?? "rutina";
+                  return (
+                    <Badge variant={PRIORIDAD_VARIANT[prioridad] ?? "outline"}>
+                      {prioridad.toUpperCase()}
+                    </Badge>
+                  );
+                })()}
               </TableCell>
               <TableCell>
                 <Badge variant={ESTADO_VARIANT[r.estado_codigo] ?? "outline"}>
@@ -125,7 +131,7 @@ export default function EstudiosListPage() {
                 </Badge>
               </TableCell>
               <TableCell className="tabular-nums text-xs">
-                {r.fecha_solicitud ? dateFmt.format(new Date(r.fecha_solicitud)) : "—"}
+                {r.fecha_hora ? dateFmt.format(new Date(r.fecha_hora)) : "—"}
               </TableCell>
               <TableCell>
                 <Button asChild variant="outline" size="sm">

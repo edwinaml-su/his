@@ -6,16 +6,35 @@
  *   get:    NOT_FOUND cuando no existe.
  *   create: happy-path; PRECONDITION_FAILED sin tipo SOL_EST; NOT_FOUND sin episodio.
  *   firmar: happy-path; CONFLICT si estado no es borrador/en_revision; FORBIDDEN sin rol MC.
- *   validar: CONFLICT si no está firmado.
+ *   validar: CONFLICT si no está firmado; requiere PIN (HH-03).
  *   anular: happy-path; CONFLICT si ya validado.
+ *
+ * Columnas BD reales (HH-01):
+ *   examenes (jsonb), indicacion_clinica, medico_solicitante_id, fecha_hora, estado
+ *   — eliminadas: paciente_id, estudios_solicitados, prioridad top-level, observaciones_clinicas, solicitado_por
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { TRPCError } from "@trpc/server";
 import { eceSolicitudEstudioRouter } from "../solicitud-estudio.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { MOCK_TENANT } from "@his/test-utils";
+
+// ─── Mock outbox + argon2 ─────────────────────────────────────────────────────
+vi.mock("@his/database", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("@his/database")>();
+  return {
+    ...mod,
+    emitDomainEvent: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn(async () => true),
+    hash: vi.fn(async () => "$argon2id$stub"),
+  },
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -32,24 +51,23 @@ const ESTADO_ID = "88888888-8888-8888-8888-888888888888";
 const FIRMA_ID = "99999999-9999-9999-9999-999999999999";
 const DEST_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
+/** Fixture con columnas reales de ece.solicitud_estudio. */
 function makeSolicitudRow(overrides: Partial<{
   id: string;
   instancia_id: string;
   estado_codigo: string;
   tipo: string;
-  prioridad: string;
 }> = {}) {
   return {
     id: overrides.id ?? SOL_ID,
     instancia_id: overrides.instancia_id ?? INST_ID,
     episodio_id: EPISODIO_ID,
-    paciente_id: PACIENTE_ID,
     tipo: overrides.tipo ?? "laboratorio",
-    estudios_solicitados: ["2093-3"],
-    prioridad: overrides.prioridad ?? "rutina",
-    observaciones_clinicas: null,
-    solicitado_por: PERSONAL_ID,
-    fecha_solicitud: new Date("2026-01-15T10:00:00Z"),
+    examenes: { examenes: ["2093-3"], prioridad: "rutina" },
+    indicacion_clinica: null,
+    medico_solicitante_id: PERSONAL_ID,
+    fecha_hora: new Date("2026-01-15T10:00:00Z"),
+    estado: overrides.estado_codigo ?? "borrador",
     estado_codigo: overrides.estado_codigo ?? "borrador",
     estado_id: ESTADO_ID,
   };
@@ -176,7 +194,7 @@ describe("eceSolicitudEstudioRouter", () => {
   });
 
   // -------------------------------------------------------------------------
-  // create
+  // create — usa columnas reales: examenes (jsonb), indicacion_clinica, medico_solicitante_id
   // -------------------------------------------------------------------------
 
   describe("create", () => {
@@ -194,7 +212,7 @@ describe("eceSolicitudEstudioRouter", () => {
       const result = await caller.create({
         episodioId: EPISODIO_ID,
         tipo: "laboratorio",
-        estudiosSolicitados: ["2093-3"],
+        examenes: ["2093-3"],
         prioridad: "rutina",
       });
 
@@ -202,9 +220,29 @@ describe("eceSolicitudEstudioRouter", () => {
       expect(result.estadoCodigo).toBe("borrador");
     });
 
+    it("acepta indicacionClinica opcional", async () => {
+      setupTransactionPassThrough(prisma);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INI_ID }])
+        .mockResolvedValueOnce([{ paciente_id: PACIENTE_ID }])
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+        .mockResolvedValueOnce([{ id: INST_ID }])
+        .mockResolvedValueOnce([{ id: SOL_ID }]);
+
+      const ctx = makeMcCtx(prisma);
+      const caller = eceSolicitudEstudioRouter.createCaller(ctx);
+      const result = await caller.create({
+        episodioId: EPISODIO_ID,
+        tipo: "imagenologia",
+        examenes: ["24813-8"],
+        indicacionClinica: "Sospecha de fractura",
+      });
+
+      expect(result.solicitudId).toBe(SOL_ID);
+    });
+
     it("lanza PRECONDITION_FAILED si SOL_EST no está configurado", async () => {
       setupTransactionPassThrough(prisma);
-      // Primera query (tipo_documento) devuelve vacío
       prisma.$queryRaw.mockResolvedValueOnce([]);
 
       const ctx = makeMcCtx(prisma);
@@ -213,8 +251,7 @@ describe("eceSolicitudEstudioRouter", () => {
         caller.create({
           episodioId: EPISODIO_ID,
           tipo: "laboratorio",
-          estudiosSolicitados: ["2093-3"],
-          prioridad: "rutina",
+          examenes: ["2093-3"],
         }),
       ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
@@ -231,8 +268,7 @@ describe("eceSolicitudEstudioRouter", () => {
         caller.create({
           episodioId: EPISODIO_ID,
           tipo: "laboratorio",
-          estudiosSolicitados: ["2093-3"],
-          prioridad: "rutina",
+          examenes: ["2093-3"],
         }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
@@ -278,7 +314,7 @@ describe("eceSolicitudEstudioRouter", () => {
   });
 
   // -------------------------------------------------------------------------
-  // validar
+  // validar — HH-03: ahora requiere PIN
   // -------------------------------------------------------------------------
 
   describe("validar", () => {
@@ -289,32 +325,44 @@ describe("eceSolicitudEstudioRouter", () => {
       const ctx = makeMcCtx(prisma);
       const caller = eceSolicitudEstudioRouter.createCaller(ctx);
       await expect(
-        caller.validar({ solicitudId: SOL_ID }),
+        caller.validar({ solicitudId: SOL_ID, pin: "123456" }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     it("llama a avanzarEstado y emitDomainEvent cuando el estado es firmado", async () => {
       setupTransactionPassThrough(prisma);
-      // findSolicitud
       prisma.$queryRaw
         .mockResolvedValueOnce([makeSolicitudRow({ estado_codigo: "firmado" })])
-        // avanzarEstado — buscar transición
+        // verifyPinOrThrow: findPersonal
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+        // verifyPinOrThrow: findFirma
+        .mockResolvedValueOnce([{ id: FIRMA_ID, pin_hash: "hash", failed_attempts: 0, locked_until: null, revoked_at: null }])
+        // avanzarEstado: buscar transición
         .mockResolvedValueOnce([{ estado_destino_id: DEST_ID }]);
       prisma.$executeRaw
+        .mockResolvedValueOnce(1) // reset failed_attempts
         .mockResolvedValueOnce(1) // UPDATE documento_instancia
         .mockResolvedValueOnce(1); // INSERT historial
       prisma.$queryRaw.mockResolvedValue([]);
-      // Mock del Prisma model usado por emitDomainEvent (mismo patrón que
-      // accounting.test.ts). Sin esto, `tx.domainEvent.create({data})` retorna
-      // undefined y desreferenciar `.id` lanza TypeError.
-      prisma.domainEvent.create.mockResolvedValue({ id: "ev-1" } as never);
+      // emitDomainEvent mockeado globalmente vía vi.mock("@his/database")
 
       const ctx = makeMcCtx(prisma);
       const caller = eceSolicitudEstudioRouter.createCaller(ctx);
-      const result = await caller.validar({ solicitudId: SOL_ID });
+      const result = await caller.validar({ solicitudId: SOL_ID, pin: "123456" });
 
       expect(result.ok).toBe(true);
       expect(result.validadoEn).toBeDefined();
+    });
+
+    it("lanza FORBIDDEN si rol no es MC ni ESP", async () => {
+      const ctx = makeCtx({
+        prisma,
+        tenant: { ...MOCK_TENANT, roleCodes: ["ENF"], establishmentId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb" },
+      });
+      const caller = eceSolicitudEstudioRouter.createCaller(ctx);
+      await expect(
+        caller.validar({ solicitudId: SOL_ID, pin: "123456" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 
