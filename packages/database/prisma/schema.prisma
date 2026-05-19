@@ -4362,6 +4362,8 @@ model EceEstablecimiento {
   personalSalud  EcePersonalSalud[]
   pacientes      EcePaciente[]
   episodios      EceEpisodioAtencion[]
+  salasQx        EceSalaQx[]
+  ordenesIngreso EceOrdenIngreso[]    @relation("OIEstablecimiento")
 
   @@map("establecimiento")
   @@schema("ece")
@@ -4702,6 +4704,7 @@ model EceEpisodioAtencion {
   solicitudesEstudio      EceSolicitudEstudio[]
   estadoLogs              EceEpisodioEstadoLog[]
   eliminaciones           EceEliminacionSupervisada[] @relation("EpisodioEliminaciones")
+  reservasSalaQx          EceReservaSalaQx[]
 
   @@index([pacienteId])
   @@index([estado])
@@ -5181,6 +5184,10 @@ model EceOrdenIngreso {
   circunstanciaIngreso String   @map("circunstancia_ingreso")
   fechaHoraOrden       DateTime @default(now()) @map("fecha_hora_orden") @db.Timestamptz()
   motivoIngreso        String   @map("motivo_ingreso")
+  motivoIngresoTipo    String?  @map("motivo_ingreso_tipo") @db.VarChar(20)
+  procedimientoCie10   String?  @map("procedimiento_cie10") @db.VarChar(20)
+  establecimientoId    String?  @map("establecimiento_id") @db.Uuid
+  reservaSalaQxId      String?  @map("reserva_sala_qx_id") @db.Uuid
   servicioIngresoId    String?  @map("servicio_ingreso_id") @db.Uuid
   procedencia          String   @db.VarChar(40)
   modalidad            String   @db.VarChar(30)
@@ -5191,6 +5198,8 @@ model EceOrdenIngreso {
 
   paciente        EcePaciente          @relation(fields: [pacienteId], references: [id])
   episodio        EceEpisodioAtencion? @relation(fields: [episodioId], references: [id])
+  establecimiento EceEstablecimiento?  @relation("OIEstablecimiento", fields: [establecimientoId], references: [id])
+  reservaSalaQx   EceReservaSalaQx?    @relation("OIReservaSalaQx", fields: [reservaSalaQxId], references: [id])
   servicioIngreso EceServicio?         @relation(fields: [servicioIngresoId], references: [id])
   medicoOrdena    EcePersonalSalud     @relation("OIMedicoOrdena", fields: [medicoOrdenaId], references: [id])
   hojasIngreso    EceHojaIngreso[]
@@ -6433,5 +6442,58 @@ model EceMedicationWindowAlert {
   @@index([organizationId, enviadoEn])
   @@index([indicationId])
   @@map("medication_window_alert")
+  @@schema("ece")
+}
+
+// =============================================================================
+// HE-01 Fix — S4 Quirófano: Salas y Reservas Quirúrgicas
+// packages/database/sql/99_sala_qx_reserva_sala_qx.sql
+// =============================================================================
+
+/// Catálogo de salas quirúrgicas por establecimiento.
+model EceSalaQx {
+  id                String   @id @default(uuid()) @db.Uuid
+  establecimientoId String   @map("establecimiento_id") @db.Uuid
+  codigo            String   @db.VarChar(20)
+  nombre            String   @db.VarChar(100)
+  tipo              String   @db.VarChar(20)
+  activa            Boolean  @default(true)
+  registradoEn      DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
+
+  establecimiento EceEstablecimiento @relation(fields: [establecimientoId], references: [id], onDelete: Restrict)
+  reservas        EceReservaSalaQx[]
+
+  @@unique([establecimientoId, codigo])
+  @@map("sala_qx")
+  @@schema("ece")
+}
+
+/// Reserva de sala quirúrgica para una cirugía programada.
+/// Columnas alineadas al contrato de bridge-cirugia.router.ts.
+model EceReservaSalaQx {
+  id                  String    @id @default(uuid()) @db.Uuid
+  ordenQxId           String    @map("orden_qx_id") @db.Uuid
+  episodioId          String    @map("episodio_id") @db.Uuid
+  salaQxId            String    @map("sala_qx_id") @db.Uuid
+  cirujanoId          String    @map("cirujano_id") @db.Uuid
+  anestesiologoId     String?   @map("anestesiologo_id") @db.Uuid
+  fechaInicio         DateTime  @map("fecha_inicio") @db.Timestamptz()
+  fechaFin            DateTime  @map("fecha_fin") @db.Timestamptz()
+  duracionEstimadaMin Int       @map("duracion_estimada_min")
+  procedimientoCie10  String    @map("procedimiento_cie10") @db.VarChar(20)
+  estado              String    @default("programado") @db.VarChar(20)
+  reservadoPor        String    @map("reservado_por") @db.Uuid
+  reservadoEn         DateTime  @default(now()) @map("reservado_en") @db.Timestamptz()
+  motivoCancelacion   String?   @map("motivo_cancelacion")
+  canceladoEn         DateTime? @map("cancelado_en") @db.Timestamptz()
+  canceladoPor        String?   @map("cancelado_por") @db.Uuid
+
+  episodio     EceEpisodioAtencion @relation(fields: [episodioId], references: [id], onDelete: Cascade)
+  salaQx       EceSalaQx           @relation(fields: [salaQxId], references: [id], onDelete: Restrict)
+  ordenIngreso EceOrdenIngreso[]   @relation("OIReservaSalaQx")
+
+  @@index([salaQxId, fechaInicio, fechaFin], name: "idx_reserva_sala_qx_overlap")
+  @@index([episodioId], name: "idx_reserva_sala_qx_episodio")
+  @@map("reserva_sala_qx")
   @@schema("ece")
 }
