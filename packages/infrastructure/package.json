@@ -11,7 +11,8 @@
     "./observability/logger": "./src/observability/logger.ts",
     "./observability/health-check": "./src/observability/health-check.ts",
     "./notifications": "./src/notifications/index.ts",
-    "./notifications/resend": "./src/notifications/resend.ts"
+    "./notifications/resend": "./src/notifications/resend.ts",
+    "./firma/argon2": "./src/firma/argon2.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
@@ -22,7 +23,7 @@
   },
   "dependencies": {
     "@his/contracts": "*",
-    "argon2": "^0.44.0",
+    "@node-rs/argon2": "^2.0.2",
     "pino": "^9.5.0"
   },
   "devDependencies": {

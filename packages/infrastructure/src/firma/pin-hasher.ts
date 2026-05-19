@@ -6,7 +6,7 @@
  *   "argon2": "^0.41.1"
  *   "@types/node": ya presente (usa crypto.randomBytes)
  */
-import argon2 from "argon2";
+import argon2 from "./argon2";
 import { randomBytes } from "node:crypto";
 
 const ARGON2_OPTIONS = {

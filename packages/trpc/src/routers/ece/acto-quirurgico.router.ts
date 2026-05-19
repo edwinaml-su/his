@@ -23,7 +23,7 @@
  */
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
-import argon2 from "argon2";
+import argon2 from "@his/infrastructure/firma/argon2";
 import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../ece/workflow-context";
