@@ -980,6 +980,24 @@ export type FarmacovigilanciaAlergiaPayload = z.infer<typeof farmacovigilanciaAl
 export type FarmacovigilanciaRecallPayload = z.infer<typeof farmacovigilanciaRecallPayloadSchema>;
 export type FarmacovigilanciaDobleDispPayload = z.infer<typeof farmacovigilanciaDobleDispPayloadSchema>;
 export type FarmacovigilanciaVencidoPayload = z.infer<typeof farmacovigilanciaVencidoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
+// farmacovigilancia.escalado  (S8 HI-24 — US.F2.6.58)
+// Emitido cuando PHARM/ADMIN escala un incidente al Comité de Farmacovigilancia.
+// Activa Beta.15 para notificar al receptor (jefe farmacia / comité).
+// -----------------------------------------------------------------------------
+
+export const farmacovigilanciaEscaladoPayloadSchema = z.object({
+  incidentId: z.string().uuid(),
+  severidad: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
+  motivo: z.string().min(10).max(1000),
+  establecimientoId: z.string().uuid(),
+  escaladoPor: z.string().uuid(),
+  escaladoEn: z.string().datetime(),
+});
+
+export type FarmacovigilanciaEscaladoPayload = z.infer<typeof farmacovigilanciaEscaladoPayloadSchema>;
+
 // pharmacy.reservation.created / pharmacy.reservation.cancelled (US.F2.6.8)
 // Emitidos cuando se crea o cancela una reserva lógica GS1.
 // -----------------------------------------------------------------------------
@@ -1333,6 +1351,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("farmacovigilancia.dosis_vencida"),
     payload: farmacovigilanciaVencidoPayloadSchema,
+  }),
+  // S8 HI-24 — escalado al Comité de Farmacovigilancia
+  z.object({
+    eventType: z.literal("farmacovigilancia.escalado"),
+    payload: farmacovigilanciaEscaladoPayloadSchema,
   }),
   // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
   z.object({
