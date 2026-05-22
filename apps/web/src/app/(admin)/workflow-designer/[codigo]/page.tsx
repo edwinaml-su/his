@@ -29,6 +29,9 @@ import { WorkflowGraph } from "./_components/workflow-graph";
 import { MobileView } from "./_components/mobile-view";
 import { ReadOnlyBanner } from "./_components/read-only-banner";
 import { useWorkflowAccess } from "./_components/use-workflow-access";
+import { DependenciasGrafo } from "../_components/dependencias-grafo";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // ─── Skip-links ───────────────────────────────────────────────────────────────
 
@@ -330,7 +333,7 @@ export default function WorkflowGrafoPage() {
     { soloActivos: false },
   );
 
-  const tipoDoc = tiposDocs?.find((d: { codigo: string }) => d.codigo === codigo);
+  const tipoDoc = tiposDocs?.find((d) => d.codigo === codigo);
 
   const { data: estados, isLoading: loadingEstados } = trpc.workflowEstado.estado.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
@@ -459,6 +462,80 @@ export default function WorkflowGrafoPage() {
           </Button>
         )}
       </div>
+
+      {/* Descripción rica (markdown) + módulo HIS — Fase 3 */}
+      {(tipoDoc.descripcion_markdown || tipoDoc.modulo_his_target) && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm">Descripción y contexto operativo</CardTitle>
+              {tipoDoc.modulo_his_target && (
+                <Link
+                  href={tipoDoc.modulo_his_target}
+                  className="text-xs text-muted-foreground underline hover:text-foreground"
+                >
+                  Ir al módulo {tipoDoc.modulo_his_target}
+                </Link>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {tipoDoc.descripcion_markdown ? (
+              <article className="prose prose-sm dark:prose-invert max-w-none">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {tipoDoc.descripcion_markdown}
+                </ReactMarkdown>
+              </article>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Sin descripción rica configurada.{" "}
+                {canEdit && (
+                  <Link
+                    href={`/workflow-designer/${codigo}/editar`}
+                    className="underline hover:text-foreground"
+                  >
+                    Agregar desde el editor
+                  </Link>
+                )}
+                .
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Grafo de dependencias — Fase 3 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">
+            Dependencias del flujo
+            <span className="ml-2 font-normal text-muted-foreground">
+              ({(tipoDoc.depende_de ?? []).length} prerrequisito(s))
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <DependenciasGrafo
+            current={{
+              codigo: tipoDoc.codigo,
+              nombre: tipoDoc.nombre,
+              modalidad: tipoDoc.modalidad,
+              depende_de: tipoDoc.depende_de ?? null,
+            }}
+            all={(tiposDocs ?? []).map((d: {
+              codigo: string;
+              nombre: string;
+              modalidad: string;
+              depende_de: string[] | null;
+            }) => ({
+              codigo: d.codigo,
+              nombre: d.nombre,
+              modalidad: d.modalidad,
+              depende_de: d.depende_de,
+            }))}
+          />
+        </CardContent>
+      </Card>
 
       {/* Panel de validación */}
       <ValidationPanel
