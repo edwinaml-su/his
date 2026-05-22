@@ -221,4 +221,98 @@ describe("assertDependenciasFirmadas", () => {
     // Y el mensaje de error (cuando aplica) usaría "paciente" en lugar de "episodio";
     // aquí solo verificamos que el scoping llega correctamente al SQL.
   });
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Fase 6 — overrides por establecimiento
+  // ───────────────────────────────────────────────────────────────────────────
+
+  const ESTABLECIMIENTO_ID = "33333333-3333-3333-3333-333333333333";
+  const TIPO_DOC_ID = "44444444-4444-4444-4444-444444444444";
+
+  it("override obligatorio=false hace bypass total (no enforcement)", async () => {
+    // 1: lookup tipo_documento (con id ahora)
+    tx.$queryRaw.mockResolvedValueOnce([
+      { id: TIPO_DOC_ID, codigo: "IND_MED", depende_de: ["HOJA_ING"] },
+    ]);
+    // 2: lookup override → obligatorio_override=false → bypass
+    tx.$queryRaw.mockResolvedValueOnce([
+      { obligatorio_override: false, depende_de_override: null },
+    ]);
+
+    await assertDependenciasFirmadas({
+      tx: tx as unknown as Prisma.TransactionClient,
+      tipoDocCodigo: "IND_MED",
+      episodioId: EPISODIO_ID,
+      pacienteId: PACIENTE_ID,
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
+
+    // Solo 2 llamadas: lookup tipo + lookup override. NO se ejecuta el query
+    // de dependencias pendientes (3ra llamada).
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it("override depende_de_override reemplaza el global", async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      { id: TIPO_DOC_ID, codigo: "IND_MED", depende_de: ["HOJA_ING", "FICHA_ID"] },
+    ]);
+    // Override: solo FICHA_ID — HOJA_ING ya no aplica en este establecimiento.
+    tx.$queryRaw.mockResolvedValueOnce([
+      { obligatorio_override: null, depende_de_override: ["FICHA_ID"] },
+    ]);
+    // Query de dependencias pendientes con depende_de override → ninguna pendiente.
+    tx.$queryRaw.mockResolvedValueOnce([]);
+
+    await assertDependenciasFirmadas({
+      tx: tx as unknown as Prisma.TransactionClient,
+      tipoDocCodigo: "IND_MED",
+      episodioId: EPISODIO_ID,
+      pacienteId: PACIENTE_ID,
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
+
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
+    // El 3er query debe usar el override ["FICHA_ID"], no el global.
+    const values3 = getSqlValues(tx, 2);
+    expect(values3).toContainEqual(["FICHA_ID"]);
+  });
+
+  it("sin override registrado → usa depende_de global", async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      { id: TIPO_DOC_ID, codigo: "IND_MED", depende_de: ["HOJA_ING"] },
+    ]);
+    // Override: no existe fila → array vacío.
+    tx.$queryRaw.mockResolvedValueOnce([]);
+    // Query de dependencias pendientes con depende_de global.
+    tx.$queryRaw.mockResolvedValueOnce([]);
+
+    await assertDependenciasFirmadas({
+      tx: tx as unknown as Prisma.TransactionClient,
+      tipoDocCodigo: "IND_MED",
+      episodioId: EPISODIO_ID,
+      pacienteId: PACIENTE_ID,
+      establecimientoId: ESTABLECIMIENTO_ID,
+    });
+
+    const values3 = getSqlValues(tx, 2);
+    expect(values3).toContainEqual(["HOJA_ING"]);
+  });
+
+  it("sin establecimientoId no consulta overrides", async () => {
+    tx.$queryRaw.mockResolvedValueOnce([
+      { id: TIPO_DOC_ID, codigo: "IND_MED", depende_de: ["HOJA_ING"] },
+    ]);
+    tx.$queryRaw.mockResolvedValueOnce([]);
+
+    await assertDependenciasFirmadas({
+      tx: tx as unknown as Prisma.TransactionClient,
+      tipoDocCodigo: "IND_MED",
+      episodioId: EPISODIO_ID,
+      pacienteId: PACIENTE_ID,
+      // establecimientoId omitido
+    });
+
+    // Solo 2 queries: lookup tipo + query de pendientes (NO override).
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+  });
 });
