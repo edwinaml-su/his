@@ -194,6 +194,7 @@ export const workflowInstanceRouter = router({
         episodioId: input.episodioId ?? null,
         pacienteId: input.pacienteId,
         skipEnforcement: input.skipDependenciasEnforcement === true,
+        establecimientoId: eceCtx.establecimientoId,
       });
 
       // 2. Insertar instancia
@@ -520,20 +521,31 @@ export const workflowInstanceRouter = router({
           estado_es_final: boolean | null;
         };
 
-        const tipos = await tx.$queryRaw<TipoConEstadoRow[]>`
+        // Fase 6: `depende_de_efectivo` aplica overrides por establecimiento.
+        //  - obligatorio_override=false en override → bypass total (vacío)
+        //  - depende_de_override !== NULL → reemplaza el global
+        //  - sin override → usa td.depende_de
+        // También filtra fuera tipos desactivados por activo_override=false.
+        const tipos = await tx.$queryRaw<
+          (TipoConEstadoRow & { obligatorio_override: boolean | null })[]
+        >`
           SELECT
-            td.id::text                        AS tipo_id,
-            td.codigo                          AS codigo,
-            td.nombre                          AS nombre,
-            td.modalidad                       AS modalidad,
-            td.tipo_registro                   AS tipo_registro,
-            td.inmutable                       AS inmutable,
-            td.depende_de                      AS depende_de,
-            td.modulo_his_target               AS modulo_his_target,
-            di.id::text                        AS instancia_id,
-            fe.codigo                          AS estado_codigo,
-            fe.es_final                        AS estado_es_final
+            td.id::text                                              AS tipo_id,
+            td.codigo                                                AS codigo,
+            td.nombre                                                AS nombre,
+            td.modalidad                                             AS modalidad,
+            td.tipo_registro                                         AS tipo_registro,
+            td.inmutable                                             AS inmutable,
+            ece.fn_depende_de_efectivo(td.id, ${eceCtx.establecimientoId}::uuid) AS depende_de,
+            td.modulo_his_target                                     AS modulo_his_target,
+            di.id::text                                              AS instancia_id,
+            fe.codigo                                                AS estado_codigo,
+            fe.es_final                                              AS estado_es_final,
+            tde.obligatorio_override                                 AS obligatorio_override
           FROM ece.tipo_documento td
+          LEFT JOIN ece.tipo_documento_establecimiento tde
+            ON tde.tipo_documento_id = td.id
+            AND tde.establecimiento_id = ${eceCtx.establecimientoId}::uuid
           LEFT JOIN LATERAL (
             SELECT id, estado_actual_id
             FROM ece.documento_instancia
@@ -545,6 +557,7 @@ export const workflowInstanceRouter = router({
           ) di ON TRUE
           LEFT JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
           WHERE td.activo = true
+            AND COALESCE(tde.activo_override, true) = true
             AND (td.modalidad = ${modalidad} OR td.modalidad = 'ambos')
           ORDER BY td.codigo
         `;
@@ -576,11 +589,18 @@ export const workflowInstanceRouter = router({
           );
 
           let estado: Estado;
+          // Fase 6: si el establecimiento marcó este tipo como opcional
+          // (obligatorio_override=false), lo mostramos como NO_APLICA salvo
+          // que ya exista una instancia (entonces respetamos su estado real).
+          const esOpcionalEnEstablecimiento = t.obligatorio_override === false;
+
           if (t.estado_codigo !== null) {
             const esFirmado =
               t.estado_es_final === true ||
               ["firmado", "validado", "certificado"].includes(t.estado_codigo);
             estado = esFirmado ? "FIRMADO" : "EN_PROGRESO";
+          } else if (esOpcionalEnEstablecimiento) {
+            estado = "NO_APLICA";
           } else if (dependenciasFaltantes.length === 0) {
             estado = "LISTO";
           } else {

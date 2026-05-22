@@ -48,6 +48,12 @@ export interface AssertDependenciasFirmadasOpts {
   pacienteId: string;
   /** Si true, omite el check (uso interno: seeders, migraciones). */
   skipEnforcement?: boolean;
+  /**
+   * Establecimiento actual — si se provee, el helper aplica overrides de
+   * `ece.tipo_documento_establecimiento` (Fase 6). Si es undefined, usa
+   * solo el `depende_de` global del catálogo.
+   */
+  establecimientoId?: string;
 }
 
 interface TipoDocRow {
@@ -73,11 +79,11 @@ export async function assertDependenciasFirmadas(
 ): Promise<void> {
   if (opts.skipEnforcement === true) return;
 
-  const { tx, tipoDocCodigo, episodioId, pacienteId } = opts;
+  const { tx, tipoDocCodigo, episodioId, pacienteId, establecimientoId } = opts;
 
   // 1. Obtener depende_de del tipo_documento a crear.
-  const tipoRows = await tx.$queryRaw<TipoDocRow[]>(Prisma.sql`
-    SELECT codigo, depende_de
+  const tipoRows = await tx.$queryRaw<(TipoDocRow & { id: string })[]>(Prisma.sql`
+    SELECT id::text, codigo, depende_de
     FROM ece.tipo_documento
     WHERE codigo = ${tipoDocCodigo} AND activo = true
     LIMIT 1
@@ -91,7 +97,29 @@ export async function assertDependenciasFirmadas(
     });
   }
 
-  const dependencias = tipoDoc.depende_de ?? [];
+  // Fase 6: aplicar override por establecimiento si está disponible.
+  // - obligatorio_override=false → bypass total (devuelve array vacío)
+  // - depende_de_override !== null → reemplaza el depende_de global
+  // - sin override → usa el depende_de global del catálogo
+  let dependencias = tipoDoc.depende_de ?? [];
+  if (establecimientoId !== undefined) {
+    const override = await tx.$queryRaw<
+      { obligatorio_override: boolean | null; depende_de_override: string[] | null }[]
+    >(Prisma.sql`
+      SELECT obligatorio_override, depende_de_override
+      FROM ece.tipo_documento_establecimiento
+      WHERE tipo_documento_id = ${tipoDoc.id}::uuid
+        AND establecimiento_id = ${establecimientoId}::uuid
+      LIMIT 1
+    `);
+
+    if (override.length > 0) {
+      const o = override[0]!;
+      if (o.obligatorio_override === false) return;
+      if (o.depende_de_override !== null) dependencias = o.depende_de_override;
+    }
+  }
+
   if (dependencias.length === 0) return;
 
   // 2. Para cada CODIGO en depende_de, verificar que exista al menos una
