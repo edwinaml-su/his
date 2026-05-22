@@ -55,7 +55,9 @@ export const EVENT_TYPES = [
   "ece.episodio.abierto",
   "ece.episodio.cerrado",
   // Fase 2 — ECE Atención de Emergencia (NTEC Doc 5, ATN_EMERG)
+  "ece.atencion_emergencia.creada",
   "ece.atencion_emergencia.firmada",
+  "ece.atencion_emergencia.anulada",
   // Fase 2 — ECE RRI (NTEC Doc 10)
   "ece.rri.firmada",
   "ece.rri.respondida",
@@ -65,6 +67,7 @@ export const EVENT_TYPES = [
   "ece.solicitud_estudio.anulada",
   "ece.resultado_estudio.registrado",
   "ece.resultado_estudio.aprobado",
+  "ece.resultado_estudio.validado",
   // Fase 2 — ECE Hoja de Ingreso Hospitalario (Doc 12 NTEC)
   "ece.hoja_ingreso.firmada",
   "ece.hoja_ingreso.validada",
