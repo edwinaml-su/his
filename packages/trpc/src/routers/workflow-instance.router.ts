@@ -29,6 +29,7 @@ import { router, requireRole } from "../trpc";
 import { withWorkflowContext, type EceContext } from "../workflow/context";
 import { canTransition, executeTransition } from "../workflow/transitions";
 import { emitDomainEvent } from "@his/database";
+import { assertDependenciasFirmadas } from "../ece/dependencias-enforcement";
 
 // ─── Schemas de input ────────────────────────────────────────────────────────
 
@@ -38,6 +39,12 @@ const createInput = z.object({
   pacienteId: z.string().uuid(),
   /** id de la fila en la tabla física de datos clínicos (ece.<tabla_datos>). */
   registroId: z.string().uuid().optional(),
+  /**
+   * Si true, omite la validación de `depende_de` (Fase 4 enforcement).
+   * Reservado para seeders, migraciones y procesos administrativos.
+   * NO debe exponerse al cliente — requiere rol ADMIN o similar.
+   */
+  skipDependenciasEnforcement: z.boolean().optional(),
 });
 
 const getInput = z.object({
@@ -165,6 +172,29 @@ export const workflowInstanceRouter = router({
       }
 
       const estadoInicial = estadosIniciales[0]!;
+
+      // 1.5. Fase 4 enforcement — validar dependencias firmadas en el episodio.
+      // Resuelve el código del tipo_documento y lanza PRECONDITION_FAILED si
+      // alguna dependencia declarada en `depende_de` no tiene instancia firmada.
+      const tipoCodigoRows = await tx.$queryRaw<{ codigo: string }[]>`
+        SELECT codigo FROM ece.tipo_documento
+        WHERE id = ${input.tipoDocumentoId}::uuid LIMIT 1
+      `;
+      const tipoCodigo = tipoCodigoRows[0]?.codigo;
+      if (!tipoCodigo) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Tipo de documento ${input.tipoDocumentoId} no encontrado.`,
+        });
+      }
+
+      await assertDependenciasFirmadas({
+        tx,
+        tipoDocCodigo: tipoCodigo,
+        episodioId: input.episodioId ?? null,
+        pacienteId: input.pacienteId,
+        skipEnforcement: input.skipDependenciasEnforcement === true,
+      });
 
       // 2. Insertar instancia
       const rows = await tx.$queryRaw<{ id: string }[]>`
