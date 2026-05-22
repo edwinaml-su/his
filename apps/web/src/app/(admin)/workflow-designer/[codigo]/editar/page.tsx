@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { MarkdownEditor } from "../../_components/markdown-editor";
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -83,6 +84,9 @@ interface TipoDocRow {
   codigo: string;
   nombre: string;
   activo: boolean;
+  descripcion_markdown?: string | null;
+  modulo_his_target?: string | null;
+  depende_de?: string[] | null;
 }
 
 interface RolDisponibleRow {
@@ -834,14 +838,135 @@ function SeccionRoles({
   );
 }
 
+// ─── Sección: Descripción markdown + módulo HIS ───────────────────────────────
+
+function SeccionDescripcion({
+  tipoDoc,
+  refetch,
+}: {
+  tipoDoc: TipoDocRow;
+  refetch: () => void;
+}) {
+  const [markdown, setMarkdown] = React.useState(tipoDoc.descripcion_markdown ?? "");
+  const [modulo, setModulo] = React.useState(tipoDoc.modulo_his_target ?? "");
+  const [error, setError] = React.useState<string | null>(null);
+  const [savedAt, setSavedAt] = React.useState<Date | null>(null);
+
+  // Sync cuando cambia el tipoDoc
+  React.useEffect(() => {
+    setMarkdown(tipoDoc.descripcion_markdown ?? "");
+    setModulo(tipoDoc.modulo_his_target ?? "");
+  }, [tipoDoc.descripcion_markdown, tipoDoc.modulo_his_target]);
+
+  const updateMutation = trpc.workflowTipoDoc.update.useMutation({
+    onSuccess: () => {
+      setSavedAt(new Date());
+      setError(null);
+      refetch();
+    },
+    onError: (e: { message: string }) => setError(e.message),
+  });
+
+  const dirty =
+    markdown !== (tipoDoc.descripcion_markdown ?? "") ||
+    modulo !== (tipoDoc.modulo_his_target ?? "");
+
+  function handleSave() {
+    setError(null);
+    updateMutation.mutate({
+      id: tipoDoc.id,
+      descripcionMarkdown: markdown.length > 0 ? markdown : null,
+      moduloHisTarget: modulo.length > 0 ? modulo : null,
+    });
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm">Descripción y módulo HIS</CardTitle>
+          {savedAt && !dirty && (
+            <span className="text-xs text-muted-foreground">
+              Guardado a las {savedAt.toLocaleTimeString("es-SV")}
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div>
+          <label htmlFor="modulo-his-target" className="block text-xs font-medium">
+            Módulo HIS legacy asociado
+          </label>
+          <input
+            id="modulo-his-target"
+            type="text"
+            value={modulo}
+            onChange={(e) => setModulo(e.target.value)}
+            placeholder="ej. /triage, /admissions, /ece/consentimiento"
+            className="mt-0.5 w-full rounded border px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            maxLength={255}
+          />
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ruta de la app donde vive este documento (regla &quot;adecuar legacy, NO duplicar&quot;).
+          </p>
+        </div>
+
+        <div>
+          <label htmlFor="markdown-editor" className="block text-xs font-medium">
+            Descripción rica (WYSIWYG — se persiste en Markdown)
+          </label>
+          <p className="mb-1 mt-0.5 text-xs text-muted-foreground">
+            Texto que el workflow designer renderiza como ayuda contextual. Soporta
+            encabezados, listas, énfasis, enlaces, código y citas.
+          </p>
+          <MarkdownEditor
+            value={markdown}
+            onChange={setMarkdown}
+            placeholder="Escribe la descripción del flujo: cuándo se usa, dependencias, errores comunes…"
+          />
+        </div>
+
+        {error && (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        )}
+
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            disabled={!dirty || updateMutation.isPending}
+          >
+            {updateMutation.isPending ? "Guardando…" : "Guardar descripción"}
+          </Button>
+          {dirty && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setMarkdown(tipoDoc.descripcion_markdown ?? "");
+                setModulo(tipoDoc.modulo_his_target ?? "");
+              }}
+            >
+              Descartar cambios
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function WorkflowEditorPage() {
   const params = useParams();
   const codigo = typeof params.codigo === "string" ? params.codigo : "";
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tiposDocs, isLoading: loadingDoc } = (trpc as any).workflowTipoDoc.list.useQuery(
+  const { data: tiposDocs, isLoading: loadingDoc, refetch: refetchTipos } = trpc.workflowTipoDoc.list.useQuery(
     { soloActivos: false },
   );
 
@@ -915,6 +1040,7 @@ export default function WorkflowEditorPage() {
 
       {/* Secciones de edición */}
       <div className="space-y-4">
+        <SeccionDescripcion tipoDoc={tipoDoc} refetch={refetchTipos} />
         <SeccionEstados
           tipoDocId={tipoDoc.id}
           estados={estados ?? []}

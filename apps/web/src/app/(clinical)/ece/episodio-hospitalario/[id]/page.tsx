@@ -26,6 +26,7 @@ import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
+import { WizardProximosDocumentos } from "./_components/wizard-proximos-documentos";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -195,10 +196,18 @@ export default function EpisodioHospitalarioDetallePage() {
           </Card>
         </TabsContent>
 
-        {/* Documentos — navega a las rutas ECE existentes */}
-        <TabsContent value="documentos" className="mt-4">
+        {/* Documentos — Wizard Fase 5 calculado desde depende_de del workflow */}
+        <TabsContent value="documentos" className="mt-4 space-y-3">
+          <WizardProximosDocumentos episodioAtencionId={ep.episodio_atencion_id} />
+
+          {/* Accesos rápidos a vistas históricas (mantiene los anteriores) */}
           <Card>
-            <CardContent className="pt-6">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs text-muted-foreground">
+                Accesos directos
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
               <div className="flex flex-col gap-2">
                 <Button asChild variant="outline" size="sm" className="justify-start">
                   <Link href={`/ece/epicrisis?episodioId=${ep.episodio_atencion_id}`}>

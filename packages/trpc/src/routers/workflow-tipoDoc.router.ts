@@ -57,6 +57,10 @@ const createInput = z.object({
   dependeDe: z.array(z.string().min(2).max(64)).optional(),
   /** Si true, el documento no admite UPDATE después de su creación. */
   inmutable: z.boolean().optional(),
+  /** Ruta del módulo HIS legacy asociado (p.ej. /triage, /admissions). */
+  moduloHisTarget: z.string().max(255).optional(),
+  /** Descripción rica en markdown — renderizada por el workflow designer. */
+  descripcionMarkdown: z.string().max(20000).optional(),
 });
 
 const updateInput = z.object({
@@ -72,6 +76,8 @@ const updateInput = z.object({
   modalidad: modalidadEnum.optional(),
   dependeDe: z.array(z.string().min(2).max(64)).optional(),
   inmutable: z.boolean().optional(),
+  moduloHisTarget: z.string().max(255).nullable().optional(),
+  descripcionMarkdown: z.string().max(20000).nullable().optional(),
 });
 
 const idInput = z.object({ id: z.string().uuid() });
@@ -97,6 +103,8 @@ export interface TipoDocRow {
   depende_de: string[] | null;
   inmutable: boolean;
   activo: boolean;
+  modulo_his_target: string | null;
+  descripcion_markdown: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +221,9 @@ export const workflowTipoDocRouter = router({
           modalidad,
           depende_de,
           inmutable,
-          activo
+          activo,
+          modulo_his_target,
+          descripcion_markdown
         FROM ece.tipo_documento
         WHERE
           (${soloActivos} = false OR activo = true)
@@ -239,7 +249,9 @@ export const workflowTipoDocRouter = router({
           modalidad,
           depende_de,
           inmutable,
-          activo
+          activo,
+          modulo_his_target,
+          descripcion_markdown
         FROM ece.tipo_documento
         WHERE id = ${input.id}::uuid
         LIMIT 1
@@ -271,7 +283,7 @@ export const workflowTipoDocRouter = router({
 
       const rows = await tx.$queryRaw<TipoDocRow[]>(Prisma.sql`
         INSERT INTO ece.tipo_documento
-          (codigo, nombre, tabla_datos, tipo_registro, modalidad, depende_de, inmutable)
+          (codigo, nombre, tabla_datos, tipo_registro, modalidad, depende_de, inmutable, modulo_his_target, descripcion_markdown)
         VALUES
           (
             ${input.codigo},
@@ -280,7 +292,9 @@ export const workflowTipoDocRouter = router({
             ${input.tipoRegistro},
             ${input.modalidad},
             ${input.dependeDe ?? null},
-            ${input.inmutable ?? false}
+            ${input.inmutable ?? false},
+            ${input.moduloHisTarget ?? null},
+            ${input.descripcionMarkdown ?? null}
           )
         RETURNING
           id::text,
@@ -291,7 +305,9 @@ export const workflowTipoDocRouter = router({
           modalidad,
           depende_de,
           inmutable,
-          activo
+          activo,
+          modulo_his_target,
+          descripcion_markdown
       `);
 
       const created = assertFound(rows[0], "TipoDocumento recién creado");
@@ -338,6 +354,10 @@ export const workflowTipoDocRouter = router({
         updates.push(Prisma.sql`depende_de = ${input.dependeDe}`);
       if (input.inmutable !== undefined)
         updates.push(Prisma.sql`inmutable = ${input.inmutable}`);
+      if (input.moduloHisTarget !== undefined)
+        updates.push(Prisma.sql`modulo_his_target = ${input.moduloHisTarget}`);
+      if (input.descripcionMarkdown !== undefined)
+        updates.push(Prisma.sql`descripcion_markdown = ${input.descripcionMarkdown}`);
 
       if (updates.length === 0) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "No se proveyó ningún campo para actualizar." });
@@ -409,7 +429,9 @@ export const workflowTipoDocRouter = router({
           modalidad,
           depende_de,
           inmutable,
-          activo
+          activo,
+          modulo_his_target,
+          descripcion_markdown
       `);
 
       const deactivated = assertFound(rows[0], "TipoDocumento");
