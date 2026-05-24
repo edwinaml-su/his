@@ -40,7 +40,10 @@ const listOutliersInput = z.object({
 });
 
 const flagOutlierInput = z.object({
-  bitacoraId: z.string().uuid(),
+  // `ece.bitacora_acceso.id` es BIGINT GENERATED ALWAYS AS IDENTITY (no UUID).
+  // Acepta string o number desde el cliente (query params suelen llegar como string)
+  // y coerciona a number entero positivo seguro hasta 2^53.
+  bitacoraId: z.coerce.number().int().positive(),
   motivo:     z.string().min(1).max(200),
 });
 
