@@ -1027,6 +1027,20 @@ export const eceUrpaAltaOtorgadaPayloadSchema = z.object({
 export type EceUrpaAltaOtorgadaPayload = z.infer<typeof eceUrpaAltaOtorgadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// gs1.recall.iniciado  (S8 — HI-10/11 — NTEC RTCA + TDR §19)
+// Emitido cuando ADMIN/DIRECTOR inicia un recall sobre un GTIN del catálogo ECE.
+// -----------------------------------------------------------------------------
+
+export const gs1RecallIniciadoPayloadSchema = z.object({
+  gtinId:        z.string().uuid(),
+  motivo:        z.string().min(10).max(1000),
+  severidad:     z.enum(["VOLUNTARIO", "OBLIGATORIO", "RETIRO_MERCADO"]),
+  iniciadoPorId: z.string().uuid(),
+});
+
+export type Gs1RecallIniciadoPayload = z.infer<typeof gs1RecallIniciadoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1347,6 +1361,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.urpa.alta_otorgada"),
     payload: eceUrpaAltaOtorgadaPayloadSchema,
+  }),
+  // S8 — HI-10/11: Recall RTCA (NTEC RTCA + TDR §19)
+  z.object({
+    eventType: z.literal("gs1.recall.iniciado"),
+    payload: gs1RecallIniciadoPayloadSchema,
   }),
 ]);
 

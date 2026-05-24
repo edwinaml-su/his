@@ -132,6 +132,8 @@ export const EVENT_TYPES = [
   "pharmacy.reservation.cancelled",
   // S1 HD-30 — ECE URPA: alta post-anestésica otorgada (NTEC Art. 36)
   "ece.urpa.alta_otorgada",
+  // S8 — HI-10/11: Trazabilidad lote + recall RTCA (NTEC RTCA + TDR §19)
+  "gs1.recall.iniciado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

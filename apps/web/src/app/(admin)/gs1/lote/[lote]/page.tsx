@@ -4,14 +4,10 @@
  * GS1 Trazabilidad de lote — §19 Inventario / GS1-128.
  *
  * Permite buscar un número de lote y ver:
- * - Timeline visual: recepción → almacenamiento → unidosis →
- *   dispensación → administración → paciente final.
- * - Lista de pacientes afectados (solo MRN — privacy LGPD/HIPAA §8.3).
- * - Botón "Iniciar recall" (requiere rol DIR).
- *
- * Estado actual: UI completa con datos de demostración y hooks de integración
- * preparados para conectar con `trpc.gs1.loteTrace` cuando el router esté
- * disponible (sprint GS1 fase 2).
+ * - Información del GTIN (catálogo ECE).
+ * - Timeline de movimientos (EPCIS) + recepciones.
+ * - Lista de dispensaciones (solo ID paciente — privacidad LGPD/HIPAA §8.3).
+ * - Botón "Iniciar recall" (requiere rol ADMIN/DIRECTOR — HI-11).
  *
  * WCAG 2.2 AA: tokens semánticos, foco visible, aria-live para resultados,
  * contraste mínimo 4.5:1 (muted-foreground sobre background).
@@ -22,86 +18,108 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@his/ui/components/dialog";
+import {
   LotTraceTimeline,
   GS1_STEPS,
   type LotTraceStep,
 } from "@/components/lot-trace-timeline";
+import { trpc } from "@/lib/trpc/react";
 
-// ─── Tipos de datos de respuesta ──────────────────────────────────────────
-
-interface AffectedPatient {
-  mrn: string;
-  encounterId: string;
-  administeredAt: string | null;
-}
-
-interface LotTraceResult {
-  lotNumber: string;
-  itemName: string;
-  itemSku: string;
-  expiryDate: string | null;
-  quantityOnHand: number;
-  steps: LotTraceStep[];
-  affectedPatients: AffectedPatient[];
-  recallInitiated: boolean;
-}
-
-// ─── Datos de demostración ────────────────────────────────────────────────
-// Se reemplazan por trpc.gs1.loteTrace.useQuery({ lotNumber }) cuando
-// el router esté disponible.
-
-function buildDemoData(lotNumber: string): LotTraceResult {
-  const base = new Date("2026-05-01T08:00:00-06:00");
-  const add = (h: number) => new Date(base.getTime() + h * 3_600_000);
-
-  const steps: LotTraceStep[] = GS1_STEPS.map((cfg, idx) => ({
-    ...cfg,
-    occurredAt: idx < 4 ? add(idx * 6) : null,
-    reference:
-      idx === 0
-        ? `FAC-2026-04-${lotNumber.slice(-3)}`
-        : idx === 1
-          ? "BODEGA-A / EST-001"
-          : idx === 3
-            ? `RX-${lotNumber}-01`
-            : undefined,
-  }));
-
-  return {
-    lotNumber,
-    itemName: "Amoxicilina 500 mg Cápsulas",
-    itemSku: "MED-AMOX-500",
-    expiryDate: "2027-03-31",
-    quantityOnHand: 240,
-    steps,
-    affectedPatients: [
-      { mrn: "PAC-000123", encounterId: "ENC-001", administeredAt: null },
-      { mrn: "PAC-000456", encounterId: "ENC-002", administeredAt: null },
-    ],
-    recallInitiated: false,
+/**
+ * Construye los pasos de la timeline a partir de los movimientos EPCIS.
+ * Mapea subtipos conocidos a los GS1_STEPS del componente legacy.
+ * Si no hay movimientos, devuelve los steps con occurredAt null.
+ */
+function buildStepsFromMovimientos(
+  movimientos: Array<{ fecha: Date; tipo: string; ubicacion: unknown; cantidad: unknown | null }>,
+): LotTraceStep[] {
+  const subtipoToStepIndex: Record<string, number> = {
+    INBOUND:           0,
+    STORAGE:           1,
+    PHARMACY_DISPENSE: 2,
+    BEDSIDE_ADMIN:     3,
+    RETURNING:         4,
   };
+
+  return GS1_STEPS.map((cfg, idx) => {
+    const movimiento = movimientos.find(
+      (m) => (subtipoToStepIndex[m.tipo] ?? -1) === idx,
+    );
+    return {
+      ...cfg,
+      occurredAt: movimiento ? movimiento.fecha : null,
+    } as LotTraceStep;
+  });
 }
 
-// ─── Componente ────────────────────────────────────────────────────────────
+// ─── Formulario de recall ─────────────────────────────────────────────────────
+
+type SeveridadRecall = "VOLUNTARIO" | "OBLIGATORIO" | "RETIRO_MERCADO";
+
+interface RecallFormState {
+  motivo: string;
+  severidad: SeveridadRecall;
+}
+
+// ─── Componente ────────────────────────────────────────────────────────────────
 
 export default function LotTracePage() {
   const params = useParams<{ lote: string }>();
   const lotNumber = decodeURIComponent(params.lote ?? "");
 
-  // TODO: reemplazar con trpc.gs1.loteTrace.useQuery({ lotNumber }) cuando
-  // el router esté implementado.
-  const data = React.useMemo(() => buildDemoData(lotNumber), [lotNumber]);
+  // ── Query trazabilidad ──────────────────────────────────────────────────────
+  const { data, isLoading, isError, error } =
+    trpc.gs1LoteTrace.loteTrace.useQuery(
+      { lotNumber },
+      { enabled: lotNumber.length > 0 },
+    );
 
-  const [recallPending, setRecallPending] = React.useState(false);
-  const [recallDone, setRecallDone] = React.useState(data.recallInitiated);
+  // ── Mutation recall ─────────────────────────────────────────────────────────
+  const utils = trpc.useUtils();
+  const [recallOpen, setRecallOpen] = React.useState(false);
+  const [recallForm, setRecallForm] = React.useState<RecallFormState>({
+    motivo: "",
+    severidad: "VOLUNTARIO",
+  });
 
-  function handleRecall() {
-    setRecallPending(true);
-    // TODO: conectar a trpc.gs1.initiateRecall.mutate({ lotNumber })
-    setTimeout(() => {
-      setRecallPending(false);
-      setRecallDone(true);
-    }, 800);
+  const recallMutation = trpc.gs1LoteTrace.initiateRecall.useMutation({
+    onSuccess: () => {
+      setRecallOpen(false);
+      void utils.gs1LoteTrace.loteTrace.invalidate({ lotNumber });
+    },
+  });
+
+  // ── Estados derivados ───────────────────────────────────────────────────────
+  const recallStatus = data?.gtin?.recallStatus ?? "NONE";
+  const recallActivo = recallStatus !== "NONE" && recallStatus !== "CERRADO";
+  const steps = React.useMemo(
+    () => buildStepsFromMovimientos(data?.movimientos ?? []),
+    [data?.movimientos],
+  );
+
+  // ── Render estados de carga ────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <div role="status" aria-live="polite" className="py-12 text-center text-sm text-muted-foreground">
+        Cargando trazabilidad del lote…
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div role="alert" className="py-12 text-center text-sm text-destructive">
+        Error al cargar datos: {error.message}
+      </div>
+    );
   }
 
   return (
@@ -117,23 +135,101 @@ export default function LotTracePage() {
           </p>
         </div>
 
-        <Button
-          variant={recallDone ? "outline" : "destructive"}
-          disabled={recallPending || recallDone}
-          aria-label={
-            recallDone
-              ? "Recall ya iniciado"
-              : "Iniciar recall — requiere autorización DIR"
-          }
-          data-testid="btn-iniciar-recall"
-          onClick={handleRecall}
-        >
-          {recallDone
-            ? "Recall iniciado"
-            : recallPending
-              ? "Iniciando…"
-              : "Iniciar recall"}
-        </Button>
+        {/* Botón recall — visible para todos; el server enforza rol ADMIN/DIRECTOR (HI-11) */}
+        <Dialog open={recallOpen} onOpenChange={setRecallOpen}>
+            <DialogTrigger asChild>
+              <Button
+                variant={recallActivo ? "outline" : "destructive"}
+                disabled={recallActivo}
+                aria-label={
+                  recallActivo
+                    ? `Recall activo (estado: ${recallStatus})`
+                    : "Iniciar proceso de recall — requiere autorización ADMIN o DIRECTOR"
+                }
+                data-testid="btn-iniciar-recall"
+              >
+                {recallActivo ? `Recall: ${recallStatus}` : "Iniciar recall"}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Iniciar proceso de recall</DialogTitle>
+                <DialogDescription>
+                  Esta acción marcará el GTIN como recall activo y emitirá una
+                  notificación. Requiere autorización de nivel DIRECTOR o
+                  ADMIN.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-4 py-4">
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">Severidad</span>
+                  <select
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={recallForm.severidad}
+                    onChange={(e) =>
+                      setRecallForm((f) => ({
+                        ...f,
+                        severidad: e.target.value as SeveridadRecall,
+                      }))
+                    }
+                  >
+                    <option value="VOLUNTARIO">Voluntario</option>
+                    <option value="OBLIGATORIO">Obligatorio (MINSAL)</option>
+                    <option value="RETIRO_MERCADO">Retiro de mercado</option>
+                  </select>
+                </label>
+
+                <label className="grid gap-1.5 text-sm">
+                  <span className="font-medium">Motivo</span>
+                  <textarea
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    rows={4}
+                    placeholder="Describe el motivo del recall (mínimo 10 caracteres)…"
+                    value={recallForm.motivo}
+                    onChange={(e) =>
+                      setRecallForm((f) => ({ ...f, motivo: e.target.value }))
+                    }
+                  />
+                </label>
+
+                {recallMutation.error && (
+                  <p role="alert" className="text-sm text-destructive">
+                    {recallMutation.error.message}
+                  </p>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setRecallOpen(false)}
+                  disabled={recallMutation.isPending}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  variant="destructive"
+                  disabled={
+                    recallMutation.isPending ||
+                    recallForm.motivo.length < 10 ||
+                    !data?.gtin?.id
+                  }
+                  onClick={() => {
+                    if (!data?.gtin?.id) return;
+                    recallMutation.mutate({
+                      gtinId:    data.gtin.id,
+                      motivo:    recallForm.motivo,
+                      severidad: recallForm.severidad,
+                    });
+                  }}
+                  data-testid="btn-confirmar-recall"
+                >
+                  {recallMutation.isPending ? "Iniciando…" : "Confirmar recall"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
       </div>
 
       {/* Tarjeta resumen del lote */}
@@ -142,68 +238,69 @@ export default function LotTracePage() {
           <CardTitle className="text-base">Información del lote</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl
-            className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4"
-            aria-label="Datos del lote"
-          >
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Lote
-              </dt>
-              <dd
-                className="mt-0.5 font-mono font-semibold"
-                data-testid="lot-number"
-              >
-                {data.lotNumber}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Producto
-              </dt>
-              <dd className="mt-0.5" data-testid="lot-item-name">
-                {data.itemName}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                SKU
-              </dt>
-              <dd className="mt-0.5 font-mono">{data.itemSku}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Vencimiento
-              </dt>
-              <dd className="mt-0.5">{data.expiryDate ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Stock disponible
-              </dt>
-              <dd className="mt-0.5">{data.quantityOnHand} unidades</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Estado recall
-              </dt>
-              <dd className="mt-0.5">
-                {recallDone ? (
-                  <Badge variant="destructive" data-testid="badge-recall">
-                    Recall activo
-                  </Badge>
-                ) : (
-                  <Badge variant="secondary" data-testid="badge-recall">
-                    Normal
-                  </Badge>
-                )}
-              </dd>
-            </div>
-          </dl>
+          {!data?.gtin ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              No se encontró un GTIN registrado para el lote{" "}
+              <span className="font-mono">{lotNumber}</span>.
+            </p>
+          ) : (
+            <dl
+              className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4"
+              aria-label="Datos del lote"
+            >
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Lote
+                </dt>
+                <dd
+                  className="mt-0.5 font-mono font-semibold"
+                  data-testid="lot-number"
+                >
+                  {lotNumber}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  GTIN
+                </dt>
+                <dd className="mt-0.5 font-mono">{data.gtin.codigo}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Producto
+                </dt>
+                <dd className="mt-0.5" data-testid="lot-item-name">
+                  {data.gtin.descripcion}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Fabricante
+                </dt>
+                <dd className="mt-0.5">{data.gtin.fabricante || "—"}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Estado recall
+                </dt>
+                <dd className="mt-0.5">
+                  {recallActivo ? (
+                    <Badge variant="destructive" data-testid="badge-recall">
+                      {recallStatus}
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" data-testid="badge-recall">
+                      Normal
+                    </Badge>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          )}
         </CardContent>
       </Card>
 
-      {/* Timeline */}
+      {/* Timeline cadena de custodia */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Cadena de custodia</CardTitle>
@@ -213,46 +310,47 @@ export default function LotTracePage() {
             aria-live="polite"
             aria-label="Línea de tiempo de trazabilidad del lote"
           >
-            <LotTraceTimeline steps={data.steps} />
+            <LotTraceTimeline steps={steps} />
           </div>
         </CardContent>
       </Card>
 
-      {/* Pacientes afectados */}
+      {/* Dispensaciones */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">
-            Pacientes afectados
+            Dispensaciones registradas
             <span className="ml-2 text-xs font-normal text-muted-foreground">
-              (solo MRN — privacidad §8.3)
+              (solo ID paciente — privacidad §8.3)
             </span>
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {data.affectedPatients.length === 0 ? (
+          {!data || data.dispensaciones.length === 0 ? (
             <p className="text-sm text-muted-foreground" role="status">
-              Sin pacientes registrados para este lote.
+              Sin dispensaciones registradas para este lote.
             </p>
           ) : (
             <ul
               className="divide-y divide-border"
-              aria-label="Pacientes afectados por el lote"
-              data-testid="affected-patients-list"
+              aria-label="Dispensaciones del lote"
+              data-testid="dispensaciones-list"
             >
-              {data.affectedPatients.map((p) => (
+              {data.dispensaciones.map((d, idx) => (
                 <li
-                  key={p.encounterId}
+                  key={`${d.paciente_id ?? "anonimo"}-${idx}`}
                   className="flex items-center justify-between py-2.5 text-sm"
-                  data-testid={`patient-row-${p.mrn}`}
                 >
-                  <span className="font-mono font-medium">{p.mrn}</span>
-                  <span className="text-xs text-muted-foreground">
-                    Episodio: {p.encounterId}
+                  <span className="font-mono font-medium">
+                    {d.paciente_id ?? "—"}
                   </span>
                   <span className="text-xs text-muted-foreground">
-                    {p.administeredAt
-                      ? `Adm: ${p.administeredAt}`
-                      : "Sin administración registrada"}
+                    Prescripción: {d.prescripcion_id ?? "—"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {d.fecha instanceof Date
+                      ? d.fecha.toLocaleDateString("es-SV")
+                      : String(d.fecha)}
                   </span>
                 </li>
               ))}
