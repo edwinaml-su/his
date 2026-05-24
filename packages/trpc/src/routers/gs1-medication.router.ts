@@ -26,16 +26,7 @@ import { withTenantContext } from "../rls-context";
 // Schemas
 // ---------------------------------------------------------------------------
 
-function gs1CheckDigitValid(code: string): boolean {
-  const len = code.length;
-  let sum = 0;
-  for (let i = 0; i < len - 1; i++) {
-    const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
-    sum += parseInt(code[i]!, 10) * weight;
-  }
-  const expected = (10 - (sum % 10)) % 10;
-  return expected === parseInt(code[len - 1]!, 10);
-}
+import { gs1CheckDigitValid } from "@his/contracts";
 
 const gtinSchema = z
   .string()

@@ -12,7 +12,7 @@
  *   8. Idempotencia: buildGSRN + validateGSRN = true para distintos seriales
  */
 import { describe, it, expect } from "vitest";
-import { buildGSRN, validateGSRN } from "../gs1";
+import { buildGSRN, gs1CheckDigitValid, validateGSRN } from "../gs1";
 
 describe("buildGSRN", () => {
   it("genera GSRN de exactamente 18 dígitos", () => {
@@ -84,5 +84,85 @@ describe("validateGSRN", () => {
     const good = buildGSRN("7503000", 5);
     const withDashes = good.slice(0, 9) + "-" + good.slice(9);
     expect(validateGSRN(withDashes)).toBe(true);
+  });
+});
+
+// =============================================================================
+// gs1CheckDigitValid — Módulo-10 GS1 genérico (HI-08)
+// =============================================================================
+
+describe("gs1CheckDigitValid", () => {
+  /**
+   * Helper local — calcula el check digit con el MISMO algoritmo que
+   * `gs1CheckDigitValid`. Permite construir fixtures derivadas sin
+   * recurrir a `buildGSRN` (que usa otra variante interna).
+   */
+  function deriveCheckDigit(body: string): string {
+    const len = body.length + 1;
+    let sum = 0;
+    for (let i = 0; i < body.length; i++) {
+      const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
+      sum += Number.parseInt(body.charAt(i), 10) * weight;
+    }
+    return String((10 - (sum % 10)) % 10);
+  }
+
+  function makeValid(body: string): string {
+    return body + deriveCheckDigit(body);
+  }
+
+  // Sample real GS1 v23 (GTIN-14 oficial — externamente verificable)
+  const REAL_GTIN_14_SAMPLE = "00012345678905";
+
+  // 5 GTINs derivados (incluye sample real + 4 generadas con el algoritmo)
+  const VALID_GTIN_14 = [
+    REAL_GTIN_14_SAMPLE,
+    makeValid("0750123456789"), // El Salvador-style
+    makeValid("0001234567890"),
+    makeValid("9501234567890"),
+    makeValid("2000000000000"), // borde: muchos ceros
+  ];
+
+  // GLN-13 (1 longitud distinta)
+  const VALID_GLN_13 = makeValid("750123456789");
+
+  // SSCC-18 (1 longitud distinta)
+  const VALID_SSCC_18 = makeValid("75030000000000000");
+
+  // 3 inválidos: digit incorrecto / dos GTINs con typo / no-numérico
+  const INVALID_CODES = [
+    REAL_GTIN_14_SAMPLE.slice(0, -1) + "0", // mismo body, check incorrecto
+    makeValid("9999999999999").slice(0, -1) + "8", // check off by 1
+    "abc12345678905", // no-numérico
+  ];
+
+  it.each(VALID_GTIN_14)("acepta GTIN-14 válido: %s", (gtin) => {
+    expect(gtin).toHaveLength(14);
+    expect(gs1CheckDigitValid(gtin)).toBe(true);
+  });
+
+  it("acepta GLN-13 derivado con el mismo algoritmo", () => {
+    expect(VALID_GLN_13).toHaveLength(13);
+    expect(gs1CheckDigitValid(VALID_GLN_13)).toBe(true);
+  });
+
+  it("acepta SSCC-18 derivado con el mismo algoritmo", () => {
+    expect(VALID_SSCC_18).toHaveLength(18);
+    expect(gs1CheckDigitValid(VALID_SSCC_18)).toBe(true);
+  });
+
+  it.each(INVALID_CODES)("rechaza código inválido: %s", (code) => {
+    expect(gs1CheckDigitValid(code)).toBe(false);
+  });
+
+  it("rechaza string vacío y de longitud < 2", () => {
+    expect(gs1CheckDigitValid("")).toBe(false);
+    expect(gs1CheckDigitValid("5")).toBe(false);
+  });
+
+  it("rechaza no-string / null / undefined", () => {
+    expect(gs1CheckDigitValid(12345 as unknown as string)).toBe(false);
+    expect(gs1CheckDigitValid(null as unknown as string)).toBe(false);
+    expect(gs1CheckDigitValid(undefined as unknown as string)).toBe(false);
   });
 });

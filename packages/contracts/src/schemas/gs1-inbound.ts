@@ -1,10 +1,15 @@
 import { z } from "zod";
+import { gs1CheckDigitValid } from "../validators/gs1";
 
 // ---------------------------------------------------------------------------
 // Producto escaneado en muelle: un ítem dentro del JSONB `productos`
 // ---------------------------------------------------------------------------
 export const gs1ProductoRecibidoSchema = z.object({
-  gtin: z.string().min(14).max(14).regex(/^\d+$/, "GTIN debe ser 14 dígitos"),
+  gtin: z
+    .string()
+    .length(14)
+    .regex(/^\d{14}$/, "GTIN debe ser 14 dígitos")
+    .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido (GTIN-14)"),
   cantidad: z.number().int().positive(),
   lote: z.string().min(1).max(50),
   expiry: z
@@ -43,7 +48,12 @@ export const recibirMercanciaInput = z.object({
     .string()
     .length(13)
     .regex(/^\d+$/, "GLN debe ser 13 dígitos"),
-  sscc_pallet: z.string().optional(),
+  sscc_pallet: z
+    .string()
+    .length(18)
+    .regex(/^\d{18}$/, "SSCC debe ser 18 dígitos")
+    .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido (SSCC-18)")
+    .optional(),
   productos: z.array(gs1ProductoRecibidoSchema).min(1),
   verificacion_5correctos: verificacion5CorrectosSchema,
   establecimiento_id: z.string().uuid(),
