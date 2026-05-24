@@ -124,6 +124,8 @@ export const EVENT_TYPES = [
   "farmacovigilancia.recall_detectado",
   "farmacovigilancia.doble_dispensacion",
   "farmacovigilancia.dosis_vencida",
+  // S8 HI-24 — escalado al Comité de Farmacovigilancia (US.F2.6.58)
+  "farmacovigilancia.escalado",
   // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
   "medication.administered.bedside",
   "medication.administration.canceled",

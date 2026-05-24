@@ -17,6 +17,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { emitDomainEvent } from "@his/database";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -178,83 +179,94 @@ export const farmacovigilanciaRouter = router({
    * Crear incidente — usado internamente por el consumer del outbox y
    * por los routers de bedside/dispensación al detectar un hard-stop.
    * Rol mínimo: PHARM (farmacéutico), NURSE (enfermería), ADMIN.
+   * HI-23: withTenantContext garantiza RLS por establecimiento_id.
    */
   create: requireRole(["ADMIN", "PHARM", "NURSE", "PHYSICIAN"])
     .input(createIncidentInput)
     .mutation(async ({ ctx, input }) => {
       type IdRow = { id: string };
-      const rows = await ctx.prisma.$queryRawUnsafe<IdRow[]>(
-        `INSERT INTO ece.farmacovigilancia_incident
-           (tipo, severity, patient_id, gtin, gsrn_enfermera, payload,
-            domain_event_id, establecimiento_id)
-         VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7::uuid, $8::uuid)
-         RETURNING id`,
-        input.tipo,
-        input.severity,
-        input.patientId ?? null,
-        input.gtin ?? null,
-        input.gsrnEnfermera ?? null,
-        JSON.stringify(input.payload),
-        input.domainEventId ?? null,
-        ctx.tenant.organizationId,  // Nota: usamos org como tenant key para Prisma tenant
-      );
-      return { id: rows[0]!.id };
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rows = await tx.$queryRawUnsafe<IdRow[]>(
+          `INSERT INTO ece.farmacovigilancia_incident
+             (tipo, severity, patient_id, gtin, gsrn_enfermera, payload,
+              domain_event_id, establecimiento_id)
+           VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7::uuid, $8::uuid)
+           RETURNING id`,
+          input.tipo,
+          input.severity,
+          input.patientId ?? null,
+          input.gtin ?? null,
+          input.gsrnEnfermera ?? null,
+          JSON.stringify(input.payload),
+          input.domainEventId ?? null,
+          ctx.tenant.organizationId,
+        );
+        return { id: rows[0]!.id };
+      });
     }),
 
   /**
    * Reconocer (acknowledge) un incidente PENDIENTE.
    * Cambia status a RECONOCIDO y registra quién lo reconoció.
+   * HI-23: withTenantContext + filtro establecimiento_id impide cross-tenant.
    */
   acknowledge: requireRole(["ADMIN", "PHARM"])
     .input(acknowledgeInput)
     .mutation(async ({ ctx, input }) => {
-      const rows = await ctx.prisma.$queryRawUnsafe<{ status: string }[]>(
-        `SELECT status FROM ece.farmacovigilancia_incident WHERE id = $1::uuid`,
-        input.incidentId,
-      );
-      const inc = rows[0];
-      if (!inc) throw new TRPCError({ code: "NOT_FOUND", message: "Incidente no encontrado" });
-      if (inc.status !== "PENDIENTE") {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `Solo PENDIENTE puede ser reconocido. Estado actual: ${inc.status}`,
-        });
-      }
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rows = await tx.$queryRawUnsafe<{ status: string }[]>(
+          `SELECT status FROM ece.farmacovigilancia_incident
+           WHERE id = $1::uuid AND establecimiento_id = $2::uuid`,
+          input.incidentId,
+          ctx.tenant.organizationId,
+        );
+        const inc = rows[0];
+        if (!inc) throw new TRPCError({ code: "NOT_FOUND", message: "Incidente no encontrado" });
+        if (inc.status !== "PENDIENTE") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Solo PENDIENTE puede ser reconocido. Estado actual: ${inc.status}`,
+          });
+        }
 
-      await ctx.prisma.$executeRawUnsafe(
-        `UPDATE ece.farmacovigilancia_incident
-            SET status = 'RECONOCIDO',
-                acknowledged_at = now(),
-                acknowledged_by_id = $2::uuid
-          WHERE id = $1::uuid`,
-        input.incidentId,
-        ctx.user.id,
-      );
+        await tx.$executeRawUnsafe(
+          `UPDATE ece.farmacovigilancia_incident
+              SET status = 'RECONOCIDO',
+                  acknowledged_at = now(),
+                  acknowledged_by_id = $2::uuid
+            WHERE id = $1::uuid`,
+          input.incidentId,
+          ctx.user.id,
+        );
 
-      return { ok: true as const };
+        return { ok: true as const };
+      });
     }),
 
   /**
-   * Escalar un incidente al farmacéutico jefe.
-   * Emite evento de dominio para que Beta.15 notifique al receptor.
+   * Escalar un incidente al farmacéutico jefe / Comité de Farmacovigilancia.
+   * HI-23: withTenantContext + filtro establecimiento_id impide cross-tenant.
+   * HI-24: emite farmacovigilancia.escalado al outbox para activar Beta.15.
    */
   escalate: requireRole(["ADMIN", "PHARM"])
     .input(escalateInput)
     .mutation(async ({ ctx, input }) => {
-      const rows = await ctx.prisma.$queryRawUnsafe<{ status: string; tipo: string; severity: string }[]>(
-        `SELECT status, tipo, severity FROM ece.farmacovigilancia_incident WHERE id = $1::uuid`,
-        input.incidentId,
-      );
-      const inc = rows[0];
-      if (!inc) throw new TRPCError({ code: "NOT_FOUND", message: "Incidente no encontrado" });
-      if (inc.status === "CERRADO" || inc.status === "ESCALADO") {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `No se puede escalar un incidente en estado: ${inc.status}`,
-        });
-      }
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rows = await tx.$queryRawUnsafe<{ status: string; severity: string }[]>(
+          `SELECT status, severity FROM ece.farmacovigilancia_incident
+           WHERE id = $1::uuid AND establecimiento_id = $2::uuid`,
+          input.incidentId,
+          ctx.tenant.organizationId,
+        );
+        const inc = rows[0];
+        if (!inc) throw new TRPCError({ code: "NOT_FOUND", message: "Incidente no encontrado" });
+        if (inc.status === "CERRADO" || inc.status === "ESCALADO") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `No se puede escalar un incidente en estado: ${inc.status}`,
+          });
+        }
 
-      await ctx.prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe(
           `UPDATE ece.farmacovigilancia_incident
               SET status = 'ESCALADO',
@@ -265,14 +277,24 @@ export const farmacovigilanciaRouter = router({
           input.motivo,
         );
 
-        // Emitir evento al outbox para notificar al farmacéutico jefe
-        // Usamos allergy.mismatch como proxy hasta que Beta.19 añada
-        // farmacovigilancia.escalado; el payload lleva suficiente contexto.
-        // Trade-off: evitar alterar el catalog en esta PR para scope mínimo.
-        // TODO: US.F2.6.58 — eventType propio "farmacovigilancia.escalado"
-      });
+        await emitDomainEvent(tx, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "farmacovigilancia.escalado",
+          aggregateType: "FarmacovigilanciaIncident",
+          aggregateId: input.incidentId,
+          emittedById: ctx.user.id,
+          payload: {
+            incidentId: input.incidentId,
+            severidad: inc.severity as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+            motivo: input.motivo,
+            establecimientoId: ctx.tenant.organizationId,
+            escaladoPor: ctx.user.id,
+            escaladoEn: new Date().toISOString(),
+          },
+        });
 
-      return { ok: true as const };
+        return { ok: true as const };
+      });
     }),
 
   /**
