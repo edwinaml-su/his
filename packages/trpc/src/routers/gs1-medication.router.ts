@@ -19,14 +19,13 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { gs1CheckDigitValid } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
-
-import { gs1CheckDigitValid } from "@his/contracts";
 
 const gtinSchema = z
   .string()
