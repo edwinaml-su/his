@@ -63,6 +63,21 @@ const upsertConfigInput = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Fragmento SQL reutilizable: JOIN para aislar registros por organización.
+//
+// ece.bitacora_acceso no tiene organization_id directamente; la cadena es:
+//   bitacora_acceso.establecimiento_id → ece.establecimiento.institucion_id
+//   → ece.institucion.organization_id (FK nullable a public."Organization")
+//
+// El filtro explícito es defensa en profundidad sobre el rol Postgres que
+// ejecuta la query (BYPASSRLS cuando no se usa withTenantContext).
+// ---------------------------------------------------------------------------
+const ORG_JOIN = `
+  JOIN ece.establecimiento est ON b.establecimiento_id = est.id
+  JOIN ece.institucion     i   ON est.institucion_id   = i.id
+`;
+
+// ---------------------------------------------------------------------------
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
 
@@ -126,9 +141,10 @@ export const auditOutlierRouter = router({
   listOutliers: requireRole(["DIR", "ARCH"])
     .input(listOutliersInput)
     .query(async ({ ctx, input }) => {
-      const conditions: string[] = ["b.flag_outlier = true"];
-      const params: unknown[] = [];
-      let idx = 1;
+      const orgId = ctx.tenant.organizationId;
+      const conditions: string[] = ["b.flag_outlier = true", `i.organization_id = $1::uuid`];
+      const params: unknown[] = [orgId];
+      let idx = 2;
 
       if (input.desde) {
         conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`);
@@ -141,7 +157,7 @@ export const auditOutlierRouter = router({
       const where = conditions.join(" AND ");
 
       const countRows = await ctx.prisma.$queryRawUnsafe<CountRow[]>(
-        `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${where}`,
+        `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b ${ORG_JOIN} WHERE ${where}`,
         ...params,
       );
       const total = Number(countRows[0]?.total ?? 0);
@@ -153,7 +169,7 @@ export const auditOutlierRouter = router({
       const rows = await ctx.prisma.$queryRawUnsafe<OutlierRow[]>(
         `SELECT b.id, b.personal_id, b.auth_user_id, b.accion, b.autorizado,
                 b.ip_origen, b.ocurrido_en, b.flag_outlier, b.motivo_outlier, b.recurso_id
-         FROM ece.bitacora_acceso b
+         FROM ece.bitacora_acceso b ${ORG_JOIN}
          WHERE ${where}
          ORDER BY b.ocurrido_en DESC
          LIMIT $${lIdx} OFFSET $${oIdx}`,
@@ -183,11 +199,19 @@ export const auditOutlierRouter = router({
   flagOutlier: requireRole(["DIR"])
     .input(flagOutlierInput)
     .mutation(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+      // El WHERE incluye el JOIN implícito via subquery para garantizar
+      // que el registro pertenece a la organización del caller.
       const affected = await ctx.prisma.$executeRawUnsafe(
-        `UPDATE ece.bitacora_acceso
+        `UPDATE ece.bitacora_acceso b
          SET flag_outlier = true, motivo_outlier = $1
-         WHERE id = $2::uuid`,
+         FROM ece.establecimiento est
+         JOIN ece.institucion i ON est.institucion_id = i.id
+         WHERE b.establecimiento_id = est.id
+           AND i.organization_id = $2::uuid
+           AND b.id = $3::bigint`,
         input.motivo,
+        orgId,
         input.bitacoraId,
       );
       if (affected === 0) {
@@ -236,6 +260,11 @@ export const auditOutlierRouter = router({
         ipCondition = `(b.ip_origen IS NOT NULL AND b.ip_origen NOT IN (${placeholders.join(",")}))`;
       }
 
+      // Filtro org: JOIN implícito via FROM/WHERE para que el UPDATE
+      // solo afecte registros del establecimiento de esta organización.
+      const orgPlaceholder = `$${params.length + 1}`;
+      params.push(orgId);
+
       const sql = `
         UPDATE ece.bitacora_acceso b
         SET flag_outlier = true,
@@ -248,7 +277,11 @@ export const auditOutlierRouter = router({
                 THEN 'IP no whitelisted'
               ELSE motivo_outlier
             END
-        WHERE b.ocurrido_en BETWEEN $1::timestamptz AND $2::timestamptz
+        FROM ece.establecimiento est
+        JOIN ece.institucion i ON est.institucion_id = i.id
+        WHERE b.establecimiento_id = est.id
+          AND i.organization_id = ${orgPlaceholder}::uuid
+          AND b.ocurrido_en BETWEEN $1::timestamptz AND $2::timestamptz
           AND b.flag_outlier = false
           AND (${fueraHorario} OR ${ipCondition !== "false" ? ipCondition : "false"})
       `;
@@ -264,9 +297,10 @@ export const auditOutlierRouter = router({
   dashboardStats: requireRole(["DIR"])
     .input(dashboardStatsInput)
     .query(async ({ ctx, input }) => {
-      const conditions: string[] = ["1=1"];
-      const params: unknown[] = [];
-      let idx = 1;
+      const orgId = ctx.tenant.organizationId;
+      const conditions: string[] = [`i.organization_id = $1::uuid`];
+      const params: unknown[] = [orgId];
+      let idx = 2;
 
       if (input.desde) {
         conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`);
@@ -280,16 +314,16 @@ export const auditOutlierRouter = router({
 
       const [totalRows, outlierRows, topUserRows] = await Promise.all([
         ctx.prisma.$queryRawUnsafe<BigintRow[]>(
-          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where}`,
+          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b ${ORG_JOIN} WHERE ${where}`,
           ...params,
         ),
         ctx.prisma.$queryRawUnsafe<BigintRow[]>(
-          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where} AND b.flag_outlier = true`,
+          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b ${ORG_JOIN} WHERE ${where} AND b.flag_outlier = true`,
           ...params,
         ),
         ctx.prisma.$queryRawUnsafe<UserRow[]>(
           `SELECT b.auth_user_id, COUNT(*) AS count
-           FROM ece.bitacora_acceso b
+           FROM ece.bitacora_acceso b ${ORG_JOIN}
            WHERE ${where} AND b.auth_user_id IS NOT NULL
            GROUP BY b.auth_user_id
            ORDER BY count DESC
@@ -314,14 +348,17 @@ export const auditOutlierRouter = router({
   topUsers: requireRole(["DIR", "ARCH"])
     .input(z.object({ limit: z.number().int().min(1).max(50).default(10) }))
     .query(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
       const rows = await ctx.prisma.$queryRawUnsafe<UserRow[]>(
         `SELECT b.auth_user_id, COUNT(*) AS count
-         FROM ece.bitacora_acceso b
-         WHERE b.ocurrido_en >= now() - INTERVAL '30 days'
+         FROM ece.bitacora_acceso b ${ORG_JOIN}
+         WHERE i.organization_id = $1::uuid
+           AND b.ocurrido_en >= now() - INTERVAL '30 days'
            AND b.auth_user_id IS NOT NULL
          GROUP BY b.auth_user_id
          ORDER BY count DESC
-         LIMIT $1`,
+         LIMIT $2`,
+        orgId,
         input.limit,
       );
       return rows.map((r) => ({
@@ -337,17 +374,19 @@ export const auditOutlierRouter = router({
   sensitiveAccess: requireRole(["DIR"])
     .input(listOutliersInput)
     .query(async ({ ctx, input }) => {
-      const params: unknown[] = [];
-      let idx = 1;
+      const orgId = ctx.tenant.organizationId;
       const conditions: string[] = [
+        `i.organization_id = $1::uuid`,
         "(b.justificacion ILIKE '%VIP%' OR b.justificacion ILIKE '%mental%' OR b.justificacion ILIKE '%HIV%')",
       ];
+      const params: unknown[] = [orgId];
+      let idx = 2;
       if (input.desde) { conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`); params.push(input.desde); }
       if (input.hasta) { conditions.push(`b.ocurrido_en <= $${idx++}::timestamptz`); params.push(input.hasta); }
       const where = conditions.join(" AND ");
 
       const countRows = await ctx.prisma.$queryRawUnsafe<CountRow[]>(
-        `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${where}`,
+        `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b ${ORG_JOIN} WHERE ${where}`,
         ...params,
       );
       const total = Number(countRows[0]?.total ?? 0);
@@ -356,7 +395,7 @@ export const auditOutlierRouter = router({
       const rows = await ctx.prisma.$queryRawUnsafe<OutlierRow[]>(
         `SELECT b.id, b.personal_id, b.auth_user_id, b.accion, b.autorizado,
                 b.ip_origen, b.ocurrido_en, b.flag_outlier, b.motivo_outlier, b.recurso_id
-         FROM ece.bitacora_acceso b
+         FROM ece.bitacora_acceso b ${ORG_JOIN}
          WHERE ${where}
          ORDER BY b.ocurrido_en DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,

@@ -15,7 +15,7 @@ import {
 import { Badge } from "@his/ui/components/badge";
 import { trpc } from "@/lib/trpc/react";
 
-type EstadoRectificacion = "PENDIENTE" | "APROBADA" | "RECHAZADA";
+type EstadoRectificacion = "PENDIENTE" | "APROBADA" | "RECHAZADA" | "FIRMADA";
 
 /**
  * ECE — Mis rectificaciones pendientes (PHYSICIAN/NURSE).
@@ -32,6 +32,7 @@ function EstadoBadge({ estado }: { estado: EstadoRectificacion }) {
     PENDIENTE: { label: "Pendiente", variant: "secondary" },
     APROBADA: { label: "Aprobada", variant: "default" },
     RECHAZADA: { label: "Rechazada", variant: "destructive" },
+    FIRMADA: { label: "Firmada", variant: "outline" },
   };
   const { label, variant } = map[estado];
   return <Badge variant={variant}>{label}</Badge>;
