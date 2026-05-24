@@ -253,7 +253,7 @@ describe("auditOutlier.flagOutlier", () => {
     (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(1);
 
     const result = await caller.flagOutlier({
-      bitacoraId: "00000000-0000-0000-0000-000000000001",
+      bitacoraId: 1,
       motivo:     "IP sospechosa detectada manualmente",
     });
     expect(result.ok).toBe(true);
@@ -265,10 +265,29 @@ describe("auditOutlier.flagOutlier", () => {
 
     await expect(
       caller.flagOutlier({
-        bitacoraId: "00000000-0000-0000-0000-000000000001",
+        bitacoraId: 1,
         motivo:     "Prueba",
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("rechaza UUID o string no numérico (bigint IDENTITY, no UUID)", async () => {
+    const caller = makeOutlierCaller(prisma);
+    await expect(
+      // @ts-expect-error — validamos que el Zod rechaza el tipo incorrecto
+      caller.flagOutlier({ bitacoraId: "not-a-number", motivo: "test" }),
+    ).rejects.toThrow();
+  });
+
+  it("coerciona string numérico a number (input desde URL params)", async () => {
+    const caller = makeOutlierCaller(prisma);
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(1);
+
+    const result = await caller.flagOutlier({
+      bitacoraId: "42" as unknown as number, // simula input desde query string
+      motivo:     "Test coerción",
+    });
+    expect(result.ok).toBe(true);
   });
 });
 
