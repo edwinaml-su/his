@@ -21,6 +21,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { computeScheduledSlot } from "../utils/medication-slot";
 
 // ---------------------------------------------------------------------------
 // GS1 DataMatrix parser (AI 01 / 10 / 17 / 21)
@@ -356,6 +357,22 @@ const administrationRouter = router({
         });
       }
 
+      // BCMA-002 Right Time: calcular slot programado real desde frecuencia e
+      // hora_indicada de la indicación. Evita que scheduledTime = now() haga
+      // inocuo el guard isWithinTimingWindow en medication-admin.router.
+      const slotRows = await ctx.prisma.$queryRawUnsafe<{ fecha_hora: Date | null; frecuencia: string | null }[]>(
+        `SELECT im.fecha_hora, ii.frecuencia
+         FROM ece.indicaciones_medicas im
+         LEFT JOIN ece.indicacion_item ii ON ii.indicacion_id = im.id
+         WHERE im.id = $1
+         LIMIT 1`,
+        input.indicationId,
+      );
+      const slotRow = slotRows[0];
+      const scheduledTime = slotRow?.fecha_hora && slotRow.frecuencia
+        ? computeScheduledSlot(new Date(slotRow.fecha_hora), slotRow.frecuencia)
+        : null;
+
       const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Crear MedicationAdministration con flags BCMA activos
         const admin = await tx.medicationAdministration.create({
@@ -378,6 +395,8 @@ const administrationRouter = router({
             gsrnPaciente:    input.patientGsrn,
             gsrnEnfermera:   input.staffGsrn,
             notes:           `Bedside BCMA: ${input.dosis} via ${input.via}`,
+            // Right Time 5R — slot calculado desde frecuencia de la indicación
+            scheduledTime:   scheduledTime,
           },
           select: { id: true },
         });

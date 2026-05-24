@@ -56,11 +56,20 @@ export const labOrderListInput = z.object({
   limit: z.number().int().min(1).max(100).default(50),
 });
 
+// JCI Standard: IPSG.1 ME 4 — toma de muestra bedside requiere 2 identificadores.
 export const specimenCollectInput = z.object({
   orderId: z.string().uuid(),
   type: specimenTypeEnum,
   barcode: z.string().trim().min(1).max(80),
   collectedAt: z.coerce.date().optional(),
+  /** GSRN de la pulsera del paciente (AI 8018, 18 dígitos). Requerido para bedside. */
+  patientGsrn: z.string().length(18).regex(/^\d{18}$/).optional(),
+  /**
+   * Segundo identificador: MRN interno o valor de PatientIdentifier (DUI/NIT/NIE).
+   * Cuando patientGsrn viene presente, secondIdentifier también debe venir — se
+   * valida en el router con refinement lógico para no bloquear uso en lab (sin pulsera).
+   */
+  secondIdentifier: z.string().trim().min(1).max(80).optional(),
 });
 
 export const specimenRejectInput = z.object({
