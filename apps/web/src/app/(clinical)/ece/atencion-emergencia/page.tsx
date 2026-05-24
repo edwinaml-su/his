@@ -135,7 +135,7 @@ export default function AtencionEmergenciaListPage() {
               </TableHeader>
               <TableBody>
                 {rows.map((r) => {
-                  const estado = r.estado_workflow ?? "borrador";
+                  const estado = r.estado_documento ?? "borrador";
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="font-mono text-xs">

@@ -264,6 +264,7 @@ export default function DeathCertificateDetailPage() {
   const utils = trpc.useUtils();
 
   const [showFirmarModal, setShowFirmarModal] = React.useState(false);
+  const [showValidarModal, setShowValidarModal] = React.useState(false);
   const [showCertificarModal, setShowCertificarModal] = React.useState(false);
 
   const { data: cert, isLoading, error } = trpc.eceCertDef.get.useQuery({
@@ -466,7 +467,7 @@ export default function DeathCertificateDetailPage() {
                   <Button
                     type="button"
                     className="w-full"
-                    onClick={() => validar.mutate({ id: cert.id })}
+                    onClick={() => setShowValidarModal(true)}
                     disabled={validar.isPending}
                   >
                     {validar.isPending ? "Validando…" : "Validar (MC)"}
@@ -533,6 +534,27 @@ export default function DeathCertificateDetailPage() {
           );
         }}
         isPending={firmar.isPending}
+      />
+
+      {/* Modal validar MC — B-03: requiere firmaPin para no-repudio */}
+      <PinDialog
+        open={showValidarModal}
+        title="Validar certificado — MC"
+        description={
+          <span>
+            Confirme la revisión clínica del certificado. Esta acción requiere su PIN de
+            firma electrónica (no-repudio B-03).
+          </span>
+        }
+        submitLabel="Validar"
+        onClose={() => setShowValidarModal(false)}
+        onConfirm={(pin) => {
+          validar.mutate(
+            { id: cert.id, firmaPin: pin },
+            { onSuccess: () => setShowValidarModal(false) },
+          );
+        }}
+        isPending={validar.isPending}
       />
 
       {/* Modal certificar DIR */}

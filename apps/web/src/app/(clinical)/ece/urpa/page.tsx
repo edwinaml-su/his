@@ -17,7 +17,7 @@ import { UrpaCountdown } from "@/components/urpa/urpa-countdown";
 import { trpc } from "@/lib/trpc/react";
 
 export default function UrpaPage() {
-  const query = trpc.eceUrpaRecovery.list.useQuery({
+  const query = trpc.eceUrpa.list.useQuery({
     estadoRegistro: "activo",
     limit: 50,
   });

@@ -292,10 +292,10 @@ export default function EpicrisisDetailPage({
         diagnosticosEgreso: Array.isArray(epicrisis.diagnosticos_egreso)
           ? (epicrisis.diagnosticos_egreso as EpicrisisPdfData["diagnosticosEgreso"])
           : [],
-        resumenIngreso: epicrisis.resumen_ingreso,
-        evolucionHospitalaria: epicrisis.evolucion_hospitalaria,
-        tratamientoEgreso: epicrisis.tratamiento_egreso,
-        indicacionesEgreso: epicrisis.indicaciones_egreso,
+        resumenIngreso: epicrisis.resumen_ingreso ?? "",
+        evolucionHospitalaria: epicrisis.evolucion_hospitalaria ?? "",
+        tratamientoEgreso: epicrisis.tratamiento_egreso ?? "",
+        indicacionesEgreso: epicrisis.indicaciones_egreso ?? "",
         notas: epicrisis.notas,
         firmadoEn: epicrisis.firmado_en,
         validadoEn: epicrisis.validado_en,

@@ -102,8 +102,10 @@ export default function NuevaCertDefPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const episodioPreset = searchParams.get("episodioId") ?? "";
+  const epicrisisPreset = searchParams.get("epicrisisId") ?? "";
 
   const [episodioId, setEpisodioId] = React.useState(episodioPreset);
+  const [epicrisisId, setEpicrisisId] = React.useState(epicrisisPreset);
   const [fechaHoraDefuncion, setFechaHoraDefuncion] = React.useState("");
   const [lugarDefuncion, setLugarDefuncion] = React.useState<"intrahospitalaria" | "extrahospitalaria">("intrahospitalaria");
   const [causaPrincipal, setCausaPrincipal] = React.useState("");
@@ -141,6 +143,7 @@ export default function NuevaCertDefPage() {
     setError(null);
 
     if (!episodioId.trim()) { setError("El ID del episodio es requerido."); return; }
+    if (!epicrisisId.trim()) { setError("El ID de la epicrisis es requerido."); return; }
     if (!fechaHoraDefuncion) { setError("La fecha y hora de defunción son requeridas."); return; }
     if (!causaPrincipal.trim()) { setError("La causa principal (CIE-10) es requerida."); return; }
     if (!causaBasica.trim()) { setError("La causa básica (CIE-10) es requerida."); return; }
@@ -151,6 +154,7 @@ export default function NuevaCertDefPage() {
       const causasFiltered = causasIntermedias.filter((c) => c.trim().length > 0);
       const result = await createMutation.mutateAsync({
         episodioId: episodioId.trim(),
+        epicrisisId: epicrisisId.trim(),
         fechaHoraDefuncion: new Date(fechaHoraDefuncion),
         lugarDefuncion,
         causaPrincipalCie10: causaPrincipal.split(" ")[0]!,
@@ -208,6 +212,23 @@ export default function NuevaCertDefPage() {
               />
               {episodioPreset && (
                 <p className="text-xs text-muted-foreground">Pre-rellenado desde alta hospitalaria.</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="epicrisis-id">
+                ID Epicrisis de egreso <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="epicrisis-id"
+                value={epicrisisId}
+                onChange={(e) => setEpicrisisId(e.target.value)}
+                placeholder="UUID de la epicrisis (tipo_egreso = fallecido)"
+                disabled={!!epicrisisPreset}
+                required
+              />
+              {epicrisisPreset && (
+                <p className="text-xs text-muted-foreground">Pre-rellenado desde epicrisis de egreso.</p>
               )}
             </div>
 

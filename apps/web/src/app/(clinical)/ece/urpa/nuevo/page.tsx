@@ -68,8 +68,8 @@ export default function NuevoUrpaPage() {
   const [form, setForm] = React.useState<FormState>(INITIAL_FORM);
   const [clientError, setClientError] = React.useState<string | null>(null);
 
-  const createMutation = trpc.eceUrpaRecovery.create.useMutation({
-    onSuccess: (data) => {
+  const createMutation = trpc.eceUrpa.create.useMutation({
+    onSuccess: (data: { id: string }) => {
       router.push(`/ece/urpa/${data.id}`);
     },
   });

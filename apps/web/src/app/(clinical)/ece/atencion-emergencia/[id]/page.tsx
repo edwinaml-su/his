@@ -156,9 +156,6 @@ export default function AtencionEmergenciaDetailPage({
   const firmar = trpc.eceAtencionEmergencia.firmar.useMutation({
     onSuccess: () => query.refetch(),
   });
-  const validar = trpc.eceAtencionEmergencia.validar.useMutation({
-    onSuccess: () => query.refetch(),
-  });
   const anular = trpc.eceAtencionEmergencia.anular.useMutation({
     onSuccess: () => query.refetch(),
   });
@@ -167,14 +164,14 @@ export default function AtencionEmergenciaDetailPage({
   const [showAnularDialog, setShowAnularDialog] = React.useState(false);
 
   const doc = query.data;
-  const estado = (doc?.estado_workflow ?? "borrador") as WorkflowEstado;
+  const estado = (doc?.estado_documento ?? "borrador") as WorkflowEstado;
 
   const canFirmar = estado === "borrador" || estado === "en_revision";
-  const canValidar = estado === "firmado";
   const canAnular = estado !== "validado" && estado !== "anulado";
 
   function onPinConfirmed(firmaId: string) {
-    firmar.mutate({ id, firmaId });
+    // PinConfirmModal entrega el valor como `firmaId`; el router firmar espera `pin`
+    firmar.mutate({ id, pin: firmaId });
     setShowPinModal(false);
   }
 
@@ -183,9 +180,9 @@ export default function AtencionEmergenciaDetailPage({
     setShowAnularDialog(false);
   }
 
-  const anyPending = firmar.isPending || validar.isPending || anular.isPending;
+  const anyPending = firmar.isPending || anular.isPending;
   const mutationError =
-    firmar.error?.message ?? validar.error?.message ?? anular.error?.message ?? null;
+    firmar.error?.message ?? anular.error?.message ?? null;
 
   const dateFmt = new Intl.DateTimeFormat("es-SV", {
     dateStyle: "medium",
@@ -211,15 +208,6 @@ export default function AtencionEmergenciaDetailPage({
               className="bg-[#1a3c6e] hover:bg-[#15305a] text-white"
             >
               {firmar.isPending ? "Firmando…" : "Firmar (MT)"}
-            </Button>
-          )}
-          {canValidar && (
-            <Button
-              onClick={() => validar.mutate({ id })}
-              disabled={anyPending}
-              variant="outline"
-            >
-              {validar.isPending ? "Validando…" : "Validar (MT)"}
             </Button>
           )}
           {canAnular && (
@@ -253,8 +241,7 @@ export default function AtencionEmergenciaDetailPage({
         >
           <Lock className="h-4 w-4 shrink-0" aria-hidden />
           <span>
-            <strong>Atención anulada.</strong>{" "}
-            {doc?.motivo_anulacion ? `Motivo: ${doc.motivo_anulacion}` : ""}
+            <strong>Atención anulada.</strong>
           </span>
         </div>
       )}
@@ -299,21 +286,23 @@ export default function AtencionEmergenciaDetailPage({
             </section>
             <section aria-labelledby="section-exploracion">
               <h2 id="section-exploracion" className="mb-1 font-semibold text-[#1a3c6e]">
-                Exploración física
+                Examen físico
               </h2>
-              <p className="whitespace-pre-wrap">{doc.exploracion}</p>
+              <p className="whitespace-pre-wrap">{doc.examen_fisico}</p>
             </section>
             <section aria-labelledby="section-diagnostico">
               <h2 id="section-diagnostico" className="mb-1 font-semibold text-[#1a3c6e]">
-                Diagnóstico
+                Diagnósticos
               </h2>
-              <p className="whitespace-pre-wrap">{doc.diagnostico}</p>
+              <p className="whitespace-pre-wrap">
+                {doc.diagnosticos != null ? JSON.stringify(doc.diagnosticos) : ""}
+              </p>
             </section>
             <section aria-labelledby="section-plan">
               <h2 id="section-plan" className="mb-1 font-semibold text-[#1a3c6e]">
-                Plan terapéutico
+                Disposición
               </h2>
-              <p className="whitespace-pre-wrap">{doc.plan_terapeutico}</p>
+              <p className="whitespace-pre-wrap">{doc.disposicion}</p>
             </section>
           </CardContent>
         </Card>
@@ -345,22 +334,6 @@ export default function AtencionEmergenciaDetailPage({
                   {dateFmt.format(new Date(doc.registrado_en))}
                 </dd>
               </div>
-              {doc.firmado_en && (
-                <div>
-                  <dt className="text-muted-foreground">Firmado</dt>
-                  <dd className="tabular-nums">
-                    {dateFmt.format(new Date(doc.firmado_en))}
-                  </dd>
-                </div>
-              )}
-              {doc.validado_en && (
-                <div>
-                  <dt className="text-muted-foreground">Validado</dt>
-                  <dd className="tabular-nums">
-                    {dateFmt.format(new Date(doc.validado_en))}
-                  </dd>
-                </div>
-              )}
             </dl>
           </CardContent>
         </Card>

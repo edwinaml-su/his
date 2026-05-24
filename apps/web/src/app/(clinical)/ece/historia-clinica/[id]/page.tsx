@@ -166,7 +166,7 @@ export default function EceHistoriaClinicaDetailPage() {
         </Card>
 
         {/* Antecedentes */}
-        {hc.antecedentes && (
+        {(hc.antecedentes as object | null) && (
           <Card>
             <CardHeader>
               <CardTitle>Antecedentes</CardTitle>
@@ -209,7 +209,7 @@ export default function EceHistoriaClinicaDetailPage() {
         )}
 
         {/* Examen físico */}
-        {hc.examenFisico && (
+        {(hc.examenFisico as object | null) && (
           <Card>
             <CardHeader>
               <CardTitle>Examen físico</CardTitle>

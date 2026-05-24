@@ -169,8 +169,8 @@ function TabDefinicion({
             update.mutate({
               id: workflow.id,
               nombre: nombre.trim(),
-              descripcion: descripcion.trim() || null,
-              activo,
+              descripcionMarkdown: descripcion.trim() || null,
+              // activo no está en updateInput del router (campo gestionado separadamente)
             });
           }}
         >
@@ -247,7 +247,17 @@ function TabEstados({
 
   // workflowId es el ID del tipo de documento (ece.tipo_documento.id)
   const query = trpc.workflowEstado.estado.list.useQuery({ tipDocumentoId: workflowId });
-  const estados: WorkflowEstado[] = query.data ?? [];
+  // Router devuelve FlujoEstadoRow (snake_case: es_inicial, es_final, sin activo).
+  // Mapeamos a WorkflowEstado para la UI.
+  const estados: WorkflowEstado[] = (query.data ?? []).map((r) => ({
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    esInicial: r.es_inicial,
+    esTerminal: r.es_final,
+    orden: r.orden,
+    activo: true, // FlujoEstadoRow no expone activo — asumimos activo si está en lista
+  }));
   const utils = trpc.useUtils();
 
   const invalidate = () =>
@@ -434,8 +444,29 @@ function TabTransiciones({
 
   const query = trpc.workflowEstado.transicion.list.useQuery({ tipDocumentoId: workflowId });
   const estadosQuery = trpc.workflowEstado.estado.list.useQuery({ tipDocumentoId: workflowId });
-  const transiciones: WorkflowTransicion[] = query.data ?? [];
-  const estados: WorkflowEstado[] = estadosQuery.data ?? [];
+  // Router devuelve FlujoTransicionRow & { rol_codigo, rol_nombre } (snake_case, usa `accion`).
+  // Mapeamos a WorkflowTransicion para la UI. Los nombres de estados origen/destino no están
+  // en este endpoint — se muestran vacíos hasta implementar JOIN en el router (TODO HG-18).
+  const transiciones: WorkflowTransicion[] = (query.data ?? []).map((r) => ({
+    id: r.id,
+    estadoOrigenId: r.estado_origen_id,
+    estadoOrigenNombre: "",
+    estadoDestinoId: r.estado_destino_id,
+    estadoDestinoNombre: "",
+    nombre: r.accion,
+    requiereFirma: r.requiere_firma,
+    activo: true, // FlujoTransicionRow no expone activo — asumimos activo si está en lista
+  }));
+  // Router devuelve FlujoEstadoRow (snake_case). Mapeamos a WorkflowEstado para la UI.
+  const estados: WorkflowEstado[] = (estadosQuery.data ?? []).map((r) => ({
+    id: r.id,
+    codigo: r.codigo,
+    nombre: r.nombre,
+    esInicial: r.es_inicial,
+    esTerminal: r.es_final,
+    orden: r.orden,
+    activo: true,
+  }));
   const utils = trpc.useUtils();
 
   const invalidate = () =>
@@ -778,7 +809,18 @@ function TabInstancias({ workflowId }: { workflowId: string }) {
     { enabled: false }, // deshabilitado hasta tener episodioId o listByTipo
   );
 
-  const data: PaginatedInstancias = query.data ?? { items: [], total: 0 };
+  // Router devuelve { items: InstanciaRow[], nextCursor } — mapeamos a WorkflowInstancia.
+  const rawItems = query.data?.items ?? [];
+  const data: PaginatedInstancias = {
+    items: rawItems.map((r) => ({
+      id: r.id,
+      folio: r.tipo_codigo,
+      estadoActual: r.estado_nombre,
+      responsable: r.creado_por ?? null,
+      creadaEn: r.creado_en,
+    })),
+    total: rawItems.length,
+  };
   const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
 
   return (
