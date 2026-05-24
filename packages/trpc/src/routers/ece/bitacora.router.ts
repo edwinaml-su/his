@@ -27,7 +27,8 @@
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
  *   ece.bitacora_acceso  — log inmutable append-only:
- *     id uuid PK, firma_id uuid nullable FK(ece.firma_electronica),
+ *     id BIGINT PK GENERATED ALWAYS AS IDENTITY (no UUID — ref. PR #225),
+ *     firma_id uuid nullable FK(ece.firma_electronica),
  *     user_id uuid NOT NULL, paciente_id uuid nullable,
  *     accion text NOT NULL, exito boolean NOT NULL,
  *     contexto text nullable, ip text nullable,
