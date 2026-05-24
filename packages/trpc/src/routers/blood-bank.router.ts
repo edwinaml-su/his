@@ -363,6 +363,10 @@ export const bloodBankRouter = router({
     /**
      * Enfermero inicia la transfusión.
      * Requiere que la solicitud esté APPROVED y un CrossMatch COMPATIBLE previo.
+     *
+     * IPSG.1 ME 3 — verificación de 2 identificadores del paciente antes de
+     * administrar un componente sanguíneo: pulsera GSRN + segundo identificador
+     * (MRN o cualquier identificador registrado en PatientIdentifier).
      */
     start: requireRole(NURSE_ROLES)
       .input(
@@ -373,6 +377,9 @@ export const bloodBankRouter = router({
           supervisorId: z.string().uuid(),
           route: transfusionRouteSchema,
           vitalSignsPre: z.record(z.unknown()).optional(),
+          // JCI Standard: IPSG.1 ME 3 — 2-ID verification
+          patientGsrn: z.string().trim().min(1),
+          secondIdentifier: z.string().trim().min(1),
         }),
       )
       .mutation(async ({ ctx, input }) => {
@@ -384,12 +391,46 @@ export const bloodBankRouter = router({
               organizationId: ctx.tenant.organizationId,
               status: "APPROVED",
             },
-            select: { id: true, encounterId: true },
+            select: { id: true, encounterId: true, patientId: true },
           });
           if (!req) {
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Solicitud no encontrada o no aprobada.",
+            });
+          }
+
+          // JCI Standard: IPSG.1 ME 3 — verificar 2 identificadores del paciente
+          const patient = await tx.patient.findFirst({
+            where: {
+              id: req.patientId,
+              organizationId: ctx.tenant.organizationId,
+              gsrn: input.patientGsrn,
+            },
+            select: {
+              id: true,
+              mrn: true,
+              identifiers: { select: { value: true } },
+            },
+          });
+
+          if (!patient) {
+            // GSRN no coincide con el paciente de la solicitud
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "IPSG1_TRANSFUSION_TWO_ID_MISMATCH",
+            });
+          }
+
+          const validSecondIds = new Set([
+            patient.mrn,
+            ...patient.identifiers.map((id) => id.value),
+          ]);
+
+          if (!validSecondIds.has(input.secondIdentifier)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "IPSG1_TRANSFUSION_TWO_ID_MISMATCH",
             });
           }
 

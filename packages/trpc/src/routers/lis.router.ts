@@ -161,13 +161,62 @@ export const lisRouter = router({
   }),
 
   specimen: router({
+    /**
+     * Registra la toma física de la muestra.
+     *
+     * JCI Standard: IPSG.1 ME 4 — cuando se envía `patientGsrn` (flujo bedside),
+     * se verifica que el GSRN coincida con el paciente de la orden Y que el
+     * `secondIdentifier` coincida con el MRN o con al menos un PatientIdentifier
+     * (DUI / NIT / NIE / pasaporte). Si cualquiera de los dos no coincide, FORBIDDEN.
+     */
     collect: tenantProcedure.input(specimenCollectInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const order = await tx.labOrder.findFirst({
           where: { id: input.orderId, organizationId: ctx.tenant.organizationId },
-          select: { id: true },
+          select: { id: true, patientId: true },
         });
         if (!order) throw new TRPCError({ code: "NOT_FOUND" });
+
+        // JCI Standard: IPSG.1 ME 4 — verificación 2-IDs (solo flujo bedside).
+        if (input.patientGsrn !== undefined) {
+          if (!input.secondIdentifier) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "IPSG.1: se requiere un segundo identificador junto al GSRN de pulsera.",
+            });
+          }
+
+          const patient = await tx.patient.findFirst({
+            where: { id: order.patientId, organizationId: ctx.tenant.organizationId },
+            select: {
+              gsrn: true,
+              mrn: true,
+              identifiers: { select: { value: true } },
+            },
+          });
+          if (!patient) throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+
+          // Verificar primer ID: GSRN de pulsera.
+          if (patient.gsrn !== input.patientGsrn) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "IPSG.1: el GSRN de la pulsera no coincide con el paciente de la orden.",
+            });
+          }
+
+          // Verificar segundo ID: MRN o cualquier PatientIdentifier registrado.
+          const knownIdentifiers = new Set<string>([
+            patient.mrn,
+            ...patient.identifiers.map((i) => i.value),
+          ]);
+          if (!knownIdentifiers.has(input.secondIdentifier)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "IPSG.1: el segundo identificador no coincide con el paciente de la orden.",
+            });
+          }
+        }
+
         return tx.labSpecimen.create({
           data: {
             orderId: input.orderId,

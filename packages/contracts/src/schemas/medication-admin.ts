@@ -101,6 +101,15 @@ export type MedicationAdministrationListInput = z.infer<typeof medicationAdminis
  * Los campos BCMA (gtin, lote, serie, gsrn*) son los valores escaneados del DataMatrix.
  * bedsideValidationId es FK opcional al evento de validación del Stream 01/10.
  */
+// JCI Standard: IPSG.1 ME 2 — segundo identificador independiente del paciente
+export const secondIdentifierSchema = z.object({
+  /** Tipo del segundo identificador ('DUI' para cédula SV, 'MRN' para número de registro). */
+  type:  z.enum(['DUI', 'MRN']),
+  value: z.string().trim().min(1).max(50),
+});
+
+export type SecondIdentifier = z.infer<typeof secondIdentifierSchema>;
+
 export const recordBedsideAdminInput = z.object({
   /** FK al evento BedsideValidation del Stream 01/10 (puede no existir aún). */
   validationId:    z.string().uuid().optional(),
@@ -114,10 +123,19 @@ export const recordBedsideAdminInput = z.object({
   serie:           z.string().max(50).optional(),
   /** GLN de la ubicación bedside — AI (414). */
   glnUbicacion:    z.string().min(13).max(15).optional(),
-  /** GSRN del paciente (de la pulsera) — AI (8018). */
-  gsrnPaciente:    z.string().min(18).max(20).optional(),
+  /**
+   * GSRN del paciente (de la pulsera) — AI (8018). Primer identificador IPSG.1.
+   * Requerido para flujos BCMA que deben cumplir IPSG.1 ME 2.
+   */
+  gsrnPaciente:    z.string().min(18).max(20),
   /** GSRN de la enfermera (del badge) — AI (8018). */
   gsrnEnfermera:   z.string().min(18).max(20).optional(),
+  /**
+   * Segundo identificador independiente del paciente — IPSG.1 ME 2.
+   * Debe ser diferente tipo al GSRN (pulsera); típicamente DUI o MRN.
+   * El router valida que GSRN + secondIdentifier.value apunten al mismo patientId.
+   */
+  secondIdentifier: secondIdentifierSchema,
   /** FK del User enfermera (resuelto desde GSRN). */
   nurseId:         z.string().uuid(),
   /** FK del Patient. */

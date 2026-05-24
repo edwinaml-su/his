@@ -15,86 +15,110 @@ import {
   kardexStatsInput,
 } from "../medication-admin";
 
-const VALID_UUID = "00000000-0000-0000-0000-000000000001";
-const GTIN       = "07501000001234";
-const LOTE       = "L2024A";
+const VALID_UUID  = "00000000-0000-0000-0000-000000000001";
+const GTIN        = "07501000001234";
+const LOTE        = "L2024A";
+// JCI Standard: IPSG.1 ME 2 — identificadores requeridos
+const GSRN_PAX    = "801874130000000001";
+const SECOND_ID   = { type: "DUI" as const, value: "01234567-8" };
 
 // ---------------------------------------------------------------------------
 // recordBedsideAdminInput
 // ---------------------------------------------------------------------------
 describe("recordBedsideAdminInput", () => {
-  it("acepta input mínimo válido (sin campos opcionales)", () => {
-    const r = recordBedsideAdminInput.safeParse({
-      indicationId:  VALID_UUID,
-      gtin:          GTIN,
-      lote:          LOTE,
-      nurseId:       VALID_UUID,
-      patientId:     VALID_UUID,
-    });
+  // Fixture mínimo válido con los 2 identificadores IPSG.1 requeridos
+  const VALID_MIN = {
+    indicationId:     VALID_UUID,
+    gtin:             GTIN,
+    lote:             LOTE,
+    gsrnPaciente:     GSRN_PAX,
+    secondIdentifier: SECOND_ID,
+    nurseId:          VALID_UUID,
+    patientId:        VALID_UUID,
+  };
+
+  it("acepta input mínimo válido con 2 identificadores IPSG.1", () => {
+    const r = recordBedsideAdminInput.safeParse(VALID_MIN);
     expect(r.success).toBe(true);
   });
 
   it("acepta input completo con todos los campos GS1", () => {
     const r = recordBedsideAdminInput.safeParse({
-      validationId:  VALID_UUID,
-      indicationId:  VALID_UUID,
-      gtin:          GTIN,
-      lote:          LOTE,
-      serie:         "21000001",
-      glnUbicacion:  "7413000000001",
-      gsrnPaciente:  "801874130000000001",
-      gsrnEnfermera: "801874130000000002",
-      nurseId:       VALID_UUID,
-      patientId:     VALID_UUID,
-      reservationId: VALID_UUID,
-      route:         "IV",
-      site:          "Brazo izquierdo",
-      notes:         "Sin incidentes",
+      validationId:     VALID_UUID,
+      indicationId:     VALID_UUID,
+      gtin:             GTIN,
+      lote:             LOTE,
+      serie:            "21000001",
+      glnUbicacion:     "7413000000001",
+      gsrnPaciente:     GSRN_PAX,
+      gsrnEnfermera:    "801874130000000002",
+      secondIdentifier: SECOND_ID,
+      nurseId:          VALID_UUID,
+      patientId:        VALID_UUID,
+      reservationId:    VALID_UUID,
+      route:            "IV",
+      site:             "Brazo izquierdo",
+      notes:            "Sin incidentes",
     });
     expect(r.success).toBe(true);
   });
 
+  it("acepta secondIdentifier tipo MRN", () => {
+    const r = recordBedsideAdminInput.safeParse({
+      ...VALID_MIN,
+      secondIdentifier: { type: "MRN", value: "HIS-001234" },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rechaza si falta gsrnPaciente (primer identificador IPSG.1)", () => {
+    const { gsrnPaciente: _, ...rest } = VALID_MIN;
+    const r = recordBedsideAdminInput.safeParse(rest);
+    expect(r.success).toBe(false);
+  });
+
+  it("rechaza si falta secondIdentifier (segundo identificador IPSG.1)", () => {
+    const { secondIdentifier: _, ...rest } = VALID_MIN;
+    const r = recordBedsideAdminInput.safeParse(rest);
+    expect(r.success).toBe(false);
+  });
+
+  it("rechaza secondIdentifier tipo inválido", () => {
+    const r = recordBedsideAdminInput.safeParse({
+      ...VALID_MIN,
+      secondIdentifier: { type: "PASSPORT", value: "A1234567" },
+    });
+    expect(r.success).toBe(false);
+  });
+
   it("rechaza si indicationId no es UUID", () => {
     const r = recordBedsideAdminInput.safeParse({
+      ...VALID_MIN,
       indicationId: "no-es-uuid",
-      gtin:         GTIN,
-      lote:         LOTE,
-      nurseId:      VALID_UUID,
-      patientId:    VALID_UUID,
     });
     expect(r.success).toBe(false);
   });
 
   it("rechaza si gtin tiene menos de 8 chars", () => {
     const r = recordBedsideAdminInput.safeParse({
-      indicationId: VALID_UUID,
-      gtin:         "1234567", // 7 chars
-      lote:         LOTE,
-      nurseId:      VALID_UUID,
-      patientId:    VALID_UUID,
+      ...VALID_MIN,
+      gtin: "1234567", // 7 chars
     });
     expect(r.success).toBe(false);
   });
 
   it("rechaza si lote está vacío", () => {
     const r = recordBedsideAdminInput.safeParse({
-      indicationId: VALID_UUID,
-      gtin:         GTIN,
-      lote:         "",
-      nurseId:      VALID_UUID,
-      patientId:    VALID_UUID,
+      ...VALID_MIN,
+      lote: "",
     });
     expect(r.success).toBe(false);
   });
 
   it("rechaza route inválido", () => {
     const r = recordBedsideAdminInput.safeParse({
-      indicationId: VALID_UUID,
-      gtin:         GTIN,
-      lote:         LOTE,
-      nurseId:      VALID_UUID,
-      patientId:    VALID_UUID,
-      route:        "INTRAMUSCULAR_PROFUNDO", // no está en el enum
+      ...VALID_MIN,
+      route: "INTRAMUSCULAR_PROFUNDO", // no está en el enum
     });
     expect(r.success).toBe(false);
   });

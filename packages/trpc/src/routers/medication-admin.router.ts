@@ -368,6 +368,39 @@ export const medicationAdminRouter = router({
     .input(recordBedsideAdminInput)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // -- JCI Standard: IPSG.1 ME 2 — Verificar 2 identificadores del paciente --
+        // Primer ID: GSRN de la pulsera (escaneado físicamente).
+        // Segundo ID: DUI o MRN (ingresado/escaneado independientemente).
+        // Ambos deben resolverse al mismo patientId para que la administración proceda.
+        {
+          const { type, value } = input.secondIdentifier;
+          const col = type === "DUI" ? '"nationalId"' : '"mrn"';
+
+          // Paciente que coincide con el GSRN de la pulsera
+          const byGsrn = await tx.$queryRawUnsafe<{ id: string }[]>(
+            `SELECT p.id FROM "Patient" p WHERE p.gsrn = $1 LIMIT 1`,
+            input.gsrnPaciente,
+          );
+          // Paciente que coincide con el segundo identificador
+          const bySecond = await tx.$queryRawUnsafe<{ id: string }[]>(
+            `SELECT p.id FROM "Patient" p WHERE ${col} = $1 LIMIT 1`,
+            value,
+          );
+
+          const gsrnPatientId   = byGsrn[0]?.id;
+          const secondPatientId = bySecond[0]?.id;
+
+          // Ambos deben existir y apuntar al mismo registro
+          if (!gsrnPatientId || !secondPatientId || gsrnPatientId !== secondPatientId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "IPSG1_TWO_ID_MISMATCH: Los 2 identificadores del paciente no coinciden. " +
+                "Se requiere GSRN de pulsera y " + type + " apuntando al mismo paciente (5R: paciente correcto).",
+            });
+          }
+        }
+
         // Validar que el PrescriptionItem (indicación) pertenece a la organización
         // y está en estado apto para administrar.
         const indication = await tx.prescriptionItem.findFirst({
