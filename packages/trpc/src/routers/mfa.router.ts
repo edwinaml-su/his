@@ -190,18 +190,24 @@ function generateTotp(secretBase32: string, counter: number): string {
   return mod.toString().padStart(TOTP_DIGITS, "0");
 }
 
-function verifyTotp(secretBase32: string, token: string): boolean {
-  if (!RE_TOTP_TOKEN.test(token)) return false;
+/**
+ * Verifica un token TOTP y devuelve el step que hizo match (para registro anti-replay),
+ * o null si el token es inválido.
+ * El step es floor(epoch_s / STEP_SECONDS) — identifica unívocamente el slot de 30 s.
+ */
+function verifyTotp(secretBase32: string, token: string): { matched: true; step: bigint } | { matched: false } {
+  if (!RE_TOTP_TOKEN.test(token)) return { matched: false };
   const counter = Math.floor(Date.now() / 1000 / TOTP_STEP_SECONDS);
   const tokenBuf = Buffer.from(token, "utf8");
   for (let w = -TOTP_WINDOW; w <= TOTP_WINDOW; w++) {
-    const candidate = generateTotp(secretBase32, counter + w);
+    const step = counter + w;
+    const candidate = generateTotp(secretBase32, step);
     const candBuf = Buffer.from(candidate, "utf8");
     if (candBuf.length === tokenBuf.length && timingSafeEqual(candBuf, tokenBuf)) {
-      return true;
+      return { matched: true, step: BigInt(step) };
     }
   }
-  return false;
+  return { matched: false };
 }
 
 function generateBackupCodes(): string[] {
@@ -297,7 +303,7 @@ export const mfaRouter = router({
       const cred = await ctx.prisma.userCredential.findFirst({
         where: { userId: ctx.user.id, method: "TOTP" },
         orderBy: { createdAt: "desc" },
-        select: { id: true, secretHash: true },
+        select: { id: true, secretHash: true, lastUsedTotpStep: true },
       });
       if (!cred) {
         throw new TRPCError({ code: "PRECONDITION_FAILED", message: "MFA no enrolado." });
@@ -318,11 +324,18 @@ export const mfaRouter = router({
       const token = input.token;
 
       if (token.length === TOTP_DIGITS) {
-        const ok = verifyTotp(plaintext.secret, token);
-        if (!ok) {
+        const result = verifyTotp(plaintext.secret, token);
+        if (!result.matched) {
           throw new TRPCError({
             code: "UNAUTHORIZED",
             message: "Código incorrecto o expirado.",
+          });
+        }
+        // Prevención de replay (HJ-20): rechazar si este step ya fue usado.
+        if (cred.lastUsedTotpStep !== null && cred.lastUsedTotpStep === result.step) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Código ya utilizado. Espere el siguiente código TOTP.",
           });
         }
         await ctx.prisma.$transaction([
@@ -332,7 +345,11 @@ export const mfaRouter = router({
           }),
           ctx.prisma.userCredential.update({
             where: { id: cred.id },
-            data: { validFrom: new Date() },
+            data: {
+              validFrom: new Date(),
+              lastUsedTotpStep: result.step,
+              lastUsedTotpAt: new Date(),
+            },
           }),
         ]);
         return { ok: true as const, usedBackupCode: false as const };

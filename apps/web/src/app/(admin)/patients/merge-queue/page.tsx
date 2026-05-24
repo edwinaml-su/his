@@ -49,6 +49,8 @@ function MergeConfirmDialog({
   merged: { mrn: string; firstName: string; lastName: string };
   onClose: () => void;
 }) {
+  const [userId1, setUserId1] = React.useState("");
+  const [userId2, setUserId2] = React.useState("");
   const [firmaDir1, setFirmaDir1] = React.useState("");
   const [firmaDir2, setFirmaDir2] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -63,7 +65,11 @@ function MergeConfirmDialog({
   });
 
   const canSubmit =
-    firmaDir1.trim().length >= 6 && firmaDir2.trim().length >= 6 && !confirm.isPending;
+    userId1.trim().length > 0 &&
+    userId2.trim().length > 0 &&
+    /^\d{6,8}$/.test(firmaDir1.trim()) &&
+    /^\d{6,8}$/.test(firmaDir2.trim()) &&
+    !confirm.isPending;
 
   return (
     <DialogContent className="max-w-lg">
@@ -90,20 +96,42 @@ function MergeConfirmDialog({
 
       <div className="space-y-3">
         <div className="space-y-1">
-          <Label htmlFor="firma1">PIN Director (hash)</Label>
+          <Label htmlFor="user1">Usuario Director (UUID)</Label>
+          <Input
+            id="user1"
+            type="text"
+            value={userId1}
+            onChange={(e) => setUserId1(e.target.value)}
+            placeholder="UUID del Director"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="firma1">PIN Director (6-8 dígitos)</Label>
           <Input
             id="firma1"
             type="password"
+            inputMode="numeric"
             value={firmaDir1}
             onChange={(e) => setFirmaDir1(e.target.value)}
             placeholder="PIN del Director"
           />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="firma2">PIN Director Médico (hash)</Label>
+          <Label htmlFor="user2">Usuario Director Médico (UUID)</Label>
+          <Input
+            id="user2"
+            type="text"
+            value={userId2}
+            onChange={(e) => setUserId2(e.target.value)}
+            placeholder="UUID del Director Médico (debe ser distinto al primero)"
+          />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="firma2">PIN Director Médico (6-8 dígitos)</Label>
           <Input
             id="firma2"
             type="password"
+            inputMode="numeric"
             value={firmaDir2}
             onChange={(e) => setFirmaDir2(e.target.value)}
             placeholder="PIN del Director Médico"
@@ -122,8 +150,8 @@ function MergeConfirmDialog({
           onClick={() =>
             confirm.mutate({
               mergeId,
-              firmaDir1Id: firmaDir1.trim(),
-              firmaDir2Id: firmaDir2.trim(),
+              firmante1: { userId: userId1.trim(), pin: firmaDir1.trim() },
+              firmante2: { userId: userId2.trim(), pin: firmaDir2.trim() },
             })
           }
         >

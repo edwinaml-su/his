@@ -527,13 +527,17 @@ model User {
 
 /// TDR §6.1 — credenciales locales. 4NF: separa la MVD usuario↔(método auth, hash).
 model UserCredential {
-  id         String     @id @default(uuid()) @db.Uuid
-  userId     String     @db.Uuid
-  method     AuthMethod
-  secretHash String /// bcrypt/argon2 (PASSWORD), TOTP secret cifrado, etc.
-  validFrom  DateTime   @default(now()) @db.Timestamptz()
-  validTo    DateTime?  @db.Timestamptz()
-  createdAt  DateTime   @default(now()) @db.Timestamptz()
+  id                String     @id @default(uuid()) @db.Uuid
+  userId            String     @db.Uuid
+  method            AuthMethod
+  secretHash        String /// bcrypt/argon2 (PASSWORD), TOTP secret cifrado, etc.
+  validFrom         DateTime   @default(now()) @db.Timestamptz()
+  validTo           DateTime?  @db.Timestamptz()
+  createdAt         DateTime   @default(now()) @db.Timestamptz()
+  /// HJ-20 — prevención replay TOTP: último step consumido exitosamente (floor(epoch_s/30)).
+  lastUsedTotpStep  BigInt?
+  /// HJ-20 — timestamp UTC del último verify TOTP exitoso (auditoría).
+  lastUsedTotpAt    DateTime?  @db.Timestamptz()
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

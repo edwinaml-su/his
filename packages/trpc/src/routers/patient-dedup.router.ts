@@ -13,11 +13,162 @@
  *
  * RLS: withTenantContext en todas las escrituras. Reads usan prisma directo
  * con filtro explícito organizationId/establecimientoId.
+ *
+ * HJ-30: PIN nunca viaja ni se almacena en texto plano. confirmEceMerge recibe
+ *   { firmante1: { userId, pin }, firmante2: { userId, pin } } y verifica cada
+ *   PIN contra ece.firma_electronica.pin_hash (argon2id) server-side. Solo el
+ *   UUID de la firma electrónica queda persistido en EcePatientMerge.
+ *
+ * HJ-31: Quorum de roles verificado server-side: ambos firmantes deben ser
+ *   personal_salud activo con roles ECE distintos. Se rechaza si es el mismo
+ *   personal o si ambos comparten el mismo código de rol.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { argon2 } from "@his/infrastructure";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+// ─── Tipos y helpers firma electrónica (HJ-30 / HJ-31) ───────────────────────
+
+// Columnas mínimas necesarias de ece.firma_electronica.
+type FirmaRow = {
+  id: string;
+  personal_id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+};
+
+type PersonalRolRow = {
+  personal_id: string;
+  rol_codigo: string;
+};
+
+/**
+ * Resuelve his_user_id → firma electrónica activa en ece.
+ * Lanza PRECONDITION_FAILED si no existe personal ECE o firma sin configurar.
+ */
+async function resolveFirma(
+  prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
+  userId: string,
+): Promise<FirmaRow> {
+  const personal = await (
+    prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>
+  )`
+    SELECT id FROM ece.personal_salud
+    WHERE his_user_id = ${userId}::uuid AND activo = true
+    LIMIT 1
+  `;
+  if (!personal[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró personal ECE activo para el usuario firmante.",
+    });
+  }
+
+  const firmas = await (
+    prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<FirmaRow[]>
+  )`
+    SELECT id, personal_id, pin_hash, failed_attempts, locked_until, revoked_at
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personal[0].id}::uuid
+    LIMIT 1
+  `;
+  if (!firmas[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada para el usuario firmante.",
+    });
+  }
+  return firmas[0];
+}
+
+/**
+ * Verifica PIN argon2id. Lanza UNAUTHORIZED / TOO_MANY_REQUESTS / FORBIDDEN.
+ * No actualiza contadores de intentos fallidos (responsabilidad del router firma-electronica).
+ */
+async function verifyMergePinOrThrow(firma: FirmaRow, pin: string): Promise<void> {
+  if (firma.revoked_at !== null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "La firma electrónica del firmante ha sido revocada.",
+    });
+  }
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message: "PIN de firma incorrecto.",
+    });
+  }
+}
+
+/**
+ * HJ-31: Verifica quorum — personal_id distintos y rol ECE distinto entre ambos.
+ * Consulta ece.asignacion_rol con ece.rol para obtener el código del rol.
+ */
+async function assertQuorumOrThrow(
+  prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
+  firma1: FirmaRow,
+  firma2: FirmaRow,
+): Promise<void> {
+  // Misma persona → rechazar
+  if (firma1.personal_id === firma2.personal_id) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Quorum inválido: ambas firmas corresponden al mismo profesional.",
+    });
+  }
+
+  // Obtener rol ECE primario (vigente) de cada firmante
+  const rows = await (
+    prisma.$queryRaw as (
+      q: TemplateStringsArray,
+      ...v: unknown[]
+    ) => Promise<PersonalRolRow[]>
+  )`
+    SELECT ar.personal_id, r.codigo AS rol_codigo
+    FROM ece.asignacion_rol ar
+    JOIN ece.rol r ON r.id = ar.rol_id
+    WHERE ar.personal_id IN (${firma1.personal_id}::uuid, ${firma2.personal_id}::uuid)
+      AND ar.vigente = true
+    ORDER BY ar.personal_id, ar.asignado_en DESC
+  `;
+
+  const rolPor = new Map<string, string>();
+  for (const row of rows) {
+    // Primer registro = rol más reciente (ya ordenado)
+    if (!rolPor.has(row.personal_id)) {
+      rolPor.set(row.personal_id, row.rol_codigo);
+    }
+  }
+
+  const rol1 = rolPor.get(firma1.personal_id);
+  const rol2 = rolPor.get(firma2.personal_id);
+
+  if (!rol1 || !rol2) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Uno o ambos firmantes no tienen rol ECE vigente asignado.",
+    });
+  }
+
+  if (rol1 === rol2) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Quorum inválido: ambos firmantes tienen el mismo rol ECE (${rol1}). Se requieren roles distintos.`,
+    });
+  }
+}
 
 // ─── Jaro-Winkler (mirror del patient.router para evitar ciclos) ──────────────
 
@@ -111,10 +262,22 @@ const requestMergeInput = z.object({
   mergedPatientId: z.string().uuid(),
 });
 
+// PIN: 6-8 dígitos numéricos (NTEC Art. 42) — idéntico a ece-rectificacion.router.
+const pinSchema = z
+  .string()
+  .regex(/^\d{6,8}$/, "El PIN debe ser 6-8 dígitos numéricos.");
+
+// HJ-30: el cliente nunca envía el PIN ya hasheado ni el firmaId directamente.
+// Envía userId + PIN en claro; el servidor resuelve la firma y verifica argon2id.
+const firmanteSchema = z.object({
+  userId: z.string().uuid("userId debe ser UUID del usuario HIS"),
+  pin: pinSchema,
+});
+
 const confirmMergeInput = z.object({
   mergeId: z.string().uuid(),
-  firmaDir1Id: z.string().min(1),
-  firmaDir2Id: z.string().min(1),
+  firmante1: firmanteSchema,
+  firmante2: firmanteSchema,
 });
 
 const expedienteFormatInput = z.object({
@@ -238,9 +401,17 @@ export const patientDedupRouter = router({
     }),
 
   /**
-   * US.F2.7.41 — Confirmar merge con doble firma.
-   * Recibe firmaDir1Id + firmaDir2Id (hashes PIN de los directores).
-   * Ejecuta: re-FK episodios, marca mergedPatient.mergedIntoId, audit log.
+   * US.F2.7.41 — Confirmar merge con doble firma electrónica argon2id.
+   *
+   * HJ-30: los PINes se verifican server-side contra ece.firma_electronica.pin_hash.
+   *   Nunca se almacenan ni se loguean los PINes en texto plano.
+   *   Solo los UUIDs de las firmas electrónicas quedan en EcePatientMerge.
+   *
+   * HJ-31: se verifica quorum antes de ejecutar:
+   *   - Los dos firmantes deben ser personal ECE activo distintos.
+   *   - Deben tener roles ECE distintos (e.g., DIR + MC — no dos DIR).
+   *
+   * Ejecuta: re-FK expedientes ECE, marca mergedPatient.mergedIntoId, audit log.
    * Irreversible: estado EJECUTADO.
    */
   confirmEceMerge: requireRole(["DIR", "ADMIN"])
@@ -248,6 +419,7 @@ export const patientDedupRouter = router({
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
+      // ── 1. Verificar que la solicitud existe, es del tenant y está PENDIENTE ──
       const mergeReq = await ctx.prisma.ecePatientMerge.findUnique({
         where: { id: input.mergeId },
       });
@@ -264,6 +436,25 @@ export const patientDedupRouter = router({
         });
       }
 
+      // ── 2. HJ-30: Resolver y verificar PINes server-side (argon2id) ───────────
+      // Secuencial (no paralelo) para que el orden de $queryRaw sea determinista
+      // y para que un error en firma1 no ocupe recursos para firma2 inútilmente.
+      const firma1 = await resolveFirma(ctx.prisma, input.firmante1.userId);
+      const firma2 = await resolveFirma(ctx.prisma, input.firmante2.userId);
+
+      // Verificar PINes sin cortocircuito para no revelar cuál falló por timing.
+      const [check1, check2] = await Promise.allSettled([
+        verifyMergePinOrThrow(firma1, input.firmante1.pin),
+        verifyMergePinOrThrow(firma2, input.firmante2.pin),
+      ]);
+
+      if (check1.status === "rejected") throw check1.reason;
+      if (check2.status === "rejected") throw check2.reason;
+
+      // ── 3. HJ-31: Quorum de roles ────────────────────────────────────────────
+      await assertQuorumOrThrow(ctx.prisma, firma1, firma2);
+
+      // ── 4. Ejecutar merge dentro de transacción con RLS ──────────────────────
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Marcar paciente HIS absorbido con mergedIntoId (US.F2.7.41)
         await tx.patient.update({
@@ -271,7 +462,7 @@ export const patientDedupRouter = router({
           data: { mergedIntoId: mergeReq.canonicalPatientId, active: false },
         });
 
-        // Reasignar expedientes ECE que apuntan al mergedPatient como maestro
+        // Reasignar expedientes ECE que apuntan al mergedPatient como maestro.
         // Nota: ece.paciente.id ≠ public.Patient.id en general; la relación
         // ECE↔HIS vive en el bridge. Aquí marcamos los expedientes subordinados.
         await tx.ecePaciente.updateMany({
@@ -279,19 +470,19 @@ export const patientDedupRouter = router({
           data: { estadoExpediente: "fusionado", expedienteMaestroId: mergeReq.canonicalPatientId },
         });
 
-        // Actualizar solicitud de merge con firmas y fecha de ejecución
+        // Persistir UUIDs de firma (nunca el PIN).
         const updated = await tx.ecePatientMerge.update({
           where: { id: input.mergeId },
           data: {
-            firmaDir1Id: input.firmaDir1Id,
-            firmaDir2Id: input.firmaDir2Id,
+            firmaDir1Id: firma1.id,
+            firmaDir2Id: firma2.id,
             fechaEjecucion: new Date(),
             estado: "EJECUTADO",
           },
           select: { id: true, estado: true, fechaEjecucion: true, canonicalPatientId: true },
         });
 
-        // Audit log
+        // Audit log con quorum explícito — sin PINes.
         await tx.auditLog.create({
           data: {
             userId: ctx.user.id,
@@ -307,8 +498,13 @@ export const patientDedupRouter = router({
               mergeId: input.mergeId,
               canonicalPatientId: mergeReq.canonicalPatientId,
               mergedPatientId: mergeReq.mergedPatientId,
+              // UUIDs de firma — trazabilidad completa sin datos sensibles.
+              firmaDir1Id: firma1.id,
+              firmaDir1PersonalId: firma1.personal_id,
+              firmaDir2Id: firma2.id,
+              firmaDir2PersonalId: firma2.personal_id,
             },
-            justification: `Merge NTEC confirmado. mergeId=${input.mergeId}`,
+            justification: `Merge NTEC confirmado con quorum doble firma. mergeId=${input.mergeId}`,
           },
         });
 
