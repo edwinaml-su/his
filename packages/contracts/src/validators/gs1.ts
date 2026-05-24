@@ -308,3 +308,36 @@ export function validateGS1Checksum(ai: string, value: string): boolean {
 
   return mod10CheckDigit(body) === check;
 }
+
+// =============================================================================
+// HI-08 (audit Stream I) — Validador genérico Módulo-10 para AIs GS1 fijos
+// =============================================================================
+
+/**
+ * Valida el dígito verificador GS1 Módulo-10 sobre un string numérico cuyo
+ * último carácter es el check digit. Funciona para cualquier longitud:
+ *
+ *   - GTIN-14  (AI 01)
+ *   - GLN-13   (sin AI explícito; muelle/proveedor)
+ *   - SSCC-18  (AI 00)
+ *   - GSRN-18  (AI 8018)
+ *   - GRAI-14  (prefijo de AI 8003)
+ *
+ * Algoritmo (idéntico a las definiciones locales de los routers GS1):
+ *   Pesos alternos 3,1,3,1,... desde la izquierda; el último dígito es el
+ *   check digit esperado = (10 - (sum % 10)) % 10.
+ *
+ * Para validación AI-specific con longitud fija, prefiere `validateGS1Checksum(ai, value)`.
+ */
+export function gs1CheckDigitValid(code: string): boolean {
+  if (typeof code !== "string" || code.length < 2) return false;
+  if (!/^\d+$/.test(code)) return false;
+  const len = code.length;
+  let sum = 0;
+  for (let i = 0; i < len - 1; i++) {
+    const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
+    sum += Number.parseInt(code.charAt(i), 10) * weight;
+  }
+  const expected = (10 - (sum % 10)) % 10;
+  return expected === Number.parseInt(code.charAt(len - 1), 10);
+}

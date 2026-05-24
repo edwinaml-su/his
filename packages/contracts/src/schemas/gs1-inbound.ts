@@ -48,7 +48,12 @@ export const recibirMercanciaInput = z.object({
     .string()
     .length(13)
     .regex(/^\d+$/, "GLN debe ser 13 dígitos"),
-  sscc_pallet: z.string().optional(),
+  sscc_pallet: z
+    .string()
+    .length(18)
+    .regex(/^\d{18}$/, "SSCC debe ser 18 dígitos")
+    .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido (SSCC-18)")
+    .optional(),
   productos: z.array(gs1ProductoRecibidoSchema).min(1),
   verificacion_5correctos: verificacion5CorrectosSchema,
   establecimiento_id: z.string().uuid(),

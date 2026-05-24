@@ -29,6 +29,7 @@ import { router, requireRole } from "../trpc";
 import { withWorkflowContext, type EceContext } from "../workflow/context";
 import { canTransition, executeTransition } from "../workflow/transitions";
 import { emitDomainEvent } from "@his/database";
+import { assertDependenciasFirmadas } from "../ece/dependencias-enforcement";
 
 // ─── Schemas de input ────────────────────────────────────────────────────────
 
@@ -38,6 +39,12 @@ const createInput = z.object({
   pacienteId: z.string().uuid(),
   /** id de la fila en la tabla física de datos clínicos (ece.<tabla_datos>). */
   registroId: z.string().uuid().optional(),
+  /**
+   * Si true, omite la validación de `depende_de` (Fase 4 enforcement).
+   * Reservado para seeders, migraciones y procesos administrativos.
+   * NO debe exponerse al cliente — requiere rol ADMIN o similar.
+   */
+  skipDependenciasEnforcement: z.boolean().optional(),
 });
 
 const getInput = z.object({
@@ -165,6 +172,30 @@ export const workflowInstanceRouter = router({
       }
 
       const estadoInicial = estadosIniciales[0]!;
+
+      // 1.5. Fase 4 enforcement — validar dependencias firmadas en el episodio.
+      // Resuelve el código del tipo_documento y lanza PRECONDITION_FAILED si
+      // alguna dependencia declarada en `depende_de` no tiene instancia firmada.
+      const tipoCodigoRows = await tx.$queryRaw<{ codigo: string }[]>`
+        SELECT codigo FROM ece.tipo_documento
+        WHERE id = ${input.tipoDocumentoId}::uuid LIMIT 1
+      `;
+      const tipoCodigo = tipoCodigoRows[0]?.codigo;
+      if (!tipoCodigo) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Tipo de documento ${input.tipoDocumentoId} no encontrado.`,
+        });
+      }
+
+      await assertDependenciasFirmadas({
+        tx,
+        tipoDocCodigo: tipoCodigo,
+        episodioId: input.episodioId ?? null,
+        pacienteId: input.pacienteId,
+        skipEnforcement: input.skipDependenciasEnforcement === true,
+        establecimientoId: eceCtx.establecimientoId,
+      });
 
       // 2. Insertar instancia
       const rows = await tx.$queryRaw<{ id: string }[]>`
@@ -429,4 +460,196 @@ export const workflowInstanceRouter = router({
       return { items, nextCursor };
     });
   }),
+
+  /**
+   * proximosDocumentos — wizard de Fase 5.
+   *
+   * Para un `episodioId` dado, calcula la lista ordenada de documentos NTEC
+   * que el equipo clínico debería ir creando/firmando, clasificando cada
+   * tipo_documento por su estado actual respecto al episodio:
+   *
+   *  - FIRMADO:       existe instancia con estado terminal/firmado/validado/certificado
+   *  - EN_PROGRESO:   existe instancia en borrador o en_revision
+   *  - LISTO:         no existe instancia y TODAS sus depende_de están firmadas
+   *  - BLOQUEADO:     no existe instancia y al menos una dependencia falta firmar
+   *  - NO_APLICA:     modalidad del tipo no coincide con la del episodio
+   *
+   * El cliente puede usar esta data para renderizar un wizard que muestre
+   * qué documentos firmar a continuación y cuáles están bloqueados (con la
+   * lista de dependencias que faltan firmar).
+   *
+   * RBAC: cualquier rol clínico con acceso al episodio puede consultar.
+   */
+  proximosDocumentos: instanceBase
+    .input(z.object({ episodioId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const eceCtx = buildEceCtx(ctx);
+
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        // 1. Resolver modalidad y paciente del episodio
+        const episodio = await tx.$queryRaw<
+          { paciente_id: string; modalidad: string }[]
+        >`
+          SELECT paciente_id::text, modalidad
+          FROM ece.episodio_atencion
+          WHERE id = ${input.episodioId}::uuid
+          LIMIT 1
+        `;
+
+        if (episodio.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Episodio ${input.episodioId} no encontrado.`,
+          });
+        }
+
+        const { paciente_id, modalidad } = episodio[0]!;
+
+        // 2. Cargar tipos aplicables (modalidad === episodio.modalidad OR 'ambos')
+        //    + sus instancias en este episodio (si existen)
+        type TipoConEstadoRow = {
+          tipo_id: string;
+          codigo: string;
+          nombre: string;
+          modalidad: string;
+          tipo_registro: string;
+          inmutable: boolean;
+          depende_de: string[] | null;
+          modulo_his_target: string | null;
+          instancia_id: string | null;
+          estado_codigo: string | null;
+          estado_es_final: boolean | null;
+        };
+
+        // Fase 6: `depende_de_efectivo` aplica overrides por establecimiento.
+        //  - obligatorio_override=false en override → bypass total (vacío)
+        //  - depende_de_override !== NULL → reemplaza el global
+        //  - sin override → usa td.depende_de
+        // También filtra fuera tipos desactivados por activo_override=false.
+        const tipos = await tx.$queryRaw<
+          (TipoConEstadoRow & { obligatorio_override: boolean | null })[]
+        >`
+          SELECT
+            td.id::text                                              AS tipo_id,
+            td.codigo                                                AS codigo,
+            td.nombre                                                AS nombre,
+            td.modalidad                                             AS modalidad,
+            td.tipo_registro                                         AS tipo_registro,
+            td.inmutable                                             AS inmutable,
+            ece.fn_depende_de_efectivo(td.id, ${eceCtx.establecimientoId}::uuid) AS depende_de,
+            td.modulo_his_target                                     AS modulo_his_target,
+            di.id::text                                              AS instancia_id,
+            fe.codigo                                                AS estado_codigo,
+            fe.es_final                                              AS estado_es_final,
+            tde.obligatorio_override                                 AS obligatorio_override
+          FROM ece.tipo_documento td
+          LEFT JOIN ece.tipo_documento_establecimiento tde
+            ON tde.tipo_documento_id = td.id
+            AND tde.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+          LEFT JOIN LATERAL (
+            SELECT id, estado_actual_id
+            FROM ece.documento_instancia
+            WHERE tipo_documento_id = td.id
+              AND episodio_id       = ${input.episodioId}::uuid
+              AND estado_registro   = 'vigente'
+            ORDER BY creado_en DESC
+            LIMIT 1
+          ) di ON TRUE
+          LEFT JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          WHERE td.activo = true
+            AND COALESCE(tde.activo_override, true) = true
+            AND (td.modalidad = ${modalidad} OR td.modalidad = 'ambos')
+          ORDER BY td.codigo
+        `;
+
+        // 3. Construir set de códigos firmados/terminales para resolver dependencias
+        const firmados = new Set(
+          tipos
+            .filter(
+              (t) =>
+                t.estado_codigo !== null &&
+                (t.estado_es_final === true ||
+                  ["firmado", "validado", "certificado"].includes(t.estado_codigo)),
+            )
+            .map((t) => t.codigo),
+        );
+
+        // 4. Clasificar cada tipo
+        type Estado =
+          | "FIRMADO"
+          | "EN_PROGRESO"
+          | "LISTO"
+          | "BLOQUEADO"
+          | "NO_APLICA";
+
+        const items = tipos.map((t) => {
+          const dependeDe = t.depende_de ?? [];
+          const dependenciasFaltantes = dependeDe.filter(
+            (codigo) => !firmados.has(codigo),
+          );
+
+          let estado: Estado;
+          // Fase 6: si el establecimiento marcó este tipo como opcional
+          // (obligatorio_override=false), lo mostramos como NO_APLICA salvo
+          // que ya exista una instancia (entonces respetamos su estado real).
+          const esOpcionalEnEstablecimiento = t.obligatorio_override === false;
+
+          if (t.estado_codigo !== null) {
+            const esFirmado =
+              t.estado_es_final === true ||
+              ["firmado", "validado", "certificado"].includes(t.estado_codigo);
+            estado = esFirmado ? "FIRMADO" : "EN_PROGRESO";
+          } else if (esOpcionalEnEstablecimiento) {
+            estado = "NO_APLICA";
+          } else if (dependenciasFaltantes.length === 0) {
+            estado = "LISTO";
+          } else {
+            estado = "BLOQUEADO";
+          }
+
+          return {
+            tipoId: t.tipo_id,
+            codigo: t.codigo,
+            nombre: t.nombre,
+            modalidad: t.modalidad,
+            tipoRegistro: t.tipo_registro,
+            inmutable: t.inmutable,
+            moduloHisTarget: t.modulo_his_target,
+            dependeDe,
+            dependenciasFaltantes,
+            instanciaId: t.instancia_id,
+            estadoActual: t.estado_codigo,
+            estado,
+          };
+        });
+
+        // 5. Ordenar: LISTO arriba, luego EN_PROGRESO, luego BLOQUEADO, luego FIRMADO
+        const orden: Record<Estado, number> = {
+          LISTO: 0,
+          EN_PROGRESO: 1,
+          BLOQUEADO: 2,
+          FIRMADO: 3,
+          NO_APLICA: 4,
+        };
+        items.sort(
+          (a, b) =>
+            (orden[a.estado] ?? 99) - (orden[b.estado] ?? 99) ||
+            a.codigo.localeCompare(b.codigo),
+        );
+
+        return {
+          episodioId: input.episodioId,
+          modalidad,
+          pacienteId: paciente_id,
+          items,
+          resumen: {
+            firmados: items.filter((i) => i.estado === "FIRMADO").length,
+            enProgreso: items.filter((i) => i.estado === "EN_PROGRESO").length,
+            listos: items.filter((i) => i.estado === "LISTO").length,
+            bloqueados: items.filter((i) => i.estado === "BLOQUEADO").length,
+            total: items.length,
+          },
+        };
+      });
+    }),
 });

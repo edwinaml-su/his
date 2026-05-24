@@ -19,19 +19,10 @@ import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
 
 // ---------------------------------------------------------------------------
-// Validación GS1 Módulo-10 (espeja gs1-catalogos.router.ts y SQL)
+// Validación GS1 Módulo-10 — fuente única en @his/contracts/validators/gs1
 // ---------------------------------------------------------------------------
 
-function gs1CheckDigitValid(code: string): boolean {
-  const len = code.length;
-  let sum = 0;
-  for (let i = 0; i < len - 1; i++) {
-    const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
-    sum += parseInt(code[i]!, 10) * weight;
-  }
-  const expected = (10 - (sum % 10)) % 10;
-  return expected === parseInt(code[len - 1]!, 10);
-}
+import { gs1CheckDigitValid } from "@his/contracts";
 
 /** Genera un GSRN-18 con prefijo de empresa GS1 y dígito verificador correcto. */
 function generateGsrn(companyPrefix: string = "801234567890"): string {

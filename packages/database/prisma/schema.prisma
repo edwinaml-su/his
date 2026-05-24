@@ -5686,7 +5686,28 @@ model EceGs1Gtin {
   activo      Boolean  @default(true)
   creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
 
+  sustitutosA EceGs1GtinSustitutos[] @relation("GtinA")
+  sustitutosB EceGs1GtinSustitutos[] @relation("GtinB")
+
   @@map("gs1_gtin")
+  @@schema("ece")
+}
+
+/// HI-13: sustitutos terapéuticos GTIN aprobados
+model EceGs1GtinSustitutos {
+  gtinAId       String   @map("gtin_a_id") @db.Uuid
+  gtinBId       String   @map("gtin_b_id") @db.Uuid
+  autorizada    Boolean  @default(false)
+  motivo        String?
+  registradoPor String   @map("registrado_por") @db.Uuid
+  registradoEn  DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
+  actualizadoEn DateTime @default(now()) @map("actualizado_en") @db.Timestamptz()
+
+  gtinA EceGs1Gtin @relation("GtinA", fields: [gtinAId], references: [id], onDelete: Cascade)
+  gtinB EceGs1Gtin @relation("GtinB", fields: [gtinBId], references: [id], onDelete: Cascade)
+
+  @@id([gtinAId, gtinBId])
+  @@map("gs1_gtin_sustitutos")
   @@schema("ece")
 }
 

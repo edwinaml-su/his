@@ -159,6 +159,17 @@ function PageHeader() {
           Motor ECE data-driven — configura estados, transiciones y roles sin redeploy.
           Requiere rol <code>WORKFLOW_DESIGNER</code> o <code>DIR</code>.
         </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Documentación canónica de flujos NTEC:{" "}
+          <a
+            href="https://github.com/edwinaml-su/his/blob/main/docs/31_flujos_operativos_consolidado.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            docs/31_flujos_operativos_consolidado.md
+          </a>
+        </p>
       </div>
     </div>
   );

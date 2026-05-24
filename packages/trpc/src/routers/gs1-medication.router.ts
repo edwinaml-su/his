@@ -19,29 +19,13 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { gs1CheckDigitValid } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
-
-/**
- * Validación check-digit GS1 Módulo-10 para GTIN-14.
- * Equivalente a validateGtinChecksum en @his/contracts/validators/gs1 (HI-08).
- * Mantenida local por limitación de resolución de workspace en el worktree;
- * la función canónica está en packages/contracts/src/validators/gs1.ts.
- */
-function gs1CheckDigitValid(code: string): boolean {
-  const len = code.length;
-  let sum = 0;
-  for (let i = 0; i < len - 1; i++) {
-    const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
-    sum += parseInt(code[i]!, 10) * weight;
-  }
-  const expected = (10 - (sum % 10)) % 10;
-  return expected === parseInt(code[len - 1]!, 10);
-}
 
 const gtinSchema = z
   .string()

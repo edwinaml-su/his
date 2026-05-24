@@ -49,6 +49,7 @@ import { portalRouter } from "./portal.router";
 import { firmaElectronicaRouter } from "./firma-electronica.router";
 import { evolucionMedicaRouter } from "./evolucion-medica.router";
 import { workflowTipoDocRouter } from "./workflow-tipoDoc.router";
+import { workflowTipoDocOverrideRouter } from "./workflow-tipoDoc-override.router";
 import { workflowEstadoRouter } from "./workflow-estado.router";
 import { workflowTransicionRouter } from "./workflow-transicion.router";
 import { workflowRolRouter } from "./workflow-rol.router";
@@ -226,6 +227,7 @@ export const appRouter = router({
   firma: firmaElectronicaRouter,
   eceEvolucion: evolucionMedicaRouter,
   workflowTipoDoc: workflowTipoDocRouter,
+  workflowTipoDocOverride: workflowTipoDocOverrideRouter,
   workflowEstado: workflowEstadoRouter,
   workflowTransicion: workflowTransicionRouter,
   workflowRol: workflowRolRouter,
