@@ -13,6 +13,9 @@
  *   - confirmEceMerge: NOT_FOUND si solicitud no existe
  *   - confirmEceMerge: FORBIDDEN si tenant distinto
  *   - confirmEceMerge: BAD_REQUEST si estado != PENDIENTE
+ *   - confirmEceMerge: HJ-30 — PIN verificado server-side (argon2id, nunca en texto plano)
+ *   - confirmEceMerge: HJ-31 — quorum rechazado si mismo personal
+ *   - confirmEceMerge: HJ-31 — quorum rechazado si mismo rol ECE
  *   - confirmEceMerge: ejecuta merge y retorna EJECUTADO
  *   - getExpedienteFormat: retorna formato por defecto si no hay config
  *   - upsertExpedienteFormat: crea nuevo registro de formato
@@ -26,6 +29,17 @@ import { patientDedupRouter } from "../patient-dedup.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT, MOCK_USER_ADMIN } from "@his/test-utils";
 
+// Mock @his/infrastructure argon2 para tests sin runtime nativo.
+// vi.hoisted permite que el spy esté disponible dentro de la factory de vi.mock
+// (que se ejecuta antes del cuerpo del módulo por hoisting).
+const { argon2VerifyMock } = vi.hoisted(() => ({
+  argon2VerifyMock: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock("@his/infrastructure", () => ({
+  argon2: { verify: argon2VerifyMock },
+}));
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const ORG_ID = MOCK_TENANT.organizationId;
@@ -33,6 +47,62 @@ const ESTAB_ID = MOCK_TENANT.establishmentId!;
 const PATIENT_A = "11111111-1111-1111-1111-111111111111";
 const PATIENT_B = "22222222-2222-2222-2222-222222222222";
 const MERGE_ID = "33333333-3333-3333-3333-333333333333";
+
+// UUIDs ficticios para personal ECE y firmas electrónicas en tests de confirmEceMerge.
+const PERSONAL_ID_1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const PERSONAL_ID_2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const FIRMA_ID_1 = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const FIRMA_ID_2 = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const USER_ID_DIR1 = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const USER_ID_DIR2 = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+
+// Input válido post HJ-30: firmantes con userId + PIN (nunca PIN hasheado directo).
+const VALID_CONFIRM_INPUT = {
+  mergeId: MERGE_ID,
+  firmante1: { userId: USER_ID_DIR1, pin: "123456" },
+  firmante2: { userId: USER_ID_DIR2, pin: "654321" },
+};
+
+/**
+ * Configura prisma.$queryRaw para simular un flujo completo de confirmEceMerge:
+ *   - personal_salud resuelto para ambos users
+ *   - firma_electronica activa para ambos personales
+ *   - asignacion_rol con roles DISTINTOS para quorum OK
+ */
+function mockQueryRawHappyPath(prisma: DeepMockProxy<PrismaClient>) {
+  prisma.$queryRaw
+    // resolveFirma(USER_ID_DIR1): personal_salud
+    .mockResolvedValueOnce([{ id: PERSONAL_ID_1 }])
+    // resolveFirma(USER_ID_DIR1): firma_electronica
+    .mockResolvedValueOnce([
+      {
+        id: FIRMA_ID_1,
+        personal_id: PERSONAL_ID_1,
+        pin_hash: "$argon2id$v=19$mock",
+        failed_attempts: 0,
+        locked_until: null,
+        revoked_at: null,
+      },
+    ])
+    // resolveFirma(USER_ID_DIR2): personal_salud
+    .mockResolvedValueOnce([{ id: PERSONAL_ID_2 }])
+    // resolveFirma(USER_ID_DIR2): firma_electronica
+    .mockResolvedValueOnce([
+      {
+        id: FIRMA_ID_2,
+        personal_id: PERSONAL_ID_2,
+        pin_hash: "$argon2id$v=19$mock",
+        failed_attempts: 0,
+        locked_until: null,
+        revoked_at: null,
+      },
+    ])
+    // assertQuorumOrThrow: asignacion_rol con roles distintos
+    .mockResolvedValueOnce([
+      { personal_id: PERSONAL_ID_1, rol_codigo: "DIR" },
+      { personal_id: PERSONAL_ID_2, rol_codigo: "MC" },
+    ]);
+}
 
 function makeEcePaciente(overrides: Record<string, unknown> = {}) {
   return {
@@ -58,6 +128,9 @@ describe("patientDedupRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // Limpiar la cola Once de cualquier test previo y restaurar el default.
+    argon2VerifyMock.mockReset();
+    argon2VerifyMock.mockResolvedValue(true);
   });
 
   // ===========================================================================
@@ -298,11 +371,7 @@ describe("patientDedupRouter", () => {
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
-        caller.confirmEceMerge({
-          mergeId: MERGE_ID,
-          firmaDir1Id: "hash-dir1",
-          firmaDir2Id: "hash-dir2",
-        }),
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -317,11 +386,7 @@ describe("patientDedupRouter", () => {
 
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
       await expect(
-        caller.confirmEceMerge({
-          mergeId: MERGE_ID,
-          firmaDir1Id: "hash-dir1",
-          firmaDir2Id: "hash-dir2",
-        }),
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
@@ -336,15 +401,11 @@ describe("patientDedupRouter", () => {
 
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
       await expect(
-        caller.confirmEceMerge({
-          mergeId: MERGE_ID,
-          firmaDir1Id: "hash-dir1",
-          firmaDir2Id: "hash-dir2",
-        }),
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
-    it("ejecuta merge y retorna estado EJECUTADO", async () => {
+    it("HJ-30: lanza PRECONDITION_FAILED si el userId no tiene personal ECE activo", async () => {
       prisma.ecePatientMerge.findUnique.mockResolvedValue({
         id: MERGE_ID,
         organizationId: ORG_ID,
@@ -352,6 +413,131 @@ describe("patientDedupRouter", () => {
         mergedPatientId: PATIENT_B,
         estado: "PENDIENTE",
       } as never);
+      // resolveFirma: personal_salud vacío → PRECONDITION_FAILED
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
+
+    it("HJ-30: lanza UNAUTHORIZED si el PIN es incorrecto", async () => {
+      // Primer verify falla → UNAUTHORIZED
+      argon2VerifyMock.mockResolvedValueOnce(false);
+
+      prisma.ecePatientMerge.findUnique.mockResolvedValue({
+        id: MERGE_ID,
+        organizationId: ORG_ID,
+        canonicalPatientId: PATIENT_A,
+        mergedPatientId: PATIENT_B,
+        estado: "PENDIENTE",
+      } as never);
+      mockQueryRawHappyPath(prisma);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.confirmEceMerge({
+          ...VALID_CONFIRM_INPUT,
+          firmante1: { userId: USER_ID_DIR1, pin: "000000" },
+        }),
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    });
+
+    it("HJ-31: lanza FORBIDDEN si ambas firmas corresponden al mismo personal", async () => {
+      prisma.ecePatientMerge.findUnique.mockResolvedValue({
+        id: MERGE_ID,
+        organizationId: ORG_ID,
+        canonicalPatientId: PATIENT_A,
+        mergedPatientId: PATIENT_B,
+        estado: "PENDIENTE",
+      } as never);
+
+      // Ambos users resuelven al mismo personal_id → quorum falla
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: PERSONAL_ID_1 }]) // firm1 personal
+        .mockResolvedValueOnce([
+          {
+            id: FIRMA_ID_1,
+            personal_id: PERSONAL_ID_1,
+            pin_hash: "$argon2id$v=19$mock",
+            failed_attempts: 0,
+            locked_until: null,
+            revoked_at: null,
+          },
+        ])
+        .mockResolvedValueOnce([{ id: PERSONAL_ID_1 }]) // mismo personal para firm2
+        .mockResolvedValueOnce([
+          {
+            id: FIRMA_ID_1,
+            personal_id: PERSONAL_ID_1,
+            pin_hash: "$argon2id$v=19$mock",
+            failed_attempts: 0,
+            locked_until: null,
+            revoked_at: null,
+          },
+        ]);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("HJ-31: lanza FORBIDDEN si ambos firmantes tienen el mismo rol ECE", async () => {
+      prisma.ecePatientMerge.findUnique.mockResolvedValue({
+        id: MERGE_ID,
+        organizationId: ORG_ID,
+        canonicalPatientId: PATIENT_A,
+        mergedPatientId: PATIENT_B,
+        estado: "PENDIENTE",
+      } as never);
+
+      // Personales distintos pero mismo rol → quorum falla
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: PERSONAL_ID_1 }])
+        .mockResolvedValueOnce([
+          {
+            id: FIRMA_ID_1,
+            personal_id: PERSONAL_ID_1,
+            pin_hash: "$argon2id$v=19$mock",
+            failed_attempts: 0,
+            locked_until: null,
+            revoked_at: null,
+          },
+        ])
+        .mockResolvedValueOnce([{ id: PERSONAL_ID_2 }])
+        .mockResolvedValueOnce([
+          {
+            id: FIRMA_ID_2,
+            personal_id: PERSONAL_ID_2,
+            pin_hash: "$argon2id$v=19$mock",
+            failed_attempts: 0,
+            locked_until: null,
+            revoked_at: null,
+          },
+        ])
+        // asignacion_rol: ambos con rol DIR
+        .mockResolvedValueOnce([
+          { personal_id: PERSONAL_ID_1, rol_codigo: "DIR" },
+          { personal_id: PERSONAL_ID_2, rol_codigo: "DIR" },
+        ]);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.confirmEceMerge(VALID_CONFIRM_INPUT),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("ejecuta merge y retorna estado EJECUTADO con UUIDs de firma en audit log", async () => {
+      prisma.ecePatientMerge.findUnique.mockResolvedValue({
+        id: MERGE_ID,
+        organizationId: ORG_ID,
+        canonicalPatientId: PATIENT_A,
+        mergedPatientId: PATIENT_B,
+        estado: "PENDIENTE",
+      } as never);
+      mockQueryRawHappyPath(prisma);
       prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
         fn(prisma),
       );
@@ -366,14 +552,28 @@ describe("patientDedupRouter", () => {
       prisma.auditLog.create.mockResolvedValue({} as never);
 
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
-      const result = await caller.confirmEceMerge({
-        mergeId: MERGE_ID,
-        firmaDir1Id: "sha256-dir1",
-        firmaDir2Id: "sha256-dir2",
-      });
+      const result = await caller.confirmEceMerge(VALID_CONFIRM_INPUT);
 
       expect(result.estado).toBe("EJECUTADO");
-      // Verifica que se actualizó patient.mergedIntoId
+
+      // HJ-30: verifica que el update persistió UUIDs de firma (no el PIN).
+      const mergeUpdateArgs = prisma.ecePatientMerge.update.mock.calls[0]![0];
+      expect(mergeUpdateArgs.data).toMatchObject({
+        firmaDir1Id: FIRMA_ID_1,
+        firmaDir2Id: FIRMA_ID_2,
+        estado: "EJECUTADO",
+      });
+
+      // HJ-30: el audit log contiene UUIDs de firma pero no PINes.
+      const auditArgs = prisma.auditLog.create.mock.calls[0]![0];
+      expect(auditArgs.data.afterJson).toMatchObject({
+        firmaDir1Id: FIRMA_ID_1,
+        firmaDir2Id: FIRMA_ID_2,
+      });
+      expect(JSON.stringify(auditArgs.data.afterJson)).not.toContain("123456");
+      expect(JSON.stringify(auditArgs.data.afterJson)).not.toContain("654321");
+
+      // Verifica que se actualizó patient.mergedIntoId.
       const patientUpdateArgs = prisma.patient.update.mock.calls[0]![0];
       expect(patientUpdateArgs.data).toMatchObject({
         mergedIntoId: PATIENT_A,

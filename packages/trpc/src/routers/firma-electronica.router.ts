@@ -30,7 +30,14 @@
  *
  * NO se registra en `_app.ts` desde aquí — lo hace @Orq.
  */
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, publicProcedure, requireRole, router } from "../trpc";
@@ -142,6 +149,131 @@ type SessionCacheRow = {
   user_id: string;
   expires_at: Date;
 };
+
+// =============================================================================
+// Helpers MFA — espejo de mfa.router.ts (funciones puras, sin dependencia Prisma).
+// Duplicados aquí para evitar dependencia circular entre routers.
+// Fuente de verdad: packages/trpc/src/routers/mfa.router.ts.
+// Si se refactoriza a helper compartido, eliminar esta sección.
+// =============================================================================
+
+// Constantes espejo de mfa.router.ts
+const MFA_TOTP_DIGITS = 6;
+const MFA_TOTP_STEP_SECONDS = 30;
+const MFA_TOTP_WINDOW = 1; // ±1 step => ~90s tolerancia
+const MFA_ENC_VERSION = 1;
+const MFA_IV_BYTES = 12;
+const MFA_TAG_BYTES = 16;
+const MFA_RE_TOTP = /^[0-9]{6}$/;
+const MFA_RE_BACKUP = /^[0-9]{8}$/;
+
+type MfaStoredCredential = {
+  v: number;
+  iv: string;
+  tag: string;
+  ct: string;
+  createdAt: string;
+};
+
+type MfaPlaintext = { secret: string; codes: string[] };
+
+function getMfaEncryptionKey(): Buffer {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "AUTH_SECRET no configurado correctamente.",
+    });
+  }
+  return createHash("sha256").update(secret, "utf8").digest();
+}
+
+function decryptMfaCredential(stored: string): MfaPlaintext {
+  const blob = JSON.parse(stored) as MfaStoredCredential;
+  if (blob.v !== MFA_ENC_VERSION) {
+    throw new Error(`Versión de credencial MFA desconocida: v${blob.v}`);
+  }
+  const key = getMfaEncryptionKey();
+  const iv = Buffer.from(blob.iv, "hex");
+  const tag = Buffer.from(blob.tag, "hex");
+  const ct = Buffer.from(blob.ct, "hex");
+  if (iv.length !== MFA_IV_BYTES || tag.length !== MFA_TAG_BYTES) {
+    throw new Error("Credencial MFA corrupta.");
+  }
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
+  return JSON.parse(pt.toString("utf8")) as MfaPlaintext;
+}
+
+function base32DecodeMfa(input: string): Buffer {
+  const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  const cleaned = input.replace(/=+$/g, "").toUpperCase().replace(/\s+/g, "");
+  let bits = 0;
+  let value = 0;
+  const out: number[] = [];
+  for (const ch of cleaned) {
+    const idx = ALPHABET.indexOf(ch);
+    if (idx < 0) throw new Error("Base32 inválido en secret TOTP");
+    value = (value << 5) | idx;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+
+function generateTotpCode(secretBase32: string, counter: number): string {
+  const key = base32DecodeMfa(secretBase32);
+  const buf = Buffer.alloc(8);
+  buf.writeUInt32BE(Math.floor(counter / 0x1_0000_0000), 0);
+  buf.writeUInt32BE(counter & 0xffffffff, 4);
+  const hmac = createHmac("sha1", key).update(buf).digest();
+  const offset = hmac[hmac.length - 1]! & 0x0f;
+  const bin =
+    ((hmac[offset]! & 0x7f) << 24) |
+    ((hmac[offset + 1]! & 0xff) << 16) |
+    ((hmac[offset + 2]! & 0xff) << 8) |
+    (hmac[offset + 3]! & 0xff);
+  const mod = bin % 10 ** MFA_TOTP_DIGITS;
+  return mod.toString().padStart(MFA_TOTP_DIGITS, "0");
+}
+
+/**
+ * Verifica un token TOTP (6 dígitos) contra el secreto base32.
+ * Ventana ±1 step (~90s). Timing-safe.
+ */
+function verifyTotpCode(secretBase32: string, token: string): boolean {
+  if (!MFA_RE_TOTP.test(token)) return false;
+  const counter = Math.floor(Date.now() / 1000 / MFA_TOTP_STEP_SECONDS);
+  const tokenBuf = Buffer.from(token, "utf8");
+  for (let w = -MFA_TOTP_WINDOW; w <= MFA_TOTP_WINDOW; w++) {
+    const candidate = generateTotpCode(secretBase32, counter + w);
+    const candBuf = Buffer.from(candidate, "utf8");
+    if (candBuf.length === tokenBuf.length && timingSafeEqual(candBuf, tokenBuf)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Verifica un backup code (8 dígitos) de forma timing-safe.
+ * Retorna el índice del código que coincidió, o -1 si ninguno.
+ */
+function verifyBackupCode(codes: string[], token: string): number {
+  if (!MFA_RE_BACKUP.test(token)) return -1;
+  const tokenBuf = Buffer.from(token, "utf8");
+  for (let i = 0; i < codes.length; i++) {
+    const candBuf = Buffer.from(codes[i]!, "utf8");
+    if (candBuf.length === tokenBuf.length && timingSafeEqual(candBuf, tokenBuf)) {
+      return i;
+    }
+  }
+  return -1;
+}
 
 // =============================================================================
 // Helpers criptográficos (espejo de @his/infrastructure/src/firma/pin-hasher.ts)
@@ -602,11 +734,11 @@ export const firmaElectronicaRouter = router({
         });
       }
 
-      // Validar MFA: buscar credencial TOTP y verificar código.
+      // Validar MFA: buscar credencial TOTP y verificar código TOTP o backup code.
       const cred = await ctx.prisma.userCredential.findFirst({
         where: { userId: hisUserId, method: "TOTP" },
         orderBy: { createdAt: "desc" },
-        select: { secretHash: true },
+        select: { id: true, secretHash: true },
       });
 
       if (!cred) {
@@ -616,24 +748,74 @@ export const firmaElectronicaRouter = router({
         });
       }
 
-      // Validación de longitud mfaCode para distinguir TOTP vs backup code.
-      // La lógica de verificación TOTP real requiere importar el algoritmo de mfa.router;
-      // aquí delegamos a un check básico de longitud + not-empty para mantener el router
-      // simple. @QA debe E2E-testear el flujo completo con un TOTP real.
-      const mfaCodeBuf = Buffer.from(input.mfaCode, "utf8");
-      const mfaCodeLen = mfaCodeBuf.length;
-      if (mfaCodeLen !== 6 && mfaCodeLen !== 8) {
+      let mfaPlaintext: MfaPlaintext;
+      try {
+        mfaPlaintext = decryptMfaCredential(cred.secretHash);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error("[firma.completeRecovery] error al descifrar credencial MFA:", err);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "No se pudo leer la credencial MFA.",
+        });
+      }
+
+      const mfaCode = input.mfaCode;
+
+      if (MFA_RE_TOTP.test(mfaCode)) {
+        // Código TOTP de 6 dígitos — verificar contra ventana ±1 step.
+        const ok = verifyTotpCode(mfaPlaintext.secret, mfaCode);
+        if (!ok) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Código MFA incorrecto o expirado.",
+          });
+        }
+      } else if (MFA_RE_BACKUP.test(mfaCode)) {
+        // Backup code de 8 dígitos — verificar timing-safe y consumir del set.
+        const matchIndex = verifyBackupCode(mfaPlaintext.codes, mfaCode);
+        if (matchIndex < 0) {
+          throw new TRPCError({
+            code: "UNAUTHORIZED",
+            message: "Código de respaldo inválido o ya usado.",
+          });
+        }
+        // Consumir backup code: persistir set cifrado sin el código usado.
+        // Usa la misma clave AES-256-GCM que mfa.router (AUTH_SECRET derivado SHA-256).
+        // TODO: si se extrae encryptMfaCredential a un helper compartido, reemplazar esta
+        //       re-implementación local. Por ahora se duplica para evitar import circular.
+        try {
+          const key = getMfaEncryptionKey();
+          const iv = randomBytes(MFA_IV_BYTES);
+          const cipher = createCipheriv("aes-256-gcm", key, iv);
+          const remainingCodes = mfaPlaintext.codes.filter((_, i) => i !== matchIndex);
+          const pt = JSON.stringify({ secret: mfaPlaintext.secret, codes: remainingCodes });
+          const ct = Buffer.concat([cipher.update(pt, "utf8"), cipher.final()]);
+          const tag = cipher.getAuthTag();
+          const newStored = JSON.stringify({
+            v: MFA_ENC_VERSION,
+            iv: iv.toString("hex"),
+            tag: tag.toString("hex"),
+            ct: ct.toString("hex"),
+            createdAt: new Date().toISOString(),
+          });
+          await ctx.prisma.userCredential.update({
+            where: { id: cred.id },
+            data: { secretHash: newStored },
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.error("[firma.completeRecovery] error al consumir backup code:", err);
+          // El backup code fue verificado; no bloquear el flujo de recuperación
+          // por un fallo de housekeeping. El código usado sigue siendo "válido"
+          // hasta que se re-encripte — riesgo aceptable vs bloquear el usuario.
+        }
+      } else {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "Código MFA inválido. Debe tener 6 (TOTP) u 8 (respaldo) dígitos.",
         });
       }
-
-      // Timing-safe dummy check to prevent bypass via short-circuit.
-      // La verificación real del TOTP se realiza en el middleware de sesión.
-      // Esta procedure asume que el cliente ya pasó por mfa.verify en la UI.
-      const dummyBuf = randomBytes(mfaCodeLen);
-      timingSafeEqual(mfaCodeBuf, dummyBuf); // siempre false — solo previene timing attacks.
 
       // Establecer nuevo PIN y limpiar token de recuperación.
       const { hash, salt } = await hashPin(input.newPin);
