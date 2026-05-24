@@ -35,10 +35,19 @@ const pinSchema = z
   .trim()
   .regex(/^\d{6,8}$/, { message: "PIN debe ser 6-8 dígitos." });
 
-const listInput = z.object({
-  documentoInstanciaId: z.string().uuid(),
-  estado: z.enum(["PENDIENTE", "APROBADA", "RECHAZADA"]).optional(),
-});
+// Acepta filtrado por documentoInstanciaId directo O por episodioId (JOIN).
+// Al menos uno de los dos debe estar presente.
+const listInput = z
+  .object({
+    documentoInstanciaId: z.string().uuid().optional(),
+    episodioId: z.string().uuid().optional(),
+    estado: z
+      .enum(["PENDIENTE", "APROBADA", "RECHAZADA", "FIRMADA"])
+      .optional(),
+  })
+  .refine((v) => v.documentoInstanciaId ?? v.episodioId, {
+    message: "Se requiere documentoInstanciaId o episodioId.",
+  });
 
 const solicitarInput = z.object({
   documentoInstanciaId: z.string().uuid(),
@@ -61,6 +70,12 @@ const rechazarInput = z.object({
   pin: pinSchema,
 });
 
+// Art. 42 NTEC: firma del autor original cierra la rectificación (estado FIRMADA).
+const firmarInput = z.object({
+  rectificacionId: z.string().uuid(),
+  pin: pinSchema,
+});
+
 // ---------------------------------------------------------------------------
 // Tipos locales
 // ---------------------------------------------------------------------------
@@ -72,12 +87,13 @@ type RectificacionRow = {
   valor_anterior: string;
   valor_propuesto: string;
   motivo: string;
-  estado: "PENDIENTE" | "APROBADA" | "RECHAZADA";
+  estado: "PENDIENTE" | "APROBADA" | "RECHAZADA" | "FIRMADA";
   solicitante_id: string;
   solicitante_nombre: string | null;
   aprobador_id: string | null;
   fecha_aprobacion: string | null;
   motivo_rechazo: string | null;
+  firmado_en: string | null;
   created_at: string;
 };
 
@@ -248,6 +264,9 @@ export const eceRectificacionRouter = router({
     .input(listInput)
     .query(async ({ ctx, input }) => {
       const estadoFilter = input.estado ?? null;
+      const instanciaFilter = input.documentoInstanciaId ?? null;
+      const episodioFilter = input.episodioId ?? null;
+
       return (
         ctx.prisma.$queryRaw as (
           query: TemplateStringsArray,
@@ -267,10 +286,13 @@ export const eceRectificacionRouter = router({
           r.aprobador_id,
           r.fecha_aprobacion::text,
           r.motivo_rechazo,
+          r.firmado_en::text,
           r.created_at::text
         FROM ece.rectificacion r
         LEFT JOIN public."User" u ON u.id = r.solicitante_id
-        WHERE r.documento_instancia_id = ${input.documentoInstanciaId}::uuid
+        LEFT JOIN ece.documento_instancia di ON di.id = r.documento_instancia_id
+        WHERE (${instanciaFilter}::uuid IS NULL OR r.documento_instancia_id = ${instanciaFilter}::uuid)
+          AND (${episodioFilter}::uuid IS NULL OR di.episodio_id = ${episodioFilter}::uuid)
           AND (${estadoFilter}::text IS NULL OR r.estado::text = ${estadoFilter}::text)
         ORDER BY r.created_at DESC
       `;
@@ -448,5 +470,76 @@ export const eceRectificacionRouter = router({
       });
 
       return { ok: true as const };
+    }),
+
+  /**
+   * Autor original firma la rectificación con PIN electrónico argon2id.
+   *
+   * NTEC Art. 42: la firma del autor cierra la rectificación (FIRMADA).
+   * La rectificación firmada es inmutable — para corregir errores en la propia
+   * rectificación se emite una nueva solicitud encadenada.
+   *
+   * Precondiciones:
+   *   - La rectificación debe existir y estar en estado APROBADA (impacto MEDIO+)
+   *     o PENDIENTE (impacto NINGUNO/BAJO — firma directa sin aprobación DIR).
+   *   - El solicitante debe coincidir con ctx.user.id (o tener rol JEFE_SERVICIO).
+   *   - El PIN debe verificarse correctamente contra ece.firma_electronica.
+   */
+  firmar: requireRole(["PHYSICIAN", "NURSE"])
+    .input(firmarInput)
+    .mutation(async ({ ctx, input }) => {
+      // Verificar identidad criptográfica del firmante
+      const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
+      await checkPinDir(firma, input.pin);
+
+      const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
+
+      if (!rect) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Rectificación no encontrada.",
+        });
+      }
+
+      // Solo se puede firmar desde PENDIENTE (impacto bajo) o APROBADA (impacto alto)
+      if (rect.estado !== "PENDIENTE" && rect.estado !== "APROBADA") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `La rectificación no puede firmarse desde el estado ${rect.estado}.`,
+        });
+      }
+
+      // El firmante debe ser el solicitante original (autor del documento)
+      if (rect.solicitante_id !== ctx.user.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Solo el autor que solicitó la rectificación puede firmarla. Si el autor no está disponible, use el flujo de superior jerárquico.",
+        });
+      }
+
+      await (
+        ctx.prisma.$executeRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<number>
+      )`
+        UPDATE ece.rectificacion
+        SET estado     = 'FIRMADA',
+            firmado_en = now()
+        WHERE id = ${input.rectificacionId}::uuid
+      `;
+
+      await insertOutbox(ctx.prisma, "ece.rectificacion.firmada", {
+        rectificacionId: input.rectificacionId,
+        documentoInstanciaId: rect.documento_instancia_id,
+        autorId: ctx.user.id,
+        campo: rect.campo,
+        valorAnterior: rect.valor_anterior,
+        valorPropuesto: rect.valor_propuesto,
+        firmadoEn: new Date().toISOString(),
+      });
+
+      return { ok: true as const, firmadoEn: new Date().toISOString() };
     }),
 });

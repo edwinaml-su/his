@@ -860,6 +860,18 @@ const expedienteRouter = router({
             take: 50,
           });
           eIds = encs.map((e) => e.id);
+        } else {
+          // Validar que TODOS los encounterIds pertenecen al paciente autenticado.
+          // Si el count no coincide, alguno es de otro paciente → FORBIDDEN.
+          const owned = await tx.encounter.count({
+            where: { id: { in: eIds }, patientId },
+          });
+          if (owned !== eIds.length) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Uno o más encuentros no pertenecen al paciente autenticado.",
+            });
+          }
         }
 
         if (eIds.length === 0) return [];

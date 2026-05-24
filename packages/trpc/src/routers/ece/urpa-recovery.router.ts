@@ -10,23 +10,28 @@
  *   ece.acto_quirurgico        — FK de origen
  *
  * Autorización: requireRole(["NURSE", "PHYSICIAN"])
- * Alta: requireRole(["NURSE"])
+ * Alta: requireRole(["ESP", "MC"]) — Art. 39 NTEC + JCI ASC.5: solo anestesiólogo/MC firma el alta.
  *
  * Lógica de negocio dar alta:
  *   - Aldrete alta ≥9 → criterio debe ser "cumple".
  *   - Aldrete alta <9 → criterio "no_cumple_observacion" o "trasladar_uci".
  *   - Validado en Zod (eceUrpaDarAltaSchema) y reforzado en router.
+ *   - Requiere firmaPin (PIN argon2id) del ESP/MC que otorga el alta.
  *   - Emite evento de dominio ece.urpa.alta_otorgada vía emitDomainEvent (outbox unificado).
  *
  * @QA E2E a cubrir:
- *   - Flujo completo: create → registrarSignos → darAlta (Aldrete ≥9, criterio cumple).
+ *   - Flujo completo: create (NURSE) → registrarSignos (NURSE) → darAlta (ESP, Aldrete ≥9, criterio cumple, PIN válido).
  *   - darAlta con Aldrete <9 y criterio "cumple" → 400.
  *   - darAlta con Aldrete ≥9 y criterio "no_cumple_observacion" → 400.
  *   - darAlta sobre registro ya dado de alta → 409.
- *   - PHYSICIAN puede list/get pero no darAlta (403).
+ *   - darAlta con PIN incorrecto → 401.
+ *   - NURSE intenta darAlta → 403 (Art. 39 NTEC).
+ *   - PHYSICIAN intenta darAlta → 403 (solo ESP/MC).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { argon2 } from "@his/infrastructure";
+import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
@@ -55,6 +60,93 @@ export interface UrpaRecoveryRow {
   actualizado_en: Date;
 }
 
+// ─── Tipos internos para firma ───────────────────────────────────────────────
+
+interface PersonalRow {
+  id: string;
+}
+
+interface FirmaRow {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+}
+
+// ─── PIN verification (Art. 39 NTEC — firma anestesiólogo) ───────────────────
+
+const LOCKOUT_MAX = 5;
+
+async function verifyPinOrThrow(
+  tx: PrismaClient,
+  hisUserId: string,
+  pin: string,
+): Promise<{ firmaId: string }> {
+  const personalRows = await tx.$queryRaw<PersonalRow[]>`
+    SELECT id::text
+    FROM ece.personal_salud
+    WHERE his_user_id = ${hisUserId}::uuid
+      AND activo = true
+    LIMIT 1
+  `;
+  const personal = personalRows[0];
+  if (!personal) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró un profesional de salud asociado a su cuenta.",
+    });
+  }
+
+  const firmaRows = await tx.$queryRaw<FirmaRow[]>`
+    SELECT id::text, pin_hash, failed_attempts, locked_until
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personal.id}::uuid
+      AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  const firma = firmaRows[0];
+  if (!firma) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada. Use firma.setup para crearla.",
+    });
+  }
+
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+
+  const valid = await argon2.verify(firma.pin_hash, pin);
+
+  if (!valid) {
+    await tx.$executeRaw`
+      UPDATE ece.firma_electronica
+      SET failed_attempts = failed_attempts + 1
+      WHERE id = ${firma.id}::uuid
+    `;
+    const remaining = LOCKOUT_MAX - (firma.failed_attempts + 1);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        remaining > 0
+          ? `PIN incorrecto. Intentos restantes: ${remaining}.`
+          : "PIN incorrecto. La firma quedará bloqueada.",
+    });
+  }
+
+  await tx.$executeRaw`
+    UPDATE ece.firma_electronica
+    SET failed_attempts = 0
+    WHERE id = ${firma.id}::uuid
+  `;
+
+  return { firmaId: firma.id };
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function resolveEceIds(ctx: {
@@ -74,6 +166,8 @@ function resolveEceIds(ctx: {
 
 const base = requireRole(["NURSE", "PHYSICIAN"]);
 const nurseOnly = requireRole(["NURSE"]);
+// Art. 39 NTEC + JCI ASC.5: el alta URPA solo puede otorgarla el anestesiólogo (ESP) o MC.
+const espOnly = requireRole(["ESP", "MC"]);
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 
@@ -290,15 +384,17 @@ export const eceUrpaRecoveryRouter = router({
     }),
 
   /**
-   * Otorga el alta URPA (ENF).
+   * Otorga el alta URPA.
    *
    * Reglas:
+   *   - Solo ESP (anestesiólogo) o MC — Art. 39 NTEC + JCI ASC.5.
+   *   - Requiere firmaPin argon2id del profesional que otorga el alta.
    *   - Aldrete alta ≥9 → criterio debe ser "cumple".
    *   - Aldrete alta <9 → criterio "no_cumple_observacion" o "trasladar_uci".
    *   - Emite evento ece.urpa.alta_otorgada vía emitDomainEvent (outbox unificado).
    */
-  darAlta: nurseOnly
-    .input(eceUrpaDarAltaSchema)
+  darAlta: espOnly
+    .input(eceUrpaDarAltaSchema.and(z.object({ firmaPin: z.string().min(4) })))
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = resolveEceIds(ctx);
 
@@ -325,6 +421,9 @@ export const eceUrpaRecoveryRouter = router({
             message: `El alta ya fue registrada o el registro está anulado. Estado: '${urpa.estado_registro}'.`,
           });
         }
+
+        // Verificar PIN del anestesiólogo/MC antes de procesar (Art. 39 NTEC).
+        await verifyPinOrThrow(tx, ctx.user.id, input.firmaPin);
 
         // Doble verificación (la validación Zod ya lo valida, pero reforzamos en DB).
         const aldreteAlta = input.escalaAldreteAlta;

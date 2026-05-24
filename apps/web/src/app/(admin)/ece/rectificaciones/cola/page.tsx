@@ -252,7 +252,7 @@ export default function ColaRectificacionesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {query.data.map((r: RectificacionRow) => (
+                {(query.data as RectificacionRow[]).map((r: RectificacionRow) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">{r.campo}</TableCell>
                     <TableCell className="max-w-[10rem] truncate text-sm">

@@ -7,7 +7,8 @@
  *   § 3  rbac.permissionMatrix — happy path, filtro resource, sin usuarios
  *   § 4  rbac.purgeInactiveUsers — dryRun, ejecución real, sin candidatos
  *   § 5  rbac.reactivateUser   — happy path, domainEvent
- *   § 6  PIN lockout state machine (tabla de transiciones via firma.verify)
+ *   § 6  cross-tenant isolation HJ-04 (queries) + HJ-06 (scanAndFlag mutation)
+ *   § 7  PIN lockout state machine (tabla de transiciones via firma.verify)
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -18,7 +19,7 @@ import { firmaElectronicaRouter } from "../firma-electronica.router";
 import { auditOutlierRouter } from "../audit-outlier.router";
 import { rbacRouter } from "../rbac.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { MOCK_USER_ADMIN, MOCK_TENANT, MOCK_TENANT_OTHER_ORG } from "@his/test-utils";
 
 // ---------------------------------------------------------------------------
 // Mock argon2 para velocidad
@@ -528,10 +529,136 @@ describe("rbac.reactivateUser", () => {
 });
 
 // ---------------------------------------------------------------------------
-// § 6 — PIN lockout state machine (via firma.verify)
+// § 6 — Cross-tenant isolation (HJ-04 / HJ-06)
+//
+// Verifica que cada procedure del auditOutlierRouter incluye el filtro
+// organization_id en el SQL generado, impidiendo que una org vea datos
+// de otra. El mock captura el SQL ejecutado y valida la presencia del
+// fragmento de JOIN + filtro.
 // ---------------------------------------------------------------------------
 
-describe("firma PIN lockout state machine (US.F2.7.3)", () => {
+describe("auditOutlier cross-tenant isolation (HJ-04/HJ-06)", () => {
+  let prisma: DeepMockProxy<PrismaClient>;
+  const ORG_A = MOCK_TENANT.organizationId;
+  const ORG_B = MOCK_TENANT_OTHER_ORG.organizationId;
+
+  const TENANT_A_DIR = { ...MOCK_TENANT,        roleCodes: ["DIR", "super_admin"] };
+  const TENANT_B_DIR = { ...MOCK_TENANT_OTHER_ORG, roleCodes: ["DIR", "super_admin"] };
+
+  function callerA() {
+    return auditOutlierRouter.createCaller(
+      makeCtx({ prisma, user: MOCK_USER_ADMIN, tenant: TENANT_A_DIR }),
+    );
+  }
+  function callerB() {
+    return auditOutlierRouter.createCaller(
+      makeCtx({ prisma, user: MOCK_USER_ADMIN, tenant: TENANT_B_DIR }),
+    );
+  }
+
+  beforeEach(() => {
+    prisma = mockDeep<PrismaClient>();
+    vi.clearAllMocks();
+  });
+
+  it("[HJ-04] listOutliers pasa organization_id de OrgA en el SQL", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ total: BigInt(0) }])
+      .mockResolvedValueOnce([]);
+
+    await callerA().listOutliers({ limit: 10, offset: 0 });
+
+    const calls = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    // Ambas queries (COUNT + SELECT) deben incluir el filtro de org
+    for (const [sql, ...params] of calls) {
+      expect(sql as string).toContain("organization_id");
+      expect(params).toContain(ORG_A);
+      expect(params).not.toContain(ORG_B);
+    }
+  });
+
+  it("[HJ-04] listOutliers de OrgB recibe su propio org_id, no el de OrgA", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ total: BigInt(0) }])
+      .mockResolvedValueOnce([]);
+
+    await callerB().listOutliers({ limit: 10, offset: 0 });
+
+    const calls = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    for (const [, ...params] of calls) {
+      expect(params).toContain(ORG_B);
+      expect(params).not.toContain(ORG_A);
+    }
+  });
+
+  it("[HJ-04] dashboardStats incluye filtro organization_id", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ count: BigInt(0) }]);
+
+    await callerA().dashboardStats({});
+
+    const calls = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [sql, ...params] of calls) {
+      expect(sql as string).toContain("organization_id");
+      expect(params).toContain(ORG_A);
+    }
+  });
+
+  it("[HJ-04] topUsers incluye filtro organization_id", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    await callerA().topUsers({ limit: 10 });
+
+    const [[sql, ...params]] = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sql as string).toContain("organization_id");
+    expect(params).toContain(ORG_A);
+  });
+
+  it("[HJ-04] sensitiveAccess incluye filtro organization_id", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ total: BigInt(0) }])
+      .mockResolvedValueOnce([]);
+
+    await callerA().sensitiveAccess({ limit: 10, offset: 0 });
+
+    const calls = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    for (const [sql, ...params] of calls) {
+      expect(sql as string).toContain("organization_id");
+      expect(params).toContain(ORG_A);
+    }
+  });
+
+  it("[HJ-06] scanAndFlag incluye organization_id en el UPDATE", async () => {
+    // getOrgConfig → sin config
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(0);
+
+    await callerA().scanAndFlag({});
+
+    const [[sql, ...params]] = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sql as string).toContain("organization_id");
+    expect(params).toContain(ORG_A);
+    expect(params).not.toContain(ORG_B);
+  });
+
+  it("[HJ-06] scanAndFlag de OrgB no mezcla params con OrgA", async () => {
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(0);
+
+    await callerB().scanAndFlag({});
+
+    const [[, ...params]] = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(params).toContain(ORG_B);
+    expect(params).not.toContain(ORG_A);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// § 7 — PIN lockout state machine (via firma.verify)
+// ---------------------------------------------------------------------------
+
+describe("§7 firma PIN lockout state machine (US.F2.7.3)", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
   beforeEach(() => {
