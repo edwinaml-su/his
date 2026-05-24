@@ -44,15 +44,15 @@ npx playwright test e2e/triage-manchester.spec.ts --headed
 ```
 apps/web/                  # Next.js App Router. Rutas en grupos: (admin) / (auth) / (clinical)
 packages/
-  database/                # schema.prisma (3343 líneas, 4NF) + sql/ (RLS + hardening) + seeds
-  contracts/               # Zod schemas, validadores SV (DUI/NIT/NIE), eventos de dominio
-  trpc/                    # routers (~45), trpc.ts (procedures), rls-context.ts ⚠ ver §RLS
-  infrastructure/          # observability (slo-checks), adaptadores externos
+  database/                # schema.prisma (4NF) + sql/ (RLS + hardening + workflow seed) + seeds
+  contracts/               # Zod schemas (ECE+GS1 re-exportados), validadores SV (DUI/NIT/NIE), eventos
+  trpc/                    # ~120 routers (83 raíz + 38 en routers/ece/), trpc.ts, rls-context.ts ⚠ §RLS
+  infrastructure/          # observability (slo-checks), firma/argon2, adaptadores externos
   ui/                      # design system Shadcn/Tailwind compartido
   test-utils/              # fixtures (DUI válidos, pacientes, encounters), mock-session
   config/eslint/           # config compartida
 tests/features/            # Gherkin (.feature) — BDD de @QAF, no ejecutables, son spec
-docs/                      # 25 docs numerados + adr/ + blueprints/ + uat/ + sprint-reviews/
+docs/                      # 33 docs numerados + flujos/ (30 fichas NTEC) + adr/ + blueprints/ + uat/
 infra/terraform/           # placeholder (BI/data fase posterior)
 scripts/                   # diagnose-supabase-env.mjs, db-reset, setup, golive-checklist
 ```
@@ -89,6 +89,26 @@ const patient = await withTenantContext(prisma, ctx.tenant, async (tx) => {
 - `requireRole(["PHYSICIAN", "NURSE"])` — wrapper sobre `tenantProcedure`.
 
 Contexto se arma en `apps/web/src/lib/trpc/` (server side) leyendo cookies `his.org` / `his.estab` + Supabase auth.
+
+---
+
+## Motor de workflow ECE (data-driven)
+
+El catálogo de documentos clínicos NTEC vive en BD, no en código. Las 4 tablas + 2 funciones que componen el motor:
+
+- **`ece.tipo_documento`** — 31 tipos sembrados; columnas clave: `codigo` (PK semántica), `depende_de` (text[] de códigos prerequisito), `inmutable` (bool), `modalidad` (ambulatorio/hospitalario/ambos), `tabla_datos` (tabla física de payload), `descripcion_markdown` (renderizada por workflow-designer WYSIWYG).
+- **`ece.flujo_estado`** — estados por tipo (`borrador`/`en_revision`/`firmado`/`validado`/`anulado` estándar; algunos tipos como URPA tienen modelo propio).
+- **`ece.flujo_transicion`** — acciones permitidas entre estados con `rol_autoriza_id` + `requiere_firma`.
+- **`ece.documento_instancia`** — instancias reales por episodio/paciente.
+- **`ece.tipo_documento_establecimiento`** — overrides DIR por establecimiento (`obligatorio_override`, `depende_de_override`, `activo_override`).
+- **`ece.fn_depende_de_efectivo(tipo_id, estab_id)`** — STABLE; resuelve override sobre global.
+- **`ece.fn_assert_dependencias_firmadas`** — trigger BEFORE INSERT en `documento_instancia`; bloquea creación si deps no firmadas (override por GUC `app.skip_dependencias_enforcement='true'` para seeders).
+
+**Capa TS paralela:** `packages/trpc/src/ece/dependencias-enforcement.ts` — helper `assertDependenciasFirmadas()` lanza `TRPCError code='PRECONDITION_FAILED'` con `cause.dependenciasFaltantes`. Cableada en `workflow-instance.router.create`. Estados aceptados como "firmado": `firmado`, `validado`, `certificado`, o cualquier `es_final=true`.
+
+**UI**: `/admin/workflow-designer` (lista + grafo + editor WYSIWYG TipTap), `/admin/workflow-overrides` (DIR), wizard "próximos documentos" en `/ece/episodio-hospitalario/[id]`.
+
+**Fuentes de verdad**: `docs/31_flujos_operativos_consolidado.md` (índice) + `docs/flujos/{CODIGO}.md` (30 fichas con metadata + dependencias + roles + eventos por documento NTEC).
 
 ---
 
@@ -218,6 +238,9 @@ Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no
 - **Coverage threshold global** trumpa coverage por workspace — un módulo nuevo sin tests baja la métrica agregada. Agrega test trivial o márcalo en `exclude`.
 - **dual gh accounts:** la cuenta git default puede ser personal; los push van a `edwinaml-su/his`. Verifica `git remote -v` antes de operaciones destructivas.
 - **MCP Supabase** puede estar en read-only mode; cuando se necesite write, hay un PR pattern (`chore/mcp-write-mode`) que habilita `apply_migration` temporalmente.
+- **Re-exports en `@his/contracts`:** los schemas nuevos en `packages/contracts/src/schemas/*.ts` deben agregarse a `packages/contracts/src/schemas/index.ts`. PR #217 reveló que faltaban 31 archivos ECE+GS1 re-exportados — bloqueaba CI typecheck por meses. Si creas un schema nuevo, añade su `export * from "./<archivo>";` en el mismo PR.
+- **Deuda preexistente typecheck:** al 2026-05-22 main tiene ~42 errores TS en pages UI (`deaths/`, `workflows/`, `atencion-emergencia/`, `defuncion/`, `epicrisis/`, `historia-clinica/`, `hoja-ingreso/`, `urpa/`) — drift entre routers ECE actuales y signatures viejas de UI. Pendiente de sprint dedicado. Si tu PR no toca esos archivos, los errores NO son tu responsabilidad.
+- **tsconfig `rootDir`:** no agregar `rootDir: "src"` a tsconfig de un paquete que importe `@his/contracts` — genera TS6059 porque los archivos del paquete dep están fuera del rootDir. Si ya está, removerlo + agregar `declaration: false, declarationMap: false` (tsconfig de @his/trpc lo demuestra).
 
 ---
 
@@ -241,6 +264,9 @@ Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no
 | `docs/15_production_runbook.md` | Operación: incidentes, rollback |
 | `docs/17_hipercuidado_runbook.md` | Hipercuidado post-deploy |
 | `docs/blueprints/beta15_*.md` | Spec Beta.15 alerts/notifications (current) |
+| `docs/31_flujos_operativos_consolidado.md` | Índice maestro de los 30 flujos NTEC (workflow-designer) |
+| `docs/flujos/{CODIGO}.md` | Ficha por documento NTEC: metadata, dependencias, roles, eventos, drift |
+| `docs/audit/2026-05-19_audit_stream_*.md` | Hallazgos audit A-J (271 totales, 52 P0); muchos ya remediados |
 | `TDR_HIS_Multipais.md` | Términos de referencia (1923 líneas, 30 módulos) — fuente de verdad regulatoria |
 
 **Regla:** este CLAUDE.md apunta y resume. No duplica. Si encuentras inconsistencia entre CLAUDE.md y los docs numerados, los docs ganan — y abre un PR para actualizar CLAUDE.md.
