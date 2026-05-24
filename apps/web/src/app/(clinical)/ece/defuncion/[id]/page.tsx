@@ -120,7 +120,7 @@ function PinDialog({ titulo, onConfirm, onCancel }: PinDialogProps) {
 // Página principal
 // ──────────────────────────────────────────────────────────────────────────────
 
-type PendingAction = "firmar" | "certificar" | null;
+type PendingAction = "firmar" | "validar" | "certificar" | null;
 
 export default function CertDefDetailPage() {
   const params = useParams();
@@ -139,16 +139,6 @@ export default function CertDefDetailPage() {
   const validarMutation = trpc.eceCertDef.validar.useMutation();
   const certificarMutation = trpc.eceCertDef.certificar.useMutation();
   const anularMutation = trpc.eceCertDef.anular.useMutation();
-
-  async function handleValidar() {
-    setActionError(null);
-    try {
-      await validarMutation.mutateAsync({ id });
-      await utils.eceCertDef.get.invalidate({ id });
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Error al validar.");
-    }
-  }
 
   async function handleAnular() {
     if (!motivoAnulacion.trim() || motivoAnulacion.trim().length < 10) {
@@ -301,14 +291,13 @@ export default function CertDefDetailPage() {
                 </Button>
               )}
 
-              {/* MC: validar (firmado) */}
+              {/* MC: validar (firmado) — requiere PIN (B-03) */}
               {estado === "firmado" && (
                 <Button
                   variant="secondary"
-                  onClick={handleValidar}
-                  disabled={validarMutation.isPending}
+                  onClick={() => { setActionError(null); setPendingAction("validar"); }}
                 >
-                  {validarMutation.isPending ? "Validando…" : "Validar (MC)"}
+                  Validar (MC)
                 </Button>
               )}
 
@@ -369,6 +358,17 @@ export default function CertDefDetailPage() {
       )}
 
       {/* Dialogs PIN */}
+      {pendingAction === "validar" && (
+        <PinDialog
+          titulo="Validar Certificado de Defunción (MC) — B-03"
+          onConfirm={async (pin) => {
+            await validarMutation.mutateAsync({ id, firmaPin: pin });
+            await utils.eceCertDef.get.invalidate({ id });
+            setPendingAction(null);
+          }}
+          onCancel={() => setPendingAction(null)}
+        />
+      )}
       {pendingAction === "firmar" && (
         <PinDialog
           titulo="Firmar Certificado de Defunción (MC)"

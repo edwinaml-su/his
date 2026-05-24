@@ -220,33 +220,33 @@ export default function HojaIngresoDetallePage({
               {dateFmt.format(new Date(hoja.fecha_hora_ingreso))}
             </DataField>
             <DataField label="Modalidad">
-              <span className="capitalize">{hoja.modalidad}</span>
+              <span className="capitalize">{hoja.datos_administrativos?.modalidad}</span>
             </DataField>
-            <DataField label="Procedencia">{hoja.procedencia}</DataField>
+            <DataField label="Procedencia">{hoja.datos_administrativos?.procedencia}</DataField>
             <DataField label="Orden de ingreso">
               <span className="font-mono text-xs">{hoja.orden_ingreso_id}</span>
             </DataField>
             <DataField label="Servicio">
-              <span className="font-mono text-xs">{hoja.servicio_ingreso_id}</span>
+              <span className="font-mono text-xs">{hoja.servicio_id}</span>
             </DataField>
-            {hoja.cama_asignada_id && (
+            {hoja.cama_id && (
               <DataField label="Cama asignada">
-                <span className="font-mono text-xs">{hoja.cama_asignada_id}</span>
+                <span className="font-mono text-xs">{hoja.cama_id}</span>
               </DataField>
             )}
-            {hoja.diagnostico_ingreso && (
+            {hoja.datos_administrativos?.diagnosticoIngreso && (
               <DataField label="Diagnóstico de ingreso" className="sm:col-span-2">
-                {hoja.diagnostico_ingreso}
+                {hoja.datos_administrativos.diagnosticoIngreso}
               </DataField>
             )}
-            {hoja.motivo_consulta && (
+            {hoja.datos_administrativos?.motivoConsulta && (
               <DataField label="Motivo de consulta" className="sm:col-span-2">
-                {hoja.motivo_consulta}
+                {hoja.datos_administrativos.motivoConsulta}
               </DataField>
             )}
-            {hoja.notas_adicionales && (
+            {hoja.datos_administrativos?.notasAdicionales && (
               <DataField label="Notas adicionales" className="sm:col-span-2">
-                <pre className="whitespace-pre-wrap text-sm">{hoja.notas_adicionales}</pre>
+                <pre className="whitespace-pre-wrap text-sm">{hoja.datos_administrativos.notasAdicionales}</pre>
               </DataField>
             )}
           </dl>

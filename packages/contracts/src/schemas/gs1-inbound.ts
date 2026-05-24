@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { validateGtinChecksum } from "../validators/gs1";
+import { validateGtinChecksum, gs1CheckDigitValid } from "../validators/gs1";
 
 // ---------------------------------------------------------------------------
 // Producto escaneado en muelle: un ítem dentro del JSONB `productos`

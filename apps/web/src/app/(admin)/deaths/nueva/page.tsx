@@ -61,6 +61,7 @@ type LugarDef = typeof LUGAR_OPTIONS[number]["value"];
 
 interface FormState {
   episodioId: string;
+  epicrisisId: string;
   fechaHoraDefuncion: string;
   lugarDefuncion: LugarDef | "";
   causaPrincipalCie10: string;
@@ -73,6 +74,7 @@ interface FormState {
 
 const EMPTY_FORM: FormState = {
   episodioId: "",
+  epicrisisId: "",
   fechaHoraDefuncion: "",
   lugarDefuncion: "",
   causaPrincipalCie10: "",
@@ -103,6 +105,7 @@ function parseCausasIntermedias(raw: string): string[] {
 
 interface FieldErrors {
   episodioId?: string;
+  epicrisisId?: string;
   fechaHoraDefuncion?: string;
   lugarDefuncion?: string;
   causaPrincipalCie10?: string;
@@ -115,6 +118,7 @@ function validate(form: FormState): FieldErrors {
   const errors: FieldErrors = {};
 
   if (!form.episodioId.trim()) errors.episodioId = "Requerido.";
+  if (!form.epicrisisId.trim()) errors.epicrisisId = "Requerido.";
 
   if (!form.fechaHoraDefuncion) {
     errors.fechaHoraDefuncion = "Requerido.";
@@ -221,8 +225,9 @@ export default function DeathsNuevaPage() {
 
     create.mutate({
       episodioId: form.episodioId.trim(),
+      epicrisisId: form.epicrisisId.trim(),
       fechaHoraDefuncion: new Date(form.fechaHoraDefuncion),
-      lugarDefuncion: form.lugarDefuncion as LugarDef,
+      lugarDefuncion: form.lugarDefuncion as "intrahospitalaria" | "extrahospitalaria",
       causaPrincipalCie10: form.causaPrincipalCie10.trim().toUpperCase(),
       causaBasicaCie10: form.causaBasicaCie10.trim().toUpperCase(),
       causasIntermediasCie10: parseCausasIntermedias(form.causasIntermediasCie10),
@@ -267,6 +272,25 @@ export default function DeathsNuevaPage() {
               {fieldErrors.episodioId && (
                 <p id="episodioId-err" className="text-xs text-destructive">
                   {fieldErrors.episodioId}
+                </p>
+              )}
+            </div>
+
+            {/* Epicrisis — B-04: debe tener tipo_egreso = 'fallecido' */}
+            <div className="space-y-1.5">
+              <Label htmlFor="epicrisisId">ID de epicrisis (UUID)</Label>
+              <Input
+                id="epicrisisId"
+                value={form.epicrisisId}
+                onChange={(e) => set("epicrisisId", e.target.value)}
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                aria-invalid={Boolean(fieldErrors.epicrisisId)}
+                aria-describedby={fieldErrors.epicrisisId ? "epicrisisId-err" : undefined}
+                className="font-mono text-sm"
+              />
+              {fieldErrors.epicrisisId && (
+                <p id="epicrisisId-err" className="text-xs text-destructive">
+                  {fieldErrors.epicrisisId}
                 </p>
               )}
             </div>

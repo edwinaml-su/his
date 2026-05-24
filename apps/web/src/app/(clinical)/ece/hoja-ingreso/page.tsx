@@ -174,7 +174,7 @@ export default function HojaIngresoListPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Paciente</TableHead>
+                  <TableHead>Episodio</TableHead>
                   <TableHead>Modalidad</TableHead>
                   <TableHead>Fecha/hora</TableHead>
                   <TableHead>Estado</TableHead>
@@ -185,9 +185,9 @@ export default function HojaIngresoListPage() {
                 {items.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">
-                      {r.paciente_id.slice(0, 8)}…
+                      {r.episodio_id.slice(0, 8)}…
                     </TableCell>
-                    <TableCell className="capitalize">{r.modalidad}</TableCell>
+                    <TableCell className="capitalize">{r.datos_administrativos?.modalidad}</TableCell>
                     <TableCell className="tabular-nums text-xs">
                       {dateFmt.format(new Date(r.fecha_hora_ingreso))}
                     </TableCell>
