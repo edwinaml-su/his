@@ -22,7 +22,10 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
+import { Tabs, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
+
+type Scope = "MINE" | "TEAM" | "ALL";
 
 type Priority = "CRITICAL" | "HIGH" | "NORMAL" | "LOW";
 
@@ -113,6 +116,7 @@ function fmtRemaining(min: number | null): string {
 export default function TareasPage() {
   const [selectedTypes, setSelectedTypes] = React.useState<Set<string>>(new Set());
   const [onlyOverdue, setOnlyOverdue] = React.useState(false);
+  const [scope, setScope] = React.useState<Scope>("MINE");
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
@@ -120,6 +124,7 @@ export default function TareasPage() {
     {
       types: selectedTypes.size > 0 ? Array.from(selectedTypes) : undefined,
       onlyOverdue,
+      scope,
       limit: 200,
     },
     { refetchInterval: 30_000, refetchOnWindowFocus: true },
@@ -150,10 +155,16 @@ export default function TareasPage() {
         <div className="space-y-1">
           <h1 className="flex items-center gap-2 text-2xl font-bold">
             <Inbox className="h-6 w-6" />
-            Mi bandeja de tareas
+            {scope === "MINE"
+              ? "Mi bandeja de tareas"
+              : scope === "TEAM"
+                ? "Tareas del equipo"
+                : "Cola completa (admin)"}
           </h1>
           <p className="text-sm text-muted-foreground">
-            Tareas BPM enrutadas según tus roles activos.
+            {scope === "MINE" && "Tareas BPM enrutadas según tus roles activos."}
+            {scope === "TEAM" && "Todas las tareas que tu equipo puede ejecutar (mismos roles que tú)."}
+            {scope === "ALL" && "Vista supervisora — todas las tareas pendientes de la organización."}
             {data ? (
               <>
                 {" — "}
@@ -187,6 +198,14 @@ export default function TareasPage() {
           )}
         </div>
       </div>
+
+      <Tabs value={scope} onValueChange={(v) => setScope(v as Scope)}>
+        <TabsList>
+          <TabsTrigger value="MINE">Mis tareas</TabsTrigger>
+          <TabsTrigger value="TEAM">Mi equipo</TabsTrigger>
+          <TabsTrigger value="ALL">Cola completa (admin)</TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {counts.length > 0 && (
         <Card>
