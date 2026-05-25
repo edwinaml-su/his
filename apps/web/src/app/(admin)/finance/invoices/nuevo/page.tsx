@@ -40,6 +40,19 @@ function emptyLine(): ItemLine {
   return { description: "", quantity: "1", unitPrice: "0", costCenterId: "", serviceUnitId: "" };
 }
 
+type TarifarioItem = {
+  id: string;
+  priceListName: string;
+  code: string | null;
+  description: string;
+  unitPrice: string;
+  estimatedCost: string | null;
+  serviceUnitId: string | null;
+  suggestedCostCenterId: string | null;
+  costCenterCode: string | null;
+  costCenterName: string | null;
+};
+
 type CostCenter = { id: string; code: string; name: string };
 
 export default function NuevaFacturaPage() {
@@ -61,11 +74,13 @@ export default function NuevaFacturaPage() {
   const costCentersQuery = trpcAny.invoice.listCostCenters.useQuery();
   const currenciesQuery = trpcAny.currency.list.useQuery();
   const insurersQuery = trpcAny.insurance.insurer.list.useQuery({ limit: 200 });
+  const tarifarioItemsQuery = trpcAny.servicePriceList.listActiveItems.useQuery();
 
   const costCenters: CostCenter[] = costCentersQuery.data ?? [];
   const currencies: { id: string; isoCode: string; name: string }[] =
     currenciesQuery.data ?? [];
   const insurers: { id: string; name: string }[] = insurersQuery.data ?? [];
+  const tarifarioItems: TarifarioItem[] = tarifarioItemsQuery.data ?? [];
 
   const createMutation = trpcAny.invoice.create.useMutation({
     onSuccess: (data: { id: string; invoiceNumber: string }) => {
@@ -101,6 +116,22 @@ export default function NuevaFacturaPage() {
   function removeLine(idx: number) {
     if (items.length === 1) return; // siempre al menos 1 línea
     setItems((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function applyTarifarioItem(lineIdx: number, item: TarifarioItem) {
+    setItems((prev) =>
+      prev.map((it, i) =>
+        i === lineIdx
+          ? {
+              ...it,
+              description: item.description,
+              unitPrice: String(Number(item.unitPrice)),
+              costCenterId: item.suggestedCostCenterId ?? it.costCenterId,
+              serviceUnitId: item.serviceUnitId ?? it.serviceUnitId,
+            }
+          : it,
+      ),
+    );
   }
 
   function validate(): string | null {
@@ -238,7 +269,8 @@ export default function NuevaFacturaPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           {/* Header row */}
-          <div className="hidden grid-cols-[1fr_80px_100px_200px_100px_40px] gap-2 text-xs font-medium text-muted-foreground sm:grid">
+          <div className="hidden grid-cols-[180px_1fr_80px_100px_200px_100px_40px] gap-2 text-xs font-medium text-muted-foreground sm:grid">
+            <span>Tarifario</span>
             <span>Descripción *</span>
             <span>Cantidad</span>
             <span>Precio unit.</span>
@@ -252,8 +284,30 @@ export default function NuevaFacturaPage() {
             return (
               <div
                 key={idx}
-                className="grid grid-cols-1 gap-2 rounded-md border p-2 sm:grid-cols-[1fr_80px_100px_200px_100px_40px] sm:border-none sm:p-0"
+                className="grid grid-cols-1 gap-2 rounded-md border p-2 sm:grid-cols-[180px_1fr_80px_100px_200px_100px_40px] sm:border-none sm:p-0"
               >
+                {/* Selector de tarifario — auto-llena descripción, precio y centro */}
+                <Select
+                  value="none"
+                  onValueChange={(v) => {
+                    if (v === "none") return;
+                    const item = tarifarioItems.find((i) => i.id === v);
+                    if (item) applyTarifarioItem(idx, item);
+                  }}
+                >
+                  <SelectTrigger className="text-xs">
+                    <SelectValue placeholder="Cargar desde tarifario" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— cargar desde tarifario —</SelectItem>
+                    {tarifarioItems.map((ti) => (
+                      <SelectItem key={ti.id} value={ti.id}>
+                        {ti.code ? `[${ti.code}] ` : ""}{ti.description}
+                        {ti.costCenterCode ? ` · ${ti.costCenterCode}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <Input
                   placeholder="Descripción del servicio"
                   value={it.description}

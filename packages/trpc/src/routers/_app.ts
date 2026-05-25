@@ -199,6 +199,10 @@ import { operatingCostRouter } from "./operating-cost.router";
 import { allocationRuleRouter } from "./allocation-rule.router";
 // Wave 9 — Reportes Financieros + Regulatorios MINSAL (spec §8)
 import { financeReportsRouter } from "./finance-reports.router";
+// Wave 11 — Tarifario de Servicios
+import { servicePriceListRouter } from "./service-price-list.router";
+// Wave 11 — Finance Overview KPIs (landing /finance)
+import { financeOverviewRouter } from "./finance-overview.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -400,6 +404,10 @@ export const appRouter = router({
   allocationRule: allocationRuleRouter,
   // Wave 9 — Reportes Financieros + Regulatorios MINSAL (spec §8)
   financeReports: financeReportsRouter,
+  // Wave 11 — Tarifario de Servicios
+  servicePriceList: servicePriceListRouter,
+  // Wave 11 — Finance Overview KPIs (landing /finance)
+  financeOverview: financeOverviewRouter,
 });
 
 export type AppRouter = typeof appRouter;
