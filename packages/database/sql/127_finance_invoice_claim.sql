@@ -84,6 +84,8 @@ CREATE POLICY invoice_tenant_isolation ON "Invoice"
   WITH CHECK ("organizationId" = COALESCE(current_setting('app.current_org_id', true), '')::uuid);
 
 -- ─── InvoiceItem ────────────────────────────────────────────────────────────
+-- NOTA: costCenterId es OBLIGATORIO (ver 128_cost_center_table_and_invoice_fk.sql).
+-- Sin centro de costo no es posible análisis presupuestario / margen por área.
 CREATE TABLE IF NOT EXISTS "InvoiceItem" (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "invoiceId"     uuid NOT NULL REFERENCES "Invoice"(id) ON DELETE CASCADE,
@@ -92,7 +94,7 @@ CREATE TABLE IF NOT EXISTS "InvoiceItem" (
   "unitPrice"     numeric(14,2) NOT NULL DEFAULT 0,
   "totalPrice"    numeric(14,2) NOT NULL DEFAULT 0,
   "serviceUnitId" uuid REFERENCES "ServiceUnit"(id) ON DELETE SET NULL,
-  "costCenterId"  uuid REFERENCES "CostCenter"(id) ON DELETE SET NULL,
+  "costCenterId"  uuid NOT NULL REFERENCES "CostCenter"(id) ON DELETE RESTRICT,
   "estimatedCost" numeric(14,2),
   "createdAt"     timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT invoice_item_qty_chk CHECK (quantity > 0 AND "unitPrice" >= 0 AND "totalPrice" >= 0)
