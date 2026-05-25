@@ -1,10 +1,14 @@
 # 31 — Flujos Operativos Consolidados (HIS Multipaís Avante)
 
+> **Última actualización:** 2026-05-25 — sincronizado contra `ece.tipo_documento` en Supabase prod y contra implementación real en `packages/trpc/src/routers/ece/` + `apps/web/src/app/(clinical)/ece/`.
+>
 > **Fuente de verdad** para el motor de workflow data-driven (`ece.tipo_documento` + `ece.flujo_estado` + `ece.flujo_transicion`).
 >
 > Este documento es el **índice maestro** que el módulo `/admin/workflow-designer` lee para visualizar y permitir la edición de los flujos clínicos NTEC (Acuerdo MINSAL 1616/2024) implementados en el HIS.
 >
 > Cada flujo tiene su propia ficha en `docs/flujos/{CODIGO}.md` con: metadata, propósito normativo, dependencias, obligatoriedad por modalidad, roles firmantes, campos obligatorios, estados, transiciones, eventos de dominio, drift conocido y descripción rica markdown (esta última se siembra en `ece.tipo_documento.descripcion_markdown` y se renderiza en el workflow designer).
+>
+> **Resumen del estado:** 31 tipos sembrados en BD · 30 fichas MD · **27 documentos con implementación funcional completa** (router + UI + ficha) · **4 gaps** identificados ([CERT_INC](#gaps-de-implementaci%C3%B3n-verificado-2026-05-25), DOC_ASOC, DOC_OBST, ORD_ING).
 
 ---
 
@@ -165,16 +169,64 @@ BIT (transversal AUTOMATICO sobre todas las operaciones — cadena SHA-256)
 
 ---
 
-## Estado de implementación (resumen Phase 1)
+## Estado de implementación
 
-| Fase | Descripción | Estado |
+| Fase | Descripción | Estado | PR |
+|---|---|---|---|
+| **Phase 1** | Documentación NTEC consolidada (30 fichas) | ✅ Completada 2026-05-22 | [#211](https://github.com/edwinaml-su/his/pull/211) |
+| **Phase 2** | Seed `ece.tipo_documento` (31 tipos) + `flujo_estado` (152) + `flujo_transicion` (120) + `descripcion_markdown` (31/31) | ✅ Completada 2026-05-22 | [#212](https://github.com/edwinaml-su/his/pull/212) |
+| **Phase 3** | UI extensions: grafo `depende_de` (ReactFlow) + WYSIWYG TipTap en workflow-designer | ✅ Completada 2026-05-22 | [#213](https://github.com/edwinaml-su/his/pull/213) |
+| **Phase 4** | Server enforcement: `fn_assert_dependencias_firmadas` (trigger BEFORE INSERT) + helper TS `assertDependenciasFirmadas()` | ✅ Completada 2026-05-22 | [#214](https://github.com/edwinaml-su/his/pull/214) |
+| **Phase 5** | UI wizard "próximos documentos" integrado en `/ece/episodio-hospitalario/[id]` | ✅ Completada 2026-05-22 | [#215](https://github.com/edwinaml-su/his/pull/215) |
+| **Phase 6** | Overrides por establecimiento (`ece.tipo_documento_establecimiento`) + UI DIR | ✅ Completada 2026-05-22 | [#216](https://github.com/edwinaml-su/his/pull/216) |
+
+---
+
+## Mapeo de códigos MD ↔ BD
+
+El índice de fichas usa nombres "didácticos" del documento NTEC. En BD (`ece.tipo_documento.codigo`) se usan abreviaturas técnicas. Mapping vigente:
+
+| Código en ficha MD | Código real en BD | Razón |
 |---|---|---|
-| **Phase 1** | Documentación NTEC consolidada (30 fichas) | ✅ Completada 2026-05-22 |
-| **Phase 2** | Seed `ece.tipo_documento` + `flujo_estado` + `flujo_transicion` + `descripcion_markdown` desde estas fichas | ⏳ Pendiente |
-| **Phase 3** | UI extensions: grafo de `depende_de` visual + WYSIWYG (TipTap) en workflow-designer | ⏳ Pendiente |
-| **Phase 4** | Server enforcement: validar `depende_de` firmadas antes de `documento_instancia.crear` (PRECONDITION_FAILED) | ⏳ Pendiente |
-| **Phase 5** | UI wizard por episodio guiando la secuencia obligada | ⏳ Pendiente |
-| **Phase 6** | Overrides por establecimiento (`ece.tipo_documento_establecimiento`) controlados por DIR | ⏳ Pendiente |
+| `FICHA_IDENT` | `FICHA_ID` | Abreviatura técnica |
+| `HC_AMB` | `HIST_CLIN` | BD usa el genérico (ambulatorio y hospitalario comparten estructura) |
+| `NEV` | `EVOL_MED` | BD unifica nota de evolución y evolución médica |
+| `EPI_EGR` | `EPICRISIS` | BD usa el término clínico canónico |
+| `PREOP` | `PREOP_CHECK` | BD enfatiza que es checklist |
+| `SV` | `SIG_VIT` | Abreviatura técnica |
+| `RRI_HOS` | `RRI` | BD generaliza (no solo hospitalización) |
+| `SALA_EXP` | `SALA_EXPULSION` | BD nombre completo |
+| `WHO_CHECK` | `WHO_CHK` | Abreviatura técnica |
+| `ACT_QX` | `ACTO_QX` | BD nombre completo |
+
+> El workflow-designer en `/admin/workflow-designer` muestra el **código BD**. Las fichas MD conservan su slug original para no romper enlaces — pero el sembrado vincula ambos vía `descripcion_markdown`.
+
+---
+
+## Gaps de implementación (verificado 2026-05-25)
+
+Códigos sembrados en BD que **NO tienen router tRPC dedicado, ni UI propia, ni ficha MD**. Son documentos NTEC presentes en el catálogo pero pendientes de implementación funcional:
+
+| Código BD | Documento | Modalidad | Estado actual | Pendiente |
+|---|---|---|---|---|
+| **`CERT_INC`** ⚠ | Certificado de Incapacidad ISSS | ambos | Solo schema + seed BD | Router + UI + ficha MD — específico SLV (ISSS); ver TDR §17 |
+| **`DOC_ASOC`** ⚠ | Documentos Clínicos Asociados (adjuntos genéricos) | ambos | Solo schema + seed BD | Router + UI uploader + ficha MD |
+| **`DOC_OBST`** ⚠ | Documentos Obstétricos (wrapper genérico) | hospitalario | Solo schema + seed BD; los específicos PARTOGRAMA/SALA_EXP/ATN_RN/NRP **sí** están implementados | Decidir si retirar el wrapper o convertirlo en agregador |
+| **`ORD_ING`** ⚠ | Orden de Ingreso | hospitalario | Cubierto operacionalmente por `HOJA_ING` (router + UI); BD lo conserva como tipo aparte | Decidir si retirar el tipo BD o crear flujo separado (orden médica → admisión administrativa) |
+
+**Códigos en ficha MD pero sin tipo BD propio** (transversales o acciones, no documentos firmables independientes):
+- `CERT_DIR` — implementado vía `certificacion.router.ts` como acción sobre EPI_EGR / CERT_DEF.
+- `BIT` — automático del sistema (cadena SHA-256), no genera `documento_instancia`.
+- `RECT` — transversal, implementado vía `ece-rectificacion.router.ts` sobre cualquier documento firmado.
+
+### Plan recomendado
+
+1. **CERT_INC** — sprint dedicado JCI/SLV (alto valor para acreditación ISSS). Estimado: 8 SP (schema ya está, falta router + UI + ficha).
+2. **DOC_ASOC** — sprint UX corto (uploader + metadata mínima). Estimado: 5 SP.
+3. **DOC_OBST + ORD_ING** — decisión arquitectónica antes de implementar:
+   - Opción A: retirar del catálogo BD vía migración (los flujos reales ya están cubiertos).
+   - Opción B: convertir en agregadores que renderizan documentos hijos.
+   - Pendiente de RFC con @AS / @PO.
 
 ---
 
