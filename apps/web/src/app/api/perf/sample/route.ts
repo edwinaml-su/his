@@ -37,9 +37,12 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser();
     const orgId = cookies().get(HIS_COOKIES.ORG_COOKIE)?.value ?? null;
 
+    // Casts ::uuid explícitos: Postgres no infiere el tipo de los placeholders
+    // de $executeRawUnsafe, y "userId"/"organizationId" son uuid columns.
+    // Sin el cast: ERROR 42804 "column is of type uuid but expression is of type text".
     await prisma.$executeRawUnsafe(
       `INSERT INTO "PerformanceSample" (route, kind, duration_ms, "userId", "organizationId")
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES ($1, $2, $3, $4::uuid, $5::uuid)`,
       body.route.slice(0, 200),
       body.kind.slice(0, 40),
       body.durationMs,
