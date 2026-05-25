@@ -612,7 +612,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Barras severidad × org",
     clasificacion: "operativo_estrategico",
     responsable: "Dirección TI / Soporte",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -644,7 +644,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Barras org × trimestre",
     clasificacion: "estrategico",
     responsable: "Dirección TI / Gobierno HIS",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
