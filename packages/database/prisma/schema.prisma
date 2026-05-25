@@ -2366,11 +2366,17 @@ model EncounterDiagnosis {
 // §11 Inpatient — Hospitalización (Wave 7 / Phase 2 entry)
 // =============================================================================
 
+/// ISSS MNP-S-138 — los 3 hitos del ciclo hospitalario.
+/// Spec: docs/36_admision_vs_ingreso_isss.md
 enum InpatientStatus {
-  ACTIVE
-  ON_LEAVE
-  DISCHARGED
-  TRANSFERRED_OUT
+  ADMISSION_DECIDED   /// Hito 1: médico indicó ingreso, sin cama
+  BED_ASSIGNED        /// Hito 2: cama reservada, sin recibir paciente
+  ACTIVE              /// Hito 3: paciente físicamente en sala (inicia día-cama)
+  DISCHARGE_PENDING   /// alta firmada, esperando salida administrativa
+  ON_LEAVE            /// permiso pase domiciliario
+  CANCELLED           /// admisión revertida pre-recepción física
+  DISCHARGED          /// alta efectiva (terminal)
+  TRANSFERRED_OUT     /// transferido a otra org (terminal)
 
   @@schema("public")
 }
@@ -2400,6 +2406,19 @@ model InpatientAdmission {
   notes           String?         @db.Text
   // Wave 10 — imputación a centro de costo productivo (migration cost_center_id_clinical_modules_2026_05_25)
   costCenterId    String?         @db.Uuid
+  // ISSS MNP-S-138 — los 3 hitos del ciclo hospitalario (migration 136_admision_vs_ingreso_isss.sql)
+  // Hito 1: decisión clínica
+  admissionDecidedAt    DateTime? @db.Timestamptz()
+  admissionDecidedById  String?   @db.Uuid
+  // Hito 2: asignación operativa de cama
+  bedAssignedAt         DateTime? @db.Timestamptz()
+  bedAssignedById       String?   @db.Uuid
+  bedId                 String?   @db.Uuid
+  // Hito 3: recepción física (INICIA DÍA-CAMA, Norma General 6)
+  physicalAdmittedAt    DateTime? @db.Timestamptz()
+  physicalAdmittedById  String?   @db.Uuid
+  wristbandPlacedAt     DateTime? @db.Timestamptz()
+  admissionFormNumber   String?   @db.VarChar(40) /// SAFISSS 130201132
   createdAt       DateTime        @default(now()) @db.Timestamptz()
   createdBy       String?         @db.Uuid
   updatedAt       DateTime        @updatedAt @db.Timestamptz()

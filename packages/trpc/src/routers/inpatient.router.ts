@@ -20,6 +20,10 @@ import {
   inpatientAdmissionGoOnLeaveInput,
   inpatientAdmissionReturnFromLeaveInput,
   inpatientAdmissionTransferOutInput,
+  inpatientDecidirAdmisionInput,
+  inpatientAsignarCamaInput,
+  inpatientConfirmarRecepcionFisicaInput,
+  inpatientCancelarPreCamaInput,
   inpatientVitalsRecordInput,
   inpatientKardexCreateInput,
   inpatientCarePlanCreateInput,
@@ -199,6 +203,201 @@ export const inpatientRouter = router({
           }
 
           return admission;
+        });
+      }),
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ISSS MNP-S-138 — los 3 hitos del ciclo hospitalario
+    // Spec: docs/36_admision_vs_ingreso_isss.md
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Hito 1 — Decidir admisión. El médico indica el ingreso del paciente,
+     * sin asignar cama todavía. status=ADMISSION_DECIDED.
+     */
+    decidirAdmision: tenantProcedure
+      .input(inpatientDecidirAdmisionInput)
+      .mutation(async ({ ctx, input }) => {
+        const enc = await ctx.prisma.encounter.findFirst({
+          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
+          select: { id: true, patientId: true },
+        });
+        if (!enc) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe." });
+        }
+        if (enc.patientId !== input.patientId) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide." });
+        }
+        const now = new Date();
+        return ctx.prisma.inpatientAdmission.create({
+          data: {
+            organizationId: ctx.tenant.organizationId,
+            establishmentId: input.establishmentId,
+            encounterId: input.encounterId,
+            patientId: input.patientId,
+            attendingId: input.attendingId,
+            reason: input.reason,
+            expectedLos: input.expectedLos ?? null,
+            notes: input.notes ?? null,
+            costCenterId: input.costCenterId ?? null,
+            status: "ADMISSION_DECIDED",
+            admissionDecidedAt: now,
+            admissionDecidedById: ctx.user.id,
+            // admittedAt requerido en schema legacy — usamos `now` como placeholder
+            // hasta que se confirme la recepción física (que lo sobrescribe).
+            admittedAt: now,
+            createdBy: ctx.user.id,
+          },
+        });
+      }),
+
+    /**
+     * Hito 2 — Asignar cama. status: ADMISSION_DECIDED → BED_ASSIGNED.
+     * La cama debe estar FREE; pasa a estado lógico (no se cambia su `status`
+     * a OCCUPIED hasta el Hito 3 — recepción física).
+     */
+    asignarCama: tenantProcedure
+      .input(inpatientAsignarCamaInput)
+      .mutation(async ({ ctx, input }) => {
+        const adm = await ctx.prisma.inpatientAdmission.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+        });
+        if (!adm) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        if (!canTransitionInpatient(adm.status as InpatientStatusType, "BED_ASSIGNED")) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Transición ${adm.status} → BED_ASSIGNED no permitida.`,
+          });
+        }
+        const bed = await ctx.prisma.bed.findFirst({
+          where: {
+            id: input.bedId,
+            organizationId: ctx.tenant.organizationId,
+            active: true,
+          },
+          select: { id: true, status: true, establishmentId: true },
+        });
+        if (!bed) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Cama no existe." });
+        }
+        if (bed.status !== "FREE") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Cama no disponible (status=${bed.status}).`,
+          });
+        }
+        if (bed.establishmentId !== adm.establishmentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La cama pertenece a otro establecimiento.",
+          });
+        }
+        return ctx.prisma.inpatientAdmission.update({
+          where: { id: input.id },
+          data: {
+            status: "BED_ASSIGNED",
+            bedId: input.bedId,
+            bedAssignedAt: new Date(),
+            bedAssignedById: ctx.user.id,
+            notes: input.reason
+              ? `${adm.notes ?? ""}\n[Cama asignada] ${input.reason}`.trim()
+              : adm.notes,
+            updatedBy: ctx.user.id,
+          },
+        });
+      }),
+
+    /**
+     * Hito 3 — Confirmar recepción física. INICIA EL DÍA-CAMA (Norma General 6).
+     * status: BED_ASSIGNED → ACTIVE. Marca la cama como OCCUPIED y crea
+     * el BedAssignment legacy para compat con módulos existentes.
+     */
+    confirmarRecepcionFisica: tenantProcedure
+      .input(inpatientConfirmarRecepcionFisicaInput)
+      .mutation(async ({ ctx, input }) => {
+        const adm = await ctx.prisma.inpatientAdmission.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+        });
+        if (!adm) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Transición ${adm.status} → ACTIVE no permitida. Asigne cama primero.`,
+          });
+        }
+        if (!adm.bedId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No hay cama asignada para esta admisión.",
+          });
+        }
+        const now = new Date();
+        return ctx.prisma.$transaction(async (tx) => {
+          const updated = await tx.inpatientAdmission.update({
+            where: { id: input.id },
+            data: {
+              status: "ACTIVE",
+              physicalAdmittedAt: now,
+              physicalAdmittedById: ctx.user.id,
+              wristbandPlacedAt: input.wristbandPlaced ? now : null,
+              admissionFormNumber: input.admissionFormNumber ?? null,
+              // admittedAt legacy: se sobrescribe con el momento real de
+              // recepción física para que reportes legados sigan correctos.
+              admittedAt: now,
+              notes: input.notes
+                ? `${adm.notes ?? ""}\n[Recepción física] ${input.notes}`.trim()
+                : adm.notes,
+              updatedBy: ctx.user.id,
+            },
+          });
+          // Compat legacy: BedAssignment + Bed.status=OCCUPIED.
+          await tx.bedAssignment.create({
+            data: {
+              encounterId: adm.encounterId,
+              bedId: adm.bedId!,
+              reason: "Recepción física en sala (Hito 3 ISSS).",
+              createdBy: ctx.user.id,
+            },
+          });
+          await tx.bed.update({
+            where: { id: adm.bedId! },
+            data: { status: "OCCUPIED" },
+          });
+          return updated;
+        });
+      }),
+
+    /**
+     * Cancelación pre-cama: ADMISSION_DECIDED → CANCELLED.
+     * Solo permitido antes de asignar cama (la admisión no llegó a tener
+     * recursos comprometidos). El motivo es obligatorio para auditoría.
+     */
+    cancelarPreCama: tenantProcedure
+      .input(inpatientCancelarPreCamaInput)
+      .mutation(async ({ ctx, input }) => {
+        const adm = await ctx.prisma.inpatientAdmission.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+        });
+        if (!adm) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        if (adm.status !== "ADMISSION_DECIDED") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Solo se puede cancelar pre-cama desde ADMISSION_DECIDED. Estado actual: ${adm.status}.`,
+          });
+        }
+        return ctx.prisma.inpatientAdmission.update({
+          where: { id: input.id },
+          data: {
+            status: "CANCELLED",
+            notes: `${adm.notes ?? ""}\n[Cancelada pre-cama] ${input.reason}`.trim(),
+            updatedBy: ctx.user.id,
+          },
         });
       }),
 
