@@ -152,5 +152,65 @@ export async function computeCalidad(req: ComputeRequest): Promise<KpiValuesMap>
     result.dat_codificacion = null;
   }
 
+  // -- dat_hl7_fhir ---------------------------------------------------------
+  // Proxy: DomainEvent outbox como volumen de intercambios entre módulos.
+  // HL7/FHIR real requiere motor de integración externo. Mientras tanto,
+  // medimos % de DomainEvent procesados (dispatched=true) sobre total.
+  try {
+    type CountRow = { count: bigint };
+    const totalRows = await prisma.$queryRaw<CountRow[]>`
+      SELECT COUNT(*)::bigint AS count
+      FROM public."DomainEvent"
+      WHERE "createdAt" BETWEEN ${new Date(req.fechaDesde)} AND ${new Date(req.fechaHasta)}
+    `;
+    const procesadosRows = await prisma.$queryRaw<CountRow[]>`
+      SELECT COUNT(*)::bigint AS count
+      FROM public."DomainEvent"
+      WHERE "createdAt" BETWEEN ${new Date(req.fechaDesde)} AND ${new Date(req.fechaHasta)}
+        AND "dispatchedAt" IS NOT NULL
+    `;
+    const total = Number(totalRows[0]?.count ?? 0);
+    const procesados = Number(procesadosRows[0]?.count ?? 0);
+    if (total === 0) {
+      result.dat_hl7_fhir = null;
+    } else {
+      const v = (procesados / total) * 100;
+      result.dat_hl7_fhir = {
+        display: fmtUnidad(v, "%"),
+        semaforo: semaforoMayor(v, 99.5, 95),
+        delta: `${procesados}/${total} eventos procesados`,
+      };
+    }
+  } catch {
+    result.dat_hl7_fhir = null;
+  }
+
+  // -- dat_propagacion_maestros --------------------------------------------
+  // Tiempo promedio entre 2 últimas migrations aplicadas como proxy de
+  // velocidad de propagación de catálogos. Wave 3+ medirá con tabla
+  // dedicada de "broadcast events" cuando exista.
+  try {
+    const rows = await prisma.$queryRaw<{ finished_at: Date }[]>`
+      SELECT finished_at
+      FROM public._prisma_migrations
+      WHERE finished_at IS NOT NULL
+      ORDER BY finished_at DESC
+      LIMIT 2
+    `;
+    if (rows.length < 2) {
+      result.dat_propagacion_maestros = null;
+    } else {
+      const horas = (rows[0]!.finished_at.getTime() - rows[1]!.finished_at.getTime()) / 3_600_000;
+      result.dat_propagacion_maestros = {
+        display: fmtUnidad(horas, "horas"),
+        // Meta ≤ 24h
+        semaforo: horas <= 24 ? "verde" : horas <= 72 ? "ambar" : "rojo",
+        delta: "Entre últimas 2 migraciones",
+      };
+    }
+  } catch {
+    result.dat_propagacion_maestros = null;
+  }
+
   return result;
 }
