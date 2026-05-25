@@ -189,6 +189,10 @@ import { eceOrdenIngresoRouter } from "./ece/orden-ingreso.router";
 import { documentoAsociadoRouter } from "./ece/documento-asociado.router";
 // CERT_INC — Certificado de Incapacidad ISSS (ISSS Reglamento + NTEC §22)
 import { certificadoIncapacidadRouter } from "./ece/certificado-incapacidad.router";
+// Sprint UI Finance — Centros de Costo (TDR §23)
+import { costCenterRouter } from "./cost-center.router";
+// Finance — Invoice, InvoiceItem, InvoicePayment, InsuranceClaim (Wave 8b)
+import { invoiceRouter } from "./invoice.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -380,6 +384,10 @@ export const appRouter = router({
   eceDocAsoc: documentoAsociadoRouter,
   // CERT_INC — Certificado de Incapacidad ISSS (ISSS Reglamento + NTEC §22)
   eceCertificadoIncapacidad: certificadoIncapacidadRouter,
+  // Sprint UI Finance — Centros de Costo (TDR §23)
+  costCenter: costCenterRouter,
+  // Finance — Invoice (Wave 8b)
+  invoice: invoiceRouter,
 });
 
 export type AppRouter = typeof appRouter;
