@@ -123,7 +123,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Barras apiladas por proveedor",
     clasificacion: "estrategico",
     responsable: "Dirección de TI / Gestión de proveedores",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: true,
   },
   {
