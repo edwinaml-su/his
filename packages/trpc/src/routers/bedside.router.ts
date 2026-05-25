@@ -480,8 +480,8 @@ const administrationRouter = router({
 
         const storedHash = verifier[0].pin_hash;
         if (storedHash !== null) {
-          const { verify } = await import("argon2");
-          const pinOk = await verify(storedHash, input.doubleCheckPin);
+          const { argon2 } = await import("@his/infrastructure");
+          const pinOk = await argon2.verify(storedHash, input.doubleCheckPin);
           if (!pinOk) {
             throw new TRPCError({
               code: "UNAUTHORIZED",
@@ -494,8 +494,8 @@ const administrationRouter = router({
       // Hash del PIN para persistencia
       let doubleCheckPinHash: string | null = null;
       if (requiresDoubleCheck && input.doubleCheckPin) {
-        const { hash } = await import("argon2");
-        doubleCheckPinHash = await hash(input.doubleCheckPin);
+        const { argon2 } = await import("@his/infrastructure");
+        doubleCheckPinHash = await argon2.hash(input.doubleCheckPin);
       }
 
       const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
