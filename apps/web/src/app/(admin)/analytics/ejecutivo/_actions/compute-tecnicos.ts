@@ -95,8 +95,32 @@ export async function computeTecnicos(req: ComputeRequest): Promise<KpiValuesMap
   }
 
   // -- tec_sla_compliance --------------------------------------------------
-  // Requiere ITSM con clasificación SLA. No existe. Null hasta integración.
-  result.tec_sla_compliance = null;
+  // Proxy: % de transacciones procesadas sin SYSTEM_ERROR sobre el total.
+  // Mide la confiabilidad funcional del HIS (= cumplimiento del SLA implícito
+  // "sin error"). ITSM con clasificación de severidad por proveedor habilitaría
+  // la versión completa del KPI; este proxy es honesto contra audit_log.
+  try {
+    const [total, errors] = await Promise.all([
+      prisma.auditLog.count({
+        where: { occurredAt: { gte: desde, lte: hasta } },
+      }),
+      prisma.auditLog.count({
+        where: { occurredAt: { gte: desde, lte: hasta }, action: "SYSTEM_ERROR" },
+      }),
+    ]);
+    if (total === 0) {
+      result.tec_sla_compliance = null;
+    } else {
+      const pct = ((total - errors) / total) * 100;
+      result.tec_sla_compliance = {
+        display: fmtUnidad(pct, "%", 2),
+        semaforo: semaforoMayor(pct, 95, 90),
+        delta: `${errors} errores / ${total.toLocaleString("es-SV")} tx`,
+      };
+    }
+  } catch {
+    result.tec_sla_compliance = null;
+  }
 
   // -- tec_capacity_usage --------------------------------------------------
   // Proxy: % de transacciones procesadas vs umbral conservador (10k/día).
