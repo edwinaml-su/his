@@ -132,9 +132,12 @@ export async function applyPortalContext(
   portalAccountId: string,
   options: { demoteRole?: boolean } = {},
 ): Promise<void> {
+  // NOTA: PostgreSQL no acepta casts (`::`) en el RHS de `SET LOCAL` — provoca
+  // syntax error 42601. El valor se almacena como texto; las políticas RLS hacen
+  // current_setting('app.current_portal_account', true)::uuid donde corresponde.
   const id = String(portalAccountId).replace(/'/g, "''");
   await tx.$executeRawUnsafe(
-    `SET LOCAL "app.current_portal_account" = '${id}'::uuid::text;`,
+    `SET LOCAL "app.current_portal_account" = '${id}';`,
   );
   if (options.demoteRole !== false) {
     await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
