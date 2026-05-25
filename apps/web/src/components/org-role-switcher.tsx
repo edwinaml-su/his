@@ -128,20 +128,20 @@ export function OrgRoleSwitcher() {
   // ───────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex items-center gap-2">
-      {/* Selector de Organización */}
+    <div className="flex items-center gap-1 sm:gap-2">
+      {/* Selector de Organización — compacto en mobile (solo icono) */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="outline"
             size="sm"
-            className="max-w-[220px] justify-between gap-2"
+            className="h-9 max-w-[220px] justify-between gap-2 px-2 sm:px-3"
             disabled={pending}
             aria-label="Cambiar organización activa"
           >
             <span className="flex items-center gap-2 truncate">
               <Building2 className="h-4 w-4 shrink-0" aria-hidden />
-              <span className="truncate">{activeOrg?.name ?? "Sin organización"}</span>
+              <span className="hidden truncate sm:inline">{activeOrg?.name ?? "Sin organización"}</span>
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
           </Button>
@@ -174,22 +174,25 @@ export function OrgRoleSwitcher() {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Selector de Roles activos */}
+      {/* Selector de Roles activos — compacto en mobile */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
             variant="outline"
             size="sm"
-            className="max-w-[220px] justify-between gap-2"
+            className="h-9 max-w-[220px] justify-between gap-2 px-2 sm:px-3"
             disabled={pending || availableRoles.length === 0}
             aria-label="Seleccionar roles activos para esta sesión"
           >
             <span className="flex items-center gap-2 truncate">
               <ShieldCheck className="h-4 w-4 shrink-0" aria-hidden />
-              <span className="truncate">
+              <span className="hidden truncate sm:inline">
                 {effectiveActive.length === availableRoles.length
                   ? `Todos los roles (${effectiveActive.length})`
                   : `${effectiveActive.length} de ${availableRoles.length} roles`}
+              </span>
+              <span className="sm:hidden text-xs font-medium tabular-nums">
+                {effectiveActive.length}/{availableRoles.length}
               </span>
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden />
