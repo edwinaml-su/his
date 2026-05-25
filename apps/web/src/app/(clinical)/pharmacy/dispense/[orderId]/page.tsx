@@ -30,7 +30,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@his/ui/components/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+
+interface CostCenterOption {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface ScanFormState {
   gtin: string;
@@ -56,6 +69,30 @@ export default function GS1DispensePage(): React.ReactElement {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
+
+  // Centros de costo: carga todos los intermedios (2-XXX-XXX) + pre-selecciona 2-FAR-HOS.
+  const costCentersQuery = trpcAny.costCenter.list.useQuery(
+    { activo: true },
+    { staleTime: 60_000 },
+  );
+  const dispenseCostCenterOptions = React.useMemo(() => {
+    const all = (costCentersQuery.data ?? []) as CostCenterOption[];
+    return all.filter((cc) => cc.code.startsWith("2-"));
+  }, [costCentersQuery.data]);
+
+  const defaultDispenseCcId = React.useMemo(() => {
+    const all = (costCentersQuery.data ?? []) as CostCenterOption[];
+    return all.find((cc) => cc.code === "2-FAR-HOS")?.id ?? "";
+  }, [costCentersQuery.data]);
+
+  const [dispenseCostCenterId, setDispenseCostCenterId] = React.useState("");
+
+  // Pre-seleccionar 2-FAR-HOS en cuanto cargue.
+  React.useEffect(() => {
+    if (defaultDispenseCcId && !dispenseCostCenterId) {
+      setDispenseCostCenterId(defaultDispenseCcId);
+    }
+  }, [defaultDispenseCcId, dispenseCostCenterId]);
 
   const [form, setForm] = React.useState<ScanFormState>({
     gtin: "",
@@ -284,6 +321,25 @@ export default function GS1DispensePage(): React.ReactElement {
         </CardHeader>
         <CardContent>
           <Form onSubmit={(e) => void handleScan(e)}>
+            <FormField>
+              <Label htmlFor="dispense-cc">Centro de costo dispensador</Label>
+              <Select
+                value={dispenseCostCenterId}
+                onValueChange={setDispenseCostCenterId}
+                disabled={Boolean(reservationId)}
+              >
+                <SelectTrigger id="dispense-cc">
+                  <SelectValue placeholder="Sin asignar" />
+                </SelectTrigger>
+                <SelectContent>
+                  {dispenseCostCenterOptions.map((cc) => (
+                    <SelectItem key={cc.id} value={cc.id}>
+                      {cc.code} — {cc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
             <FormField>
               <Label htmlFor="gs1-gtin">
                 GTIN-14 <span className="text-destructive">*</span>

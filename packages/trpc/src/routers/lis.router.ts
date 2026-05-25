@@ -107,6 +107,8 @@ export const lisRouter = router({
             ...(input.priority && { priority: input.priority }),
             ...(input.status && { status: input.status }),
             ...(input.fromDate && { orderedAt: { gte: input.fromDate } }),
+            ...(input.costCenterId && { costCenterId: input.costCenterId }),
+            ...(input.ejecutorCostCenterId && { ejecutorCostCenterId: input.ejecutorCostCenterId }),
           },
           include: { items: { include: { test: true } } },
           orderBy: { orderedAt: "desc" },
@@ -141,6 +143,17 @@ export const lisRouter = router({
         if (enc.patientId !== input.patientId) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
         }
+
+        // Si no se envía ejecutorCostCenterId, resolver el laboratorio clínico por code.
+        let ejecutorId = input.ejecutorCostCenterId ?? null;
+        if (!ejecutorId) {
+          const labCli = await tx.costCenter.findFirst({
+            where: { organizationId: ctx.tenant.organizationId, code: "2-LAB-CLI" },
+            select: { id: true },
+          });
+          ejecutorId = labCli?.id ?? null;
+        }
+
         return tx.labOrder.create({
           data: {
             organizationId: ctx.tenant.organizationId,
@@ -150,6 +163,8 @@ export const lisRouter = router({
             priority: input.priority,
             status: "ORDERED",
             clinicalIndication: input.clinicalIndication ?? null,
+            costCenterId: input.costCenterId ?? null,
+            ejecutorCostCenterId: ejecutorId,
             items: {
               create: input.items.map((i) => ({ testId: i.testId, notes: i.notes ?? null })),
             },

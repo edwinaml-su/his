@@ -109,6 +109,10 @@ export const imagingOrderCreateInput = z.object({
   priority: imagingPriorityEnum.default("ROUTINE"),
   scheduledAt: z.coerce.date().optional(),
   notes: z.string().trim().max(4000).optional(),
+  /** UUID del centro de costo solicitante (productivo o intermedio). */
+  costCenterId: z.string().uuid().optional(),
+  /** UUID del centro ejecutor. Si no se envía, el router lo resuelve según modalidad. */
+  ejecutorCostCenterId: z.string().uuid().optional(),
 });
 
 export const imagingOrderListInput = z.object({
@@ -121,6 +125,10 @@ export const imagingOrderListInput = z.object({
   fromDate: z.coerce.date().optional(),
   toDate: z.coerce.date().optional(),
   limit: z.number().int().min(1).max(200).default(50),
+  /** Filtrar por centro solicitante. */
+  costCenterId: z.string().uuid().optional(),
+  /** Filtrar por centro ejecutor. */
+  ejecutorCostCenterId: z.string().uuid().optional(),
 });
 
 export const imagingOrderUpdateStatusInput = z

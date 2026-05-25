@@ -45,6 +45,10 @@ export const labOrderCreateInput = z.object({
   priority: labPriorityEnum.default("ROUTINE"),
   clinicalIndication: z.string().trim().max(2000).optional(),
   items: z.array(labOrderItemInput).min(1).max(50),
+  /** Centro de costo solicitante (productivo o intermedio). */
+  costCenterId: z.string().uuid().optional(),
+  /** Centro ejecutor. Si se omite, el router asigna el laboratorio clínico (code 2-LAB-CLI). */
+  ejecutorCostCenterId: z.string().uuid().optional(),
 });
 
 export const labOrderListInput = z.object({
@@ -54,6 +58,10 @@ export const labOrderListInput = z.object({
   status: labOrderStatusEnum.optional(),
   fromDate: z.coerce.date().optional(),
   limit: z.number().int().min(1).max(100).default(50),
+  /** Filtrar por centro solicitante. */
+  costCenterId: z.string().uuid().optional(),
+  /** Filtrar por centro ejecutor. */
+  ejecutorCostCenterId: z.string().uuid().optional(),
 });
 
 // JCI Standard: IPSG.1 ME 4 — toma de muestra bedside requiere 2 identificadores.

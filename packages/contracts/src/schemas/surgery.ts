@@ -64,6 +64,7 @@ export const surgeryCaseCreateInput = z
     scheduledEnd: z.coerce.date(),
     asaClass: asaClassEnum.optional(),
     preopNotes: z.string().trim().max(4000).optional(),
+    costCenterId: z.string().uuid().optional(),
   })
   .refine((d) => d.scheduledEnd > d.scheduledStart, {
     message: "scheduledEnd debe ser posterior a scheduledStart",
@@ -75,6 +76,7 @@ export const surgeryCaseListInput = z.object({
   primarySurgeonId: z.string().uuid().optional(),
   operatingRoomId: z.string().uuid().optional(),
   patientId: z.string().uuid().optional(),
+  costCenterId: z.string().uuid().optional(),
   fromDate: z.coerce.date().optional(),
   toDate: z.coerce.date().optional(),
   limit: z.number().int().min(1).max(200).default(50),

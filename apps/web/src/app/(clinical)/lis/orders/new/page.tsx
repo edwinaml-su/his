@@ -11,6 +11,10 @@
  *
  * Validaciones cliente: encounterId/patientId UUIDs, ≥1 test
  * seleccionado. La validación final ocurre server-side.
+ *
+ * Wave 10: campos costCenterId (solicitante) y ejecutorCostCenterId (ejecutor).
+ * El ejecutor se pre-selecciona automáticamente con el centro 2-LAB-CLI.
+ * Si el usuario no cambia la selección, el router también asigna el default.
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -48,10 +52,19 @@ interface LabOrderCreateInput {
   priority: LabPriority;
   clinicalIndication?: string;
   items: LabOrderItemInput[];
+  costCenterId?: string;
+  ejecutorCostCenterId?: string;
 }
 
 interface LabOrderCreated {
   id: string;
+}
+
+interface CostCenterRow {
+  id: string;
+  code: string;
+  name: string;
+  tipo: string | null;
 }
 
 interface LisAccess {
@@ -77,12 +90,24 @@ interface LisAccess {
   };
 }
 
+interface CostCenterAccess {
+  list: {
+    useQuery: (
+      input?: { tipo?: "productivo" | "intermedio" | "apoyo"; activo?: boolean },
+    ) => { data?: CostCenterRow[]; isLoading: boolean };
+  };
+}
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Código del laboratorio clínico — usado para pre-seleccionar ejecutor. */
+const LAB_CLI_CODE = "2-LAB-CLI";
 
 export default function NewLisOrderPage(): React.ReactElement {
   const router = useRouter();
   const lis = (trpc as unknown as { lis: LisAccess }).lis;
+  const costCenter = (trpc as unknown as { costCenter: CostCenterAccess }).costCenter;
 
   const [encounterId, setEncounterId] = React.useState("");
   const [patientId, setPatientId] = React.useState("");
@@ -92,6 +117,8 @@ export default function NewLisOrderPage(): React.ReactElement {
   const [debouncedSearch, setDebouncedSearch] = React.useState("");
   const [selected, setSelected] = React.useState<LabTestRow[]>([]);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
+  const [costCenterId, setCostCenterId] = React.useState<string>("");
+  const [ejecutorCostCenterId, setEjecutorCostCenterId] = React.useState<string>("");
 
   // Debounce 300ms para no spamear el endpoint mientras el usuario tipea.
   React.useEffect(() => {
@@ -103,6 +130,19 @@ export default function NewLisOrderPage(): React.ReactElement {
     { search: debouncedSearch || undefined, activeOnly: true, limit: 20 },
     { enabled: debouncedSearch.length > 0 },
   );
+
+  // Centros productivos + intermedios para el solicitante.
+  const solicitanteCenters = costCenter.list.useQuery({ activo: true });
+  // Centros intermedios para el ejecutor (solo tipo intermedio como 2-LAB-CLI).
+  const ejecutorCenters = costCenter.list.useQuery({ tipo: "intermedio", activo: true });
+
+  // Pre-seleccionar ejecutor con 2-LAB-CLI en cuanto se carguen los centros.
+  React.useEffect(() => {
+    if (ejecutorCenters.data && !ejecutorCostCenterId) {
+      const labCli = ejecutorCenters.data.find((c) => c.code === LAB_CLI_CODE);
+      if (labCli) setEjecutorCostCenterId(labCli.id);
+    }
+  }, [ejecutorCenters.data, ejecutorCostCenterId]);
 
   const create = lis.order.create.useMutation({
     onSuccess: () => {
@@ -143,8 +183,15 @@ export default function NewLisOrderPage(): React.ReactElement {
         clinicalIndication: clinicalIndication.trim(),
       }),
       items: selected.map((t) => ({ testId: t.id })),
+      ...(costCenterId && { costCenterId }),
+      ...(ejecutorCostCenterId && { ejecutorCostCenterId }),
     });
   }
+
+  // Filtra centros solicitantes a productivo + intermedio (excluye apoyo).
+  const centrosSolicitantes = (solicitanteCenters.data ?? []).filter(
+    (c) => c.tipo === "productivo" || c.tipo === "intermedio" || c.tipo === null,
+  );
 
   return (
     <div className="space-y-4">
@@ -217,6 +264,54 @@ export default function NewLisOrderPage(): React.ReactElement {
                 className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 placeholder="Sospecha clínica, diagnóstico de trabajo, etc."
               />
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="cost-center-solicitante">
+                Centro solicitante{" "}
+                <span className="text-xs text-muted-foreground">(opcional)</span>
+              </Label>
+              <Select
+                value={costCenterId}
+                onValueChange={setCostCenterId}
+                disabled={solicitanteCenters.isLoading}
+              >
+                <SelectTrigger id="cost-center-solicitante">
+                  <SelectValue placeholder="Seleccionar centro..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {centrosSolicitantes.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <span className="font-mono text-xs">{c.code}</span>
+                      <span className="ml-2">{c.name}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="cost-center-ejecutor">
+                Centro ejecutor{" "}
+                <span className="text-xs text-muted-foreground">(opcional — por defecto: {LAB_CLI_CODE})</span>
+              </Label>
+              <Select
+                value={ejecutorCostCenterId}
+                onValueChange={setEjecutorCostCenterId}
+                disabled={ejecutorCenters.isLoading}
+              >
+                <SelectTrigger id="cost-center-ejecutor">
+                  <SelectValue placeholder="Seleccionar centro ejecutor..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(ejecutorCenters.data ?? []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      <span className="font-mono text-xs">{c.code}</span>
+                      <span className="ml-2">{c.name}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </FormField>
 
             <FormField>

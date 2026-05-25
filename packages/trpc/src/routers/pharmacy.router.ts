@@ -200,6 +200,7 @@ export const pharmacyRouter = router({
             ...(input.patientId && { patientId: input.patientId }),
             ...(input.prescriberId && { prescriberId: input.prescriberId }),
             ...(input.fromDate && { prescribedAt: { gte: input.fromDate } }),
+            ...(input.costCenterId && { costCenterId: input.costCenterId }),
           },
           include: { items: { include: { drug: true } } },
           orderBy: { prescribedAt: "desc" },
@@ -236,6 +237,7 @@ export const pharmacyRouter = router({
             patientId: input.patientId,
             prescriberId: ctx.user.id,
             notes: input.notes ?? null,
+            ...(input.costCenterId && { costCenterId: input.costCenterId }),
             items: { create: input.items },
           },
           include: { items: true },
@@ -441,6 +443,17 @@ export const pharmacyRouter = router({
           });
         }
 
+        // Resolver centro de costo dispensador: usa el que viene en input o
+        // intenta auto-sugerir 2-FAR-HOS del tenant. Si no existe en BD, queda null.
+        let resolvedCostCenterId: string | null = input.costCenterId ?? null;
+        if (!resolvedCostCenterId) {
+          const farmaciaCc = await ctx.prisma.costCenter.findFirst({
+            where: { code: "2-FAR-HOS", organizationId: ctx.tenant.organizationId },
+            select: { id: true },
+          });
+          resolvedCostCenterId = farmaciaCc?.id ?? null;
+        }
+
         return ctx.prisma.medicationDispense.create({
           data: {
             prescriptionItemId: input.prescriptionItemId,
@@ -449,6 +462,7 @@ export const pharmacyRouter = router({
             batchNumber: input.batchNumber ?? null,
             expiryDate: input.expiryDate ?? null,
             notes: composeDispenseNotes(input),
+            ...(resolvedCostCenterId && { costCenterId: resolvedCostCenterId }),
           },
         });
       }),

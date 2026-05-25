@@ -57,6 +57,7 @@ export default function AdmissionPage() {
   // Step 2 — datos.
   const currencies = trpc.currency.list.useQuery();
   const services = trpc.bed.getMap.useQuery();
+  const costCentersQuery = trpc.costCenter.list.useQuery({ tipo: "productivo", activo: true });
   const serviceUnits = React.useMemo(
     () =>
       services.data?.map((s) => ({ id: s.id, code: s.code, name: s.name })) ??
@@ -67,6 +68,7 @@ export default function AdmissionPage() {
   const [data, setData] = React.useState<AdmissionFormState>({
     admissionType: "EMERGENCY",
     serviceUnitId: "",
+    costCenterId: "",
     currencyId: "",
     isReferral: false,
     referralOrigin: "",
@@ -109,6 +111,7 @@ export default function AdmissionPage() {
       serviceUnitId: data.serviceUnitId || undefined,
       currencyId: data.currencyId,
       bedId: bedId ?? undefined,
+      costCenterId: data.costCenterId || undefined,
       isReferral: data.isReferral || undefined,
       referralOrigin: data.isReferral
         ? data.referralOrigin || undefined
@@ -257,6 +260,13 @@ export default function AdmissionPage() {
               onChange={setData}
               currencies={currencies.data ?? []}
               serviceUnits={serviceUnits}
+              costCenters={
+                costCentersQuery.data?.map((c) => ({
+                  id: c.id,
+                  code: c.code,
+                  name: c.name,
+                })) ?? []
+              }
               onBack={() => setStep("patient")}
               onContinue={() => {
                 // Salta el paso de cama si no aplica (TRANSFER_IN sin cama).
@@ -294,6 +304,13 @@ export default function AdmissionPage() {
                   <dt className="text-muted-foreground">Servicio</dt>
                   <dd>
                     {serviceUnits.find((s) => s.id === data.serviceUnitId)
+                      ?.name ?? "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Centro de costo</dt>
+                  <dd>
+                    {costCentersQuery.data?.find((c) => c.id === data.costCenterId)
                       ?.name ?? "—"}
                   </dd>
                 </div>

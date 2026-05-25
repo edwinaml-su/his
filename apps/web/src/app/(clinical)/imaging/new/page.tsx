@@ -2,6 +2,7 @@
 
 /**
  * §18 RIS/PACS — Crear orden de estudio de imagen.
+ * Wave 10: agrega selects de centro de costo solicitante y ejecutor.
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -50,6 +51,21 @@ const PRIORITY_OPTIONS: { value: Priority; label: string }[] = [
   { value: "STAT", label: "STAT (inmediato)" },
 ];
 
+/**
+ * Code del centro ejecutor por defecto según modalidad DICOM.
+ * Debe coincidir con MODALITY_EXECUTOR_CODE del router.
+ */
+const MODALITY_EXECUTOR_CODE: Partial<Record<ModalityType, string>> = {
+  CR: "2-IMG-RAY",
+  XA: "2-IMG-RAY",
+  MG: "2-IMG-RAY",
+  NM: "2-IMG-RAY",
+  US: "2-IMG-USG",
+  CT: "2-IMG-TAC",
+  MR: "2-IMG-RMN",
+  PT: "2-IMG-RMN",
+};
+
 interface FormState {
   encounterId: string;
   establishmentId: string;
@@ -59,6 +75,8 @@ interface FormState {
   bodySite: string;
   clinicalIndication: string;
   priority: Priority;
+  costCenterId: string;
+  ejecutorCostCenterId: string;
 }
 
 const INITIAL: FormState = {
@@ -70,6 +88,8 @@ const INITIAL: FormState = {
   bodySite: "",
   clinicalIndication: "",
   priority: "ROUTINE",
+  costCenterId: "",
+  ejecutorCostCenterId: "",
 };
 
 function validate(f: FormState): string | null {
@@ -81,10 +101,16 @@ function validate(f: FormState): string | null {
   return null;
 }
 
+const NONE_VALUE = "__none__";
+
 export default function NewImagingOrderPage() {
   const router = useRouter();
   const [form, setForm] = React.useState<FormState>(INITIAL);
   const [clientError, setClientError] = React.useState<string | null>(null);
+
+  const { data: costCenters = [] } = trpc.costCenter.list.useQuery(undefined, {
+    staleTime: 5 * 60 * 1000,
+  });
 
   const create = trpc.imaging.order.create.useMutation({
     onSuccess: () => router.push("/imaging"),
@@ -92,6 +118,16 @@ export default function NewImagingOrderPage() {
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  // Al cambiar modalidad, pre-selecciona el ejecutor si coincide con los centros cargados.
+  function handleModalityChange(v: ModalityType) {
+    const executorCode = MODALITY_EXECUTOR_CODE[v];
+    const executorId =
+      executorCode
+        ? (costCenters.find((cc) => cc.code === executorCode)?.id ?? "")
+        : "";
+    setForm((f) => ({ ...f, modalityType: v, ejecutorCostCenterId: executorId }));
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -111,6 +147,8 @@ export default function NewImagingOrderPage() {
       bodySite: form.bodySite.trim() || undefined,
       clinicalIndication: form.clinicalIndication.trim(),
       priority: form.priority,
+      costCenterId: form.costCenterId || undefined,
+      ejecutorCostCenterId: form.ejecutorCostCenterId || undefined,
     });
   }
 
@@ -162,7 +200,7 @@ export default function NewImagingOrderPage() {
               <Label htmlFor="modalityType">Modalidad</Label>
               <Select
                 value={form.modalityType}
-                onValueChange={(v) => update("modalityType", v as ModalityType)}
+                onValueChange={(v) => handleModalityChange(v as ModalityType)}
               >
                 <SelectTrigger id="modalityType">
                   <SelectValue />
@@ -171,6 +209,48 @@ export default function NewImagingOrderPage() {
                   {MODALITY_OPTIONS.map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField>
+              <Label htmlFor="costCenterId">Centro solicitante (opcional)</Label>
+              <Select
+                value={form.costCenterId || NONE_VALUE}
+                onValueChange={(v) =>
+                  update("costCenterId", v === NONE_VALUE ? "" : v)
+                }
+              >
+                <SelectTrigger id="costCenterId">
+                  <SelectValue placeholder="Sin especificar" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE_VALUE}>Sin especificar</SelectItem>
+                  {costCenters.map((cc) => (
+                    <SelectItem key={cc.id} value={cc.id}>
+                      {cc.code} — {cc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField>
+              <Label htmlFor="ejecutorCostCenterId">Centro ejecutor (opcional)</Label>
+              <Select
+                value={form.ejecutorCostCenterId || NONE_VALUE}
+                onValueChange={(v) =>
+                  update("ejecutorCostCenterId", v === NONE_VALUE ? "" : v)
+                }
+              >
+                <SelectTrigger id="ejecutorCostCenterId">
+                  <SelectValue placeholder="Auto-deducido por modalidad" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE_VALUE}>Auto-deducido por modalidad</SelectItem>
+                  {costCenters.map((cc) => (
+                    <SelectItem key={cc.id} value={cc.id}>
+                      {cc.code} — {cc.name}
                     </SelectItem>
                   ))}
                 </SelectContent>

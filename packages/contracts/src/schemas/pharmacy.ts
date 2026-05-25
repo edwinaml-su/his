@@ -80,6 +80,8 @@ export const prescriptionCreateInput = z.object({
   patientId: z.string().uuid(),
   notes: z.string().trim().max(4000).optional(),
   items: z.array(prescriptionItemInput).min(1).max(50),
+  /** Centro de costo solicitante (productivo o intermedio). Opcional. */
+  costCenterId: z.string().uuid().optional(),
 });
 
 export const prescriptionSignInput = z.object({
@@ -92,6 +94,8 @@ export const prescriptionListInput = z.object({
   prescriberId: z.string().uuid().optional(),
   fromDate: z.coerce.date().optional(),
   limit: z.number().int().min(1).max(100).default(50),
+  /** Filtra por centro de costo solicitante. */
+  costCenterId: z.string().uuid().optional(),
 });
 
 export const dispenseCreateInput = z.object({
@@ -100,6 +104,8 @@ export const dispenseCreateInput = z.object({
   batchNumber: z.string().trim().max(80).optional(),
   expiryDate: z.coerce.date().optional(),
   notes: z.string().trim().max(2000).optional(),
+  /** Centro de costo dispensador. Si omitido, el router sugiere 2-FAR-HOS. */
+  costCenterId: z.string().uuid().optional(),
 });
 
 export type DrugListInput = z.infer<typeof drugListInput>;

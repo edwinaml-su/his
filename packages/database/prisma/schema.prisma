@@ -1503,6 +1503,8 @@ model Encounter {
   primaryDiagnosisId String?        @db.Uuid /// ClinicalConcept (CIE-10/11).
   currencyId         String         @db.Uuid
   exchangeRateToFunc Decimal        @db.Decimal(18, 8)
+  // Wave 10 — imputación a centro de costo productivo (migration cost_center_id_clinical_modules_2026_05_25)
+  costCenterId       String?        @db.Uuid
   createdAt          DateTime       @default(now()) @db.Timestamptz()
   createdBy          String?        @db.Uuid
   updatedAt          DateTime       @updatedAt @db.Timestamptz()
@@ -1515,6 +1517,7 @@ model Encounter {
   patientType     PatientType?     @relation(fields: [patientTypeId], references: [id], onDelete: SetNull)
   patientCategory PatientCategory? @relation(fields: [patientCategoryId], references: [id], onDelete: SetNull)
   currency        Currency         @relation("EncounterCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+  costCenter      CostCenter?      @relation("EncounterCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
 
   bedAssignments         BedAssignment[]
   transfers              EncounterTransfer[]
@@ -2130,25 +2133,33 @@ model LabTest {
 
 /// TDR §17.2 — orden de lab. Cabecera con items.
 model LabOrder {
-  id                 String         @id @default(uuid()) @db.Uuid
-  organizationId     String         @db.Uuid
-  encounterId        String         @db.Uuid
-  prescriberId       String         @db.Uuid /// User.
-  patientId          String         @db.Uuid
-  orderedAt          DateTime       @default(now()) @db.Timestamptz()
-  priority           LabPriority    @default(ROUTINE)
-  status             LabOrderStatus @default(DRAFT)
-  clinicalIndication String?        @db.Text
-  externalLabRef     String?        @db.VarChar(120) /// si se externaliza a un lab externo.
-  createdAt          DateTime       @default(now()) @db.Timestamptz()
-  updatedAt          DateTime       @updatedAt @db.Timestamptz()
+  id                   String         @id @default(uuid()) @db.Uuid
+  organizationId       String         @db.Uuid
+  encounterId          String         @db.Uuid
+  prescriberId         String         @db.Uuid /// User.
+  patientId            String         @db.Uuid
+  orderedAt            DateTime       @default(now()) @db.Timestamptz()
+  priority             LabPriority    @default(ROUTINE)
+  status               LabOrderStatus @default(DRAFT)
+  clinicalIndication   String?        @db.Text
+  externalLabRef       String?        @db.VarChar(120) /// si se externaliza a un lab externo.
+  /// Centro de costo solicitante (productivo o intermedio que pidió el estudio).
+  costCenterId         String?        @db.Uuid
+  /// Centro intermedio ejecutor (normalmente 2-LAB-CLI; asignado por defecto en el router).
+  ejecutorCostCenterId String?        @db.Uuid
+  createdAt            DateTime       @default(now()) @db.Timestamptz()
+  updatedAt            DateTime       @updatedAt @db.Timestamptz()
 
-  items     LabOrderItem[]
-  specimens LabSpecimen[]
+  items            LabOrderItem[]
+  specimens        LabSpecimen[]
+  costCenter       CostCenter?    @relation("LabOrderSolicitante", fields: [costCenterId], references: [id], onDelete: Restrict)
+  ejecutorCostCenter CostCenter?  @relation("LabOrderEjecutor", fields: [ejecutorCostCenterId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, orderedAt])
   @@index([encounterId])
   @@index([patientId])
+  @@index([costCenterId])
+  @@index([ejecutorCostCenterId])
   @@schema("public")
 }
 
@@ -2387,6 +2398,8 @@ model InpatientAdmission {
   status          InpatientStatus @default(ACTIVE)
   dischargedAt    DateTime?       @db.Timestamptz()
   notes           String?         @db.Text
+  // Wave 10 — imputación a centro de costo productivo (migration cost_center_id_clinical_modules_2026_05_25)
+  costCenterId    String?         @db.Uuid
   createdAt       DateTime        @default(now()) @db.Timestamptz()
   createdBy       String?         @db.Uuid
   updatedAt       DateTime        @updatedAt @db.Timestamptz()
@@ -2398,6 +2411,7 @@ model InpatientAdmission {
   encounter     Encounter     @relation("EncInpatientAdmission", fields: [encounterId], references: [id], onDelete: Cascade)
   patient       Patient       @relation("PatInpatientAdmissions", fields: [patientId], references: [id], onDelete: Restrict)
   attending     User          @relation("InpatientAttending", fields: [attendingId], references: [id], onDelete: Restrict)
+  costCenter    CostCenter?   @relation("InpatientAdmissionCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
 
   vitalsLog InpatientVitals[]
   kardexLog InpatientKardex[]
@@ -2646,6 +2660,8 @@ model SurgeryCase {
   intraopNotes         String?           @db.Text
   postopNotes          String?           @db.Text
   cancelReason         String?           @db.VarChar(400)
+  /// Imputación financiera a centro de costo quirúrgico (132_cost_center_clinical_modules.sql).
+  costCenterId         String?           @db.Uuid
   createdAt            DateTime          @default(now()) @db.Timestamptz()
   createdBy            String?           @db.Uuid
   updatedAt            DateTime          @updatedAt @db.Timestamptz()
@@ -2658,6 +2674,7 @@ model SurgeryCase {
   patient        Patient        @relation("PatSurgeryCases", fields: [patientId], references: [id], onDelete: Restrict)
   operatingRoom  OperatingRoom? @relation(fields: [operatingRoomId], references: [id], onDelete: SetNull)
   primarySurgeon User           @relation("SurgeryPrimarySurgeon", fields: [primarySurgeonId], references: [id], onDelete: Restrict)
+  costCenter     CostCenter?    @relation("SurgeryCaseCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, scheduledStart])
   @@index([patientId])
@@ -2665,6 +2682,7 @@ model SurgeryCase {
   @@index([operatingRoomId])
   @@index([status])
   @@index([establishmentId])
+  @@index([costCenterId])
   @@schema("public")
 }
 
@@ -2857,18 +2875,24 @@ model ImagingOrder {
   /// Radiation dose — CTDIvol in mGy. Only for CT/XA/MG modalities.
   radiationDoseCtdi  Decimal?            @db.Decimal(10, 4)
   notes              String?             @db.Text
+  /// Centro solicitante (productivo o intermedio). FK RESTRICT.
+  costCenterId          String?             @db.Uuid
+  /// Centro intermedio ejecutor (depende de modalidad). FK RESTRICT.
+  ejecutorCostCenterId  String?             @db.Uuid
   createdAt          DateTime            @default(now()) @db.Timestamptz()
   createdBy          String?             @db.Uuid
   updatedAt          DateTime            @updatedAt @db.Timestamptz()
   updatedBy          String?             @db.Uuid
   deletedAt          DateTime?           @db.Timestamptz()
 
-  organization     Organization     @relation("OrgImagingOrders", fields: [organizationId], references: [id], onDelete: Restrict)
-  establishment    Establishment    @relation("EstImagingOrders", fields: [establishmentId], references: [id], onDelete: Restrict)
-  encounter        Encounter        @relation("EncImagingOrders", fields: [encounterId], references: [id], onDelete: Restrict)
-  patient          Patient          @relation("PatImagingOrders", fields: [patientId], references: [id], onDelete: Restrict)
-  modality         ImagingModality? @relation(fields: [modalityId], references: [id], onDelete: SetNull)
-  orderingProvider User             @relation("ImagingOrderingProvider", fields: [orderingProviderId], references: [id], onDelete: Restrict)
+  organization          Organization     @relation("OrgImagingOrders", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment         Establishment    @relation("EstImagingOrders", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter             Encounter        @relation("EncImagingOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patient               Patient          @relation("PatImagingOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  modality              ImagingModality? @relation(fields: [modalityId], references: [id], onDelete: SetNull)
+  orderingProvider      User             @relation("ImagingOrderingProvider", fields: [orderingProviderId], references: [id], onDelete: Restrict)
+  costCenter            CostCenter?      @relation("ImagingOrderCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
+  ejecutorCostCenter    CostCenter?      @relation("ImagingOrderEjecutorCostCenter", fields: [ejecutorCostCenterId], references: [id], onDelete: Restrict)
 
   report ImagingReport?
 
@@ -2880,6 +2904,8 @@ model ImagingOrder {
   @@index([modalityType])
   @@index([establishmentId])
   @@index([orderedAt]) /// SLA/overdue queries.
+  @@index([costCenterId])
+  @@index([ejecutorCostCenterId])
   @@schema("public")
 }
 
@@ -4311,9 +4337,20 @@ model CostCenter {
   // Finance — sql/127 + sql/128
   invoices     Invoice[]                       @relation("InvoiceCostCenter")
   invoiceItems InvoiceItem[]                   @relation("InvoiceItemCostCenter")
+  // Wave 10 — módulos clínicos
+  encounters          Encounter[]          @relation("EncounterCostCenter")
+  inpatientAdmissions InpatientAdmission[] @relation("InpatientAdmissionCostCenter")
   // Prorrateo — sql/131
   allocationRulesAsSource  CostCenterAllocationRule[]   @relation("AllocationRuleSource")
   allocationRulesAsTarget  CostCenterAllocationTarget[] @relation("AllocationRuleTarget")
+  // Imaging — Wave 10
+  imagingOrdersSolicitante ImagingOrder[]               @relation("ImagingOrderCostCenter")
+  imagingOrdersEjecutor    ImagingOrder[]               @relation("ImagingOrderEjecutorCostCenter")
+  // LIS — back-relations para LabOrder.costCenterId / LabOrder.ejecutorCostCenterId
+  labOrdersSolicitante     LabOrder[]                   @relation("LabOrderSolicitante")
+  labOrdersEjecutor        LabOrder[]                   @relation("LabOrderEjecutor")
+  // Surgery — Wave 10 (132_cost_center_clinical_modules.sql)
+  surgeryCases             SurgeryCase[]                @relation("SurgeryCaseCostCenter")
 
   @@unique([organizationId, code])
   @@index([organizationId, active])
