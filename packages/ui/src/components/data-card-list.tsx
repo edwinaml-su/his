@@ -1,10 +1,14 @@
-"use client";
-
 /**
  * DataCardList — patrón "responsive table" para listas densas.
  *
  * En mobile (< sm) renderiza cada fila como Card vertical con label:valor.
  * En desktop (≥ sm) renderiza una <table> tradicional.
+ *
+ * Server Component compatible: no usa hooks ni event handlers. Las props
+ * `getKey`, `columns[i].cell` y `actions` se evalúan en el servidor durante
+ * el render y emiten HTML estático — no requieren cruzar la frontera client.
+ * (Marcarlo `"use client"` rompe el build porque server pages le pasan funciones
+ * que no se pueden serializar.)
  *
  * Uso:
  *   <DataCardList
