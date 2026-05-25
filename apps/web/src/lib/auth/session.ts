@@ -17,6 +17,11 @@ const ESTAB_COOKIE = "his.estab";
 // CSV de role codes activos seleccionados por el usuario (subset de los
 // que tiene en la org activa). Si está vacía o ausente: usa todos.
 const ROLES_COOKIE = "his.roles";
+// CSV de organization IDs ADICIONALES a la primaria, para visibilidad
+// cross-org de roles directivos/gerenciales (DIR, ADM, JEFE, GERENTE).
+// Solo se usa para consultas opt-in (dashboards, reports). Las queries
+// transaccionales siguen filtrando por organizationId primaria.
+const ORGS_COOKIE = "his.orgs";
 
 export interface CurrentUser {
   id: string;
@@ -109,4 +114,45 @@ export async function getTenantContext(): Promise<TenantContext | null> {
   };
 }
 
-export const HIS_COOKIES = { ORG_COOKIE, ESTAB_COOKIE, ROLES_COOKIE };
+/**
+ * IDs de organizaciones ADICIONALES con visibilidad para el usuario actual,
+ * leídos de la cookie `his.orgs`. Solo populated cuando el usuario tiene un
+ * rol multiorg (DIR, ADM, JEFE, GERENTE) activo y eligió ≥2 orgs en el
+ * switcher. Se valida que todas pertenezcan a sus membresías vigentes —
+ * cualquier ID no autorizado se descarta silenciosamente.
+ *
+ * Uso típico: dashboards o reports consolidados que opt-in a esta lista.
+ *   const visibleOrgs = await getVisibleOrgIds();  // [primaria, ...adicionales]
+ */
+export async function getVisibleOrgIds(): Promise<string[]> {
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  const cookieStore = cookies();
+  const orgCookie = cookieStore.get(ORG_COOKIE)?.value;
+  const orgsCookie = cookieStore.get(ORGS_COOKIE)?.value ?? "";
+
+  const ids = new Set<string>();
+  if (orgCookie) ids.add(orgCookie);
+  for (const id of orgsCookie.split(",").map((s) => s.trim()).filter(Boolean)) {
+    ids.add(id);
+  }
+  if (ids.size === 0) return [];
+
+  // Validar que el usuario realmente tiene membresía en cada ID — defensa
+  // en profundidad contra cookie tampering.
+  const now = new Date();
+  const memberships = await prisma.userOrganizationRole.findMany({
+    where: {
+      userId: user.id,
+      organizationId: { in: Array.from(ids) },
+      validFrom: { lte: now },
+      OR: [{ validTo: null }, { validTo: { gte: now } }],
+    },
+    select: { organizationId: true },
+  });
+  const valid = new Set(memberships.map((m) => m.organizationId));
+  return Array.from(ids).filter((id) => valid.has(id));
+}
+
+export const HIS_COOKIES = { ORG_COOKIE, ESTAB_COOKIE, ROLES_COOKIE, ORGS_COOKIE };

@@ -3,8 +3,11 @@
  *
  * Devuelve para el usuario autenticado:
  *   - Sus organizaciones disponibles (con todos los roles agrupados por org)
- *   - La org activa (de cookie `his.org`)
+ *   - La org activa primaria (de cookie `his.org`)
  *   - Los role codes activos seleccionados (de cookie `his.roles`)
+ *   - Las orgs adicionales con visibilidad (de cookie `his.orgs`)
+ *   - Si el usuario tiene rol multi-org activo (controla UI single-vs-multi
+ *     select del switcher de organización)
  *
  * Lo consume el componente <OrgRoleSwitcher /> para poblar los dropdowns.
  */
@@ -12,6 +15,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { prisma } from "@his/database";
 import { getCurrentUser, HIS_COOKIES } from "@/lib/auth/session";
+import { hasMultiOrgRole, MULTI_ORG_ROLE_CODES } from "@/lib/auth/multi-org-roles";
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -63,11 +67,27 @@ export async function GET() {
   const activeOrgId  = store.get(HIS_COOKIES.ORG_COOKIE)?.value ?? organizations[0]?.id ?? null;
   const rolesCookie  = store.get(HIS_COOKIES.ROLES_COOKIE)?.value ?? "";
   const activeRoles  = rolesCookie ? rolesCookie.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const orgsCookie   = store.get(HIS_COOKIES.ORGS_COOKIE)?.value ?? "";
+  const additionalOrgIds = orgsCookie ? orgsCookie.split(",").map((s) => s.trim()).filter(Boolean) : [];
+
+  // Determinar si el usuario tiene rol multi-org ACTIVO en la org primaria.
+  // Si activeRoles está vacío, usamos todos los roles disponibles de la
+  // org primaria (default backward-compat).
+  const activeOrg = organizations.find((o) => o.id === activeOrgId);
+  const effectiveActiveRoles =
+    activeRoles.length > 0 ? activeRoles : (activeOrg?.roles.map((r) => r.code) ?? []);
+  const isMultiOrgActive = hasMultiOrgRole(effectiveActiveRoles);
 
   return NextResponse.json({
     user: { id: user.id, email: user.email, fullName: user.fullName },
     organizations,
     activeOrgId,
     activeRoles,
+    /** Orgs adicionales con visibilidad cross-org (solo aplica si isMultiOrgActive). */
+    additionalOrgIds,
+    /** Si true, el switcher de Org permite multi-checkbox; default false. */
+    isMultiOrgActive,
+    /** Catálogo informativo de roles que habilitan multi-org. */
+    multiOrgRoleCodes: MULTI_ORG_ROLE_CODES,
   });
 }
