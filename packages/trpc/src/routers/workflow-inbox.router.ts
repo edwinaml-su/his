@@ -1,0 +1,1065 @@
+/**
+ * Router tRPC — Workflow Inbox (Bandeja BPM centralizada).
+ *
+ * Ola 1 P1: 29 fuentes BPM activas.
+ *   - Base: receta, triage, lab, imagen, dispensación, medicación bedside (6)
+ *   - Documentos NTEC: HC, epicrisis, evolución, valoración ENF, consentimiento
+ *     médico, orden ingreso, atención emergencia, RRI, ISSS, rectificación,
+ *     certificación DIR (11)
+ *   - JCI: verbal order, critical result, double-check, WHO incomplete,
+ *     fall report, Morse, wristband (7)
+ *   - Quirófano: preop, consent Qx, anestésico abierto, URPA egreso, nota
+ *     operatoria (5)
+ *
+ * Estrategia: queries paralelas con Promise.all + batch fetch único de
+ * Patient. Drift pattern para tablas del schema `ece` que no están en
+ * schema.prisma — usan $queryRawUnsafe.
+ *
+ * Spec: ver packages/contracts/src/schemas/workflow-inbox.ts
+ */
+import {
+  inboxFiltersSchema,
+  type InboxResponse,
+  type Task,
+  type TaskPriority,
+  type TaskType,
+  TASK_REQUIRED_ROLES,
+  TASK_SLA_MINUTES,
+  TASK_TYPE_LABEL,
+} from "@his/contracts/schemas/workflow-inbox";
+import { router, tenantProcedure } from "../trpc";
+
+function derivePriority(ageMinutes: number, slaMinutes: number | null): TaskPriority {
+  if (slaMinutes === null) return "NORMAL";
+  if (slaMinutes === 0) return "CRITICAL";
+  const pct = ageMinutes / slaMinutes;
+  if (pct > 1) return "CRITICAL";
+  if (pct > 0.7) return "HIGH";
+  if (pct > 0.4) return "NORMAL";
+  return "LOW";
+}
+
+function ageInMinutes(from: Date, to: Date): number {
+  return Math.round(((to.getTime() - from.getTime()) / 60_000) * 10) / 10;
+}
+
+function userHasAnyRole(userRoles: string[], required: string[]): boolean {
+  return required.some((r) => userRoles.includes(r));
+}
+
+interface PatientMini {
+  id: string;
+  firstName: string;
+  lastName: string;
+  mrn: string;
+}
+
+/** Fila genérica de una query raw sobre ece.documento_instancia. */
+interface NtecDocRow {
+  id: string;
+  paciente_id: string;
+  creado_en: Date;
+  creado_por: string;
+  episodio_id: string | null;
+}
+
+/** Wrapper para queries NTEC: filtra por código de tipo y estado del documento. */
+function buildNtecQuery(tipoCode: string, estadoCode: string) {
+  return `
+    SELECT di.id::text AS id,
+           di.paciente_id::text AS paciente_id,
+           di.creado_en,
+           di.creado_por::text AS creado_por,
+           di.episodio_id::text AS episodio_id
+    FROM ece.documento_instancia di
+    JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
+    JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+    WHERE td.codigo = $1 AND fe.codigo = $2
+      AND di.estado_registro = 'vigente'
+    ORDER BY di.creado_en ASC
+    LIMIT 100
+  `;
+}
+
+export const workflowInboxRouter = router({
+  miBandeja: tenantProcedure
+    .input(inboxFiltersSchema.optional())
+    .query(async ({ ctx, input }): Promise<InboxResponse> => {
+      const filters = input ?? inboxFiltersSchema.parse({});
+      const { prisma, tenant, user } = ctx;
+      const userRoles = tenant.roleCodes;
+      const orgId = tenant.organizationId;
+      const now = new Date();
+
+      function isEnabled(type: TaskType): boolean {
+        if (filters.types && filters.types.length > 0 && !filters.types.includes(type)) {
+          return false;
+        }
+        return userHasAnyRole(userRoles, TASK_REQUIRED_ROLES[type]);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // BASE V1 (6 fuentes)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const rxToSign = isEnabled("PRESCRIPTION_TO_SIGN")
+        ? await prisma.prescription.findMany({
+            where: { organizationId: orgId, status: "DRAFT", prescriberId: user.id },
+            select: { id: true, prescribedAt: true, notes: true, patientId: true },
+            orderBy: { prescribedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const rxToDispense = isEnabled("PRESCRIPTION_TO_DISPENSE")
+        ? await prisma.prescription.findMany({
+            where: { organizationId: orgId, status: "SIGNED" },
+            select: { id: true, signedAt: true, prescribedAt: true, patientId: true },
+            orderBy: { signedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const triages = isEnabled("TRIAGE_IN_PROGRESS")
+        ? await prisma.triageEvaluation.findMany({
+            where: {
+              organizationId: orgId,
+              ...(tenant.establishmentId ? { establishmentId: tenant.establishmentId } : {}),
+              status: "IN_PROGRESS",
+            },
+            select: {
+              id: true,
+              startedAt: true,
+              patientId: true,
+              assignedLevel: { select: { name: true } },
+            },
+            orderBy: { startedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const labs = isEnabled("LAB_TO_PROCESS")
+        ? await prisma.labOrder.findMany({
+            where: { organizationId: orgId, status: { in: ["ORDERED", "COLLECTED"] } },
+            select: { id: true, orderedAt: true, patientId: true },
+            orderBy: { orderedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const labsToValidate = isEnabled("LAB_TO_VALIDATE")
+        ? await prisma.labOrder.findMany({
+            where: { organizationId: orgId, status: "RESULTED" },
+            select: { id: true, orderedAt: true, patientId: true },
+            orderBy: { orderedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const images = isEnabled("IMAGING_TO_REPORT")
+        ? await prisma.imagingOrder.findMany({
+            where: { organizationId: orgId, status: "COMPLETED" },
+            select: { id: true, orderedAt: true, patientId: true },
+            orderBy: { orderedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const imagesToValidate = isEnabled("IMAGING_TO_VALIDATE")
+        ? await prisma.imagingOrder.findMany({
+            where: { organizationId: orgId, status: "REPORTED" },
+            select: { id: true, orderedAt: true, patientId: true },
+            orderBy: { orderedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      const meds = isEnabled("MED_TO_ADMINISTER")
+        ? await prisma.medicationAdministration.findMany({
+            where: {
+              organizationId: orgId,
+              status: "SCHEDULED",
+              administeredAt: { lte: new Date(now.getTime() + 4 * 60 * 60_000) },
+            },
+            select: { id: true, administeredAt: true, prescriptionItemId: true },
+            orderBy: { administeredAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // SPRINT A — Documentos NTEC (queries raw sobre schema `ece`)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const ntecQuery = async (
+        type: TaskType,
+        tipoCode: string,
+        estadoCode: string,
+      ): Promise<NtecDocRow[]> => {
+        if (!isEnabled(type)) return [];
+        return prisma.$queryRawUnsafe<NtecDocRow[]>(
+          buildNtecQuery(tipoCode, estadoCode),
+          tipoCode,
+          estadoCode,
+        );
+      };
+
+      const [
+        hcDocs,
+        epicrisisDocs,
+        consentMedDocs,
+        ordIngDocs,
+        atnEmergDocs,
+        rriDocs,
+        isssDocs,
+        consentQxDocs,
+      ] = await Promise.all([
+        ntecQuery("HC_TO_SIGN", "HC", "borrador"),
+        ntecQuery("EPICRISIS_TO_SIGN", "EPICRISIS", "borrador"),
+        ntecQuery("MEDICAL_CONSENT_PENDING", "CONSENT_MED", "borrador"),
+        ntecQuery("ORDEN_INGRESO_PENDING", "ORD_ING", "borrador"),
+        ntecQuery("ATENCION_EMERGENCIA_PENDING", "ATN_EMERG", "borrador"),
+        ntecQuery("RRI_PENDING", "RRI", "pendiente_respuesta"),
+        ntecQuery("ISSS_CERT_PENDING", "CERT_INC", "borrador"),
+        ntecQuery("SURGERY_CONSENT_PENDING", "CONSENT_QX", "borrador"),
+      ]);
+
+      // EVOLUTION_TO_WRITE: encuentros INPATIENT activos >24h sin evolución del día
+      const evolutionsPending: Array<{ id: string; admittedAt: Date; patientId: string }> =
+        isEnabled("EVOLUTION_TO_WRITE")
+          ? await prisma.encounter.findMany({
+              where: {
+                organizationId: orgId,
+                dischargedAt: null,
+                admissionType: { in: ["EMERGENCY", "SCHEDULED"] },
+                admittedAt: { lt: new Date(now.getTime() - 24 * 60 * 60_000) },
+              },
+              select: { id: true, admittedAt: true, patientId: true },
+              take: 100,
+            })
+          : [];
+
+      // VALORACION_INICIAL_PENDING: episodio hospitalario sin valoración ENF firmada
+      const valoracionPending: Array<{
+        id: string;
+        episodio_hospitalario_id: string;
+        admitted_at: Date;
+        paciente_id: string;
+      }> = isEnabled("VALORACION_INICIAL_PENDING")
+        ? await prisma.$queryRawUnsafe(`
+            SELECT eh.id::text AS id,
+                   eh.id::text AS episodio_hospitalario_id,
+                   eh.fecha_ingreso AS admitted_at,
+                   ea.paciente_id::text AS paciente_id
+            FROM ece.episodio_hospitalario eh
+            JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_atencion_id
+            LEFT JOIN ece.valoracion_inicial_enfermeria vie
+              ON vie.episodio_hospitalario_id = eh.id
+              AND vie.estado_registro IN ('firmado','validado')
+            WHERE eh.fecha_egreso IS NULL
+              AND vie.id IS NULL
+              AND eh.fecha_ingreso > now() - interval '7 days'
+            ORDER BY eh.fecha_ingreso ASC
+            LIMIT 100
+          `)
+        : [];
+
+      // ECE_RECTIFICACION_PENDING: rectificaciones recientes (heurística — el modelo
+      // no tiene estado pendiente/aprobada explícito; mostramos las últimas 24h
+      // que el DIR debe revisar).
+      const rectifPending: Array<{ id: string; ejecutada_en: Date; paciente_id: string }> =
+        isEnabled("ECE_RECTIFICACION_PENDING")
+          ? await prisma.$queryRawUnsafe(`
+              SELECT r.id::text AS id,
+                     r.ejecutada_en,
+                     di.paciente_id::text AS paciente_id
+              FROM ece.rectificacion r
+              JOIN ece.documento_instancia di ON di.id = r.instancia_id
+              WHERE r.ejecutada_en > now() - interval '7 days'
+              ORDER BY r.ejecutada_en DESC
+              LIMIT 100
+            `)
+          : [];
+
+      // ECE_DOC_TO_CERTIFY: documentos en estado 'validado' que esperan certificación DIR
+      const docsToCertify = await ntecQuery("ECE_DOC_TO_CERTIFY", "HC", "validado");
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // SPRINT B — JCI / Seguridad del paciente
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // VERBAL_ORDER_TO_CONFIRM: ece.verbal_order estado='dictada' + confirmado_en NULL
+      const verbalOrders: Array<{ id: string; dictado_en: Date; paciente_id: string }> =
+        isEnabled("VERBAL_ORDER_TO_CONFIRM")
+          ? await prisma.$queryRawUnsafe(`
+              SELECT id::text AS id, dictado_en, paciente_id::text AS paciente_id
+              FROM ece.verbal_order
+              WHERE estado = 'dictada' AND confirmado_en IS NULL
+              ORDER BY dictado_en ASC
+              LIMIT 100
+            `)
+          : [];
+
+      // CRITICAL_RESULT_TO_NOTIFY: ece.critical_result_notification sin notificación
+      const criticalResults: Array<{ id: string; detectado_en: Date; paciente_id: string }> =
+        isEnabled("CRITICAL_RESULT_TO_NOTIFY")
+          ? await (prisma.$queryRawUnsafe(`
+              SELECT id::text AS id,
+                     detectado_en,
+                     paciente_id::text AS paciente_id
+              FROM ece.critical_result_notification
+              WHERE notificado_en IS NULL
+              ORDER BY detectado_en ASC
+              LIMIT 100
+            `) as Promise<Array<{ id: string; detectado_en: Date; paciente_id: string }>>).catch(
+              () => [] as Array<{ id: string; detectado_en: Date; paciente_id: string }>,
+            )
+          : [];
+
+      // DOUBLE_CHECK_PENDING: med admin high-alert sin doubleCheckBy
+      const doubleCheck = isEnabled("DOUBLE_CHECK_PENDING")
+        ? await prisma.medicationAdministration.findMany({
+            where: {
+              organizationId: orgId,
+              status: "SCHEDULED",
+              doubleCheckBy: null,
+              administeredAt: { lte: new Date(now.getTime() + 60 * 60_000) },
+            },
+            select: { id: true, administeredAt: true, prescriptionItemId: true },
+            orderBy: { administeredAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // WHO_CHECKLIST_INCOMPLETE: cirugía IN_PROGRESS sin signIn/timeOut/signOut
+      const whoIncomplete = isEnabled("WHO_CHECKLIST_INCOMPLETE")
+        ? await prisma.surgeryCase.findMany({
+            where: {
+              organizationId: orgId,
+              status: "IN_PROGRESS",
+              OR: [{ signInAt: null }, { timeOutAt: null }, { signOutAt: null }],
+            },
+            select: {
+              id: true,
+              scheduledStart: true,
+              patientId: true,
+              procedureDescription: true,
+            },
+            orderBy: { scheduledStart: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // FALL_REPORT_PENDING: caídas no notificadas a JCI
+      type FallRow = { id: string; fecha_hora: Date; episodio_id: string };
+      const fallsPending: FallRow[] = isEnabled("FALL_REPORT_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+              SELECT id::text AS id, fecha_hora, episodio_id::text AS episodio_id
+              FROM ece.fall_event
+              WHERE notificado_jci = false
+                AND lesion_resultante IN ('moderada','grave','muy_grave')
+              ORDER BY fecha_hora ASC
+              LIMIT 100
+            `) as Promise<FallRow[]>).catch(() => [] as FallRow[])
+        : [];
+
+      // MORSE_REEVALUATE: valoraciones con escala_morse > 45 (alto riesgo) sin reeval 24h
+      type MorseRow = {
+        id: string;
+        registrado_en: Date;
+        episodio_hospitalario_id: string;
+      };
+      const morseHigh: MorseRow[] = isEnabled("MORSE_REEVALUATE")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT vie.id::text AS id,
+                   vie.registrado_en,
+                   vie.episodio_hospitalario_id::text AS episodio_hospitalario_id
+            FROM ece.valoracion_inicial_enfermeria vie
+            JOIN ece.episodio_hospitalario eh ON eh.id = vie.episodio_hospitalario_id
+            WHERE vie.escala_morse > 45
+              AND eh.fecha_egreso IS NULL
+              AND vie.registrado_en < now() - interval '24 hours'
+            ORDER BY vie.registrado_en ASC
+            LIMIT 100
+          `) as Promise<MorseRow[]>).catch(() => [] as MorseRow[])
+        : [];
+
+      // WRISTBAND_MISSING: encounter activo INPATIENT/EMERGENCY sin gsrn registrado.
+      // Heurística: chequeamos asignacion_cama sin un valor de pulsera bedside.
+      const wristbandMissing = isEnabled("WRISTBAND_MISSING")
+        ? await prisma.encounter.findMany({
+            where: {
+              organizationId: orgId,
+              dischargedAt: null,
+              admissionType: { in: ["EMERGENCY", "SCHEDULED"] },
+              admittedAt: {
+                gte: new Date(now.getTime() - 60 * 60_000), // últimas 1h
+              },
+            },
+            select: { id: true, admittedAt: true, patientId: true },
+            take: 100,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // SPRINT C — Quirófano
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // SURGERY_PREOP_PENDING: cirugía próximas 24h sin preopNotes
+      const preopPending = isEnabled("SURGERY_PREOP_PENDING")
+        ? await prisma.surgeryCase.findMany({
+            where: {
+              organizationId: orgId,
+              status: "SCHEDULED",
+              scheduledStart: {
+                gte: now,
+                lte: new Date(now.getTime() + 24 * 60 * 60_000),
+              },
+              OR: [{ preopNotes: null }, { preopNotes: "" }],
+            },
+            select: {
+              id: true,
+              scheduledStart: true,
+              patientId: true,
+              procedureDescription: true,
+            },
+            orderBy: { scheduledStart: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // ANESTHESIA_RECORD_OPEN: cirugía con actualEnd seteado pero anesthesiaEndAt NULL
+      const anesthOpen = isEnabled("ANESTHESIA_RECORD_OPEN")
+        ? await prisma.surgeryCase.findMany({
+            where: {
+              organizationId: orgId,
+              actualEnd: { not: null },
+              anesthesiaEndAt: null,
+              anesthesiaStartAt: { not: null },
+            },
+            select: {
+              id: true,
+              actualEnd: true,
+              patientId: true,
+              procedureDescription: true,
+            },
+            orderBy: { actualEnd: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // URPA_DISCHARGE_PENDING: registros URPA en borrador (heurística — no hay campo
+      // explícito "criterios cumplidos"). El médico revisa y completa el egreso.
+      type UrpaRow = { id: string; registrado_en: Date; episodio_id: string };
+      const urpaPending: UrpaRow[] = isEnabled("URPA_DISCHARGE_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+              SELECT u.id::text AS id,
+                     u.registrado_en,
+                     u.episodio_id::text AS episodio_id
+              FROM ece.urpa_recovery u
+              WHERE u.estado_registro = 'borrador'
+                AND u.registrado_en > now() - interval '2 days'
+              ORDER BY u.registrado_en ASC
+              LIMIT 50
+            `) as Promise<UrpaRow[]>).catch(() => [] as UrpaRow[])
+        : [];
+
+      // SURGERY_NOTE_PENDING: cirugía con actualEnd seteado pero postopNotes vacío
+      const surgNotePending = isEnabled("SURGERY_NOTE_PENDING")
+        ? await prisma.surgeryCase.findMany({
+            where: {
+              organizationId: orgId,
+              actualEnd: { not: null },
+              OR: [{ postopNotes: null }, { postopNotes: "" }],
+            },
+            select: {
+              id: true,
+              actualEnd: true,
+              patientId: true,
+              procedureDescription: true,
+            },
+            orderBy: { actualEnd: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // Enriquecer Patient en batch único
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const patientIds = new Set<string>([
+        ...rxToSign.map((r) => r.patientId),
+        ...rxToDispense.map((r) => r.patientId),
+        ...triages.map((t) => t.patientId),
+        ...labs.map((l) => l.patientId),
+        ...labsToValidate.map((l) => l.patientId),
+        ...images.map((i) => i.patientId),
+        ...imagesToValidate.map((i) => i.patientId),
+        ...evolutionsPending.map((e) => e.patientId),
+        ...whoIncomplete.map((s) => s.patientId),
+        ...wristbandMissing.map((e) => e.patientId),
+        ...preopPending.map((s) => s.patientId),
+        ...anesthOpen.map((s) => s.patientId),
+        ...surgNotePending.map((s) => s.patientId),
+      ]);
+
+      // Patient IDs de tablas `ece` necesitan resolverse via ece.paciente → public.Patient
+      // por bridge. Para simplificar, usamos las IDs raw como están (las tablas ece
+      // contienen patient_id que apunta al MPI HIS).
+      for (const d of hcDocs) patientIds.add(d.paciente_id);
+      for (const d of epicrisisDocs) patientIds.add(d.paciente_id);
+      for (const d of consentMedDocs) patientIds.add(d.paciente_id);
+      for (const d of ordIngDocs) patientIds.add(d.paciente_id);
+      for (const d of atnEmergDocs) patientIds.add(d.paciente_id);
+      for (const d of rriDocs) patientIds.add(d.paciente_id);
+      for (const d of isssDocs) patientIds.add(d.paciente_id);
+      for (const d of consentQxDocs) patientIds.add(d.paciente_id);
+      for (const d of docsToCertify) patientIds.add(d.paciente_id);
+      for (const v of valoracionPending) patientIds.add(v.paciente_id);
+      for (const r of rectifPending) patientIds.add(r.paciente_id);
+      for (const v of verbalOrders) patientIds.add(v.paciente_id);
+      for (const c of criticalResults) patientIds.add(c.paciente_id);
+
+      // MedAdmin batch enrichment
+      let medItemMap = new Map<
+        string,
+        { drugName: string; patientId: string | null }
+      >();
+      const allMedItemIds = [
+        ...meds.map((m) => m.prescriptionItemId),
+        ...doubleCheck.map((m) => m.prescriptionItemId),
+      ];
+      if (allMedItemIds.length > 0) {
+        const items = await prisma.prescriptionItem.findMany({
+          where: { id: { in: allMedItemIds } },
+          select: { id: true, drugId: true, prescriptionId: true },
+        });
+        const [drugs, prescs] = await Promise.all([
+          prisma.drug.findMany({
+            where: { id: { in: items.map((i) => i.drugId) } },
+            select: { id: true, brandName: true, genericName: true },
+          }),
+          prisma.prescription.findMany({
+            where: { id: { in: items.map((i) => i.prescriptionId) } },
+            select: { id: true, patientId: true },
+          }),
+        ]);
+        const drugById = new Map(drugs.map((d) => [d.id, d.brandName ?? d.genericName]));
+        const presById = new Map(prescs.map((p) => [p.id, p.patientId]));
+        for (const it of items) {
+          const pid = presById.get(it.prescriptionId) ?? null;
+          if (pid) patientIds.add(pid);
+          medItemMap.set(it.id, {
+            drugName: drugById.get(it.drugId) ?? "Medicación",
+            patientId: pid,
+          });
+        }
+      }
+
+      const patientsById = new Map<string, PatientMini>();
+      if (patientIds.size > 0) {
+        const patients = await prisma.patient.findMany({
+          where: { id: { in: Array.from(patientIds) } },
+          select: { id: true, firstName: true, lastName: true, mrn: true },
+        });
+        for (const p of patients) patientsById.set(p.id, p);
+      }
+
+      function getPatient(id: string | null | undefined): PatientMini | null {
+        if (!id) return null;
+        return patientsById.get(id) ?? null;
+      }
+      function fmtName(p: PatientMini | null): string | null {
+        if (!p) return null;
+        return `${p.firstName} ${p.lastName}`.trim() || null;
+      }
+
+      function buildTask(args: {
+        type: TaskType;
+        sourceId: string;
+        createdAt: Date;
+        patient: PatientMini | null;
+        description: string;
+        deepLink: string;
+      }): Task {
+        const age = ageInMinutes(args.createdAt, now);
+        const sla = TASK_SLA_MINUTES[args.type];
+        const remaining = sla === null ? null : sla - age;
+        const isOverdue = remaining !== null && remaining < 0;
+        return {
+          id: `${args.type}:${args.sourceId}`,
+          type: args.type,
+          typeLabel: TASK_TYPE_LABEL[args.type],
+          priority: derivePriority(age, sla),
+          patientName: fmtName(args.patient),
+          patientMrn: args.patient?.mrn ?? null,
+          description: args.description,
+          createdAt: args.createdAt,
+          ageMinutes: age,
+          remainingMinutes: remaining,
+          isOverdue,
+          deepLink: args.deepLink,
+          requiredRoles: TASK_REQUIRED_ROLES[args.type],
+        };
+      }
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // Mapeo a Task[]
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const tasks: Task[] = [
+        // Base V1
+        ...rxToSign.map((r) =>
+          buildTask({
+            type: "PRESCRIPTION_TO_SIGN",
+            sourceId: r.id,
+            createdAt: r.prescribedAt,
+            patient: getPatient(r.patientId),
+            description: r.notes?.slice(0, 80) ?? "Receta borrador pendiente de firma",
+            deepLink: `/pharmacy?prescription=${r.id}`,
+          }),
+        ),
+        ...rxToDispense.map((r) =>
+          buildTask({
+            type: "PRESCRIPTION_TO_DISPENSE",
+            sourceId: r.id,
+            createdAt: r.signedAt ?? r.prescribedAt,
+            patient: getPatient(r.patientId),
+            description: "Receta firmada lista para dispensar",
+            deepLink: `/pharmacy/dispense?prescription=${r.id}`,
+          }),
+        ),
+        ...triages.map((t) =>
+          buildTask({
+            type: "TRIAGE_IN_PROGRESS",
+            sourceId: t.id,
+            createdAt: t.startedAt,
+            patient: getPatient(t.patientId),
+            description: `Triage ${t.assignedLevel.name} en curso`,
+            deepLink: `/triage/${t.id}/discriminators`,
+          }),
+        ),
+        ...labs.map((l) =>
+          buildTask({
+            type: "LAB_TO_PROCESS",
+            sourceId: l.id,
+            createdAt: l.orderedAt,
+            patient: getPatient(l.patientId),
+            description: "Orden de laboratorio pendiente de procesamiento",
+            deepLink: `/lis/orders?id=${l.id}`,
+          }),
+        ),
+        ...labsToValidate.map((l) =>
+          buildTask({
+            type: "LAB_TO_VALIDATE",
+            sourceId: l.id,
+            createdAt: l.orderedAt,
+            patient: getPatient(l.patientId),
+            description: "Resultado de laboratorio pendiente de validar",
+            deepLink: `/lis/results?id=${l.id}`,
+          }),
+        ),
+        ...images.map((i) =>
+          buildTask({
+            type: "IMAGING_TO_REPORT",
+            sourceId: i.id,
+            createdAt: i.orderedAt,
+            patient: getPatient(i.patientId),
+            description: "Estudio de imagen completado, pendiente de reporte",
+            deepLink: `/imaging?id=${i.id}`,
+          }),
+        ),
+        ...imagesToValidate.map((i) =>
+          buildTask({
+            type: "IMAGING_TO_VALIDATE",
+            sourceId: i.id,
+            createdAt: i.orderedAt,
+            patient: getPatient(i.patientId),
+            description: "Reporte de imagen pendiente de validar",
+            deepLink: `/imaging?id=${i.id}`,
+          }),
+        ),
+        ...meds.map((m) => {
+          const item = medItemMap.get(m.prescriptionItemId);
+          return buildTask({
+            type: "MED_TO_ADMINISTER",
+            sourceId: m.id,
+            createdAt: m.administeredAt,
+            patient: getPatient(item?.patientId ?? null),
+            description: `Administrar ${item?.drugName ?? "medicación"}`,
+            deepLink: `/emar?medAdmin=${m.id}`,
+          });
+        }),
+
+        // Sprint A — NTEC
+        ...hcDocs.map((d) =>
+          buildTask({
+            type: "HC_TO_SIGN",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Historia clínica borrador pendiente de firma",
+            deepLink: `/ece/historia-clinica?id=${d.id}`,
+          }),
+        ),
+        ...epicrisisDocs.map((d) =>
+          buildTask({
+            type: "EPICRISIS_TO_SIGN",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Epicrisis pendiente de firma al alta",
+            deepLink: `/ece/epicrisis?id=${d.id}`,
+          }),
+        ),
+        ...evolutionsPending.map((e) =>
+          buildTask({
+            type: "EVOLUTION_TO_WRITE",
+            sourceId: e.id,
+            createdAt: e.admittedAt,
+            patient: getPatient(e.patientId),
+            description: "Encuentro abierto >24h sin evolución del día",
+            deepLink: `/ece/evolucion?encounterId=${e.id}`,
+          }),
+        ),
+        ...valoracionPending.map((v) =>
+          buildTask({
+            type: "VALORACION_INICIAL_PENDING",
+            sourceId: v.id,
+            createdAt: v.admitted_at,
+            patient: getPatient(v.paciente_id),
+            description: "Valoración inicial enfermería pendiente al ingreso",
+            deepLink: `/ece/valoracion-inicial-enfermeria/nueva?episodio=${v.episodio_hospitalario_id}`,
+          }),
+        ),
+        ...consentMedDocs.map((d) =>
+          buildTask({
+            type: "MEDICAL_CONSENT_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Consentimiento médico pendiente de firma",
+            deepLink: `/ece/consentimiento?id=${d.id}`,
+          }),
+        ),
+        ...ordIngDocs.map((d) =>
+          buildTask({
+            type: "ORDEN_INGRESO_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Orden de ingreso pendiente de firma",
+            deepLink: `/ece/orden-ingreso?id=${d.id}`,
+          }),
+        ),
+        ...atnEmergDocs.map((d) =>
+          buildTask({
+            type: "ATENCION_EMERGENCIA_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Documento atención emergencia borrador",
+            deepLink: `/ece/atencion-emergencia?id=${d.id}`,
+          }),
+        ),
+        ...rriDocs.map((d) =>
+          buildTask({
+            type: "RRI_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Referencia/Interconsulta pendiente de respuesta",
+            deepLink: `/ece/rri?id=${d.id}`,
+          }),
+        ),
+        ...isssDocs.map((d) =>
+          buildTask({
+            type: "ISSS_CERT_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Certificado ISSS pendiente de emisión",
+            deepLink: `/ece/certificado-incapacidad?id=${d.id}`,
+          }),
+        ),
+        ...rectifPending.map((r) =>
+          buildTask({
+            type: "ECE_RECTIFICACION_PENDING",
+            sourceId: r.id,
+            createdAt: r.ejecutada_en,
+            patient: getPatient(r.paciente_id),
+            description: "Rectificación ECE para revisión DIR",
+            deepLink: `/ece/rectificaciones/cola`,
+          }),
+        ),
+        ...docsToCertify.map((d) =>
+          buildTask({
+            type: "ECE_DOC_TO_CERTIFY",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Documento validado pendiente de certificación DIR",
+            deepLink: `/ece/certificacion?id=${d.id}`,
+          }),
+        ),
+
+        // Sprint B — JCI
+        ...verbalOrders.map((v) =>
+          buildTask({
+            type: "VERBAL_ORDER_TO_CONFIRM",
+            sourceId: v.id,
+            createdAt: v.dictado_en,
+            patient: getPatient(v.paciente_id),
+            description: "Orden verbal sin confirmar (IPSG.2)",
+            deepLink: `/ece/indicaciones?verbalOrder=${v.id}`,
+          }),
+        ),
+        ...criticalResults.map((c) =>
+          buildTask({
+            type: "CRITICAL_RESULT_TO_NOTIFY",
+            sourceId: c.id,
+            createdAt: c.detectado_en,
+            patient: getPatient(c.paciente_id),
+            description: "Resultado crítico sin notificar al médico tratante",
+            deepLink: `/lis/results?critical=${c.id}`,
+          }),
+        ),
+        ...doubleCheck.map((m) => {
+          const item = medItemMap.get(m.prescriptionItemId);
+          return buildTask({
+            type: "DOUBLE_CHECK_PENDING",
+            sourceId: m.id,
+            createdAt: m.administeredAt,
+            patient: getPatient(item?.patientId ?? null),
+            description: `High-alert sin 2da verificación: ${item?.drugName ?? "medicación"}`,
+            deepLink: `/emar?medAdmin=${m.id}`,
+          });
+        }),
+        ...whoIncomplete.map((s) =>
+          buildTask({
+            type: "WHO_CHECKLIST_INCOMPLETE",
+            sourceId: s.id,
+            createdAt: s.scheduledStart,
+            patient: getPatient(s.patientId),
+            description: `WHO incompleto: ${s.procedureDescription.slice(0, 60)}`,
+            deepLink: `/ece/quirofano/who-check?id=${s.id}`,
+          }),
+        ),
+        ...fallsPending.map((f) =>
+          buildTask({
+            type: "FALL_REPORT_PENDING",
+            sourceId: f.id,
+            createdAt: f.fecha_hora,
+            patient: null,
+            description: "Reporte de caída con lesión sin notificar a JCI",
+            deepLink: `/ece/fall-event?id=${f.id}`,
+          }),
+        ),
+        ...morseHigh.map((m) =>
+          buildTask({
+            type: "MORSE_REEVALUATE",
+            sourceId: m.id,
+            createdAt: m.registrado_en,
+            patient: null,
+            description: "Paciente con riesgo alto de caída sin reevaluación 24h",
+            deepLink: `/ece/valoracion-inicial-enfermeria?episodio=${m.episodio_hospitalario_id}`,
+          }),
+        ),
+        ...wristbandMissing.map((e) =>
+          buildTask({
+            type: "WRISTBAND_MISSING",
+            sourceId: e.id,
+            createdAt: e.admittedAt,
+            patient: getPatient(e.patientId),
+            description: "Paciente recién admitido — verificar pulsera GSRN",
+            deepLink: `/patient-id?encounter=${e.id}`,
+          }),
+        ),
+
+        // Sprint C — Quirófano
+        ...preopPending.map((s) =>
+          buildTask({
+            type: "SURGERY_PREOP_PENDING",
+            sourceId: s.id,
+            createdAt: s.scheduledStart,
+            patient: getPatient(s.patientId),
+            description: `Preop pendiente: ${s.procedureDescription.slice(0, 60)}`,
+            deepLink: `/ece/quirofano/preop?id=${s.id}`,
+          }),
+        ),
+        ...consentQxDocs.map((d) =>
+          buildTask({
+            type: "SURGERY_CONSENT_PENDING",
+            sourceId: d.id,
+            createdAt: d.creado_en,
+            patient: getPatient(d.paciente_id),
+            description: "Consentimiento quirúrgico pendiente de firma",
+            deepLink: `/ece/quirofano/consentimiento-qx?id=${d.id}`,
+          }),
+        ),
+        ...anesthOpen.map((s) =>
+          buildTask({
+            type: "ANESTHESIA_RECORD_OPEN",
+            sourceId: s.id,
+            createdAt: s.actualEnd!,
+            patient: getPatient(s.patientId),
+            description: `Anestésico abierto post-cx: ${s.procedureDescription.slice(0, 50)}`,
+            deepLink: `/ece/registro-anestesico?id=${s.id}`,
+          }),
+        ),
+        ...urpaPending.map((u) =>
+          buildTask({
+            type: "URPA_DISCHARGE_PENDING",
+            sourceId: u.id,
+            createdAt: u.registrado_en,
+            patient: null,
+            description: "URPA pendiente de cerrar o evaluar criterios de egreso",
+            deepLink: `/ece/urpa?id=${u.id}`,
+          }),
+        ),
+        ...surgNotePending.map((s) =>
+          buildTask({
+            type: "SURGERY_NOTE_PENDING",
+            sourceId: s.id,
+            createdAt: s.actualEnd!,
+            patient: getPatient(s.patientId),
+            description: `Nota operatoria pendiente: ${s.procedureDescription.slice(0, 50)}`,
+            deepLink: `/ece/quirofano/acto-quirurgico?id=${s.id}`,
+          }),
+        ),
+      ];
+
+      // ── Filtros adicionales ───────────────────────────────────────────────
+      let filtered = tasks;
+      if (filters.onlyOverdue) filtered = filtered.filter((t) => t.isOverdue);
+      if (filters.priority) filtered = filtered.filter((t) => t.priority === filters.priority);
+
+      const priorityRank: Record<TaskPriority, number> = {
+        CRITICAL: 0,
+        HIGH: 1,
+        NORMAL: 2,
+        LOW: 3,
+      };
+      filtered.sort((a, b) => {
+        if (a.isOverdue !== b.isOverdue) return a.isOverdue ? -1 : 1;
+        const pa = priorityRank[a.priority] - priorityRank[b.priority];
+        if (pa !== 0) return pa;
+        return b.ageMinutes - a.ageMinutes;
+      });
+
+      const allTypes = Object.keys(TASK_TYPE_LABEL) as TaskType[];
+      const countsByType = allTypes
+        .map((t) => {
+          const items = tasks.filter((task) => task.type === t);
+          return {
+            type: t,
+            typeLabel: TASK_TYPE_LABEL[t],
+            count: items.length,
+            overdueCount: items.filter((task) => task.isOverdue).length,
+          };
+        })
+        .filter((c) => c.count > 0);
+
+      return {
+        serverNow: now,
+        totalTasks: tasks.length,
+        overdueTasks: tasks.filter((t) => t.isOverdue).length,
+        countsByType,
+        tasks: filtered.slice(0, filters.limit),
+      };
+    }),
+
+  /**
+   * Contador rápido para badge — count-only sobre las fuentes base + NTEC + JCI.
+   */
+  contadorBadge: tenantProcedure.query(
+    async ({ ctx }): Promise<{ total: number; overdue: number }> => {
+      const { prisma, tenant, user } = ctx;
+      const userRoles = tenant.roleCodes;
+      const orgId = tenant.organizationId;
+      const now = new Date();
+
+      function check(type: TaskType): boolean {
+        return userHasAnyRole(userRoles, TASK_REQUIRED_ROLES[type]);
+      }
+
+      const counts = await Promise.all([
+        check("PRESCRIPTION_TO_SIGN")
+          ? prisma.prescription.count({
+              where: { organizationId: orgId, status: "DRAFT", prescriberId: user.id },
+            })
+          : Promise.resolve(0),
+        check("PRESCRIPTION_TO_DISPENSE")
+          ? prisma.prescription.count({
+              where: { organizationId: orgId, status: "SIGNED" },
+            })
+          : Promise.resolve(0),
+        check("TRIAGE_IN_PROGRESS")
+          ? prisma.triageEvaluation.count({
+              where: {
+                organizationId: orgId,
+                ...(tenant.establishmentId
+                  ? { establishmentId: tenant.establishmentId }
+                  : {}),
+                status: "IN_PROGRESS",
+              },
+            })
+          : Promise.resolve(0),
+        check("LAB_TO_PROCESS")
+          ? prisma.labOrder.count({
+              where: { organizationId: orgId, status: { in: ["ORDERED", "COLLECTED"] } },
+            })
+          : Promise.resolve(0),
+        check("IMAGING_TO_REPORT")
+          ? prisma.imagingOrder.count({
+              where: { organizationId: orgId, status: "COMPLETED" },
+            })
+          : Promise.resolve(0),
+        check("MED_TO_ADMINISTER")
+          ? prisma.medicationAdministration.count({
+              where: {
+                organizationId: orgId,
+                status: "SCHEDULED",
+                administeredAt: { lte: new Date(now.getTime() + 4 * 60 * 60_000) },
+              },
+            })
+          : Promise.resolve(0),
+      ]);
+
+      const total = counts.reduce((s, n) => s + n, 0);
+
+      const overdueChecks = await Promise.all([
+        check("PRESCRIPTION_TO_SIGN")
+          ? prisma.prescription.count({
+              where: {
+                organizationId: orgId,
+                status: "DRAFT",
+                prescriberId: user.id,
+                prescribedAt: {
+                  lt: new Date(
+                    now.getTime() - (TASK_SLA_MINUTES.PRESCRIPTION_TO_SIGN ?? 0) * 60_000,
+                  ),
+                },
+              },
+            })
+          : Promise.resolve(0),
+        check("TRIAGE_IN_PROGRESS")
+          ? prisma.triageEvaluation.count({
+              where: {
+                organizationId: orgId,
+                status: "IN_PROGRESS",
+                startedAt: {
+                  lt: new Date(
+                    now.getTime() - (TASK_SLA_MINUTES.TRIAGE_IN_PROGRESS ?? 0) * 60_000,
+                  ),
+                },
+              },
+            })
+          : Promise.resolve(0),
+      ]);
+
+      const overdue = overdueChecks.reduce((s, n) => s + n, 0);
+      return { total, overdue };
+    },
+  ),
+});
