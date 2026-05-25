@@ -269,9 +269,78 @@ export async function computeFinancieros(req: ComputeRequest): Promise<KpiValues
   }
 
   // -- fin_costo_his --------------------------------------------------------
-  // Requiere registro de costos operativos del HIS (suscripción + infra + soporte).
-  // No existe tabla específica todavía. Sigue null hasta sprint dedicado.
-  result.fin_costo_his = null;
+  // Wave 6: tabla HisOperatingCost prorrateada por días de overlap con el
+  // rango del filtro. Divide entre nº de usuarios distintos con actividad
+  // en el mismo periodo (proxy de "usuarios activos del HIS").
+  //
+  // Costos con organizationId NULL (compartidos) se cuentan completos para
+  // cualquier vista; costos asignados a una org específica solo si esa org
+  // está en la selección activa.
+  try {
+    type SumRow = { value: string | null };
+    const desdeISO = req.fechaDesde;
+    const hastaISO = req.fechaHasta;
+
+    // Prorrateo: amount × (días de overlap / días del periodo del costo).
+    const sumRows = hasOrgs
+      ? await prisma.$queryRaw<SumRow[]>`
+          SELECT COALESCE(SUM(
+            amount * GREATEST(0,
+              LEAST("periodEnd"::date, ${hastaISO}::date)
+              - GREATEST("periodStart"::date, ${desdeISO}::date)
+              + 1
+            )::numeric / GREATEST(1, ("periodEnd"::date - "periodStart"::date + 1))
+          ), 0)::text AS value
+          FROM "HisOperatingCost"
+          WHERE "periodEnd" >= ${desdeISO}::date
+            AND "periodStart" <= ${hastaISO}::date
+            AND ("organizationId" IS NULL
+                 OR "organizationId" = ANY(${req.organizationIds}::uuid[]))
+        `
+      : await prisma.$queryRaw<SumRow[]>`
+          SELECT COALESCE(SUM(
+            amount * GREATEST(0,
+              LEAST("periodEnd"::date, ${hastaISO}::date)
+              - GREATEST("periodStart"::date, ${desdeISO}::date)
+              + 1
+            )::numeric / GREATEST(1, ("periodEnd"::date - "periodStart"::date + 1))
+          ), 0)::text AS value
+          FROM "HisOperatingCost"
+          WHERE "periodEnd" >= ${desdeISO}::date
+            AND "periodStart" <= ${hastaISO}::date
+        `;
+    const costoTotal = toNumber(sumRows[0]?.value ?? null);
+
+    // Usuarios activos del periodo
+    const usuariosRows = hasOrgs
+      ? await prisma.$queryRaw<CountRow[]>`
+          SELECT COUNT(DISTINCT "userId")::bigint AS count
+          FROM audit."AuditLog"
+          WHERE "occurredAt" BETWEEN ${desde} AND ${hasta}
+            AND "userId" IS NOT NULL
+            AND "organizationId" = ANY(${req.organizationIds}::uuid[])
+        `
+      : await prisma.$queryRaw<CountRow[]>`
+          SELECT COUNT(DISTINCT "userId")::bigint AS count
+          FROM audit."AuditLog"
+          WHERE "occurredAt" BETWEEN ${desde} AND ${hasta}
+            AND "userId" IS NOT NULL
+        `;
+    const usuariosActivos = Number(usuariosRows[0]?.count ?? 0);
+
+    if (usuariosActivos === 0 || costoTotal === 0) {
+      result.fin_costo_his = null;
+    } else {
+      const costoPorUsuario = costoTotal / usuariosActivos;
+      result.fin_costo_his = {
+        display: `$ ${costoPorUsuario.toLocaleString("es-SV", { maximumFractionDigits: 2 })}`,
+        semaforo: "neutro", // sin meta absoluta; el catálogo pide tendencia descendente
+        delta: `$ ${costoTotal.toLocaleString("es-SV")} total · ${usuariosActivos} usuarios activos`,
+      };
+    }
+  } catch {
+    result.fin_costo_his = null;
+  }
 
   return result;
 }
