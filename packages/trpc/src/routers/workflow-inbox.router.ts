@@ -484,6 +484,242 @@ export const workflowInboxRouter = router({
         : [];
 
       // ═══════════════════════════════════════════════════════════════════════
+      // OLA 2 — Camas / Flujo paciente (4)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // BED_TO_CLEAN: Bed.status=DIRTY
+      const bedsToClean = isEnabled("BED_TO_CLEAN")
+        ? await prisma.bed.findMany({
+            where: {
+              organizationId: orgId,
+              ...(tenant.establishmentId ? { establishmentId: tenant.establishmentId } : {}),
+              status: "DIRTY",
+              active: true,
+            },
+            select: { id: true, code: true, updatedAt: true },
+            orderBy: { updatedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // BED_TO_RELEASE: InpatientAdmission status=DISCHARGE_PENDING (alta firmada sin liberar)
+      const bedsToRelease = isEnabled("BED_TO_RELEASE")
+        ? await prisma.inpatientAdmission.findMany({
+            where: {
+              organizationId: orgId,
+              status: "DISCHARGE_PENDING",
+              dischargedAt: null,
+              deletedAt: null,
+            },
+            select: { id: true, updatedAt: true, patientId: true, bedId: true },
+            orderBy: { updatedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // ADMISSION_VITALS_MISSING: InpatientAdmission ACTIVE sin signos vitales en 30min
+      const admissionsNoVitals = isEnabled("ADMISSION_VITALS_MISSING")
+        ? await prisma.inpatientAdmission.findMany({
+            where: {
+              organizationId: orgId,
+              status: "ACTIVE",
+              physicalAdmittedAt: {
+                gte: new Date(now.getTime() - 12 * 60 * 60_000), // últimas 12h
+                lte: new Date(now.getTime() - 30 * 60_000),       // hace >30min
+              },
+              vitalsLog: { none: {} }, // sin ningún registro de vitals
+            },
+            select: { id: true, physicalAdmittedAt: true, patientId: true },
+            orderBy: { physicalAdmittedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 2 — Consulta externa (3)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // APPOINTMENT_TO_CHECKIN: cita próxima sin check-in (entre -30m y +120m)
+      const appointmentsToCheckin = isEnabled("APPOINTMENT_TO_CHECKIN")
+        ? await prisma.outpatientAppointment.findMany({
+            where: {
+              organizationId: orgId,
+              ...(tenant.establishmentId ? { establishmentId: tenant.establishmentId } : {}),
+              status: { in: ["SCHEDULED", "CONFIRMED"] },
+              scheduledAt: {
+                gte: new Date(now.getTime() - 30 * 60_000),
+                lte: new Date(now.getTime() + 120 * 60_000),
+              },
+              deletedAt: null,
+            },
+            select: { id: true, scheduledAt: true, patientId: true, reason: true },
+            orderBy: { scheduledAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // CONSULTATION_NOTE_PENDING: cita COMPLETED >2h sin nota EHR
+      const consultsNoNote = isEnabled("CONSULTATION_NOTE_PENDING")
+        ? await prisma.outpatientAppointment.findMany({
+            where: {
+              organizationId: orgId,
+              status: "COMPLETED",
+              scheduledAt: {
+                gte: new Date(now.getTime() - 7 * 24 * 60 * 60_000), // semana
+                lte: new Date(now.getTime() - 2 * 60 * 60_000),       // >2h
+              },
+              consultations: { none: {} },
+              deletedAt: null,
+            },
+            select: { id: true, scheduledAt: true, patientId: true, reason: true },
+            orderBy: { scheduledAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // APPOINTMENT_NO_SHOW_FOLLOWUP: NO_SHOW últimas 24h
+      const appointmentsNoShow = isEnabled("APPOINTMENT_NO_SHOW_FOLLOWUP")
+        ? await prisma.outpatientAppointment.findMany({
+            where: {
+              organizationId: orgId,
+              status: "NO_SHOW",
+              scheduledAt: {
+                gte: new Date(now.getTime() - 24 * 60 * 60_000),
+              },
+              deletedAt: null,
+            },
+            select: { id: true, scheduledAt: true, patientId: true, reason: true },
+            orderBy: { scheduledAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 2 — Estudios pendientes (3)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // RESPIRATORY_ORDER_PENDING: RespiratoryOrder ACTIVE en última hora
+      const respPending = isEnabled("RESPIRATORY_ORDER_PENDING")
+        ? await prisma.respiratoryOrder.findMany({
+            where: {
+              organizationId: orgId,
+              status: "ACTIVE",
+              createdAt: { gte: new Date(now.getTime() - 60 * 60_000) },
+            },
+            select: { id: true, createdAt: true, patientId: true },
+            orderBy: { createdAt: "asc" },
+            take: 100,
+          }).catch(() => [])
+        : [];
+
+      // NUTRITION_ORDER_PENDING: NutritionOrder ORDERED (pendiente aprobación)
+      const nutriPending = isEnabled("NUTRITION_ORDER_PENDING")
+        ? await prisma.nutritionOrder.findMany({
+            where: { organizationId: orgId, status: "ORDERED" },
+            select: { id: true, createdAt: true, patientId: true },
+            orderBy: { createdAt: "asc" },
+            take: 100,
+          }).catch(() => [])
+        : [];
+
+      // STUDY_TO_SCHEDULE: ImagingOrder ORDERED sin SCHEDULED
+      const studiesToSchedule = isEnabled("STUDY_TO_SCHEDULE")
+        ? await prisma.imagingOrder.findMany({
+            where: { organizationId: orgId, status: "ORDERED" },
+            select: { id: true, orderedAt: true, patientId: true },
+            orderBy: { orderedAt: "asc" },
+            take: 100,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 2 — Maternidad (3) — queries raw sobre schema ece (resilientes)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      type ParteRow = { id: string; ultima_actualizacion: Date; paciente_id: string };
+      const partogramaOverdue: ParteRow[] = isEnabled("PARTOGRAMA_OVERDUE")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT p.id::text AS id,
+                   p.actualizado_en AS ultima_actualizacion,
+                   ea.paciente_id::text AS paciente_id
+            FROM ece.partograma p
+            JOIN ece.episodio_atencion ea ON ea.id = p.episodio_id
+            WHERE p.estado_registro = 'borrador'
+              AND p.actualizado_en < now() - interval '30 minutes'
+            ORDER BY p.actualizado_en ASC
+            LIMIT 100
+          `) as Promise<ParteRow[]>).catch(() => [] as ParteRow[])
+        : [];
+
+      type RnRow = { id: string; nacimiento_en: Date; paciente_id: string };
+      const rnApgarPending: RnRow[] = isEnabled("RN_APGAR_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT rn.id::text AS id,
+                   rn.fecha_nacimiento AS nacimiento_en,
+                   rn.paciente_id::text AS paciente_id
+            FROM ece.atencion_rn rn
+            WHERE (rn.apgar_1min IS NULL OR rn.apgar_5min IS NULL)
+              AND rn.fecha_nacimiento > now() - interval '10 minutes'
+            ORDER BY rn.fecha_nacimiento ASC
+            LIMIT 50
+          `) as Promise<RnRow[]>).catch(() => [] as RnRow[])
+        : [];
+
+      type NrpRow = { id: string; evento_en: Date; paciente_id: string };
+      const nrpPostevent: NrpRow[] = isEnabled("NRP_POSTEVENT_DEBRIEF")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT n.id::text AS id,
+                   n.fecha_hora AS evento_en,
+                   rn.paciente_id::text AS paciente_id
+            FROM ece.reanimacion_neonatal n
+            LEFT JOIN ece.atencion_rn rn ON rn.id = n.atencion_rn_id
+            WHERE n.debrief_completado = false
+              AND n.fecha_hora < now() - interval '24 hours'
+              AND n.fecha_hora > now() - interval '7 days'
+            ORDER BY n.fecha_hora ASC
+            LIMIT 50
+          `) as Promise<NrpRow[]>).catch(() => [] as NrpRow[])
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 2 — Banco de sangre (2)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // BLOOD_VERIFY_PENDING: TransfusionRequest APPROVED sin Transfusion asociada
+      const bloodVerifyPending = isEnabled("BLOOD_VERIFY_PENDING")
+        ? await prisma.transfusionRequest.findMany({
+            where: {
+              organizationId: orgId,
+              status: "APPROVED",
+            },
+            select: { id: true, createdAt: true, patientId: true },
+            orderBy: { createdAt: "asc" },
+            take: 100,
+          }).catch(() => [])
+        : [];
+
+      // BLOOD_REACTION_REPORT: Transfusion con adverseReactions JSONB no nulo sin reporte
+      // Heurística: status=COMPLETED + adverseReactions IS NOT NULL en últimas 7d
+      type BloodReactRow = {
+        id: string;
+        started_at: Date;
+        encounter_id: string;
+      };
+      const bloodReactPending: BloodReactRow[] = isEnabled("BLOOD_REACTION_REPORT")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   "startedAt" AS started_at,
+                   "encounterId"::text AS encounter_id
+            FROM "Transfusion"
+            WHERE "organizationId" = $1::uuid
+              AND "adverseReactions" IS NOT NULL
+              AND "completedAt" > now() - interval '7 days'
+            ORDER BY "startedAt" ASC
+            LIMIT 50
+          `, orgId) as Promise<BloodReactRow[]>).catch(() => [] as BloodReactRow[])
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
       // Enriquecer Patient en batch único
       // ═══════════════════════════════════════════════════════════════════════
 
@@ -501,7 +737,21 @@ export const workflowInboxRouter = router({
         ...preopPending.map((s) => s.patientId),
         ...anesthOpen.map((s) => s.patientId),
         ...surgNotePending.map((s) => s.patientId),
+        // Ola 2
+        ...bedsToRelease.map((a) => a.patientId),
+        ...admissionsNoVitals.map((a) => a.patientId),
+        ...appointmentsToCheckin.map((a) => a.patientId),
+        ...consultsNoNote.map((a) => a.patientId),
+        ...appointmentsNoShow.map((a) => a.patientId),
+        ...respPending.map((r) => r.patientId),
+        ...nutriPending.map((n) => n.patientId),
+        ...studiesToSchedule.map((s) => s.patientId),
+        ...bloodVerifyPending.map((b) => b.patientId),
       ]);
+
+      for (const p of partogramaOverdue) patientIds.add(p.paciente_id);
+      for (const r of rnApgarPending) patientIds.add(r.paciente_id);
+      for (const n of nrpPostevent) patientIds.add(n.paciente_id);
 
       // Patient IDs de tablas `ece` necesitan resolverse via ece.paciente → public.Patient
       // por bridge. Para simplificar, usamos las IDs raw como están (las tablas ece
@@ -925,6 +1175,156 @@ export const workflowInboxRouter = router({
             patient: getPatient(s.patientId),
             description: `Nota operatoria pendiente: ${s.procedureDescription.slice(0, 50)}`,
             deepLink: `/ece/quirofano/acto-quirurgico?id=${s.id}`,
+          }),
+        ),
+
+        // ─── Ola 2 — Camas / Flujo (4) ─────────────────────────────────────
+        ...bedsToClean.map((b) =>
+          buildTask({
+            type: "BED_TO_CLEAN",
+            sourceId: b.id,
+            createdAt: b.updatedAt,
+            patient: null,
+            description: `Cama ${b.code} en limpieza post-alta`,
+            deepLink: `/beds`,
+          }),
+        ),
+        ...bedsToRelease.map((a) =>
+          buildTask({
+            type: "BED_TO_RELEASE",
+            sourceId: a.id,
+            createdAt: a.updatedAt,
+            patient: getPatient(a.patientId),
+            description: "Alta firmada — liberar cama y trasladar paciente",
+            deepLink: `/admission/${a.id}/timeline`,
+          }),
+        ),
+        ...admissionsNoVitals.map((a) =>
+          buildTask({
+            type: "ADMISSION_VITALS_MISSING",
+            sourceId: a.id,
+            createdAt: a.physicalAdmittedAt!,
+            patient: getPatient(a.patientId),
+            description: "Admisión activa sin signos vitales iniciales",
+            deepLink: `/inpatient?admission=${a.id}`,
+          }),
+        ),
+
+        // ─── Ola 2 — Consulta externa (3) ──────────────────────────────────
+        ...appointmentsToCheckin.map((a) =>
+          buildTask({
+            type: "APPOINTMENT_TO_CHECKIN",
+            sourceId: a.id,
+            createdAt: a.scheduledAt,
+            patient: getPatient(a.patientId),
+            description: a.reason ?? "Cita próxima — pendiente check-in",
+            deepLink: `/outpatient?appointment=${a.id}`,
+          }),
+        ),
+        ...consultsNoNote.map((a) =>
+          buildTask({
+            type: "CONSULTATION_NOTE_PENDING",
+            sourceId: a.id,
+            createdAt: a.scheduledAt,
+            patient: getPatient(a.patientId),
+            description: a.reason ?? "Consulta atendida — falta nota EHR",
+            deepLink: `/outpatient?appointment=${a.id}`,
+          }),
+        ),
+        ...appointmentsNoShow.map((a) =>
+          buildTask({
+            type: "APPOINTMENT_NO_SHOW_FOLLOWUP",
+            sourceId: a.id,
+            createdAt: a.scheduledAt,
+            patient: getPatient(a.patientId),
+            description: a.reason ?? "Cita perdida — seguimiento médico",
+            deepLink: `/outpatient?appointment=${a.id}`,
+          }),
+        ),
+
+        // ─── Ola 2 — Estudios (3) ──────────────────────────────────────────
+        ...respPending.map((r) =>
+          buildTask({
+            type: "RESPIRATORY_ORDER_PENDING",
+            sourceId: r.id,
+            createdAt: r.createdAt,
+            patient: getPatient(r.patientId),
+            description: "Orden respiratoria activa — ejecutar terapia",
+            deepLink: `/respiratory?id=${r.id}`,
+          }),
+        ),
+        ...nutriPending.map((n) =>
+          buildTask({
+            type: "NUTRITION_ORDER_PENDING",
+            sourceId: n.id,
+            createdAt: n.createdAt,
+            patient: getPatient(n.patientId),
+            description: "Orden nutricional pendiente de aprobación",
+            deepLink: `/nutrition?id=${n.id}`,
+          }),
+        ),
+        ...studiesToSchedule.map((s) =>
+          buildTask({
+            type: "STUDY_TO_SCHEDULE",
+            sourceId: s.id,
+            createdAt: s.orderedAt,
+            patient: getPatient(s.patientId),
+            description: "Estudio de imagen sin programar",
+            deepLink: `/imaging?id=${s.id}`,
+          }),
+        ),
+
+        // ─── Ola 2 — Maternidad (3) ────────────────────────────────────────
+        ...partogramaOverdue.map((p) =>
+          buildTask({
+            type: "PARTOGRAMA_OVERDUE",
+            sourceId: p.id,
+            createdAt: p.ultima_actualizacion,
+            patient: getPatient(p.paciente_id),
+            description: "Partograma sin actualización >30min",
+            deepLink: `/ece/obstetricia/partograma?id=${p.id}`,
+          }),
+        ),
+        ...rnApgarPending.map((r) =>
+          buildTask({
+            type: "RN_APGAR_PENDING",
+            sourceId: r.id,
+            createdAt: r.nacimiento_en,
+            patient: getPatient(r.paciente_id),
+            description: "RN sin APGAR a 1m/5m (críticamente urgente)",
+            deepLink: `/ece/atencion-rn?id=${r.id}`,
+          }),
+        ),
+        ...nrpPostevent.map((n) =>
+          buildTask({
+            type: "NRP_POSTEVENT_DEBRIEF",
+            sourceId: n.id,
+            createdAt: n.evento_en,
+            patient: getPatient(n.paciente_id),
+            description: "Reanimación neonatal sin debrief post-evento",
+            deepLink: `/ece/reanimacion-neonatal?id=${n.id}`,
+          }),
+        ),
+
+        // ─── Ola 2 — Banco de sangre (2) ───────────────────────────────────
+        ...bloodVerifyPending.map((b) =>
+          buildTask({
+            type: "BLOOD_VERIFY_PENDING",
+            sourceId: b.id,
+            createdAt: b.createdAt,
+            patient: getPatient(b.patientId),
+            description: "Unidad lista — verificar 2-IDs antes de transfundir",
+            deepLink: `/blood-bank?request=${b.id}`,
+          }),
+        ),
+        ...bloodReactPending.map((b) =>
+          buildTask({
+            type: "BLOOD_REACTION_REPORT",
+            sourceId: b.id,
+            createdAt: b.started_at,
+            patient: null,
+            description: "Transfusión con reacción adversa — reportar hemovigilancia",
+            deepLink: `/blood-bank?transfusion=${b.id}`,
           }),
         ),
       ];

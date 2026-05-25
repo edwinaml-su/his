@@ -53,6 +53,31 @@ export const taskTypeEnum = z.enum([
   "ANESTHESIA_RECORD_OPEN",       // Anestésico sin cerrar post-cx
   "URPA_DISCHARGE_PENDING",       // URPA con criterios cumplidos
   "SURGERY_NOTE_PENDING",         // Cirugía terminada sin nota operatoria
+
+  // ─── Ola 2 — Camas / Flujo paciente (4) ───────────────────────────────────
+  "BED_TO_CLEAN",                 // Bed.status=DIRTY pendiente de limpieza
+  "BED_TO_RELEASE",               // Alta firmada pero cama no liberada
+  "TRANSFER_PENDING_ACCEPT",      // Traslado solicitado sin aceptar destino
+  "ADMISSION_VITALS_MISSING",     // Admisión activa sin signos vitales iniciales
+
+  // ─── Ola 2 — Consulta externa (3) ─────────────────────────────────────────
+  "APPOINTMENT_TO_CHECKIN",       // Cita próxima sin check-in
+  "CONSULTATION_NOTE_PENDING",    // Cita atendida sin nota EHR
+  "APPOINTMENT_NO_SHOW_FOLLOWUP", // Cita perdida — seguimiento médico
+
+  // ─── Ola 2 — Estudios pendientes (3 nuevos + 2 activados de Ola 1) ────────
+  "RESPIRATORY_ORDER_PENDING",    // Orden respiratoria sin ejecutar
+  "NUTRITION_ORDER_PENDING",      // Orden nutricional sin aprobar
+  "STUDY_TO_SCHEDULE",            // ImagingOrder ORDERED sin SCHEDULED
+
+  // ─── Ola 2 — Maternidad (3) ────────────────────────────────────────────────
+  "PARTOGRAMA_OVERDUE",           // Partograma sin actualización >30min
+  "RN_APGAR_PENDING",             // RN sin APGAR a 1m/5m
+  "NRP_POSTEVENT_DEBRIEF",        // Post-reanimación neonatal sin debrief
+
+  // ─── Ola 2 — Banco de sangre (2) ───────────────────────────────────────────
+  "BLOOD_VERIFY_PENDING",         // TransfusionRequest APPROVED sin transfusión iniciada
+  "BLOOD_REACTION_REPORT",        // Transfusion con reacción adversa sin reporte
 ]);
 export type TaskType = z.infer<typeof taskTypeEnum>;
 
@@ -96,6 +121,23 @@ export const TASK_SLA_MINUTES: Record<TaskType, number | null> = {
   ANESTHESIA_RECORD_OPEN:    120,
   URPA_DISCHARGE_PENDING:     30,
   SURGERY_NOTE_PENDING:     1440,
+
+  // Ola 2
+  BED_TO_CLEAN:              120,
+  BED_TO_RELEASE:             60,
+  TRANSFER_PENDING_ACCEPT:   240,
+  ADMISSION_VITALS_MISSING:   30,
+  APPOINTMENT_TO_CHECKIN:    -30, // negativo = SLA "pre-hora" (anticipo de 30m)
+  CONSULTATION_NOTE_PENDING: 120,
+  APPOINTMENT_NO_SHOW_FOLLOWUP: 1440,
+  RESPIRATORY_ORDER_PENDING:  60,
+  NUTRITION_ORDER_PENDING:   240,
+  STUDY_TO_SCHEDULE:         240,
+  PARTOGRAMA_OVERDUE:         30,
+  RN_APGAR_PENDING:            5,
+  NRP_POSTEVENT_DEBRIEF:    1440,
+  BLOOD_VERIFY_PENDING:        5,
+  BLOOD_REACTION_REPORT:     240,
 };
 
 /** Roles RBAC que pueden ejecutar cada tipo de tarea. */
@@ -134,6 +176,23 @@ export const TASK_REQUIRED_ROLES: Record<TaskType, string[]> = {
   ANESTHESIA_RECORD_OPEN:    ["ANESTH", "MC"],
   URPA_DISCHARGE_PENDING:    ["ANESTH", "MC"],
   SURGERY_NOTE_PENDING:      ["MC", "PHYSICIAN"],
+
+  // Ola 2
+  BED_TO_CLEAN:              ["NURSE", "ENF", "LIMPIEZA", "ADM"],
+  BED_TO_RELEASE:            ["ADM", "NURSE", "ENF"],
+  TRANSFER_PENDING_ACCEPT:   ["MC", "PHYSICIAN"],
+  ADMISSION_VITALS_MISSING:  ["NURSE", "ENF"],
+  APPOINTMENT_TO_CHECKIN:    ["ADM", "RECEPCION"],
+  CONSULTATION_NOTE_PENDING: ["MC", "PHYSICIAN"],
+  APPOINTMENT_NO_SHOW_FOLLOWUP: ["MC", "PHYSICIAN"],
+  RESPIRATORY_ORDER_PENDING: ["RESP", "TERAPISTA", "NURSE"],
+  NUTRITION_ORDER_PENDING:   ["NUTRI", "MC"],
+  STUDY_TO_SCHEDULE:         ["RAD", "RADIOLOGO", "ADM"],
+  PARTOGRAMA_OVERDUE:        ["OBSTETRA", "MC", "NURSE", "ENF"],
+  RN_APGAR_PENDING:          ["NEONATOLOGO", "MC", "NURSE", "ENF"],
+  NRP_POSTEVENT_DEBRIEF:     ["NEONATOLOGO", "MC", "ENF"],
+  BLOOD_VERIFY_PENDING:      ["NURSE", "ENF", "BB"],
+  BLOOD_REACTION_REPORT:     ["MC", "PHYSICIAN", "BB"],
 };
 
 /** Label legible en español por tipo. */
@@ -172,6 +231,23 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   ANESTHESIA_RECORD_OPEN:    "Cerrar registro anestésico",
   URPA_DISCHARGE_PENDING:    "Egreso URPA",
   SURGERY_NOTE_PENDING:      "Escribir nota operatoria",
+
+  // Ola 2
+  BED_TO_CLEAN:              "Limpiar cama (post-alta)",
+  BED_TO_RELEASE:            "Liberar cama (alta firmada)",
+  TRANSFER_PENDING_ACCEPT:   "Aceptar traslado entrante",
+  ADMISSION_VITALS_MISSING:  "Capturar signos vitales al ingreso",
+  APPOINTMENT_TO_CHECKIN:    "Check-in de cita próxima",
+  CONSULTATION_NOTE_PENDING: "Documentar consulta atendida",
+  APPOINTMENT_NO_SHOW_FOLLOWUP: "Seguimiento por no-asistencia",
+  RESPIRATORY_ORDER_PENDING: "Ejecutar orden respiratoria",
+  NUTRITION_ORDER_PENDING:   "Aprobar orden nutricional",
+  STUDY_TO_SCHEDULE:         "Programar estudio de imagen",
+  PARTOGRAMA_OVERDUE:        "Actualizar partograma (>30min)",
+  RN_APGAR_PENDING:          "Registrar APGAR del RN",
+  NRP_POSTEVENT_DEBRIEF:     "Debrief post reanimación neonatal",
+  BLOOD_VERIFY_PENDING:      "Verificar 2-IDs para transfusión",
+  BLOOD_REACTION_REPORT:     "Reportar reacción transfusional",
 };
 
 export const taskSchema = z.object({
