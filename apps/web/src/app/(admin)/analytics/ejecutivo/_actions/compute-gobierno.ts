@@ -97,15 +97,67 @@ export async function computeGobierno(req: ComputeRequest): Promise<KpiValuesMap
     result.gob_backlog = null;
   }
 
-  // -- gob_satisfaccion (NPS / CSAT) ---------------------------------------
-  // Requiere plataforma de encuestas integrada al HIS. No hay tabla.
-  result.gob_satisfaccion = null;
+  // -- gob_satisfaccion (NPS) ----------------------------------------------
+  // Wave 7 — encuestas NPS desde /feedback. NPS = %Promotores − %Detractores.
+  //   Promotor:   score 9-10
+  //   Pasivo:     score 7-8
+  //   Detractor:  score 0-6
+  try {
+    type BreakdownRow = { promotores: bigint; detractores: bigint; total: bigint };
+    const rows = hasOrgs
+      ? await prisma.$queryRaw<BreakdownRow[]>`
+          SELECT
+            COUNT(*) FILTER (WHERE score >= 9)::bigint  AS promotores,
+            COUNT(*) FILTER (WHERE score <= 6)::bigint  AS detractores,
+            COUNT(*)::bigint                            AS total
+          FROM "NpsResponse"
+          WHERE "submittedAt" BETWEEN ${desde} AND ${hasta}
+            AND ("organizationId" IS NULL
+                 OR "organizationId" = ANY(${req.organizationIds}::uuid[]))
+        `
+      : await prisma.$queryRaw<BreakdownRow[]>`
+          SELECT
+            COUNT(*) FILTER (WHERE score >= 9)::bigint  AS promotores,
+            COUNT(*) FILTER (WHERE score <= 6)::bigint  AS detractores,
+            COUNT(*)::bigint                            AS total
+          FROM "NpsResponse"
+          WHERE "submittedAt" BETWEEN ${desde} AND ${hasta}
+        `;
+    const total = Number(rows[0]?.total ?? 0);
+    if (total === 0) {
+      result.gob_satisfaccion = null;
+    } else {
+      const promotores = Number(rows[0]!.promotores);
+      const detractores = Number(rows[0]!.detractores);
+      const nps = ((promotores - detractores) / total) * 100;
+      result.gob_satisfaccion = {
+        display: `${nps.toFixed(0)}`,
+        semaforo: nps >= 30 ? "verde" : nps >= 0 ? "ambar" : "rojo",
+        delta: `${promotores} promotores · ${detractores} detractores · ${total} respuestas`,
+      };
+    }
+  } catch {
+    result.gob_satisfaccion = null;
+  }
 
   // -- gob_cambios_estandar ------------------------------------------------
-  // Requiere análisis de commits (conventional commit tags feat vs chore).
-  // Vercel serverless no tiene .git accesible. Sprint dedicado integra
-  // GitHub API con token para clasificar PRs cerrados.
-  result.gob_cambios_estandar = null;
+  // Wave 7 — GitHub commit analyzer: clasifica commits por conventional tag.
+  // Requiere env var GITHUB_TOKEN. Si falta, queda null + badge "Pendiente".
+  try {
+    const { analyzeCommitsInRange } = await import("@/lib/github/commit-analyzer");
+    const analysis = await analyzeCommitsInRange(desde, hasta);
+    if (analysis == null || analysis.total === 0) {
+      result.gob_cambios_estandar = null;
+    } else {
+      result.gob_cambios_estandar = {
+        display: fmtUnidad(analysis.pct, "%"),
+        semaforo: semaforoMayor(analysis.pct, 80, 60),
+        delta: `${analysis.estandar}/${analysis.total} commits feat/fix/chore`,
+      };
+    }
+  } catch {
+    result.gob_cambios_estandar = null;
+  }
 
   return result;
 }

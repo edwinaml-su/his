@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { NotificationsBadge } from "@/components/notifications-badge";
 import { OrgRoleSwitcher } from "@/components/org-role-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { PerfTracker } from "@/components/perf-tracker";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       }
     >
       {children}
+      <PerfTracker />
     </AppShell>
   );
 }
