@@ -22,6 +22,10 @@ import { computeKpiValue } from "./_lib/compute-kpis";
 import { KpiCard, type KpiValue } from "./_components/kpi-card";
 import { KpiSection } from "./_components/kpi-section";
 import { Toolbar } from "./_components/toolbar";
+import { computeAdopcion } from "./_actions/compute-adopcion";
+import { computeCalidad } from "./_actions/compute-calidad";
+import { computeAsistenciales } from "./_actions/compute-asistenciales";
+import { computeSeguridad } from "./_actions/compute-seguridad";
 
 function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -36,9 +40,9 @@ export default function DashboardEjecutivoPage() {
   const [fechaDesde, setFechaDesde] = React.useState(isoMinus(30));
   const [fechaHasta, setFechaHasta] = React.useState(isoToday());
 
-  // Snapshot: una entrada por KPI con su valor calculado para el rango actual.
-  // Wave 1: organizationIds vendrá del context (single-org primaria + adicionales si rol multi-org).
-  const snapshot = React.useMemo(() => {
+  // Snapshot inicial: valores sync (mock/pending) — los "real" se sobreescriben
+  // cuando llegan los resultados async de los server actions paralelos.
+  const baseSnapshot = React.useMemo(() => {
     const ctx = {
       organizationIds: [],
       fechaDesde: new Date(fechaDesde),
@@ -49,6 +53,37 @@ export default function DashboardEjecutivoPage() {
       value: computeKpiValue(kpi, ctx) as KpiValue | null,
     }));
   }, [fechaDesde, fechaHasta]);
+
+  // Overrides async (Wave 1): valores reales calculados server-side.
+  const [realOverrides, setRealOverrides] = React.useState<Record<string, KpiValue | null>>({});
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const req = { organizationIds: [], fechaDesde, fechaHasta };
+    Promise.allSettled([
+      computeAdopcion(req),
+      computeCalidad(req),
+      computeAsistenciales(req),
+      computeSeguridad(req),
+    ]).then((results) => {
+      if (cancelled) return;
+      const merged: Record<string, KpiValue | null> = {};
+      for (const r of results) {
+        if (r.status === "fulfilled") Object.assign(merged, r.value);
+      }
+      setRealOverrides(merged);
+    });
+    return () => { cancelled = true; };
+  }, [fechaDesde, fechaHasta]);
+
+  // Merge: override por kpi.id si hay valor async; fallback al base.
+  const snapshot = React.useMemo(
+    () => baseSnapshot.map(({ kpi, value }) => ({
+      kpi,
+      value: (realOverrides[kpi.id] ?? value) as KpiValue | null,
+    })),
+    [baseSnapshot, realOverrides],
+  );
 
   const snapshotByCategoria = React.useMemo(() => {
     const grouped = new Map<Categoria, typeof snapshot>();
