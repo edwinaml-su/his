@@ -63,6 +63,7 @@ import {
   Paperclip,
   ClipboardPlus,
   TriangleAlert,
+  Inbox,
   Menu,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
@@ -105,6 +106,8 @@ const SECTIONS: NavSection[] = [
         description: "Tablero ejecutivo con 36 KPIs en 7 categorías (clínicos, financieros, gobierno)." },
       { href: "/feedback", label: "Mi feedback (NPS)", icon: HeartHandshake,
         description: "Encuestas de satisfacción del personal (NPS) y comentarios." },
+      { href: "/tareas", label: "Mi Bandeja (BPM)", icon: Inbox,
+        description: "Bandeja centralizada de tareas pendientes según rol (BPM). Recetas, lab, imagen, triages, bedside." },
     ],
   },
   {

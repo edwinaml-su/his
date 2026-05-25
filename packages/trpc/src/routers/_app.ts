@@ -205,6 +205,8 @@ import { servicePriceListRouter } from "./service-price-list.router";
 import { financeOverviewRouter } from "./finance-overview.router";
 // Integración SRS — registro sanitario El Salvador (read + import a Drug)
 import { srsRegistroRouter } from "./srs-registro.router";
+// Workflow Inbox — bandeja BPM centralizada con routing RBAC
+import { workflowInboxRouter } from "./workflow-inbox.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -412,6 +414,8 @@ export const appRouter = router({
   financeOverview: financeOverviewRouter,
   // Integración SRS — registro sanitario El Salvador
   srsRegistro: srsRegistroRouter,
+  // Workflow Inbox — bandeja BPM con routing RBAC
+  workflowInbox: workflowInboxRouter,
 });
 
 export type AppRouter = typeof appRouter;
