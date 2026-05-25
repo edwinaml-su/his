@@ -187,6 +187,8 @@ import { fallEventRouter } from "./ece/fall-event.router";
 import { eceOrdenIngresoRouter } from "./ece/orden-ingreso.router";
 // DOC_ASOC — Documentos Clínicos Asociados (NTEC §15, §38)
 import { documentoAsociadoRouter } from "./ece/documento-asociado.router";
+// CERT_INC — Certificado de Incapacidad ISSS (ISSS Reglamento + NTEC §22)
+import { certificadoIncapacidadRouter } from "./ece/certificado-incapacidad.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -376,6 +378,8 @@ export const appRouter = router({
   eceOrdenIngreso: eceOrdenIngresoRouter,
   // DOC_ASOC — Documentos Clínicos Asociados (NTEC §15, §38)
   eceDocAsoc: documentoAsociadoRouter,
+  // CERT_INC — Certificado de Incapacidad ISSS (ISSS Reglamento + NTEC §22)
+  eceCertificadoIncapacidad: certificadoIncapacidadRouter,
 });
 
 export type AppRouter = typeof appRouter;
