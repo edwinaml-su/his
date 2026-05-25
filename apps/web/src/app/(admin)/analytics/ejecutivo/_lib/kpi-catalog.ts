@@ -508,7 +508,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Tarjeta + comparativo trimestral",
     clasificacion: "estrategico",
     responsable: "Dirección financiera / TI",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
 
