@@ -72,7 +72,7 @@ function typeBgColor(type: string): string {
   if (type.startsWith("PRESCRIPTION") || type.startsWith("MED_")) return "bg-emerald-100 text-emerald-700";
   if (type.startsWith("TRIAGE") || type === "WRISTBAND_MISSING") return "bg-red-100 text-red-700";
   if (type.startsWith("LAB_")) return "bg-purple-100 text-purple-700";
-  if (type.startsWith("IMAGING_")) return "bg-indigo-100 text-indigo-700";
+  if (type.startsWith("IMAGING_") || type === "STUDY_TO_SCHEDULE") return "bg-indigo-100 text-indigo-700";
   if (type.startsWith("SURGERY_") || type === "ANESTHESIA_RECORD_OPEN" || type === "URPA_DISCHARGE_PENDING" || type === "WHO_CHECKLIST_INCOMPLETE")
     return "bg-rose-100 text-rose-700";
   if (type.startsWith("ECE_") || type === "HC_TO_SIGN" || type === "EPICRISIS_TO_SIGN" || type === "EVOLUTION_TO_WRITE" ||
@@ -82,6 +82,15 @@ function typeBgColor(type: string): string {
   if (type === "VERBAL_ORDER_TO_CONFIRM" || type === "CRITICAL_RESULT_TO_NOTIFY" ||
       type === "DOUBLE_CHECK_PENDING" || type === "FALL_REPORT_PENDING" || type === "MORSE_REEVALUATE")
     return "bg-pink-100 text-pink-700";
+  // Ola 2
+  if (type === "BED_TO_CLEAN" || type === "BED_TO_RELEASE") return "bg-sky-100 text-sky-700";
+  if (type === "TRANSFER_PENDING_ACCEPT" || type === "ADMISSION_VITALS_MISSING") return "bg-blue-100 text-blue-700";
+  if (type === "APPOINTMENT_TO_CHECKIN" || type === "CONSULTATION_NOTE_PENDING" || type === "APPOINTMENT_NO_SHOW_FOLLOWUP")
+    return "bg-teal-100 text-teal-700";
+  if (type === "RESPIRATORY_ORDER_PENDING" || type === "NUTRITION_ORDER_PENDING") return "bg-violet-100 text-violet-700";
+  if (type === "PARTOGRAMA_OVERDUE" || type === "RN_APGAR_PENDING" || type === "NRP_POSTEVENT_DEBRIEF")
+    return "bg-fuchsia-100 text-fuchsia-700";
+  if (type === "BLOOD_VERIFY_PENDING" || type === "BLOOD_REACTION_REPORT") return "bg-red-100 text-red-700";
   return "bg-slate-100 text-slate-700";
 }
 
