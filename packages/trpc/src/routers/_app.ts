@@ -193,6 +193,12 @@ import { certificadoIncapacidadRouter } from "./ece/certificado-incapacidad.rout
 import { costCenterRouter } from "./cost-center.router";
 // Finance — Invoice, InvoiceItem, InvoicePayment, InsuranceClaim (Wave 8b)
 import { invoiceRouter } from "./invoice.router";
+// Wave 9 — Costos Operativos HIS
+import { operatingCostRouter } from "./operating-cost.router";
+// Wave 9 — Reglas de prorrateo de centros de costo
+import { allocationRuleRouter } from "./allocation-rule.router";
+// Wave 9 — Reportes Financieros + Regulatorios MINSAL (spec §8)
+import { financeReportsRouter } from "./finance-reports.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -388,6 +394,12 @@ export const appRouter = router({
   costCenter: costCenterRouter,
   // Finance — Invoice (Wave 8b)
   invoice: invoiceRouter,
+  // Wave 9 — Costos Operativos HIS
+  operatingCost: operatingCostRouter,
+  // Wave 9 — Reglas de prorrateo de centros de costo
+  allocationRule: allocationRuleRouter,
+  // Wave 9 — Reportes Financieros + Regulatorios MINSAL (spec §8)
+  financeReports: financeReportsRouter,
 });
 
 export type AppRouter = typeof appRouter;

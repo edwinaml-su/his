@@ -158,6 +158,79 @@ enum PermissionEffect {
   @@schema("public")
 }
 
+// Finance — sql/127_finance_invoice_claim.sql
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  PARTIALLY_PAID
+  VOIDED
+
+  @@schema("public")
+}
+
+enum ElectronicInvoiceStatus {
+  NOT_APPLICABLE
+  PENDING
+  ACCEPTED
+  REJECTED
+
+  @@schema("public")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  INSURANCE
+  OTHER
+
+  @@schema("public")
+}
+
+enum ClaimStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PARTIALLY_APPROVED
+  PAID
+
+  @@schema("public")
+}
+
+// Cost Centers — sql/131_cost_centers_spec_v2_41.sql
+enum CostCenterType {
+  productivo
+  intermedio
+  apoyo
+
+  @@schema("public")
+}
+
+enum CostDistributionBase {
+  metros_cuadrados
+  numero_empleados
+  horas_trabajadas
+  pacientes_atendidos
+  kilos_lavados
+  consumo_directo
+  porcentaje_manual
+
+  @@schema("public")
+}
+
+// HisOperatingCost — sql/129_his_operating_cost.sql
+enum HisCostCategory {
+  SUBSCRIPTION
+  INFRASTRUCTURE
+  SUPPORT
+  LICENSE
+  OTHER
+
+  @@schema("public")
+}
+
 // =============================================================================
 // 1. MULTI-ENTIDAD  (TDR §5)
 // =============================================================================
@@ -245,6 +318,9 @@ model Currency {
   // Beta.18 — Contabilidad
   accounts         Account[]         @relation("AccountCurrency")
   journalEntries   JournalEntry[]    @relation("JournalCurrency")
+  // Finance — sql/127 + sql/129
+  invoices         Invoice[]         @relation("InvoiceCurrency")
+  hisOperatingCosts HisOperatingCost[] @relation("HisOperatingCostCurrency")
 
   @@schema("public")
 }
@@ -376,6 +452,10 @@ model Organization {
   eceStatEvents             EceStatEvent[]            @relation("OrgEceStatEvent")
   // F2-S14-D — Window Alert
   medicationWindowAlerts    EceMedicationWindowAlert[] @relation("OrgMedicationWindowAlerts")
+  // Finance — sql/127 + sql/129
+  invoices                  Invoice[]                  @relation("InvoiceOrganization")
+  hisOperatingCosts         HisOperatingCost[]         @relation("HisOperatingCostOrganization")
+  allocationRules           CostCenterAllocationRule[] @relation("AllocationRuleOrganization")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -413,6 +493,8 @@ model Establishment {
   stockMovements         StockMovement[]         @relation("EstStockMovements")
   biomedicalEquipment    BiomedicalEquipment[]   @relation("EstEquipment")
   bloodBank              BloodBank?
+  // Finance — sql/127
+  invoices               Invoice[] @relation("InvoiceEstablishment")
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -521,6 +603,8 @@ model User {
   eceStatEventsActivados    EceStatEvent[]               @relation("EceStatEventActivador")
   // F2-S14-D — Window Alert
   windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
+  // Finance / Cost Centers — sql/131
+  costCentersResponsable    CostCenter[]                 @relation("CostCenterResponsable")
 
   @@schema("public")
 }
@@ -914,6 +998,8 @@ model ServiceUnit {
   beds          Bed[]
   encounters    Encounter[]
   triages       TriageEvaluation[]
+  // Finance — sql/127
+  invoiceItems  InvoiceItem[]      @relation("InvoiceItemServiceUnit")
 
   @@unique([establishmentId, code])
   @@schema("public")
@@ -1066,6 +1152,8 @@ model Patient {
   ecePatientMergesCanon  EcePatientMerge[]  @relation("EceMergeCanonical")
   ecePatientMergesMerged EcePatientMerge[]  @relation("EceMergeMerged")
   solicitudesArco        SolicitudArco[]    @relation("PatientSolicitudesArco")
+  // Finance — sql/127
+  invoices               Invoice[]          @relation("InvoicePatient")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1449,6 +1537,8 @@ model Encounter {
   pathologyOrders        PathologyOrder[]        @relation("EncPathologyOrders")
   // F2-S7 — GS1 Bedside
   pharmacyOrders         PharmacyOrder[]         @relation("EncPharmacyOrders")
+  // Finance — sql/127
+  invoices               Invoice[]               @relation("InvoiceEncounter")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -2857,8 +2947,11 @@ model Insurer {
   updatedAt      DateTime    @updatedAt @db.Timestamptz()
   updatedBy      String?     @db.Uuid
 
-  organization Organization?   @relation("OrgInsurers", fields: [organizationId], references: [id], onDelete: Restrict)
-  plans        InsurancePlan[]
+  organization    Organization?   @relation("OrgInsurers", fields: [organizationId], references: [id], onDelete: Restrict)
+  plans           InsurancePlan[]
+  // Finance — sql/127
+  invoices        Invoice[]       @relation("InvoiceInsurer")
+  insuranceClaims InsuranceClaim[] @relation("ClaimInsurer")
 
   @@unique([organizationId, code])
   @@index([active])
@@ -4189,23 +4282,42 @@ model JournalLine {
 }
 
 /// TDR §23 — centro de costos por organizacion (jerarquico).
+/// Extendido en sql/131_cost_centers_spec_v2_41.sql: tipo, permite_imputacion,
+/// responsableId, baseDistribucion, centroResponsableMinsal, cuentas default.
+/// code cambió a varchar(11) formato T-AAA-SSS (CHECK regex BD).
 model CostCenter {
-  id             String    @id @default(uuid()) @db.Uuid
-  organizationId String    @db.Uuid
-  code           String    @db.VarChar(20)
-  name           String    @db.VarChar(120)
-  parentId       String?   @db.Uuid
-  active         Boolean   @default(true)
-  createdAt      DateTime  @default(now()) @db.Timestamptz()
-  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+  id                      String                @id @default(uuid()) @db.Uuid
+  organizationId          String                @db.Uuid
+  code                    String                @db.VarChar(11)
+  name                    String                @db.VarChar(120)
+  parentId                String?               @db.Uuid
+  active                  Boolean               @default(true)
+  // sql/131 — extensión spec v2.41
+  tipo                    CostCenterType?
+  permiteImputacion       Boolean               @default(true) @map("permite_imputacion")
+  responsableId           String?               @db.Uuid
+  baseDistribucion        CostDistributionBase?
+  centroResponsableMinsal String?               @db.VarChar(40)
+  cuentaIngresoDefaultId  String?               @db.Uuid
+  cuentaGastoDefaultId    String?               @db.Uuid
+  createdAt               DateTime              @default(now()) @db.Timestamptz()
+  updatedAt               DateTime              @updatedAt @db.Timestamptz()
 
-  organization Organization @relation("CostCenterOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
-  parent       CostCenter?  @relation("CostCenterHierarchy", fields: [parentId], references: [id])
-  children     CostCenter[] @relation("CostCenterHierarchy")
+  organization Organization                    @relation("CostCenterOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  parent       CostCenter?                     @relation("CostCenterHierarchy", fields: [parentId], references: [id])
+  children     CostCenter[]                    @relation("CostCenterHierarchy")
+  responsable  User?                           @relation("CostCenterResponsable", fields: [responsableId], references: [id], onDelete: SetNull)
   journalLines JournalLine[]
+  // Finance — sql/127 + sql/128
+  invoices     Invoice[]                       @relation("InvoiceCostCenter")
+  invoiceItems InvoiceItem[]                   @relation("InvoiceItemCostCenter")
+  // Prorrateo — sql/131
+  allocationRulesAsSource  CostCenterAllocationRule[]   @relation("AllocationRuleSource")
+  allocationRulesAsTarget  CostCenterAllocationTarget[] @relation("AllocationRuleTarget")
 
   @@unique([organizationId, code])
   @@index([organizationId, active])
+  @@index([tipo])
   @@schema("public")
 }
 
@@ -6569,4 +6681,202 @@ model EceReservaSalaQx {
   @@index([episodioId], name: "idx_reserva_sala_qx_episodio")
   @@map("reserva_sala_qx")
   @@schema("ece")
+}
+
+// =============================================================================
+// Finance — sql/127_finance_invoice_claim.sql + sql/128_cost_center_table_and_invoice_fk.sql
+// =============================================================================
+
+/// Factura emitida por episodio o paciente. Soporta facturación electrónica MH (SV).
+/// Trigger BD fn_invoice_recalc_payments actualiza paidAmount + status automáticamente.
+model Invoice {
+  id                          String                  @id @default(uuid()) @db.Uuid
+  organizationId              String                  @db.Uuid
+  establishmentId             String                  @db.Uuid
+  encounterId                 String?                 @db.Uuid
+  patientId                   String                  @db.Uuid
+  insurerId                   String?                 @db.Uuid
+  invoiceNumber               String                  @db.VarChar(40)
+  issuedAt                    DateTime                @default(now()) @db.Timestamptz()
+  dueAt                       DateTime?               @db.Timestamptz()
+  currencyId                  String                  @db.Uuid
+  exchangeRateToFunc          Decimal                 @default(1) @db.Decimal(18, 8)
+  subtotal                    Decimal                 @default(0) @db.Decimal(14, 2)
+  taxAmount                   Decimal                 @default(0) @db.Decimal(14, 2)
+  totalAmount                 Decimal                 @default(0) @db.Decimal(14, 2)
+  paidAmount                  Decimal                 @default(0) @db.Decimal(14, 2)
+  status                      InvoiceStatus           @default(DRAFT)
+  electronicInvoiceStatus     ElectronicInvoiceStatus @default(NOT_APPLICABLE)
+  electronicInvoiceCode       String?                 @db.VarChar(64)
+  electronicInvoiceIssuedAt   DateTime?               @db.Timestamptz()
+  notes                       String?                 @db.Text
+  costCenterId                String?                 @db.Uuid
+  createdAt                   DateTime                @default(now()) @db.Timestamptz()
+  createdBy                   String?                 @db.Uuid
+  updatedAt                   DateTime                @updatedAt @db.Timestamptz()
+  updatedBy                   String?                 @db.Uuid
+
+  organization  Organization  @relation("InvoiceOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment @relation("InvoiceEstablishment", fields: [establishmentId], references: [id], onDelete: Restrict)
+  encounter     Encounter?    @relation("InvoiceEncounter", fields: [encounterId], references: [id], onDelete: SetNull)
+  patient       Patient       @relation("InvoicePatient", fields: [patientId], references: [id], onDelete: Restrict)
+  insurer       Insurer?      @relation("InvoiceInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
+  currency      Currency      @relation("InvoiceCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+  costCenter    CostCenter?   @relation("InvoiceCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
+  items         InvoiceItem[]
+  payments      InvoicePayment[]
+  claims        InsuranceClaim[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, issuedAt(sort: Desc)])
+  @@index([patientId])
+  @@index([encounterId])
+  @@index([organizationId, status])
+  @@index([organizationId, electronicInvoiceStatus])
+  @@index([costCenterId])
+  @@schema("public")
+}
+
+/// Línea de factura. costCenterId obligatorio (RESTRICT) — sin CC no hay análisis presupuestario.
+model InvoiceItem {
+  id            String   @id @default(uuid()) @db.Uuid
+  invoiceId     String   @db.Uuid
+  description   String   @db.VarChar(300)
+  quantity      Decimal  @db.Decimal(12, 3)
+  unitPrice     Decimal  @db.Decimal(14, 2)
+  totalPrice    Decimal  @db.Decimal(14, 2)
+  serviceUnitId String?  @db.Uuid
+  costCenterId  String   @db.Uuid
+  estimatedCost Decimal? @db.Decimal(14, 2)
+  createdAt     DateTime @default(now()) @db.Timestamptz()
+
+  invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  serviceUnit ServiceUnit? @relation("InvoiceItemServiceUnit", fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  costCenter  CostCenter   @relation("InvoiceItemCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@index([serviceUnitId])
+  @@index([costCenterId])
+  @@schema("public")
+}
+
+/// Pago registrado contra una factura.
+/// Trigger BD fn_invoice_recalc_payments actualiza Invoice.paidAmount + status — NO replicar lógica aquí.
+model InvoicePayment {
+  id              String        @id @default(uuid()) @db.Uuid
+  invoiceId       String        @db.Uuid
+  paidAt          DateTime      @default(now()) @db.Timestamptz()
+  amount          Decimal       @db.Decimal(14, 2)
+  method          PaymentMethod
+  referenceNumber String?       @db.VarChar(80)
+  notes           String?       @db.Text
+  createdAt       DateTime      @default(now()) @db.Timestamptz()
+  createdBy       String?       @db.Uuid
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@index([paidAt(sort: Desc)])
+  @@schema("public")
+}
+
+/// Reclamación ante aseguradora vinculada a una factura.
+model InsuranceClaim {
+  id               String      @id @default(uuid()) @db.Uuid
+  invoiceId        String      @db.Uuid
+  insurerId        String      @db.Uuid
+  claimNumber      String      @db.VarChar(80)
+  submittedAt      DateTime    @default(now()) @db.Timestamptz()
+  respondedAt      DateTime?   @db.Timestamptz()
+  status           ClaimStatus @default(SUBMITTED)
+  submittedAmount  Decimal     @db.Decimal(14, 2)
+  approvedAmount   Decimal     @db.Decimal(14, 2)
+  rejectedAmount   Decimal     @db.Decimal(14, 2)
+  rejectionReason  String?     @db.Text
+  notes            String?     @db.Text
+  createdAt        DateTime    @default(now()) @db.Timestamptz()
+  createdBy        String?     @db.Uuid
+  updatedAt        DateTime    @updatedAt @db.Timestamptz()
+  updatedBy        String?     @db.Uuid
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  insurer Insurer @relation("ClaimInsurer", fields: [insurerId], references: [id], onDelete: Restrict)
+
+  @@unique([insurerId, claimNumber])
+  @@index([invoiceId])
+  @@index([insurerId, submittedAt(sort: Desc)])
+  @@index([status, submittedAt(sort: Desc)])
+  @@schema("public")
+}
+
+// =============================================================================
+// Finance — sql/129_his_operating_cost.sql
+// =============================================================================
+
+/// Costo operativo periódico del HIS (suscripciones, infra, soporte, licencias).
+/// organizationId nullable = costo compartido entre todas las orgs activas.
+/// KPI: fin_costo_his del dashboard ejecutivo.
+model HisOperatingCost {
+  id             String          @id @default(uuid()) @db.Uuid
+  organizationId String?         @db.Uuid
+  category       HisCostCategory
+  description    String          @db.VarChar(200)
+  vendor         String?         @db.VarChar(120)
+  amount         Decimal         @db.Decimal(14, 2)
+  currencyId     String          @db.Uuid
+  periodStart    DateTime        @db.Date
+  periodEnd      DateTime        @db.Date
+  notes          String?         @db.Text
+  createdAt      DateTime        @default(now()) @db.Timestamptz()
+  createdBy      String?         @db.Uuid
+  updatedAt      DateTime        @updatedAt @db.Timestamptz()
+  updatedBy      String?         @db.Uuid
+
+  organization Organization? @relation("HisOperatingCostOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+  currency     Currency      @relation("HisOperatingCostCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
+
+  @@index([periodStart, periodEnd])
+  @@index([organizationId])
+  @@index([category])
+  @@schema("public")
+}
+
+// =============================================================================
+// Cost Centers — sql/131_cost_centers_spec_v2_41.sql
+// =============================================================================
+
+/// Regla de prorrateo de un centro de costo fuente hacia N centros destino.
+/// Trigger BD valida suma porcentajes = 100% (DEFERRABLE) — NO replicar en Prisma.
+model CostCenterAllocationRule {
+  id                String               @id @default(uuid()) @db.Uuid
+  organizationId    String               @db.Uuid
+  name              String               @db.VarChar(120)
+  sourceCostCenterId String              @db.Uuid
+  base              CostDistributionBase
+  periodicity       String               @default("monthly") @db.VarChar(20)
+  active            Boolean              @default(true)
+  createdAt         DateTime             @default(now()) @db.Timestamptz()
+  updatedAt         DateTime             @updatedAt @db.Timestamptz()
+
+  organization     Organization @relation("AllocationRuleOrganization", fields: [organizationId], references: [id], onDelete: Cascade)
+  sourceCostCenter CostCenter   @relation("AllocationRuleSource", fields: [sourceCostCenterId], references: [id], onDelete: Cascade)
+  targets          CostCenterAllocationTarget[]
+
+  @@unique([sourceCostCenterId, active])
+  @@index([organizationId])
+  @@schema("public")
+}
+
+/// Destino de prorrateo: un centro de costo objetivo con su porcentaje.
+model CostCenterAllocationTarget {
+  id                  String  @id @default(uuid()) @db.Uuid
+  ruleId              String  @db.Uuid
+  targetCostCenterId  String  @db.Uuid
+  percentage          Decimal @db.Decimal(5, 2)
+
+  rule             CostCenterAllocationRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  targetCostCenter CostCenter               @relation("AllocationRuleTarget", fields: [targetCostCenterId], references: [id], onDelete: Restrict)
+
+  @@index([ruleId])
+  @@schema("public")
 }
