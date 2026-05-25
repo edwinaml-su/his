@@ -17,14 +17,6 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@his/ui/components/table";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,6 +34,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { Badge } from "@his/ui/components/badge";
+import { DataCardList, type DataCardColumn } from "@his/ui/components/data-card-list";
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +89,95 @@ const STATUS_OPTIONS: { value: MedAdminStatus | "ALL"; label: string }[] = [
   { value: "REFUSED",       label: "Rechazado" },
   { value: "MISSED",        label: "Omitido" },
   { value: "DOCUMENTED_LATE", label: "Doc. tardía" },
+];
+
+// ---------------------------------------------------------------------------
+// Column definitions
+// ---------------------------------------------------------------------------
+type KardexRow = {
+  id: string;
+  administeredAt: Date | string;
+  status: string;
+  prescriptionItem?: { drug?: { genericName?: string } };
+  administeredBy?: { fullName?: string };
+  gtinScanned?: string | null;
+  loteScanned?: string | null;
+  serieScanned?: string | null;
+  cancelReason?: string | null;
+};
+
+const KARDEX_COLUMNS: DataCardColumn<KardexRow>[] = [
+  {
+    id: "medicamento",
+    header: "Medicamento",
+    primary: true,
+    cell: (row) =>
+      row.prescriptionItem?.drug?.genericName ?? "-",
+  },
+  {
+    id: "fecha",
+    header: "Fecha / hora",
+    cell: (row) => (
+      <span className="whitespace-nowrap">
+        {dateFmt.format(new Date(row.administeredAt))}
+      </span>
+    ),
+  },
+  {
+    id: "enfermera",
+    header: "Enfermera",
+    cell: (row) => row.administeredBy?.fullName ?? "-",
+  },
+  {
+    id: "estado",
+    header: "Estado",
+    cell: (row) => {
+      const status = row.status as MedAdminStatus;
+      return (
+        <Badge variant={STATUS_VARIANT[status]}>
+          {STATUS_LABEL[status] ?? status}
+        </Badge>
+      );
+    },
+  },
+  {
+    id: "bcma",
+    header: "BCMA",
+    align: "center",
+    hideOnMobile: true,
+    cell: (row) =>
+      row.gtinScanned ? (
+        <span
+          className="text-green-600 font-semibold"
+          title="Administración verificada BCMA (scan bedside)"
+        >
+          Verificado
+        </span>
+      ) : (
+        <span
+          className="text-amber-600"
+          title="Administración manual sin scan GS1"
+        >
+          Manual
+        </span>
+      ),
+  },
+  {
+    id: "lote",
+    header: "Lote / serie",
+    hideOnMobile: true,
+    className: "font-mono",
+    cell: (row) =>
+      row.loteScanned
+        ? `${row.loteScanned} / ${row.serieScanned ?? "-"}`
+        : "-",
+  },
+  {
+    id: "cancelReason",
+    header: "Motivo cancelación",
+    className: "max-w-xs truncate text-muted-foreground",
+    cell: (row) => (row.cancelReason ? String(row.cancelReason) : "-"),
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -190,7 +272,7 @@ export default function KardexPage() {
           <CardTitle className="text-base">Filtros</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-wrap gap-4 items-end">
+          <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
             <div className="space-y-1">
               <Label htmlFor="status-filter">Estado</Label>
               <Select
@@ -237,7 +319,7 @@ export default function KardexPage() {
         </CardContent>
       </Card>
 
-      {/* Tabla */}
+      {/* Tabla / Cards */}
       <Card>
         <CardContent className="pt-4">
           {isLoading && (
@@ -251,106 +333,26 @@ export default function KardexPage() {
             </p>
           )}
           {!isLoading && !isError && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Fecha / hora</TableHead>
-                  <TableHead>Medicamento</TableHead>
-                  <TableHead>Enfermera</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>BCMA</TableHead>
-                  <TableHead>Lote / serie</TableHead>
-                  <TableHead>Motivo cancelación</TableHead>
-                  <TableHead className="w-28">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data?.length === 0 && (
-                  <TableRow>
-                    <TableCell
-                      colSpan={8}
-                      className="text-center text-muted-foreground py-8"
-                    >
-                      Sin registros para los filtros seleccionados.
-                    </TableCell>
-                  </TableRow>
-                )}
-                {data?.map((row) => {
-                  const isBcma = Boolean(
-                    (row as Record<string, unknown>).gtinScanned,
-                  );
-                  const status = row.status as MedAdminStatus;
-                  const cancelable = status !== "CANCELED" && status !== "MISSED";
-                  return (
-                    <TableRow key={row.id}>
-                      <TableCell className="text-sm whitespace-nowrap">
-                        {dateFmt.format(new Date(row.administeredAt))}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {(
-                          row as {
-                            prescriptionItem?: {
-                              drug?: { genericName?: string };
-                            };
-                          }
-                        ).prescriptionItem?.drug?.genericName ?? "-"}
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {(
-                          row as {
-                            administeredBy?: { fullName?: string };
-                          }
-                        ).administeredBy?.fullName ?? "-"}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={STATUS_VARIANT[status]}>
-                          {STATUS_LABEL[status] ?? status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {isBcma ? (
-                          <span
-                            className="text-green-600 font-semibold"
-                            title="Administración verificada BCMA (scan bedside)"
-                          >
-                            Verificado
-                          </span>
-                        ) : (
-                          <span
-                            className="text-amber-600"
-                            title="Administración manual sin scan GS1"
-                          >
-                            Manual
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-sm font-mono">
-                        {(row as Record<string, unknown>).loteScanned
-                          ? `${(row as Record<string, unknown>).loteScanned} / ${(row as Record<string, unknown>).serieScanned ?? "-"}`
-                          : "-"}
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground max-w-xs truncate">
-                        {(row as Record<string, unknown>).cancelReason
-                          ? String((row as Record<string, unknown>).cancelReason)
-                          : "-"}
-                      </TableCell>
-                      <TableCell>
-                        {cancelable && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setCancelTarget(row.id)}
-                          >
-                            Cancelar
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <DataCardList
+              data={(data ?? []) as KardexRow[]}
+              getKey={(row) => row.id}
+              columns={KARDEX_COLUMNS}
+              actions={(row) => {
+                const status = row.status as MedAdminStatus;
+                const cancelable = status !== "CANCELED" && status !== "MISSED";
+                return cancelable ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-destructive hover:text-destructive"
+                    onClick={() => setCancelTarget(row.id)}
+                  >
+                    Cancelar
+                  </Button>
+                ) : null;
+              }}
+              emptyMessage="Sin registros para los filtros seleccionados."
+            />
           )}
         </CardContent>
       </Card>

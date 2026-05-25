@@ -9,14 +9,6 @@
 import * as React from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@his/ui/components/table";
 import { Button } from "@his/ui/components/button";
 import { Label } from "@his/ui/components/label";
 import {
@@ -26,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
+import { DataCardList, type DataCardColumn } from "@his/ui/components/data-card-list";
 import { trpc } from "@/lib/trpc/react";
 
 type MedAdminStatus =
@@ -44,6 +37,14 @@ const STATUS_OPTIONS: { value: MedAdminStatus | "ALL"; label: string }[] = [
   { value: "DOCUMENTED_LATE", label: "Doc. tardía" },
 ];
 
+const STATUS_LABEL: Record<MedAdminStatus, string> = {
+  GIVEN: "Administrado",
+  HELD: "Pendiente",
+  REFUSED: "Rechazado",
+  MISSED: "Omitido",
+  DOCUMENTED_LATE: "Doc. tardía",
+};
+
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -60,16 +61,60 @@ export default function EmarListPage() {
 
   const query = trpc.medicationAdmin.list.useQuery(listInput);
 
+  type Row = NonNullable<typeof query.data>[number];
+
+  const columns: DataCardColumn<Row>[] = React.useMemo(
+    () => [
+      {
+        id: "medicamento",
+        header: "Medicamento",
+        primary: true,
+        cell: (a) => a.prescriptionItem?.drug?.genericName ?? "—",
+      },
+      {
+        id: "fecha",
+        header: "Fecha",
+        cell: (a) => (
+          <span className="tabular-nums">
+            {dateFmt.format(new Date(a.administeredAt))}
+          </span>
+        ),
+      },
+      {
+        id: "estado",
+        header: "Estado",
+        cell: (a) => STATUS_LABEL[a.status as MedAdminStatus] ?? a.status,
+      },
+      {
+        id: "dosis",
+        header: "Dosis",
+        align: "right",
+        cell: (a) => (
+          <span className="tabular-nums">
+            {a.doseAmount ? `${String(a.doseAmount)} ${a.doseUnit ?? ""}` : "—"}
+          </span>
+        ),
+      },
+      {
+        id: "administradoPor",
+        header: "Administrado por",
+        hideOnMobile: true,
+        cell: (a) => a.administeredBy?.fullName ?? "—",
+      },
+    ],
+    [],
+  );
+
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">eMAR — Administración de medicamentos</h1>
           <p className="text-sm text-muted-foreground">
             Registro electrónico de administraciones (§16).
           </p>
         </div>
-        <Button asChild>
+        <Button asChild className="w-full sm:w-auto">
           <Link href="/emar/new">Nueva administración</Link>
         </Button>
       </div>
@@ -79,8 +124,8 @@ export default function EmarListPage() {
           <CardTitle>Filtros</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="w-full space-y-1.5 sm:max-w-xs">
               <Label htmlFor="filter-status">Estado</Label>
               <Select
                 value={status}
@@ -113,40 +158,13 @@ export default function EmarListPage() {
               {query.error.message}
             </p>
           )}
-          {query.data && query.data.length === 0 && (
-            <p className="text-sm text-muted-foreground">Sin registros.</p>
-          )}
-          {query.data && query.data.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Fecha</TableHead>
-                  <TableHead>Medicamento</TableHead>
-                  <TableHead>Administrado por</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>Dosis</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {query.data.map((a) => {
-                  const drugName = a.prescriptionItem?.drug?.genericName ?? "—";
-                  const adminName = a.administeredBy?.fullName ?? "—";
-                  return (
-                    <TableRow key={a.id}>
-                      <TableCell className="tabular-nums">
-                        {dateFmt.format(new Date(a.administeredAt))}
-                      </TableCell>
-                      <TableCell>{drugName}</TableCell>
-                      <TableCell>{adminName}</TableCell>
-                      <TableCell>{a.status}</TableCell>
-                      <TableCell className="tabular-nums">
-                        {a.doseAmount ? `${String(a.doseAmount)} ${a.doseUnit ?? ""}` : "—"}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+          {query.data && (
+            <DataCardList
+              data={query.data}
+              getKey={(a) => a.id}
+              columns={columns}
+              emptyMessage="Sin administraciones registradas."
+            />
           )}
         </CardContent>
       </Card>
