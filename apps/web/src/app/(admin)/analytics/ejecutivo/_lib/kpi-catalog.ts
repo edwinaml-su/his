@@ -428,7 +428,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Comparativo org × tipo paciente",
     clasificacion: "estrategico",
     responsable: "Dirección financiera",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -444,7 +444,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "KPI + tendencia",
     clasificacion: "estrategico",
     responsable: "Dirección financiera",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: true,
   },
   {
@@ -460,7 +460,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Tabla con motivos principales",
     clasificacion: "operativo_estrategico",
     responsable: "Dirección financiera",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: true,
   },
   {
@@ -476,7 +476,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "KPI + log errores",
     clasificacion: "operativo",
     responsable: "Dirección financiera",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -492,7 +492,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Heatmap servicio × org",
     clasificacion: "estrategico",
     responsable: "Dirección financiera",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
