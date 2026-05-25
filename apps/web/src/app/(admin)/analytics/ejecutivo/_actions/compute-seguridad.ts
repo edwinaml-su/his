@@ -119,5 +119,30 @@ export async function computeSeguridad(req: ComputeRequest): Promise<KpiValuesMa
     result.seg_mfa = null;
   }
 
+  // -- seg_parches ----------------------------------------------------------
+  // Requiere plataforma gestión vulnerabilidades (Snyk, Dependabot, etc.).
+  // Como proxy interno: días desde último deploy exitoso (migration aplicada).
+  // Wave 3+ integrar con GitHub Dependabot API para deuda real de parches.
+  try {
+    const rows = await prisma.$queryRaw<{ finished_at: Date }[]>`
+      SELECT finished_at FROM public._prisma_migrations
+      WHERE finished_at IS NOT NULL
+      ORDER BY finished_at DESC LIMIT 1
+    `;
+    if (rows.length === 0) {
+      result.seg_parches = null;
+    } else {
+      const dias = (Date.now() - rows[0]!.finished_at.getTime()) / 86_400_000;
+      result.seg_parches = {
+        display: fmtUnidad(dias, "días"),
+        // Meta ≤ 7 días — más es peor.
+        semaforo: dias <= 7 ? "verde" : dias <= 30 ? "ambar" : "rojo",
+        delta: "Desde último deploy (proxy)",
+      };
+    }
+  } catch {
+    result.seg_parches = null;
+  }
+
   return result;
 }

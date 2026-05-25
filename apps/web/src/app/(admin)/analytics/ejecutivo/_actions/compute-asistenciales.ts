@@ -205,13 +205,72 @@ export async function computeAsistenciales(req: ComputeRequest): Promise<KpiValu
   }
 
   // -------------------------------------------------------------------------
-  // asi_eventos_adversos — no existe modelo FallEvent ni AdverseEvent en BD.
-  // Proxy: MedicationAdministration con status=CANCELED y cancelReason no null,
-  //        que captura errores de medicación reportados.
-  // NOTA: Este proxy es parcial (solo errores medicación, no caídas ni úlceras).
-  //       Se devuelve null hasta que exista un módulo de seguridad del paciente.
+  // asi_eventos_adversos — Σ(caídas + administraciones canceladas con motivo)
+  //                       × 1000 / pacientes únicos atendidos en periodo.
+  //
+  // ece.fall_event existe en BD (Wave 1 #232) pero no está en Prisma client
+  // todavía — se accede vía $queryRaw. MedicationAdministration.cancelReason
+  // distinto a "" capta errores de medicación reportados.
   // -------------------------------------------------------------------------
-  result.asi_eventos_adversos = null;
+  try {
+    type CountRow = { count: bigint };
+    const orgFilterUuids = req.organizationIds.length > 0
+      ? req.organizationIds
+      : null;
+
+    // Caídas registradas en periodo
+    const fallsRows = orgFilterUuids
+      ? await prisma.$queryRaw<CountRow[]>`
+          SELECT COUNT(*)::bigint AS count
+          FROM ece.fall_event fe
+          WHERE fe.fecha_hora BETWEEN ${desde} AND ${hasta}
+            AND fe.establecimiento_id IN (
+              SELECT id FROM "Establishment"
+              WHERE "organizationId" = ANY(${orgFilterUuids}::uuid[])
+            )
+        `
+      : await prisma.$queryRaw<CountRow[]>`
+          SELECT COUNT(*)::bigint AS count
+          FROM ece.fall_event
+          WHERE fecha_hora BETWEEN ${desde} AND ${hasta}
+        `;
+    const caidas = Number(fallsRows[0]?.count ?? 0);
+
+    // Errores de medicación (admin canceladas con motivo)
+    const erroresMed = await prisma.medicationAdministration.count({
+      where: {
+        ...orgFilter,
+        status: "CANCELED",
+        cancelReason: { not: null },
+        administeredAt: { gte: desde, lte: hasta },
+      },
+    });
+
+    // Pacientes únicos atendidos: encounters en periodo
+    const pacientesRows = await prisma.encounter.findMany({
+      where: {
+        ...orgFilter,
+        admittedAt: { gte: desde, lte: hasta },
+      },
+      select: { patientId: true },
+      distinct: ["patientId"],
+    });
+    const pacientesUnicos = pacientesRows.length;
+
+    if (pacientesUnicos === 0) {
+      result.asi_eventos_adversos = null;
+    } else {
+      const totalEventos = caidas + erroresMed;
+      const tasa = (totalEventos * 1000) / pacientesUnicos;
+      result.asi_eventos_adversos = {
+        display: `${tasa.toFixed(2)} / 1000`,
+        semaforo: tasa <= 5 ? "verde" : tasa <= 15 ? "ambar" : "rojo",
+        delta: `${caidas} caídas + ${erroresMed} med-errores / ${pacientesUnicos} pacientes`,
+      };
+    }
+  } catch {
+    result.asi_eventos_adversos = null;
+  }
 
   return result;
 }

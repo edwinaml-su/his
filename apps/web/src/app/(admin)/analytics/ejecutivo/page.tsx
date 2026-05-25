@@ -26,6 +26,9 @@ import { computeAdopcion } from "./_actions/compute-adopcion";
 import { computeCalidad } from "./_actions/compute-calidad";
 import { computeAsistenciales } from "./_actions/compute-asistenciales";
 import { computeSeguridad } from "./_actions/compute-seguridad";
+import { computeTecnicos } from "./_actions/compute-tecnicos";
+import { computeFinancieros } from "./_actions/compute-financieros";
+import { computeGobierno } from "./_actions/compute-gobierno";
 
 function isoToday(): string {
   return new Date().toISOString().slice(0, 10);
@@ -65,6 +68,9 @@ export default function DashboardEjecutivoPage() {
       computeCalidad(req),
       computeAsistenciales(req),
       computeSeguridad(req),
+      computeTecnicos(req),
+      computeFinancieros(req),
+      computeGobierno(req),
     ]).then((results) => {
       if (cancelled) return;
       const merged: Record<string, KpiValue | null> = {};

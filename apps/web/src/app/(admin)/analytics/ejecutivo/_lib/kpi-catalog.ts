@@ -74,7 +74,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Semáforo por organización + tendencia 30 días",
     clasificacion: "operativo_estrategico",
     responsable: "Dirección de TI / Proveedor del HIS",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: true,
   },
   {
@@ -107,7 +107,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Tarjetas con comparativo mes a mes",
     clasificacion: "estrategico",
     responsable: "Dirección de TI",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -139,7 +139,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Heatmap org × recurso",
     clasificacion: "estrategico",
     responsable: "Dirección de TI / Finanzas",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
 
@@ -276,7 +276,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Línea + log errores recientes",
     clasificacion: "operativo",
     responsable: "Dirección de TI",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -292,7 +292,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Tabla últimos 10 cambios",
     clasificacion: "estrategico",
     responsable: "Dirección TI / Gobierno datos",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
 
@@ -592,7 +592,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Lista parches pendientes",
     clasificacion: "operativo_estrategico",
     responsable: "Dirección seguridad / TI",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
 
