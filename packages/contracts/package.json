@@ -13,7 +13,8 @@
     "./schemas/*": "./src/schemas/*.ts",
     "./types": "./src/types/index.ts",
     "./events": "./src/events/index.ts",
-    "./notifications/provider": "./src/notifications/provider.ts"
+    "./notifications/provider": "./src/notifications/provider.ts",
+    "./clinical/*": "./src/clinical/*.ts"
   },
   "scripts": {
     "lint": "echo 'no lint configured'",

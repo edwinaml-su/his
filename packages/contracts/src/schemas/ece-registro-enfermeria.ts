@@ -75,3 +75,38 @@ export type EceRegistroGetInput = z.infer<typeof eceRegistroGetSchema>;
 export const eceRegistroIdSchema = z.object({
   id: z.string().uuid(),
 });
+
+// ---------------------------------------------------------------------------
+// SBAR — Handoff estructurado al cierre de turno (JCI IPSG.2 ME 4)
+// ---------------------------------------------------------------------------
+
+const sbarFieldSchema = z.string().trim().min(10).max(2000);
+
+/**
+ * Estructura SBAR para handoff inter-turno de enfermería.
+ * JCI Standard: IPSG.2 ME 4.
+ *
+ * Cada componente requiere mínimo 10 caracteres para forzar texto sustantivo
+ * (evita "ok", "bien") y máximo 2000 caracteres.
+ */
+export const sbarSchema = z.object({
+  /** Situación actual del paciente al momento del cierre de turno. */
+  situation: sbarFieldSchema,
+  /** Antecedentes clínicos relevantes para el enfermero entrante. */
+  background: sbarFieldSchema,
+  /** Evaluación de enfermería: estado actual, tendencias, preocupaciones. */
+  assessment: sbarFieldSchema,
+  /** Acciones recomendadas o pendientes para el próximo turno. */
+  recommendation: sbarFieldSchema,
+});
+
+export type SbarInput = z.infer<typeof sbarSchema>;
+
+/**
+ * Input para el cierre de turno (procedure cerrarTurno).
+ * sbar es opcional — warning en respuesta cuando paciente activo y sbar null.
+ */
+export const eceRegistroEnfermeriaCierreSchema = z.object({
+  id: z.string().uuid(),
+  sbar: sbarSchema.optional(),
+});

@@ -177,6 +177,10 @@ import { medicationWindowRouter } from "./medication-window.router";
 import { eceObstetriciaRouter } from "./ece/obstetricia.router";
 // S8 — HI-10/11: Trazabilidad lote + recall RTCA
 import { gs1LoteTraceRouter } from "./gs1-lote-trace.router";
+// JCI IPSG.2 ME 1 — Workflow read-back órdenes verbales (US.JCI.5.5)
+import { verbalOrderRouter } from "./ece/verbal-order.router";
+// JCI IPSG.2 ME 2 — Notificación de resultados críticos con SLA + read-back (US.JCI.5.7)
+import { criticalResultRouter } from "./ece/critical-result.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -356,6 +360,10 @@ export const appRouter = router({
   eceObstetricia: eceObstetriciaRouter,
   // S8 — HI-10/11: Trazabilidad lote + recall RTCA
   gs1LoteTrace: gs1LoteTraceRouter,
+  // JCI IPSG.2 ME 1 — Workflow read-back órdenes verbales (US.JCI.5.5)
+  eceVerbalOrder: verbalOrderRouter,
+  // JCI IPSG.2 ME 2 — Notificación de resultados críticos con SLA + read-back (US.JCI.5.7)
+  eceCriticalResult: criticalResultRouter,
 });
 
 export type AppRouter = typeof appRouter;
