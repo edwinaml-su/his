@@ -66,6 +66,9 @@ export async function setOrganization(organizationId: string) {
   // Resetear roles activos al cambiar de org: los codes válidos cambian.
   // Backend usará todos los disponibles en la nueva org como default.
   store.delete(HIS_COOKIES.ROLES_COOKIE);
+  // Resetear orgs adicionales (visibilidad cross-org): el contexto multi-org
+  // depende del rol activo en la nueva org primaria.
+  store.delete(HIS_COOKIES.ORGS_COOKIE);
 
   // Refrescar todas las Server Components dependientes de tenant context.
   revalidatePath("/", "layout");

@@ -14,6 +14,11 @@
  * pertenece, lo descartamos silenciosamente.
  *
  * Cookie `his.roles` = CSV de codes. Si vacía → backend usa todos.
+ *
+ * IMPORTANTE: nunca throwear desde esta action — los server actions de
+ * Next.js se invocan como POST a la página actual; un throw resulta en
+ * un 500 en producción visible para el usuario. Siempre retornar
+ * `{ ok: false, error }` para casos esperados (sin sesión / sin org).
  */
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
@@ -22,13 +27,23 @@ import { getCurrentUser, HIS_COOKIES } from "@/lib/auth/session";
 
 const ONE_WEEK_SECONDS = 60 * 60 * 24 * 7;
 
-export async function setActiveRoles(roleCodes: string[]) {
+export interface SetActiveRolesResult {
+  ok: boolean;
+  activeRoles?: string[];
+  error?: string;
+}
+
+export async function setActiveRoles(roleCodes: string[]): Promise<SetActiveRolesResult> {
   const user = await getCurrentUser();
-  if (!user) throw new Error("No autenticado");
+  if (!user) return { ok: false, error: "No autenticado" };
 
   const store = cookies();
   const organizationId = store.get(HIS_COOKIES.ORG_COOKIE)?.value;
-  if (!organizationId) throw new Error("Sin organización activa");
+  if (!organizationId) {
+    // Caso esperado: usuario sin organización activa todavía. UI debe
+    // deshabilitar el switcher de roles hasta que se elija una org.
+    return { ok: false, error: "Sin organización activa" };
+  }
 
   // Filtrar a los codes que el usuario realmente tiene en la org activa.
   const now = new Date();
