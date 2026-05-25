@@ -7,3 +7,7 @@ export * from './notifications';
 // (alternativa a @his/infrastructure/firma/argon2 que vitest no resuelve
 // correctamente con conditional exports map).
 export { default as argon2 } from './firma/argon2';
+// Cliente XML-RPC para Odoo (lee env vars ODOO_URL/DB/USER/PASSWORD).
+export { getOdooClient, getOdooVersion } from './odoo/client';
+export type { OdooClient, OdooConfig } from './odoo/client';
+export { xmlrpcCall } from './odoo/xmlrpc';
