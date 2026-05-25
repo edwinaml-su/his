@@ -7,43 +7,32 @@
  *   métricas de ocupación, y transiciones manuales de estado operativo.
  *
  * ---------------------------------------------------------------------------
- * WORKFLOW  (estados de cama — no es workflow de documento NTEC)
+ * WORKFLOW  (estados de cama)
  * ---------------------------------------------------------------------------
- *   Estados de cama (public."Bed".estadoManual):
- *     libre → limpieza → libre   (ciclo post-alta)
- *     libre → mantenimiento → libre (ciclo correctivo)
+ *   Estados de cama (public."Bed".status — enum BedStatus):
+ *     FREE → DIRTY → FREE              (ciclo post-alta)
+ *     FREE → MAINTENANCE → FREE        (ciclo correctivo)
  *
- *   Estado "ocupada" es derivado: se infiere de la existencia de una fila
- *   en ece.asignacion_cama con estado 'activa'. Tiene prioridad sobre
- *   estadoManual: una cama con asignación activa siempre es "ocupada".
+ *   El frontend recibe nombres en español:
+ *     FREE        → libre
+ *     DIRTY       → limpieza
+ *     MAINTENANCE → mantenimiento
+ *     OCCUPIED    → ocupada
  *
- *   Las asignaciones se crean en el bridge-admision.router.ts y se liberan
- *   en episodio-hospitalario.router.ts (confirmarAlta). Este router solo
- *   gestiona transiciones manuales de estado operativo.
- *
- * ---------------------------------------------------------------------------
- * OUTBOX
- * ---------------------------------------------------------------------------
- *   No emite eventos de dominio. Los cambios de estado de cama son operativos,
- *   no generan eventos clínicos ni notificaciones (Beta.15).
+ *   "ocupada" tiene prioridad sobre el status físico: si hay
+ *   ece.asignacion_cama activa, la cama se marca como ocupada aunque su
+ *   `status` físico diga otra cosa.
  *
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — mezcla schema public + ece)
  * ---------------------------------------------------------------------------
- *   public."Bed"              — catálogo de camas: codigo, servicio_id,
- *                               tipo_cama, "estadoManual"
- *   ece.asignacion_cama       — asignaciones activas: cama_id, episodio_id,
- *                               estado ('activa'|'liberada'), fecha_asignacion
- *   ece.episodio_hospitalario — para join con paciente (via episodio_atencion)
+ *   public."Bed"              — catálogo de camas: code, serviceUnitId, status
+ *   public."ServiceUnit"      — servicio/área donde está la cama (sustituye al
+ *                               legacy "Ward" que NO existe en este schema)
+ *   public."Patient"          — datos del paciente (firstName, lastName)
+ *   ece.asignacion_cama       — asignaciones activas: cama_id, episodio_id, activa
+ *   ece.episodio_hospitalario — para join con paciente via episodio_atencion
  *   ece.episodio_atencion     — datos base: paciente_id
- *   public."Patient"          — nombre y documento del paciente
- *
- * ---------------------------------------------------------------------------
- * ROLES tRPC
- * ---------------------------------------------------------------------------
- *   listEstadoCamas  → requireRole(["NURSE","ADM","PHYSICIAN"])
- *   estadoServicio   → requireRole(["NURSE","ADM","PHYSICIAN"])
- *   cambiarEstado    → requireRole(["NURSE","ADM"])
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -86,7 +75,7 @@ interface CamaRaw {
   cama_id: string;
   codigo: string;
   servicio: string;
-  estado_manual: string | null;
+  status_bd: string | null;
   asignacion_id: string | null;
   paciente_nombre: string | null;
   episodio_id: string | null;
@@ -101,13 +90,23 @@ interface MetricaRaw {
   mantenimiento: bigint;
 }
 
-// ─── Helper privado ───────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function resolverEstado(estadoManual: string | null, ocupada: boolean): EstadoCama {
+/** Mapea BedStatus (enum DB) + ocupación derivada → estado frontend. */
+function resolverEstado(statusBd: string | null, ocupada: boolean): EstadoCama {
   if (ocupada) return "ocupada";
-  if (estadoManual === "limpieza") return "limpieza";
-  if (estadoManual === "mantenimiento") return "mantenimiento";
-  return "libre";
+  if (statusBd === "DIRTY") return "limpieza";
+  if (statusBd === "MAINTENANCE") return "mantenimiento";
+  return "libre"; // FREE, BLOCKED, RESERVED y null caen a "libre" (legibilidad UX)
+}
+
+/** Inverso: estado frontend → BedStatus enum DB. */
+function estadoFrontendABedStatus(estado: "libre" | "limpieza" | "mantenimiento"): string {
+  switch (estado) {
+    case "libre":         return "FREE";
+    case "limpieza":      return "DIRTY";
+    case "mantenimiento": return "MAINTENANCE";
+  }
 }
 
 function withEceCtx(ctx: {
@@ -143,8 +142,6 @@ interface ServicioRaw {
 
 // ─── Base procedures ──────────────────────────────────────────────────────────
 
-// Permitir ADMIN/ADMIN_CLINICO también para mapa de camas (lectura admin).
-// Bug: usuario "ADMIN" recibía 403 porque la guard solo aceptaba "ADM".
 const readBase = requireRole(["NURSE", "ADM", "ADMIN", "ADMIN_CLINICO", "PHYSICIAN", "DIR"]);
 const writeBase = requireRole(["NURSE", "ADM", "ADMIN", "ADMIN_CLINICO"]);
 
@@ -153,10 +150,6 @@ const writeBase = requireRole(["NURSE", "ADM", "ADMIN", "ADMIN_CLINICO"]);
 export const eceCamaRouter = router({
   /**
    * Lista todas las camas de un servicio con su estado en tiempo real.
-   *
-   * Estado derivado:
-   * - Si existe ece.asignacion_cama activa → "ocupada"
-   * - Si no, usa Bed.estadoManual (libre / limpieza / mantenimiento)
    */
   listEstadoCamas: readBase
     .input(listEstadoCamasInput)
@@ -168,14 +161,14 @@ export const eceCamaRouter = router({
           SELECT
             b.id::text                               AS cama_id,
             b.code                                   AS codigo,
-            COALESCE(w.name, b."wardId"::text)       AS servicio,
-            b."statusManual"                         AS estado_manual,
+            COALESCE(su.name, b."serviceUnitId"::text) AS servicio,
+            b."status"::text                         AS status_bd,
             ac.id::text                              AS asignacion_id,
-            CONCAT(p."firstName", ' ', p."lastName1") AS paciente_nombre,
+            CONCAT(p."firstName", ' ', p."lastName") AS paciente_nombre,
             ea.id::text                              AS episodio_id,
             ac.fecha_asignacion                      AS asignada_desde
           FROM public."Bed" b
-          LEFT JOIN public."Ward" w ON w.id = b."wardId"
+          LEFT JOIN public."ServiceUnit" su ON su.id = b."serviceUnitId"
           LEFT JOIN ece.asignacion_cama ac
             ON ac.cama_id = b.id AND ac.activa = true
           LEFT JOIN ece.episodio_hospitalario eh
@@ -184,7 +177,7 @@ export const eceCamaRouter = router({
             ON ea.id = eh.episodio_atencion_id
           LEFT JOIN public."Patient" p
             ON p.id = ea.paciente_id
-          WHERE b."wardId" = ${input.servicioId}::uuid
+          WHERE b."serviceUnitId" = ${input.servicioId}::uuid
           ORDER BY b.code ASC
         `;
 
@@ -192,7 +185,7 @@ export const eceCamaRouter = router({
           camaId: r.cama_id,
           codigo: r.codigo,
           servicio: r.servicio,
-          estado: resolverEstado(r.estado_manual, r.asignacion_id !== null),
+          estado: resolverEstado(r.status_bd, r.asignacion_id !== null),
           pacienteNombre: r.paciente_nombre ?? null,
           episodioId: r.episodio_id ?? null,
           asignadaDesde: r.asignada_desde ?? null,
@@ -214,19 +207,19 @@ export const eceCamaRouter = router({
             COUNT(*)                                          AS total,
             COUNT(*) FILTER (
               WHERE ac.id IS NULL
-                AND (b."statusManual" IS NULL OR b."statusManual" = 'libre')
+                AND (b."status" IS NULL OR b."status" = 'FREE')
             )                                                AS libres,
             COUNT(*) FILTER (WHERE ac.id IS NOT NULL)        AS ocupadas,
             COUNT(*) FILTER (
-              WHERE ac.id IS NULL AND b."statusManual" = 'limpieza'
+              WHERE ac.id IS NULL AND b."status" = 'DIRTY'
             )                                                AS limpieza,
             COUNT(*) FILTER (
-              WHERE ac.id IS NULL AND b."statusManual" = 'mantenimiento'
+              WHERE ac.id IS NULL AND b."status" = 'MAINTENANCE'
             )                                                AS mantenimiento
           FROM public."Bed" b
           LEFT JOIN ece.asignacion_cama ac
             ON ac.cama_id = b.id AND ac.activa = true
-          WHERE b."wardId" = ${input.servicioId}::uuid
+          WHERE b."serviceUnitId" = ${input.servicioId}::uuid
         `;
 
         const m = rows[0];
@@ -256,30 +249,30 @@ export const eceCamaRouter = router({
         // Obtener servicios con camas activas
         const servicios = await tx.$queryRaw<ServicioRaw[]>`
           SELECT DISTINCT
-            w.id::text   AS servicio_id,
-            w.name       AS servicio_nombre
-          FROM public."Ward" w
-          JOIN public."Bed" b ON b."wardId" = w.id
+            su.id::text   AS servicio_id,
+            su.name       AS servicio_nombre
+          FROM public."ServiceUnit" su
+          JOIN public."Bed" b ON b."serviceUnitId" = su.id
           WHERE b.active = true
-          ORDER BY w.name ASC
+          ORDER BY su.name ASC
         `;
 
         if (servicios.length === 0) return [];
 
         // Una sola query para todas las camas de todos los servicios
-        const todasCamas = await tx.$queryRaw<(CamaRaw & { ward_id: string })[]>`
+        const todasCamas = await tx.$queryRaw<(CamaRaw & { service_unit_id: string })[]>`
           SELECT
             b.id::text                               AS cama_id,
             b.code                                   AS codigo,
-            w.name                                   AS servicio,
-            w.id::text                               AS ward_id,
-            b."statusManual"                         AS estado_manual,
+            su.name                                  AS servicio,
+            su.id::text                              AS service_unit_id,
+            b."status"::text                         AS status_bd,
             ac.id::text                              AS asignacion_id,
-            CONCAT(p."firstName", ' ', p."lastName1") AS paciente_nombre,
+            CONCAT(p."firstName", ' ', p."lastName") AS paciente_nombre,
             ea.id::text                              AS episodio_id,
             ac.fecha_asignacion                      AS asignada_desde
           FROM public."Bed" b
-          JOIN public."Ward" w ON w.id = b."wardId"
+          JOIN public."ServiceUnit" su ON su.id = b."serviceUnitId"
           LEFT JOIN ece.asignacion_cama ac
             ON ac.cama_id = b.id AND ac.activa = true
           LEFT JOIN ece.episodio_hospitalario eh
@@ -289,23 +282,23 @@ export const eceCamaRouter = router({
           LEFT JOIN public."Patient" p
             ON p.id = ea.paciente_id
           WHERE b.active = true
-          ORDER BY w.name ASC, b.code ASC
+          ORDER BY su.name ASC, b.code ASC
         `;
 
         // Agrupar en memoria por servicio
         const camasPorServicio = new Map<string, CamaEstadoRow[]>();
         for (const r of todasCamas) {
-          const grupo = camasPorServicio.get(r.ward_id) ?? [];
+          const grupo = camasPorServicio.get(r.service_unit_id) ?? [];
           grupo.push({
             camaId: r.cama_id,
             codigo: r.codigo,
             servicio: r.servicio,
-            estado: resolverEstado(r.estado_manual, r.asignacion_id !== null),
+            estado: resolverEstado(r.status_bd, r.asignacion_id !== null),
             pacienteNombre: r.paciente_nombre ?? null,
             episodioId: r.episodio_id ?? null,
             asignadaDesde: r.asignada_desde ?? null,
           });
-          camasPorServicio.set(r.ward_id, grupo);
+          camasPorServicio.set(r.service_unit_id, grupo);
         }
 
         return servicios
@@ -319,7 +312,7 @@ export const eceCamaRouter = router({
     }),
 
   /**
-   * Cambia el estado manual de una cama (libre / limpieza / mantenimiento).
+   * Cambia el estado físico de una cama (libre / limpieza / mantenimiento).
    * No puede aplicarse si la cama tiene una asignación activa (ya está ocupada).
    */
   cambiarEstado: writeBase
@@ -344,11 +337,11 @@ export const eceCamaRouter = router({
           });
         }
 
-        const nuevoEstadoManual = input.nuevoEstado === "libre" ? null : input.nuevoEstado;
+        const nuevoStatus = estadoFrontendABedStatus(input.nuevoEstado);
 
         const updated = await tx.$queryRaw<{ id: string }[]>`
           UPDATE public."Bed"
-          SET "statusManual" = ${nuevoEstadoManual}
+          SET "status" = ${nuevoStatus}::"BedStatus", "updatedAt" = now()
           WHERE id = ${input.camaId}::uuid
           RETURNING id::text
         `;
