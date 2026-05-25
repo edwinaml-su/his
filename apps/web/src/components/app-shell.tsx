@@ -91,6 +91,7 @@ const SECTIONS: NavSection[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/analytics", label: "Analítica BI", icon: BarChart3 },
+      { href: "/analytics/ejecutivo", label: "Dashboard Ejecutivo KPI", icon: Gauge },
     ],
   },
   {
