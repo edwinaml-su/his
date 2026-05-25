@@ -83,3 +83,7 @@ export * from "./triage-flowchart";
 export * from "./user";
 export * from "./user-admin";
 export * from "./vaccination";
+export * from "./orden-ingreso";
+export * from "./certificado-incapacidad";
+export * from "./documento-asociado";
+export * from "./fall-event";

@@ -146,6 +146,16 @@ export const EVENT_TYPES = [
   "ipsg6.fall_event_recorded",
   // JCI-1.S3 US.JCI.5.14 — IPSG.6 ME 2: SLA Morse por turno (>12 h sin evaluación)
   "ipsg6.morse_sla_exceeded",
+  // CERT_INC — Certificado de Incapacidad ISSS (NTEC §22)
+  "ece.certificado_incapacidad.firmado",
+  "ece.certificado_incapacidad.anulado",
+  // DOC_ASOC — Documentos Clínicos Asociados (NTEC §15, §38)
+  "ece.documento_asociado.adjuntado",
+  "ece.documento_asociado.firmado",
+  // ECE — Orden de Ingreso Hospitalario (ORD_ING, NTEC Art. 33)
+  "ece.orden_ingreso.creada",
+  "ece.orden_ingreso.firmada",
+  "ece.orden_ingreso.anulada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

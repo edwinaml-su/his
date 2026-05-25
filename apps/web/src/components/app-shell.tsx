@@ -59,6 +59,10 @@ import {
   Search,
   LayoutGrid,
   Zap,
+  FileBadge,
+  Paperclip,
+  ClipboardPlus,
+  TriangleAlert,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 
@@ -176,6 +180,10 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight },
+      { href: "/ece/orden-ingreso", label: "Orden de Ingreso", icon: ClipboardPlus },
+      { href: "/ece/certificado-incapacidad", label: "Certificado Incapacidad ISSS", icon: FileBadge },
+      { href: "/ece/documento-asociado", label: "Documentos Asociados", icon: Paperclip },
+      { href: "/ece/fall-event", label: "Reporte de Caídas (IPSG.6)", icon: TriangleAlert },
     ],
   },
   {

@@ -1,6 +1,6 @@
 # 31 — Flujos Operativos Consolidados (HIS Multipaís Avante)
 
-> **Última actualización:** 2026-05-25 — sincronizado contra `ece.tipo_documento` en Supabase prod y contra implementación real en `packages/trpc/src/routers/ece/` + `apps/web/src/app/(clinical)/ece/`.
+> **Última actualización:** 2026-05-25 (PR cierre 4 gaps) — sincronizado contra `ece.tipo_documento` en Supabase prod y contra implementación real en `packages/trpc/src/routers/ece/` + `apps/web/src/app/(clinical)/ece/`.
 >
 > **Fuente de verdad** para el motor de workflow data-driven (`ece.tipo_documento` + `ece.flujo_estado` + `ece.flujo_transicion`).
 >
@@ -8,7 +8,7 @@
 >
 > Cada flujo tiene su propia ficha en `docs/flujos/{CODIGO}.md` con: metadata, propósito normativo, dependencias, obligatoriedad por modalidad, roles firmantes, campos obligatorios, estados, transiciones, eventos de dominio, drift conocido y descripción rica markdown (esta última se siembra en `ece.tipo_documento.descripcion_markdown` y se renderiza en el workflow designer).
 >
-> **Resumen del estado:** 31 tipos sembrados en BD · 30 fichas MD · **27 documentos con implementación funcional completa** (router + UI + ficha) · **4 gaps** identificados ([CERT_INC](#gaps-de-implementaci%C3%B3n-verificado-2026-05-25), DOC_ASOC, DOC_OBST, ORD_ING).
+> **Resumen del estado:** 30 tipos sembrados en BD · 33 fichas MD · **30/30 documentos con implementación funcional completa** (router + UI + ficha). Los 4 gaps de la versión 2026-05-25 anterior están resueltos: CERT_INC + DOC_ASOC + ORD_ING implementados end-to-end; DOC_OBST retirado del catálogo (redundante con PARTOGRAMA / SALA_EXP / ATN_RN / NRP).
 
 ---
 
@@ -47,6 +47,7 @@
 
 | Código | Documento | NTEC | Obligatoriedad | Inmutable post-firma |
 |---|---|---|---|---|
+| [ORD_ING](flujos/ORD_ING.md) | Orden de Ingreso Hospitalario | Art. 33 | Decisión clínica previa a HOJA_ING | Sí |
 | [HOJA_ING](flujos/HOJA_ING.md) | Hoja de Ingreso Hospitalario | Art. 34 | Siempre al admitir | Sí |
 | [VAL_INI_ENF](flujos/VAL_INI_ENF.md) | Valoración Inicial de Enfermería | Art. 37 | ≤24h post-admisión | Sí |
 | [IND_MED](flujos/IND_MED.md) | Indicaciones Médicas | Art. 36 | Diaria | Sí (cada cierre diario) |
@@ -82,6 +83,8 @@
 | Código | Documento | NTEC | Obligatoriedad | Inmutable post-firma |
 |---|---|---|---|---|
 | [CERT_DEF](flujos/CERT_DEF.md) | Certificado de Defunción | — | Toda defunción | Sí (rectificable vía RECT) |
+| [CERT_INC](flujos/CERT_INC.md) | Certificado de Incapacidad ISSS | ISSS Reglamento + §22 | Trabajador asegurado con dx que requiere incapacidad | Sí |
+| [DOC_ASOC](flujos/DOC_ASOC.md) | Documentos Clínicos Asociados (adjuntos) | §15 / §38 | Cuando se adjunta evidencia externa al expediente | Sí (post-firma) |
 | [RECT](flujos/RECT.md) | Rectificación de Documento Firmado | Art. 42 | Error material en firmado | Sí (transversal) |
 | [BIT](flujos/BIT.md) | Bitácora Clínica ECE | Arts. 45–52 | Automático (sistema) | Sí (cadena SHA-256) |
 
@@ -203,30 +206,25 @@ El índice de fichas usa nombres "didácticos" del documento NTEC. En BD (`ece.t
 
 ---
 
-## Gaps de implementación (verificado 2026-05-25)
+## Gaps de implementación
 
-Códigos sembrados en BD que **NO tienen router tRPC dedicado, ni UI propia, ni ficha MD**. Son documentos NTEC presentes en el catálogo pero pendientes de implementación funcional:
+**Estado 2026-05-25 (post cierre):** sin gaps abiertos en el catálogo. Los 4 gaps identificados en la auditoría previa están resueltos:
 
-| Código BD | Documento | Modalidad | Estado actual | Pendiente |
-|---|---|---|---|---|
-| **`CERT_INC`** ⚠ | Certificado de Incapacidad ISSS | ambos | Solo schema + seed BD | Router + UI + ficha MD — específico SLV (ISSS); ver TDR §17 |
-| **`DOC_ASOC`** ⚠ | Documentos Clínicos Asociados (adjuntos genéricos) | ambos | Solo schema + seed BD | Router + UI uploader + ficha MD |
-| **`DOC_OBST`** ⚠ | Documentos Obstétricos (wrapper genérico) | hospitalario | Solo schema + seed BD; los específicos PARTOGRAMA/SALA_EXP/ATN_RN/NRP **sí** están implementados | Decidir si retirar el wrapper o convertirlo en agregador |
-| **`ORD_ING`** ⚠ | Orden de Ingreso | hospitalario | Cubierto operacionalmente por `HOJA_ING` (router + UI); BD lo conserva como tipo aparte | Decidir si retirar el tipo BD o crear flujo separado (orden médica → admisión administrativa) |
+| Código BD | Documento | Resolución |
+|---|---|---|
+| `CERT_INC` | Certificado de Incapacidad ISSS | ✅ Implementado end-to-end — tabla `ece.certificado_incapacidad` (migración 124), router `certificadoIncapacidadRouter`, UI `/ece/certificado-incapacidad`, ficha [CERT_INC.md](flujos/CERT_INC.md), 7 tests |
+| `DOC_ASOC` | Documentos Clínicos Asociados | ✅ Implementado end-to-end — tabla `ece.documento_asociado` (migración 125) con trigger inmutabilidad, router `documentoAsociadoRouter` con signed URLs Supabase Storage, UI `/ece/documento-asociado` con SHA-256 cliente, ficha [DOC_ASOC.md](flujos/DOC_ASOC.md), 5 tests |
+| `ORD_ING` | Orden de Ingreso Hospitalario | ✅ Implementado end-to-end — tabla `ece.orden_ingreso` (constraints/índices via migración 126), router `eceOrdenIngresoRouter`, UI `/ece/orden-ingreso`, ficha [ORD_ING.md](flujos/ORD_ING.md), 10 tests. Distinto y predecesor de HOJA_ING (decisión clínica vs apertura administrativa) |
+| `DOC_OBST` | Documentos Obstétricos (wrapper) | ✅ Retirado del catálogo BD (migración `retire_doc_obst_catalog_full_2026_05_25`) — dominio cubierto por PARTOGRAMA + SALA_EXP + ATN_RN + NRP. 0 instancias / 0 overrides / 0 dependientes pre-retiro |
 
 **Códigos en ficha MD pero sin tipo BD propio** (transversales o acciones, no documentos firmables independientes):
 - `CERT_DIR` — implementado vía `certificacion.router.ts` como acción sobre EPI_EGR / CERT_DEF.
 - `BIT` — automático del sistema (cadena SHA-256), no genera `documento_instancia`.
 - `RECT` — transversal, implementado vía `ece-rectificacion.router.ts` sobre cualquier documento firmado.
 
-### Plan recomendado
+### Configuración pendiente para Go-Live
 
-1. **CERT_INC** — sprint dedicado JCI/SLV (alto valor para acreditación ISSS). Estimado: 8 SP (schema ya está, falta router + UI + ficha).
-2. **DOC_ASOC** — sprint UX corto (uploader + metadata mínima). Estimado: 5 SP.
-3. **DOC_OBST + ORD_ING** — decisión arquitectónica antes de implementar:
-   - Opción A: retirar del catálogo BD vía migración (los flujos reales ya están cubiertos).
-   - Opción B: convertir en agregadores que renderizan documentos hijos.
-   - Pendiente de RFC con @AS / @PO.
+- **Bucket Supabase Storage `ece-documentos-asociados`** — crear manualmente en el dashboard con política de acceso privado antes del despliegue productivo (requisito de DOC_ASOC).
 
 ---
 
