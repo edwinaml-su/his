@@ -105,6 +105,7 @@ const SECTIONS: NavSection[] = [
       { href: "/census", label: "Censo", icon: Activity },
       { href: "/transfers", label: "Traslados", icon: Layers },
       { href: "/triage", label: "Triage", icon: Stethoscope },
+      { href: "/triage/monitor", label: "Monitor Triage", icon: Activity },
       { href: "/emergency", label: "Emergencias", icon: HeartPulse },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine },
