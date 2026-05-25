@@ -13,10 +13,15 @@
 import { z } from "zod";
 
 const INPATIENT_STATUS = [
-  "ACTIVE",
-  "ON_LEAVE",
-  "DISCHARGED",
-  "TRANSFERRED_OUT",
+  // ISSS MNP-S-138 Hitos 1-3 (docs/36_admision_vs_ingreso_isss.md)
+  "ADMISSION_DECIDED",   // Hito 1: médico indicó ingreso, sin cama
+  "BED_ASSIGNED",        // Hito 2: cama reservada, sin recibir paciente
+  "ACTIVE",              // Hito 3: paciente físicamente en sala (inicia día-cama)
+  "ON_LEAVE",            // permiso pase domiciliario
+  "DISCHARGE_PENDING",   // alta firmada, esperando salida administrativa
+  "CANCELLED",           // admisión revertida pre-recepción física
+  "DISCHARGED",          // alta efectiva (terminal)
+  "TRANSFERRED_OUT",     // transferido a otra org (terminal)
 ] as const;
 
 const CARE_PLAN_STATUS = [
@@ -54,8 +59,13 @@ export type CarePlanStatusType = z.infer<typeof carePlanStatusEnum>;
  * Documentadas conforme TDR §11.5 (estados de hospitalización).
  */
 const STATE_TRANSITIONS: Record<InpatientStatusType, ReadonlyArray<InpatientStatusType>> = {
-  ACTIVE: ["ON_LEAVE", "DISCHARGED", "TRANSFERRED_OUT"],
+  // ISSS MNP-S-138 — 3 hitos del ciclo hospitalario (docs/36_admision_vs_ingreso_isss.md)
+  ADMISSION_DECIDED: ["BED_ASSIGNED", "CANCELLED"],
+  BED_ASSIGNED: ["ACTIVE", "CANCELLED"],
+  ACTIVE: ["ON_LEAVE", "DISCHARGE_PENDING", "DISCHARGED", "TRANSFERRED_OUT"],
+  DISCHARGE_PENDING: ["DISCHARGED", "ACTIVE"], // reversible si se desbloquea el alta
   ON_LEAVE: ["ACTIVE", "DISCHARGED"],
+  CANCELLED: [], // terminal (admisión revertida pre-recepción física)
   DISCHARGED: [], // terminal
   TRANSFERRED_OUT: [], // terminal
 };
@@ -252,6 +262,49 @@ export const inpatientCarePlanUpdateStatusInput = z.object({
   id: z.string().uuid(),
   status: carePlanStatusEnum,
 });
+
+// ---------------------------------------------------------------------------
+// ISSS MNP-S-138 — los 3 hitos del ciclo hospitalario
+// Spec: docs/36_admision_vs_ingreso_isss.md
+// ---------------------------------------------------------------------------
+
+/** Hito 1 — Admisión (decisión clínica). Médico indica el ingreso. */
+export const inpatientDecidirAdmisionInput = z.object({
+  encounterId: z.string().uuid(),
+  establishmentId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  attendingId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(400),
+  expectedLos: z.number().int().min(1).max(365).optional(),
+  notes: z.string().trim().max(4000).optional(),
+  costCenterId: z.string().uuid().optional(),
+});
+
+/** Hito 2 — Asignación de cama (reserva operativa). */
+export const inpatientAsignarCamaInput = z.object({
+  id: z.string().uuid(), // InpatientAdmission.id
+  bedId: z.string().uuid(),
+  reason: z.string().trim().max(400).optional(),
+});
+
+/** Hito 3 — Recepción física en sala (INICIA DÍA-CAMA, Norma General 6 ISSS). */
+export const inpatientConfirmarRecepcionFisicaInput = z.object({
+  id: z.string().uuid(), // InpatientAdmission.id
+  admissionFormNumber: z.string().trim().max(40).optional(), // SAFISSS 130201132
+  wristbandPlaced: z.boolean().default(true),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+/** Cancelación pre-cama: ADMISSION_DECIDED → CANCELLED (decisión revertida). */
+export const inpatientCancelarPreCamaInput = z.object({
+  id: z.string().uuid(),
+  reason: z.string().trim().min(1).max(400),
+});
+
+export type InpatientDecidirAdmisionInput = z.infer<typeof inpatientDecidirAdmisionInput>;
+export type InpatientAsignarCamaInput = z.infer<typeof inpatientAsignarCamaInput>;
+export type InpatientConfirmarRecepcionFisicaInput = z.infer<typeof inpatientConfirmarRecepcionFisicaInput>;
+export type InpatientCancelarPreCamaInput = z.infer<typeof inpatientCancelarPreCamaInput>;
 
 export type InpatientAdmissionCreateInput = z.infer<typeof inpatientAdmissionCreateInput>;
 export type InpatientAdmissionListInput = z.infer<typeof inpatientAdmissionListInput>;
