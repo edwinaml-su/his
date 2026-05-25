@@ -12,6 +12,7 @@
 import Link from "next/link";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
+import { DataCardList, type DataCardColumn } from "@his/ui/components/data-card-list";
 import { VITAL_THRESHOLDS_ADULT } from "@his/contracts/schemas/inpatient";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +123,69 @@ function formatDateTime(iso: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Columnas DataCardList
+// ---------------------------------------------------------------------------
+
+const COLUMNS: DataCardColumn<VitalRow>[] = [
+  {
+    id: "fechaHora",
+    header: "Fecha / Hora",
+    primary: true,
+    cell: (row) => (
+      <span className="flex items-center gap-2 whitespace-nowrap">
+        {formatDateTime(row.capturedAt)}
+        {hasCriticalAlert(row) ? (
+          <Badge variant="destructive" className="text-xs">Crítico</Badge>
+        ) : (
+          <Badge variant="secondary" className="text-xs">Normal</Badge>
+        )}
+      </span>
+    ),
+  },
+  {
+    id: "ta",
+    header: "TA (S/D)",
+    cell: (row) => (
+      <span>
+        <CellValue field="systolicBp" value={row.systolicBp} unit="" />
+        {" / "}
+        <CellValue field="diastolicBp" value={row.diastolicBp} unit="mmHg" />
+      </span>
+    ),
+  },
+  {
+    id: "fc",
+    header: "FC",
+    cell: (row) => <CellValue field="heartRate" value={row.heartRate} unit="lpm" />,
+  },
+  {
+    id: "fr",
+    header: "FR",
+    cell: (row) => <CellValue field="respiratoryRate" value={row.respiratoryRate} unit="rpm" />,
+  },
+  {
+    id: "temp",
+    header: "Temp.",
+    cell: (row) => <CellValue field="temperatureC" value={row.temperatureC} unit="°C" />,
+  },
+  {
+    id: "spo2",
+    header: "SpO₂",
+    cell: (row) => <CellValue field="spo2" value={row.spo2} unit="%" />,
+  },
+  {
+    id: "dolor",
+    header: "Dolor",
+    cell: (row) =>
+      row.painScale !== null ? (
+        <span>{row.painScale}/10</span>
+      ) : (
+        <span className="text-muted-foreground">—</span>
+      ),
+  },
+];
+
+// ---------------------------------------------------------------------------
 // Página
 // ---------------------------------------------------------------------------
 
@@ -155,90 +219,13 @@ export default function SignosVitalesPage() {
         </div>
       )}
 
-      {/* Tabla de tendencias */}
-      <div className="overflow-x-auto rounded-lg border bg-card">
-        <table className="w-full text-sm" aria-label="Historial de signos vitales">
-          <caption className="sr-only">
-            Historial de signos vitales del paciente, ordenado por fecha y hora descendente.
-          </caption>
-          <thead>
-            <tr className="border-b bg-muted/50 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              <th scope="col" className="px-3 py-2.5">Fecha / Hora</th>
-              <th scope="col" className="px-3 py-2.5">TA (S/D)</th>
-              <th scope="col" className="px-3 py-2.5">FC</th>
-              <th scope="col" className="px-3 py-2.5">FR</th>
-              <th scope="col" className="px-3 py-2.5">Temp.</th>
-              <th scope="col" className="px-3 py-2.5">SpO₂</th>
-              <th scope="col" className="px-3 py-2.5">Dolor</th>
-              <th scope="col" className="px-3 py-2.5 sr-only">Estado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">
-                  Sin registros. Use &quot;Nuevo registro&quot; para capturar signos vitales.
-                </td>
-              </tr>
-            ) : (
-              rows.map((row) => {
-                const critical = hasCriticalAlert(row);
-                return (
-                  <tr
-                    key={row.id}
-                    className={
-                      critical
-                        ? "border-b bg-destructive/5 hover:bg-destructive/10"
-                        : "border-b hover:bg-muted/30"
-                    }
-                  >
-                    <td className="whitespace-nowrap px-3 py-2.5 text-muted-foreground">
-                      {formatDateTime(row.capturedAt)}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <span>
-                        <CellValue field="systolicBp" value={row.systolicBp} unit="" />
-                        {" / "}
-                        <CellValue field="diastolicBp" value={row.diastolicBp} unit="mmHg" />
-                      </span>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <CellValue field="heartRate" value={row.heartRate} unit="lpm" />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <CellValue field="respiratoryRate" value={row.respiratoryRate} unit="rpm" />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <CellValue field="temperatureC" value={row.temperatureC} unit="°C" />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <CellValue field="spo2" value={row.spo2} unit="%" />
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {row.painScale !== null ? (
-                        <span>{row.painScale}/10</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5">
-                      {critical ? (
-                        <Badge variant="destructive" className="text-xs">
-                          Crítico
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs">
-                          Normal
-                        </Badge>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+      {/* Lista responsiva de signos vitales */}
+      <DataCardList
+        data={rows}
+        getKey={(row) => row.id}
+        columns={COLUMNS}
+        emptyMessage='Sin registros. Use "Nuevo registro" para capturar signos vitales.'
+      />
     </div>
   );
 }

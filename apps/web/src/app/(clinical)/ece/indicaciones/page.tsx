@@ -14,14 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@his/ui/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@his/ui/components/table";
 import { Button } from "@his/ui/components/button";
 import { Label } from "@his/ui/components/label";
 import {
@@ -31,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
+import { DataCardList, type DataCardColumn } from "@his/ui/components/data-card-list";
 import { trpc } from "@/lib/trpc/react";
 import {
   IndicacionEstadoBadge,
@@ -52,6 +45,46 @@ const VIGENCIAS: Array<{ value: Vigencia | "TODAS"; label: string }> = [
   { value: "CANCELADA", label: "Cancelada" },
 ];
 
+const COLUMNS: DataCardColumn<IndicacionListRow>[] = [
+  {
+    id: "medico",
+    header: "Médico prescriptor",
+    primary: true,
+    cell: (row) => (
+      <span className="font-mono text-xs">{row.medico_prescriptor.slice(0, 8)}…</span>
+    ),
+  },
+  {
+    id: "estado",
+    header: "Estado",
+    cell: (row) => (
+      <IndicacionEstadoBadge
+        estadoRegistro={row.estado_registro as "borrador" | "firmado" | "validado"}
+      />
+    ),
+  },
+  {
+    id: "vigencia",
+    header: "Vigencia",
+    cell: (row) => (
+      <IndicacionEstadoBadge
+        estadoRegistro={row.estado_registro as "borrador" | "firmado" | "validado"}
+        vigencia={row.vigencia as Vigencia}
+      />
+    ),
+  },
+  {
+    id: "fecha",
+    header: "Fecha registro",
+    hideOnMobile: true,
+    cell: (row) => (
+      <span className="tabular-nums text-sm">
+        {new Date(row.registrado_en).toLocaleString("es-SV")}
+      </span>
+    ),
+  },
+];
+
 export default function IndicacionesListPage(): React.ReactElement {
   const [episodioId, setEpisodioId] = React.useState("");
   const [vigencia, setVigencia] = React.useState<Vigencia | "TODAS">("TODAS");
@@ -71,7 +104,7 @@ export default function IndicacionesListPage(): React.ReactElement {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">Indicaciones Médicas</h1>
           <p className="text-sm text-muted-foreground">
@@ -79,7 +112,7 @@ export default function IndicacionesListPage(): React.ReactElement {
             administración de enfermería (NTEC Doc 6).
           </p>
         </div>
-        <Button asChild>
+        <Button asChild className="w-full sm:w-auto">
           <Link href="/ece/indicaciones/nueva">Nueva indicación</Link>
         </Button>
       </div>
@@ -134,54 +167,18 @@ export default function IndicacionesListPage(): React.ReactElement {
             </p>
           ) : list.isLoading ? (
             <p className="text-sm text-muted-foreground">Cargando…</p>
-          ) : items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              No hay indicaciones con estos filtros.
-            </p>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Médico prescriptor</TableHead>
-                  <TableHead>Fecha registro</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>Vigencia</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(items as IndicacionListRow[]).map((ind) => (
-                  <TableRow key={ind.id}>
-                    <TableCell className="font-mono text-xs">
-                      {ind.medico_prescriptor.slice(0, 8)}…
-                    </TableCell>
-                    <TableCell className="tabular-nums text-sm">
-                      {new Date(ind.registrado_en).toLocaleString("es-SV")}
-                    </TableCell>
-                    <TableCell>
-                      <IndicacionEstadoBadge
-                        estadoRegistro={
-                          ind.estado_registro as "borrador" | "firmado" | "validado"
-                        }
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <IndicacionEstadoBadge
-                        estadoRegistro={
-                          ind.estado_registro as "borrador" | "firmado" | "validado"
-                        }
-                        vigencia={ind.vigencia as Vigencia}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/ece/indicaciones/${ind.id}`}>Ver</Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <DataCardList
+              data={items as IndicacionListRow[]}
+              getKey={(row) => row.id}
+              columns={COLUMNS}
+              actions={(row) => (
+                <Button asChild size="sm" variant="outline" className="w-full sm:w-auto">
+                  <Link href={`/ece/indicaciones/${row.id}`}>Ver</Link>
+                </Button>
+              )}
+              emptyMessage="No hay indicaciones con estos filtros."
+            />
           )}
         </CardContent>
       </Card>
