@@ -11,3 +11,15 @@ export { default as argon2 } from './firma/argon2';
 export { getOdooClient, getOdooVersion } from './odoo/client';
 export type { OdooClient, OdooConfig } from './odoo/client';
 export { xmlrpcCall } from './odoo/xmlrpc';
+// Cliente SRS El Salvador — read-only del padrón de registro sanitario.
+export { buscarPadron, obtenerDetalle, parseVidaUtilMeses } from './srs/client';
+export type {
+  SrsFiltroBusqueda,
+  SrsEstado,
+  SrsListadoItem,
+  SrsListadoResult,
+  SrsDetalle,
+  SrsPrincipioActivo,
+  SrsFabricante,
+  SrsPresentacion,
+} from './srs/client';
