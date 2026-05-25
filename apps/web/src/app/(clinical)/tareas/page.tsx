@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { trpc } from "@/lib/trpc/react";
+import { TaskActionsMenu } from "./task-actions-menu";
 
 type Priority = "CRITICAL" | "HIGH" | "NORMAL" | "LOW";
 
@@ -266,10 +267,17 @@ export default function TareasPage() {
                 const theme = PRIORITY_THEME[t.priority];
                 const iconBg = typeBgColor(t.type);
                 return (
-                  <li key={t.id}>
+                  <li key={t.id} className="relative">
+                    <div className="absolute right-2 top-2 z-10">
+                      <TaskActionsMenu
+                        taskId={t.id}
+                        taskType={t.type}
+                        onActionDone={() => query.refetch()}
+                      />
+                    </div>
                     <Link
                       href={t.deepLink}
-                      className={`flex items-start gap-3 rounded-md border bg-card p-3 transition-colors hover:bg-accent ${theme.ring}`}
+                      className={`flex items-start gap-3 rounded-md border bg-card p-3 pr-12 transition-colors hover:bg-accent ${theme.ring}`}
                     >
                       <div
                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${iconBg}`}

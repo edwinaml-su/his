@@ -17,8 +17,14 @@
  *
  * Spec: ver packages/contracts/src/schemas/workflow-inbox.ts
  */
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import {
   inboxFiltersSchema,
+  reassignTaskInput,
+  escalateTaskInput,
+  completeTaskInput,
+  commentTaskInput,
   type InboxResponse,
   type Task,
   type TaskPriority,
@@ -1462,4 +1468,206 @@ export const workflowInboxRouter = router({
       return { total, overdue };
     },
   ),
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // Ola 4 — Consolidación: acciones sobre tareas + auditoría
+  // ═════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Reasigna una tarea a otro usuario. Registra acción REASSIGN en
+   * WorkflowTaskAction. NO modifica el source (Prescription/LabOrder/etc.)
+   * — el reassignment es informativo y se respeta por convención del equipo.
+   */
+  reasignar: tenantProcedure
+    .input(reassignTaskInput)
+    .mutation(async ({ ctx, input }) => {
+      const { prisma, tenant, user } = ctx;
+      // Verificar que el target user pertenezca a la org
+      const target = await prisma.user.findFirst({
+        where: {
+          id: input.targetUserId,
+          roles: { some: { organizationId: tenant.organizationId } },
+        },
+        select: { id: true, fullName: true },
+      });
+      if (!target) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "El usuario destino no existe en esta organización.",
+        });
+      }
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "WorkflowTaskAction"
+          ("organizationId","taskId","taskType",action,"actorId","targetUserId",reason)
+         VALUES ($1::uuid, $2, $3, 'REASSIGN', $4::uuid, $5::uuid, $6)`,
+        tenant.organizationId,
+        input.taskId,
+        input.taskType,
+        user.id,
+        input.targetUserId,
+        input.reason,
+      );
+      return { ok: true, targetName: target.fullName };
+    }),
+
+  /**
+   * Escala una tarea — registra acción ESCALATE (típicamente al supervisor).
+   * Si targetUserId se omite, queda como escalación abierta (notificación
+   * para todos los roles supervisores).
+   */
+  escalar: tenantProcedure
+    .input(escalateTaskInput)
+    .mutation(async ({ ctx, input }) => {
+      const { prisma, tenant, user } = ctx;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "WorkflowTaskAction"
+          ("organizationId","taskId","taskType",action,"actorId","targetUserId",reason)
+         VALUES ($1::uuid, $2, $3, 'ESCALATE', $4::uuid, $5, $6)`,
+        tenant.organizationId,
+        input.taskId,
+        input.taskType,
+        user.id,
+        input.targetUserId ?? null,
+        input.reason,
+      );
+      return { ok: true };
+    }),
+
+  /**
+   * Override manual de "completar" una tarea — útil para fuentes sin estado
+   * cerrado natural o cuando el usuario decide marcarla como atendida fuera
+   * del flujo normal. Registra solo la acción; NO modifica el source.
+   */
+  completar: tenantProcedure
+    .input(completeTaskInput)
+    .mutation(async ({ ctx, input }) => {
+      const { prisma, tenant, user } = ctx;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "WorkflowTaskAction"
+          ("organizationId","taskId","taskType",action,"actorId",reason)
+         VALUES ($1::uuid, $2, $3, 'COMPLETE', $4::uuid, $5)`,
+        tenant.organizationId,
+        input.taskId,
+        input.taskType,
+        user.id,
+        input.reason,
+      );
+      return { ok: true };
+    }),
+
+  /**
+   * Comentario libre sobre una tarea (no cambia estado). Útil para
+   * coordinar entre roles que comparten visibilidad de la tarea.
+   */
+  comentar: tenantProcedure
+    .input(commentTaskInput)
+    .mutation(async ({ ctx, input }) => {
+      const { prisma, tenant, user } = ctx;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "WorkflowTaskAction"
+          ("organizationId","taskId","taskType",action,"actorId",reason)
+         VALUES ($1::uuid, $2, $3, 'COMMENT', $4::uuid, $5)`,
+        tenant.organizationId,
+        input.taskId,
+        input.taskType,
+        user.id,
+        input.reason,
+      );
+      return { ok: true };
+    }),
+
+  /**
+   * Devuelve el historial de acciones de una tarea específica
+   * (drill-down para auditoría).
+   */
+  historialTarea: tenantProcedure
+    .input(z.object({ taskId: z.string().min(3).max(120) }))
+    .query(async ({ ctx, input }) => {
+      const { prisma, tenant } = ctx;
+      type Row = {
+        id: string;
+        taskId: string;
+        taskType: string;
+        action: string;
+        actorId: string;
+        actorName: string | null;
+        targetUserId: string | null;
+        targetName: string | null;
+        reason: string;
+        createdAt: Date;
+      };
+      const rows = await prisma.$queryRawUnsafe<Row[]>(
+        `SELECT
+           wta.id::text AS id,
+           wta."taskId",
+           wta."taskType",
+           wta.action,
+           wta."actorId"::text AS "actorId",
+           u_actor."fullName" AS "actorName",
+           wta."targetUserId"::text AS "targetUserId",
+           u_target."fullName" AS "targetName",
+           wta.reason,
+           wta."createdAt"
+         FROM "WorkflowTaskAction" wta
+         JOIN "User" u_actor ON u_actor.id = wta."actorId"
+         LEFT JOIN "User" u_target ON u_target.id = wta."targetUserId"
+         WHERE wta."organizationId" = $1::uuid
+           AND wta."taskId" = $2
+         ORDER BY wta."createdAt" DESC
+         LIMIT 100`,
+        tenant.organizationId,
+        input.taskId,
+      );
+      return rows;
+    }),
+
+  /**
+   * Reporte de acciones recientes de TODO el equipo (admin/DIR).
+   * Útil para detectar patrones de reasignación, escalaciones repetidas,
+   * carga desigual entre miembros del equipo.
+   */
+  actividadEquipo: tenantProcedure
+    .input(
+      z.object({
+        days: z.number().int().min(1).max(30).default(7),
+        action: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { prisma, tenant } = ctx;
+      type Row = {
+        id: string;
+        taskId: string;
+        taskType: string;
+        action: string;
+        actorName: string;
+        targetName: string | null;
+        reason: string;
+        createdAt: Date;
+      };
+      const since = new Date(Date.now() - input.days * 24 * 60 * 60_000);
+      const rows = await prisma.$queryRawUnsafe<Row[]>(
+        `SELECT
+           wta.id::text AS id,
+           wta."taskId",
+           wta."taskType",
+           wta.action,
+           u_actor."fullName" AS "actorName",
+           u_target."fullName" AS "targetName",
+           wta.reason,
+           wta."createdAt"
+         FROM "WorkflowTaskAction" wta
+         JOIN "User" u_actor ON u_actor.id = wta."actorId"
+         LEFT JOIN "User" u_target ON u_target.id = wta."targetUserId"
+         WHERE wta."organizationId" = $1::uuid
+           AND wta."createdAt" >= $2
+           ${input.action ? `AND wta.action = $3` : ""}
+         ORDER BY wta."createdAt" DESC
+         LIMIT 200`,
+        tenant.organizationId,
+        since,
+        ...(input.action ? [input.action] : []),
+      );
+      return rows;
+    }),
 });

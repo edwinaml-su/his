@@ -290,3 +290,60 @@ export const inboxFiltersSchema = z.object({
   limit: z.number().int().min(1).max(500).default(200),
 });
 export type InboxFilters = z.infer<typeof inboxFiltersSchema>;
+
+// ---------------------------------------------------------------------------
+// Ola 4 — Acciones sobre tareas (WorkflowTaskAction)
+// ---------------------------------------------------------------------------
+
+export const taskActionEnum = z.enum([
+  "REASSIGN",   // reasignar a otro usuario
+  "ESCALATE",   // escalar al supervisor (rol superior)
+  "COMPLETE",   // marcar completada manualmente (override)
+  "COMMENT",    // agregar comentario sin cambiar estado
+  "CANCEL",     // descartar la tarea (no aplicable)
+]);
+export type TaskAction = z.infer<typeof taskActionEnum>;
+
+export const reassignTaskInput = z.object({
+  taskId: z.string().min(3).max(120),
+  taskType: taskTypeEnum,
+  targetUserId: z.string().uuid(),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const escalateTaskInput = z.object({
+  taskId: z.string().min(3).max(120),
+  taskType: taskTypeEnum,
+  targetUserId: z.string().uuid().optional(),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const completeTaskInput = z.object({
+  taskId: z.string().min(3).max(120),
+  taskType: taskTypeEnum,
+  reason: z.string().trim().min(3).max(500),
+});
+
+export const commentTaskInput = z.object({
+  taskId: z.string().min(3).max(120),
+  taskType: taskTypeEnum,
+  reason: z.string().trim().min(3).max(2000),
+});
+
+export const colaFiltersSchema = inboxFiltersSchema.extend({
+  /** Si true, incluye tareas asignadas a otros usuarios del equipo (mismo rol). */
+  scope: z.enum(["MINE", "TEAM", "ALL"]).default("MINE"),
+});
+export type ColaFilters = z.infer<typeof colaFiltersSchema>;
+
+export const taskActionRowSchema = z.object({
+  id: z.string().uuid(),
+  taskId: z.string(),
+  taskType: taskTypeEnum,
+  action: taskActionEnum,
+  actorId: z.string().uuid(),
+  targetUserId: z.string().uuid().nullable(),
+  reason: z.string(),
+  createdAt: z.date(),
+});
+export type TaskActionRow = z.infer<typeof taskActionRowSchema>;
