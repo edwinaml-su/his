@@ -6,7 +6,17 @@
  *   2. Sync/upsert en tabla `User` local por email.
  *   3. Resuelve organización activa: cookie `his.org` o primera membresía.
  *   4. Establecimiento activo: cookie `his.estab` o el primero activo de la org.
+ *
+ * IMPORTANTE — Pool exhaustion fix:
+ *   `getCurrentUser`, `getTenantContext` y `getVisibleOrgIds` están envueltos
+ *   en `cache()` de React Server Components. Eso garantiza una sola llamada
+ *   por request HTTP — críticamente importante porque cada llamada hace
+ *   `prisma.user.upsert()` que consume una conexión del pool de Supabase
+ *   (15 max en session mode). Sin la memoización, una page que se compone
+ *   de layout + Server Component + sidebar agotaba el pool en producción
+ *   con error `(EMAXCONNSESSION) max clients reached in session mode`.
  */
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@his/database";
 import type { TenantContext } from "@his/contracts";
@@ -29,7 +39,7 @@ export interface CurrentUser {
   fullName: string;
 }
 
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
   const supabase = createSupabaseServerClient();
   const { data } = await supabase.auth.getUser();
   const supaUser = data.user;
@@ -52,9 +62,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   });
 
   return { id: user.id, email: user.email, fullName: user.fullName };
-}
+});
 
-export async function getTenantContext(): Promise<TenantContext | null> {
+export const getTenantContext = cache(async (): Promise<TenantContext | null> => {
   const user = await getCurrentUser();
   if (!user) return null;
 
@@ -112,7 +122,7 @@ export async function getTenantContext(): Promise<TenantContext | null> {
     // subset gobierna.
     roleCodes: activeRoleCodes.length > 0 ? activeRoleCodes : availableRoleCodes,
   };
-}
+});
 
 /**
  * IDs de organizaciones ADICIONALES con visibilidad para el usuario actual,
@@ -124,7 +134,7 @@ export async function getTenantContext(): Promise<TenantContext | null> {
  * Uso típico: dashboards o reports consolidados que opt-in a esta lista.
  *   const visibleOrgs = await getVisibleOrgIds();  // [primaria, ...adicionales]
  */
-export async function getVisibleOrgIds(): Promise<string[]> {
+export const getVisibleOrgIds = cache(async (): Promise<string[]> => {
   const user = await getCurrentUser();
   if (!user) return [];
 
@@ -153,6 +163,6 @@ export async function getVisibleOrgIds(): Promise<string[]> {
   });
   const valid = new Set(memberships.map((m) => m.organizationId));
   return Array.from(ids).filter((id) => valid.has(id));
-}
+});
 
 export const HIS_COOKIES = { ORG_COOKIE, ESTAB_COOKIE, ROLES_COOKIE, ORGS_COOKIE };
