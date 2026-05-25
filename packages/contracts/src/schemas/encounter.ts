@@ -46,6 +46,8 @@ export const admitSchema = z.object({
   accompanyingPersonName: z.string().max(200).optional(),
   valuables: z.array(z.string().max(200)).max(20).optional(),
   chiefComplaint: z.string().max(500).optional(),
+  /** Centro de costo productivo donde se imputa el encuentro. */
+  costCenterId: z.string().uuid().optional(),
 });
 
 export const transferSchema = z.object({
@@ -66,6 +68,7 @@ export const dischargeSchema = z.object({
 
 export const encounterListSchema = z.object({
   patientId: z.string().uuid().optional(),
+  costCenterId: z.string().uuid().optional(),
   status: z.enum(["OPEN", "CLOSED", "ALL"]).default("OPEN"),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(100).default(20),
@@ -76,6 +79,7 @@ export const encounterListOpenByOrgSchema = z.object({
   query: z.string().trim().max(120).optional(),
   admissionType: admissionTypeEnum.optional(),
   serviceUnitId: z.string().uuid().optional(),
+  costCenterId: z.string().uuid().optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(100).default(20),
 });

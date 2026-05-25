@@ -184,6 +184,8 @@ export const inpatientAdmissionCreateInput = z.object({
   bedId: z.string().uuid().optional(),
   /** Razón al asignar cama (auditoría). */
   bedAssignmentReason: z.string().trim().max(200).optional(),
+  /** Centro de costo productivo donde se imputa la hospitalización. */
+  costCenterId: z.string().uuid().optional(),
 });
 
 export const inpatientAdmissionListInput = z.object({
@@ -191,6 +193,7 @@ export const inpatientAdmissionListInput = z.object({
   patientId: z.string().uuid().optional(),
   attendingId: z.string().uuid().optional(),
   establishmentId: z.string().uuid().optional(),
+  costCenterId: z.string().uuid().optional(),
   limit: z.number().int().min(1).max(200).default(50),
 });
 

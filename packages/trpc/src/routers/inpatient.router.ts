@@ -85,6 +85,7 @@ export const inpatientRouter = router({
             ...(input.establishmentId && {
               establishmentId: input.establishmentId,
             }),
+            ...(input.costCenterId && { costCenterId: input.costCenterId }),
           },
           include: {
             patient: {
@@ -177,6 +178,7 @@ export const inpatientRouter = router({
               reason: input.reason,
               expectedLos: input.expectedLos ?? null,
               notes: input.notes ?? null,
+              costCenterId: input.costCenterId ?? null,
               createdBy: ctx.user.id,
             },
           });

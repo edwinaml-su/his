@@ -31,6 +31,9 @@ const ASA_OPTIONS: { value: AsaClass | "NONE"; label: string }[] = [
   { value: "ASA_VI", label: "ASA VI" },
 ];
 
+// Códigos quirúrgicos habilitados para imputación de SurgeryCase.
+const SURGICAL_CC_CODES = ["1-QUI-MAY", "1-QUI-MEN", "1-PAR-SAL"] as const;
+
 interface FormState {
   encounterId: string;
   establishmentId: string;
@@ -41,6 +44,7 @@ interface FormState {
   scheduledStart: string;
   scheduledEnd: string;
   asaClass: AsaClass | "NONE";
+  costCenterId: string;
 }
 
 const INITIAL: FormState = {
@@ -53,6 +57,7 @@ const INITIAL: FormState = {
   scheduledStart: "",
   scheduledEnd: "",
   asaClass: "NONE",
+  costCenterId: "",
 };
 
 function validate(f: FormState): string | null {
@@ -73,6 +78,24 @@ export default function NewSurgeryCasePage() {
   const router = useRouter();
   const [form, setForm] = React.useState<FormState>(INITIAL);
   const [clientError, setClientError] = React.useState<string | null>(null);
+
+  // Carga centros de costo activos y filtra a los 3 quirúrgicos.
+  const { data: costCenters } = trpc.costCenter.list.useQuery(
+    { activo: true },
+    {
+      select: (rows) =>
+        rows.filter((cc: { code: string }) =>
+          (SURGICAL_CC_CODES as ReadonlyArray<string>).includes(cc.code),
+        ),
+    },
+  );
+
+  // Pre-selecciona 1-QUI-MAY en cuanto cargan los cost centers.
+  React.useEffect(() => {
+    if (!costCenters || form.costCenterId) return;
+    const defaultCc = costCenters.find((cc: { code: string }) => cc.code === "1-QUI-MAY");
+    if (defaultCc) setForm((f) => ({ ...f, costCenterId: defaultCc.id }));
+  }, [costCenters, form.costCenterId]);
 
   const create = trpc.surgery.case.create.useMutation({
     onSuccess: () => router.push("/surgery"),
@@ -100,6 +123,7 @@ export default function NewSurgeryCasePage() {
       scheduledStart: new Date(form.scheduledStart),
       scheduledEnd: new Date(form.scheduledEnd),
       asaClass: form.asaClass === "NONE" ? undefined : form.asaClass,
+      costCenterId: form.costCenterId || undefined,
     });
   }
 
@@ -161,6 +185,24 @@ export default function NewSurgeryCasePage() {
                 value={form.operatingRoomId}
                 onChange={(e) => update("operatingRoomId", e.target.value)}
               />
+            </FormField>
+            <FormField>
+              <Label htmlFor="costCenterId">Centro de costo</Label>
+              <Select
+                value={form.costCenterId}
+                onValueChange={(v) => update("costCenterId", v)}
+              >
+                <SelectTrigger id="costCenterId">
+                  <SelectValue placeholder="Seleccionar centro de costo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(costCenters ?? []).map((cc: { id: string; code: string; name: string }) => (
+                    <SelectItem key={cc.id} value={cc.id}>
+                      {cc.code} — {cc.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </FormField>
             <FormField>
               <Label htmlFor="procedureDescription">Descripción del procedimiento</Label>

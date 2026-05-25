@@ -119,6 +119,7 @@ export const surgeryRouter = router({
               operatingRoomId: input.operatingRoomId,
             }),
             ...(input.patientId && { patientId: input.patientId }),
+            ...(input.costCenterId && { costCenterId: input.costCenterId }),
             ...((input.fromDate || input.toDate) && {
               scheduledStart: {
                 ...(input.fromDate && { gte: input.fromDate }),
@@ -206,6 +207,7 @@ export const surgeryRouter = router({
             scheduledEnd: input.scheduledEnd,
             asaClass: input.asaClass ?? null,
             preopNotes: input.preopNotes ?? null,
+            costCenterId: input.costCenterId ?? null,
             createdBy: ctx.user.id,
           },
         });

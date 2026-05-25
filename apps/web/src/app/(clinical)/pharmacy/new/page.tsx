@@ -105,11 +105,19 @@ const emptyItem = (): ItemDraft => ({
   notes: "",
 });
 
+interface CostCenterOption {
+  id: string;
+  code: string;
+  name: string;
+  tipo: string | null;
+}
+
 export default function NewPrescriptionPage(): React.ReactElement {
   const router = useRouter();
   const [encounterId, setEncounterId] = React.useState("");
   const [patientId, setPatientId] = React.useState("");
   const [notes, setNotes] = React.useState("");
+  const [costCenterId, setCostCenterId] = React.useState("");
   const [items, setItems] = React.useState<ItemDraft[]>([emptyItem()]);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
@@ -120,6 +128,15 @@ export default function NewPrescriptionPage(): React.ReactElement {
     onSuccess: () => router.push("/pharmacy"),
     onError: (err: { message: string }) => setServerError(err.message),
   });
+
+  // Centros productivos e intermedios para el solicitante (excluye apoyo).
+  const costCentersQuery = trpcAny.costCenter.list.useQuery(
+    { activo: true },
+    { staleTime: 60_000 },
+  );
+  const costCenterOptions = (
+    (costCentersQuery.data ?? []) as CostCenterOption[]
+  ).filter((cc) => cc.tipo === "productivo" || cc.tipo === "intermedio" || cc.tipo === null);
 
   const updateItem = (key: string, patch: Partial<ItemDraft>) => {
     setItems((prev) => prev.map((it) => (it.key === key ? { ...it, ...patch } : it)));
@@ -170,6 +187,7 @@ export default function NewPrescriptionPage(): React.ReactElement {
       encounterId: encounterId.trim(),
       patientId: patientId.trim(),
       ...(notes.trim() ? { notes: notes.trim() } : {}),
+      ...(costCenterId ? { costCenterId } : {}),
       items: payloadItems as Array<NonNullable<(typeof payloadItems)[number]>>,
     };
 
@@ -239,6 +257,25 @@ export default function NewPrescriptionPage(): React.ReactElement {
                   className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   placeholder="Indicaciones generales, alergias relevantes…"
                 />
+              </FormField>
+              <FormField>
+                <Label htmlFor="costCenter">Centro de costo solicitante</Label>
+                <Select
+                  value={costCenterId}
+                  onValueChange={setCostCenterId}
+                >
+                  <SelectTrigger id="costCenter">
+                    <SelectValue placeholder="Sin asignar" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {costCenterOptions.map((cc) => (
+                      <SelectItem key={cc.id} value={cc.id}>
+                        {cc.code} — {cc.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FormHint>Productivo o intermedio. Opcional.</FormHint>
               </FormField>
             </div>
           </CardContent>

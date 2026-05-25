@@ -30,6 +30,21 @@ import {
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
+/**
+ * Mapeo modalidad DICOM → code de centro de costo ejecutor.
+ * Definido en Wave 10: 41 centros sembrados, 4 centros de imagen.
+ */
+const MODALITY_EXECUTOR_CODE: Partial<Record<string, string>> = {
+  CR: "2-IMG-RAY",
+  XA: "2-IMG-RAY", // Angiografía también usa sala RX
+  MG: "2-IMG-RAY", // Mamografía en mismo servicio radiología
+  NM: "2-IMG-RAY", // Nuclear medicine comparte RX en establecimientos pequeños
+  US: "2-IMG-USG",
+  CT: "2-IMG-TAC",
+  MR: "2-IMG-RMN",
+  PT: "2-IMG-RMN", // PET/RMN — misma unidad
+};
+
 export const imagingRouter = router({
   modality: router({
     list: tenantProcedure
@@ -99,6 +114,10 @@ export const imagingRouter = router({
               ...(input.establishmentId && {
                 establishmentId: input.establishmentId,
               }),
+              ...(input.costCenterId && { costCenterId: input.costCenterId }),
+              ...(input.ejecutorCostCenterId && {
+                ejecutorCostCenterId: input.ejecutorCostCenterId,
+              }),
               ...((input.fromDate || input.toDate) && {
                 createdAt: {
                   ...(input.fromDate && { gte: input.fromDate }),
@@ -159,6 +178,24 @@ export const imagingRouter = router({
               message: "patientId no coincide con encounter.",
             });
           }
+
+          // Resolver ejecutorCostCenterId: usa el explícito o lo deduce de modalidad.
+          let ejecutorCostCenterId = input.ejecutorCostCenterId ?? null;
+          if (!ejecutorCostCenterId) {
+            const executorCode = MODALITY_EXECUTOR_CODE[input.modalityType];
+            if (executorCode) {
+              const cc = await tx.costCenter.findFirst({
+                where: {
+                  organizationId: ctx.tenant.organizationId,
+                  code: executorCode,
+                  active: true,
+                },
+                select: { id: true },
+              });
+              ejecutorCostCenterId = cc?.id ?? null;
+            }
+          }
+
           return tx.imagingOrder.create({
             data: {
               organizationId: ctx.tenant.organizationId,
@@ -175,6 +212,8 @@ export const imagingRouter = router({
               scheduledAt: input.scheduledAt ?? null,
               notes: input.notes ?? null,
               createdBy: ctx.user.id,
+              costCenterId: input.costCenterId ?? null,
+              ejecutorCostCenterId,
             },
           });
         });

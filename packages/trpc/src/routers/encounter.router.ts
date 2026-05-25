@@ -185,6 +185,7 @@ export const encounterRouter = router({
           admittedAt: input.admittedAt ?? new Date(),
           encounterNumber,
           currencyId,
+          costCenterId: input.costCenterId ?? null,
           // TODO(Sprint 2): resolver tipo de cambio real desde ExchangeRate.
           exchangeRateToFunc: 1,
           createdBy: ctx.user.id,
@@ -283,6 +284,7 @@ export const encounterRouter = router({
     const where = {
       organizationId: ctx.tenant.organizationId,
       ...(input.patientId ? { patientId: input.patientId } : {}),
+      ...(input.costCenterId ? { costCenterId: input.costCenterId } : {}),
       ...(input.status === "OPEN" ? { dischargedAt: null } : {}),
       ...(input.status === "CLOSED" ? { dischargedAt: { not: null } } : {}),
     };
@@ -316,6 +318,7 @@ export const encounterRouter = router({
         dischargedAt: null,
         ...(input.admissionType ? { admissionType: input.admissionType } : {}),
         ...(input.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+        ...(input.costCenterId ? { costCenterId: input.costCenterId } : {}),
         ...(q
           ? {
               patient: {

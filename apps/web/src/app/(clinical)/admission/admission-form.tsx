@@ -23,6 +23,7 @@ export type AdmissionType =
 export interface AdmissionFormState {
   admissionType: AdmissionType;
   serviceUnitId: string;
+  costCenterId: string;
   currencyId: string;
   isReferral: boolean;
   referralOrigin: string;
@@ -36,6 +37,7 @@ export interface AdmissionFormProps {
   onChange: (next: AdmissionFormState) => void;
   currencies: Array<{ id: string; isoCode: string; name: string }>;
   serviceUnits: Array<{ id: string; code: string; name: string }>;
+  costCenters: Array<{ id: string; code: string; name: string }>;
   onBack: () => void;
   onContinue: () => void;
   error?: string | null;
@@ -60,6 +62,7 @@ export function AdmissionForm({
   onChange,
   currencies,
   serviceUnits,
+  costCenters,
   onBack,
   onContinue,
   error,
@@ -113,6 +116,25 @@ export function AdmissionForm({
             {serviceUnits.map((s) => (
               <SelectItem key={s.id} value={s.id}>
                 {s.code} — {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormField>
+
+      <FormField>
+        <Label>Centro de costo</Label>
+        <Select
+          value={value.costCenterId}
+          onValueChange={(v) => onChange({ ...value, costCenterId: v })}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Selecciona centro de costo…" />
+          </SelectTrigger>
+          <SelectContent>
+            {costCenters.map((c) => (
+              <SelectItem key={c.id} value={c.id}>
+                {c.code} — {c.name}
               </SelectItem>
             ))}
           </SelectContent>
