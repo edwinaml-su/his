@@ -241,6 +241,8 @@ const SECTIONS: NavSection[] = [
       { href: "/consents", label: "Consentimientos de datos (GDPR)", icon: FileSignature },
       { href: "/deaths", label: "Defunciones", icon: Skull },
       { href: "/ledgers", label: "Contabilidad", icon: BookOpen },
+      { href: "/finance/cost-centers", label: "Centros de Costo", icon: Building2 },
+      { href: "/finance/invoices", label: "Facturas", icon: FileText },
       { href: "/notifications", label: "Notificaciones", icon: BellRing },
     ],
   },
