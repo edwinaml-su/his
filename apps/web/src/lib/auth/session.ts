@@ -14,6 +14,9 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const ORG_COOKIE = "his.org";
 const ESTAB_COOKIE = "his.estab";
+// CSV de role codes activos seleccionados por el usuario (subset de los
+// que tiene en la org activa). Si está vacía o ausente: usa todos.
+const ROLES_COOKIE = "his.roles";
 
 export interface CurrentUser {
   id: string;
@@ -75,18 +78,35 @@ export async function getTenantContext(): Promise<TenantContext | null> {
   const establishmentId =
     establishments.find((e) => e.id === estabCookie)?.id ?? establishments[0]?.id;
 
-  // Roles del usuario en la org elegida.
-  const roleCodes = memberships
+  // Roles del usuario en la org elegida (todos los que tiene asignados).
+  const availableRoleCodes = memberships
     .filter((m) => m.organizationId === chosen.organizationId)
     .map((m) => m.role.code);
+
+  // Subconjunto activo seleccionado por el usuario vía cookie his.roles.
+  // Semántica restrictiva: si el usuario marca solo ENF, requireRole(['MC'])
+  // falla aunque tenga MC en availableRoleCodes. Sirve para auditoría
+  // (la firma queda con el rol activo, no con el más privilegiado).
+  // Default cuando la cookie está ausente o vacía: TODOS (compat backward).
+  const rolesCookieValue = cookieStore.get(ROLES_COOKIE)?.value;
+  const selectedFromCookie = rolesCookieValue
+    ? rolesCookieValue.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  const activeRoleCodes =
+    selectedFromCookie.length > 0
+      ? availableRoleCodes.filter((code) => selectedFromCookie.includes(code))
+      : availableRoleCodes;
 
   return {
     userId: user.id,
     countryId: chosen.organization.countryId,
     organizationId: chosen.organizationId,
     establishmentId,
-    roleCodes,
+    // `roleCodes` mantiene la semántica del contrato: lo que el motor usa
+    // para autorización en runtime. Cuando el usuario marca un subset, ese
+    // subset gobierna.
+    roleCodes: activeRoleCodes.length > 0 ? activeRoleCodes : availableRoleCodes,
   };
 }
 
-export const HIS_COOKIES = { ORG_COOKIE, ESTAB_COOKIE };
+export const HIS_COOKIES = { ORG_COOKIE, ESTAB_COOKIE, ROLES_COOKIE };
