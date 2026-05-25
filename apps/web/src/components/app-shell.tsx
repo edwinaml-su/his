@@ -63,8 +63,11 @@ import {
   Paperclip,
   ClipboardPlus,
   TriangleAlert,
+  Menu,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
+import { Sheet, SheetContent, SheetTrigger } from "@his/ui/components/sheet";
+import { Button } from "@his/ui/components/button";
 
 interface NavItem {
   href: string;
@@ -354,6 +357,36 @@ export function AppShell({
   roleCodes?: string[];
 }) {
   const pathname = usePathname();
+  const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+
+  // Cierra el drawer mobile al navegar (los items son <Link>; el cambio de
+  // pathname implica que el usuario tocó uno).
+  React.useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
+
+  // Nav body reutilizado entre sidebar desktop y sheet mobile.
+  const navBody = (
+    <>
+      <div className="border-b border-sidebar-border p-4">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/avante-logo.svg"
+          alt="AVANTE Complejo Hospitalario"
+          className="h-10 w-auto brightness-0 invert"
+        />
+        <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
+          Sistema de Información Hospitalaria · El Salvador
+        </p>
+      </div>
+      <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
+        {SECTIONS.map((section) => (
+          <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
+        ))}
+      </nav>
+    </>
+  );
+
   return (
     <div className="flex min-h-screen">
       <a
@@ -362,29 +395,42 @@ export function AppShell({
       >
         Saltar al contenido principal
       </a>
+
+      {/* Sidebar desktop (≥ md) */}
       <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground md:flex md:flex-col">
-        <div className="border-b border-sidebar-border p-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/avante-logo.svg"
-            alt="AVANTE Complejo Hospitalario"
-            className="h-10 w-auto brightness-0 invert"
-          />
-          <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
-            Sistema de Información Hospitalaria · El Salvador
-          </p>
-        </div>
-        <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
-          {SECTIONS.map((section) => (
-            <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
-          ))}
-        </nav>
+        {navBody}
       </aside>
+
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 items-center justify-between border-b bg-background px-4 shadow-sm">
-          <div className="text-sm text-muted-foreground">{topbar}</div>
+        <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
+          {/* Hamburguesa mobile (< md) */}
+          <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+            <SheetTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 w-9 p-0 md:hidden"
+                aria-label="Abrir menú de navegación"
+              >
+                <Menu className="h-5 w-5" aria-hidden />
+              </Button>
+            </SheetTrigger>
+            <SheetContent
+              side="left"
+              className="flex w-72 max-w-[85vw] flex-col border-r-sidebar-border bg-sidebar-background p-0 text-sidebar-foreground"
+            >
+              {navBody}
+            </SheetContent>
+          </Sheet>
+
+          <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
         </header>
-        <main id="main-content" tabIndex={-1} className="flex-1 bg-muted/30 p-6">
+
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 bg-muted/30 p-3 sm:p-4 lg:p-6"
+        >
           {children}
         </main>
       </div>
