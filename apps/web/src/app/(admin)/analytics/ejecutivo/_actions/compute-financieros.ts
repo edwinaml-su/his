@@ -226,6 +226,11 @@ export async function computeFinancieros(req: ComputeRequest): Promise<KpiValues
   // -- fin_margen -----------------------------------------------------------
   // Margen = (ingresos − costos estimados) / ingresos × 100
   // estimatedCost por línea (proxy: 60% del total si no se especifica).
+  //
+  // NOTA presupuestaria: InvoiceItem.costCenterId es NOT NULL (#128), por lo
+  // que el margen se puede agrupar por centro de costo añadiendo
+  // `GROUP BY ii."costCenterId"` y serializar como heatmap servicio × org en
+  // Capa 2. Wave 4 (visualización drill-down) implementa esa vista detallada.
   try {
     const rows = hasOrgs
       ? await prisma.$queryRaw<{ ingresos: string | null; costos: string | null }[]>`
