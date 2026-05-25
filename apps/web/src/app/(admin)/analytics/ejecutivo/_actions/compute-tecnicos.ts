@@ -28,6 +28,7 @@ export async function computeTecnicos(req: ComputeRequest): Promise<KpiValuesMap
   const result: KpiValuesMap = {};
   const desde = new Date(req.fechaDesde);
   const hasta = new Date(req.fechaHasta);
+  const hasOrgs = req.organizationIds.length > 0;
 
   // -- tec_uptime ----------------------------------------------------------
   // Proxy: % de horas en el periodo SIN errores SYSTEM_ERROR registrados.
@@ -57,8 +58,39 @@ export async function computeTecnicos(req: ComputeRequest): Promise<KpiValuesMap
   }
 
   // -- tec_response_time ---------------------------------------------------
-  // Requiere Vercel Speed Insights / APM externo. No hay datos en BD.
-  result.tec_response_time = null;
+  // Wave 7 — APM cliente: <PerfTracker /> reporta navigation timing a la
+  // tabla PerformanceSample. Aquí calculamos el promedio de duration_ms
+  // en el periodo (todas las rutas/orgs). Percentiles en Capa 2 detallada.
+  try {
+    type AvgRow = { avg_ms: number | string | null };
+    const rows = hasOrgs
+      ? await prisma.$queryRaw<AvgRow[]>`
+          SELECT AVG(duration_ms)::float AS avg_ms
+          FROM "PerformanceSample"
+          WHERE "occurredAt" BETWEEN ${desde} AND ${hasta}
+            AND ("organizationId" IS NULL
+                 OR "organizationId" = ANY(${req.organizationIds}::uuid[]))
+        `
+      : await prisma.$queryRaw<AvgRow[]>`
+          SELECT AVG(duration_ms)::float AS avg_ms
+          FROM "PerformanceSample"
+          WHERE "occurredAt" BETWEEN ${desde} AND ${hasta}
+        `;
+    const avgMs = rows[0]?.avg_ms == null ? null : Number(rows[0].avg_ms);
+    if (avgMs == null) {
+      result.tec_response_time = null;
+    } else {
+      const segundos = avgMs / 1000;
+      result.tec_response_time = {
+        display: fmtUnidad(segundos, "segundos"),
+        // Meta del catálogo: ≤ 2s consulta · ≤ 4s transaccional. Conservador: ≤ 3s verde.
+        semaforo: semaforoMenor(segundos, 3, 6),
+        delta: "Promedio navigation timing (cliente)",
+      };
+    }
+  } catch {
+    result.tec_response_time = null;
+  }
 
   // -- tec_mtbf_mttr -------------------------------------------------------
   // Proxy MTBF: tiempo promedio entre eventos SYSTEM_ERROR.

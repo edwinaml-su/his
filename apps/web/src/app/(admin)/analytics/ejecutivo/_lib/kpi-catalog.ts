@@ -91,7 +91,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Líneas p50/p90/p99",
     clasificacion: "operativo",
     responsable: "Dirección de TI",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
   {
@@ -628,7 +628,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "Tarjeta + tendencia",
     clasificacion: "estrategico",
     responsable: "Comité directivo",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: true,
   },
   {
@@ -660,7 +660,7 @@ export const KPI_CATALOG: ReadonlyArray<KpiDefinition> = [
     visualizacion: "KPI + tendencia",
     clasificacion: "estrategico",
     responsable: "Comité de gobernanza HIS",
-    dataSource: "pending",
+    dataSource: "real",
     capaEjecutiva: false,
   },
 ];
