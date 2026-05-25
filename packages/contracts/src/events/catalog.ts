@@ -142,6 +142,10 @@ export const EVENT_TYPES = [
   "critical_result.escalated",
   "critical_result.sla_warning",
   "critical_result.sla_exceeded",
+  // JCI-1.S3 US.5.16 — IPSG.6 ME 4: Reporte estructurado de caída
+  "ipsg6.fall_event_recorded",
+  // JCI-1.S3 US.JCI.5.14 — IPSG.6 ME 2: SLA Morse por turno (>12 h sin evaluación)
+  "ipsg6.morse_sla_exceeded",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

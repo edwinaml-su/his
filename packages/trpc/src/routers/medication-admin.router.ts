@@ -11,6 +11,7 @@
  *      (salvo override). El trigger SQL 32_emar_hardening.sql mantiene consistencia DB.
  *   6. JCI IPSG.3 ME 2: LASA pair detection — warning no bloqueante en scan GTIN.
  *   7. JCI IPSG.3 ME 4: double-check independiente para alertLevel high/very_high/critical.
+ *   8. JCI IPSG.3 ME 5: bloqueo de dosis máxima pediátrica (tabla ece.pediatric_max_dose).
  */
 import { TRPCError } from "@trpc/server";
 import {
@@ -478,6 +479,119 @@ export const medicationAdminRouter = router({
           }
         }
 
+        // -- JCI IPSG.3 ME 5 — bloqueo de dosis máxima pediátrica -----------------
+        // JCI Standard: IPSG.3 ME 5
+        // Solo aplica cuando se especifica doseAmount en la administración.
+        // noWeightWarning=true indica que no hay peso reciente; el clínico decide continuar.
+        let noWeightWarning = false;
+        if (input.doseAmount != null && indication.drug) {
+          const patientRow = await tx.$queryRawUnsafe<{
+            birth_date: Date | null;
+          }[]>(
+            `SELECT "birthDate" AS birth_date FROM "Patient" WHERE id = $1 LIMIT 1`,
+            input.patientId,
+          );
+
+          const birthDate = patientRow[0]?.birth_date ?? null;
+          if (birthDate) {
+            const now = new Date();
+            const edadMeses =
+              (now.getFullYear() - birthDate.getFullYear()) * 12 +
+              (now.getMonth() - birthDate.getMonth());
+
+            // Solo aplica si el paciente tiene menos de 18 años (216 meses)
+            if (edadMeses < 216) {
+              const viaInput = input.route ?? null;
+
+              const limites = await tx.$queryRawUnsafe<{
+                max_dose_mg_per_kg: string | null;
+                max_dose_absolute_mg: string | null;
+              }[]>(
+                `SELECT max_dose_mg_per_kg, max_dose_absolute_mg
+                 FROM ece.pediatric_max_dose
+                 WHERE drug_id = $1
+                   AND $2 >= edad_min_meses
+                   AND $2 <= edad_max_meses
+                   AND activo = true
+                   AND (via IS NULL OR via = $3)
+                 ORDER BY via NULLS LAST
+                 LIMIT 1`,
+                indication.drug.id,
+                edadMeses,
+                viaInput,
+              );
+
+              if (limites.length > 0 && limites[0]) {
+                const limite = limites[0];
+
+                // Intentar obtener el último peso del paciente (últimas 24h) desde triage.
+                // vitalCode 'WEIGHT' almacena el peso en kg.
+                const pesoRows = await tx.$queryRawUnsafe<{
+                  value_numeric: string | null;
+                }[]>(
+                  `SELECT tvs."valueNumeric" AS value_numeric
+                   FROM "TriageVitalSign" tvs
+                   JOIN "TriageEvaluation" te ON te.id = tvs."evaluationId"
+                   WHERE te."patientId" = $1
+                     AND tvs."vitalCode" = 'WEIGHT'
+                     AND tvs."measuredAt" >= now() - interval '24 hours'
+                   ORDER BY tvs."measuredAt" DESC
+                   LIMIT 1`,
+                  input.patientId,
+                );
+
+                const pesoKg = pesoRows[0]?.value_numeric
+                  ? parseFloat(pesoRows[0].value_numeric)
+                  : null;
+
+                if (pesoKg === null) {
+                  // Sin peso reciente: warning, no bloquea — el clínico decide.
+                  noWeightWarning = true;
+                } else {
+                  const doseAmount = input.doseAmount;
+                  const dosisCalculada = doseAmount / pesoKg;
+
+                  // Verificar mg/kg/dosis
+                  if (limite.max_dose_mg_per_kg !== null) {
+                    const maxMgPerKg = parseFloat(limite.max_dose_mg_per_kg);
+                    if (dosisCalculada > maxMgPerKg) {
+                      throw new TRPCError({
+                        code: "PRECONDITION_FAILED",
+                        message:
+                          `IPSG3_PEDIATRIC_MAX_DOSE_EXCEEDED: Dosis calculada ${dosisCalculada.toFixed(3)} mg/kg ` +
+                          `supera el límite pediátrico de ${maxMgPerKg} mg/kg para este medicamento.`,
+                        cause: {
+                          code: "IPSG3_PEDIATRIC_MAX_DOSE_EXCEEDED",
+                          maxDoseMgPerKg: maxMgPerKg,
+                          dosisCalculada,
+                        },
+                      });
+                    }
+                  }
+
+                  // Verificar tope absoluto (independiente del peso)
+                  if (limite.max_dose_absolute_mg !== null) {
+                    const maxAbsoluto = parseFloat(limite.max_dose_absolute_mg);
+                    if (doseAmount > maxAbsoluto) {
+                      throw new TRPCError({
+                        code: "PRECONDITION_FAILED",
+                        message:
+                          `IPSG3_PEDIATRIC_MAX_DOSE_EXCEEDED: Dosis absoluta ${doseAmount} mg ` +
+                          `supera el tope absoluto pediátrico de ${maxAbsoluto} mg.`,
+                        cause: {
+                          code: "IPSG3_PEDIATRIC_MAX_DOSE_EXCEEDED",
+                          maxDoseAbsoluteMg: maxAbsoluto,
+                          dosisCalculada,
+                        },
+                      });
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // -- JCI IPSG.3 ME 4 — double-check para high-alert meds ------------------
         const requiresDoubleCheck =
           indication.drug !== null &&
@@ -591,6 +705,8 @@ export const medicationAdminRouter = router({
           requiresDoubleCheck: false as const,
           lasaAlert,
           administrationId: admin.id,
+          // JCI IPSG.3 ME 5 — warning si no había peso reciente al momento de administrar
+          noWeightWarning,
         };
       });
     }),

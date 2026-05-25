@@ -151,6 +151,9 @@ export const recordBedsideAdminInput = z.object({
   doubleCheckBy:   z.string().uuid().optional(),
   /** PIN institucional de la verificadora (texto plano — se hashea en el servidor). */
   doubleCheckPin:  z.string().min(4).max(20).optional(),
+  // JCI IPSG.3 ME 5 — dosis pediátrica máxima.
+  /** Dosis administrada en mg — requerido para validación pediátrica si <18 años. */
+  doseAmount:      z.number().positive().optional(),
 });
 
 export type RecordBedsideAdminInput = z.infer<typeof recordBedsideAdminInput>;
