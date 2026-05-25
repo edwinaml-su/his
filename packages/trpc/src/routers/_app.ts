@@ -183,6 +183,10 @@ import { verbalOrderRouter } from "./ece/verbal-order.router";
 import { criticalResultRouter } from "./ece/critical-result.router";
 // JCI IPSG.6 ME 4 — Reporte estructurado de caídas (US.5.16)
 import { fallEventRouter } from "./ece/fall-event.router";
+// ECE — Orden de Ingreso Hospitalario (ORD_ING, NTEC Art. 33)
+import { eceOrdenIngresoRouter } from "./ece/orden-ingreso.router";
+// DOC_ASOC — Documentos Clínicos Asociados (NTEC §15, §38)
+import { documentoAsociadoRouter } from "./ece/documento-asociado.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -368,6 +372,10 @@ export const appRouter = router({
   eceCriticalResult: criticalResultRouter,
   // JCI IPSG.6 ME 4 — Reporte estructurado de caídas (US.5.16)
   eceFallEvent: fallEventRouter,
+  // ECE — Orden de Ingreso Hospitalario (ORD_ING, NTEC Art. 33)
+  eceOrdenIngreso: eceOrdenIngresoRouter,
+  // DOC_ASOC — Documentos Clínicos Asociados (NTEC §15, §38)
+  eceDocAsoc: documentoAsociadoRouter,
 });
 
 export type AppRouter = typeof appRouter;
