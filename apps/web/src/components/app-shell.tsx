@@ -68,6 +68,7 @@ import {
 import { cn } from "@his/ui/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@his/ui/components/sheet";
 import { Button } from "@his/ui/components/button";
+import { Breadcrumbs } from "./breadcrumbs";
 
 interface NavItem {
   href: string;
@@ -288,37 +289,81 @@ function SectionGroup({
   section,
   pathname,
   roleCodes,
+  collapsed = false,
 }: {
   section: NavSection;
   pathname: string | null;
   roleCodes: string[];
+  /** Si true, renderiza solo iconos (modo rail desktop). */
+  collapsed?: boolean;
 }) {
   const visibleItems = section.items.filter((item) =>
     !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
   );
 
-  const [open, setOpen] = React.useState(section.defaultOpen ?? true);
+  // ENFOQUE VISUAL: solo la sección que contiene el item activo arranca abierta.
+  // Las demás están colapsadas para reducir ruido. El usuario puede expandirlas
+  // manualmente y la elección persiste hasta que cambie de ruta.
   const sectionHasActive = visibleItems.some((i) => pathname?.startsWith(i.href));
-  const expanded = open || sectionHasActive;
+  const [open, setOpen] = React.useState(sectionHasActive);
+
+  // Si el usuario navega a otra sección, re-evaluamos: la nueva sección con
+  // item activo se auto-expande; las demás vuelven a su estado por defecto
+  // (cerradas) — pero si el usuario las había abierto manualmente, conservamos
+  // esa elección sólo durante esa sesión de ruta. Compromiso pragmático:
+  // forzamos a la sección activa a abrirse al cambiar de ruta.
+  React.useEffect(() => {
+    if (sectionHasActive) setOpen(true);
+  }, [sectionHasActive]);
 
   if (visibleItems.length === 0) return null;
+
+  // Modo rail (collapsed): renderiza solo los iconos directamente, sin
+  // botón de sección. El title atributo sirve como tooltip nativo accesible.
+  if (collapsed) {
+    return (
+      <ul className="mb-2 space-y-0.5 border-b border-sidebar-border/40 pb-2 last:border-0">
+        {visibleItems.map((item) => {
+          const Icon = item.icon;
+          const active = pathname?.startsWith(item.href);
+          return (
+            <li key={item.href}>
+              <Link
+                href={item.href}
+                title={`${section.label} — ${item.label}`}
+                aria-label={item.label}
+                className={cn(
+                  "flex h-10 items-center justify-center rounded-md transition-colors",
+                  active
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground shadow-sm"
+                    : "text-sidebar-foreground/80 hover:bg-sidebar-accent/40 hover:text-sidebar-foreground",
+                )}
+              >
+                <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
 
   return (
     <div className="mb-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-expanded={expanded}
+        aria-expanded={open}
         className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       >
         <span>{section.label}</span>
-        {expanded ? (
+        {open ? (
           <ChevronDown className="h-3 w-3" aria-hidden="true" />
         ) : (
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
         )}
       </button>
-      {expanded && (
+      {open && (
         <ul className="mt-0.5 space-y-0.5">
           {visibleItems.map((item) => {
             const Icon = item.icon;
@@ -359,6 +404,21 @@ export function AppShell({
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
 
+  // Estado collapse desktop (persiste en localStorage para sobrevivir refresh).
+  // Hidratación diferida para evitar mismatch SSR.
+  const [desktopCollapsed, setDesktopCollapsed] = React.useState(false);
+  React.useEffect(() => {
+    const stored = window.localStorage.getItem("his.sidebar.collapsed");
+    if (stored === "true") setDesktopCollapsed(true);
+  }, []);
+  const toggleDesktopCollapse = React.useCallback(() => {
+    setDesktopCollapsed((prev) => {
+      const next = !prev;
+      window.localStorage.setItem("his.sidebar.collapsed", String(next));
+      return next;
+    });
+  }, []);
+
   // Cierra el drawer mobile al navegar (los items son <Link>; el cambio de
   // pathname implica que el usuario tocó uno).
   React.useEffect(() => {
@@ -366,22 +426,40 @@ export function AppShell({
   }, [pathname]);
 
   // Nav body reutilizado entre sidebar desktop y sheet mobile.
-  const navBody = (
+  // `collapsed` solo aplica en desktop; mobile siempre renderiza expandido.
+  const renderNavBody = (collapsed: boolean) => (
     <>
-      <div className="border-b border-sidebar-border p-4">
+      <div className={cn(
+        "border-b border-sidebar-border",
+        collapsed ? "flex items-center justify-center p-2" : "p-4",
+      )}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/avante-logo.svg"
           alt="AVANTE Complejo Hospitalario"
-          className="h-10 w-auto brightness-0 invert"
+          className={cn(
+            "w-auto brightness-0 invert",
+            collapsed ? "h-7" : "h-10",
+          )}
         />
-        <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
-          Sistema de Información Hospitalaria · El Salvador
-        </p>
+        {!collapsed && (
+          <p className="mt-2 text-xs uppercase tracking-wide opacity-70">
+            Sistema de Información Hospitalaria · El Salvador
+          </p>
+        )}
       </div>
-      <nav className="flex-1 overflow-y-auto p-2" aria-label="Principal">
+      <nav
+        className={cn("flex-1 overflow-y-auto", collapsed ? "p-1.5" : "p-2")}
+        aria-label="Principal"
+      >
         {SECTIONS.map((section) => (
-          <SectionGroup key={section.label} section={section} pathname={pathname} roleCodes={roleCodes} />
+          <SectionGroup
+            key={section.label}
+            section={section}
+            pathname={pathname}
+            roleCodes={roleCodes}
+            collapsed={collapsed}
+          />
         ))}
       </nav>
     </>
@@ -396,14 +474,19 @@ export function AppShell({
         Saltar al contenido principal
       </a>
 
-      {/* Sidebar desktop (≥ md) */}
-      <aside className="hidden w-64 shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground md:flex md:flex-col">
-        {navBody}
+      {/* Sidebar desktop (≥ md) — ancho condicional */}
+      <aside
+        className={cn(
+          "hidden shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground transition-[width] duration-200 md:flex md:flex-col",
+          desktopCollapsed ? "w-16" : "w-64",
+        )}
+      >
+        {renderNavBody(desktopCollapsed)}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
-          {/* Hamburguesa mobile (< md) */}
+          {/* Hamburguesa mobile (< md) abre Sheet */}
           <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
             <SheetTrigger asChild>
               <Button
@@ -419,12 +502,27 @@ export function AppShell({
               side="left"
               className="flex w-72 max-w-[85vw] flex-col border-r-sidebar-border bg-sidebar-background p-0 text-sidebar-foreground"
             >
-              {navBody}
+              {renderNavBody(false)}
             </SheetContent>
           </Sheet>
 
+          {/* Toggle desktop collapse (≥ md) */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="hidden h-9 w-9 p-0 md:inline-flex"
+            onClick={toggleDesktopCollapse}
+            aria-label={desktopCollapsed ? "Expandir barra lateral" : "Contraer barra lateral"}
+            aria-pressed={desktopCollapsed}
+          >
+            <Menu className="h-5 w-5" aria-hidden />
+          </Button>
+
           <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
         </header>
+
+        {/* Breadcrumbs (barra de navegabilidad) */}
+        <Breadcrumbs pathname={pathname} />
 
         <main
           id="main-content"
