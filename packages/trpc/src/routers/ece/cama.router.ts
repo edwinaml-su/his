@@ -114,9 +114,15 @@ function withEceCtx(ctx: {
   tenant: { establishmentId?: string };
 }) {
   if (!ctx.tenant.establishmentId) {
+    // `PRECONDITION_FAILED` permite a la UI distinguir "configuración faltante"
+    // de "input inválido". El fallback automático en `getTenantContext`
+    // (session.ts) ya resuelve la mayoría de casos (holding sin establishments
+    // → usa sub-org operativa). Este error solo aplica si el usuario no tiene
+    // NINGUNA membresía con establishments activos.
     throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Se requiere establecimiento activo para consultar el mapa de camas.",
+      code: "PRECONDITION_FAILED",
+      message:
+        "Tu cuenta no tiene un establecimiento activo. Solicita al administrador asignarte a un hospital o registrar un establecimiento en tu organización.",
     });
   }
   return ctx.tenant.establishmentId;
