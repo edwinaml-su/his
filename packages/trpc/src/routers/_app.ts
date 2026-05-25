@@ -181,6 +181,8 @@ import { gs1LoteTraceRouter } from "./gs1-lote-trace.router";
 import { verbalOrderRouter } from "./ece/verbal-order.router";
 // JCI IPSG.2 ME 2 — Notificación de resultados críticos con SLA + read-back (US.JCI.5.7)
 import { criticalResultRouter } from "./ece/critical-result.router";
+// JCI IPSG.6 ME 4 — Reporte estructurado de caídas (US.5.16)
+import { fallEventRouter } from "./ece/fall-event.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -364,6 +366,8 @@ export const appRouter = router({
   eceVerbalOrder: verbalOrderRouter,
   // JCI IPSG.2 ME 2 — Notificación de resultados críticos con SLA + read-back (US.JCI.5.7)
   eceCriticalResult: criticalResultRouter,
+  // JCI IPSG.6 ME 4 — Reporte estructurado de caídas (US.5.16)
+  eceFallEvent: fallEventRouter,
 });
 
 export type AppRouter = typeof appRouter;

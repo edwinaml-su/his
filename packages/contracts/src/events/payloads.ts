@@ -1059,6 +1059,35 @@ export const gs1RecallIniciadoPayloadSchema = z.object({
 export type Gs1RecallIniciadoPayload = z.infer<typeof gs1RecallIniciadoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// ipsg6.fall_event_recorded (JCI-1.S3 US.5.16 — IPSG.6 ME 4)
+// -----------------------------------------------------------------------------
+
+export const ipsg6FallEventRecordedPayloadSchema = z.object({
+  fallEventId:            z.string().uuid(),
+  pacienteId:             z.string().uuid(),
+  episodioId:             z.string().uuid(),
+  lugar:                  z.string(),
+  lesionResultante:       z.string(),
+  requirioAtencionMedica: z.boolean(),
+  reportadoPorId:         z.string().uuid(),
+});
+
+// -----------------------------------------------------------------------------
+// ipsg6.morse_sla_exceeded (JCI-1.S3 US.JCI.5.14 — IPSG.6 ME 2)
+// Emitido por pg_cron cada hora cuando un episodio hospitalario activo
+// supera 12 h sin re-evaluación de escala Morse.
+// -----------------------------------------------------------------------------
+
+export const ipsg6MorseSlaExceededPayloadSchema = z.object({
+  pacienteId:         z.string().uuid(),
+  episodioId:         z.string().uuid(),
+  ultimaEvaluacionEn: z.string().datetime().nullable(),
+  horasTranscurridas: z.number().nullable(),
+});
+
+export type Ipsg6MorseSlaExceededPayload = z.infer<typeof ipsg6MorseSlaExceededPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1412,6 +1441,16 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("critical_result.sla_exceeded"),
     payload: z.object({}).passthrough(),
   }),
+  // JCI-1.S3 US.5.16 — IPSG.6 ME 4: Reporte estructurado de caída
+  z.object({
+    eventType: z.literal("ipsg6.fall_event_recorded"),
+    payload: ipsg6FallEventRecordedPayloadSchema,
+  }),
+  // JCI-1.S3 US.JCI.5.14 — IPSG.6 ME 2: SLA Morse por turno (>12 h)
+  z.object({
+    eventType: z.literal("ipsg6.morse_sla_exceeded"),
+    payload: ipsg6MorseSlaExceededPayloadSchema,
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;
@@ -1425,3 +1464,4 @@ export type PathologyReportSignedPayload = z.infer<typeof pathologyReportSignedP
 export type PathologyCriticalFindingPayload = z.infer<typeof pathologyCriticalFindingPayloadSchema>;
 export type AccountingPeriodClosedPayload = z.infer<typeof accountingPeriodClosedPayloadSchema>;
 export type AccountingJournalPostedHighValuePayload = z.infer<typeof accountingJournalPostedHighValuePayloadSchema>;
+export type Ipsg6FallEventRecordedPayload = z.infer<typeof ipsg6FallEventRecordedPayloadSchema>;
