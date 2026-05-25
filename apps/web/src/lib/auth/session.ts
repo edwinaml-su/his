@@ -83,13 +83,39 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
   });
   if (memberships.length === 0) return null;
 
-  const chosen =
+  let chosen =
     memberships.find((m) => m.organizationId === orgCookie) ?? memberships[0]!;
 
-  const establishments = await prisma.establishment.findMany({
+  let establishments = await prisma.establishment.findMany({
     where: { organizationId: chosen.organizationId, active: true },
     orderBy: { code: "asc" },
   });
+
+  // Fallback de establecimiento — caso real:
+  // Avante Holding es una organización corporativa sin operación propia; las
+  // camas/servicios físicos viven en sub-organizaciones (e.g. Avante Complejo
+  // Hospitalario Santa Tecla). Si el usuario eligió la holding como org
+  // activa, `establishments[]` viene vacío y módulos clínicos (mapa de camas,
+  // farmacia, lab, etc.) lanzan "Se requiere establecimiento activo".
+  //
+  // Estrategia: si la org elegida no tiene establecimientos activos, hacer
+  // fallback a la primera org del usuario que sí los tenga. Se cambia
+  // `chosen` para mantener consistencia (un establishment pertenece a UNA org).
+  if (establishments.length === 0) {
+    for (const m of memberships) {
+      if (m.organizationId === chosen.organizationId) continue;
+      const fallback = await prisma.establishment.findMany({
+        where: { organizationId: m.organizationId, active: true },
+        orderBy: { code: "asc" },
+      });
+      if (fallback.length > 0) {
+        chosen = m;
+        establishments = fallback;
+        break;
+      }
+    }
+  }
+
   const establishmentId =
     establishments.find((e) => e.id === estabCookie)?.id ?? establishments[0]?.id;
 
