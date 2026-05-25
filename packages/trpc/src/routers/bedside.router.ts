@@ -307,7 +307,13 @@ const administrationRecordInput = z.object({
   via:          z.enum(["ORAL", "IV", "IM", "SC", "TOPICAL", "INHALED", "RECTAL", "SUBLINGUAL", "OPHTHALMIC", "OTIC", "NASAL"]),
   indicationId: z.string().uuid(),
   staffGsrn:   z.string().length(18).regex(/^\d{18}$/),
+  // JCI IPSG.3 ME 4 — double-check independiente para high-alert meds.
+  doubleCheckBy:  z.string().uuid().optional(),
+  doubleCheckPin: z.string().min(4).max(20).optional(),
 });
+
+// Niveles de alerta que requieren double-check independiente (IPSG.3 ME 4).
+const DOUBLE_CHECK_ALERT_LEVELS = new Set(["high", "very_high", "critical"]);
 
 const administrationRouter = router({
   /**
@@ -373,6 +379,125 @@ const administrationRouter = router({
         ? computeScheduledSlot(new Date(slotRow.fecha_hora), slotRow.frecuencia)
         : null;
 
+      // -- JCI IPSG.3 ME 2 — LASA pair detection (pre-tx, read-only) -----------
+      type LasaAlertPayload = {
+        pairedDrugId:   string;
+        pairedDrugName: string;
+        razon:          string;
+        severidad:      string;
+      };
+      let lasaAlert: LasaAlertPayload | null = null;
+
+      // Resolver drugId desde GTIN en Drug catalog para la query LASA
+      const drugRows = await ctx.prisma.$queryRawUnsafe<{ id: string; alert_level: string }[]>(
+        `SELECT d.id, d."alertLevel" AS alert_level
+         FROM "Drug" d
+         WHERE d."active" = true
+         LIMIT 1`,
+        // Sin FK directa GTIN→Drug en este router; la indicación enlaza el drug.
+        // Usamos prescriptionItemId para resolver drug.
+      );
+      // Resolver drug desde prescriptionItem (ya resuelto arriba)
+      const drugFromItem = await ctx.prisma.$queryRawUnsafe<{
+        drug_id: string;
+        alert_level: string;
+      }[]>(
+        `SELECT pi."drugId" AS drug_id, d."alertLevel" AS alert_level
+         FROM "PrescriptionItem" pi
+         JOIN "Drug" d ON d.id = pi."drugId"
+         WHERE pi.id = $1
+         LIMIT 1`,
+        prescriptionItemId,
+      );
+      void drugRows; // no usado directamente
+
+      const drugId     = drugFromItem[0]?.drug_id ?? null;
+      const alertLevel = drugFromItem[0]?.alert_level ?? "standard";
+
+      if (drugId) {
+        const lasaRows = await ctx.prisma.$queryRawUnsafe<{
+          paired_drug_id:   string;
+          paired_drug_name: string;
+          razon:            string;
+          severidad:        string;
+        }[]>(
+          `SELECT
+             CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
+             d."genericName" AS paired_drug_name,
+             lp.razon,
+             lp.severidad
+           FROM ece.lasa_pair lp
+           JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END
+           WHERE (lp.drug_a_id = $1 OR lp.drug_b_id = $1)
+             AND lp.activo = true
+           LIMIT 1`,
+          drugId,
+        );
+
+        if (lasaRows.length > 0 && lasaRows[0]) {
+          lasaAlert = {
+            pairedDrugId:   lasaRows[0].paired_drug_id,
+            pairedDrugName: lasaRows[0].paired_drug_name,
+            razon:          lasaRows[0].razon,
+            severidad:      lasaRows[0].severidad,
+          };
+        }
+      }
+
+      // -- JCI IPSG.3 ME 4 — double-check para high-alert meds ----------------
+      const requiresDoubleCheck = DOUBLE_CHECK_ALERT_LEVELS.has(alertLevel);
+
+      if (requiresDoubleCheck) {
+        if (!input.doubleCheckBy || !input.doubleCheckPin) {
+          // Retornar flag — UI debe mostrar modal y re-enviar con los datos.
+          return {
+            requiresDoubleCheck: true as const,
+            lasaAlert,
+            administrationId: null,
+          };
+        }
+
+        if (input.doubleCheckBy === nurseId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "IPSG3_DOUBLE_CHECK_SAME_PERSON: El verificador independiente debe ser " +
+              "una enfermera distinta a la que administra.",
+          });
+        }
+
+        const verifier = await ctx.prisma.$queryRawUnsafe<{ pin_hash: string | null }[]>(
+          `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1 LIMIT 1`,
+          input.doubleCheckBy,
+        );
+
+        if (!verifier[0]) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "IPSG3_DOUBLE_CHECK_FAILED: Verificadora no encontrada.",
+          });
+        }
+
+        const storedHash = verifier[0].pin_hash;
+        if (storedHash !== null) {
+          const { verify } = await import("argon2");
+          const pinOk = await verify(storedHash, input.doubleCheckPin);
+          if (!pinOk) {
+            throw new TRPCError({
+              code: "UNAUTHORIZED",
+              message: "IPSG3_DOUBLE_CHECK_FAILED: PIN de verificación incorrecto.",
+            });
+          }
+        }
+      }
+
+      // Hash del PIN para persistencia
+      let doubleCheckPinHash: string | null = null;
+      if (requiresDoubleCheck && input.doubleCheckPin) {
+        const { hash } = await import("argon2");
+        doubleCheckPinHash = await hash(input.doubleCheckPin);
+      }
+
       const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Crear MedicationAdministration con flags BCMA activos
         const admin = await tx.medicationAdministration.create({
@@ -397,6 +522,10 @@ const administrationRouter = router({
             notes:           `Bedside BCMA: ${input.dosis} via ${input.via}`,
             // Right Time 5R — slot calculado desde frecuencia de la indicación
             scheduledTime:   scheduledTime,
+            // JCI IPSG.3 ME 4 — double-check
+            doubleCheckBy:  input.doubleCheckBy ?? null,
+            doubleCheckAt:  requiresDoubleCheck && input.doubleCheckBy ? new Date() : null,
+            doubleCheckPin: doubleCheckPinHash,
           },
           select: { id: true },
         });
@@ -423,6 +552,7 @@ const administrationRouter = router({
             epcisEventId,
             payloadHash,
             adminId:     admin.id,
+            lasaAlert,
           }),
           JSON.stringify({ readPoint: "0000000000000" }),
           new Date().toISOString(),
@@ -436,7 +566,11 @@ const administrationRouter = router({
         return admin;
       });
 
-      return { administrationId: result.id };
+      return {
+        requiresDoubleCheck: false as const,
+        lasaAlert,
+        administrationId: result.id,
+      };
     }),
 });
 

@@ -53,6 +53,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
+import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
 
 // ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
 // La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
@@ -466,6 +467,23 @@ export const indicacionesMedicasRouter = router({
             });
           }
 
+          // JCI IPSG.2 ME 3 — escanear texto libre de items (warning, no bloquea)
+          const itemTexts = await tx.$queryRaw<{ descripcion: string; notas: string | null }[]>`
+            SELECT descripcion, notas
+            FROM ece.indicacion_item
+            WHERE indicacion_id = ${input.id}::uuid
+          `;
+          const textoItems = itemTexts
+            .map((r) => [r.descripcion, r.notas ?? ""].join(" "))
+            .join(" ");
+          const ipsg2 = validateClinicalText(textoItems);
+          if (ipsg2.errors.length > 0 || ipsg2.warnings.length > 0) {
+            console.warn(
+              `[IPSG.2 ME 3] indicaciones_medicas ${input.id}: ` +
+                `${ipsg2.errors.length} error(es) JCI, ${ipsg2.warnings.length} warning(s)`,
+            );
+          }
+
           await tx.$executeRaw`
             UPDATE ece.indicaciones_medicas
             SET estado_registro = 'firmado',
@@ -496,7 +514,11 @@ export const indicacionesMedicasRouter = router({
             },
           });
 
-          return { id: input.id, estadoRegistro: "firmado" as const };
+          return {
+            id: input.id,
+            estadoRegistro: "firmado" as const,
+            ipsg2Warnings: [...ipsg2.errors, ...ipsg2.warnings],
+          };
         },
       );
     }),

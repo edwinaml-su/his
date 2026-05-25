@@ -38,6 +38,7 @@ import {
   TableHeader,
   TableRow,
 } from "@his/ui/components/table";
+import { Textarea } from "@his/ui/components/textarea";
 import { trpc } from "@/lib/trpc/react";
 import { computeScheduledSlot } from "@/lib/medication-slot";
 
@@ -369,6 +370,192 @@ function BcmaModal({
   );
 }
 
+// ─── SBAR Handoff ─────────────────────────────────────────────────────────────
+
+interface SbarForm {
+  situation:      string;
+  background:     string;
+  assessment:     string;
+  recommendation: string;
+}
+
+const SBAR_EMPTY: SbarForm = {
+  situation:      "",
+  background:     "",
+  assessment:     "",
+  recommendation: "",
+};
+
+/** Tooltip inline con la definición de cada componente SBAR. */
+function SbarTooltip({ label, hint }: { label: string; hint: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="font-medium text-sm">{label}</span>
+      <span className="text-xs text-muted-foreground">— {hint}</span>
+    </div>
+  );
+}
+
+/**
+ * Modal de cierre de turno con formulario SBAR.
+ * JCI Standard: IPSG.2 ME 4 — structured handoff.
+ */
+function CierreTurnoModal({
+  open,
+  registroId,
+  onClose,
+}: {
+  open:       boolean;
+  registroId: string;
+  onClose:    () => void;
+}) {
+  const [form, setForm] = React.useState<SbarForm>(SBAR_EMPTY);
+  const [skipSbar, setSkipSbar] = React.useState(false);
+  const [warning, setWarning] = React.useState<string | null>(null);
+
+  const cerrarMutation = trpc.eceRegistroEnfermeria.cerrarTurno.useMutation({
+    onSuccess: (data: unknown) => {
+      const result = data as { warning?: string };
+      if (result.warning) {
+        setWarning(result.warning);
+      } else {
+        onClose();
+      }
+    },
+    onError: (err: { message: string }) => {
+      setWarning(err.message);
+    },
+  });
+
+  function updateField(field: keyof SbarForm, value: string) {
+    setForm((f) => ({ ...f, [field]: value }));
+  }
+
+  function submit() {
+    const sbarValido =
+      !skipSbar &&
+      form.situation.trim().length >= 10 &&
+      form.background.trim().length >= 10 &&
+      form.assessment.trim().length >= 10 &&
+      form.recommendation.trim().length >= 10;
+
+    cerrarMutation.mutate({
+      id:   registroId,
+      sbar: sbarValido ? form : undefined,
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Cierre de turno — Handoff SBAR</DialogTitle>
+          <DialogDescription>
+            JCI IPSG.2 ME 4: registre el handoff estructurado para el enfermero/a entrante.
+            Cada campo requiere mínimo 10 caracteres.
+          </DialogDescription>
+        </DialogHeader>
+
+        {!skipSbar && (
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <SbarTooltip
+                label="S — Situación"
+                hint="Estado actual del paciente al cierre de turno."
+              />
+              <Textarea
+                id="sbar-situation"
+                rows={3}
+                placeholder="Ej: Paciente post-quirúrgico, hemodinámicamente estable…"
+                value={form.situation}
+                onChange={(e) => updateField("situation", e.target.value)}
+                aria-label="Situación SBAR"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <SbarTooltip
+                label="B — Background (antecedentes)"
+                hint="Información clínica relevante para el turno entrante."
+              />
+              <Textarea
+                id="sbar-background"
+                rows={3}
+                placeholder="Ej: Colecistectomía laparoscópica hace 6h, sin alergias conocidas…"
+                value={form.background}
+                onChange={(e) => updateField("background", e.target.value)}
+                aria-label="Antecedentes SBAR"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <SbarTooltip
+                label="A — Assessment (evaluación)"
+                hint="Juicio clínico de enfermería: tendencias y preocupaciones."
+              />
+              <Textarea
+                id="sbar-assessment"
+                rows={3}
+                placeholder="Ej: Dolor controlado EVA 3/10, signos vitales estables…"
+                value={form.assessment}
+                onChange={(e) => updateField("assessment", e.target.value)}
+                aria-label="Evaluación SBAR"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <SbarTooltip
+                label="R — Recommendation"
+                hint="Acciones pendientes o recomendadas para el siguiente turno."
+              />
+              <Textarea
+                id="sbar-recommendation"
+                rows={3}
+                placeholder="Ej: Control de signos vitales c/4h, analgesia PRN, deambulación al despertar…"
+                value={form.recommendation}
+                onChange={(e) => updateField("recommendation", e.target.value)}
+                aria-label="Recomendaciones SBAR"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <input
+            id="skip-sbar"
+            type="checkbox"
+            checked={skipSbar}
+            onChange={(e) => setSkipSbar(e.target.checked)}
+            className="h-4 w-4 rounded border-input"
+          />
+          <label htmlFor="skip-sbar">
+            Cerrar sin SBAR (sin enfermero/a entrante disponible)
+          </label>
+        </div>
+
+        {warning && (
+          <p role="status" className="text-sm text-amber-600 rounded-md bg-amber-50 p-2">
+            {warning}
+          </p>
+        )}
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={cerrarMutation.isPending}>
+            Cancelar
+          </Button>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={cerrarMutation.isPending}
+          >
+            {cerrarMutation.isPending ? "Cerrando…" : "Confirmar cierre de turno"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function MarPage() {
@@ -380,6 +567,9 @@ export default function MarPage() {
   const historyQuery = trpc.medicationAdmin.list.useQuery({
     limit: 50,
   });
+
+  // Estado del modal SBAR cierre de turno
+  const [cierreOpen, setCierreOpen] = React.useState(false);
 
   // Estado del modal BCMA
   const [modalOpen, setModalOpen] = React.useState(false);
@@ -455,6 +645,12 @@ export default function MarPage() {
 
   return (
     <>
+      <CierreTurnoModal
+        open={cierreOpen}
+        registroId={admissionId}
+        onClose={() => setCierreOpen(false)}
+      />
+
       <BcmaModal
         open={modalOpen}
         form={bcmaForm}
@@ -474,9 +670,18 @@ export default function MarPage() {
               <span className="font-mono text-xs">{admissionId}</span>
             </p>
           </div>
-          <Button type="button" variant="outline" onClick={() => router.back()}>
-            Volver
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setCierreOpen(true)}
+            >
+              Cerrar turno
+            </Button>
+            <Button type="button" variant="outline" onClick={() => router.back()}>
+              Volver
+            </Button>
+          </div>
         </div>
 
         {/* Horarios pendientes */}

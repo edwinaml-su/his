@@ -38,6 +38,7 @@ import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
 
 // ---------------------------------------------------------------------------
 // Enum NTEC tipo_consulta (MINSAL Acuerdo n.° 1616 Art. 7)
@@ -564,9 +565,18 @@ export const eceHistoriaClinicaRouter = router({
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
-      const current = await tx.$queryRaw<{ estado_registro: string; instancia_id: string | null }[]>(
+      type FirmarFetchRow = {
+        estado_registro: string;
+        instancia_id: string | null;
+        motivo_consulta: string | null;
+        enfermedad_actual: string | null;
+        plan_manejo: string | null;
+      };
+
+      const current = await tx.$queryRaw<FirmarFetchRow[]>(
         Prisma.sql`
-          SELECT estado_registro, instancia_id::text
+          SELECT estado_registro, instancia_id::text,
+                 motivo_consulta, enfermedad_actual, plan_manejo
           FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
         `,
       );
@@ -577,6 +587,20 @@ export const eceHistoriaClinicaRouter = router({
           code: "CONFLICT",
           message: `Estado '${cur.estado_registro}' no permite firma. Se esperaba 'borrador'.`,
         });
+      }
+
+      // JCI IPSG.2 ME 3 — validación abreviaciones prohibidas (warning, no bloquea)
+      const textosClinicos = [
+        cur.motivo_consulta ?? "",
+        cur.enfermedad_actual ?? "",
+        cur.plan_manejo ?? "",
+      ].join(" ");
+      const ipsg2 = validateClinicalText(textosClinicos);
+      if (ipsg2.errors.length > 0 || ipsg2.warnings.length > 0) {
+        console.warn(
+          `[IPSG.2 ME 3] historia_clinica ${input.id}: ` +
+            `${ipsg2.errors.length} error(es) JCI, ${ipsg2.warnings.length} warning(s)`,
+        );
       }
 
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
@@ -594,6 +618,9 @@ export const eceHistoriaClinicaRouter = router({
       );
 
       const updated = assertFound(rows[0], "HistoriaClinica firmada");
+
+      // JCI IPSG.2 ME 3 — adjuntar warnings a response (no bloquea)
+      const ipsg2Warnings = [...ipsg2.errors, ...ipsg2.warnings];
 
       // Registrar en historial de instancia si existe vínculo workflow
       if (cur.instancia_id) {
@@ -613,7 +640,7 @@ export const eceHistoriaClinicaRouter = router({
         );
       }
 
-      return updated;
+      return { ...updated, ipsg2Warnings };
     });
   }),
 

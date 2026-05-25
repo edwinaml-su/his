@@ -136,6 +136,12 @@ export const EVENT_TYPES = [
   "ece.urpa.alta_otorgada",
   // S8 — HI-10/11: Trazabilidad lote + recall RTCA (NTEC RTCA + TDR §19)
   "gs1.recall.iniciado",
+  // JCI-1.S2 US.5.7 — IPSG.2 ME 2: Critical results read-back + SLA watchdog
+  "critical_result.emitted",
+  "critical_result.read_back_confirmed",
+  "critical_result.escalated",
+  "critical_result.sla_warning",
+  "critical_result.sla_exceeded",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

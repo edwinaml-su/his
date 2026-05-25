@@ -145,6 +145,12 @@ export const recordBedsideAdminInput = z.object({
   route:           medAdminRouteEnum.optional(),
   site:            z.string().trim().max(80).optional(),
   notes:           z.string().trim().max(4000).optional(),
+  // JCI IPSG.3 ME 4 — double-check independiente para high-alert meds.
+  // Opcionales en el primer envío; requeridos cuando el servidor responde requiresDoubleCheck=true.
+  /** UUID de la enfermera verificadora independiente (distinta a nurseId). */
+  doubleCheckBy:   z.string().uuid().optional(),
+  /** PIN institucional de la verificadora (texto plano — se hashea en el servidor). */
+  doubleCheckPin:  z.string().min(4).max(20).optional(),
 });
 
 export type RecordBedsideAdminInput = z.infer<typeof recordBedsideAdminInput>;

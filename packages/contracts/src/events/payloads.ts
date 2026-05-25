@@ -1390,6 +1390,28 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("gs1.recall.iniciado"),
     payload: gs1RecallIniciadoPayloadSchema,
   }),
+  // JCI-1.S2 US.5.7 — IPSG.2 ME 2: Critical results lifecycle
+  // Payloads validados como objeto genérico (rapid prototype; refinar en sprint posterior)
+  z.object({
+    eventType: z.literal("critical_result.emitted"),
+    payload: z.object({}).passthrough(),
+  }),
+  z.object({
+    eventType: z.literal("critical_result.read_back_confirmed"),
+    payload: z.object({}).passthrough(),
+  }),
+  z.object({
+    eventType: z.literal("critical_result.escalated"),
+    payload: z.object({}).passthrough(),
+  }),
+  z.object({
+    eventType: z.literal("critical_result.sla_warning"),
+    payload: z.object({}).passthrough(),
+  }),
+  z.object({
+    eventType: z.literal("critical_result.sla_exceeded"),
+    payload: z.object({}).passthrough(),
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;

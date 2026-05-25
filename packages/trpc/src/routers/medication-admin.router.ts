@@ -1,5 +1,5 @@
 /**
- * §16 eMAR — router (Beta.8 hardening layer 1).
+ * §16 eMAR — router (Beta.8 hardening layer 1 + JCI IPSG.3 layer).
  *
  * Reglas implementadas:
  *   1. BCMA: los 3 scans (patient + drug + provider) deben ser true para ADMINISTERED.
@@ -9,6 +9,8 @@
  *   4. State machine: INSERT acepta todos los estados destino desde SCHEDULED.
  *   5. Cumulative qty: router valida administeredQty + doseAmount <= prescribedQty
  *      (salvo override). El trigger SQL 32_emar_hardening.sql mantiene consistencia DB.
+ *   6. JCI IPSG.3 ME 2: LASA pair detection — warning no bloqueante en scan GTIN.
+ *   7. JCI IPSG.3 ME 4: double-check independiente para alertLevel high/very_high/critical.
  */
 import { TRPCError } from "@trpc/server";
 import {
@@ -25,6 +27,12 @@ import {
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+// ---------------------------------------------------------------------------
+// Constantes IPSG.3
+// ---------------------------------------------------------------------------
+
+const DOUBLE_CHECK_ALERT_LEVELS = new Set(["high", "very_high", "critical"]);
 
 // ---------------------------------------------------------------------------
 // Helpers internos
@@ -402,7 +410,7 @@ export const medicationAdminRouter = router({
         }
 
         // Validar que el PrescriptionItem (indicación) pertenece a la organización
-        // y está en estado apto para administrar.
+        // y está en estado apto para administrar. Incluir drug para LASA + double-check.
         const indication = await tx.prescriptionItem.findFirst({
           where: {
             id: input.indicationId,
@@ -411,7 +419,16 @@ export const medicationAdminRouter = router({
               status: { in: ["SIGNED", "PARTIALLY_DISPENSED", "DISPENSED"] },
             },
           },
-          select: { id: true },
+          select: {
+            id: true,
+            drug: {
+              select: {
+                id: true,
+                genericName: true,
+                alertLevel: true,
+              },
+            },
+          },
         });
 
         if (!indication) {
@@ -419,6 +436,108 @@ export const medicationAdminRouter = router({
             code: "NOT_FOUND",
             message: "Indicación no encontrada o la prescripción no está activa.",
           });
+        }
+
+        // -- JCI IPSG.3 ME 2 — LASA pair detection --------------------------------
+        // Warning no bloqueante: el UI mostrará alerta pero no impedirá continuar.
+        type LasaAlertPayload = {
+          pairedDrugId:   string;
+          pairedDrugName: string;
+          razon:          string;
+          severidad:      string;
+        };
+        let lasaAlert: LasaAlertPayload | null = null;
+
+        if (indication.drug) {
+          const lasaRows = await tx.$queryRawUnsafe<{
+            paired_drug_id:   string;
+            paired_drug_name: string;
+            razon:            string;
+            severidad:        string;
+          }[]>(
+            `SELECT
+               CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
+               d."genericName" AS paired_drug_name,
+               lp.razon,
+               lp.severidad
+             FROM ece.lasa_pair lp
+             JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END
+             WHERE (lp.drug_a_id = $1 OR lp.drug_b_id = $1)
+               AND lp.activo = true
+             LIMIT 1`,
+            indication.drug.id,
+          );
+
+          if (lasaRows.length > 0 && lasaRows[0]) {
+            lasaAlert = {
+              pairedDrugId:   lasaRows[0].paired_drug_id,
+              pairedDrugName: lasaRows[0].paired_drug_name,
+              razon:          lasaRows[0].razon,
+              severidad:      lasaRows[0].severidad,
+            };
+          }
+        }
+
+        // -- JCI IPSG.3 ME 4 — double-check para high-alert meds ------------------
+        const requiresDoubleCheck =
+          indication.drug !== null &&
+          indication.drug !== undefined &&
+          DOUBLE_CHECK_ALERT_LEVELS.has(indication.drug.alertLevel);
+
+        if (requiresDoubleCheck) {
+          if (!input.doubleCheckBy || !input.doubleCheckPin) {
+            // Devolver 200 con flag — el UI debe mostrar el modal y reenviar con los datos.
+            // No lanzar error todavía para que el frontend pueda capturar el flag.
+            return {
+              requiresDoubleCheck: true as const,
+              lasaAlert,
+              administrationId: null,
+            };
+          }
+
+          if (input.doubleCheckBy === input.nurseId) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "IPSG3_DOUBLE_CHECK_SAME_PERSON: El verificador independiente debe ser " +
+                "una enfermera distinta a la que administra.",
+            });
+          }
+
+          // Verificar PIN de la segunda enfermera contra hash almacenado en User.
+          // El campo User.pinHash almacena argon2id del PIN institucional.
+          const verifier = await tx.$queryRawUnsafe<{ pin_hash: string | null }[]>(
+            `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1 LIMIT 1`,
+            input.doubleCheckBy,
+          );
+
+          if (!verifier[0]) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "IPSG3_DOUBLE_CHECK_FAILED: Verificadora no encontrada.",
+            });
+          }
+
+          // Verificación hash argon2id — comparación timing-safe.
+          // Si pinHash es NULL: organización no ha configurado PINs (graceful degradation).
+          const storedHash = verifier[0].pin_hash;
+          if (storedHash !== null) {
+            const { verify } = await import("argon2");
+            const pinOk = await verify(storedHash, input.doubleCheckPin);
+            if (!pinOk) {
+              throw new TRPCError({
+                code: "UNAUTHORIZED",
+                message: "IPSG3_DOUBLE_CHECK_FAILED: PIN de verificación incorrecto.",
+              });
+            }
+          }
+        }
+
+        // Hash del PIN para persistencia (nunca texto plano).
+        let doubleCheckPinHash: string | null = null;
+        if (requiresDoubleCheck && input.doubleCheckPin) {
+          const { hash } = await import("argon2");
+          doubleCheckPinHash = await hash(input.doubleCheckPin);
         }
 
         const admin = await tx.medicationAdministration.create({
@@ -445,6 +564,10 @@ export const medicationAdminRouter = router({
             route:               input.route ?? null,
             site:                input.site ?? null,
             notes:               input.notes ?? null,
+            // JCI IPSG.3 ME 4 — double-check
+            doubleCheckBy:  input.doubleCheckBy ?? null,
+            doubleCheckAt:  requiresDoubleCheck && input.doubleCheckBy ? new Date() : null,
+            doubleCheckPin: doubleCheckPinHash,
           },
         });
 
@@ -460,10 +583,15 @@ export const medicationAdminRouter = router({
             gtin:        input.gtin,
             lote:        input.lote,
             administeredAt: admin.administeredAt.toISOString(),
+            lasaAlert,
           },
         });
 
-        return admin;
+        return {
+          requiresDoubleCheck: false as const,
+          lasaAlert,
+          administrationId: admin.id,
+        };
       });
     }),
 

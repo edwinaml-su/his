@@ -27,9 +27,17 @@ interface AdministrationWizardProps {
 }
 
 type WizardStep = 1 | 2 | 3;
+type LasaAlert = {
+  pairedDrugId:   string;
+  pairedDrugName: string;
+  razon:          string;
+  severidad:      string;
+};
+
 type WizardState =
   | { phase: "scanning"; step: WizardStep }
   | { phase: "validating" }
+  | { phase: "doubleCheck"; lasaAlert: LasaAlert | null }
   | { phase: "success"; administrationId: string | null }
   | { phase: "hardStop"; reason: string };
 
@@ -82,6 +90,10 @@ export function AdministrationWizard({
     2: undefined,
     3: undefined,
   });
+  // Double-check state — sólo activo cuando servidor responde requiresDoubleCheck=true.
+  const [doubleCheckBy, setDoubleCheckBy]   = useState("");
+  const [doubleCheckPin, setDoubleCheckPin] = useState("");
+  const [doubleCheckError, setDoubleCheckError] = useState<string | undefined>();
 
   const validate5Correct = trpc.bedside.validate5Correct.validate.useMutation();
   const recordAdministration = trpc.bedside.administration.record.useMutation();
@@ -123,6 +135,71 @@ export function AdministrationWizard({
     },
     [],
   );
+
+  // Extraído para reutilizar desde el flujo normal y desde el re-envío double-check.
+  const submitAdministration = useCallback(
+    async (
+      currentScans: Partial<ScanData>,
+      gtin: string,
+      lot: string,
+      expiry: string,
+      extraDoubleCheck?: { doubleCheckBy: string; doubleCheckPin: string },
+    ) => {
+      try {
+        const adminResult = await recordAdministration.mutateAsync({
+          patientGsrn:     currentScans.patientGsrn!,
+          staffGsrn:       currentScans.nurseGsrn!,
+          medicamentoGtin: gtin,
+          lote:            lot,
+          dosis:           `GS1:${expiry}`,
+          via:             "IV",
+          indicationId,
+          ...extraDoubleCheck,
+        });
+
+        if (adminResult.requiresDoubleCheck) {
+          // Servidor señala que se necesita verificación independiente.
+          setWizardState({ phase: "doubleCheck", lasaAlert: adminResult.lasaAlert ?? null });
+          return;
+        }
+
+        setWizardState({
+          phase: "success",
+          administrationId: adminResult.administrationId,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (
+          message.includes("IPSG3_DOUBLE_CHECK_FAILED") ||
+          message.includes("IPSG3_DOUBLE_CHECK_SAME_PERSON")
+        ) {
+          setDoubleCheckError(message);
+          return;
+        }
+        setWizardState({ phase: "hardStop", reason: extractHardStopReason(message) });
+      }
+    },
+    [indicationId, recordAdministration],
+  );
+
+  const handleDoubleCheckSubmit = useCallback(async () => {
+    setDoubleCheckError(undefined);
+    if (!doubleCheckBy.trim() || !doubleCheckPin.trim()) {
+      setDoubleCheckError("Ingrese el ID y PIN de la enfermera verificadora.");
+      return;
+    }
+    const currentScans = scans;
+    await submitAdministration(
+      currentScans,
+      currentScans.gtin ?? "",
+      currentScans.lot  ?? "",
+      currentScans.expiry ?? "",
+      {
+        doubleCheckBy:  doubleCheckBy.trim(),
+        doubleCheckPin: doubleCheckPin.trim(),
+      },
+    );
+  }, [doubleCheckBy, doubleCheckPin, scans, submitAdministration]);
 
   // Step 3: scan medicamento (DataMatrix GS1)
   const handleMedicationScan = useCallback(
@@ -171,26 +248,9 @@ export function AdministrationWizard({
       // Registrar administración (eMAR BCMA)
       // La vía "IV" es el default bedside — US.F2.6.24 prevé un selector de vía
       // en una pantalla de confirmación futura.
-      try {
-        const adminResult = await recordAdministration.mutateAsync({
-          patientGsrn:     currentScans.patientGsrn!,
-          staffGsrn:       currentScans.nurseGsrn!,
-          medicamentoGtin: gtin,
-          lote:            lot,
-          dosis:           `GS1:${expiry}`, // placeholder hasta que bridge ECE provea dosis real
-          via:             "IV",
-          indicationId,
-        });
-        setWizardState({
-          phase: "success",
-          administrationId: adminResult.administrationId,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setWizardState({ phase: "hardStop", reason: extractHardStopReason(message) });
-      }
+      await submitAdministration(currentScans, gtin, lot, expiry);
     },
-    [scans, indicationId, validate5Correct, recordAdministration],
+    [scans, indicationId, validate5Correct, submitAdministration],
   );
 
   // ---- Renderizado por fase ----
@@ -206,6 +266,23 @@ export function AdministrationWizard({
           setStepStatuses({ 1: "waiting", 2: "waiting", 3: "waiting" });
           setStepErrors({ 1: undefined, 2: undefined, 3: undefined });
         }}
+      />
+    );
+  }
+
+  // JCI IPSG.3 ME 4 — modal de verificación independiente
+  if (wizardState.phase === "doubleCheck") {
+    return (
+      <DoubleCheckModal
+        lasaAlert={wizardState.lasaAlert}
+        doubleCheckBy={doubleCheckBy}
+        doubleCheckPin={doubleCheckPin}
+        error={doubleCheckError}
+        submitting={recordAdministration.isPending}
+        onDoubleCheckByChange={setDoubleCheckBy}
+        onDoubleCheckPinChange={setDoubleCheckPin}
+        onSubmit={() => void handleDoubleCheckSubmit()}
+        onCancel={() => router.push("/bedside")}
       />
     );
   }
@@ -390,6 +467,133 @@ function HardStopScreen({
             className="w-full rounded-lg border border-white/50 px-6 py-3 font-semibold text-white hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-white"
           >
             Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * JCI IPSG.3 ME 4 — Modal de verificación independiente doble-check.
+ * Se muestra cuando el servidor responde requiresDoubleCheck=true.
+ * No bloquea la UI completa — permite cancelar (error auditado).
+ */
+function DoubleCheckModal({
+  lasaAlert,
+  doubleCheckBy,
+  doubleCheckPin,
+  error,
+  submitting,
+  onDoubleCheckByChange,
+  onDoubleCheckPinChange,
+  onSubmit,
+  onCancel,
+}: {
+  lasaAlert: LasaAlert | null;
+  doubleCheckBy: string;
+  doubleCheckPin: string;
+  error: string | undefined;
+  submitting: boolean;
+  onDoubleCheckByChange: (v: string) => void;
+  onDoubleCheckPinChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="double-check-title"
+    >
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-100">
+            <svg aria-hidden="true" className="h-6 w-6 text-amber-600" fill="currentColor" viewBox="0 0 24 24">
+              <path fillRule="evenodd" d="M9.401 3.003c1.155-2 4.043-2 5.197 0l7.355 12.748c1.154 2-.29 4.5-2.599 4.5H4.645c-2.309 0-3.752-2.5-2.598-4.5L9.4 3.003zM12 8.25a.75.75 0 01.75.75v3.75a.75.75 0 01-1.5 0V9a.75.75 0 01.75-.75zm0 8.25a.75.75 0 100-1.5.75.75 0 000 1.5z" clipRule="evenodd" />
+            </svg>
+          </div>
+          <div>
+            <h2 id="double-check-title" className="text-base font-bold text-gray-900">
+              Double-check requerido
+            </h2>
+            <p className="text-xs text-gray-500">JCI IPSG.3 — Medicamento de alto riesgo</p>
+          </div>
+        </div>
+
+        {lasaAlert && (
+          <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50 p-3">
+            <p className="text-xs font-semibold text-orange-700">Alerta LASA</p>
+            <p className="text-xs text-orange-600">
+              Riesgo de confusión con <span className="font-medium">{lasaAlert.pairedDrugName}</span>
+              {" "}({lasaAlert.razon})
+            </p>
+          </div>
+        )}
+
+        <p className="mb-4 text-sm text-gray-700">
+          Este medicamento requiere verificación independiente de una segunda enfermera.
+          Ingrese el ID institucional y PIN de la enfermera verificadora.
+        </p>
+
+        <div className="space-y-3">
+          <div>
+            <label htmlFor="dc-by" className="block text-xs font-medium text-gray-700">
+              ID de la enfermera verificadora
+            </label>
+            <input
+              id="dc-by"
+              type="text"
+              value={doubleCheckBy}
+              onChange={(e) => onDoubleCheckByChange(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="UUID o código institucional"
+              autoComplete="off"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="dc-pin" className="block text-xs font-medium text-gray-700">
+              PIN de la verificadora
+            </label>
+            <input
+              id="dc-pin"
+              type="password"
+              value={doubleCheckPin}
+              onChange={(e) => onDoubleCheckPinChange(e.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              placeholder="PIN institucional"
+              autoComplete="current-password"
+            />
+          </div>
+        </div>
+
+        {error && (
+          <p className="mt-3 text-xs font-medium text-red-600" role="alert">
+            {error.includes("IPSG3_DOUBLE_CHECK_SAME_PERSON")
+              ? "La verificadora debe ser una persona distinta a quien administra."
+              : error.includes("IPSG3_DOUBLE_CHECK_FAILED")
+                ? "PIN incorrecto o verificadora no encontrada."
+                : error}
+          </p>
+        )}
+
+        <div className="mt-5 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={onSubmit}
+            disabled={submitting}
+            className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+          >
+            {submitting ? "Verificando..." : "Confirmar double-check"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-400"
+          >
+            Cancelar administración
           </button>
         </div>
       </div>

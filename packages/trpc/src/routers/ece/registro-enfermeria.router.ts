@@ -54,6 +54,7 @@ import { applyGs1Validation } from "../../gs1/require-gs1-validation";
 import { computeScheduledSlot } from "../../utils/medication-slot";
 import type { TenantContext } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
+import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod — espejo de packages/contracts/src/schemas/ece-registro-enfermeria.ts
@@ -97,6 +98,23 @@ const eceRegistroListSchema = z.object({
 const eceRegistroGetSchema = z.object({ id: z.string().uuid() });
 const eceRegistroIdSchema   = z.object({ id: z.string().uuid() });
 
+// SBAR — JCI IPSG.2 ME 4
+// Definido localmente para que el router sea autocontenido y no dependa de
+// que el build de @his/contracts esté actualizado en el monorepo.
+const sbarFieldSchema = z.string().trim().min(10).max(2000);
+
+const sbarSchema = z.object({
+  situation:      sbarFieldSchema,
+  background:     sbarFieldSchema,
+  assessment:     sbarFieldSchema,
+  recommendation: sbarFieldSchema,
+});
+
+const eceCierreSchema = z.object({
+  id: z.string().uuid(),
+  sbar: sbarSchema.optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Tipos raw SQL
 // ---------------------------------------------------------------------------
@@ -109,6 +127,7 @@ export interface RegistroRow {
   nota_evolucion: string | null;
   plan_cuidados: string | null;
   valoracion_enf: Record<string, unknown> | null;
+  sbar: Record<string, string> | null;
   registrado_por: string;
   registrado_en: Date;
   estado_registro: string;
@@ -162,6 +181,7 @@ async function findRegistro(
   ) => Promise<RegistroRow[]>)`
     SELECT re.id, re.instancia_id, re.episodio_id, re.turno,
            re.nota_evolucion, re.plan_cuidados, re.valoracion_enf,
+           re.sbar,
            re.registrado_por, re.registrado_en, re.estado_registro
     FROM ece.registro_enfermeria re
     JOIN ece.episodio_atencion ea ON ea.id = re.episodio_id
@@ -225,6 +245,7 @@ export const registroEnfermeriaRouter = router({
         ) => Promise<RegistroRow[]>)`
           SELECT re.id, re.instancia_id, re.episodio_id, re.turno,
                  re.nota_evolucion, re.plan_cuidados, re.valoracion_enf,
+                 re.sbar,
                  re.registrado_por, re.registrado_en, re.estado_registro
           FROM ece.registro_enfermeria re
           WHERE (${input.episodioId ?? null}::uuid IS NULL
@@ -410,6 +431,19 @@ export const registroEnfermeriaRouter = router({
           });
         }
 
+        // JCI IPSG.2 ME 3 — validación abreviaciones prohibidas (warning, no bloquea)
+        const textoEvolucion = [
+          registro.nota_evolucion ?? "",
+          registro.plan_cuidados ?? "",
+        ].join(" ");
+        const ipsg2 = validateClinicalText(textoEvolucion);
+        if (ipsg2.errors.length > 0 || ipsg2.warnings.length > 0) {
+          console.warn(
+            `[IPSG.2 ME 3] registro_enfermeria ${input.id}: ` +
+              `${ipsg2.errors.length} error(es) JCI, ${ipsg2.warnings.length} warning(s)`,
+          );
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
@@ -418,7 +452,69 @@ export const registroEnfermeriaRouter = router({
           SET estado_registro = 'firmado'
           WHERE id = ${input.id}::uuid
         `;
-        return { ok: true as const };
+        return {
+          ok: true as const,
+          ipsg2Warnings: [...ipsg2.errors, ...ipsg2.warnings],
+        };
+      });
+    }),
+
+  /**
+   * Cierra el turno de enfermería con handoff SBAR opcional.
+   *
+   * JCI Standard: IPSG.2 ME 4 — structured handoff.
+   *
+   * Flujo:
+   *   borrador | en_revision → cierre_turno
+   *
+   * Si sbar es null y el episodio está activo (no dado de alta), la respuesta
+   * incluye un warning pero el cierre procede — el estándar JCI recomienda pero
+   * la norma local no lo hace obligatorio (enfermeras en urgencias pueden cerrar
+   * sin handoff formal cuando no hay enfermero entrante aún).
+   *
+   * Una vez cerrado el turno, el registro avanza a estado 'en_revision' para
+   * que la firma posterior sea posible.
+   */
+  cerrarTurno: nurseRole
+    .input(eceCierreSchema)
+    .mutation(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+      const userId = ctx.user.id;
+
+      return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        const registro = await findRegistro(tx, input.id, orgId);
+        if (!registro) throw new TRPCError({ code: "NOT_FOUND" });
+
+        if (!["borrador", "en_revision"].includes(registro.estado_registro)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `No se puede cerrar un turno en estado '${registro.estado_registro}'.`,
+          });
+        }
+
+        await (tx.$executeRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<number>)`
+          UPDATE ece.registro_enfermeria
+          SET estado_registro = 'en_revision',
+              sbar            = ${input.sbar ? JSON.stringify(input.sbar) : null}::jsonb
+          WHERE id = ${input.id}::uuid
+        `;
+
+        // Warning cuando el paciente sigue activo y no se registró SBAR.
+        // El episodio activo se infiere por la existencia del registro_enfermeria
+        // en estado que no sea 'validado' o 'cerrado'.
+        const sbarMissing = input.sbar == null;
+
+        return {
+          ok: true as const,
+          ...(sbarMissing && {
+            warning:
+              "SBAR no registrado. JCI IPSG.2 ME 4 recomienda handoff estructurado " +
+              "al cierre de turno cuando el paciente permanece activo.",
+          }),
+        };
       });
     }),
 
