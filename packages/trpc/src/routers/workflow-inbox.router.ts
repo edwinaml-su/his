@@ -720,6 +720,210 @@ export const workflowInboxRouter = router({
         : [];
 
       // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — MPI / Identidad / Privacidad
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // PATIENT_NN_TO_RESOLVE: pacientes isUnknown=true con encounter >48h
+      const nnToResolve = isEnabled("PATIENT_NN_TO_RESOLVE")
+        ? await prisma.patient.findMany({
+            where: {
+              organizationId: orgId,
+              isUnknown: true,
+              active: true,
+              createdAt: { lt: new Date(now.getTime() - 48 * 60 * 60_000) },
+            },
+            select: { id: true, firstName: true, lastName: true, mrn: true, createdAt: true },
+            orderBy: { createdAt: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // ARCO_REQUEST_PENDING: solicitud ARCO con estado=PENDIENTE
+      type ArcoRow = { id: string; creado_en: Date; paciente_id: string };
+      const arcoPending: ArcoRow[] = isEnabled("ARCO_REQUEST_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id, creado_en, paciente_id::text AS paciente_id
+            FROM ece.solicitud_arco
+            WHERE estado = 'PENDIENTE' AND organizacion_id = $1::uuid
+            ORDER BY creado_en ASC LIMIT 100
+          `, orgId) as Promise<ArcoRow[]>).catch(() => [] as ArcoRow[])
+        : [];
+
+      // MPI_MERGE_PENDING: placeholder (modelo de candidatos no existe;
+      // PatientMerge solo registra merges ya ejecutados, no candidatos)
+      const mpiMergePending: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — Farmacovigilancia / Calidad (placeholder por ahora)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const adrPending: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      const incidentToReview: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — Cold chain (1 activa)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      type ColdRow = { id: string; ocurrido_en: Date; equipo_id: string };
+      const coldChainBreach: ColdRow[] = isEnabled("COLD_CHAIN_BREACH")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   COALESCE(resuelta_en, creada_en) AS ocurrido_en,
+                   equipo_id::text AS equipo_id
+            FROM ece.cold_chain_alerta
+            WHERE resuelta = false
+            ORDER BY creada_en ASC LIMIT 50
+          `) as Promise<ColdRow[]>).catch(() => [] as ColdRow[])
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — Equipos / Mantenimiento (2 activas, 1 placeholder)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // EQUIPMENT_CALIBRATION_DUE: certificación vencida o próxima (<30d)
+      const calibDue = isEnabled("EQUIPMENT_CALIBRATION_DUE")
+        ? await prisma.biomedicalEquipment.findMany({
+            where: {
+              organizationId: orgId,
+              active: true,
+              certificationExpiresAt: {
+                lte: new Date(now.getTime() + 30 * 24 * 60 * 60_000),
+              },
+            },
+            select: { id: true, assetTag: true, name: true, certificationExpiresAt: true },
+            orderBy: { certificationExpiresAt: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // EQUIPMENT_OUT_OF_SERVICE_RETURN: UNDER_MAINTENANCE/BROKEN/OUT_OF_SERVICE >7d
+      const equipOutOfService = isEnabled("EQUIPMENT_OUT_OF_SERVICE_RETURN")
+        ? await prisma.biomedicalEquipment.findMany({
+            where: {
+              organizationId: orgId,
+              active: true,
+              status: { in: ["UNDER_MAINTENANCE", "BROKEN", "OUT_OF_SERVICE"] },
+              updatedAt: {
+                lt: new Date(now.getTime() - 7 * 24 * 60 * 60_000),
+              },
+            },
+            select: { id: true, assetTag: true, name: true, updatedAt: true, status: true },
+            orderBy: { updatedAt: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // EQUIPMENT_MAINTENANCE_DUE: placeholder (requiere lectura de PmSchedule
+      // con cálculo de próxima fecha vencida — pospuesto a iteración futura)
+      const maintDue: Array<{ id: string; assetTag: string; name: string; createdAt: Date }> = [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — Inventario (2 activas)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // INVENTORY_LOW_STOCK: StockLot.quantityOnHand < StockItem.reorderLevel
+      type LowStockRow = {
+        id: string;
+        lot_number: string;
+        item_name: string;
+        quantity_on_hand: number;
+        reorder_level: number;
+        updated_at: Date;
+      };
+      const lowStock: LowStockRow[] = isEnabled("INVENTORY_LOW_STOCK")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT sl.id::text AS id,
+                   sl."lotNumber" AS lot_number,
+                   si.name AS item_name,
+                   sl."quantityOnHand"::float8 AS quantity_on_hand,
+                   COALESCE(si."reorderLevel", 0)::float8 AS reorder_level,
+                   sl."updatedAt" AS updated_at
+            FROM "StockLot" sl
+            JOIN "StockItem" si ON si.id = sl."itemId"
+            WHERE sl."organizationId" = $1::uuid
+              AND sl.active = true
+              AND si."reorderLevel" IS NOT NULL
+              AND sl."quantityOnHand" < si."reorderLevel"
+            ORDER BY (si."reorderLevel" - sl."quantityOnHand") DESC
+            LIMIT 50
+          `, orgId) as Promise<LowStockRow[]>).catch(() => [] as LowStockRow[])
+        : [];
+
+      // INVENTORY_EXPIRING_SOON: StockLot.expiryDate < now + 30d con qty > 0
+      const expiringSoon = isEnabled("INVENTORY_EXPIRING_SOON")
+        ? await prisma.stockLot.findMany({
+            where: {
+              organizationId: orgId,
+              active: true,
+              quantityOnHand: { gt: 0 },
+              expiryDate: {
+                gte: now,
+                lte: new Date(now.getTime() + 30 * 24 * 60 * 60_000),
+              },
+            },
+            select: { id: true, lotNumber: true, expiryDate: true, item: { select: { name: true } } },
+            orderBy: { expiryDate: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — GS1 / Logística (4 placeholders)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const gs1Inbound: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      const gs1Transfer: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      const gs1Return: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      const gs1Recall: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // OLA 3 — Defunciones / Reclamos (3 activas)
+      // ═══════════════════════════════════════════════════════════════════════
+
+      // DEATH_CERT_PENDING: Encounter dischargeType=DEATH sin DeathCertificate
+      type DeathPendingRow = {
+        encounter_id: string;
+        discharged_at: Date;
+        patient_id: string;
+      };
+      const deathCertPending: DeathPendingRow[] = isEnabled("DEATH_CERT_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT e.id::text AS encounter_id,
+                   e."dischargedAt" AS discharged_at,
+                   e."patientId"::text AS patient_id
+            FROM "Encounter" e
+            LEFT JOIN "DeathCertificate" dc ON dc."patientId" = e."patientId"
+            WHERE e."organizationId" = $1::uuid
+              AND e."dischargeType" = 'DEATH'::"DischargeType"
+              AND e."dischargedAt" IS NOT NULL
+              AND e."dischargedAt" > now() - interval '7 days'
+              AND dc.id IS NULL
+            ORDER BY e."dischargedAt" ASC
+            LIMIT 50
+          `, orgId) as Promise<DeathPendingRow[]>).catch(() => [] as DeathPendingRow[])
+        : [];
+
+      // CLAIM_REJECTED_TO_APPEAL: InsuranceClaim status=REJECTED
+      const claimsRejected = isEnabled("CLAIM_REJECTED_TO_APPEAL")
+        ? await prisma.insuranceClaim.findMany({
+            where: {
+              status: "REJECTED",
+              invoice: { organizationId: orgId },
+              respondedAt: {
+                gte: new Date(now.getTime() - 30 * 24 * 60 * 60_000),
+              },
+            },
+            select: { id: true, claimNumber: true, respondedAt: true, rejectionReason: true },
+            orderBy: { respondedAt: "asc" },
+            take: 50,
+          })
+        : [];
+
+      // CLAIM_PENDING_SUBMISSION: placeholder (requiere modelo Invoice + InsuranceCoverage
+      // para detectar facturas con cobertura pendientes de claim — pospuesto)
+      const claimsPendingSubmission: Array<{ id: string; createdAt: Date }> = [];
+
+      // ═══════════════════════════════════════════════════════════════════════
       // Enriquecer Patient en batch único
       // ═══════════════════════════════════════════════════════════════════════
 
@@ -747,7 +951,11 @@ export const workflowInboxRouter = router({
         ...nutriPending.map((n) => n.patientId),
         ...studiesToSchedule.map((s) => s.patientId),
         ...bloodVerifyPending.map((b) => b.patientId),
+        // Ola 3
+        ...nnToResolve.map((p) => p.id),
+        ...deathCertPending.map((d) => d.patient_id),
       ]);
+      for (const a of arcoPending) patientIds.add(a.paciente_id);
 
       for (const p of partogramaOverdue) patientIds.add(p.paciente_id);
       for (const r of rnApgarPending) patientIds.add(r.paciente_id);
@@ -1325,6 +1533,106 @@ export const workflowInboxRouter = router({
             patient: null,
             description: "Transfusión con reacción adversa — reportar hemovigilancia",
             deepLink: `/blood-bank?transfusion=${b.id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — MPI / Identidad / Privacidad ──────────────────────────
+        ...nnToResolve.map((p) =>
+          buildTask({
+            type: "PATIENT_NN_TO_RESOLVE",
+            sourceId: p.id,
+            createdAt: p.createdAt,
+            patient: getPatient(p.id),
+            description: `Paciente NN sin identificar — ${p.mrn}`,
+            deepLink: `/patients/${p.id}`,
+          }),
+        ),
+        ...arcoPending.map((a) =>
+          buildTask({
+            type: "ARCO_REQUEST_PENDING",
+            sourceId: a.id,
+            createdAt: a.creado_en,
+            patient: getPatient(a.paciente_id),
+            description: "Solicitud ARCO (GDPR) pendiente de respuesta legal",
+            deepLink: `/solicitudes-arco?id=${a.id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — Cold chain ────────────────────────────────────────────
+        ...coldChainBreach.map((c) =>
+          buildTask({
+            type: "COLD_CHAIN_BREACH",
+            sourceId: c.id,
+            createdAt: c.ocurrido_en,
+            patient: null,
+            description: "Quiebre de cadena de frío sin resolver",
+            deepLink: `/equipment?id=${c.equipo_id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — Equipos ───────────────────────────────────────────────
+        ...calibDue.map((e) =>
+          buildTask({
+            type: "EQUIPMENT_CALIBRATION_DUE",
+            sourceId: e.id,
+            createdAt: e.certificationExpiresAt ?? now,
+            patient: null,
+            description: `Calibración vencida o próxima: ${e.assetTag} ${e.name}`,
+            deepLink: `/equipment?id=${e.id}`,
+          }),
+        ),
+        ...equipOutOfService.map((e) =>
+          buildTask({
+            type: "EQUIPMENT_OUT_OF_SERVICE_RETURN",
+            sourceId: e.id,
+            createdAt: e.updatedAt,
+            patient: null,
+            description: `Equipo en ${e.status} >7d: ${e.assetTag} ${e.name}`,
+            deepLink: `/equipment?id=${e.id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — Inventario ────────────────────────────────────────────
+        ...lowStock.map((l) =>
+          buildTask({
+            type: "INVENTORY_LOW_STOCK",
+            sourceId: l.id,
+            createdAt: l.updated_at,
+            patient: null,
+            description: `${l.item_name} (lote ${l.lot_number}): ${l.quantity_on_hand} < reorden ${l.reorder_level}`,
+            deepLink: `/inventory?lot=${l.id}`,
+          }),
+        ),
+        ...expiringSoon.map((l) =>
+          buildTask({
+            type: "INVENTORY_EXPIRING_SOON",
+            sourceId: l.id,
+            createdAt: l.expiryDate ?? now,
+            patient: null,
+            description: `${l.item?.name ?? "Insumo"} lote ${l.lotNumber} vence ${l.expiryDate?.toISOString().slice(0, 10) ?? ""}`,
+            deepLink: `/inventory?lot=${l.id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — Defunciones / Reclamos ────────────────────────────────
+        ...deathCertPending.map((d) =>
+          buildTask({
+            type: "DEATH_CERT_PENDING",
+            sourceId: d.encounter_id,
+            createdAt: d.discharged_at,
+            patient: getPatient(d.patient_id),
+            description: "Defunción registrada — emitir certificado CIE-10",
+            deepLink: `/deaths?encounter=${d.encounter_id}`,
+          }),
+        ),
+        ...claimsRejected.map((c) =>
+          buildTask({
+            type: "CLAIM_REJECTED_TO_APPEAL",
+            sourceId: c.id,
+            createdAt: c.respondedAt ?? now,
+            patient: null,
+            description: `Reclamo ${c.claimNumber} rechazado: ${c.rejectionReason?.slice(0, 60) ?? "sin motivo"}`,
+            deepLink: `/finance/invoices?claim=${c.id}`,
           }),
         ),
       ];

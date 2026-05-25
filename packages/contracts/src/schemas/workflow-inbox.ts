@@ -55,29 +55,61 @@ export const taskTypeEnum = z.enum([
   "SURGERY_NOTE_PENDING",         // Cirugía terminada sin nota operatoria
 
   // ─── Ola 2 — Camas / Flujo paciente (4) ───────────────────────────────────
-  "BED_TO_CLEAN",                 // Bed.status=DIRTY pendiente de limpieza
-  "BED_TO_RELEASE",               // Alta firmada pero cama no liberada
-  "TRANSFER_PENDING_ACCEPT",      // Traslado solicitado sin aceptar destino
-  "ADMISSION_VITALS_MISSING",     // Admisión activa sin signos vitales iniciales
+  "BED_TO_CLEAN",
+  "BED_TO_RELEASE",
+  "TRANSFER_PENDING_ACCEPT",
+  "ADMISSION_VITALS_MISSING",
 
   // ─── Ola 2 — Consulta externa (3) ─────────────────────────────────────────
-  "APPOINTMENT_TO_CHECKIN",       // Cita próxima sin check-in
-  "CONSULTATION_NOTE_PENDING",    // Cita atendida sin nota EHR
-  "APPOINTMENT_NO_SHOW_FOLLOWUP", // Cita perdida — seguimiento médico
+  "APPOINTMENT_TO_CHECKIN",
+  "CONSULTATION_NOTE_PENDING",
+  "APPOINTMENT_NO_SHOW_FOLLOWUP",
 
-  // ─── Ola 2 — Estudios pendientes (3 nuevos + 2 activados de Ola 1) ────────
-  "RESPIRATORY_ORDER_PENDING",    // Orden respiratoria sin ejecutar
-  "NUTRITION_ORDER_PENDING",      // Orden nutricional sin aprobar
-  "STUDY_TO_SCHEDULE",            // ImagingOrder ORDERED sin SCHEDULED
+  // ─── Ola 2 — Estudios pendientes (3) ──────────────────────────────────────
+  "RESPIRATORY_ORDER_PENDING",
+  "NUTRITION_ORDER_PENDING",
+  "STUDY_TO_SCHEDULE",
 
   // ─── Ola 2 — Maternidad (3) ────────────────────────────────────────────────
-  "PARTOGRAMA_OVERDUE",           // Partograma sin actualización >30min
-  "RN_APGAR_PENDING",             // RN sin APGAR a 1m/5m
-  "NRP_POSTEVENT_DEBRIEF",        // Post-reanimación neonatal sin debrief
+  "PARTOGRAMA_OVERDUE",
+  "RN_APGAR_PENDING",
+  "NRP_POSTEVENT_DEBRIEF",
 
   // ─── Ola 2 — Banco de sangre (2) ───────────────────────────────────────────
-  "BLOOD_VERIFY_PENDING",         // TransfusionRequest APPROVED sin transfusión iniciada
-  "BLOOD_REACTION_REPORT",        // Transfusion con reacción adversa sin reporte
+  "BLOOD_VERIFY_PENDING",
+  "BLOOD_REACTION_REPORT",
+
+  // ─── Ola 3 — MPI / Identidad / Privacidad (3) ─────────────────────────────
+  "MPI_MERGE_PENDING",
+  "PATIENT_NN_TO_RESOLVE",
+  "ARCO_REQUEST_PENDING",
+
+  // ─── Ola 3 — Farmacovigilancia / Calidad (2) ──────────────────────────────
+  "ADR_REPORT_PENDING",
+  "INCIDENT_TO_REVIEW",
+
+  // ─── Ola 3 — GS1 / Logística (4) ──────────────────────────────────────────
+  "GS1_INBOUND_PENDING",
+  "GS1_TRANSFER_PENDING",
+  "GS1_RETURN_PENDING",
+  "GS1_RECALL_TO_PURGE",
+
+  // ─── Ola 3 — Cold chain (1) ───────────────────────────────────────────────
+  "COLD_CHAIN_BREACH",
+
+  // ─── Ola 3 — Equipos / Mantenimiento (3) ──────────────────────────────────
+  "EQUIPMENT_CALIBRATION_DUE",
+  "EQUIPMENT_MAINTENANCE_DUE",
+  "EQUIPMENT_OUT_OF_SERVICE_RETURN",
+
+  // ─── Ola 3 — Inventario (2) ───────────────────────────────────────────────
+  "INVENTORY_LOW_STOCK",
+  "INVENTORY_EXPIRING_SOON",
+
+  // ─── Ola 3 — Defunciones / Reclamos (3) ───────────────────────────────────
+  "DEATH_CERT_PENDING",
+  "CLAIM_PENDING_SUBMISSION",
+  "CLAIM_REJECTED_TO_APPEAL",
 ]);
 export type TaskType = z.infer<typeof taskTypeEnum>;
 
@@ -127,7 +159,7 @@ export const TASK_SLA_MINUTES: Record<TaskType, number | null> = {
   BED_TO_RELEASE:             60,
   TRANSFER_PENDING_ACCEPT:   240,
   ADMISSION_VITALS_MISSING:   30,
-  APPOINTMENT_TO_CHECKIN:    -30, // negativo = SLA "pre-hora" (anticipo de 30m)
+  APPOINTMENT_TO_CHECKIN:    -30,
   CONSULTATION_NOTE_PENDING: 120,
   APPOINTMENT_NO_SHOW_FOLLOWUP: 1440,
   RESPIRATORY_ORDER_PENDING:  60,
@@ -138,6 +170,25 @@ export const TASK_SLA_MINUTES: Record<TaskType, number | null> = {
   NRP_POSTEVENT_DEBRIEF:    1440,
   BLOOD_VERIFY_PENDING:        5,
   BLOOD_REACTION_REPORT:     240,
+  // Ola 3
+  MPI_MERGE_PENDING:       10080,
+  PATIENT_NN_TO_RESOLVE:    2880,
+  ARCO_REQUEST_PENDING:    43200,
+  ADR_REPORT_PENDING:       4320,
+  INCIDENT_TO_REVIEW:      10080,
+  GS1_INBOUND_PENDING:      1440,
+  GS1_TRANSFER_PENDING:      240,
+  GS1_RETURN_PENDING:       1440,
+  GS1_RECALL_TO_PURGE:      1440,
+  COLD_CHAIN_BREACH:          30,
+  EQUIPMENT_CALIBRATION_DUE: null,
+  EQUIPMENT_MAINTENANCE_DUE: null,
+  EQUIPMENT_OUT_OF_SERVICE_RETURN: 10080,
+  INVENTORY_LOW_STOCK:      1440,
+  INVENTORY_EXPIRING_SOON: 43200,
+  DEATH_CERT_PENDING:       1440,
+  CLAIM_PENDING_SUBMISSION:10080,
+  CLAIM_REJECTED_TO_APPEAL:43200,
 };
 
 /** Roles RBAC que pueden ejecutar cada tipo de tarea. */
@@ -193,6 +244,25 @@ export const TASK_REQUIRED_ROLES: Record<TaskType, string[]> = {
   NRP_POSTEVENT_DEBRIEF:     ["NEONATOLOGO", "MC", "ENF"],
   BLOOD_VERIFY_PENDING:      ["NURSE", "ENF", "BB"],
   BLOOD_REACTION_REPORT:     ["MC", "PHYSICIAN", "BB"],
+  // Ola 3
+  MPI_MERGE_PENDING:         ["ADM", "ADMIN", "DPO"],
+  PATIENT_NN_TO_RESOLVE:     ["ADM", "NURSE", "ENF"],
+  ARCO_REQUEST_PENDING:      ["DPO", "DIR", "ADMIN"],
+  ADR_REPORT_PENDING:        ["PHARM", "MC", "PHYSICIAN", "FARMACO"],
+  INCIDENT_TO_REVIEW:        ["CALIDAD", "DIR", "ADMIN"],
+  GS1_INBOUND_PENDING:       ["BODEGA", "ADMIN"],
+  GS1_TRANSFER_PENDING:      ["BODEGA"],
+  GS1_RETURN_PENDING:        ["BODEGA"],
+  GS1_RECALL_TO_PURGE:       ["BODEGA", "PHARM", "ADMIN"],
+  COLD_CHAIN_BREACH:         ["PHARM", "MANTENIMIENTO", "BODEGA"],
+  EQUIPMENT_CALIBRATION_DUE: ["BIOMEDICA", "MANTENIMIENTO"],
+  EQUIPMENT_MAINTENANCE_DUE: ["BIOMEDICA", "MANTENIMIENTO"],
+  EQUIPMENT_OUT_OF_SERVICE_RETURN: ["BIOMEDICA", "MANTENIMIENTO"],
+  INVENTORY_LOW_STOCK:       ["BODEGA", "ADMIN"],
+  INVENTORY_EXPIRING_SOON:   ["BODEGA", "PHARM"],
+  DEATH_CERT_PENDING:        ["MC", "PHYSICIAN"],
+  CLAIM_PENDING_SUBMISSION:  ["ADM", "FACTURACION", "ADMIN"],
+  CLAIM_REJECTED_TO_APPEAL:  ["ADM", "FACTURACION", "ADMIN"],
 };
 
 /** Label legible en español por tipo. */
@@ -248,6 +318,25 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   NRP_POSTEVENT_DEBRIEF:     "Debrief post reanimación neonatal",
   BLOOD_VERIFY_PENDING:      "Verificar 2-IDs para transfusión",
   BLOOD_REACTION_REPORT:     "Reportar reacción transfusional",
+  // Ola 3
+  MPI_MERGE_PENDING:         "Resolver candidatos de merge MPI",
+  PATIENT_NN_TO_RESOLVE:     "Identificar paciente NN (>48h)",
+  ARCO_REQUEST_PENDING:      "Responder solicitud ARCO (GDPR)",
+  ADR_REPORT_PENDING:        "Reportar reacción adversa medicamentosa",
+  INCIDENT_TO_REVIEW:        "Revisar evento adverso de calidad",
+  GS1_INBOUND_PENDING:       "Validar recepción de mercadería",
+  GS1_TRANSFER_PENDING:      "Recepcionar transferencia interna",
+  GS1_RETURN_PENDING:        "Validar devolución",
+  GS1_RECALL_TO_PURGE:       "Purgar lote retirado del stock",
+  COLD_CHAIN_BREACH:         "Quiebre cadena de frío (acción inmediata)",
+  EQUIPMENT_CALIBRATION_DUE: "Calibrar equipo biomédico",
+  EQUIPMENT_MAINTENANCE_DUE: "Mantenimiento preventivo de equipo",
+  EQUIPMENT_OUT_OF_SERVICE_RETURN: "Equipo en reparación >7d",
+  INVENTORY_LOW_STOCK:       "Reposición de stock crítico",
+  INVENTORY_EXPIRING_SOON:   "Lote por vencer en 30 días",
+  DEATH_CERT_PENDING:        "Emitir certificado de defunción",
+  CLAIM_PENDING_SUBMISSION:  "Enviar reclamo a aseguradora",
+  CLAIM_REJECTED_TO_APPEAL:  "Apelar reclamo rechazado",
 };
 
 export const taskSchema = z.object({
