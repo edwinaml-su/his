@@ -203,6 +203,8 @@ import { financeReportsRouter } from "./finance-reports.router";
 import { servicePriceListRouter } from "./service-price-list.router";
 // Wave 11 — Finance Overview KPIs (landing /finance)
 import { financeOverviewRouter } from "./finance-overview.router";
+// Integración SRS — registro sanitario El Salvador (read + import a Drug)
+import { srsRegistroRouter } from "./srs-registro.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -408,6 +410,8 @@ export const appRouter = router({
   servicePriceList: servicePriceListRouter,
   // Wave 11 — Finance Overview KPIs (landing /finance)
   financeOverview: financeOverviewRouter,
+  // Integración SRS — registro sanitario El Salvador
+  srsRegistro: srsRegistroRouter,
 });
 
 export type AppRouter = typeof appRouter;
