@@ -24,6 +24,7 @@ import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { Tabs, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
+import { TaskActionsMenu } from "./task-actions-menu";
 
 type Scope = "MINE" | "TEAM" | "ALL";
 
@@ -94,6 +95,21 @@ function typeBgColor(type: string): string {
   if (type === "PARTOGRAMA_OVERDUE" || type === "RN_APGAR_PENDING" || type === "NRP_POSTEVENT_DEBRIEF")
     return "bg-fuchsia-100 text-fuchsia-700";
   if (type === "BLOOD_VERIFY_PENDING" || type === "BLOOD_REACTION_REPORT") return "bg-red-100 text-red-700";
+  // Ola 3
+  if (type === "MPI_MERGE_PENDING" || type === "PATIENT_NN_TO_RESOLVE" || type === "ARCO_REQUEST_PENDING")
+    return "bg-slate-100 text-slate-700";
+  if (type === "ADR_REPORT_PENDING" || type === "INCIDENT_TO_REVIEW")
+    return "bg-orange-100 text-orange-700";
+  if (type.startsWith("GS1_") || type.startsWith("INVENTORY_"))
+    return "bg-lime-100 text-lime-700";
+  if (type === "COLD_CHAIN_BREACH")
+    return "bg-cyan-100 text-cyan-700";
+  if (type.startsWith("EQUIPMENT_"))
+    return "bg-stone-100 text-stone-700";
+  if (type === "DEATH_CERT_PENDING")
+    return "bg-zinc-100 text-zinc-700";
+  if (type.startsWith("CLAIM_"))
+    return "bg-yellow-100 text-yellow-700";
   return "bg-slate-100 text-slate-700";
 }
 
@@ -285,10 +301,17 @@ export default function TareasPage() {
                 const theme = PRIORITY_THEME[t.priority];
                 const iconBg = typeBgColor(t.type);
                 return (
-                  <li key={t.id}>
+                  <li key={t.id} className="relative">
+                    <div className="absolute right-2 top-2 z-10">
+                      <TaskActionsMenu
+                        taskId={t.id}
+                        taskType={t.type}
+                        onActionDone={() => query.refetch()}
+                      />
+                    </div>
                     <Link
                       href={t.deepLink}
-                      className={`flex items-start gap-3 rounded-md border bg-card p-3 transition-colors hover:bg-accent ${theme.ring}`}
+                      className={`flex items-start gap-3 rounded-md border bg-card p-3 pr-12 transition-colors hover:bg-accent ${theme.ring}`}
                     >
                       <div
                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${iconBg}`}
