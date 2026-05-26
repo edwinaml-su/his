@@ -1451,6 +1451,16 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("ipsg6.morse_sla_exceeded"),
     payload: ipsg6MorseSlaExceededPayloadSchema,
   }),
+  // HE-16 (audit Stream E) — WHO Surgical Safety Checklist completado
+  z.object({
+    eventType: z.literal("ece.who_checklist.completado"),
+    payload: z.object({
+      checklistId: z.string().uuid(),
+      actoQuirurgicoId: z.string().uuid(),
+      completadoEn: z.string().datetime(),
+      completadoPor: z.string().uuid(),
+    }),
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;

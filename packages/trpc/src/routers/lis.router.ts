@@ -284,10 +284,32 @@ export const lisRouter = router({
               test: true,
               // Beta.15: prescriberId es el destinatario canónico del evento
               // `lab.criticalValue` (backlog US.B15.4.2).
-              order: { select: { prescriberId: true } },
+              // HH-09: patientId se usa para query separado de patient
+              // (no hay relación @relation nombrada en el schema).
+              order: { select: { prescriberId: true, patientId: true } },
             },
           });
           if (!item) throw new TRPCError({ code: "NOT_FOUND" });
+
+          // HH-09 (audit Stream H): age/sex se calculan server-side desde el
+          // paciente de la orden, no se aceptan del cliente. El input mantiene
+          // los campos para retro-compat pero el server los ignora.
+          const patient = await tx.patient.findUnique({
+            where: { id: item.order.patientId },
+            select: {
+              birthDate: true,
+              biologicalSex: { select: { code: true } },
+            },
+          });
+          const patientAgeYears: number | null = patient?.birthDate
+            ? Math.floor(
+                (Date.now() - new Date(patient.birthDate).getTime()) /
+                  (1000 * 60 * 60 * 24 * 365.25),
+              )
+            : null;
+          const sexCode = patient?.biologicalSex?.code ?? null;
+          const patientSex: LisSex | null =
+            sexCode === "M" ? "MALE" : sexCode === "F" ? "FEMALE" : null;
 
           // Beta.3 — Determinar el flag final.
           let finalFlag: LisResultFlag = input.flag;
@@ -301,8 +323,8 @@ export const lisRouter = router({
             finalFlag = evaluateLabResultFlag({
               valueNumeric: input.valueNumeric,
               ranges,
-              patientAgeYears: input.patientAgeYears ?? null,
-              patientSex: (input.patientSex as LisSex | undefined) ?? null,
+              patientAgeYears,
+              patientSex,
             });
           }
 
