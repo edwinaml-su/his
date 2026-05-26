@@ -372,11 +372,20 @@ export const inboxResponseSchema = z.object({
 });
 export type InboxResponse = z.infer<typeof inboxResponseSchema>;
 
+export const inboxScopeEnum = z.enum(["MINE", "TEAM", "ALL"]);
+export type InboxScope = z.infer<typeof inboxScopeEnum>;
+
 export const inboxFiltersSchema = z.object({
   types: z.array(taskTypeEnum).optional(),
   onlyOverdue: z.boolean().default(false),
   priority: taskPriorityEnum.optional(),
   limit: z.number().int().min(1).max(500).default(200),
+  /**
+   * MINE: solo tareas asignadas explícitamente al usuario (default backward-compat)
+   * TEAM: tareas que cualquier usuario con mis mismos roles puede ejecutar (sin filtro por user.id)
+   * ALL:  todas las tareas de la org (solo permitido para roles ADMIN/DIR — el router enforce)
+   */
+  scope: inboxScopeEnum.default("MINE"),
 });
 export type InboxFilters = z.infer<typeof inboxFiltersSchema>;
 

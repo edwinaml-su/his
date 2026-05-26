@@ -97,10 +97,28 @@ export const workflowInboxRouter = router({
       const orgId = tenant.organizationId;
       const now = new Date();
 
+      // RBAC enforcement de scope: ALL solo para admins/directivos.
+      if (
+        filters.scope === "ALL" &&
+        !userRoles.some((r) => ["ADMIN", "ADMIN_CLINICO", "DIR", "GERENTE"].includes(r))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Solo roles ADMIN/DIR pueden ver la cola completa.",
+        });
+      }
+
+      // Filtros que dependen del scope. MINE incluye prescriberId=user.id;
+      // TEAM/ALL lo dejan abierto a quien tenga el rol.
+      const isPersonalScope = filters.scope === "MINE";
+
       function isEnabled(type: TaskType): boolean {
         if (filters.types && filters.types.length > 0 && !filters.types.includes(type)) {
           return false;
         }
+        // En scope ALL, mostramos TODAS las fuentes; el usuario admin/DIR las ve aunque
+        // no tenga el rol clínico específico (vista supervisora).
+        if (filters.scope === "ALL") return true;
         return userHasAnyRole(userRoles, TASK_REQUIRED_ROLES[type]);
       }
 
@@ -110,7 +128,11 @@ export const workflowInboxRouter = router({
 
       const rxToSign = isEnabled("PRESCRIPTION_TO_SIGN")
         ? await prisma.prescription.findMany({
-            where: { organizationId: orgId, status: "DRAFT", prescriberId: user.id },
+            where: {
+              organizationId: orgId,
+              status: "DRAFT",
+              ...(isPersonalScope ? { prescriberId: user.id } : {}),
+            },
             select: { id: true, prescribedAt: true, notes: true, patientId: true },
             orderBy: { prescribedAt: "asc" },
             take: 100,
