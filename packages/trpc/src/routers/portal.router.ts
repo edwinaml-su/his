@@ -138,7 +138,13 @@ function decryptSecret(stored: string): string {
 // ─── Magic link email stub (US.B20.1.2 integra Resend) ───────────────────────
 
 async function sendMagicLinkEmail(email: string, token: string, purpose: string): Promise<void> {
-  console.log(`[portal][magic-link] email=${email} purpose=${purpose} token=${token}`);
+  // K-03 (audit Stream K): NUNCA loguear el token raw — un atacante con acceso
+  // a logs (Vercel/Datadog/Supabase) podría usarlo para hijacking durante el
+  // TTL del enlace. Redactamos email también (PII). El integrador del provider
+  // de email (US.B20.1.2 Resend) recibe el token directamente como parámetro.
+  void email;
+  void token;
+  console.log(`[portal][magic-link] purpose=${purpose} delivered=<redacted>`);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
