@@ -8,6 +8,7 @@
  * Gap §5.2: showInPortal / confidential no implementado —
  * se muestran todos los resultados validados.
  */
+import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
@@ -48,7 +49,7 @@ function groupByDate(results: LabResultItem[]) {
   return Object.entries(groups);
 }
 
-export default function ResultadosPage() {
+function ResultadosInner() {
   const searchParams = useSearchParams();
   const wardPatientId = searchParams.get("wardPatientId") ?? undefined;
 
@@ -113,5 +114,24 @@ export default function ResultadosPage() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Suspense boundary requerida por Next.js 14 cuando `useSearchParams()` se
+ * usa en un componente con renderizado estático/SSG. Sin esta envoltura,
+ * el build de Vercel falla con "missing-suspense-with-csr-bailout".
+ */
+export default function ResultadosPage() {
+  return (
+    <Suspense
+      fallback={
+        <p className="text-sm text-slate-500" aria-busy="true">
+          Cargando resultados...
+        </p>
+      }
+    >
+      <ResultadosInner />
+    </Suspense>
   );
 }

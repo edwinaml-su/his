@@ -5,6 +5,7 @@
  * Muestra valor + rango referencia + flag (NORMAL/HIGH/LOW/CRITICAL).
  * WCAG AA.
  */
+import { Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 
@@ -30,7 +31,7 @@ function isCritical(flag: string) {
   return flag === "CRITICAL_LOW" || flag === "CRITICAL_HIGH";
 }
 
-export default function DetalleResultadoPage() {
+function DetalleResultadoInner() {
   const { resultId } = useParams<{ resultId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -150,5 +151,24 @@ export default function DetalleResultadoPage() {
         Estos resultados son informativos. Consulte con su médico para su interpretación.
       </p>
     </article>
+  );
+}
+
+/**
+ * Suspense boundary requerida por Next.js 14 cuando `useSearchParams()` se
+ * usa en un componente con renderizado estático/SSG. Sin esta envoltura,
+ * el build de Vercel falla con "missing-suspense-with-csr-bailout".
+ */
+export default function DetalleResultadoPage() {
+  return (
+    <Suspense
+      fallback={
+        <p className="text-sm text-slate-500" aria-busy="true">
+          Cargando resultado...
+        </p>
+      }
+    >
+      <DetalleResultadoInner />
+    </Suspense>
   );
 }
