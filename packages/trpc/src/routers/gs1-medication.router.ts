@@ -15,6 +15,14 @@
  *   Lectura:   tenantProcedure.
  *   Escritura: requireRole(["ADMIN","PHARM","LOGISTIC"]) salvo markRecall que requiere ADMIN.
  *   withTenantContext en todas las mutaciones.
+ *
+ * HI-14 (audit Stream I, verificación 2026-05-26):
+ *   `ece.gs1_gtin` es un **catálogo global** — verificado con
+ *   `information_schema.columns`: NO tiene columna `organization_id`. No
+ *   requiere segregación por tenant. `list` y `get` usan `$queryRawUnsafe`
+ *   directo intencionalmente; envolver en `withTenantContext` no aplica.
+ *   Si en el futuro se agrega `organization_id` a `gs1_gtin`, este
+ *   comentario y el comportamiento de las queries deben actualizarse.
  */
 
 import { z } from "zod";
@@ -169,7 +177,10 @@ export const gs1MedicationRouter = router({
         codigoAtc:            z.string().regex(/^[A-Z]\d{2}[A-Z]{2}\d{2}$/).optional(),
         principiosActivos:    z.array(z.string().min(1).max(200)).optional(),
         excipientesAlergenos: z.array(z.string().min(1).max(200)).optional(),
-        loteVencimiento:      z.string().datetime({ offset: true }).optional(),
+        // HI-12 (audit Stream I): aceptar "YYYY-MM-DD" puro y castear ::date
+        // server-side. Antes era datetime() que invitaba al cliente a hacer
+        // new Date(string).toISOString() — en UTC-6 shiftea -1 día.
+        loteVencimiento:      z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -191,7 +202,8 @@ export const gs1MedicationRouter = router({
         if (fields.codigoAtc !== undefined)            { sets.push(`codigo_atc = $${idx++}`);           params.push(fields.codigoAtc); }
         if (fields.principiosActivos !== undefined)    { sets.push(`principios_activos = $${idx++}::jsonb`);    params.push(JSON.stringify(fields.principiosActivos)); }
         if (fields.excipientesAlergenos !== undefined) { sets.push(`excipientes_alergenos = $${idx++}::jsonb`); params.push(JSON.stringify(fields.excipientesAlergenos)); }
-        if (fields.loteVencimiento !== undefined)      { sets.push(`lote_vencimiento = $${idx++}`);     params.push(fields.loteVencimiento); }
+        // HI-12: cast explícito a ::date — preserva el día calendario sin shift por TZ.
+        if (fields.loteVencimiento !== undefined)      { sets.push(`lote_vencimiento = $${idx++}::date`); params.push(fields.loteVencimiento); }
 
         sets.push(`actualizado_en = now()`);
         params.push(id);

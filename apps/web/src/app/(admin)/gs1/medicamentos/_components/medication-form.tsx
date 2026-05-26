@@ -207,9 +207,9 @@ export function MedicationForm({
       codigoAtc:            parsed.data.codigoAtc || undefined,
       principiosActivos:    principiosActivos.filter(Boolean),
       excipientesAlergenos: excipientesAlergenos.filter(Boolean),
-      loteVencimiento:      parsed.data.loteVencimiento
-        ? new Date(parsed.data.loteVencimiento).toISOString()
-        : undefined,
+      // HI-12 (audit Stream I): enviar "YYYY-MM-DD" puro. El server castea
+      // a ::date — preserva el día calendario sin shift por timezone.
+      loteVencimiento:      parsed.data.loteVencimiento || undefined,
     });
   }
 

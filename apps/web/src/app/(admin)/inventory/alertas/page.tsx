@@ -23,6 +23,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { Checkbox } from "@his/ui/components/checkbox";
+import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import type { AlertaTipo } from "@his/contracts";
 
 // Variantes de badge por tipo de alerta
@@ -64,6 +65,12 @@ function alertaKey(a: AlertaItem): string {
 export default function InventoryAlertasPage() {
   const [seleccionados, setSeleccionados] = React.useState<Set<string>>(new Set());
   const [resueltos, setResueltos] = React.useState<Set<string>>(new Set());
+  // HI-27 (audit Stream I): reemplaza `alert()` nativo por Toast accesible.
+  const [toast, setToast] = React.useState<{
+    title: string;
+    description?: string;
+    variant?: "default" | "success" | "destructive";
+  } | null>(null);
 
   const query = trpc.inventory.gs1.listAlertas.useQuery({ limit: 200 });
 
@@ -101,14 +108,22 @@ export default function InventoryAlertasPage() {
   };
 
   // Bulk: generar orden de compra (placeholder — abre modal o redirige)
+  // HI-27 (audit Stream I): el `alert()` nativo era bloqueante, inaccesible y
+  // no testeable en JSDOM. Reemplazado por Toast del design system.
   const generarOrden = () => {
     const gtins = alertas
       .filter((a) => seleccionados.has(alertaKey(a)))
       .map((a) => a.gtinCodigo)
       .filter((v, i, arr) => arr.indexOf(v) === i)
       .join(", ");
-    // TODO §30 Compras: conectar a purchase-order router cuando esté disponible
-    alert(`Orden de compra para: ${gtins}`);
+    // TODO §30 Compras: conectar a purchase-order router cuando esté disponible.
+    setToast({
+      title: "Orden de compra en preparación",
+      description: gtins
+        ? `GTINs seleccionados: ${gtins}`
+        : "Sin GTINs seleccionados.",
+      variant: "default",
+    });
   };
 
   const haySeleccion = seleccionados.size > 0;
@@ -288,6 +303,19 @@ export default function InventoryAlertasPage() {
           )}
         </CardContent>
       </Card>
+
+      {toast ? (
+        <Toast
+          variant={toast.variant ?? "default"}
+          open={Boolean(toast)}
+          onOpenChange={(o) => !o && setToast(null)}
+        >
+          <div className="flex flex-col gap-1">
+            <ToastTitle>{toast.title}</ToastTitle>
+            {toast.description ? <ToastDescription>{toast.description}</ToastDescription> : null}
+          </div>
+        </Toast>
+      ) : null}
     </div>
   );
 }

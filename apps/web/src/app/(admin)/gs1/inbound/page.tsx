@@ -138,8 +138,8 @@ function EstadoBadge({ estado }: { estado: string }) {
 // Página principal
 // ---------------------------------------------------------------------------
 export default function Gs1InboundPage() {
-  const [establecimientoId, setEstablecimientoId] = React.useState("");
-  const [registradoPor, setRegistradoPor] = React.useState("");
+  // HI-06 (audit Stream I): el server deriva establecimiento_id y
+  // registrado_por del tenant context. La UI ya no pide UUID libres.
   const [rechazandoId, setRechazandoId] = React.useState<string | null>(null);
   const [motivoRechazo, setMotivoRechazo] = React.useState("");
   const [submitError, setSubmitError] = React.useState<string | null>(null);
@@ -183,10 +183,8 @@ export default function Gs1InboundPage() {
   // ---------------------------------------------------------------------------
   const recibirMut = trpc.gs1ProcesoA.recibirMercancia.useMutation();
   const rechazarMut = trpc.gs1ProcesoA.rechazar.useMutation();
-  const listarQuery = trpc.gs1ProcesoA.listar.useQuery(
-    { establecimiento_id: establecimientoId, limit: 50, offset: 0 },
-    { enabled: establecimientoId.length === 36 },
-  );
+  // HI-06: el server resuelve establecimiento_id del tenant context.
+  const listarQuery = trpc.gs1ProcesoA.listar.useQuery({ limit: 50, offset: 0 });
   const verificarMut = trpc.gs1ProcesoA.verificar5Correctos.useMutation();
 
   // ---------------------------------------------------------------------------
@@ -196,11 +194,8 @@ export default function Gs1InboundPage() {
     setSubmitError(null);
     setSubmitOk(false);
     try {
-      await recibirMut.mutateAsync({
-        ...data,
-        establecimiento_id: establecimientoId,
-        registrado_por: registradoPor,
-      });
+      // HI-06: server resuelve establecimiento_id y registrado_por del context.
+      await recibirMut.mutateAsync(data);
       setSubmitOk(true);
       reset();
       void listarQuery.refetch();
@@ -244,32 +239,9 @@ export default function Gs1InboundPage() {
         </p>
       </div>
 
-      {/* Contexto de sesión ECE (temporal hasta integración de contexto) */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Contexto ECE</CardTitle>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="establecimiento-id">UUID Establecimiento</Label>
-            <Input
-              id="establecimiento-id"
-              placeholder="UUID del establecimiento"
-              value={establecimientoId}
-              onChange={(e) => setEstablecimientoId(e.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="registrado-por">UUID Personal (registrado_por)</Label>
-            <Input
-              id="registrado-por"
-              placeholder="UUID de personal de salud"
-              value={registradoPor}
-              onChange={(e) => setRegistradoPor(e.target.value)}
-            />
-          </div>
-        </CardContent>
-      </Card>
+      {/* HI-06: bloque "Contexto ECE" eliminado — el server deriva
+          establecimiento_id (tenant) y registrado_por (personal_salud
+          del usuario autenticado) automáticamente. */}
 
       {/* Formulario de nueva recepción */}
       <Card>
@@ -412,9 +384,8 @@ export default function Gs1InboundPage() {
         </CardContent>
       </Card>
 
-      {/* Tabla de recepciones */}
-      {establecimientoId.length === 36 && (
-        <Card>
+      {/* Tabla de recepciones — HI-06: ya no requiere UUID manual. */}
+      <Card>
           <CardHeader>
             <CardTitle>Recepciones del establecimiento</CardTitle>
           </CardHeader>
@@ -494,7 +465,6 @@ export default function Gs1InboundPage() {
             )}
           </CardContent>
         </Card>
-      )}
 
       {/* Panel de rechazo */}
       {rechazandoId && (

@@ -2,6 +2,12 @@
 
 /**
  * §20 Services & Equipment — Listado de equipos biomédicos.
+ *
+ * HI-30 (audit Stream I): el módulo `/equipment/cold-chain/` aún no está
+ * implementado — está en backlog. No hay sidebar link a esa ruta;
+ * agregarla cuando se implemente seguimiento de cadena de frío.
+ *
+ * HI-31: fila de la tabla con link "Ver" → /equipment/[id].
  */
 import * as React from "react";
 import Link from "next/link";
@@ -128,6 +134,7 @@ export default function EquipmentPage() {
                   <TableHead>Modelo</TableHead>
                   <TableHead>Ubicación</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead className="w-20 text-right" aria-label="Acciones" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -139,6 +146,14 @@ export default function EquipmentPage() {
                     <TableCell>{e.model ?? "—"}</TableCell>
                     <TableCell>{e.location ?? "—"}</TableCell>
                     <TableCell>{e.status}</TableCell>
+                    <TableCell className="text-right">
+                      {/* HI-31: link al detalle PM + calibraciones + EPCIS. */}
+                      <Button asChild size="sm" variant="outline">
+                        <Link href={`/equipment/${e.id}`} aria-label={`Ver detalle ${e.assetTag}`}>
+                          Ver
+                        </Link>
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
