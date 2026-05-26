@@ -515,8 +515,8 @@ export default function FirmaElectronicaSetupPage() {
   const [maskedPin, setMaskedPin] = React.useState<string>("");
   const [isChangingPin, setIsChangingPin] = React.useState(false);
 
-  // Consulta de estado actual del usuario.
-  // @ts-expect-error — trpc.firma aún no registrado en _app.ts (Stream 18 pendiente).
+  // HG-22 (audit Stream G): firma.status ya está registrado en el router.
+  // El procedure devuelve { hasPin, revoked, locked }.
   const statusQuery = trpc.firma.status.useQuery(undefined, {
     retry: false,
   });

@@ -68,10 +68,15 @@ describe("whoSignInSchema", () => {
     ).toThrow();
   });
 
-  it("rechaza responsableId no-UUID", () => {
+  it("rechaza responsableId no-UUID cuando se envía", () => {
     expect(() =>
       whoSignInSchema.parse({ ...SIGN_IN_DATA, responsableId: "no-uuid" }),
     ).toThrow();
+  });
+
+  it("acepta omisión de responsableId (HE-17: server lo resuelve desde ctx.user)", () => {
+    const { responsableId: _ignored, ...withoutResp } = SIGN_IN_DATA;
+    expect(() => whoSignInSchema.parse(withoutResp)).not.toThrow();
   });
 });
 

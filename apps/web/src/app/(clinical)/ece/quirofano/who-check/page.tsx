@@ -171,11 +171,8 @@ export default function WhoChecklistPage() {
         onSubmit={({ responsableNombre, items }) => {
           marcarSignIn.mutate({
             actoQuirurgicoId: actoId,
-            signIn: {
-              responsableId: "00000000-0000-0000-0000-000000000000", // resuelto por el backend desde ctx.user
-              responsableNombre,
-              items,
-            },
+            // HE-17: responsableId lo determina el server desde ctx.user.
+            signIn: { responsableNombre, items },
           });
         }}
       />
@@ -193,11 +190,8 @@ export default function WhoChecklistPage() {
         onSubmit={({ responsableNombre, items }) => {
           marcarTimeOut.mutate({
             actoQuirurgicoId: actoId,
-            timeOut: {
-              responsableId: "00000000-0000-0000-0000-000000000000",
-              responsableNombre,
-              items,
-            },
+            // HE-17: responsableId lo determina el server desde ctx.user.
+            timeOut: { responsableNombre, items },
           });
         }}
       />
@@ -215,11 +209,8 @@ export default function WhoChecklistPage() {
         onSubmit={({ responsableNombre, items }) => {
           marcarSignOut.mutate({
             actoQuirurgicoId: actoId,
-            signOut: {
-              responsableId: "00000000-0000-0000-0000-000000000000",
-              responsableNombre,
-              items,
-            },
+            // HE-17: responsableId lo determina el server desde ctx.user.
+            signOut: { responsableNombre, items },
           });
         }}
       />

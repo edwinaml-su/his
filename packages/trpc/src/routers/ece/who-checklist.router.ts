@@ -19,6 +19,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
+import { withWorkflowContext, type EceContext } from "../../workflow/context";
+import { emitDomainEvent } from "@his/database";
+import type { PrismaClient } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod — ítem WHO individual
@@ -34,23 +37,27 @@ const whoItemSchema = z.object({
 
 export type WhoItem = z.infer<typeof whoItemSchema>;
 
+// HE-17 (audit Stream E): `responsableId` lo determina el server desde ctx.user.
+// El cliente NO debe enviarlo (no es trust boundary). Si llega, el server lo sobrescribe.
+// Mantengo el campo opcional para retro-compatibilidad de lectura del blob jsonb.
+
 // Fase Sign-In: 8 ítems estándar WHO 2009 §1
 export const whoSignInSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
 
 // Fase Time-Out: 7 ítems estándar WHO 2009 §2
 export const whoTimeOutSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
 
 // Fase Sign-Out: 5 ítems estándar WHO 2009 §3
 export const whoSignOutSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
@@ -106,19 +113,42 @@ type ChecklistRow = {
 };
 
 // ---------------------------------------------------------------------------
-// Helper: insert en outbox
+// Helper: contexto ECE para withWorkflowContext (HE-15)
 // ---------------------------------------------------------------------------
 
-async function emitOutbox(
-  prisma: { $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<number> },
-  eventType: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  const payloadJson = JSON.stringify(payload);
-  await (prisma.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-    INSERT INTO public.outbox (event_type, payload, created_at)
-    VALUES (${eventType}, ${payloadJson}::jsonb, now())
+/**
+ * HE-15 (audit Stream E): resuelve personal_salud del usuario y devuelve
+ * EceContext. Sin este envoltorio, RLS de `ece.who_checklist` no aplica y
+ * un usuario podría leer/modificar checklists de cualquier establecimiento
+ * conociendo solo el actoQuirurgicoId.
+ */
+async function buildEceCtx(
+  prisma: PrismaClient,
+  userId: string,
+  establecimientoId: string,
+): Promise<EceContext> {
+  const personalRows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM ece.personal_salud
+    WHERE usuario_id = ${userId}::uuid
+    LIMIT 1
   `;
+  if (personalRows.length === 0) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No existe registro de personal de salud para este usuario.",
+    });
+  }
+  return { personalId: personalRows[0]!.id, establecimientoId };
+}
+
+function resolveEstablecimiento(ctx: { tenant: { establishmentId?: string } }): string {
+  if (!ctx.tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para el WHO checklist.",
+    });
+  }
+  return ctx.tenant.establishmentId;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,23 +162,26 @@ export const eceWhoChecklistRouter = router({
   get: requireRole(["PHYSICIAN", "NURSE", "ANEST"])
     .input(getInput)
     .query(async ({ ctx, input }) => {
-      const rows = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<ChecklistRow[]>
-      )`
-        SELECT
-          id,
-          acto_quirurgico_id,
-          estado,
-          fase_sign_in,
-          fase_time_out,
-          fase_sign_out,
-          registrado_por,
-          registrado_en::text,
-          actualizado_en::text
-        FROM ece.who_checklist
-        WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
-        LIMIT 1
-      `;
+      const establecimientoId = resolveEstablecimiento(ctx);
+      const eceCtx = await buildEceCtx(ctx.prisma, ctx.user!.id, establecimientoId);
+
+      const rows = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        return (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<ChecklistRow[]>)`
+          SELECT
+            id,
+            acto_quirurgico_id,
+            estado,
+            fase_sign_in,
+            fase_time_out,
+            fase_sign_out,
+            registrado_por,
+            registrado_en::text,
+            actualizado_en::text
+          FROM ece.who_checklist
+          WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
+          LIMIT 1
+        `;
+      });
       return rows[0] ?? null;
     }),
 
@@ -158,30 +191,32 @@ export const eceWhoChecklistRouter = router({
   list: requireRole(["PHYSICIAN", "NURSE", "DIR", "ANEST"])
     .input(listInput)
     .query(async ({ ctx, input }) => {
+      const establecimientoId = resolveEstablecimiento(ctx);
+      const eceCtx = await buildEceCtx(ctx.prisma, ctx.user!.id, establecimientoId);
       const estadoFilter = input.estado ?? null;
-      const rows = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<ChecklistRow[]>
-      )`
-        SELECT
-          w.id,
-          w.acto_quirurgico_id,
-          w.estado,
-          w.fase_sign_in,
-          w.fase_time_out,
-          w.fase_sign_out,
-          w.registrado_por,
-          w.registrado_en::text,
-          w.actualizado_en::text
-        FROM ece.who_checklist w
-        JOIN ece.acto_quirurgico aq ON aq.id = w.acto_quirurgico_id
-        JOIN ece.episodio_atencion ea ON ea.id = aq.episodio_id
-        WHERE ea.establecimiento_id::text = ${ctx.tenant!.organizationId}
-          AND (${estadoFilter}::text IS NULL OR w.estado = ${estadoFilter}::text)
-        ORDER BY w.registrado_en DESC
-        LIMIT ${input.limit}
-        OFFSET ${input.offset}
-      `;
-      return rows;
+
+      // HE-15: filtrado por establecimiento aplica vía RLS (set_ece_context).
+      // El WHERE explícito previo comparaba establecimiento_id con organizationId
+      // (campos distintos) — bug latente. Ahora RLS aplica el establecimiento real.
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        return (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<ChecklistRow[]>)`
+          SELECT
+            w.id,
+            w.acto_quirurgico_id,
+            w.estado,
+            w.fase_sign_in,
+            w.fase_time_out,
+            w.fase_sign_out,
+            w.registrado_por,
+            w.registrado_en::text,
+            w.actualizado_en::text
+          FROM ece.who_checklist w
+          WHERE (${estadoFilter}::text IS NULL OR w.estado = ${estadoFilter}::text)
+          ORDER BY w.registrado_en DESC
+          LIMIT ${input.limit}
+          OFFSET ${input.offset}
+        `;
+      });
     }),
 
   /**
@@ -192,66 +227,65 @@ export const eceWhoChecklistRouter = router({
   marcarSignIn: requireRole(["PHYSICIAN", "NURSE", "ANEST"])
     .input(marcarSignInInput)
     .mutation(async ({ ctx, input }) => {
-      // Verificar que el acto quirúrgico exista
-      const actoRows = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>
-      )`
-        SELECT id FROM ece.acto_quirurgico
-        WHERE id = ${input.actoQuirurgicoId}::uuid
-        LIMIT 1
-      `;
-      if (!actoRows[0]) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Acto quirúrgico no encontrado." });
-      }
+      const establecimientoId = resolveEstablecimiento(ctx);
+      const eceCtx = await buildEceCtx(ctx.prisma, ctx.user!.id, establecimientoId);
+      const personalId = ctx.user!.id;
 
+      // HE-17: server override del responsableId — el blob jsonb queda consistente
+      // con el `registrado_por` y no acepta UUID falso del cliente.
       const signInPayload = JSON.stringify({
         ...input.signIn,
+        responsableId: personalId,
         completado_en: new Date().toISOString(),
       });
 
-      const personalId = ctx.user!.id;
-
-      // Upsert: si no existe → crea con estado sign_in_completo.
-      // Si existe y está en "iniciado" → actualiza.
-      const existing = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>
-      )`
-        SELECT id, estado FROM ece.who_checklist
-        WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
-        LIMIT 1
-      `;
-
-      if (!existing[0]) {
-        // CREATE
-        const newRows = await (
-          ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>
-        )`
-          INSERT INTO ece.who_checklist
-            (acto_quirurgico_id, estado, fase_sign_in, registrado_por)
-          VALUES
-            (${input.actoQuirurgicoId}::uuid, 'sign_in_completo', ${signInPayload}::jsonb, ${personalId}::uuid)
-          RETURNING id
+      // HE-15: todo el flujo dentro de withWorkflowContext para que RLS aplique.
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        // Verificar que el acto quirúrgico exista (RLS de ece.acto_quirurgico filtra por establecimiento).
+        const actoRows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>)`
+          SELECT id FROM ece.acto_quirurgico
+          WHERE id = ${input.actoQuirurgicoId}::uuid
+          LIMIT 1
         `;
-        return { id: newRows[0]!.id, estado: "sign_in_completo" };
-      }
+        if (!actoRows[0]) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Acto quirúrgico no encontrado." });
+        }
 
-      if (existing[0].estado !== "iniciado") {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `Sign-In ya fue completado. Estado actual: ${existing[0].estado}.`,
-        });
-      }
+        // Upsert: si no existe → crea con estado sign_in_completo.
+        // Si existe y está en "iniciado" → actualiza.
+        const existing = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>)`
+          SELECT id, estado FROM ece.who_checklist
+          WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
+          LIMIT 1
+        `;
 
-      await (
-        ctx.prisma.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>
-      )`
-        UPDATE ece.who_checklist
-        SET fase_sign_in = ${signInPayload}::jsonb,
-            estado = 'sign_in_completo'
-        WHERE id = ${existing[0].id}::uuid
-      `;
+        if (!existing[0]) {
+          const newRows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>)`
+            INSERT INTO ece.who_checklist
+              (acto_quirurgico_id, estado, fase_sign_in, registrado_por)
+            VALUES
+              (${input.actoQuirurgicoId}::uuid, 'sign_in_completo', ${signInPayload}::jsonb, ${personalId}::uuid)
+            RETURNING id
+          `;
+          return { id: newRows[0]!.id, estado: "sign_in_completo" };
+        }
 
-      return { id: existing[0].id, estado: "sign_in_completo" };
+        if (existing[0].estado !== "iniciado") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Sign-In ya fue completado. Estado actual: ${existing[0].estado}.`,
+          });
+        }
+
+        await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+          UPDATE ece.who_checklist
+          SET fase_sign_in = ${signInPayload}::jsonb,
+              estado = 'sign_in_completo'
+          WHERE id = ${existing[0].id}::uuid
+        `;
+
+        return { id: existing[0].id, estado: "sign_in_completo" };
+      });
     }),
 
   /**
@@ -261,38 +295,41 @@ export const eceWhoChecklistRouter = router({
   marcarTimeOut: requireRole(["PHYSICIAN", "NURSE", "ANEST"])
     .input(marcarTimeOutInput)
     .mutation(async ({ ctx, input }) => {
-      const rows = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>
-      )`
-        SELECT id, estado FROM ece.who_checklist
-        WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
-        LIMIT 1
-      `;
-      if (!rows[0]) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Checklist no encontrado. Completa el Sign-In primero." });
-      }
-      if (rows[0].estado !== "sign_in_completo") {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `Se requiere estado sign_in_completo. Estado actual: ${rows[0].estado}.`,
-        });
-      }
+      const establecimientoId = resolveEstablecimiento(ctx);
+      const eceCtx = await buildEceCtx(ctx.prisma, ctx.user!.id, establecimientoId);
 
+      // HE-17: server override del responsableId.
       const timeOutPayload = JSON.stringify({
         ...input.timeOut,
+        responsableId: ctx.user!.id,
         completado_en: new Date().toISOString(),
       });
 
-      await (
-        ctx.prisma.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>
-      )`
-        UPDATE ece.who_checklist
-        SET fase_time_out = ${timeOutPayload}::jsonb,
-            estado = 'time_out_completo'
-        WHERE id = ${rows[0].id}::uuid
-      `;
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        const rows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>)`
+          SELECT id, estado FROM ece.who_checklist
+          WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
+          LIMIT 1
+        `;
+        if (!rows[0]) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Checklist no encontrado. Completa el Sign-In primero." });
+        }
+        if (rows[0].estado !== "sign_in_completo") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Se requiere estado sign_in_completo. Estado actual: ${rows[0].estado}.`,
+          });
+        }
 
-      return { id: rows[0].id, estado: "time_out_completo" };
+        await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+          UPDATE ece.who_checklist
+          SET fase_time_out = ${timeOutPayload}::jsonb,
+              estado = 'time_out_completo'
+          WHERE id = ${rows[0].id}::uuid
+        `;
+
+        return { id: rows[0].id, estado: "time_out_completo" };
+      });
     }),
 
   /**
@@ -303,44 +340,59 @@ export const eceWhoChecklistRouter = router({
   marcarSignOut: requireRole(["PHYSICIAN", "NURSE", "ANEST"])
     .input(marcarSignOutInput)
     .mutation(async ({ ctx, input }) => {
-      const rows = await (
-        ctx.prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>
-      )`
-        SELECT id, estado FROM ece.who_checklist
-        WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
-        LIMIT 1
-      `;
-      if (!rows[0]) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Checklist no encontrado. Completa Time-Out primero." });
-      }
-      if (rows[0].estado !== "time_out_completo") {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `Se requiere estado time_out_completo. Estado actual: ${rows[0].estado}.`,
-        });
-      }
+      const establecimientoId = resolveEstablecimiento(ctx);
+      const eceCtx = await buildEceCtx(ctx.prisma, ctx.user!.id, establecimientoId);
 
+      // HE-17: server override del responsableId.
       const signOutPayload = JSON.stringify({
         ...input.signOut,
+        responsableId: ctx.user!.id,
         completado_en: new Date().toISOString(),
       });
 
-      await (
-        ctx.prisma.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>
-      )`
-        UPDATE ece.who_checklist
-        SET fase_sign_out = ${signOutPayload}::jsonb,
-            estado = 'completo'
-        WHERE id = ${rows[0].id}::uuid
-      `;
+      const result = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        const rows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string; estado: string }>>)`
+          SELECT id, estado FROM ece.who_checklist
+          WHERE acto_quirurgico_id = ${input.actoQuirurgicoId}::uuid
+          LIMIT 1
+        `;
+        if (!rows[0]) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Checklist no encontrado. Completa Time-Out primero." });
+        }
+        if (rows[0].estado !== "time_out_completo") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Se requiere estado time_out_completo. Estado actual: ${rows[0].estado}.`,
+          });
+        }
 
-      await emitOutbox(ctx.prisma as Parameters<typeof emitOutbox>[0], "ece.who_checklist.completado", {
-        checklistId: rows[0].id,
-        actoQuirurgicoId: input.actoQuirurgicoId,
-        completadoEn: new Date().toISOString(),
-        completadoPor: ctx.user!.id,
+        await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+          UPDATE ece.who_checklist
+          SET fase_sign_out = ${signOutPayload}::jsonb,
+              estado = 'completo'
+          WHERE id = ${rows[0].id}::uuid
+        `;
+
+        return { id: rows[0].id };
       });
 
-      return { id: rows[0].id, estado: "completo" };
+      // HE-16: outbox canónico con organizationId + aggregate. emitOutbox local
+      // no proveía organization_id y rompía contrato con dispatcher.
+      // emitDomainEvent abre su propia tx, debe ir fuera del withWorkflowContext.
+      await emitDomainEvent(ctx.prisma, {
+        organizationId: ctx.tenant.organizationId,
+        eventType: "ece.who_checklist.completado",
+        aggregateType: "WhoChecklist",
+        aggregateId: result.id,
+        emittedById: ctx.user!.id,
+        payload: {
+          checklistId: result.id,
+          actoQuirurgicoId: input.actoQuirurgicoId,
+          completadoEn: new Date().toISOString(),
+          completadoPor: ctx.user!.id,
+        },
+      });
+
+      return { id: result.id, estado: "completo" };
     }),
 });

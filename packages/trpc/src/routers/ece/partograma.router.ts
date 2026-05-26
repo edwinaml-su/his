@@ -29,6 +29,8 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
+import { withWorkflowContext, type EceContext } from "../../workflow/context";
+import type { PrismaClient } from "@prisma/client";
 // Schemas inline — evitan dependencia de symlink en worktree
 // (patrón establecido en atencion-emergencia.router.ts)
 
@@ -144,6 +146,30 @@ function resolveEceCtx(ctx: {
   };
 }
 
+/**
+ * HF-06 (audit Stream F): resuelve personal_salud del usuario y devuelve
+ * EceContext para envolver queries en `withWorkflowContext`. Sin esto las
+ * raw queries se ejecutan como rol bypass-RLS y la defensa en BD no aplica.
+ */
+async function buildEceCtx(
+  prisma: PrismaClient,
+  userId: string,
+  establecimientoId: string,
+): Promise<EceContext> {
+  const personalRows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM ece.personal_salud
+    WHERE usuario_id = ${userId}::uuid
+    LIMIT 1
+  `;
+  if (personalRows.length === 0) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No existe registro de personal de salud para este usuario.",
+    });
+  }
+  return { personalId: personalRows[0]!.id, establecimientoId };
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -152,35 +178,39 @@ export const ecePartogramaRouter = router({
   /** Lista la serie temporal del partograma para un documento obstétrico. */
   list: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaListSchema).query(
     async ({ ctx, input }) => {
-      const { establecimientoId } = resolveEceCtx(ctx);
+      const { userId, establecimientoId } = resolveEceCtx(ctx);
       const parsed = partogramaListSchema.parse(input);
+      const eceCtx = await buildEceCtx(ctx.prisma, userId, establecimientoId);
 
-      const rows = await ctx.prisma.$queryRaw<PartogramaRegistroRow[]>`
-        SELECT pr.*
-        FROM ece.partograma_registro pr
-        JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
-        WHERE pr.doc_obstetrico_id = ${parsed.docObstetricoId}::uuid
-          AND ep.establecimiento_id = ${establecimientoId}::uuid
-        ORDER BY pr.registrado_en ASC
-      `;
-
-      return rows;
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        return tx.$queryRaw<PartogramaRegistroRow[]>`
+          SELECT pr.*
+          FROM ece.partograma_registro pr
+          JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
+          WHERE pr.doc_obstetrico_id = ${parsed.docObstetricoId}::uuid
+            AND ep.establecimiento_id = ${establecimientoId}::uuid
+          ORDER BY pr.registrado_en ASC
+        `;
+      });
     },
   ),
 
   /** Obtiene un registro individual por id. */
   get: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaGetSchema).query(async ({ ctx, input }) => {
-    const { establecimientoId } = resolveEceCtx(ctx);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
     const parsed = partogramaGetSchema.parse(input);
+    const eceCtx = await buildEceCtx(ctx.prisma, userId, establecimientoId);
 
-    const rows = await ctx.prisma.$queryRaw<PartogramaRegistroRow[]>`
-      SELECT pr.*
-      FROM ece.partograma_registro pr
-      JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
-      WHERE pr.id = ${parsed.id}::uuid
-        AND ep.establecimiento_id = ${establecimientoId}::uuid
-      LIMIT 1
-    `;
+    const rows = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+      return tx.$queryRaw<PartogramaRegistroRow[]>`
+        SELECT pr.*
+        FROM ece.partograma_registro pr
+        JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
+        WHERE pr.id = ${parsed.id}::uuid
+          AND ep.establecimiento_id = ${establecimientoId}::uuid
+        LIMIT 1
+      `;
+    });
 
     if (rows.length === 0) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Registro no encontrado." });
@@ -193,91 +223,82 @@ export const ecePartogramaRouter = router({
     async ({ ctx, input }) => {
       const { userId, establecimientoId } = resolveEceCtx(ctx);
       const data = partogramaRegistrarSchema.parse(input);
+      const eceCtx = await buildEceCtx(ctx.prisma, userId, establecimientoId);
+      const personalId = eceCtx.personalId;
 
-      // Resolver personal_salud del usuario
-      const personalRows = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM ece.personal_salud
-        WHERE usuario_id = ${userId}::uuid
-        LIMIT 1
-      `;
-      if (personalRows.length === 0) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No existe registro de personal de salud para este usuario.",
-        });
-      }
-      const personalId = personalRows[0]!.id;
-
-      // Verificar que el episodio pertenece al establecimiento
-      const epRows = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM ece.episodio_atencion
-        WHERE id = ${data.episodioId}::uuid
-          AND establecimiento_id = ${establecimientoId}::uuid
-        LIMIT 1
-      `;
-      if (epRows.length === 0) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Episodio no encontrado en este establecimiento.",
-        });
-      }
-
-      // Calcular alerta OMS: buscar primer registro en fase activa
-      let alertaOms: "normal" | "zona_alerta" | "zona_accion" = "normal";
       const currentTime = data.registradoEn ? new Date(data.registradoEn) : new Date();
 
-      if (data.dilatacionCm >= 4) {
-        const baseRows = await ctx.prisma.$queryRaw<
-          { registrado_en: Date; dilatacion_cm: string }[]
-        >`
-          SELECT registrado_en, dilatacion_cm
-          FROM ece.partograma_registro
-          WHERE doc_obstetrico_id = ${data.docObstetricoId}::uuid
-            AND dilatacion_cm >= 4
-          ORDER BY registrado_en ASC
+      const { newId, alertaOms } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        // Verificar que el episodio pertenece al establecimiento
+        const epRows = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM ece.episodio_atencion
+          WHERE id = ${data.episodioId}::uuid
+            AND establecimiento_id = ${establecimientoId}::uuid
           LIMIT 1
         `;
-
-        if (baseRows.length > 0) {
-          const base = baseRows[0]!;
-          alertaOms = calcularAlertaOms(
-            base.registrado_en,
-            Number(base.dilatacion_cm),
-            currentTime,
-            data.dilatacionCm,
-          );
+        if (epRows.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Episodio no encontrado en este establecimiento.",
+          });
         }
-      }
 
-      const insertRows = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        INSERT INTO ece.partograma_registro (
-          doc_obstetrico_id, episodio_id, registrado_en,
-          dilatacion_cm, borramiento_pct, posicion_fetal,
-          frecuencia_cardiaca_fetal, contracciones_10min, intensidad,
-          dolor_paciente, medicamentos, observaciones,
-          alerta_oms, registrado_por
-        ) VALUES (
-          ${data.docObstetricoId}::uuid,
-          ${data.episodioId}::uuid,
-          ${data.registradoEn ? new Date(data.registradoEn) : new Date()},
-          ${data.dilatacionCm},
-          ${data.borramientoPct ?? null},
-          ${data.posicionFetal ?? null},
-          ${data.frecuenciaCardiacaFetal ?? null},
-          ${data.contracciones10min ?? null},
-          ${data.intensidad ?? null},
-          ${data.dolorPaciente ?? null},
-          ${data.medicamentos ?? null},
-          ${data.observaciones ?? null},
-          ${alertaOms},
-          ${personalId}::uuid
-        )
-        RETURNING id
-      `;
+        // Calcular alerta OMS: buscar primer registro en fase activa
+        let alerta: "normal" | "zona_alerta" | "zona_accion" = "normal";
 
-      const newId = insertRows[0]!.id;
+        if (data.dilatacionCm >= 4) {
+          const baseRows = await tx.$queryRaw<
+            { registrado_en: Date; dilatacion_cm: string }[]
+          >`
+            SELECT registrado_en, dilatacion_cm
+            FROM ece.partograma_registro
+            WHERE doc_obstetrico_id = ${data.docObstetricoId}::uuid
+              AND dilatacion_cm >= 4
+            ORDER BY registrado_en ASC
+            LIMIT 1
+          `;
 
-      // Emitir evento si hay alerta activa
+          if (baseRows.length > 0) {
+            const base = baseRows[0]!;
+            alerta = calcularAlertaOms(
+              base.registrado_en,
+              Number(base.dilatacion_cm),
+              currentTime,
+              data.dilatacionCm,
+            );
+          }
+        }
+
+        const insertRows = await tx.$queryRaw<{ id: string }[]>`
+          INSERT INTO ece.partograma_registro (
+            doc_obstetrico_id, episodio_id, registrado_en,
+            dilatacion_cm, borramiento_pct, posicion_fetal,
+            frecuencia_cardiaca_fetal, contracciones_10min, intensidad,
+            dolor_paciente, medicamentos, observaciones,
+            alerta_oms, registrado_por
+          ) VALUES (
+            ${data.docObstetricoId}::uuid,
+            ${data.episodioId}::uuid,
+            ${data.registradoEn ? new Date(data.registradoEn) : new Date()},
+            ${data.dilatacionCm},
+            ${data.borramientoPct ?? null},
+            ${data.posicionFetal ?? null},
+            ${data.frecuenciaCardiacaFetal ?? null},
+            ${data.contracciones10min ?? null},
+            ${data.intensidad ?? null},
+            ${data.dolorPaciente ?? null},
+            ${data.medicamentos ?? null},
+            ${data.observaciones ?? null},
+            ${alerta},
+            ${personalId}::uuid
+          )
+          RETURNING id
+        `;
+
+        return { newId: insertRows[0]!.id, alertaOms: alerta };
+      });
+
+      // Emitir evento fuera de la tx (emitDomainEvent abre la suya propia).
       if (alertaOms !== "normal") {
         await emitDomainEvent(ctx.prisma, {
           organizationId: ctx.tenant.organizationId,
@@ -306,24 +327,27 @@ export const ecePartogramaRouter = router({
    */
   cerrarPartograma: requireRole(["PHYSICIAN", "MT"]).input(partogramaCerrarSchema).mutation(
     async ({ ctx, input }) => {
-      const { establecimientoId } = resolveEceCtx(ctx);
+      const { userId, establecimientoId } = resolveEceCtx(ctx);
       const data = partogramaCerrarSchema.parse(input);
+      const eceCtx = await buildEceCtx(ctx.prisma, userId, establecimientoId);
 
-      const rows = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        UPDATE ece.documentos_obstetricos
-        SET labor_parto = COALESCE(labor_parto, '{}'::jsonb) || ${JSON.stringify({
-          cierre: data.motivoCierre,
-          observacion_cierre: data.observacionCierre ?? null,
-          cerrado_en: new Date().toISOString(),
-        })}::jsonb,
-            estado_registro = 'vigente'
-        WHERE id = ${data.docObstetricoId}::uuid
-          AND episodio_id IN (
-            SELECT id FROM ece.episodio_atencion
-            WHERE establecimiento_id = ${establecimientoId}::uuid
-          )
-        RETURNING id
-      `;
+      const rows = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        return tx.$queryRaw<{ id: string }[]>`
+          UPDATE ece.documentos_obstetricos
+          SET labor_parto = COALESCE(labor_parto, '{}'::jsonb) || ${JSON.stringify({
+            cierre: data.motivoCierre,
+            observacion_cierre: data.observacionCierre ?? null,
+            cerrado_en: new Date().toISOString(),
+          })}::jsonb,
+              estado_registro = 'vigente'
+          WHERE id = ${data.docObstetricoId}::uuid
+            AND episodio_id IN (
+              SELECT id FROM ece.episodio_atencion
+              WHERE establecimiento_id = ${establecimientoId}::uuid
+            )
+          RETURNING id
+        `;
+      });
 
       if (rows.length === 0) {
         throw new TRPCError({
@@ -342,17 +366,20 @@ export const ecePartogramaRouter = router({
    */
   detectarAlertasOMS: requireRole(["PHYSICIAN", "NURSE", "MT"]).input(partogramaListSchema).query(
     async ({ ctx, input }) => {
-      const { establecimientoId } = resolveEceCtx(ctx);
+      const { userId, establecimientoId } = resolveEceCtx(ctx);
       const parsed = partogramaListSchema.parse(input);
+      const eceCtx = await buildEceCtx(ctx.prisma, userId, establecimientoId);
 
-      const rows = await ctx.prisma.$queryRaw<PartogramaRegistroRow[]>`
-        SELECT pr.*
-        FROM ece.partograma_registro pr
-        JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
-        WHERE pr.doc_obstetrico_id = ${parsed.docObstetricoId}::uuid
-          AND ep.establecimiento_id = ${establecimientoId}::uuid
-        ORDER BY pr.registrado_en ASC
-      `;
+      const rows = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        return tx.$queryRaw<PartogramaRegistroRow[]>`
+          SELECT pr.*
+          FROM ece.partograma_registro pr
+          JOIN ece.episodio_atencion ep ON ep.id = pr.episodio_id
+          WHERE pr.doc_obstetrico_id = ${parsed.docObstetricoId}::uuid
+            AND ep.establecimiento_id = ${establecimientoId}::uuid
+          ORDER BY pr.registrado_en ASC
+        `;
+      });
 
       if (rows.length === 0) return { registros: [], hayDistocia: false };
 

@@ -147,6 +147,21 @@ export const triageRouter = router({
   listPending: tenantProcedure.query(async ({ ctx }) => {
     const since = new Date();
     since.setHours(0, 0, 0, 0);
+
+    // H3-03 (audit Stream A): expirar evaluaciones huérfanas IN_PROGRESS con
+    // startedAt > 2h → CANCELLED. En emergencia masiva las evaluaciones
+    // abandonadas saturaban la cola y enmascaraban pacientes no atendidos.
+    // El barrido se hace lazy al consultar la cola (sin necesidad de pg_cron).
+    const expiryThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await ctx.prisma.triageEvaluation.updateMany({
+      where: {
+        organizationId: ctx.tenant.organizationId,
+        status: "IN_PROGRESS",
+        startedAt: { lt: expiryThreshold },
+      },
+      data: { status: "CANCELLED", completedAt: new Date() },
+    });
+
     return ctx.prisma.encounter.findMany({
       where: {
         organizationId: ctx.tenant.organizationId,

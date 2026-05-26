@@ -112,6 +112,8 @@ export const EVENT_TYPES = [
   "ece.acto_quirurgico.firmado",
   "ece.acto_quirurgico.validado",
   "ece.nacimiento.registrado",
+  // HE-16 (audit Stream E) — WHO Surgical Safety Checklist completado
+  "ece.who_checklist.completado",
   // Fase 2 (S7) — Sustitución genérico-comercial autorizada (US.F2.6.11)
   "pharmacy.substitution.proposed",
   "pharmacy.substitution.authorized",

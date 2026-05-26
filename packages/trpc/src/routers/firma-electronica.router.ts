@@ -930,4 +930,26 @@ export const firmaElectronicaRouter = router({
         total,
       };
     }),
+
+  /**
+   * HG-22 (audit Stream G): devuelve el estado de firma electrónica del usuario
+   * autenticado. Necesario para el wizard /firma-electronica/setup, que antes
+   * usaba `@ts-expect-error` y dependía de un procedure inexistente — `hasPin`
+   * siempre era undefined y el banner de firma activa nunca se mostraba.
+   */
+  status: protectedProcedure.query(async ({ ctx }) => {
+    const personal = await findPersonal(ctx.prisma, ctx.user.id);
+    if (!personal) {
+      return { hasPin: false, revoked: false, locked: false };
+    }
+    const firma = await findFirma(ctx.prisma, personal.id);
+    if (!firma) {
+      return { hasPin: false, revoked: false, locked: false };
+    }
+    return {
+      hasPin: firma.revoked_at === null,
+      revoked: firma.revoked_at !== null,
+      locked: firma.locked_until !== null && firma.locked_until > new Date(),
+    };
+  }),
 });
