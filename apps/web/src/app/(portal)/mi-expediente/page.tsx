@@ -78,7 +78,7 @@ export default function MiExpedientePage() {
               <p className="text-muted-foreground">Fecha de nacimiento</p>
               <p className="font-medium">
                 {patient.birthDate
-                  ? new Date(patient.birthDate).toLocaleDateString("es-SV")
+                  ? new Date(patient.birthDate).toLocaleDateString("es-SV", { timeZone: "UTC" })
                   : "No registrada"}
               </p>
             </div>
@@ -119,10 +119,10 @@ export default function MiExpedientePage() {
                     </p>
                     <p className="text-muted-foreground">
                       {enc.admittedAt
-                        ? new Date(enc.admittedAt).toLocaleDateString("es-SV")
+                        ? new Date(enc.admittedAt).toLocaleDateString("es-SV", { timeZone: "UTC" })
                         : "—"}
                       {enc.dischargedAt
-                        ? ` · Alta ${new Date(enc.dischargedAt).toLocaleDateString("es-SV")}`
+                        ? ` · Alta ${new Date(enc.dischargedAt).toLocaleDateString("es-SV", { timeZone: "UTC" })}`
                         : " · En curso"}
                     </p>
                   </div>
@@ -155,7 +155,7 @@ export default function MiExpedientePage() {
                   </Badge>
                   <span className="font-mono text-xs text-muted-foreground">{d.conceptId}</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
-                    {new Date(d.diagnosedAt).toLocaleDateString("es-SV")}
+                    {new Date(d.diagnosedAt).toLocaleDateString("es-SV", { timeZone: "UTC" })}
                   </span>
                 </div>
               ))}

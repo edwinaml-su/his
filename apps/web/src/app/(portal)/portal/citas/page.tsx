@@ -12,6 +12,7 @@ type Tab = "proximas" | "pasadas";
 
 function formatDate(d: Date | string) {
   return new Date(d).toLocaleString("es-SV", {
+    timeZone: "America/El_Salvador",
     weekday: "short",
     day: "numeric",
     month: "short",

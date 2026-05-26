@@ -5,7 +5,7 @@
  * Muestra valor + rango referencia + flag (NORMAL/HIGH/LOW/CRITICAL).
  * WCAG AA.
  */
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 
 const FLAG_LABEL: Record<string, string> = {
@@ -33,8 +33,13 @@ function isCritical(flag: string) {
 export default function DetalleResultadoPage() {
   const { resultId } = useParams<{ resultId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const wardPatientId = searchParams.get("wardPatientId") ?? undefined;
 
-  const { data, isLoading, isError } = trpc.portal.hce.labResults.get.useQuery({ resultId });
+  const { data, isLoading, isError } = trpc.portal.hce.labResults.get.useQuery({
+    resultId,
+    ...(wardPatientId ? { wardPatientId } : {}),
+  });
 
   if (isLoading) {
     return (
