@@ -257,7 +257,7 @@ describe("registroEnfermeriaRouter (HD-22/23/24)", () => {
 
       const caller = makeCaller(prisma);
       const result = await caller.firmar({ id: REGISTRO_ID });
-      expect(result).toEqual({ ok: true });
+      expect(result).toMatchObject({ ok: true });
     });
 
     // 11

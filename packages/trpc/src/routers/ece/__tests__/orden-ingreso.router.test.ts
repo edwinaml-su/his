@@ -99,6 +99,7 @@ vi.mock("../../../ece/dependencias-enforcement", () => ({
 
 import { eceOrdenIngresoRouter } from "../orden-ingreso.router";
 import { emitDomainEvent } from "@his/database";
+import { argon2 } from "@his/infrastructure";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -251,7 +252,11 @@ describe("eceOrdenIngresoRouter — create", () => {
 // ─── 6-7: firmar ──────────────────────────────────────────────────────────────
 
 describe("eceOrdenIngresoRouter — firmar", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // vi.restoreAllMocks() in setup.ts clears vi.fn() implementations — re-init here.
+    vi.mocked(argon2.verify).mockResolvedValue(true);
+  });
 
   it("6. happy path: firma la orden y emite ece.orden_ingreso.firmada", async () => {
     const ctx = buildCtx(["MC"]);

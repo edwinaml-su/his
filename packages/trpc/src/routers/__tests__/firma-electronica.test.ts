@@ -27,6 +27,26 @@ import { TRPCError } from "@trpc/server";
 import { firmaElectronicaRouter } from "../firma-electronica.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
+import { createHash, createCipheriv, randomBytes } from "node:crypto";
+
+// Helper: genera un secretHash AES-256-GCM válido para tests usando AUTH_SECRET de prueba.
+function makeTestSecretHash(payload: { secret: string; codes: string[] }): string {
+  const key = createHash("sha256")
+    .update(process.env.AUTH_SECRET ?? "test-auth-secret-32-chars-minimum!", "utf8")
+    .digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const pt = JSON.stringify(payload);
+  const ct = Buffer.concat([cipher.update(pt, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({
+    v: 1,
+    iv: iv.toString("hex"),
+    tag: tag.toString("hex"),
+    ct: ct.toString("hex"),
+    createdAt: new Date().toISOString(),
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Mock de argon2 — velocidad: reemplaza hash/verify con operaciones triviales.
@@ -120,6 +140,8 @@ describe("firmaElectronicaRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    // AUTH_SECRET requerida por getMfaEncryptionKey en el router.
+    process.env.AUTH_SECRET = "test-auth-secret-32-chars-minimum!";
   });
 
   afterEach(() => {
@@ -349,7 +371,9 @@ describe("firmaElectronicaRouter", () => {
   describe("completeRecovery", () => {
     const NEW_PIN = "654321";
 
-    /** Simula una fila de firma con token de recovery válido. */
+    /** Simula una fila de firma con token de recovery válido.
+     * Usa backup code "12345678" (determinístico, no depende del reloj TOTP).
+     */
     function mockValidRecoveryToken(prismaM: DeepMockProxy<PrismaClient>) {
       // 1. findFirma por token hash -> encontrada y no expirada
       prismaM.$queryRaw
@@ -359,11 +383,14 @@ describe("firmaElectronicaRouter", () => {
         }] as never)
         // 2. buscar his_user_id a partir de firmaId
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      // 3. credencial TOTP del usuario (para validar mfaCode)
+      // 3. credencial MFA con backup code "12345678" encriptada correctamente
+      const testSecretHash = makeTestSecretHash({ secret: "JBSWY3DPEHPK3PXP", codes: ["12345678"] });
       prismaM.userCredential.findFirst.mockResolvedValue({
         id: CRED_ID,
-        secretHash: "dummy-totp-cred",
+        secretHash: testSecretHash,
       } as never);
+      // 4. userCredential.update para consumir el backup code
+      prismaM.userCredential.update.mockResolvedValue({} as never);
       prismaM.$executeRaw.mockResolvedValue(1 as never);
     }
 
@@ -371,9 +398,10 @@ describe("firmaElectronicaRouter", () => {
       mockValidRecoveryToken(prisma);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      // Usa backup code 8 dígitos (determinístico, no depende del reloj TOTP)
       const result = await caller.completeRecovery({
         token: RAW_TOKEN,
-        mfaCode: "123456",
+        mfaCode: "12345678",
         newPin: NEW_PIN,
         confirmPin: NEW_PIN,
       });
@@ -447,13 +475,15 @@ describe("firmaElectronicaRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: FIRMA_ID, recovery_expires_at: new Date(Date.now() + 60_000) }] as never)
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: "x" } as never);
+      // secretHash válido necesario — router verifica crypto antes de validar longitud de mfaCode
+      const testSecretHash = makeTestSecretHash({ secret: "JBSWY3DPEHPK3PXP", codes: ["12345678"] });
+      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: testSecretHash } as never);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       await expect(
         caller.completeRecovery({
           token: RAW_TOKEN,
-          mfaCode: "1234567", // 7 dígitos — inválido
+          mfaCode: "1234567", // 7 dígitos — inválido (no es 6 ni 8)
           newPin: NEW_PIN,
           confirmPin: NEW_PIN,
         })
@@ -464,14 +494,17 @@ describe("firmaElectronicaRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: FIRMA_ID, recovery_expires_at: new Date(Date.now() + 60_000) }] as never)
         .mockResolvedValueOnce([{ his_user_id: USER_ID }] as never);
-      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: "x" } as never);
+      // secretHash válido con backup code para llegar al $executeRaw
+      const testSecretHash = makeTestSecretHash({ secret: "JBSWY3DPEHPK3PXP", codes: ["12345678"] });
+      prisma.userCredential.findFirst.mockResolvedValue({ id: CRED_ID, secretHash: testSecretHash } as never);
+      prisma.userCredential.update.mockResolvedValue({} as never); // consumir backup code
       prisma.$executeRaw.mockRejectedValue(new Error("disk full") as never);
 
       const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
       await expect(
         caller.completeRecovery({
           token: RAW_TOKEN,
-          mfaCode: "123456",
+          mfaCode: "12345678", // backup code — determinístico
           newPin: NEW_PIN,
           confirmPin: NEW_PIN,
         })

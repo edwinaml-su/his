@@ -953,11 +953,20 @@ export const workflowInboxRouter = router({
         : [];
 
       // ═══════════════════════════════════════════════════════════════════════
-      // OLA 3 — GS1 / Logística (2 activadas + 2 placeholder)
+      // OLA 3 — GS1 / Logística (4 activadas — usa tablas existentes Proceso A-F)
       // ═══════════════════════════════════════════════════════════════════════
 
-      // GS1_INBOUND_PENDING: placeholder (sin tabla ece.recepcion_inbound aún)
-      const gs1Inbound: Array<{ id: string; createdAt: Date }> = [];
+      // GS1_INBOUND_PENDING: ece.recepcion_mercancia (Proceso A) en estado borrador
+      type InboundRow = { id: string; registrado_en: Date };
+      const gs1Inbound: InboundRow[] = isEnabled("GS1_INBOUND_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id, registrado_en
+            FROM ece.recepcion_mercancia
+            WHERE estado_registro = 'borrador'
+              AND registrado_en > now() - interval '30 days'
+            ORDER BY registrado_en ASC LIMIT 50
+          `) as Promise<InboundRow[]>).catch(() => [] as InboundRow[])
+        : [];
 
       // GS1_TRANSFER_PENDING: ece.transferencia_inventario en programado/en_transito
       type TransferRow = { id: string; fecha_envio: Date; origen_gln: string; destino_gln: string };
@@ -985,8 +994,35 @@ export const workflowInboxRouter = router({
           `) as Promise<ReturnRow[]>).catch(() => [] as ReturnRow[])
         : [];
 
-      // GS1_RECALL_TO_PURGE: placeholder (no hay tabla específica de recalls)
-      const gs1Recall: Array<{ id: string; createdAt: Date }> = [];
+      // GS1_RECALL_TO_PURGE: ece.farmacovigilancia_incident tipo=RECALL_DETECTADO
+      // status PENDIENTE/RECONOCIDO. Prioriza CRITICAL/HIGH severity (recall clase I/II
+      // = riesgo vida o reversible — SLA típico 24-72h por DNM El Salvador).
+      type RecallRow = {
+        id: string;
+        detected_at: Date;
+        gtin: string | null;
+        severity: string;
+      };
+      const gs1Recall: RecallRow[] = isEnabled("GS1_RECALL_TO_PURGE")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   detected_at,
+                   gtin,
+                   severity
+            FROM ece.farmacovigilancia_incident
+            WHERE tipo = 'RECALL_DETECTADO'
+              AND status IN ('PENDIENTE','RECONOCIDO')
+            ORDER BY
+              CASE severity
+                WHEN 'CRITICAL' THEN 0
+                WHEN 'HIGH' THEN 1
+                WHEN 'MEDIUM' THEN 2
+                ELSE 3
+              END,
+              detected_at ASC
+            LIMIT 50
+          `) as Promise<RecallRow[]>).catch(() => [] as RecallRow[])
+        : [];
 
       // ═══════════════════════════════════════════════════════════════════════
       // OLA 3 — Defunciones / Reclamos (3 activas)
@@ -1815,6 +1851,16 @@ export const workflowInboxRouter = router({
             deepLink: `/equipment?id=${m.equipment.id}`,
           }),
         ),
+        ...gs1Inbound.map((i) =>
+          buildTask({
+            type: "GS1_INBOUND_PENDING",
+            sourceId: i.id,
+            createdAt: i.registrado_en,
+            patient: null,
+            description: "Recepción de mercancía pendiente de verificación 5 correctos",
+            deepLink: `/gs1/recepciones?id=${i.id}`,
+          }),
+        ),
         ...gs1Transfer.map((t) =>
           buildTask({
             type: "GS1_TRANSFER_PENDING",
@@ -1833,6 +1879,18 @@ export const workflowInboxRouter = router({
             patient: null,
             description: "Devolución de inventario pendiente de validar",
             deepLink: `/gs1/devoluciones?id=${r.id}`,
+          }),
+        ),
+        ...gs1Recall.map((r) =>
+          buildTask({
+            type: "GS1_RECALL_TO_PURGE",
+            sourceId: r.id,
+            createdAt: r.detected_at,
+            patient: null,
+            description: r.gtin
+              ? `Recall ${r.severity}: GTIN ${r.gtin} pendiente de purga`
+              : `Recall ${r.severity}: pendiente de identificar lote a purgar`,
+            deepLink: `/farmacovigilancia?id=${r.id}`,
           }),
         ),
         ...claimsPendingSubmission.map((c) =>
