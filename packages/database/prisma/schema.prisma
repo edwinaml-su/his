@@ -1806,8 +1806,8 @@ model OutpatientAppointment {
   provider      User                     @relation("ProviderAppointments", fields: [providerId], references: [id], onDelete: Restrict)
   consultations OutpatientConsultation[]
 
+  @@unique([providerId, scheduledAt], name: "outpatient_appointment_provider_slot_unique")
   @@index([organizationId, scheduledAt])
-  @@index([providerId, scheduledAt])
   @@index([patientId])
   @@index([status])
   @@schema("public")
@@ -2212,6 +2212,8 @@ model LabResult {
   notes         String?    @db.Text
   validatedAt   DateTime?  @db.Timestamptz()
   validatedById String?    @db.Uuid /// User distinto de resultedById (regla 4-eyes).
+  confidential  Boolean    @default(false) /// K-16: requiere counseling previo (HIV, oncológico, salud mental). Bloquea visibilidad en portal aunque showInPortal=true.
+  showInPortal  Boolean    @default(true)  /// K-16: visibilidad en portal del paciente. Default true preserva comportamiento legacy.
   createdAt     DateTime   @default(now()) @db.Timestamptz()
   updatedAt     DateTime   @updatedAt @db.Timestamptz()
 
