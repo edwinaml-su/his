@@ -24,8 +24,13 @@ import {
 } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, portalProcedure } from "../trpc";
-import { withPortalContext } from "../rls-context";
+import { withPortalContext, applyPortalContext } from "../rls-context";
 import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
+
+// K-12 (audit Stream K): umbral de fallos TOTP antes de lockout.
+// Coherente con anti-brute-force típico (3-5 intentos / ventana de 15min).
+const TOTP_FAIL_LOCKOUT_THRESHOLD = 5;
+const TOTP_FAIL_LOCKOUT_DURATION_MS = 15 * 60_000;
 
 // ─── DUI validator (paridad con packages/contracts/src/validators/index.ts) ──
 
@@ -393,6 +398,7 @@ const authRouter = router({
               mfaEnabled: true,
               mfaSecret: true,
               lockedUntil: true,
+              failedLoginAttempts: true,
             },
           },
         },
@@ -422,21 +428,48 @@ const authRouter = router({
         }
         const secretPlain = decryptSecret(acct.mfaSecret);
         if (!verifyTotp(secretPlain, input.totpCode)) {
+          // K-12 (audit Stream K): incrementar contador de fallos en tx atómica.
+          // Si supera umbral, set lockedUntil. Consumir el magic link también
+          // (anti-replay: cada token solo se intenta una vez por código TOTP).
+          const lockoutAt = new Date(Date.now() + TOTP_FAIL_LOCKOUT_DURATION_MS);
+          await ctx.prisma.$transaction(async (tx) => {
+            await tx.portalAccount.update({
+              where: { id: acct.id },
+              data: {
+                failedLoginAttempts: { increment: 1 },
+                // Activar lockout cuando el intento N alcance el umbral.
+                // failedLoginAttempts ya tenía N-1, este UPDATE deja N.
+                ...((acct as { failedLoginAttempts?: number }).failedLoginAttempts !== undefined &&
+                ((acct as { failedLoginAttempts?: number }).failedLoginAttempts ?? 0) + 1 >=
+                  TOTP_FAIL_LOCKOUT_THRESHOLD
+                  ? { lockedUntil: lockoutAt }
+                  : {}),
+              },
+            });
+            await tx.portalMagicLink.update({
+              where: { id: link.id },
+              data: { consumedAt: new Date() },
+            });
+          });
           throw new TRPCError({ code: "UNAUTHORIZED", message: "Código TOTP inválido." });
         }
       }
 
-      // Consumir link + crear sesión
+      // Consumir link + crear sesión (K-10: applyPortalContext dentro de tx
+      // para que la policy `portal_session_insert` valide en BD que
+      // accountId coincide con el GUC — defense-in-depth complementa
+      // la validación JS).
       const sessionRaw = generateToken();
       const sessionHashed = hashToken(sessionRaw);
       const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 
-      await ctx.prisma.$transaction([
-        ctx.prisma.portalMagicLink.update({
+      await ctx.prisma.$transaction(async (tx) => {
+        await applyPortalContext(tx as unknown as Pick<typeof ctx.prisma, "$executeRawUnsafe">, acct.id);
+        await tx.portalMagicLink.update({
           where: { id: link.id },
           data: { consumedAt: new Date() },
-        }),
-        ctx.prisma.portalSession.create({
+        });
+        await tx.portalSession.create({
           data: {
             accountId: acct.id,
             token: sessionHashed,
@@ -444,12 +477,12 @@ const authRouter = router({
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           },
-        }),
-        ctx.prisma.portalAccount.update({
+        });
+        await tx.portalAccount.update({
           where: { id: acct.id },
           data: { lastLoginAt: new Date(), lastLoginIp: ctx.ip ?? null, failedLoginAttempts: 0 },
-        }),
-      ]);
+        });
+      });
 
       return {
         token: sessionRaw,
