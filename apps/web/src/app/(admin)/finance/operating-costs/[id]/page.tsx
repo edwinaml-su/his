@@ -410,7 +410,7 @@ export default function OperatingCostDetailPage() {
                   </SelectContent>
                 </Select>
                 <FormHint>
-                  "Compartido" → organizationId NULL en BD (prorrateable entre todas las orgs).
+                  &quot;Compartido&quot; → organizationId NULL en BD (prorrateable entre todas las orgs).
                 </FormHint>
               </FormField>
 

@@ -61,7 +61,7 @@ jobs:
         run: npm run -w @his/database generate
 
       - name: Run JCI compliance suite
-        run: npx vitest run --project compliance --reporter=junit --outputFile=compliance-report.xml
+        run: npx vitest run packages/trpc/src/compliance --reporter=junit --outputFile=compliance-report.xml
         env:
           # En PRs corre subset rápido; en nightly + main corre suite completa
           COMPLIANCE_FULL: ${{ github.event_name == 'schedule' || github.event_name == 'push' }}
