@@ -87,8 +87,16 @@ describe("epicrisisRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
   beforeEach(() => {
-    prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    prisma = mockDeep<PrismaClient>();
+    // Procedures use $transaction with applyWorkflowContext inside — wire it up
+    prisma.$transaction.mockImplementation(async (cb: unknown) => {
+      if (typeof cb === "function") {
+        return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+      }
+      return cb;
+    });
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValue(0);
   });
 
   // 1 ────────────────────────────────────────────────────────────────────────
@@ -182,6 +190,7 @@ describe("epicrisisRouter", () => {
       const txMock = {
         $queryRaw: vi.fn().mockResolvedValueOnce([EPICRISIS_BORRADOR]),
         $executeRaw: vi.fn(),
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as any).mockImplementation((fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
@@ -197,6 +206,7 @@ describe("epicrisisRouter", () => {
       const txMock = {
         $queryRaw: vi.fn().mockResolvedValueOnce([epicrisisValidada]),
         $executeRaw: vi.fn().mockResolvedValueOnce(1),
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as any).mockImplementation((fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
@@ -222,7 +232,13 @@ describe("epicrisisRouter", () => {
   // 9 ────────────────────────────────────────────────────────────────────────
   describe("anular", () => {
     it("lanza CONFLICT si la epicrisis está certificada", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ ...EPICRISIS_BORRADOR, estado_workflow: "certificado" }] as never);
+      const txMock = {
+        $queryRaw: vi.fn().mockResolvedValueOnce([{ ...EPICRISIS_BORRADOR, estado_workflow: "certificado" }]),
+        $executeRaw: vi.fn(),
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as any).mockImplementation((fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock));
 
       const caller = epicrisisRouter.createCaller(makeCtx({ prisma, tenant: DIR_TENANT }));
       await expect(

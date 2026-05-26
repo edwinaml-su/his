@@ -417,12 +417,22 @@ describe("bloodBankRouter", () => {
 
   // =========================================================================
   describe("transfusion.start", () => {
+    // Router added IPSG.1 ME3 two-identifier verification (patientGsrn + secondIdentifier)
     const validInput = {
       requestId: u4,
       unitId: u2,
       crossMatchId: u,
       supervisorId: u3,
       route: "IV_PERIPHERAL" as const,
+      patientGsrn: "1234567890123",
+      secondIdentifier: "MRN-001",
+    };
+
+    // Patient fixture for 2-ID verification mock
+    const PATIENT_FOR_TRANSFUSION = {
+      id: u,
+      mrn: "MRN-001",
+      identifiers: [],
     };
 
     it("NOT_FOUND si request no está APPROVED", async () => {
@@ -439,6 +449,8 @@ describe("bloodBankRouter", () => {
       prisma.transfusionRequest.findFirst.mockResolvedValue(
         TRANSFUSION_REQUEST_APPROVED as never,
       );
+      // 2-ID verification: patient found with correct GSRN
+      prisma.patient.findFirst.mockResolvedValue(PATIENT_FOR_TRANSFUSION as never);
       prisma.crossMatch.findFirst.mockResolvedValue(null as never);
       const caller = bloodBankRouter.createCaller(
         ctxWithRoles({ ...prisma }, ["NURSE"]),
@@ -452,6 +464,8 @@ describe("bloodBankRouter", () => {
       prisma.transfusionRequest.findFirst.mockResolvedValue(
         TRANSFUSION_REQUEST_APPROVED as never,
       );
+      // 2-ID verification: patient found
+      prisma.patient.findFirst.mockResolvedValue(PATIENT_FOR_TRANSFUSION as never);
       prisma.crossMatch.findFirst.mockResolvedValue(
         CROSS_MATCH_COMPATIBLE as never,
       );

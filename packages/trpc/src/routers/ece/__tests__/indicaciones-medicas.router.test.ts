@@ -173,6 +173,8 @@ describe("indicacionesMedicasRouter", () => {
       // Mock getIndicacionOrThrow
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+        // Mock item texts for IPSG.2 forbidden-abbreviations check
+        .mockResolvedValueOnce([{ descripcion: "Paracetamol 500mg VO cada 8h", notas: null }])
         // Mock count items
         .mockResolvedValueOnce([{ cnt: 2 }]);
       (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);

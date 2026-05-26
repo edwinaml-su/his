@@ -46,12 +46,23 @@ export default defineConfig({
         replacement: path.resolve(__dirname, "../contracts/src/validators/index.ts"),
       },
       {
-        find: "@his/contracts/schemas",
-        replacement: path.resolve(__dirname, "../contracts/src/schemas/index.ts"),
-      },
-      {
         find: "@his/contracts/types",
         replacement: path.resolve(__dirname, "../contracts/src/types/index.ts"),
+      },
+      // Sub-paths profundos de schemas/* y clinical/* — regex con capture group
+      // para que Vite sustituya correctamente (ej. schemas/fall-event → src/schemas/fall-event.ts).
+      // Deben ir ANTES del alias de schemas barrel y del alias raíz.
+      {
+        find: /^@his\/contracts\/schemas\/(.+)$/,
+        replacement: path.resolve(__dirname, "../contracts/src/schemas/$1.ts"),
+      },
+      {
+        find: /^@his\/contracts\/clinical\/(.+)$/,
+        replacement: path.resolve(__dirname, "../contracts/src/clinical/$1.ts"),
+      },
+      {
+        find: "@his/contracts/schemas",
+        replacement: path.resolve(__dirname, "../contracts/src/schemas/index.ts"),
       },
       // Alias raíz — al ser más general va al final.
       {

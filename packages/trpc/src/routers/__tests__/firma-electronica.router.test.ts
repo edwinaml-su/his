@@ -18,6 +18,26 @@ import type { PrismaClient } from "@prisma/client";
 import { firmaElectronicaRouter } from "../firma-electronica.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
+import { createHash, createCipheriv, randomBytes } from "node:crypto";
+
+// Helper: genera un secretHash AES-256-GCM válido para tests usando AUTH_SECRET de prueba.
+function makeTestSecretHash(payload: { secret: string; codes: string[] }): string {
+  const key = createHash("sha256")
+    .update(process.env.AUTH_SECRET ?? "test-auth-secret-32-chars-minimum!", "utf8")
+    .digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const pt = JSON.stringify(payload);
+  const ct = Buffer.concat([cipher.update(pt, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return JSON.stringify({
+    v: 1,
+    iv: iv.toString("hex"),
+    tag: tag.toString("hex"),
+    ct: ct.toString("hex"),
+    createdAt: new Date().toISOString(),
+  });
+}
 
 // Mock argon2 para evitar bcrypt real en unit tests (demasiado lento + sin salt fijo).
 vi.mock("@his/infrastructure", () => ({
@@ -55,6 +75,8 @@ describe("firmaElectronicaRouter", () => {
   beforeEach(async () => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    // AUTH_SECRET requerida por getMfaEncryptionKey en el router.
+    process.env.AUTH_SECRET = "test-auth-secret-32-chars-minimum!";
     // Re-establecer implementaciones por defecto después de clearAllMocks.
     const { argon2 } = await import("@his/infrastructure");
     vi.mocked(argon2.hash).mockResolvedValue("$argon2id$test$hash");
@@ -250,6 +272,9 @@ describe("firmaElectronicaRouter", () => {
 
     it("happy-path: actualiza PIN y limpia token de recuperación", async () => {
       const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      // Credencial con backup code "12345678" para que MFA sea determinístico en tests.
+      const testSecretHash = makeTestSecretHash({ secret: "JBSWY3DPEHPK3PXP", codes: ["12345678"] });
+
       // token encontrado
       prisma.$queryRaw.mockResolvedValueOnce([
         { id: FIRMA_ID, recovery_expires_at: expiresAt },
@@ -258,10 +283,13 @@ describe("firmaElectronicaRouter", () => {
       prisma.$queryRaw.mockResolvedValueOnce([
         { his_user_id: MOCK_USER_ADMIN.id },
       ]);
-      // UserCredential TOTP
+      // UserCredential con secretHash encriptado correctamente
       prisma.userCredential.findFirst.mockResolvedValueOnce({
-        secretHash: "someencryptedcred",
+        id: "cred-id-1",
+        secretHash: testSecretHash,
       } as never);
+      // userCredential.update (consumir backup code)
+      prisma.userCredential.update.mockResolvedValue({} as never);
       // UPDATE firma
       prisma.$executeRaw.mockResolvedValueOnce(1);
 
@@ -270,7 +298,7 @@ describe("firmaElectronicaRouter", () => {
       );
       const result = await caller.completeRecovery({
         token: VALID_TOKEN,
-        mfaCode: "123456",
+        mfaCode: "12345678",  // backup code — determinístico (no TOTP time-sensitive)
         newPin: VALID_PIN,
         confirmPin: VALID_PIN,
       });

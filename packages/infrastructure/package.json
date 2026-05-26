@@ -12,7 +12,8 @@
     "./observability/health-check": "./src/observability/health-check.ts",
     "./notifications": "./src/notifications/index.ts",
     "./notifications/resend": "./src/notifications/resend.ts",
-    "./firma/argon2": "./src/firma/argon2.ts"
+    "./firma/argon2": "./src/firma/argon2.ts",
+    "./src/firma/pin-hasher": "./src/firma/pin-hasher.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

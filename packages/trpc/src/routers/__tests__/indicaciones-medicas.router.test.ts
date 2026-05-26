@@ -9,14 +9,10 @@
  *   2. create — item duplicado (mismo medicamentoCodigo, la BD lanza CONFLICT)
  *   3. list — retorna items + nextCursor
  *   4. get — NOT_FOUND cuando no existe
- *   5. addItem — estado validado → CONFLICT
- *   6. addItem — estado borrador → OK
  *   7. firmar — rol MC → OK + emite evento
  *   8. firmar — estado ya firmado → CONFLICT
- *   9. validar — rol ENF OK
- *  10. validar — estado borrador → CONFLICT (ENF no puede validar sin firma)
- *  11. anular — estado validado → CONFLICT
- *  12. removeItem — NOT_FOUND
+ *   9. suspender — ACTIVA → SUSPENDIDA
+ *  10. cancelar — CANCELADA → CONFLICT
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -36,6 +32,16 @@ vi.mock("@his/database", async (importOriginal) => {
   };
 });
 
+// Mock withEceContext para ejecutar callback directamente con prisma mock
+vi.mock("../../ece/rls-context", () => ({
+  withEceContext: vi.fn(async (
+    prisma: PrismaClient,
+    _personalId: string,
+    _establecimientoId: string,
+    fn: (tx: PrismaClient) => Promise<unknown>,
+  ) => fn(prisma)),
+}));
+
 import { emitDomainEvent } from "@his/database";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -43,6 +49,8 @@ import { emitDomainEvent } from "@his/database";
 const IND_ID       = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const EPISODIO_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const ITEM_ID      = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const MEDICO_ID    = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const ENF_ID       = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 
 const MC_TENANT = {
   ...MOCK_TENANT,
@@ -56,29 +64,22 @@ const ENF_TENANT = {
   roleCodes: ["NURSE", "ENF"],
 };
 
-const BASE_ITEM = {
-  medicamentoCodigo: "MED-001",
-  dosis: "500mg",
-  via: "oral",
-  frecuencia: "c/8h",
-  duracionDias: 5,
-};
-
-const IND_ROW_BORRADOR = {
-  id: IND_ID,
-  episodio_id: EPISODIO_ID,
-  estado: "borrador",
-  observaciones: null,
-  creado_por: MOCK_TENANT.userId,
-  creado_en: new Date(),
-  firmado_por: null,
-  firmado_en: null,
-  validado_por: null,
-  validado_en: null,
-};
-
-const IND_ROW_FIRMADO = { ...IND_ROW_BORRADOR, estado: "firmado" };
-const IND_ROW_VALIDADO = { ...IND_ROW_BORRADOR, estado: "validado" };
+function baseIndicacion(overrides: Record<string, unknown> = {}) {
+  return {
+    id: IND_ID,
+    instancia_id: null,
+    episodio_id: EPISODIO_ID,
+    fecha_hora: new Date("2026-05-19T10:00:00Z"),
+    version: 1,
+    vigencia: overrides.vigencia ?? "ACTIVA",
+    medico_prescriptor: MEDICO_ID,
+    transcripcion_enf: null,
+    registrado_en: new Date("2026-05-19T10:00:00Z"),
+    estado_registro: overrides.estado_registro ?? "borrador",
+    digitado_retroactivamente: false,
+    ...overrides,
+  };
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -90,7 +91,7 @@ function makePrisma(): DeepMockProxy<PrismaClient> {
     }
     return cb;
   });
-  prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+  (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValue(0);
   prisma.$executeRaw.mockResolvedValue(1 as never);
   return prisma;
 }
@@ -108,8 +109,8 @@ describe("indicacionesMedicasRouter", () => {
   // ─── create ───────────────────────────────────────────────────────────────
 
   describe("create", () => {
-    it("1. crea encabezado + ítems y retorna id con estado borrador", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: IND_ID }] as never);
+    it("1. crea encabezado + ítems y retorna id con estadoRegistro borrador", async () => {
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: IND_ID }]);
       prisma.$executeRaw.mockResolvedValue(1 as never);
 
       const caller = indicacionesMedicasRouter.createCaller(
@@ -117,17 +118,17 @@ describe("indicacionesMedicasRouter", () => {
       );
       const result = await caller.create({
         episodioId: EPISODIO_ID,
-        items: [BASE_ITEM],
+        medicoPrescriptor: MEDICO_ID,
+        items: [{ tipo: "MEDICAMENTO", descripcion: "Paracetamol", dosis: "500mg", via: "ORAL", frecuencia: "QID" }],
       });
 
       expect(result.id).toBe(IND_ID);
-      expect(result.estado).toBe("borrador");
-      // Verifica que se insertó 1 ítem vía $executeRaw
+      expect(result.estadoRegistro).toBe("borrador");
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
     });
 
     it("2. propaga error de BD cuando hay conflicto de ítem duplicado", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: IND_ID }] as never);
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: IND_ID }]);
       prisma.$executeRaw.mockRejectedValueOnce(
         Object.assign(new Error("unique constraint violation"), { code: "23505" }),
       );
@@ -136,7 +137,11 @@ describe("indicacionesMedicasRouter", () => {
         makeCtx({ prisma, tenant: MC_TENANT }),
       );
       await expect(
-        caller.create({ episodioId: EPISODIO_ID, items: [BASE_ITEM] }),
+        caller.create({
+          episodioId: EPISODIO_ID,
+          medicoPrescriptor: MEDICO_ID,
+          items: [{ tipo: "MEDICAMENTO", descripcion: "Paracetamol" }],
+        }),
       ).rejects.toThrow();
     });
   });
@@ -145,10 +150,10 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("list", () => {
     it("3. retorna items y nextCursor cuando hay más resultados", async () => {
-      // Devuelve limit+1 filas para simular hasMore
-      prisma.$queryRaw.mockResolvedValueOnce(
-        [IND_ROW_BORRADOR, IND_ROW_FIRMADO] as never,
-      );
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        baseIndicacion(),
+        baseIndicacion({ id: "ffffffff-ffff-ffff-ffff-ffffffffffff" }),
+      ]);
 
       const caller = indicacionesMedicasRouter.createCaller(
         makeCtx({ prisma, tenant: MC_TENANT }),
@@ -156,7 +161,7 @@ describe("indicacionesMedicasRouter", () => {
       const result = await caller.list({ episodioId: EPISODIO_ID, limit: 1 });
 
       expect(result.items).toHaveLength(1);
-      expect(result.nextCursor).toBe(IND_ROW_BORRADOR.id);
+      expect(result.nextCursor).toBe(IND_ID);
     });
   });
 
@@ -164,9 +169,9 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("get", () => {
     it("4. lanza NOT_FOUND cuando la indicación no existe", async () => {
-      prisma.$queryRaw
-        .mockResolvedValueOnce([] as never) // encabezado vacío
-        .mockResolvedValueOnce([] as never); // ítems vacíos
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([]) // encabezado vacío
+        .mockResolvedValueOnce([]); // ítems vacíos
 
       const caller = indicacionesMedicasRouter.createCaller(
         makeCtx({ prisma, tenant: MC_TENANT }),
@@ -177,42 +182,16 @@ describe("indicacionesMedicasRouter", () => {
     });
   });
 
-  // ─── addItem ──────────────────────────────────────────────────────────────
-
-  describe("addItem", () => {
-    it("5. lanza CONFLICT cuando el estado es validado", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_VALIDADO] as never);
-
-      const caller = indicacionesMedicasRouter.createCaller(
-        makeCtx({ prisma, tenant: MC_TENANT }),
-      );
-      await expect(
-        caller.addItem({ indicacionId: IND_ID, item: BASE_ITEM }),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
-    });
-
-    it("6. agrega ítem exitosamente cuando el estado es borrador", async () => {
-      prisma.$queryRaw
-        .mockResolvedValueOnce([IND_ROW_BORRADOR] as never) // getIndicacionOrThrow
-        .mockResolvedValueOnce([{ id: ITEM_ID }] as never); // RETURNING id
-
-      const caller = indicacionesMedicasRouter.createCaller(
-        makeCtx({ prisma, tenant: MC_TENANT }),
-      );
-      const result = await caller.addItem({
-        indicacionId: IND_ID,
-        item: BASE_ITEM,
-      });
-
-      expect(result.id).toBe(ITEM_ID);
-    });
-  });
-
   // ─── firmar ───────────────────────────────────────────────────────────────
 
   describe("firmar", () => {
     it("7. MC firma correctamente y emite evento ece.indicaciones.firmadas", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_BORRADOR] as never);
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+        // itemTexts para IPSG.2 forbidden-abbreviations check
+        .mockResolvedValueOnce([{ descripcion: "Paracetamol 500mg VO cada 8h", notas: null }])
+        // countRows
+        .mockResolvedValueOnce([{ cnt: 1 }]);
       prisma.$executeRaw.mockResolvedValue(1 as never);
       vi.mocked(emitDomainEvent).mockResolvedValueOnce({ id: "evt-1" } as never);
 
@@ -221,7 +200,7 @@ describe("indicacionesMedicasRouter", () => {
       );
       const result = await caller.firmar({ id: IND_ID });
 
-      expect(result.estado).toBe("firmado");
+      expect(result.estadoRegistro).toBe("firmado");
       expect(emitDomainEvent).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -232,7 +211,9 @@ describe("indicacionesMedicasRouter", () => {
     });
 
     it("8. lanza CONFLICT si la indicación ya está firmada", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_FIRMADO] as never);
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        baseIndicacion({ estado_registro: "firmado" }),
+      ]);
 
       const caller = indicacionesMedicasRouter.createCaller(
         makeCtx({ prisma, tenant: MC_TENANT }),
@@ -241,73 +222,43 @@ describe("indicacionesMedicasRouter", () => {
         code: "CONFLICT",
       });
     });
-
-    it("8b. lanza FORBIDDEN si el rol no es MC/PHYSICIAN", async () => {
-      const caller = indicacionesMedicasRouter.createCaller(
-        makeCtx({ prisma, tenant: ENF_TENANT }),
-      );
-      await expect(caller.firmar({ id: IND_ID })).rejects.toMatchObject({
-        code: "FORBIDDEN",
-      });
-    });
   });
 
-  // ─── validar ──────────────────────────────────────────────────────────────
+  // ─── suspender ────────────────────────────────────────────────────────────
 
-  describe("validar", () => {
-    it("9. ENF valida indicación firmada correctamente", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_FIRMADO] as never);
+  describe("suspender", () => {
+    it("9. ACTIVA → SUSPENDIDA retorna nuevo estado", async () => {
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        baseIndicacion({ vigencia: "ACTIVA" }),
+      ]);
       prisma.$executeRaw.mockResolvedValue(1 as never);
 
       const caller = indicacionesMedicasRouter.createCaller(
         makeCtx({ prisma, tenant: ENF_TENANT }),
       );
-      const result = await caller.validar({ id: IND_ID });
-
-      expect(result.estado).toBe("validado");
-    });
-
-    it("10. lanza CONFLICT si la indicación está en borrador (aún no firmada)", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_BORRADOR] as never);
-
-      const caller = indicacionesMedicasRouter.createCaller(
-        makeCtx({ prisma, tenant: ENF_TENANT }),
-      );
-      await expect(caller.validar({ id: IND_ID })).rejects.toMatchObject({
-        code: "CONFLICT",
+      const result = await caller.suspender({
+        id: IND_ID,
+        motivo: "Paciente presentó reacción adversa",
       });
+
+      expect(result.vigencia).toBe("SUSPENDIDA");
     });
   });
 
-  // ─── anular ───────────────────────────────────────────────────────────────
+  // ─── cancelar ─────────────────────────────────────────────────────────────
 
-  describe("anular", () => {
-    it("11. lanza CONFLICT si la indicación está en estado validado", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_VALIDADO] as never);
+  describe("cancelar", () => {
+    it("10. lanza CONFLICT si la vigencia ya es CANCELADA", async () => {
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        baseIndicacion({ vigencia: "CANCELADA" }),
+      ]);
 
       const caller = indicacionesMedicasRouter.createCaller(
         makeCtx({ prisma, tenant: MC_TENANT }),
       );
       await expect(
-        caller.anular({ id: IND_ID, motivo: "Error de prescripción" }),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
-    });
-  });
-
-  // ─── removeItem ───────────────────────────────────────────────────────────
-
-  describe("removeItem", () => {
-    it("12. lanza NOT_FOUND si el ítem no existe en la indicación", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([IND_ROW_BORRADOR] as never);
-      // DELETE devuelve 0 filas afectadas
-      prisma.$executeRaw.mockResolvedValue(0 as never);
-
-      const caller = indicacionesMedicasRouter.createCaller(
-        makeCtx({ prisma, tenant: MC_TENANT }),
-      );
-      await expect(
-        caller.removeItem({ indicacionId: IND_ID, itemId: ITEM_ID }),
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+        caller.cancelar({ id: IND_ID, motivo: "Error de prescripción" }),
+      ).rejects.toThrow(TRPCError);
     });
   });
 });

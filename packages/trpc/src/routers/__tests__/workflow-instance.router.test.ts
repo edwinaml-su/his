@@ -26,6 +26,10 @@ vi.mock("../../workflow/transitions", () => ({
   executeTransition: vi.fn(),
 }));
 
+vi.mock("../../ece/dependencias-enforcement", () => ({
+  assertDependenciasFirmadas: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("@his/database", async (importOriginal) => {
   const original = await importOriginal<typeof import("@his/database")>();
   return {
@@ -105,6 +109,8 @@ describe("workflowInstanceRouter", () => {
       // Estado inicial
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: ESTADO_ID, codigo: "borrador" }] as never)
+        // tipoCodigo para assertDependenciasFirmadas
+        .mockResolvedValueOnce([{ codigo: "HIST_CLIN" }] as never)
         // RETURNING id del INSERT
         .mockResolvedValueOnce([{ id: INSTANCE_ID }] as never)
         // Rol para historial

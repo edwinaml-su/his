@@ -20,6 +20,7 @@ import {
   eceConsentimientoFirmarPacienteSchema,
   eceConsentimientoFirmarMcSchema,
 } from "../schemas";
+import { argon2 } from "@his/infrastructure";
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
@@ -123,6 +124,8 @@ describe("eceConsentimientoRouter", () => {
   beforeEach(() => {
     prisma = makePrisma();
     vi.clearAllMocks();
+    // vi.restoreAllMocks() in setup.ts clears vi.fn() implementations — re-init here.
+    vi.mocked(argon2.verify).mockResolvedValue(true);
   });
 
   // ── Schema validation ──────────────────────────────────────────────────────

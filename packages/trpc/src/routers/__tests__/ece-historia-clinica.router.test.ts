@@ -8,9 +8,10 @@
  *
  * Cobertura:
  *   list (happy + paginación), get (happy + NOT_FOUND), create (happy),
- *   update (happy + CONFLICT estado), enviarRevision (happy + CONFLICT),
- *   firmar (BAD_REQUEST sin firma + CONFLICT estado), validar (BAD_REQUEST),
- *   anular (happy), FORBIDDEN (rol insuficiente).
+ *   update (happy + CONFLICT estado), firmar (BAD_REQUEST sin firma + happy),
+ *   validar (BAD_REQUEST + happy), FORBIDDEN (rol insuficiente).
+ *
+ * Nota: enviarRevision y anular no existen en este router.
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import type { TRPCContext } from "../../context";
@@ -38,33 +39,50 @@ const EPISODIO_ID = "cccccccc-0000-0000-0000-000000000003";
 const FIRMA_ID = "dddddddd-0000-0000-0000-000000000004";
 const INSTANCIA_ID = "eeeeeeee-0000-0000-0000-000000000005";
 
-const SAMPLE_HC = {
+// Row shape returned by get procedure (HistoriaClinicaGetOutput)
+const SAMPLE_HC_GET = {
   id: HC_ID,
-  paciente_id: PACIENTE_ID,
-  episodio_id: EPISODIO_ID,
-  motivo_consulta: "Dolor abdominal severo",
+  instanciaId: INSTANCIA_ID,
+  episodioId: EPISODIO_ID,
+  tipoConsulta: "primera_vez",
+  motivoConsulta: "Dolor abdominal severo",
+  enfermedadActual: null,
+  disposicion: null,
+  planManejo: null,
   antecedentes: null,
-  plan_inicial: null,
-  estado: "borrador",
+  examenFisico: null,
+  diagnosticos: [],
+  registradoPor: MOCK_USER_ADMIN.id,
+  registradoEn: new Date("2026-05-17T08:00:00Z"),
+  estadoRegistro: "borrador",
+  patient: null,
+  firmadoEn: null,
+  validadoEn: null,
+};
+
+// Raw row shape from $queryRaw (used in create/update/firmar/validar)
+const SAMPLE_HC_RAW = {
+  id: HC_ID,
   instancia_id: INSTANCIA_ID,
-  creado_por: MOCK_USER_ADMIN.id,
-  creado_en: new Date("2026-05-17T08:00:00Z"),
-  actualizado_en: new Date("2026-05-17T08:00:00Z"),
-  // Campos extendidos del nuevo shape (post-refactor PR #97 follow-up):
+  episodio_id: EPISODIO_ID,
+  tipo_consulta: "ingreso",
+  motivo_consulta: "Dolor abdominal severo",
+  enfermedad_actual: null,
+  disposicion: null,
+  plan_manejo: null,
+  antecedentes: null,
+  examen_fisico: null,
+  diagnosticos: null,
+  registrado_por: MOCK_USER_ADMIN.id,
+  registrado_en: new Date("2026-05-17T08:00:00Z"),
+  estado_registro: "borrador",
+  // get output maps these from subselects on documento_instancia_historial
   firmado_en: null,
   validado_en: null,
   patient_id: null,
   patient_first_name: null,
   patient_last_name: null,
   patient_mrn: null,
-  sv_tomado_en: null,
-  sv_pa_sistolica: null,
-  sv_pa_diastolica: null,
-  sv_frecuencia_cardiaca: null,
-  sv_frecuencia_respiratoria: null,
-  sv_temperatura: null,
-  diagnosticos_json: null,
-  examen_fisico_json: null,
 };
 
 const TENANT_MC = {
@@ -77,7 +95,6 @@ const TENANT_MC = {
 
 const TENANT_DIR = { ...TENANT_MC, roleCodes: ["DIR"] };
 const TENANT_NURSE = { ...TENANT_MC, roleCodes: ["NURSE"] };
-const TENANT_MT = { ...TENANT_MC, roleCodes: ["MT"] };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,24 +149,44 @@ describe("eceHistoriaClinicaRouter", () => {
 
   describe("list", () => {
     it("retorna items y nextCursor=null cuando hay exactamente limit resultados", async () => {
-      const ctx = makeCtx(["MC"], [[SAMPLE_HC]]);
+      const listRow = {
+        id: HC_ID,
+        episodio_id: EPISODIO_ID,
+        tipo_consulta: "primera_vez",
+        motivo_consulta: "Dolor",
+        estado_registro: "borrador",
+        registrado_en: new Date("2026-05-17T08:00:00Z"),
+        patient_first_name: null,
+        patient_last_name: null,
+      };
+      const ctx = makeCtx(["MC"], [[listRow]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
-      const result = await caller.list({ pacienteId: PACIENTE_ID, limit: 20 });
+      const result = await caller.list({ episodioId: EPISODIO_ID, limit: 20 });
 
       expect(result.items).toHaveLength(1);
       expect(result.nextCursor).toBeNull();
     });
 
     it("retorna nextCursor cuando hay más registros que limit", async () => {
+      const listRow = {
+        id: HC_ID,
+        episodio_id: EPISODIO_ID,
+        tipo_consulta: "primera_vez",
+        motivo_consulta: "Dolor",
+        estado_registro: "borrador",
+        registrado_en: new Date("2026-05-17T08:00:00Z"),
+        patient_first_name: null,
+        patient_last_name: null,
+      };
       const rows = Array.from({ length: 21 }, (_, i) => ({
-        ...SAMPLE_HC,
+        ...listRow,
         id: `aaaaaaaa-0000-0000-0000-${String(i).padStart(12, "0")}`,
       }));
       const ctx = makeCtx(["PHYSICIAN"], [rows]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
-      const result = await caller.list({ pacienteId: PACIENTE_ID, limit: 20 });
+      const result = await caller.list({ episodioId: EPISODIO_ID, limit: 20 });
 
       expect(result.items).toHaveLength(20);
       expect(result.nextCursor).not.toBeNull();
@@ -160,13 +197,13 @@ describe("eceHistoriaClinicaRouter", () => {
 
   describe("get", () => {
     it("retorna la historia clínica cuando existe", async () => {
-      const ctx = makeCtx(["PHYSICIAN"], [[SAMPLE_HC]]);
+      const ctx = makeCtx(["PHYSICIAN"], [[SAMPLE_HC_RAW]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       const result = await caller.get({ id: HC_ID });
 
       expect(result.id).toBe(HC_ID);
-      expect(result.estado).toBe("borrador");
+      expect(result.estadoRegistro).toBe("borrador");
     });
 
     it("lanza NOT_FOUND cuando no existe", async () => {
@@ -181,17 +218,17 @@ describe("eceHistoriaClinicaRouter", () => {
 
   describe("create", () => {
     it("crea historia clínica en estado borrador", async () => {
-      const ctx = makeCtx(["MC"], [[SAMPLE_HC]]);
+      const ctx = makeCtx(["MC"], [[SAMPLE_HC_RAW]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       const result = await caller.create({
-        pacienteId: PACIENTE_ID,
         episodioId: EPISODIO_ID,
+        tipoConsulta: "ingreso",
         motivoConsulta: "Dolor abdominal severo",
       });
 
       expect(result.id).toBe(HC_ID);
-      expect(result.estado).toBe("borrador");
+      expect(result.estado_registro).toBe("borrador");
     });
 
     it("lanza FORBIDDEN si el rol es NURSE (no puede crear)", async () => {
@@ -199,7 +236,7 @@ describe("eceHistoriaClinicaRouter", () => {
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       await expect(
-        caller.create({ pacienteId: PACIENTE_ID, motivoConsulta: "Test" }),
+        caller.create({ episodioId: EPISODIO_ID, tipoConsulta: "ingreso", motivoConsulta: "Test" }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
@@ -208,9 +245,9 @@ describe("eceHistoriaClinicaRouter", () => {
 
   describe("update", () => {
     it("actualiza cuando el estado es borrador", async () => {
-      const updatedHc = { ...SAMPLE_HC, motivo_consulta: "Actualizado" };
+      const updatedRaw = { ...SAMPLE_HC_RAW, motivo_consulta: "Actualizado" };
       // 1ra call: estado check; 2da call: UPDATE RETURNING
-      const ctx = makeCtx(["MC"], [[{ estado: "borrador" }], [updatedHc]]);
+      const ctx = makeCtx(["MC"], [[{ estado_registro: "borrador" }], [updatedRaw]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       const result = await caller.update({ id: HC_ID, motivoConsulta: "Actualizado" });
@@ -219,40 +256,12 @@ describe("eceHistoriaClinicaRouter", () => {
     });
 
     it("lanza CONFLICT si el estado es firmado", async () => {
-      const ctx = makeCtx(["MC"], [[{ estado: "firmado" }]]);
+      const ctx = makeCtx(["MC"], [[{ estado_registro: "firmado" }]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       await expect(
         caller.update({ id: HC_ID, motivoConsulta: "X" }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
-    });
-  });
-
-  // ─── enviarRevision ────────────────────────────────────────────────────────
-
-  describe("enviarRevision", () => {
-    it("avanza de borrador a en_revision correctamente", async () => {
-      const enRevision = { ...SAMPLE_HC, estado: "en_revision" };
-      // 1ra: SELECT estado + instancia_id; 2da: UPDATE RETURNING; 3ra: INSERT historial (executeRaw)
-      const ctx = makeCtx(
-        ["MC"],
-        [[{ estado: "borrador", instancia_id: INSTANCIA_ID }], [enRevision]],
-        makeExecuteRaw(),
-      );
-      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
-
-      const result = await caller.enviarRevision({ id: HC_ID });
-
-      expect(result.estado).toBe("en_revision");
-    });
-
-    it("lanza CONFLICT si el estado actual no es borrador", async () => {
-      const ctx = makeCtx(["MT"], [[{ estado: "firmado", instancia_id: null }]]);
-      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
-
-      await expect(caller.enviarRevision({ id: HC_ID })).rejects.toMatchObject({
-        code: "CONFLICT",
-      });
     });
   });
 
@@ -268,18 +277,19 @@ describe("eceHistoriaClinicaRouter", () => {
       });
     });
 
-    it("avanza de en_revision a firmado con firmaId", async () => {
-      const firmado = { ...SAMPLE_HC, estado: "firmado" };
+    it("avanza de borrador a firmado con firmaId", async () => {
+      const firmadoRaw = { ...SAMPLE_HC_RAW, estado_registro: "firmado" };
+      // 1ra: SELECT estado_registro; 2da: UPDATE RETURNING
       const ctx = makeCtx(
         ["MC"],
-        [[{ estado: "en_revision", instancia_id: INSTANCIA_ID }], [firmado]],
+        [[{ estado_registro: "borrador", instancia_id: INSTANCIA_ID }], [firmadoRaw]],
         makeExecuteRaw(),
       );
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       const result = await caller.firmar({ id: HC_ID, firmaId: FIRMA_ID });
 
-      expect(result.estado).toBe("firmado");
+      expect(result.estado_registro).toBe("firmado");
     });
 
     it("lanza FORBIDDEN si el rol es MT (solo MC puede firmar)", async () => {
@@ -305,17 +315,17 @@ describe("eceHistoriaClinicaRouter", () => {
     });
 
     it("avanza de firmado a validado con firmaId", async () => {
-      const validado = { ...SAMPLE_HC, estado: "validado" };
+      const validadoRaw = { ...SAMPLE_HC_RAW, estado_registro: "validado" };
       const ctx = makeCtx(
         ["DIR"],
-        [[{ estado: "firmado", instancia_id: INSTANCIA_ID }], [validado]],
+        [[{ estado_registro: "firmado", instancia_id: INSTANCIA_ID }], [validadoRaw]],
         makeExecuteRaw(),
       );
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       const result = await caller.validar({ id: HC_ID, firmaId: FIRMA_ID });
 
-      expect(result.estado).toBe("validado");
+      expect(result.estado_registro).toBe("validado");
     });
 
     it("lanza FORBIDDEN si el rol es MC (solo DIR puede validar)", async () => {
@@ -325,28 +335,6 @@ describe("eceHistoriaClinicaRouter", () => {
       await expect(caller.validar({ id: HC_ID, firmaId: FIRMA_ID })).rejects.toMatchObject({
         code: "FORBIDDEN",
       });
-    });
-  });
-
-  // ─── anular ────────────────────────────────────────────────────────────────
-
-  describe("anular", () => {
-    it("anula correctamente desde estado borrador", async () => {
-      const anulado = { ...SAMPLE_HC, estado: "anulado" };
-      const ctx = makeCtx(
-        ["DIR"],
-        [[{ estado: "borrador", instancia_id: null }], [anulado]],
-        makeExecuteRaw(),
-      );
-      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
-
-      const result = await caller.anular({
-        id: HC_ID,
-        observacion: "Anulación por error administrativo",
-        estadoActual: "borrador",
-      });
-
-      expect(result.estado).toBe("anulado");
     });
   });
 });

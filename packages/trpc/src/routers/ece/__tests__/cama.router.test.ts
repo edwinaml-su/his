@@ -30,6 +30,7 @@ const CAMA_RAW_LIBRE = {
   codigo: "H-101",
   servicio: "Medicina Interna",
   estado_manual: null,
+  status_bd: null,
   asignacion_id: null,
   paciente_nombre: null,
   episodio_id: null,
@@ -161,8 +162,8 @@ describe("eceCamaRouter", () => {
     ]);
     // Segunda query: todas las camas
     prisma.$queryRaw.mockResolvedValueOnce([
-      { ...CAMA_RAW_LIBRE,   ward_id: SERVICIO_ID },
-      { ...CAMA_RAW_OCUPADA, ward_id: SERVICIO_ID },
+      { ...CAMA_RAW_LIBRE,   service_unit_id: SERVICIO_ID },
+      { ...CAMA_RAW_OCUPADA, service_unit_id: SERVICIO_ID },
     ]);
 
     const caller = eceCamaRouter.createCaller(makeCtx({ prisma, tenant: NURSE_TENANT }));

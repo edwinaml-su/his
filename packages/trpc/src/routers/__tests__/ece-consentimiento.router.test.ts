@@ -77,6 +77,7 @@ const CI_ROW_BORRADOR = {
   firmante_documento: null,
   evidencia_firma_ref: null,
   fecha_hora: new Date("2026-05-17T10:00:00Z"),
+  estado: "borrador",
   estado_codigo: "borrador",
   estado_id: ESTADO_INI_ID,
 };
@@ -91,6 +92,7 @@ const CI_ROW_CON_FIRMA_PACIENTE = {
 
 const CI_ROW_FIRMADO = {
   ...CI_ROW_CON_FIRMA_PACIENTE,
+  estado: "firmado",
   estado_codigo: "firmado",
   estado_id: ESTADO_FIR_ID,
 };
@@ -290,6 +292,8 @@ describe("eceConsentimientoRouter", () => {
         .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)
         // findFirmaByPersonal
         .mockResolvedValueOnce([FIRMA_ROW] as never)
+        // findPersonal segunda vez (línea ~713 del router: const personal = await findPersonal)
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)
         // avanzarEstado: buscar transición
         .mockResolvedValueOnce([{ estado_destino_id: ESTADO_FIR_ID, rol_codigo: "MC" }] as never);
       // executeRaw: reset counter + UPDATE instancia + INSERT historial

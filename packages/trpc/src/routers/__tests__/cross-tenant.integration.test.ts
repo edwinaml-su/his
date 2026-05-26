@@ -58,6 +58,11 @@ describe("Cross-tenant isolation — Phase 2 skeletons", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // withTenantContext wraps in $transaction — pass prisma as tx so findMany is called on the mock
+    prisma.$transaction.mockImplementation(async (fn) => {
+      if (typeof fn === "function") return fn(prisma as unknown as PrismaClient);
+      return fn;
+    });
   });
 
   it("§10 outpatient.appointment.list — caller OrgB no recibe filtro de OrgA", async () => {
