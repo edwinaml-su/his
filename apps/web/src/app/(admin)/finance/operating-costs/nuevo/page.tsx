@@ -267,7 +267,7 @@ export default function NuevoOperatingCostPage() {
                 </SelectContent>
               </Select>
               <FormHint>
-                "Compartido" = costo prorrateable entre todas las orgs activas. El campo
+                &quot;Compartido&quot; = costo prorrateable entre todas las orgs activas. El campo
                 organizationId quedará NULL en BD.
               </FormHint>
             </FormField>

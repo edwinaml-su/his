@@ -340,7 +340,7 @@ export default function PriceListDetailPage() {
                 {pl.items.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
-                      Sin items. Usa "Agregar item" para comenzar.
+                      Sin items. Usa &quot;Agregar item&quot; para comenzar.
                     </TableCell>
                   </TableRow>
                 ) : null}

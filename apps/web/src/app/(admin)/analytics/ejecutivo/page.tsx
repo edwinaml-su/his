@@ -168,7 +168,7 @@ export default function DashboardEjecutivoPage() {
         <p>
           <strong className="text-foreground">Wave 0 — arquitectura entregada.</strong>{" "}
           Los {KPI_CATALOG.filter((k) => k.dataSource === "real").length} KPIs marcados
-          "datos reales" se cablearán a Prisma en Wave 1.{" "}
+          &quot;datos reales&quot; se cablearán a Prisma en Wave 1.{" "}
           {KPI_CATALOG.filter((k) => k.dataSource === "pending").length} KPIs requieren
           integración externa (APM, finance, ITSM, NPS) — Wave 2+.
         </p>
