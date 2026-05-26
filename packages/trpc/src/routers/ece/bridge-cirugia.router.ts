@@ -22,8 +22,11 @@
  *   - Sala QX libre: no debe haber reserva activa con overlap de horario.
  *   - Un paciente puede tener varias cirugías programadas (distintos episodios).
  *   - Toda escritura usa raw SQL (ece.* fuera del schema Prisma principal).
- *   - withTenantContext NO se usa: la tx Prisma garantiza atomicidad;
- *     el router verifica explícitamente el establecimiento del usuario.
+ *   - HE-02 (audit Stream E, 2026-05-19) — `programarCirugia` y
+ *     `cancelarPrograma` se envuelven en `withWorkflowContext` para que las
+ *     policies RLS de ece.* apliquen. Antes el comentario indicaba "tx Prisma
+ *     garantiza atomicidad" pero el rol postgres tiene BYPASSRLS — defensa
+ *     solo en JS, frágil ante data corruption en personal_salud.
  *
  * Roles:
  *   programarCirugia  → requireRole(["PHYSICIAN", "ADM"])
@@ -38,6 +41,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../../trpc";
+import { withWorkflowContext } from "../../workflow/context";
 
 // =============================================================================
 // Schemas Zod (inline — patrón establecido en bridge-admision.router.ts)
@@ -232,8 +236,16 @@ export const eceBridgeCirugiaRouter = router({
         });
       }
 
-      // ── 3. Transacción atómica ─────────────────────────────────────────
-      return ctx.prisma.$transaction(async (tx) => {
+      // ── 3. Transacción atómica con contexto ECE ─────────────────────────
+      // HE-02 (audit Stream E): withWorkflowContext aplica SET LOCAL ROLE
+      // authenticated + GUCs ece (personal_id, establecimiento_id) → las
+      // policies RLS de ece.orden_ingreso/episodio/preop_checklist se aplican.
+      // Antes se usaba ctx.prisma.$transaction directo, que mantiene el rol
+      // postgres.<ref> con BYPASSRLS — defensa solo en JS, frágil.
+      return withWorkflowContext(
+        ctx.prisma,
+        { personalId: personal.id, establecimientoId: personal.establecimiento_id },
+        async (tx) => {
         const rawTx = tx as unknown as RawClient;
 
         // Paso 1: orden_ingreso (motivo=cirugía)
@@ -463,7 +475,8 @@ export const eceBridgeCirugiaRouter = router({
         });
 
         return { ordenId, episodioId, preOpId, reservaId };
-      });
+        },
+      );
     }),
 
   /**
@@ -585,8 +598,12 @@ export const eceBridgeCirugiaRouter = router({
         });
       }
 
-      // ── 3. Transacción atómica cascade soft-delete ───────────────────────
-      return ctx.prisma.$transaction(async (tx) => {
+      // ── 3. Transacción atómica cascade soft-delete con contexto ECE ──────
+      // HE-02 (audit Stream E): withWorkflowContext aplica RLS al cascade.
+      return withWorkflowContext(
+        ctx.prisma,
+        { personalId: personal.id, establecimientoId: personal.establecimiento_id },
+        async (tx) => {
         const rawTx = tx as unknown as RawClient;
 
         // Paso 1: cancelar reserva_sala_qx
@@ -660,6 +677,7 @@ export const eceBridgeCirugiaRouter = router({
         });
 
         return { ok: true as const, ordenId: input.ordenId };
-      });
+        },
+      );
     }),
 });
