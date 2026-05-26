@@ -10,9 +10,9 @@
  * Anti-enumeration: register y requestLogin siempre devuelven { sent: true }.
  * RLS: withPortalContext aplica GUC `app.current_portal_account` (SQL 52).
  *
- * NOTA: validateDUI está inlineado aquí en vez de importar de @his/contracts
- * porque la resolución de workspace falla en el runner de vitest del paquete trpc.
- * Mantener en sincronía con packages/contracts/src/validators/index.ts.
+ * K-19 (audit Stream K): `validateDUI` se importa desde `@his/contracts/validators`
+ * (alias resuelto en vitest.config.ts línea 45). El inline previo causaba
+ * drift silencioso con la implementación canónica.
  */
 import { z } from "zod";
 import {
@@ -23,6 +23,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { TRPCError } from "@trpc/server";
+import { validateDUI } from "@his/contracts/validators";
 import { router, publicProcedure, portalProcedure } from "../trpc";
 import { withPortalContext, applyPortalContext } from "../rls-context";
 import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
@@ -31,23 +32,6 @@ import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
 // Coherente con anti-brute-force típico (3-5 intentos / ventana de 15min).
 const TOTP_FAIL_LOCKOUT_THRESHOLD = 5;
 const TOTP_FAIL_LOCKOUT_DURATION_MS = 15 * 60_000;
-
-// ─── DUI validator (paridad con packages/contracts/src/validators/index.ts) ──
-
-function validateDUI(value: string): boolean {
-  const clean = value.replace(/[-\s]/g, "");
-  if (!/^\d{9}$/.test(clean)) return false;
-  // Cuerpo del DUI no puede ser todo ceros (regla práctica RNPN).
-  if (clean.slice(0, 8) === "00000000") return false;
-  const digits = clean.split("").map(Number);
-  let sum = 0;
-  for (let i = 0; i < 8; i++) {
-    sum += digits[i]! * (10 - (i + 1));
-  }
-  let calc = 10 - (sum % 10);
-  if (calc === 10) calc = 0;
-  return digits[8] === calc;
-}
 
 // ─── TOTP (RFC 6238, HMAC-SHA1, 30 s, 6 dígitos) ────────────────────────────
 
@@ -727,16 +711,25 @@ const hceRouter = router({
               resultedAt: true,
               orderItem: {
                 select: {
+                  // K-26 (audit Stream K): refRangeText permite que el paciente
+                  // vea referencia para resultados cualitativos (cultivos,
+                  // serológicos, etc.) que solo tienen rango textual ("Negativo").
                   test: {
                     select: {
+                      id: true,
                       name: true,
                       code: true,
                       refRangeLow: true,
                       refRangeHigh: true,
+                      refRangeText: true,
                       unit: true,
                     },
                   },
-                  order: { select: { orderedAt: true, patientId: true } },
+                  // K-17 (audit Stream K): NO devolver patientId al cliente.
+                  // El procedure ya filtró el resultado por el paciente del
+                  // session — exponer el UUID es superfluo y filtra el id
+                  // interno al browser/network logs.
+                  order: { select: { orderedAt: true } },
                 },
               },
             },
@@ -746,7 +739,77 @@ const hceRouter = router({
             throw new TRPCError({ code: "NOT_FOUND", message: "Resultado no encontrado." });
           }
 
-          return result;
+          // K-21 (audit Stream K): rangos estratificados por sex+age del paciente.
+          // El catálogo `LabReferenceRange` ya existe (SQL 25); usar el rango
+          // global del LabTest (refRangeLow/High planos) ignora variaciones
+          // demográficas y puede mostrar alarmas falsas.
+          let stratifiedRange: {
+            minValue: number | null;
+            maxValue: number | null;
+            criticalLow: number | null;
+            criticalHigh: number | null;
+            sex: string;
+            ageMinYears: number | null;
+            ageMaxYears: number | null;
+          } | null = null;
+          if (result.orderItem.test.id) {
+            const patient = await tx.patient.findUnique({
+              where: { id: patientId },
+              select: {
+                birthDate: true,
+                biologicalSex: { select: { code: true } },
+              },
+            });
+            if (patient?.birthDate) {
+              const ageYears = Math.floor(
+                (Date.now() - patient.birthDate.getTime()) /
+                  (365.25 * 24 * 60 * 60 * 1000),
+              );
+              // BiologicalSex.code es "M"/"F"/"I"/"U"; LabReferenceRange.sex
+              // usa "MALE"/"FEMALE"/"BOTH". Mapeamos para la query.
+              const sexToken =
+                patient.biologicalSex.code === "M"
+                  ? "MALE"
+                  : patient.biologicalSex.code === "F"
+                    ? "FEMALE"
+                    : "BOTH";
+              const range = await tx.labReferenceRange.findFirst({
+                where: {
+                  labTestId: result.orderItem.test.id,
+                  active: true,
+                  OR: [{ sex: sexToken }, { sex: "BOTH" }],
+                  AND: [
+                    { OR: [{ ageMinYears: null }, { ageMinYears: { lte: ageYears } }] },
+                    { OR: [{ ageMaxYears: null }, { ageMaxYears: { gte: ageYears } }] },
+                  ],
+                },
+                // Preferir rangos sex-específicos y con age-bracket más estrecho.
+                orderBy: [{ sex: "asc" }, { ageMinYears: "desc" }],
+                select: {
+                  minValue: true,
+                  maxValue: true,
+                  criticalLow: true,
+                  criticalHigh: true,
+                  sex: true,
+                  ageMinYears: true,
+                  ageMaxYears: true,
+                },
+              });
+              if (range) {
+                stratifiedRange = {
+                  minValue: range.minValue ? Number(range.minValue) : null,
+                  maxValue: range.maxValue ? Number(range.maxValue) : null,
+                  criticalLow: range.criticalLow ? Number(range.criticalLow) : null,
+                  criticalHigh: range.criticalHigh ? Number(range.criticalHigh) : null,
+                  sex: range.sex,
+                  ageMinYears: range.ageMinYears,
+                  ageMaxYears: range.ageMaxYears,
+                };
+              }
+            }
+          }
+
+          return { ...result, stratifiedRange };
         });
       }),
   }),
@@ -806,6 +869,9 @@ const hceRouter = router({
         const patientId = await resolvePatientId(ctx, input.wardPatientId);
 
         return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+          // K-25 (audit Stream K): paginación dura para evitar payloads
+          // ilimitados en pacientes con migración legacy (decenas de dosis).
+          // 100 cubre PAI pediátrico completo (~20) + adultos crónicos.
           return tx.patientVaccination.findMany({
             where: { patientId },
             select: {
@@ -817,6 +883,7 @@ const hceRouter = router({
               vaccine: { select: { name: true, code: true, scheduleNote: true } },
             },
             orderBy: { administeredAt: "desc" },
+            take: 100,
           });
         });
       }),
@@ -947,6 +1014,12 @@ const expedienteRouter = router({
             // El médico debe marcar `isPortalVisible: true` cuando completa la nota
             // y considera apropiado publicarla. Default false filtra notas
             // psiquiátricas / trabajo social / addenda internos.
+            //
+            // K-18 (audit Stream K): la gate `isPortalVisible` reemplaza el patrón
+            // de whitelist por `noteType: { notIn: [...] }` propuesto en el audit.
+            // Si en el futuro se requiere prohibir un tipo INCLUSO cuando el médico
+            // marque la nota como visible, debe expresarse como CHECK constraint
+            // en `ClinicalNote` (regla institucional, no de UI).
             isPortalVisible: true,
             ...(input.cursor ? { id: { lt: input.cursor } } : {}),
           },
