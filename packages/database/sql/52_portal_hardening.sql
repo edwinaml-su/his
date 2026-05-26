@@ -68,15 +68,15 @@ CREATE POLICY guardian_relationship_select ON "GuardianRelationship"
 
 CREATE TRIGGER portal_account_audit
   AFTER INSERT OR UPDATE OR DELETE ON "PortalAccount"
-  FOR EACH ROW EXECUTE FUNCTION audit.if_modified_func();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 CREATE TRIGGER portal_session_audit
   AFTER INSERT OR UPDATE OR DELETE ON "PortalSession"
-  FOR EACH ROW EXECUTE FUNCTION audit.if_modified_func();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 CREATE TRIGGER guardian_relationship_audit
   AFTER INSERT OR UPDATE OR DELETE ON "GuardianRelationship"
-  FOR EACH ROW EXECUTE FUNCTION audit.if_modified_func();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- ─── Indexes ─────────────────────────────────────────────────────────────────
 
