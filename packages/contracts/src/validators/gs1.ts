@@ -323,9 +323,13 @@ export function validateGS1Checksum(ai: string, value: string): boolean {
  *   - GSRN-18  (AI 8018)
  *   - GRAI-14  (prefijo de AI 8003)
  *
- * Algoritmo (idéntico a las definiciones locales de los routers GS1):
- *   Pesos alternos 3,1,3,1,... desde la izquierda; el último dígito es el
- *   check digit esperado = (10 - (sum % 10)) % 10.
+ * Algoritmo (GS1 General Specifications v23 §7.9.1):
+ *   "Multiplicar cada dígito alternadamente por 1 ó 3 empezando por el dígito
+ *    más a la derecha del payload y asignando factor 3 al primero (rightmost)."
+ *
+ * Implementación: posición desde la derecha del body 1-based (1, 2, 3, …);
+ * impar → ×3, par → ×1. El último dígito del input es el check digit esperado:
+ *   `expected = (10 - (sum % 10)) % 10`.
  *
  * Para validación AI-specific con longitud fija, prefiere `validateGS1Checksum(ai, value)`.
  */
@@ -335,8 +339,9 @@ export function gs1CheckDigitValid(code: string): boolean {
   const len = code.length;
   let sum = 0;
   for (let i = 0; i < len - 1; i++) {
-    const weight = (len - 1 - i) % 2 === 0 ? 3 : 1;
-    sum += Number.parseInt(code.charAt(i), 10) * weight;
+    // posición desde la derecha del body (último dígito del body es pos 1)
+    const fromRight = len - 1 - i;
+    sum += fromRight % 2 === 1 ? Number.parseInt(code.charAt(i), 10) * 3 : Number.parseInt(code.charAt(i), 10);
   }
   const expected = (10 - (sum % 10)) % 10;
   return expected === Number.parseInt(code.charAt(len - 1), 10);
