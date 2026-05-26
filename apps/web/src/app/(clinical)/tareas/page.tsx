@@ -91,6 +91,21 @@ function typeBgColor(type: string): string {
   if (type === "PARTOGRAMA_OVERDUE" || type === "RN_APGAR_PENDING" || type === "NRP_POSTEVENT_DEBRIEF")
     return "bg-fuchsia-100 text-fuchsia-700";
   if (type === "BLOOD_VERIFY_PENDING" || type === "BLOOD_REACTION_REPORT") return "bg-red-100 text-red-700";
+  // Ola 3
+  if (type === "MPI_MERGE_PENDING" || type === "PATIENT_NN_TO_RESOLVE" || type === "ARCO_REQUEST_PENDING")
+    return "bg-slate-100 text-slate-700";
+  if (type === "ADR_REPORT_PENDING" || type === "INCIDENT_TO_REVIEW")
+    return "bg-orange-100 text-orange-700";
+  if (type.startsWith("GS1_") || type.startsWith("INVENTORY_"))
+    return "bg-lime-100 text-lime-700";
+  if (type === "COLD_CHAIN_BREACH")
+    return "bg-cyan-100 text-cyan-700";
+  if (type.startsWith("EQUIPMENT_"))
+    return "bg-stone-100 text-stone-700";
+  if (type === "DEATH_CERT_PENDING")
+    return "bg-zinc-100 text-zinc-700";
+  if (type.startsWith("CLAIM_"))
+    return "bg-yellow-100 text-yellow-700";
   return "bg-slate-100 text-slate-700";
 }
 
