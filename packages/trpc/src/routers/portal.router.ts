@@ -25,6 +25,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, portalProcedure } from "../trpc";
 import { withPortalContext } from "../rls-context";
+import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
 
 // ─── DUI validator (paridad con packages/contracts/src/validators/index.ts) ──
 
@@ -173,11 +174,18 @@ const accountRouter = router({
     .input(
       z.object({
         dui: z.string().refine(validateDUI, { message: "DUI inválido." }),
-        email: z.string().email(),
+        email: z.string().email().max(254),
         patientId: z.string().min(1),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      // K-04 (audit Stream K): rate-limit por IP + email para prevenir
+      // enumeración de DUIs (combinado con anti-enumeration `{ sent: true }`).
+      const ip = normalizeIp(ctx.ip);
+      const emailKey = input.email.toLowerCase();
+      rateLimitOrThrow({ key: `auth:register:ip=${ip}`, max: 10, windowMs: 60_000 });
+      rateLimitOrThrow({ key: `auth:register:email=${emailKey}`, max: 3, windowMs: 5 * 60_000 });
+
       // Verificar que el DUI corresponde al patientId (defensa contra IDOR)
       const identifier = await ctx.prisma.patientIdentifier.findFirst({
         where: {
@@ -319,10 +327,18 @@ const authRouter = router({
    * No envía si la cuenta está bloqueada (lockedUntil > now).
    */
   requestLogin: publicProcedure
-    .input(z.object({ email: z.string().email() }))
+    .input(z.object({ email: z.string().email().max(254) }))
     .mutation(async ({ ctx, input }) => {
+      // K-04 (audit Stream K): rate-limit defense-in-depth.
+      // Superposición IP + email: un atacante con muchas IPs sigue limitado
+      // por target; un IP saturando emails distintos también.
+      const ip = normalizeIp(ctx.ip);
+      const emailKey = input.email.toLowerCase();
+      rateLimitOrThrow({ key: `auth:request-login:ip=${ip}`, max: 10, windowMs: 60_000 });
+      rateLimitOrThrow({ key: `auth:request-login:email=${emailKey}`, max: 5, windowMs: 5 * 60_000 });
+
       const account = await ctx.prisma.portalAccount.findUnique({
-        where: { email: input.email.toLowerCase() },
+        where: { email: emailKey },
         select: { id: true, status: true, lockedUntil: true },
       });
 
@@ -356,6 +372,14 @@ const authRouter = router({
   verifyLogin: publicProcedure
     .input(z.object({ token: z.string().min(1), totpCode: z.string().length(6).optional() }))
     .mutation(async ({ ctx, input }) => {
+      // K-04 (audit Stream K): rate-limit por IP. Más laxo que requestLogin
+      // porque el usuario legítimo puede reintentar tras MFA fail.
+      rateLimitOrThrow({
+        key: `auth:verify-login:ip=${normalizeIp(ctx.ip)}`,
+        max: 20,
+        windowMs: 60_000,
+      });
+
       const hashed = hashToken(input.token);
       const link = await ctx.prisma.portalMagicLink.findUnique({
         where: { token: hashed },
@@ -886,6 +910,11 @@ const expedienteRouter = router({
           where: {
             encounterId: { in: eIds },
             signedAt: { not: null }, // solo firmadas
+            // K-05 (audit Stream K): respeta la gate explícita de visibilidad al portal.
+            // El médico debe marcar `isPortalVisible: true` cuando completa la nota
+            // y considera apropiado publicarla. Default false filtra notas
+            // psiquiátricas / trabajo social / addenda internos.
+            isPortalVisible: true,
             ...(input.cursor ? { id: { lt: input.cursor } } : {}),
           },
           select: {
@@ -893,7 +922,9 @@ const expedienteRouter = router({
             noteType: true,
             signedAt: true,
             encounterId: true,
-            authorId: true,
+            // K-13 (audit Stream K): NO exponer authorId (UUID interno User) al paciente.
+            // Permite enumeración de usuarios clínicos. La UI muestra nombre
+            // del médico vía join cuando lo necesita.
             updatedAt: true,
           },
           orderBy: { signedAt: "desc" },

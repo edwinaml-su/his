@@ -5,6 +5,7 @@
  * Flujo: idle → enrolling (muestra secreto/QR) → done.
  */
 import { useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { trpc } from "@/lib/trpc/react";
 
 type State = "idle" | "enrolling" | "done";
@@ -67,17 +68,15 @@ export default function MfaSettingsPage() {
               {secret}
             </code>
           </li>
-          <li>
-            O escanee el código QR en:{" "}
-            <a
-              href={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(otpauthUrl)}`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-blue-600 hover:underline"
-            >
-              Ver QR
-            </a>
-          </li>
+          <li>O escanee el código QR:</li>
+        </ol>
+        <div className="flex justify-center">
+          <QRCodeSVG value={otpauthUrl} size={200} />
+        </div>
+        <p className="text-xs text-slate-500 text-center">
+          El QR contiene su llave TOTP. NO comparta esta imagen ni el código de respaldo.
+        </p>
+        <ol className="list-decimal list-inside space-y-3 text-sm text-slate-700" start={4}>
           <li>Ingrese el código de 6 dígitos generado por la app para confirmar.</li>
         </ol>
         <form onSubmit={handleVerify} className="space-y-4">
