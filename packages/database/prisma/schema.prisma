@@ -2312,6 +2312,11 @@ model ClinicalNote {
   signatureHash  String?   @db.VarChar(120)
   /// Historial de cambios pre-firma. Array [{at, by, action, diff}]. Max 50 entries (oldest dropped).
   editHistory    Json?
+  /// K-05 audit Stream K: gate explícita de visibilidad al Portal Paciente.
+  /// Default false — el clínico debe marcar la nota como publicable.
+  /// Filtra notas psiquiátricas, trabajo social, sospecha de abuso, addenda internos
+  /// que no deben llegar al portal sin counseling previo (LGPDP Art. 9 / TDR §5.2).
+  isPortalVisible Boolean  @default(false)
   createdAt      DateTime  @default(now()) @db.Timestamptz()
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
 
