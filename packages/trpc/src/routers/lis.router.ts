@@ -110,7 +110,14 @@ export const lisRouter = router({
             ...(input.costCenterId && { costCenterId: input.costCenterId }),
             ...(input.ejecutorCostCenterId && { ejecutorCostCenterId: input.ejecutorCostCenterId }),
           },
-          include: { items: { include: { test: true } } },
+          // HH-10 (audit Stream H): UI muestra paciente + número de encuentro
+          // en la fila; antes lo asumía vía cast `as unknown` que enmascaraba
+          // el error. Ahora viene del server explícitamente.
+          include: {
+            items: { include: { test: true } },
+            patient: { select: { firstName: true, lastName: true, mrn: true } },
+            encounter: { select: { encounterNumber: true } },
+          },
           orderBy: { orderedAt: "desc" },
           take: input.limit,
         });

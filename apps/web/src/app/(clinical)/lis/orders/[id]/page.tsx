@@ -236,7 +236,8 @@ export default function LisOrderDetailPage(): React.ReactElement {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
 
-  const lis = (trpc as unknown as { lis: LisAccess }).lis;
+  // HH-10 (audit Stream H): lis está montado en _app.ts — acceso directo.
+  const lis = trpc.lis as unknown as LisAccess;
   const order = lis.order.get.useQuery({ id });
 
   const [collectOpen, setCollectOpen] = React.useState(false);

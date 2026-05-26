@@ -1128,6 +1128,7 @@ model Patient {
   emergencyVisits        EmergencyVisit[]          @relation("PatEmergencyVisits")
   surgeryCases           SurgeryCase[]             @relation("PatSurgeryCases")
   imagingOrders          ImagingOrder[]            @relation("PatImagingOrders")
+  labOrders              LabOrder[]                @relation("PatLabOrders")
   coverages              PatientCoverage[]         @relation("PatCoverages")
   respiratoryOrders      RespiratoryOrder[]        @relation("PatRespiratoryOrders")
   dietPlans              DietPlan[]                @relation("PatDietPlans")
@@ -1529,6 +1530,7 @@ model Encounter {
   emergencyVisit         EmergencyVisit?         @relation("EncEmergencyVisit")
   surgeryCases           SurgeryCase[]           @relation("EncSurgeryCases")
   imagingOrders          ImagingOrder[]          @relation("EncImagingOrders")
+  labOrders              LabOrder[]              @relation("EncLabOrders")
   authorizationRequests  AuthorizationRequest[]  @relation("EncAuthRequests")
   respiratoryOrders      RespiratoryOrder[]      @relation("EncRespiratoryOrders")
   dietPlans              DietPlan[]              @relation("EncDietPlans")
@@ -2154,6 +2156,9 @@ model LabOrder {
   specimens        LabSpecimen[]
   costCenter       CostCenter?    @relation("LabOrderSolicitante", fields: [costCenterId], references: [id], onDelete: Restrict)
   ejecutorCostCenter CostCenter?  @relation("LabOrderEjecutor", fields: [ejecutorCostCenterId], references: [id], onDelete: Restrict)
+  // HH-10 (audit Stream H): relaciones declaradas — las FK físicas ya existen.
+  patient          Patient        @relation("PatLabOrders", fields: [patientId], references: [id], onDelete: Restrict)
+  encounter        Encounter      @relation("EncLabOrders", fields: [encounterId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, orderedAt])
   @@index([encounterId])

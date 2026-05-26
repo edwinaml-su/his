@@ -7,8 +7,8 @@
  * priority, status, fromDate). Cada fila enlaza al detalle
  * `/lis/orders/[id]`.
  *
- * Cast `trpc as any` mientras `lis.router` se monta en _app.ts en team4
- * (mismo patrón que vaccination/transfer en este sprint).
+ * HH-10 (audit Stream H): `lis: lisRouter` está montado en _app.ts:241,
+ * los casts `as unknown` ya no son necesarios — acceso directo `trpc.lis`.
  */
 import * as React from "react";
 import Link from "next/link";
@@ -33,6 +33,8 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@his/trpc";
 
 type LabPriority = "ROUTINE" | "URGENT" | "STAT";
 type LabOrderStatus =
@@ -44,34 +46,11 @@ type LabOrderStatus =
   | "VALIDATED"
   | "CANCELLED";
 
-interface LabOrderListItem {
-  id: string;
-  patient: { firstName: string; lastName: string; mrn: string } | null;
-  patientId: string;
-  encounterId: string;
-  encounter?: { encounterNumber: string } | null;
-  orderedAt: string | Date;
-  priority: LabPriority;
-  status: LabOrderStatus;
-  items: Array<{ id: string }>;
-}
-
-interface LabOrderListInput {
-  encounterId?: string;
-  patientId?: string;
-  priority?: LabPriority;
-  status?: LabOrderStatus;
-  fromDate?: Date;
-  limit?: number;
-}
-
-interface LisOrderListAccess {
-  list: {
-    useQuery: (
-      input: LabOrderListInput,
-    ) => { data?: LabOrderListItem[]; isLoading: boolean; error?: { message: string } | null };
-  };
-}
+// HH-10: tipos inferidos del router montado.
+type RouterOutput = inferRouterOutputs<AppRouter>;
+type LabOrderListItem = RouterOutput["lis"]["order"]["list"][number];
+type RouterInput = inferRouterInputs<AppRouter>;
+type LabOrderListInput = RouterInput["lis"]["order"]["list"];
 
 const PRIORITY_BADGE: Record<LabPriority, string> = {
   ROUTINE: "bg-slate-100 text-slate-700",
@@ -104,8 +83,6 @@ export default function LisOrdersPage(): React.ReactElement {
   const [status, setStatus] = React.useState<LabOrderStatus | "">("");
   const [fromDate, setFromDate] = React.useState("");
 
-  const lisOrder = (trpc as unknown as { lis: { order: LisOrderListAccess } }).lis.order;
-
   const queryInput: LabOrderListInput = {
     ...(encounterId.trim() && { encounterId: encounterId.trim() }),
     ...(patientId.trim() && { patientId: patientId.trim() }),
@@ -120,7 +97,7 @@ export default function LisOrdersPage(): React.ReactElement {
     limit: 50,
   };
 
-  const list = lisOrder.list.useQuery(queryInput);
+  const list = trpc.lis.order.list.useQuery(queryInput);
 
   return (
     <div className="space-y-4">
