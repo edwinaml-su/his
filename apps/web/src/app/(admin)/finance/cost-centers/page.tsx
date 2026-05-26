@@ -6,10 +6,25 @@
  */
 import * as React from "react";
 import Link from "next/link";
-import { Building2 } from "lucide-react";
+import { Building2, Download, FileText, FileSpreadsheet, FileDown } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@his/ui/components/dropdown-menu";
+import {
+  exportToCsv,
+  exportToXlsx,
+  exportToPdf,
+  timestampedFilename,
+  type ExportColumn,
+} from "@/lib/export";
 import {
   Select,
   SelectContent,
@@ -107,6 +122,60 @@ export default function CostCentersPage() {
 
   const rows = (query.data ?? []) as CostCenterRow[];
 
+  // Columnas exportables (label visible idéntico al de la tabla).
+  const exportColumns: ExportColumn<CostCenterRow>[] = React.useMemo(
+    () => [
+      { header: "Código", accessor: (r) => r.code },
+      { header: "Nombre", accessor: (r) => r.name },
+      { header: "Tipo", accessor: (r) => TIPO_LABEL[(r.tipo ?? "productivo") as Tipo] },
+      {
+        header: "Imputación",
+        accessor: (r) => (r.permite_imputacion !== false ? "Sí" : "Solo consolidación"),
+      },
+      { header: "Base distribución", accessor: (r) => r.base_distribucion ?? "" },
+      { header: "Estado", accessor: (r) => (r.active ? "Activo" : "Inactivo") },
+    ],
+    [],
+  );
+
+  const exportBase = "centros-costo";
+  const exportSubtitle = `${org?.tradeName ?? org?.legalName ?? ""} — ${rows.length} centro(s)`;
+
+  const handleExportCsv = () => {
+    exportToCsv(rows, exportColumns, timestampedFilename(exportBase, "csv"));
+    setToast({ title: "CSV descargado", variant: "success" });
+  };
+
+  const handleExportXlsx = async () => {
+    try {
+      await exportToXlsx(rows, exportColumns, timestampedFilename(exportBase, "xlsx"), "Centros de costo");
+      setToast({ title: "Excel descargado", variant: "success" });
+    } catch (err) {
+      setToast({
+        title: "Error al exportar Excel",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleExportPdf = async () => {
+    try {
+      await exportToPdf(rows, exportColumns, timestampedFilename(exportBase, "pdf"), {
+        title: "Centros de Costo",
+        subtitle: exportSubtitle,
+        orientation: "landscape",
+      });
+      setToast({ title: "PDF descargado", variant: "success" });
+    } catch (err) {
+      setToast({
+        title: "Error al exportar PDF",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    }
+  };
+
   if (orgQuery.isLoading) {
     return <p className="text-sm text-muted-foreground">Cargando organización…</p>;
   }
@@ -139,9 +208,39 @@ export default function CostCentersPage() {
             Formato de código: T-AAA-SSS (1=productivo, 2=intermedio, 3=apoyo).
           </p>
         </div>
-        <Button asChild>
-          <Link href="/finance/cost-centers/nuevo">+ Nuevo centro</Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                disabled={rows.length === 0 || query.isLoading}
+                aria-label="Exportar centros de costo"
+              >
+                <Download className="mr-2 h-4 w-4" aria-hidden />
+                Exportar
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuLabel>Formato de exportación</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={handleExportPdf}>
+                <FileText className="mr-2 h-4 w-4" aria-hidden />
+                PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportXlsx}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" aria-hidden />
+                Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleExportCsv}>
+                <FileDown className="mr-2 h-4 w-4" aria-hidden />
+                CSV
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button asChild>
+            <Link href="/finance/cost-centers/nuevo">+ Nuevo centro</Link>
+          </Button>
+        </div>
       </div>
 
       <Card>
