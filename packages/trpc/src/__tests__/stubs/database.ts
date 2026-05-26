@@ -42,14 +42,19 @@ export interface EmitDomainEventInput {
 export type EmitDomainEventTx = any;
 
 /**
- * Implementación stub: valida que `tx.domainEvent.create` exista y lo llama.
- * Los tests de farmacia verifican el payload a través del mock de `prisma.domainEvent.create`.
+ * Implementación stub: replica el comportamiento real de `emitDomainEvent`
+ * llamando a `tx.domainEvent.create` Y `tx.auditLog.create` en orden.
+ *
+ * El stub debe mantener paridad con `packages/database/src/outbox/emit.ts`
+ * (US.B15.1.4 — audit log wiring) porque los tests de inpatient/lis verifican
+ * que `prisma.auditLog.create` se llame tras `domainEvent.create`. Si solo
+ * delegamos a `domainEvent.create` los tests Beta.15 fallan.
  */
 export async function emitDomainEvent(
   tx: EmitDomainEventTx,
   input: EmitDomainEventInput,
-): Promise<void> {
-  await tx.domainEvent.create({
+): Promise<{ id: string }> {
+  const created = await tx.domainEvent.create({
     data: {
       organizationId: input.organizationId,
       eventType: input.eventType,
@@ -60,4 +65,15 @@ export async function emitDomainEvent(
       correlationId: input.correlationId ?? null,
     },
   });
+  await tx.auditLog.create({
+    data: {
+      organizationId: input.organizationId,
+      userId: input.emittedById ?? null,
+      action: "CREATE",
+      entity: "DomainEvent",
+      entityId: created?.id ?? "stub-id",
+      justification: `DOMAIN_EVENT_EMITTED:${input.eventType}`,
+    },
+  });
+  return created ?? { id: "stub-id" };
 }
