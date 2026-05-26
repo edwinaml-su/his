@@ -777,16 +777,59 @@ export const workflowInboxRouter = router({
           `, orgId) as Promise<ArcoRow[]>).catch(() => [] as ArcoRow[])
         : [];
 
-      // MPI_MERGE_PENDING: placeholder (modelo de candidatos no existe;
-      // PatientMerge solo registra merges ya ejecutados, no candidatos)
-      const mpiMergePending: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      // MPI_MERGE_PENDING: EcePatientMerge.estado=PENDIENTE
+      const mpiMergePending = isEnabled("MPI_MERGE_PENDING")
+        ? await prisma.ecePatientMerge.findMany({
+            where: { organizationId: orgId, estado: "PENDIENTE" },
+            select: {
+              id: true,
+              creadoEn: true,
+              canonicalPatientId: true,
+              mergedPatientId: true,
+            },
+            orderBy: { creadoEn: "asc" },
+            take: 50,
+          })
+        : [];
 
       // ═══════════════════════════════════════════════════════════════════════
-      // OLA 3 — Farmacovigilancia / Calidad (placeholder por ahora)
+      // OLA 3 — Farmacovigilancia / Calidad (activados: ece.farmacovigilancia_incident)
       // ═══════════════════════════════════════════════════════════════════════
 
-      const adrPending: Array<{ id: string; createdAt: Date; patientId: string }> = [];
-      const incidentToReview: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      type FarmaRow = {
+        id: string;
+        detected_at: Date;
+        patient_id: string | null;
+        severity: string;
+        description: string;
+      };
+      // ADR: HIGH/CRITICAL severity (reacciones adversas — reporte regulatorio)
+      const adrPending: FarmaRow[] = isEnabled("ADR_REPORT_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   detected_at,
+                   patient_id::text AS patient_id,
+                   severity,
+                   COALESCE(payload->>'description', payload->>'reason', 'Reacción adversa') AS description
+            FROM ece.farmacovigilancia_incident
+            WHERE status = 'PENDIENTE' AND severity IN ('HIGH','CRITICAL')
+            ORDER BY detected_at ASC LIMIT 100
+          `) as Promise<FarmaRow[]>).catch(() => [] as FarmaRow[])
+        : [];
+
+      // INCIDENT: LOW/MEDIUM severity (revisión de calidad rutinaria)
+      const incidentToReview: FarmaRow[] = isEnabled("INCIDENT_TO_REVIEW")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   detected_at,
+                   patient_id::text AS patient_id,
+                   severity,
+                   COALESCE(payload->>'description', payload->>'reason', 'Evento adverso') AS description
+            FROM ece.farmacovigilancia_incident
+            WHERE status = 'PENDIENTE' AND severity IN ('LOW','MEDIUM')
+            ORDER BY detected_at ASC LIMIT 100
+          `) as Promise<FarmaRow[]>).catch(() => [] as FarmaRow[])
+        : [];
 
       // ═══════════════════════════════════════════════════════════════════════
       // OLA 3 — Cold chain (1 activa)
@@ -841,9 +884,23 @@ export const workflowInboxRouter = router({
           })
         : [];
 
-      // EQUIPMENT_MAINTENANCE_DUE: placeholder (requiere lectura de PmSchedule
-      // con cálculo de próxima fecha vencida — pospuesto a iteración futura)
-      const maintDue: Array<{ id: string; assetTag: string; name: string; createdAt: Date }> = [];
+      // EQUIPMENT_MAINTENANCE_DUE: PmSchedule.status=PLANNED + scheduledAt vencido o en 7d
+      const maintDue = isEnabled("EQUIPMENT_MAINTENANCE_DUE")
+        ? await prisma.pmSchedule.findMany({
+            where: {
+              status: "PLANNED",
+              scheduledAt: { lte: new Date(now.getTime() + 7 * 24 * 60 * 60_000) },
+              equipment: { organizationId: orgId, active: true },
+            },
+            select: {
+              id: true,
+              scheduledAt: true,
+              equipment: { select: { id: true, assetTag: true, name: true } },
+            },
+            orderBy: { scheduledAt: "asc" },
+            take: 50,
+          })
+        : [];
 
       // ═══════════════════════════════════════════════════════════════════════
       // OLA 3 — Inventario (2 activas)
@@ -896,13 +953,40 @@ export const workflowInboxRouter = router({
         : [];
 
       // ═══════════════════════════════════════════════════════════════════════
-      // OLA 3 — GS1 / Logística (4 placeholders)
+      // OLA 3 — GS1 / Logística (2 activadas + 2 placeholder)
       // ═══════════════════════════════════════════════════════════════════════
 
-      const gs1Inbound: Array<{ id: string; createdAt: Date; patientId: string }> = [];
-      const gs1Transfer: Array<{ id: string; createdAt: Date; patientId: string }> = [];
-      const gs1Return: Array<{ id: string; createdAt: Date; patientId: string }> = [];
-      const gs1Recall: Array<{ id: string; createdAt: Date; patientId: string }> = [];
+      // GS1_INBOUND_PENDING: placeholder (sin tabla ece.recepcion_inbound aún)
+      const gs1Inbound: Array<{ id: string; createdAt: Date }> = [];
+
+      // GS1_TRANSFER_PENDING: ece.transferencia_inventario en programado/en_transito
+      type TransferRow = { id: string; fecha_envio: Date; origen_gln: string; destino_gln: string };
+      const gs1Transfer: TransferRow[] = isEnabled("GS1_TRANSFER_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id,
+                   COALESCE(fecha_envio, NOW()) AS fecha_envio,
+                   origen_gln,
+                   destino_gln
+            FROM ece.transferencia_inventario
+            WHERE estado IN ('programado','en_transito')
+            ORDER BY fecha_envio ASC NULLS FIRST LIMIT 50
+          `) as Promise<TransferRow[]>).catch(() => [] as TransferRow[])
+        : [];
+
+      // GS1_RETURN_PENDING: ece.devolucion_inventario en borrador
+      type ReturnRow = { id: string; registrado_en: Date };
+      const gs1Return: ReturnRow[] = isEnabled("GS1_RETURN_PENDING")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT id::text AS id, registrado_en
+            FROM ece.devolucion_inventario
+            WHERE estado_registro = 'borrador'
+              AND registrado_en > now() - interval '30 days'
+            ORDER BY registrado_en ASC LIMIT 50
+          `) as Promise<ReturnRow[]>).catch(() => [] as ReturnRow[])
+        : [];
+
+      // GS1_RECALL_TO_PURGE: placeholder (no hay tabla específica de recalls)
+      const gs1Recall: Array<{ id: string; createdAt: Date }> = [];
 
       // ═══════════════════════════════════════════════════════════════════════
       // OLA 3 — Defunciones / Reclamos (3 activas)
@@ -947,9 +1031,32 @@ export const workflowInboxRouter = router({
           })
         : [];
 
-      // CLAIM_PENDING_SUBMISSION: placeholder (requiere modelo Invoice + InsuranceCoverage
-      // para detectar facturas con cobertura pendientes de claim — pospuesto)
-      const claimsPendingSubmission: Array<{ id: string; createdAt: Date }> = [];
+      // CLAIM_PENDING_SUBMISSION: facturas últimos 7d con PatientCoverage activa
+      // del paciente del encounter, sin InsuranceClaim asociado.
+      type ClaimPendingRow = {
+        id: string;
+        created_at: Date;
+        insurer_name: string;
+      };
+      const claimsPendingSubmission: ClaimPendingRow[] = isEnabled("CLAIM_PENDING_SUBMISSION")
+        ? await (prisma.$queryRawUnsafe(`
+            SELECT inv.id::text AS id,
+                   inv."createdAt" AS created_at,
+                   ins."tradeName" AS insurer_name
+            FROM "Invoice" inv
+            JOIN "Encounter" e ON e.id = inv."encounterId"
+            JOIN "PatientCoverage" pc
+              ON pc."patientId" = e."patientId"
+              AND pc.active = true
+              AND (pc."validTo" IS NULL OR pc."validTo" >= now())
+            JOIN "Insurer" ins ON ins.id = pc."insurerId"
+            LEFT JOIN "InsuranceClaim" ic ON ic."invoiceId" = inv.id
+            WHERE inv."organizationId" = $1::uuid
+              AND inv."createdAt" > now() - interval '7 days'
+              AND ic.id IS NULL
+            ORDER BY inv."createdAt" ASC LIMIT 50
+          `, orgId) as Promise<ClaimPendingRow[]>).catch(() => [] as ClaimPendingRow[])
+        : [];
 
       // ═══════════════════════════════════════════════════════════════════════
       // Enriquecer Patient en batch único
@@ -984,6 +1091,9 @@ export const workflowInboxRouter = router({
         ...deathCertPending.map((d) => d.patient_id),
       ]);
       for (const a of arcoPending) patientIds.add(a.paciente_id);
+      for (const m of mpiMergePending) patientIds.add(m.canonicalPatientId);
+      for (const a of adrPending) if (a.patient_id) patientIds.add(a.patient_id);
+      for (const i of incidentToReview) if (i.patient_id) patientIds.add(i.patient_id);
 
       for (const p of partogramaOverdue) patientIds.add(p.paciente_id);
       for (const r of rnApgarPending) patientIds.add(r.paciente_id);
@@ -1661,6 +1771,78 @@ export const workflowInboxRouter = router({
             patient: null,
             description: `Reclamo ${c.claimNumber} rechazado: ${c.rejectionReason?.slice(0, 60) ?? "sin motivo"}`,
             deepLink: `/finance/invoices?claim=${c.id}`,
+          }),
+        ),
+
+        // ─── Ola 3 — Placeholders activados ────────────────────────────────
+        ...mpiMergePending.map((m) =>
+          buildTask({
+            type: "MPI_MERGE_PENDING",
+            sourceId: m.id,
+            createdAt: m.creadoEn,
+            patient: getPatient(m.canonicalPatientId),
+            description: "Solicitud de merge MPI pendiente de aprobación DIR",
+            deepLink: `/patients/${m.canonicalPatientId}/merge?merge=${m.id}`,
+          }),
+        ),
+        ...adrPending.map((a) =>
+          buildTask({
+            type: "ADR_REPORT_PENDING",
+            sourceId: a.id,
+            createdAt: a.detected_at,
+            patient: getPatient(a.patient_id),
+            description: `RAM ${a.severity}: ${a.description.slice(0, 80)}`,
+            deepLink: `/farmacovigilancia?id=${a.id}`,
+          }),
+        ),
+        ...incidentToReview.map((i) =>
+          buildTask({
+            type: "INCIDENT_TO_REVIEW",
+            sourceId: i.id,
+            createdAt: i.detected_at,
+            patient: getPatient(i.patient_id),
+            description: `Incidente ${i.severity}: ${i.description.slice(0, 80)}`,
+            deepLink: `/farmacovigilancia?id=${i.id}`,
+          }),
+        ),
+        ...maintDue.map((m) =>
+          buildTask({
+            type: "EQUIPMENT_MAINTENANCE_DUE",
+            sourceId: m.id,
+            createdAt: m.scheduledAt,
+            patient: null,
+            description: `Mantto preventivo: ${m.equipment.assetTag} ${m.equipment.name}`,
+            deepLink: `/equipment?id=${m.equipment.id}`,
+          }),
+        ),
+        ...gs1Transfer.map((t) =>
+          buildTask({
+            type: "GS1_TRANSFER_PENDING",
+            sourceId: t.id,
+            createdAt: t.fecha_envio,
+            patient: null,
+            description: `Transfer ${t.origen_gln} → ${t.destino_gln}`,
+            deepLink: `/gs1/transfers?id=${t.id}`,
+          }),
+        ),
+        ...gs1Return.map((r) =>
+          buildTask({
+            type: "GS1_RETURN_PENDING",
+            sourceId: r.id,
+            createdAt: r.registrado_en,
+            patient: null,
+            description: "Devolución de inventario pendiente de validar",
+            deepLink: `/gs1/devoluciones?id=${r.id}`,
+          }),
+        ),
+        ...claimsPendingSubmission.map((c) =>
+          buildTask({
+            type: "CLAIM_PENDING_SUBMISSION",
+            sourceId: c.id,
+            createdAt: c.created_at,
+            patient: null,
+            description: `Factura con cobertura ${c.insurer_name} sin reclamo enviado`,
+            deepLink: `/finance/invoices/${c.id}`,
           }),
         ),
       ];
