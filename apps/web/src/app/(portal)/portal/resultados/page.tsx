@@ -9,6 +9,7 @@
  * se muestran todos los resultados validados.
  */
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
@@ -48,7 +49,12 @@ function groupByDate(results: LabResultItem[]) {
 }
 
 export default function ResultadosPage() {
-  const { data, isLoading, isError } = trpc.portal.hce.labResults.list.useQuery({});
+  const searchParams = useSearchParams();
+  const wardPatientId = searchParams.get("wardPatientId") ?? undefined;
+
+  const { data, isLoading, isError } = trpc.portal.hce.labResults.list.useQuery(
+    wardPatientId ? { wardPatientId } : {},
+  );
 
   return (
     <div className="space-y-6">
@@ -86,7 +92,7 @@ export default function ResultadosPage() {
                 {items.map((r) => (
                   <li key={r.id}>
                     <Link
-                      href={`/portal/resultados/${r.id}`}
+                      href={`/portal/resultados/${r.id}${wardPatientId ? `?wardPatientId=${wardPatientId}` : ""}`}
                       className="flex items-center justify-between rounded-xl border bg-white p-4 hover:shadow-sm transition-shadow"
                       aria-label={`Ver detalle: ${r.orderItem.test.name}`}
                     >
