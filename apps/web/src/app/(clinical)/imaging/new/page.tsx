@@ -92,10 +92,17 @@ const INITIAL: FormState = {
   ejecutorCostCenterId: "",
 };
 
+// HH-12 (audit Stream H): patrón UUID consistente con lis/orders/new.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function validate(f: FormState): string | null {
   if (!f.encounterId.trim()) return "Encuentro es requerido.";
+  if (!UUID_RE.test(f.encounterId.trim())) return "Encuentro: formato UUID inválido.";
   if (!f.establishmentId.trim()) return "Establecimiento es requerido.";
+  if (!UUID_RE.test(f.establishmentId.trim())) return "Establecimiento: formato UUID inválido.";
   if (!f.patientId.trim()) return "Paciente es requerido.";
+  if (!UUID_RE.test(f.patientId.trim())) return "Paciente: formato UUID inválido.";
   if (!f.studyDescription.trim()) return "Descripción del estudio es requerida.";
   if (!f.clinicalIndication.trim()) return "Indicación clínica es requerida.";
   return null;
@@ -169,6 +176,7 @@ export default function NewImagingOrderPage() {
         </CardHeader>
         <CardContent>
           <Form onSubmit={onSubmit} noValidate>
+            {/* HH-12: feedback inline cuando el formato UUID no coincide. */}
             <FormField>
               <Label htmlFor="encounterId">Encuentro (UUID)</Label>
               <Input
@@ -176,7 +184,18 @@ export default function NewImagingOrderPage() {
                 required
                 value={form.encounterId}
                 onChange={(e) => update("encounterId", e.target.value)}
+                aria-invalid={form.encounterId.length > 0 && !UUID_RE.test(form.encounterId)}
+                aria-describedby={
+                  form.encounterId.length > 0 && !UUID_RE.test(form.encounterId)
+                    ? "encounterId-error"
+                    : undefined
+                }
               />
+              {form.encounterId.length > 0 && !UUID_RE.test(form.encounterId) && (
+                <p id="encounterId-error" role="alert" className="text-sm text-destructive">
+                  Formato UUID inválido (ej. 11111111-2222-3333-4444-555555555555).
+                </p>
+              )}
             </FormField>
             <FormField>
               <Label htmlFor="establishmentId">Establecimiento (UUID)</Label>
@@ -185,7 +204,18 @@ export default function NewImagingOrderPage() {
                 required
                 value={form.establishmentId}
                 onChange={(e) => update("establishmentId", e.target.value)}
+                aria-invalid={form.establishmentId.length > 0 && !UUID_RE.test(form.establishmentId)}
+                aria-describedby={
+                  form.establishmentId.length > 0 && !UUID_RE.test(form.establishmentId)
+                    ? "establishmentId-error"
+                    : undefined
+                }
               />
+              {form.establishmentId.length > 0 && !UUID_RE.test(form.establishmentId) && (
+                <p id="establishmentId-error" role="alert" className="text-sm text-destructive">
+                  Formato UUID inválido.
+                </p>
+              )}
             </FormField>
             <FormField>
               <Label htmlFor="patientId">Paciente (UUID)</Label>
@@ -194,7 +224,18 @@ export default function NewImagingOrderPage() {
                 required
                 value={form.patientId}
                 onChange={(e) => update("patientId", e.target.value)}
+                aria-invalid={form.patientId.length > 0 && !UUID_RE.test(form.patientId)}
+                aria-describedby={
+                  form.patientId.length > 0 && !UUID_RE.test(form.patientId)
+                    ? "patientId-error"
+                    : undefined
+                }
               />
+              {form.patientId.length > 0 && !UUID_RE.test(form.patientId) && (
+                <p id="patientId-error" role="alert" className="text-sm text-destructive">
+                  Formato UUID inválido.
+                </p>
+              )}
             </FormField>
             <FormField>
               <Label htmlFor="modalityType">Modalidad</Label>
