@@ -24,6 +24,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { parseDateOnly } from "@/lib/date-only";
 import {
   Select,
   SelectContent,
@@ -110,7 +111,12 @@ export default function LisOrdersPage(): React.ReactElement {
     ...(patientId.trim() && { patientId: patientId.trim() }),
     ...(priority && { priority }),
     ...(status && { status }),
-    ...(fromDate && { fromDate: new Date(fromDate) }),
+    // HH-07 (audit Stream H): `new Date("YYYY-MM-DD")` interpreta UTC midnight
+    // → en UTC-6 (es-SV) genera shift de -1 día y oculta órdenes del día filtrado.
+    ...((() => {
+      const parsed = parseDateOnly(fromDate);
+      return parsed ? { fromDate: parsed } : {};
+    })()),
     limit: 50,
   };
 

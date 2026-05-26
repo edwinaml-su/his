@@ -30,8 +30,34 @@ export default function NewPatientPage() {
     birthDate: "",
   });
 
+  // H1-02 (audit Stream A): validación client-side previa al submit — el Select
+  // de Shadcn no acepta `required` HTML, así que se enmascara como UUID inválido
+  // en el servidor sin feedback visual. Aquí marcamos los campos obligatorios
+  // antes de invocar la mutación.
+  const [validationError, setValidationError] = React.useState<{
+    field: "biologicalSexId" | "birthDate" | null;
+    message: string;
+  }>({ field: null, message: "" });
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!form.biologicalSexId) {
+      setValidationError({
+        field: "biologicalSexId",
+        message: "Selecciona el sexo biológico — campo obligatorio para protocolos clínicos.",
+      });
+      return;
+    }
+    if (!form.birthDate) {
+      setValidationError({
+        field: "birthDate",
+        message: "Ingresa la fecha de nacimiento — requerida para cálculo de edad y rangos pediátricos.",
+      });
+      return;
+    }
+    setValidationError({ field: null, message: "" });
+
     create.mutate({
       mrn: form.mrn,
       firstName: form.firstName,
@@ -80,12 +106,25 @@ export default function NewPatientPage() {
               />
             </FormField>
             <FormField>
-              <Label>Sexo biológico</Label>
+              <Label htmlFor="biologicalSexId">
+                Sexo biológico <span aria-hidden className="text-destructive">*</span>
+                <span className="sr-only"> (obligatorio)</span>
+              </Label>
               <Select
                 value={form.biologicalSexId}
-                onValueChange={(v) => setForm({ ...form, biologicalSexId: v })}
+                onValueChange={(v) => {
+                  setForm({ ...form, biologicalSexId: v });
+                  if (validationError.field === "biologicalSexId") {
+                    setValidationError({ field: null, message: "" });
+                  }
+                }}
               >
-                <SelectTrigger>
+                <SelectTrigger
+                  id="biologicalSexId"
+                  aria-required="true"
+                  aria-invalid={validationError.field === "biologicalSexId"}
+                  aria-describedby={validationError.field === "biologicalSexId" ? "biologicalSexId-error" : undefined}
+                >
                   <SelectValue placeholder="Selecciona…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -96,15 +135,36 @@ export default function NewPatientPage() {
                   ))}
                 </SelectContent>
               </Select>
+              {validationError.field === "biologicalSexId" && (
+                <p id="biologicalSexId-error" role="alert" className="text-sm text-destructive">
+                  {validationError.message}
+                </p>
+              )}
             </FormField>
             <FormField>
-              <Label htmlFor="birthDate">Fecha de nacimiento</Label>
+              <Label htmlFor="birthDate">
+                Fecha de nacimiento <span aria-hidden className="text-destructive">*</span>
+                <span className="sr-only"> (obligatorio)</span>
+              </Label>
               <Input
                 id="birthDate"
                 type="date"
+                required
                 value={form.birthDate}
-                onChange={(e) => setForm({ ...form, birthDate: e.target.value })}
+                onChange={(e) => {
+                  setForm({ ...form, birthDate: e.target.value });
+                  if (validationError.field === "birthDate") {
+                    setValidationError({ field: null, message: "" });
+                  }
+                }}
+                aria-invalid={validationError.field === "birthDate"}
+                aria-describedby={validationError.field === "birthDate" ? "birthDate-error" : undefined}
               />
+              {validationError.field === "birthDate" && (
+                <p id="birthDate-error" role="alert" className="text-sm text-destructive">
+                  {validationError.message}
+                </p>
+              )}
             </FormField>
             <FormError>{create.error?.message}</FormError>
             <Button type="submit" disabled={create.isPending}>
