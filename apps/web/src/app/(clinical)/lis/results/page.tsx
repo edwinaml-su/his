@@ -101,9 +101,9 @@ function formatValue(r: LabResultRow): string {
 
 export default function LisResultsQueuePage(): React.ReactElement {
   const router = useRouter();
-  const lisOrder = (trpc as unknown as { lis: { order: LisOrderListAccess } }).lis
-    .order;
-
+  // HH-10 (audit Stream H): lis está montado en _app.ts — acceso directo.
+  // El cast a LisOrderListAccess es local (campos opcionales que la UI espera).
+  const lisOrder = trpc.lis.order as unknown as LisOrderListAccess;
   const orders = lisOrder.list.useQuery({ status: "RESULTED", limit: 100 });
 
   const pending: PendingResultRow[] = React.useMemo(() => {

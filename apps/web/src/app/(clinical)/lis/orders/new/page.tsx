@@ -106,8 +106,10 @@ const LAB_CLI_CODE = "2-LAB-CLI";
 
 export default function NewLisOrderPage(): React.ReactElement {
   const router = useRouter();
-  const lis = (trpc as unknown as { lis: LisAccess }).lis;
-  const costCenter = (trpc as unknown as { costCenter: CostCenterAccess }).costCenter;
+  // HH-10 (audit Stream H): lis + costCenter están montados en _app.ts —
+  // acceso directo, no requiere cast as-unknown.
+  const lis = trpc.lis;
+  const costCenter = trpc.costCenter;
 
   const [encounterId, setEncounterId] = React.useState("");
   const [patientId, setPatientId] = React.useState("");
