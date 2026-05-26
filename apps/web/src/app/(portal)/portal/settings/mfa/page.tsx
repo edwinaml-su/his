@@ -3,6 +3,21 @@
 /**
  * Página de configuración de MFA (TOTP) en el Portal del Paciente.
  * Flujo: idle → enrolling (muestra secreto/QR) → done.
+ *
+ * K-07 (audit Stream K): el secreto TOTP llega del backend en plaintext
+ * (necesario para render del QR + entrada manual). Mitigaciones:
+ *   1. Secret SOLO se almacena en useState del componente (no localStorage).
+ *   2. Mutation se invalida tras `verifyMfa.onSuccess` → React Query
+ *      olvida el secret de su caché.
+ *   3. Al transicionar a `state="done"`, `setSecret(null)` limpia el state
+ *      local. Si el usuario vuelve, debe re-enrollar (genera secret nuevo).
+ *   4. La transmisión es siempre TLS + cookie HttpOnly → no expuesto a XSS.
+ *   5. Logs server-side redactan (K-03).
+ *
+ * Trade-off no resuelto en esta iteración (follow-up): el secret aparece en
+ * la respuesta tRPC y por tanto en DevTools Network. Mitigación completa
+ * exigiría generar QR server-side y devolver solo SVG opaco (sin secret).
+ * Aceptable en MVP dado que el navegador es del propio paciente.
  */
 import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
@@ -16,6 +31,8 @@ export default function MfaSettingsPage() {
   const [totpCode, setTotpCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const trpcUtils = trpc.useUtils();
+
   const enableMfa = trpc.portal.account.enableMfa.useMutation({
     onSuccess: (data: { secret: string }) => {
       setSecret(data.secret);
@@ -25,7 +42,15 @@ export default function MfaSettingsPage() {
   });
 
   const verifyMfa = trpc.portal.account.verifyMfa.useMutation({
-    onSuccess: () => setState("done"),
+    onSuccess: () => {
+      // K-07: limpiar el secret del state Y de la caché React Query
+      // para que no quede recuperable tras la activación.
+      setSecret(null);
+      setTotpCode("");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (trpcUtils.portal.account as any).enableMfa?.reset?.();
+      setState("done");
+    },
     onError: (err) => setError(err.message ?? "Código incorrecto. Intente de nuevo."),
   });
 

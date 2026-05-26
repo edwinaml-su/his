@@ -48,16 +48,18 @@ export const portalArcoRouter = router({
     .mutation(async ({ ctx, input }) => {
       const patientId = ctx.portalAccount.patientId;
 
-      // Resolver organización del paciente
-      const patient = await ctx.prisma.patient.findUnique({
-        where: { id: patientId },
-        select: { organizationId: true },
-      });
-      if (!patient) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
-      }
-
       return withPortalContext(ctx.prisma, ctx.portalAccount.id, async (tx) => {
+        // K-14 (audit Stream K): lookup del paciente DENTRO del withPortalContext.
+        // Si lo hacíamos fuera con ctx.prisma directo (BYPASSRLS), una eventual
+        // RLS policy sobre Patient para el portal era bypaseada — defense-in-depth.
+        const patient = await tx.patient.findUnique({
+          where: { id: patientId },
+          select: { organizationId: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+
         const solicitud = await tx.solicitudArco.create({
           data: {
             pacienteId: patientId,

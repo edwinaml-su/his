@@ -11,19 +11,25 @@
  *      el campo TOTP.
  *
  * Cierra K-02 del audit Stream K (session token nunca persistido como cookie).
+ * Cierra K-08 del audit Stream K (token removido de URL antes de MFA wait).
  */
-import { Suspense, useEffect, useState, useTransition } from "react";
+import { Suspense, useEffect, useRef, useState, useTransition } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { verifyMagicLink, type VerifyResult } from "./actions";
 
 function VerifyContent() {
   const params = useSearchParams();
   const router = useRouter();
-  const token = params.get("token") ?? "";
+  // K-08: capturar el token en ref/state inmediatamente; se limpiará de la URL
+  // antes de entrar al estado MFA_REQUIRED para evitar exposición en history.
+  const tokenFromUrl = params.get("token") ?? "";
+  const [tokenInState, setTokenInState] = useState(tokenFromUrl);
   const [totpCode, setTotpCode] = useState("");
   const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Evita que el effect se dispare de nuevo cuando limpiamos el token de la URL
+  const tokenConsumed = useRef(false);
 
   function handleResult(result: VerifyResult) {
     if (result.status === "OK") {
@@ -32,6 +38,9 @@ function VerifyContent() {
       return;
     }
     if (result.status === "MFA_REQUIRED") {
+      // K-08: limpiar URL antes de mostrar pantalla MFA; el token ya está en
+      // tokenInState para el segundo call con TOTP.
+      router.replace("/portal/verify");
       setMfaRequired(true);
       return;
     }
@@ -47,15 +56,19 @@ function VerifyContent() {
   }
 
   useEffect(() => {
-    if (token && !mfaRequired) {
-      dispatchVerify({ token });
+    // K-08: tokenConsumed evita reintento cuando tokenFromUrl queda vacío tras
+    // limpiar la URL con router.replace("/portal/verify").
+    if (tokenFromUrl && !tokenConsumed.current) {
+      tokenConsumed.current = true;
+      setTokenInState(tokenFromUrl);
+      dispatchVerify({ token: tokenFromUrl });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [tokenFromUrl]);
 
   function handleMfaSubmit(e: React.FormEvent) {
     e.preventDefault();
-    dispatchVerify({ token, totpCode });
+    dispatchVerify({ token: tokenInState, totpCode });
   }
 
   if (pending && !mfaRequired) {
