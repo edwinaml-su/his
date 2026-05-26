@@ -34,23 +34,27 @@ const whoItemSchema = z.object({
 
 export type WhoItem = z.infer<typeof whoItemSchema>;
 
+// HE-17 (audit Stream E): `responsableId` lo determina el server desde ctx.user.
+// El cliente NO debe enviarlo (no es trust boundary). Si llega, el server lo sobrescribe.
+// Mantengo el campo opcional para retro-compatibilidad de lectura del blob jsonb.
+
 // Fase Sign-In: 8 ítems estándar WHO 2009 §1
 export const whoSignInSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
 
 // Fase Time-Out: 7 ítems estándar WHO 2009 §2
 export const whoTimeOutSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
 
 // Fase Sign-Out: 5 ítems estándar WHO 2009 §3
 export const whoSignOutSchema = z.object({
-  responsableId: z.string().uuid(),
+  responsableId: z.string().uuid().optional(),
   responsableNombre: z.string().min(1).max(200),
   items: z.array(whoItemSchema).min(1).max(20),
 });
@@ -204,12 +208,15 @@ export const eceWhoChecklistRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Acto quirúrgico no encontrado." });
       }
 
+      const personalId = ctx.user!.id;
+
+      // HE-17: server override del responsableId — el blob jsonb queda consistente
+      // con el `registrado_por` y no acepta UUID falso del cliente.
       const signInPayload = JSON.stringify({
         ...input.signIn,
+        responsableId: personalId,
         completado_en: new Date().toISOString(),
       });
-
-      const personalId = ctx.user!.id;
 
       // Upsert: si no existe → crea con estado sign_in_completo.
       // Si existe y está en "iniciado" → actualiza.
@@ -278,8 +285,10 @@ export const eceWhoChecklistRouter = router({
         });
       }
 
+      // HE-17: server override del responsableId.
       const timeOutPayload = JSON.stringify({
         ...input.timeOut,
+        responsableId: ctx.user!.id,
         completado_en: new Date().toISOString(),
       });
 
@@ -320,8 +329,10 @@ export const eceWhoChecklistRouter = router({
         });
       }
 
+      // HE-17: server override del responsableId.
       const signOutPayload = JSON.stringify({
         ...input.signOut,
+        responsableId: ctx.user!.id,
         completado_en: new Date().toISOString(),
       });
 
