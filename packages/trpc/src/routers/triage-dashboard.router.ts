@@ -348,12 +348,14 @@ export const triageDashboardRouter = router({
         : [];
       const pendingImgSet = new Set(imgOrders.map((i) => i.encounterId));
 
-      // 6. EhrNote reciente (última hora) por encounter → señal "en consulta".
+      // 6. ClinicalNote reciente (última hora) por encounter → señal "en consulta".
+      // (Antes referenciaba "EhrNote" que nunca existió en BD — la tabla real
+      // es public."ClinicalNote", causaba 42P01 en /triage/monitor.)
       const recentNotes = encounterIds.length
         ? await ctx.prisma.$queryRawUnsafe<
             Array<{ encounterId: string }>
           >(
-            `SELECT DISTINCT "encounterId" FROM "EhrNote"
+            `SELECT DISTINCT "encounterId" FROM "ClinicalNote"
              WHERE "encounterId" = ANY($1::uuid[])
                AND "createdAt" > now() - interval '60 minutes'`,
             encounterIds,
