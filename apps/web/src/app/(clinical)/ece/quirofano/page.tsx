@@ -27,6 +27,8 @@ import {
   type EstadoSala,
 } from "@/components/quirofano-sala-card";
 import { Badge } from "@his/ui/components/badge";
+import { Button } from "@his/ui/components/button";
+import { trpc } from "@/lib/trpc/react";
 
 // ─── Tipos locales ─────────────────────────────────────────────────────────────
 
@@ -219,6 +221,85 @@ function estadoSalaConteo(
 }
 
 // ─── Subcomponentes ───────────────────────────────────────────────────────────
+
+/**
+ * Tile "Pacientes en tránsito hacia SOP" — sql/56 handoff interno.
+ *
+ * Muestra los `EncounterTransfer` con `status='SENT'` (paciente salió de
+ * cama, falta confirmación). Botón "Recibir paciente" dispara
+ * `confirmReceipt` que habilita el Sign-In WHO downstream.
+ */
+function PendientesRecepcionPanel() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const trpcAny = trpc as any;
+  const pending = trpcAny.encounterTransfer.listPendingArrivals.useQuery({
+    limit: 20,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const utils = (trpc as any).useUtils?.();
+  const confirm = trpcAny.encounterTransfer.confirmReceipt.useMutation({
+    onSuccess: () => {
+      utils?.encounterTransfer?.listPendingArrivals?.invalidate();
+    },
+  });
+
+  const items = (pending.data ?? []) as Array<{
+    id: string;
+    occurredAt: string | Date;
+    reason: string;
+    encounter: {
+      encounterNumber: string;
+      patient: { firstName: string; lastName: string; mrn: string };
+    };
+  }>;
+
+  return (
+    <section aria-label="Pacientes en tránsito hacia quirófano" className="mb-6">
+      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        Pacientes en tránsito ({items.length})
+      </h2>
+      {pending.isLoading ? (
+        <p className="text-sm text-muted-foreground">Cargando…</p>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Sin pacientes en tránsito hacia quirófano.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((t) => (
+            <li
+              key={t.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm dark:border-amber-700 dark:bg-amber-950/40"
+            >
+              <div>
+                <p className="font-semibold">
+                  {t.encounter.patient.firstName} {t.encounter.patient.lastName}{" "}
+                  <span className="text-xs text-muted-foreground">
+                    (MRN {t.encounter.patient.mrn} · {t.encounter.encounterNumber})
+                  </span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {t.reason} ·{" "}
+                  {new Date(t.occurredAt).toLocaleString("es-SV", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </p>
+              </div>
+              <Button
+                size="sm"
+                disabled={confirm.isPending}
+                onClick={() => confirm.mutate({ transferId: t.id })}
+              >
+                Recibir paciente
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
 
 function KPIPanel({ kpis }: { kpis: KPI[] }) {
   return (
@@ -442,6 +523,9 @@ export default function QuirófanoDashboardPage() {
 
       {/* 1. KPIs */}
       <KPIPanel kpis={kpis} />
+
+      {/* 1.bis — Pacientes en tránsito hacia SOP (sql/56 handoff) */}
+      <PendientesRecepcionPanel />
 
       {/* 2. Alertas */}
       <AlertasPanel alertas={alertas} />

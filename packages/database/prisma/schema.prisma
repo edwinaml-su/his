@@ -605,6 +605,8 @@ model User {
   windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
   // Finance / Cost Centers — sql/131
   costCentersResponsable    CostCenter[]                 @relation("CostCenterResponsable")
+  // Handoff interno de traslados — sql/56
+  transfersReceived         EncounterTransfer[]          @relation("TransferReceiver")
 
   @@schema("public")
 }
@@ -1583,9 +1585,28 @@ model EncounterTransfer {
   createdBy     String?  @db.Uuid
   createdAt     DateTime @default(now()) @db.Timestamptz()
 
-  encounter Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  /// Handoff de recepción interna (sql/56) — paciente sale → alguien lo recibe.
+  /// SENT (default al crear) → RECEIVED (confirmado por receptor) | CANCELLED.
+  status        EncounterTransferStatus @default(SENT)
+  receivedAt    DateTime?               @db.Timestamptz()
+  receivedById  String?                 @db.Uuid
+  receivedNote  String?                 @db.VarChar(400)
+
+  encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+  receivedBy  User?     @relation("TransferReceiver", fields: [receivedById], references: [id], onDelete: SetNull)
 
   @@index([encounterId])
+  @@index([status])
+  @@index([toServiceId, status])
+  @@schema("public")
+}
+
+/// Handoff interno de paciente — sql/56_transfer_handoff.sql.
+enum EncounterTransferStatus {
+  SENT
+  RECEIVED
+  CANCELLED
+
   @@schema("public")
 }
 

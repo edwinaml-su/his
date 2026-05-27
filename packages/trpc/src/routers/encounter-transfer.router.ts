@@ -26,7 +26,10 @@ import {
   transferEncounterInput,
   listTransfersByEncounterInput,
   listRecentTransfersInput,
+  confirmReceiptInput,
+  listPendingArrivalsInput,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 export const encounterTransferRouter = router({
@@ -122,7 +125,7 @@ export const encounterTransferRouter = router({
           }
         }
 
-        // 4) Registrar transferencia.
+        // 4) Registrar transferencia. status='SENT' por default (sql/56).
         const transfer = await tx.encounterTransfer.create({
           data: {
             encounterId: enc.id,
@@ -132,6 +135,29 @@ export const encounterTransferRouter = router({
             toBedId: input.toBedId,
             reason: input.reason,
             createdBy: ctx.user.id,
+          },
+        });
+
+        // 4.bis) Outbox sql/56 — evento patient.transfer.sent.
+        // Permite a la bandeja del servicio destino mostrar el paciente
+        // "en tránsito" y al piso origen rastrear cuándo se confirme.
+        await emitDomainEvent(tx, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "patient.transfer.sent",
+          aggregateType: "EncounterTransfer",
+          aggregateId: transfer.id,
+          emittedById: ctx.user.id,
+          payload: {
+            transferId: transfer.id,
+            encounterId: enc.id,
+            patientId: enc.patientId,
+            fromServiceId: fromServiceId,
+            toServiceId: input.toServiceUnitId,
+            fromBedId: fromBedId,
+            toBedId: input.toBedId ?? null,
+            reason: input.reason,
+            occurredAt: transfer.occurredAt.toISOString(),
+            byUserId: ctx.user.id,
           },
         });
 
@@ -222,10 +248,129 @@ export const encounterTransferRouter = router({
                 },
               },
             },
+            receivedBy: { select: { id: true, fullName: true } },
           },
         }),
         ctx.prisma.encounterTransfer.count({ where }),
       ]);
       return { items, total, page: input.page, pageSize: input.pageSize };
+    }),
+
+  /**
+   * sql/56 — bandeja de pacientes EN TRÁNSITO al servicio destino.
+   *
+   * Devuelve los `EncounterTransfer` con `status='SENT'` para que el
+   * receptor (piso, quirófano, URPA) los confirme con `confirmReceipt`.
+   * Si no se pasa `toServiceUnitId`, devuelve todos los pendientes del
+   * tenant (vista admin / supervisor).
+   */
+  listPendingArrivals: tenantProcedure
+    .input(listPendingArrivalsInput)
+    .query(async ({ ctx, input }) => {
+      return ctx.prisma.encounterTransfer.findMany({
+        where: {
+          status: "SENT",
+          encounter: { organizationId: ctx.tenant.organizationId },
+          ...(input.toServiceUnitId
+            ? { toServiceId: input.toServiceUnitId }
+            : {}),
+        },
+        orderBy: { occurredAt: "asc" }, // FIFO: el que salió primero, primero
+        take: input.limit,
+        include: {
+          encounter: {
+            select: {
+              id: true,
+              encounterNumber: true,
+              patient: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  mrn: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    }),
+
+  /**
+   * sql/56 — confirmar recepción del paciente en el servicio destino.
+   *
+   * El receptor (cualquier usuario autenticado del tenant — el filtro de
+   * rol/servicio vive en la UI por ahora, ya que el modelo de "ownership
+   * de servicio" no está en `User` aún) marca el transfer como
+   * `RECEIVED`, registra `receivedById = ctx.user.id`, `receivedAt = now`,
+   * `receivedNote` opcional, y emite `patient.transfer.confirmed`.
+   *
+   * Idempotente: si ya está RECEIVED devuelve el record sin cambios. Si
+   * está CANCELLED lanza CONFLICT.
+   */
+  confirmReceipt: tenantProcedure
+    .input(confirmReceiptInput)
+    .mutation(async ({ ctx, input }) => {
+      return ctx.prisma.$transaction(async (tx) => {
+        // 1) Carga el transfer y verifica tenancy vía Encounter.
+        const transfer = await tx.encounterTransfer.findFirst({
+          where: {
+            id: input.transferId,
+            encounter: { organizationId: ctx.tenant.organizationId },
+          },
+          include: {
+            encounter: { select: { patientId: true } },
+          },
+        });
+        if (!transfer) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Traslado no encontrado.",
+          });
+        }
+        // 2) Idempotencia: ya recibido → no-op (devuelve sin cambios).
+        if (transfer.status === "RECEIVED") {
+          return transfer;
+        }
+        if (transfer.status === "CANCELLED") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "El traslado fue cancelado; no se puede confirmar.",
+          });
+        }
+        // 3) Marca RECEIVED + outbox.
+        const updated = await tx.encounterTransfer.update({
+          where: { id: transfer.id },
+          data: {
+            status: "RECEIVED",
+            receivedAt: new Date(),
+            receivedById: ctx.user.id,
+            receivedNote: input.note ?? null,
+          },
+        });
+        await emitDomainEvent(tx, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "patient.transfer.confirmed",
+          aggregateType: "EncounterTransfer",
+          aggregateId: updated.id,
+          emittedById: ctx.user.id,
+          payload: {
+            transferId: updated.id,
+            encounterId: updated.encounterId,
+            patientId: transfer.encounter.patientId,
+            fromServiceId: updated.fromServiceId,
+            toServiceId: updated.toServiceId,
+            fromBedId: updated.fromBedId,
+            toBedId: updated.toBedId,
+            reason: updated.reason,
+            occurredAt: updated.occurredAt.toISOString(),
+            byUserId: updated.createdBy,
+            receivedAt: updated.receivedAt!.toISOString(),
+            receivedById: ctx.user.id,
+            receivedNote: updated.receivedNote,
+          },
+        });
+        return updated;
+      });
     }),
 });

@@ -40,8 +40,33 @@ export const listRecentTransfersInput = z.object({
   pageSize: z.number().int().min(1).max(100).default(20),
 });
 
+/**
+ * sql/56 — confirmación de recepción en destino.
+ *
+ * El receptor del servicio destino (piso, quirófano, URPA, etc.) marca
+ * el traslado como `RECEIVED`. El servidor registra `receivedById` desde
+ * `ctx.user.id` y `receivedAt = now()`.
+ */
+export const confirmReceiptInput = z.object({
+  transferId: z.string().uuid(),
+  note: z.string().trim().max(400).optional(),
+});
+
+/**
+ * sql/56 — bandeja de pacientes en tránsito hacia un servicio.
+ *
+ * Filtra por `toServiceId` y `status='SENT'`. Usado por el tablero
+ * `/transfers` y el tile "Pacientes en tránsito" del módulo quirófano.
+ */
+export const listPendingArrivalsInput = z.object({
+  toServiceUnitId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+});
+
 export type TransferEncounterInput = z.infer<typeof transferEncounterInput>;
 export type ListTransfersByEncounterInput = z.infer<
   typeof listTransfersByEncounterInput
 >;
 export type ListRecentTransfersInput = z.infer<typeof listRecentTransfersInput>;
+export type ConfirmReceiptInput = z.infer<typeof confirmReceiptInput>;
+export type ListPendingArrivalsInput = z.infer<typeof listPendingArrivalsInput>;
