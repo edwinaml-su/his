@@ -337,6 +337,8 @@ const SECTIONS: NavSection[] = [
         description: "Catálogo B2B2C de médicos del complejo: cabecera, turno, especialistas, interconsultantes." },
       { href: "/profesionales-salud", label: "Profesionales de la Salud", icon: UserCog,
         description: "Personal no-médico: enfermería, archivo (ESDOMED), atención al cliente, administrativos." },
+      { href: "/chat-analytics", label: "Asistente — Analytics", icon: BarChart3,
+        description: "Telemetría del Avante Asistente: sesiones, preguntas frecuentes, satisfacción, costo." },
       { href: "/roles", label: "Roles y permisos", icon: KeyRound,
         description: "Catálogo de roles RBAC y permisos asignados por rol." },
       { href: "/abac", label: "Políticas ABAC", icon: ShieldAlert,

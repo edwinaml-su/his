@@ -13,8 +13,17 @@ import { render, screen, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 // AppShell usa usePathname — mock mínimo para evitar error de contexto Next.js.
+// ChatWidget (renderizado dentro de AppShell) usa además useRouter.
 vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard",
+  useRouter: () => ({
+    push: vi.fn(),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }),
 }));
 
 // next/link renderiza como <a> en jsdom con este mock.

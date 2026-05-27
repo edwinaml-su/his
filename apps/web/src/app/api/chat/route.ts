@@ -16,6 +16,7 @@ import { streamText, convertToModelMessages, stepCountIs } from "ai";
 import { buildSystemPrompt } from "@/lib/chat/system-prompt";
 import { searchKnowledge, formatChunksForContext } from "@/lib/chat/rag";
 import { buildTools } from "@/lib/chat/tools";
+import { persistTurn } from "@/lib/chat/telemetry";
 
 // Edge runtime para streaming low-latency.
 export const runtime = "edge";
@@ -52,6 +53,8 @@ interface ChatRequestBody {
     /** Fase 3: identidad para tools tenant-scoped. */
     userId?: string;
     organizationId?: string;
+    /** Fase 4: id de sesión del chat para telemetría. */
+    sessionId?: string;
   };
 }
 
@@ -97,14 +100,19 @@ export async function POST(req: Request) {
   // el catálogo curado.
   const lastUserText = extractLastUserText(body.messages);
   let ragContext = "";
+  const ragSources: string[] = []; // Fase 4: tracking de fuentes citadas.
   if (lastUserText.length >= 4) {
     try {
       const chunks = await searchKnowledge(lastUserText);
       ragContext = formatChunksForContext(chunks);
+      ragSources.push(...chunks.map((c) => c.source));
     } catch {
       // ignore — degradación graceful.
     }
   }
+
+  // Fase 4: marcar inicio para latencia.
+  const startedAtMs = Date.now();
 
   // Fase 3: tools tenant-scoped (read-only).
   const tools = buildTools({
@@ -124,6 +132,34 @@ export async function POST(req: Request) {
     stopWhen: stepCountIs(3),
     maxOutputTokens: 2048,
     temperature: 0.3,
+    // Fase 4: telemetría — best-effort tras completar el stream.
+    onFinish: async ({ text, usage, toolCalls: finalToolCalls }) => {
+      const sid = body.context?.sessionId;
+      const uid = body.context?.userId;
+      const oid = body.context?.organizationId;
+      if (!sid || !uid || !oid) return; // necesita auth para persistir.
+      await persistTurn({
+        sessionId: sid,
+        userId: uid,
+        organizationId: oid,
+        userRoleCodes: body.context?.roleCodes ?? [],
+        currentPath: body.context?.currentPath,
+        userText: lastUserText,
+        assistantText: text,
+        toolCalls: (finalToolCalls ?? []).map((tc) => {
+          const tcAny = tc as { toolName?: string; input?: unknown; output?: unknown };
+          return {
+            toolName: tcAny.toolName ?? "unknown",
+            input: tcAny.input,
+            output: tcAny.output,
+          };
+        }),
+        retrievedSources: Array.from(new Set(ragSources)),
+        tokensIn: usage?.inputTokens,
+        tokensOut: usage?.outputTokens,
+        latencyMs: Date.now() - startedAtMs,
+      });
+    },
   });
 
   return result.toUIMessageStreamResponse();
