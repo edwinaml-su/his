@@ -14,10 +14,29 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { streamText, convertToModelMessages } from "ai";
 import { buildSystemPrompt } from "@/lib/chat/system-prompt";
+import { searchKnowledge, formatChunksForContext } from "@/lib/chat/rag";
 
 // Edge runtime para streaming low-latency.
 export const runtime = "edge";
 export const maxDuration = 60;
+
+/** Extrae el último mensaje del usuario para alimentar el retrieval RAG. */
+function extractLastUserText(messages: ChatRequestBody["messages"]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== "user") continue;
+    if (typeof m.content === "string" && m.content.trim()) return m.content;
+    if (Array.isArray(m.parts)) {
+      const text = m.parts
+        .filter((p) => p.type === "text")
+        .map((p) => p.text ?? "")
+        .join(" ")
+        .trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
 
 interface ChatRequestBody {
   messages: Array<{
@@ -69,9 +88,23 @@ export async function POST(req: Request) {
     })) as Parameters<typeof convertToModelMessages>[0],
   );
 
+  // RAG: recuperar chunks relevantes del último query del usuario.
+  // Degrada graceful — si falla embeddings o BD, el bot responde solo con
+  // el catálogo curado.
+  const lastUserText = extractLastUserText(body.messages);
+  let ragContext = "";
+  if (lastUserText.length >= 4) {
+    try {
+      const chunks = await searchKnowledge(lastUserText);
+      ragContext = formatChunksForContext(chunks);
+    } catch {
+      // ignore — degradación graceful.
+    }
+  }
+
   const result = streamText({
     model: anthropic("claude-sonnet-4-5"),
-    system: buildSystemPrompt(body.context),
+    system: buildSystemPrompt(body.context) + ragContext,
     messages: modelMessages,
     // Tokens generosos: el prompt incluye el catálogo (~1500 tok),
     // respuestas típicas <500 tok, max 2K para flujos largos.

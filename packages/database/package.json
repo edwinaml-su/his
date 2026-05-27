@@ -39,6 +39,7 @@
     "db:seed:uat": "node --env-file=.env scripts/seed-uat-patients.mjs",
     "db:seed:uat:clean": "node --env-file=.env scripts/cleanup-uat-patients.mjs",
     "db:seed:uat:dry-clean": "node --env-file=.env scripts/cleanup-uat-patients.mjs --dry-run",
+    "db:ingest:chat": "node --env-file=.env scripts/ingest-chat-knowledge.mjs",
     "test": "vitest run --passWithNoTests"
   },
   "prisma": {
