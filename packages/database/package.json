@@ -36,6 +36,9 @@
     "db:seed:icd10-full": "node --env-file=.env scripts/seed-icd10-full.mjs",
     "db:seed:go-live-defaults": "node --env-file=.env scripts/seed-go-live-defaults.mjs",
     "db:seed:go-live-verify": "node --env-file=.env scripts/seed-go-live-verify.mjs",
+    "db:seed:uat": "node --env-file=.env scripts/seed-uat-patients.mjs",
+    "db:seed:uat:clean": "node --env-file=.env scripts/cleanup-uat-patients.mjs",
+    "db:seed:uat:dry-clean": "node --env-file=.env scripts/cleanup-uat-patients.mjs --dry-run",
     "test": "vitest run --passWithNoTests"
   },
   "prisma": {
