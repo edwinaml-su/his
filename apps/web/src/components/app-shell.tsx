@@ -65,6 +65,8 @@ import {
   TriangleAlert,
   Inbox,
   Menu,
+  BriefcaseMedical,
+  UserCog,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@his/ui/components/sheet";
@@ -330,6 +332,10 @@ const SECTIONS: NavSection[] = [
         description: "Multi-tenancy: organizaciones y establecimientos del grupo Avante." },
       { href: "/users", label: "Usuarios", icon: Users,
         description: "Gestión de usuarios del sistema, membresías y estado." },
+      { href: "/medicos", label: "Médicos", icon: BriefcaseMedical,
+        description: "Catálogo B2B2C de médicos del complejo: cabecera, turno, especialistas, interconsultantes." },
+      { href: "/profesionales-salud", label: "Profesionales de la Salud", icon: UserCog,
+        description: "Personal no-médico: enfermería, archivo (ESDOMED), atención al cliente, administrativos." },
       { href: "/roles", label: "Roles y permisos", icon: KeyRound,
         description: "Catálogo de roles RBAC y permisos asignados por rol." },
       { href: "/abac", label: "Políticas ABAC", icon: ShieldAlert,
