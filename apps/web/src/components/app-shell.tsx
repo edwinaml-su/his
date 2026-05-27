@@ -78,6 +78,7 @@ import {
   TooltipTrigger,
 } from "@his/ui/components/tooltip";
 import { Breadcrumbs } from "./breadcrumbs";
+import { ChatWidget } from "./chat-widget";
 
 interface NavItem {
   href: string;
@@ -652,6 +653,8 @@ export function AppShell({
           </main>
         </div>
       </div>
+      {/* Asistente HIS — copiloto flotante context-aware. */}
+      <ChatWidget roleCodes={roleCodes} />
     </TooltipProvider>
   );
 }
