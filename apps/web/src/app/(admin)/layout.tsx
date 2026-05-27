@@ -14,6 +14,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <AppShell
       roleCodes={tenant?.roleCodes ?? []}
+      chatAuth={{
+        userId: user.id,
+        organizationId: tenant?.organizationId,
+      }}
       topbar={
         <div className="flex w-full items-center justify-between gap-2 sm:gap-4">
           <span className="hidden truncate text-sm sm:inline">
