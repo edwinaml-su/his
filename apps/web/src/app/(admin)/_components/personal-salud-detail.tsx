@@ -334,7 +334,7 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Para editar datos básicos o roles, vuelva al listado y use el botón "Editar".
+                Para editar datos básicos o roles, vuelva al listado y use el botón &quot;Editar&quot;.
               </p>
             </CardContent>
           </Card>
