@@ -444,7 +444,10 @@ export const personalSaludRouter = router({
     .input(
       z.object({
         personalId: z.string().uuid(),
-        limit: z.number().int().min(1).max(200).default(100),
+        limit: z.number().int().min(1).max(500).default(100),
+        // Filtros de rango por fecha del encuentro (inclusivo). Si NULL se omite el bound.
+        fechaDesde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        fechaHasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -488,6 +491,9 @@ export const personalSaludRouter = router({
         ultima_atencion: Date | null;
       };
 
+      const desde = input.fechaDesde ?? null;
+      const hasta = input.fechaHasta ?? null;
+
       const pacientes = await ctx.prisma.$queryRaw<PacienteRow[]>`
         WITH eventos AS (
           SELECT ia."patientId" AS patient_id,
@@ -496,21 +502,29 @@ export const personalSaludRouter = router({
           FROM public."InpatientAdmission" ia
           WHERE ia."attendingId" = ${userId}::uuid
             AND ia."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR ia."admittedAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR ia."admittedAt"::date <= ${hasta}::date)
           UNION ALL
           SELECT sc."patientId", sc."scheduledStart"::timestamptz, 'surgery'
           FROM public."SurgeryCase" sc
           WHERE sc."primarySurgeonId" = ${userId}::uuid
             AND sc."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR sc."scheduledStart"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR sc."scheduledStart"::date <= ${hasta}::date)
           UNION ALL
           SELECT oa."patientId", oa."scheduledAt"::timestamptz, 'outpatient'
           FROM public."OutpatientAppointment" oa
           WHERE oa."providerId" = ${userId}::uuid
             AND oa."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR oa."scheduledAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR oa."scheduledAt"::date <= ${hasta}::date)
           UNION ALL
           SELECT ev."patientId", ev."arrivedAt"::timestamptz, 'emergency'
           FROM public."EmergencyVisit" ev
           WHERE ev."treatingId" = ${userId}::uuid
             AND ev."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR ev."arrivedAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR ev."arrivedAt"::date <= ${hasta}::date)
         )
         SELECT
           p.id::text AS patient_id,
@@ -633,6 +647,286 @@ export const personalSaludRouter = router({
       `;
 
       return { id: input.personalId };
+    }),
+
+  /**
+   * Reporte agregado de un profesional para el rango de fechas dado:
+   *   - Total de pacientes únicos.
+   *   - Conteos por tipo de encuentro (cirugía / hospitalización / ambulatorio / emergencia).
+   *   - Total facturado (Invoice.totalAmount) cuando el encuentro está vinculado.
+   *   - Productividad mensual (12 meses retrocedidos desde fechaHasta o hoy).
+   *
+   * Requiere `auth_user_id` vinculado — sin eso devuelve estado neutral.
+   */
+  getReporteMedico: tenantProcedure
+    .input(
+      z.object({
+        personalId: z.string().uuid(),
+        fechaDesde: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        fechaHasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const estab = resolveEstablecimiento(ctx);
+      const orgId = ctx.tenant.organizationId;
+
+      const personal = await ctx.prisma.$queryRaw<{ auth_user_id: string | null }[]>`
+        SELECT auth_user_id::text FROM ece.personal_salud
+        WHERE id = ${input.personalId}::uuid AND establecimiento_id = ${estab}::uuid
+        LIMIT 1
+      `;
+      if (!personal[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
+      }
+      if (!personal[0].auth_user_id) {
+        return {
+          authUserLinked: false as const,
+          totales: {
+            pacientesUnicos: 0,
+            cirugia: 0,
+            hospitalizacion: 0,
+            ambulatorio: 0,
+            emergencia: 0,
+            facturadoTotal: 0,
+            facturadoCobrado: 0,
+          },
+          mensual: [],
+        };
+      }
+      const userId = personal[0].auth_user_id;
+      const desde = input.fechaDesde ?? null;
+      const hasta = input.fechaHasta ?? null;
+
+      // Conteos consolidados.
+      const [totalRow] = await ctx.prisma.$queryRaw<
+        Array<{
+          pacientes_unicos: number;
+          n_cirugia: number;
+          n_hospitalizacion: number;
+          n_ambulatorio: number;
+          n_emergencia: number;
+        }>
+      >`
+        WITH eventos AS (
+          SELECT ia."patientId" AS patient_id, 'hospitalizacion'::text AS tipo
+          FROM public."InpatientAdmission" ia
+          WHERE ia."attendingId" = ${userId}::uuid AND ia."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR ia."admittedAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR ia."admittedAt"::date <= ${hasta}::date)
+          UNION ALL
+          SELECT sc."patientId", 'cirugia'
+          FROM public."SurgeryCase" sc
+          WHERE sc."primarySurgeonId" = ${userId}::uuid AND sc."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR sc."scheduledStart"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR sc."scheduledStart"::date <= ${hasta}::date)
+          UNION ALL
+          SELECT oa."patientId", 'ambulatorio'
+          FROM public."OutpatientAppointment" oa
+          WHERE oa."providerId" = ${userId}::uuid AND oa."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR oa."scheduledAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR oa."scheduledAt"::date <= ${hasta}::date)
+          UNION ALL
+          SELECT ev."patientId", 'emergencia'
+          FROM public."EmergencyVisit" ev
+          WHERE ev."treatingId" = ${userId}::uuid AND ev."organizationId" = ${orgId}::uuid
+            AND (${desde}::date IS NULL OR ev."arrivedAt"::date >= ${desde}::date)
+            AND (${hasta}::date IS NULL OR ev."arrivedAt"::date <= ${hasta}::date)
+        )
+        SELECT
+          COUNT(DISTINCT patient_id)::int AS pacientes_unicos,
+          COUNT(*) FILTER (WHERE tipo = 'cirugia')::int AS n_cirugia,
+          COUNT(*) FILTER (WHERE tipo = 'hospitalizacion')::int AS n_hospitalizacion,
+          COUNT(*) FILTER (WHERE tipo = 'ambulatorio')::int AS n_ambulatorio,
+          COUNT(*) FILTER (WHERE tipo = 'emergencia')::int AS n_emergencia
+        FROM eventos
+      `;
+
+      // Facturación: Invoice cuyo encounterId pertenece a un episodio del médico.
+      const [factRow] = await ctx.prisma.$queryRaw<
+        Array<{ facturado_total: string; facturado_cobrado: string }>
+      >`
+        WITH encuentros_medico AS (
+          SELECT DISTINCT ia."encounterId" AS encounter_id
+          FROM public."InpatientAdmission" ia
+          WHERE ia."attendingId" = ${userId}::uuid AND ia."organizationId" = ${orgId}::uuid
+          UNION
+          SELECT DISTINCT sc."encounterId"
+          FROM public."SurgeryCase" sc
+          WHERE sc."primarySurgeonId" = ${userId}::uuid AND sc."organizationId" = ${orgId}::uuid
+          UNION
+          SELECT DISTINCT oa."encounterId"
+          FROM public."OutpatientAppointment" oa
+          WHERE oa."providerId" = ${userId}::uuid AND oa."organizationId" = ${orgId}::uuid
+            AND oa."encounterId" IS NOT NULL
+          UNION
+          SELECT DISTINCT ev."encounterId"
+          FROM public."EmergencyVisit" ev
+          WHERE ev."treatingId" = ${userId}::uuid AND ev."organizationId" = ${orgId}::uuid
+        )
+        SELECT
+          COALESCE(SUM(i."totalAmount"), 0)::text AS facturado_total,
+          COALESCE(SUM(i."paidAmount"),  0)::text AS facturado_cobrado
+        FROM public."Invoice" i
+        JOIN encuentros_medico em ON em.encounter_id = i."encounterId"
+        WHERE i."organizationId" = ${orgId}::uuid
+          AND (${desde}::date IS NULL OR i."issuedAt"::date >= ${desde}::date)
+          AND (${hasta}::date IS NULL OR i."issuedAt"::date <= ${hasta}::date)
+      `;
+
+      // Productividad mensual: 12 meses retrocedidos.
+      const mensual = await ctx.prisma.$queryRaw<
+        Array<{ mes: string; cirugia: number; otros: number }>
+      >`
+        WITH meses AS (
+          SELECT generate_series(
+            date_trunc('month', (COALESCE(${hasta}::date, CURRENT_DATE) - INTERVAL '11 months')),
+            date_trunc('month', COALESCE(${hasta}::date, CURRENT_DATE)),
+            INTERVAL '1 month'
+          )::date AS mes
+        ),
+        eventos AS (
+          SELECT date_trunc('month', sc."scheduledStart")::date AS mes, 'cirugia'::text AS tipo
+          FROM public."SurgeryCase" sc
+          WHERE sc."primarySurgeonId" = ${userId}::uuid AND sc."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT date_trunc('month', ia."admittedAt")::date, 'otros'
+          FROM public."InpatientAdmission" ia
+          WHERE ia."attendingId" = ${userId}::uuid AND ia."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT date_trunc('month', oa."scheduledAt")::date, 'otros'
+          FROM public."OutpatientAppointment" oa
+          WHERE oa."providerId" = ${userId}::uuid AND oa."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT date_trunc('month', ev."arrivedAt")::date, 'otros'
+          FROM public."EmergencyVisit" ev
+          WHERE ev."treatingId" = ${userId}::uuid AND ev."organizationId" = ${orgId}::uuid
+        )
+        SELECT
+          to_char(m.mes, 'YYYY-MM') AS mes,
+          COUNT(*) FILTER (WHERE e.tipo = 'cirugia' AND e.mes = m.mes)::int AS cirugia,
+          COUNT(*) FILTER (WHERE e.tipo = 'otros'   AND e.mes = m.mes)::int AS otros
+        FROM meses m
+        LEFT JOIN eventos e ON e.mes = m.mes
+        GROUP BY m.mes
+        ORDER BY m.mes ASC
+      `;
+
+      return {
+        authUserLinked: true as const,
+        totales: {
+          pacientesUnicos: totalRow?.pacientes_unicos ?? 0,
+          cirugia: totalRow?.n_cirugia ?? 0,
+          hospitalizacion: totalRow?.n_hospitalizacion ?? 0,
+          ambulatorio: totalRow?.n_ambulatorio ?? 0,
+          emergencia: totalRow?.n_emergencia ?? 0,
+          facturadoTotal: Number(factRow?.facturado_total ?? "0"),
+          facturadoCobrado: Number(factRow?.facturado_cobrado ?? "0"),
+        },
+        mensual: mensual.map((r) => ({
+          mes: r.mes,
+          cirugia: r.cirugia,
+          otros: r.otros,
+        })),
+      };
+    }),
+
+  /**
+   * Crear User HIS + vincular al profesional en una operación atómica.
+   * Útil para el flujo "Crear nueva cuenta" desde el dialog de vinculación.
+   *
+   * Crea: public."User" + public."UserOrganizationRole" (rol opcional) +
+   * UPDATE ece.personal_salud.auth_user_id.
+   *
+   * Idempotencia: si el email ya existe → CONFLICT.
+   */
+  createAndLinkUser: requireRole(["ADMIN", "DIR"])
+    .input(
+      z.object({
+        personalId: z.string().uuid(),
+        email: z.string().email().max(254),
+        fullName: z.string().trim().min(3).max(200),
+        roleCode: z.string().min(1).max(60).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const estab = resolveEstablecimiento(ctx);
+      const orgId = ctx.tenant.organizationId;
+
+      const target = await ctx.prisma.$queryRaw<{ id: string; auth_user_id: string | null }[]>`
+        SELECT id::text, auth_user_id::text FROM ece.personal_salud
+        WHERE id = ${input.personalId}::uuid AND establecimiento_id = ${estab}::uuid
+        LIMIT 1
+      `;
+      if (!target[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
+      }
+      if (target[0].auth_user_id) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Este profesional ya tiene una cuenta vinculada — desvincúlala primero.",
+        });
+      }
+
+      const emailLower = input.email.toLowerCase();
+      const existingUser = await ctx.prisma.user.findUnique({
+        where: { email: emailLower },
+        select: { id: true },
+      });
+      if (existingUser) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Ya existe un usuario con ese correo. Usa 'Vincular existente'.",
+        });
+      }
+
+      const role = input.roleCode
+        ? await ctx.prisma.role.findFirst({
+            where: {
+              code: input.roleCode,
+              OR: [{ organizationId: null }, { organizationId: orgId }],
+              active: true,
+            },
+            select: { id: true },
+          })
+        : null;
+      if (input.roleCode && !role) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Rol RBAC '${input.roleCode}' no existe en esta organización.`,
+        });
+      }
+
+      const created = await ctx.prisma.$transaction(async (tx) => {
+        const user = await tx.user.create({
+          data: {
+            email: emailLower,
+            fullName: input.fullName,
+            active: true,
+            mfaEnabled: false,
+            createdBy: ctx.user.id,
+            updatedBy: ctx.user.id,
+          },
+          select: { id: true, email: true, fullName: true },
+        });
+        if (role) {
+          await tx.userOrganizationRole.create({
+            data: {
+              userId: user.id,
+              organizationId: orgId,
+              roleId: role.id,
+              validFrom: new Date(),
+            },
+          });
+        }
+        await tx.$executeRaw`
+          UPDATE ece.personal_salud
+          SET auth_user_id = ${user.id}::uuid
+          WHERE id = ${input.personalId}::uuid
+        `;
+        return user;
+      });
+
+      return { userId: created.id, email: created.email, fullName: created.fullName };
     }),
 
   /**

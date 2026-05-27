@@ -5,14 +5,19 @@
  *   - /admin/medicos/[id]
  *   - /admin/profesionales-salud/[id]
  *
- * 3 tabs:
+ * 4 tabs:
  *   1. Datos básicos       — datos demográficos + roles + estado firma.
- *   2. Pacientes referidos — vista B2B2C: pacientes que el profesional atiende.
- *   3. Cuenta de acceso    — vincula/desvincula User HIS para login + auditoría.
+ *   2. Pacientes referidos — vista B2B2C con filtros de fecha y export PDF/CSV/XLSX.
+ *   3. Reportes            — productividad mensual + total facturado.
+ *   4. Cuenta de acceso    — vincula/crea/desvincula User HIS.
  */
 import * as React from "react";
 import Link from "next/link";
-import { ArrowLeft, ShieldCheck, ShieldAlert, Link2, Unlink, Search } from "lucide-react";
+import {
+  ArrowLeft, ShieldCheck, ShieldAlert, Link2, Unlink, Search,
+  Download, FileText, FileSpreadsheet, FileDown, Calendar as CalendarIcon,
+  TrendingUp, DollarSign, UserPlus2,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
@@ -40,8 +45,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@his/ui/components/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@his/ui/components/dropdown-menu";
 import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@his/trpc";
+import {
+  exportToCsv,
+  exportToXlsx,
+  exportToPdf,
+  timestampedFilename,
+  type ExportColumn,
+} from "@/lib/export";
+
+type ReferidoRow =
+  inferRouterOutputs<AppRouter>["personalSalud"]["getPacientesReferidos"]["pacientes"][number];
 
 interface PersonalSaludDetailProps {
   personalId: string;
@@ -54,6 +79,10 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
   const utils = trpc.useUtils();
   const [linkOpen, setLinkOpen] = React.useState(false);
   const [linkSearch, setLinkSearch] = React.useState("");
+  const [linkTab, setLinkTab] = React.useState<"existente" | "nueva">("existente");
+  const [newUserForm, setNewUserForm] = React.useState({ email: "", fullName: "", roleCode: "" });
+  const [fechaDesde, setFechaDesde] = React.useState("");
+  const [fechaHasta, setFechaHasta] = React.useState("");
   const [toast, setToast] = React.useState<{
     title: string;
     description?: string;
@@ -61,7 +90,16 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
   } | null>(null);
 
   const personalQuery = trpc.personalSalud.get.useQuery({ id: personalId });
-  const referidosQuery = trpc.personalSalud.getPacientesReferidos.useQuery({ personalId });
+  const referidosQuery = trpc.personalSalud.getPacientesReferidos.useQuery({
+    personalId,
+    ...(fechaDesde && { fechaDesde }),
+    ...(fechaHasta && { fechaHasta }),
+  });
+  const reporteQuery = trpc.personalSalud.getReporteMedico.useQuery({
+    personalId,
+    ...(fechaDesde && { fechaDesde }),
+    ...(fechaHasta && { fechaHasta }),
+  });
 
   const userSearchQuery = trpc.personalSalud.searchAvailableUsers.useQuery(
     { search: linkSearch.trim(), limit: 10 },
@@ -88,6 +126,44 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
     onError: (err) => setToast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  const createAndLinkMut = trpc.personalSalud.createAndLinkUser.useMutation({
+    onSuccess: (data) => {
+      utils.personalSalud.get.invalidate();
+      utils.personalSalud.getPacientesReferidos.invalidate();
+      setLinkOpen(false);
+      setNewUserForm({ email: "", fullName: "", roleCode: "" });
+      setToast({
+        title: "Cuenta creada y vinculada",
+        description: `${data.fullName} (${data.email})`,
+        variant: "success",
+      });
+    },
+    onError: (err) => setToast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  // Columnas de export para pacientes referidos (declarado antes de early
+  // returns para cumplir la regla de hooks de React).
+  const exportColumns: ExportColumn<ReferidoRow>[] = React.useMemo(
+    () => [
+      { header: "MRN", accessor: (r) => r.mrn },
+      { header: "Nombre", accessor: (r) => `${r.firstName} ${r.lastName}` },
+      { header: "Sexo", accessor: (r) => r.biologicalSexCode ?? "" },
+      { header: "Cirugía", accessor: (r) => r.conteos.cirugia },
+      { header: "Hospitalización", accessor: (r) => r.conteos.hospitalizacion },
+      { header: "Ambulatorio", accessor: (r) => r.conteos.ambulatorio },
+      { header: "Emergencia", accessor: (r) => r.conteos.emergencia },
+      { header: "Total", accessor: (r) => r.conteos.total },
+      {
+        header: "Última atención",
+        accessor: (r) => (r.ultimaAtencion
+          ? new Date(r.ultimaAtencion).toLocaleDateString("es-SV")
+          : ""),
+      },
+    ],
+    [],
+  );
+
+  // Early returns — solo después de TODOS los hooks (regla de hooks de React).
   if (personalQuery.isLoading) {
     return <p className="text-sm text-muted-foreground">Cargando…</p>;
   }
@@ -102,6 +178,55 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
   if (!personal) return null;
 
   const referidos = referidosQuery.data;
+  const reporte = reporteQuery.data;
+
+  const exportBase = `pacientes-referidos-${personal.documentoIdentidad}`;
+  const exportSubtitle = `${personal.nombreCompleto} (${personal.documentoIdentidad})${fechaDesde || fechaHasta ? ` — ${fechaDesde || "inicio"} a ${fechaHasta || "hoy"}` : ""}`;
+
+  const handleExportCsv = () => {
+    if (!referidos || referidos.pacientes.length === 0) return;
+    exportToCsv(referidos.pacientes, exportColumns, timestampedFilename(exportBase, "csv"));
+    setToast({ title: "CSV descargado", variant: "success" });
+  };
+
+  const handleExportXlsx = async () => {
+    if (!referidos || referidos.pacientes.length === 0) return;
+    try {
+      await exportToXlsx(referidos.pacientes, exportColumns, timestampedFilename(exportBase, "xlsx"), "Pacientes referidos");
+      setToast({ title: "Excel descargado", variant: "success" });
+    } catch (err) {
+      setToast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    }
+  };
+
+  const handleExportPdf = async () => {
+    if (!referidos || referidos.pacientes.length === 0) return;
+    try {
+      await exportToPdf(referidos.pacientes, exportColumns, timestampedFilename(exportBase, "pdf"), {
+        title: "Pacientes Referidos",
+        subtitle: exportSubtitle,
+        orientation: "landscape",
+      });
+      setToast({ title: "PDF descargado", variant: "success" });
+    } catch (err) {
+      setToast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
+    }
+  };
+
+  function formatCurrency(n: number): string {
+    return new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD" }).format(n);
+  }
+
+  function setQuickRange(months: number) {
+    const hasta = new Date();
+    const desde = new Date();
+    desde.setMonth(desde.getMonth() - months);
+    desde.setDate(1);
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    setFechaDesde(fmt(desde));
+    setFechaHasta(fmt(hasta));
+  }
 
   return (
     <div className="space-y-4">
@@ -157,6 +282,10 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
                 {referidos.pacientes.length}
               </Badge>
             ) : null}
+          </TabsTrigger>
+          <TabsTrigger value="reportes">
+            <TrendingUp className="mr-1 h-3 w-3" aria-hidden />
+            Reportes
           </TabsTrigger>
           <TabsTrigger value="cuenta">Cuenta de acceso</TabsTrigger>
         </TabsList>
@@ -214,10 +343,77 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
         {/* Tab: Pacientes referidos (CORE B2B2C) */}
         <TabsContent value="referidos" className="mt-4">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-start justify-between gap-2">
               <CardTitle className="text-base">Pacientes que ha atendido</CardTitle>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!referidos?.pacientes.length}
+                    aria-label="Exportar pacientes referidos"
+                  >
+                    <Download className="mr-2 h-3 w-3" aria-hidden /> Exportar
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-44">
+                  <DropdownMenuLabel>Formato</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={handleExportPdf}>
+                    <FileText className="mr-2 h-4 w-4" aria-hidden /> PDF
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleExportXlsx}>
+                    <FileSpreadsheet className="mr-2 h-4 w-4" aria-hidden /> Excel (.xlsx)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleExportCsv}>
+                    <FileDown className="mr-2 h-4 w-4" aria-hidden /> CSV
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* Filtros de fecha */}
+              <div className="flex flex-wrap items-end gap-2 rounded-md border bg-muted/30 p-3">
+                <div>
+                  <Label htmlFor="fechaDesde" className="text-xs">Desde</Label>
+                  <Input
+                    id="fechaDesde"
+                    type="date"
+                    value={fechaDesde}
+                    onChange={(e) => setFechaDesde(e.target.value)}
+                    className="w-40"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="fechaHasta" className="text-xs">Hasta</Label>
+                  <Input
+                    id="fechaHasta"
+                    type="date"
+                    value={fechaHasta}
+                    onChange={(e) => setFechaHasta(e.target.value)}
+                    className="w-40"
+                  />
+                </div>
+                <div className="flex gap-1">
+                  <Button size="sm" variant="outline" onClick={() => setQuickRange(1)}>1m</Button>
+                  <Button size="sm" variant="outline" onClick={() => setQuickRange(3)}>3m</Button>
+                  <Button size="sm" variant="outline" onClick={() => setQuickRange(12)}>12m</Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => { setFechaDesde(""); setFechaHasta(""); }}
+                  >
+                    Limpiar
+                  </Button>
+                </div>
+                {(fechaDesde || fechaHasta) && (
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    <CalendarIcon className="inline h-3 w-3 mr-1" aria-hidden />
+                    Filtrando {fechaDesde || "inicio"} → {fechaHasta || "hoy"}
+                  </span>
+                )}
+              </div>
+
               {referidosQuery.isLoading && (
                 <p className="text-sm text-muted-foreground">Calculando…</p>
               )}
@@ -302,6 +498,64 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
           </Card>
         </TabsContent>
 
+        {/* Tab: Reportes (productividad + facturación) */}
+        <TabsContent value="reportes" className="mt-4 space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resumen del período</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {reporteQuery.isLoading && (
+                <p className="text-sm text-muted-foreground">Calculando…</p>
+              )}
+              {reporte && !reporte.authUserLinked && (
+                <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  Sin cuenta de acceso vinculada — no hay datos.
+                </div>
+              )}
+              {reporte && reporte.authUserLinked && (
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                  <Stat label="Pacientes únicos" value={reporte.totales.pacientesUnicos} />
+                  <Stat label="Cirugías" value={reporte.totales.cirugia} accent="primary" />
+                  <Stat label="Hospitalizaciones" value={reporte.totales.hospitalizacion} />
+                  <Stat label="Ambulatorios" value={reporte.totales.ambulatorio} />
+                  <Stat label="Emergencias" value={reporte.totales.emergencia} />
+                  <Stat
+                    label="Facturado total"
+                    icon={<DollarSign className="h-4 w-4" aria-hidden />}
+                    value={formatCurrency(reporte.totales.facturadoTotal)}
+                  />
+                  <Stat
+                    label="Cobrado"
+                    icon={<DollarSign className="h-4 w-4" aria-hidden />}
+                    value={formatCurrency(reporte.totales.facturadoCobrado)}
+                  />
+                  <Stat
+                    label="% Cobranza"
+                    value={
+                      reporte.totales.facturadoTotal > 0
+                        ? `${Math.round((reporte.totales.facturadoCobrado / reporte.totales.facturadoTotal) * 100)}%`
+                        : "—"
+                    }
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Productividad mensual */}
+          {reporte && reporte.authUserLinked && reporte.mensual.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Productividad mensual (últimos 12 meses)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ProductividadMensual data={reporte.mensual} />
+              </CardContent>
+            </Card>
+          )}
+        </TabsContent>
+
         {/* Tab: Cuenta de acceso */}
         <TabsContent value="cuenta" className="mt-4">
           <Card>
@@ -354,62 +608,144 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
         </TabsContent>
       </Tabs>
 
-      {/* Dialog: vincular User */}
+      {/* Dialog: vincular o crear User */}
       <Dialog open={linkOpen} onOpenChange={(o) => !o && setLinkOpen(false)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Vincular cuenta de acceso</DialogTitle>
+            <DialogTitle>Cuenta de acceso</DialogTitle>
             <DialogDescription>
-              Busca el usuario HIS por correo o nombre. Solo aparecen los usuarios
-              activos que aún no están vinculados a otro profesional.
+              Vincula al profesional con un usuario HIS existente o crea una
+              cuenta nueva en un solo paso.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label htmlFor="userSearch">Buscar usuario</Label>
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
+
+          <Tabs value={linkTab} onValueChange={(v) => setLinkTab(v as "existente" | "nueva")}>
+            <TabsList className="w-full">
+              <TabsTrigger value="existente" className="flex-1">
+                <Link2 className="mr-1 h-3 w-3" aria-hidden /> Vincular existente
+              </TabsTrigger>
+              <TabsTrigger value="nueva" className="flex-1">
+                <UserPlus2 className="mr-1 h-3 w-3" aria-hidden /> Crear nueva
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="existente" className="mt-3 space-y-3">
+              <div className="space-y-1">
+                <Label htmlFor="userSearch">Buscar usuario</Label>
+                <div className="relative">
+                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
+                  <Input
+                    id="userSearch"
+                    value={linkSearch}
+                    onChange={(e) => setLinkSearch(e.target.value)}
+                    placeholder="Mínimo 2 caracteres…"
+                    className="pl-8"
+                  />
+                </div>
+              </div>
+              <div className="rounded-md border max-h-64 overflow-y-auto">
+                {linkSearch.trim().length < 2 ? (
+                  <p className="text-sm text-muted-foreground p-3 text-center">
+                    Escribe al menos 2 caracteres.
+                  </p>
+                ) : userSearchQuery.isLoading ? (
+                  <p className="text-sm text-muted-foreground p-3 text-center">Buscando…</p>
+                ) : (userSearchQuery.data ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground p-3 text-center">
+                    Sin resultados disponibles.
+                  </p>
+                ) : (
+                  <ul className="divide-y">
+                    {(userSearchQuery.data ?? []).map((u) => (
+                      <li key={u.id} className="flex items-center justify-between gap-2 p-2 hover:bg-muted/50">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate">{u.fullName}</p>
+                          <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={() => linkMut.mutate({ personalId, userId: u.id })}
+                          disabled={linkMut.isPending}
+                        >
+                          Vincular
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="nueva" className="mt-3 space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Se creará una cuenta HIS con el correo + nombre del profesional.
+                El rol RBAC inicial es opcional — el ADMIN puede asignarlo después
+                desde <Link href="/users" className="underline">Usuarios</Link>.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="newUserEmail">
+                  Correo <span aria-hidden className="text-destructive">*</span>
+                </Label>
                 <Input
-                  id="userSearch"
-                  value={linkSearch}
-                  onChange={(e) => setLinkSearch(e.target.value)}
-                  placeholder="Mínimo 2 caracteres…"
-                  className="pl-8"
+                  id="newUserEmail"
+                  type="email"
+                  value={newUserForm.email}
+                  onChange={(e) => setNewUserForm((f) => ({ ...f, email: e.target.value }))}
+                  placeholder="correo@hospital.com"
+                  maxLength={254}
                 />
               </div>
-            </div>
-            <div className="rounded-md border max-h-64 overflow-y-auto">
-              {linkSearch.trim().length < 2 ? (
-                <p className="text-sm text-muted-foreground p-3 text-center">
-                  Escribe al menos 2 caracteres.
-                </p>
-              ) : userSearchQuery.isLoading ? (
-                <p className="text-sm text-muted-foreground p-3 text-center">Buscando…</p>
-              ) : (userSearchQuery.data ?? []).length === 0 ? (
-                <p className="text-sm text-muted-foreground p-3 text-center">
-                  Sin resultados disponibles.
-                </p>
-              ) : (
-                <ul className="divide-y">
-                  {(userSearchQuery.data ?? []).map((u) => (
-                    <li key={u.id} className="flex items-center justify-between gap-2 p-2 hover:bg-muted/50">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate">{u.fullName}</p>
-                        <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                      </div>
-                      <Button
-                        size="sm"
-                        onClick={() => linkMut.mutate({ personalId, userId: u.id })}
-                        disabled={linkMut.isPending}
-                      >
-                        Vincular
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </div>
+              <div className="space-y-1">
+                <Label htmlFor="newUserFullName">
+                  Nombre completo <span aria-hidden className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="newUserFullName"
+                  value={newUserForm.fullName}
+                  onChange={(e) => setNewUserForm((f) => ({ ...f, fullName: e.target.value }))}
+                  placeholder="Tal como debe aparecer en sus firmas"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="newUserRoleCode">Rol RBAC inicial (opcional)</Label>
+                <Input
+                  id="newUserRoleCode"
+                  value={newUserForm.roleCode}
+                  onChange={(e) => setNewUserForm((f) => ({ ...f, roleCode: e.target.value }))}
+                  placeholder="Ej. PHYSICIAN, NURSE, ADMIN, DIR"
+                  list="role-suggestions"
+                />
+                <datalist id="role-suggestions">
+                  <option value="PHYSICIAN" />
+                  <option value="NURSE" />
+                  <option value="ADMIN" />
+                  <option value="DIR" />
+                  <option value="ANEST" />
+                  <option value="PHARMACIST" />
+                </datalist>
+              </div>
+              <Button
+                className="w-full"
+                onClick={() => {
+                  if (!newUserForm.email.trim() || !newUserForm.fullName.trim()) return;
+                  createAndLinkMut.mutate({
+                    personalId,
+                    email: newUserForm.email.trim(),
+                    fullName: newUserForm.fullName.trim(),
+                    ...(newUserForm.roleCode.trim() && { roleCode: newUserForm.roleCode.trim() }),
+                  });
+                }}
+                disabled={
+                  createAndLinkMut.isPending
+                  || !newUserForm.email.trim()
+                  || !newUserForm.fullName.trim()
+                }
+              >
+                {createAndLinkMut.isPending ? "Creando…" : "Crear cuenta y vincular"}
+              </Button>
+            </TabsContent>
+          </Tabs>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setLinkOpen(false)}>
               Cerrar
@@ -430,6 +766,73 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
           </div>
         </Toast>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sub-componentes de Reportes
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface StatProps {
+  label: string;
+  value: string | number;
+  icon?: React.ReactNode;
+  accent?: "primary";
+}
+
+function Stat({ label, value, icon, accent }: StatProps) {
+  return (
+    <div className="rounded-md border bg-card p-3">
+      <p className="text-xs text-muted-foreground flex items-center gap-1">
+        {icon}
+        {label}
+      </p>
+      <p className={`text-2xl font-bold tabular-nums ${accent === "primary" ? "text-primary" : ""}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Mini bar-chart inline mensual: cirugías (color primario) + otros (gris).
+ * Sin lib — barras CSS por altura proporcional.
+ */
+function ProductividadMensual({ data }: { data: Array<{ mes: string; cirugia: number; otros: number }> }) {
+  const max = Math.max(1, ...data.map((d) => d.cirugia + d.otros));
+  return (
+    <div className="flex items-end gap-1 h-40 px-1" role="img" aria-label="Productividad mensual">
+      {data.map((d) => {
+        const totalH = ((d.cirugia + d.otros) / max) * 100;
+        const cirH = ((d.cirugia) / Math.max(1, d.cirugia + d.otros)) * 100;
+        const label = d.mes.slice(2); // YY-MM
+        return (
+          <div key={d.mes} className="flex-1 flex flex-col items-center gap-1">
+            <div className="flex flex-col w-full justify-end h-32 relative" title={`${d.mes}: ${d.cirugia} cirugías + ${d.otros} otros`}>
+              <div
+                className="w-full bg-muted rounded-t"
+                style={{ height: `${totalH}%` }}
+              >
+                <div
+                  className="bg-primary rounded-t"
+                  style={{ height: `${cirH}%`, width: "100%" }}
+                />
+              </div>
+            </div>
+            <span className="text-[10px] text-muted-foreground tabular-nums">{label}</span>
+            <span className="text-[10px] font-mono tabular-nums">{d.cirugia + d.otros}</span>
+          </div>
+        );
+      })}
+      <div className="ml-2 text-[10px] text-muted-foreground space-y-1 self-start">
+        <p className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 bg-primary rounded-sm" /> Cirugías
+        </p>
+        <p className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 bg-muted rounded-sm" /> Otros
+        </p>
+      </div>
     </div>
   );
 }
