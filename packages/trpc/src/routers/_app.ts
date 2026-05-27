@@ -158,6 +158,8 @@ import { icd10Router } from "./ece/icd10.router";
 import { comiteEceRouter } from "./ece/comite-ece.router";
 // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
 import { patientDedupRouter } from "./patient-dedup.router";
+// Mantenimiento de personal de salud (B2B2C — médicos y profesionales no-médicos)
+import { personalSaludRouter } from "./personal-salud.router";
 import { portalArcoRouter } from "./portal-arco.router";
 // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
 import { auditOutlierRouter } from "./audit-outlier.router";
@@ -370,6 +372,8 @@ export const appRouter = router({
   comiteEce: comiteEceRouter,
   // F2-S15 Stream C — MPI Dedup NTEC + Portal ARCO
   patientDedup: patientDedupRouter,
+  // Mantenimiento de personal de salud (B2B2C)
+  personalSalud: personalSaludRouter,
   portalArco: portalArcoRouter,
   // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
   auditOutlier: auditOutlierRouter,
