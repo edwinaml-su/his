@@ -429,4 +429,233 @@ export const personalSaludRouter = router({
           : ("no_medico" as const),
       }));
     }),
+
+  /**
+   * B2B2C — Pacientes referidos / atendidos por un profesional.
+   *
+   * Devuelve los Patient cuyos episodios (Inpatient/Surgery/Outpatient/Emergency)
+   * tienen al profesional como attending/surgeon/provider/treating. Es la vista
+   * core del modelo B2B2C: "¿qué pacientes me trajo este médico?".
+   *
+   * Requiere que `ece.personal_salud.auth_user_id` esté vinculado con un
+   * User HIS. Si está NULL, devuelve lista vacía + advertencia.
+   */
+  getPacientesReferidos: tenantProcedure
+    .input(
+      z.object({
+        personalId: z.string().uuid(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const estab = resolveEstablecimiento(ctx);
+      const orgId = ctx.tenant.organizationId;
+
+      // Verificar que el personal exista en el establecimiento + obtener authUserId.
+      const rows = await ctx.prisma.$queryRaw<
+        { id: string; auth_user_id: string | null; nombre_completo: string }[]
+      >`
+        SELECT id::text, auth_user_id::text, nombre_completo
+        FROM ece.personal_salud
+        WHERE id = ${input.personalId}::uuid AND establecimiento_id = ${estab}::uuid
+        LIMIT 1
+      `;
+      if (!rows[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
+      }
+      if (!rows[0].auth_user_id) {
+        return {
+          authUserLinked: false as const,
+          pacientes: [],
+          totalEncuentros: 0,
+        };
+      }
+      const userId = rows[0].auth_user_id;
+
+      // Query unificada: pacientes distintos donde el User aparece en algún
+      // encuentro como tratante/cirujano/prestador.
+      type PacienteRow = {
+        patient_id: string;
+        mrn: string;
+        first_name: string;
+        last_name: string;
+        biological_sex_code: string | null;
+        birth_date: Date | null;
+        n_inpatient: number;
+        n_surgery: number;
+        n_outpatient: number;
+        n_emergency: number;
+        ultima_atencion: Date | null;
+      };
+
+      const pacientes = await ctx.prisma.$queryRaw<PacienteRow[]>`
+        WITH eventos AS (
+          SELECT ia."patientId" AS patient_id,
+                 ia."admittedAt"::timestamptz AS fecha,
+                 'inpatient'::text AS tipo
+          FROM public."InpatientAdmission" ia
+          WHERE ia."attendingId" = ${userId}::uuid
+            AND ia."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT sc."patientId", sc."scheduledStart"::timestamptz, 'surgery'
+          FROM public."SurgeryCase" sc
+          WHERE sc."primarySurgeonId" = ${userId}::uuid
+            AND sc."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT oa."patientId", oa."scheduledAt"::timestamptz, 'outpatient'
+          FROM public."OutpatientAppointment" oa
+          WHERE oa."providerId" = ${userId}::uuid
+            AND oa."organizationId" = ${orgId}::uuid
+          UNION ALL
+          SELECT ev."patientId", ev."arrivedAt"::timestamptz, 'emergency'
+          FROM public."EmergencyVisit" ev
+          WHERE ev."treatingId" = ${userId}::uuid
+            AND ev."organizationId" = ${orgId}::uuid
+        )
+        SELECT
+          p.id::text AS patient_id,
+          p.mrn,
+          p."firstName" AS first_name,
+          p."lastName" AS last_name,
+          bs.code AS biological_sex_code,
+          p."birthDate" AS birth_date,
+          COUNT(*) FILTER (WHERE e.tipo = 'inpatient')::int AS n_inpatient,
+          COUNT(*) FILTER (WHERE e.tipo = 'surgery')::int AS n_surgery,
+          COUNT(*) FILTER (WHERE e.tipo = 'outpatient')::int AS n_outpatient,
+          COUNT(*) FILTER (WHERE e.tipo = 'emergency')::int AS n_emergency,
+          MAX(e.fecha) AS ultima_atencion
+        FROM eventos e
+        JOIN public."Patient" p ON p.id = e.patient_id
+        LEFT JOIN public."BiologicalSex" bs ON bs.id = p."biologicalSexId"
+        WHERE p."organizationId" = ${orgId}::uuid
+          AND p.active = true
+        GROUP BY p.id, p.mrn, p."firstName", p."lastName", bs.code, p."birthDate"
+        ORDER BY ultima_atencion DESC NULLS LAST
+        LIMIT ${input.limit}
+      `;
+
+      const totalEncuentros = pacientes.reduce(
+        (sum, r) => sum + r.n_inpatient + r.n_surgery + r.n_outpatient + r.n_emergency,
+        0,
+      );
+
+      return {
+        authUserLinked: true as const,
+        pacientes: pacientes.map((r) => ({
+          patientId: r.patient_id,
+          mrn: r.mrn,
+          firstName: r.first_name,
+          lastName: r.last_name,
+          biologicalSexCode: r.biological_sex_code,
+          birthDate: r.birth_date?.toISOString() ?? null,
+          conteos: {
+            hospitalizacion: r.n_inpatient,
+            cirugia: r.n_surgery,
+            ambulatorio: r.n_outpatient,
+            emergencia: r.n_emergency,
+            total: r.n_inpatient + r.n_surgery + r.n_outpatient + r.n_emergency,
+          },
+          ultimaAtencion: r.ultima_atencion?.toISOString() ?? null,
+        })),
+        totalEncuentros,
+      };
+    }),
+
+  /**
+   * Vincula el personal con un User HIS existente (cuenta de acceso).
+   * Necesario para que el procedure `getPacientesReferidos` pueda asociar
+   * encuentros, y para que el médico pueda iniciar sesión.
+   */
+  linkAuthUser: requireRole(["ADMIN", "DIR"])
+    .input(z.object({ personalId: z.string().uuid(), userId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const estab = resolveEstablecimiento(ctx);
+
+      // Verificar que el personal exista en el establecimiento.
+      const target = await ctx.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id::text FROM ece.personal_salud
+        WHERE id = ${input.personalId}::uuid AND establecimiento_id = ${estab}::uuid
+        LIMIT 1
+      `;
+      if (!target[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
+      }
+
+      // Verificar que el User exista y no esté ya vinculado a otro personal.
+      const userExists = await ctx.prisma.user.findUnique({
+        where: { id: input.userId },
+        select: { id: true, email: true, active: true },
+      });
+      if (!userExists) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Usuario HIS no encontrado." });
+      }
+
+      const alreadyLinked = await ctx.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id::text FROM ece.personal_salud
+        WHERE auth_user_id = ${input.userId}::uuid AND id <> ${input.personalId}::uuid
+        LIMIT 1
+      `;
+      if (alreadyLinked[0]) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "El usuario ya está vinculado a otro profesional de salud.",
+        });
+      }
+
+      await ctx.prisma.$executeRaw`
+        UPDATE ece.personal_salud
+        SET auth_user_id = ${input.userId}::uuid
+        WHERE id = ${input.personalId}::uuid
+      `;
+
+      return { id: input.personalId, userEmail: userExists.email };
+    }),
+
+  /** Desvincula la cuenta de acceso. No borra el User HIS — solo el link. */
+  unlinkAuthUser: requireRole(["ADMIN", "DIR"])
+    .input(z.object({ personalId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const estab = resolveEstablecimiento(ctx);
+
+      const target = await ctx.prisma.$queryRaw<{ id: string }[]>`
+        SELECT id::text FROM ece.personal_salud
+        WHERE id = ${input.personalId}::uuid AND establecimiento_id = ${estab}::uuid
+        LIMIT 1
+      `;
+      if (!target[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
+      }
+
+      await ctx.prisma.$executeRaw`
+        UPDATE ece.personal_salud
+        SET auth_user_id = NULL
+        WHERE id = ${input.personalId}::uuid
+      `;
+
+      return { id: input.personalId };
+    }),
+
+  /**
+   * Búsqueda de Users HIS para vincular (autocomplete del dialog "Vincular cuenta").
+   * Filtra por email/fullName y excluye usuarios ya vinculados a otro personal.
+   */
+  searchAvailableUsers: tenantProcedure
+    .input(z.object({ search: z.string().min(2).max(200), limit: z.number().int().min(1).max(20).default(10) }))
+    .query(async ({ ctx, input }) => {
+      const pattern = `%${input.search.trim()}%`;
+      const users = await ctx.prisma.$queryRaw<
+        { id: string; email: string; full_name: string }[]
+      >`
+        SELECT u.id::text, u.email, u."fullName" AS full_name
+        FROM public."User" u
+        WHERE u.active = true
+          AND (u.email ILIKE ${pattern}::text OR u."fullName" ILIKE ${pattern}::text)
+          AND NOT EXISTS (
+            SELECT 1 FROM ece.personal_salud p WHERE p.auth_user_id = u.id
+          )
+        ORDER BY u."fullName" ASC
+        LIMIT ${input.limit}
+      `;
+      return users.map((u) => ({ id: u.id, email: u.email, fullName: u.full_name }));
+    }),
 });
