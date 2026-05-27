@@ -201,15 +201,98 @@ export function buildTools(auth: ToolAuthContext) {
           ),
       }),
       execute: async ({ url, label, reason }) => {
-        // No ejecuta navegación — solo devuelve la sugerencia al cliente para
-        // que renderice el botón. La acción real la hace el usuario al
-        // clickearlo.
         return {
           type: "navigation_suggestion" as const,
           url,
           label,
           reason,
         };
+      },
+    }),
+
+    // ── Fase 5: tools de ESCRITURA con confirmación humana ────────────────
+    // Patrón: la tool NO ejecuta — solo valida y retorna un "draft" con
+    // params normalizados + summary. El UI renderiza una card con botones
+    // [Confirmar] / [Cancelar]. Click "Confirmar" llama a
+    // /api/chat/execute-action que valida auth + roles + ejecuta el INSERT.
+
+    scheduleOutpatientAppointmentDraft: tool({
+      description:
+        "Prepara una propuesta de cita ambulatoria. NO crea la cita — solo " +
+        "valida los datos y devuelve un draft para que el usuario confirme " +
+        "explícitamente en la UI. Úsala cuando el usuario pida programar una " +
+        "cita: 'agenda a Juan con la Dra. López el viernes 9am para control'. " +
+        "Necesitas: patientId (busca primero con searchPatient), providerId " +
+        "(busca el User del médico) y fecha+hora ISO8601.",
+      inputSchema: z.object({
+        patientId: z
+          .string()
+          .uuid()
+          .describe("UUID del paciente. Si no lo tienes, llama primero a searchPatient."),
+        providerId: z
+          .string()
+          .uuid()
+          .describe(
+            "UUID del User HIS del médico que atenderá. Si el usuario menciona un nombre, asume que es él mismo si es médico, o pide aclaración.",
+          ),
+        scheduledAt: z
+          .string()
+          .datetime({ offset: true })
+          .describe(
+            "Fecha y hora ISO8601 con offset (ej. '2026-06-05T09:00:00-06:00'). NO inventes — usa lo que el usuario dijo o pide aclaración.",
+          ),
+        durationMinutes: z
+          .number()
+          .int()
+          .min(10)
+          .max(240)
+          .default(20)
+          .describe("Duración en minutos. Default 20."),
+        reason: z
+          .string()
+          .min(3)
+          .max(500)
+          .describe("Motivo de la cita en 1 frase corta. Ej. 'Control posquirúrgico'."),
+      }),
+      execute: async (params) => {
+        if (!auth.organizationId) {
+          return { error: "Sin organización activa." };
+        }
+        // Validación adicional server-side antes de devolver el draft.
+        // Verificar que paciente + provider existan en el tenant.
+        try {
+          const orgFilter = `eq.${auth.organizationId}`;
+          const [patientRow] = await rpcQuery<{ id: string; firstName: string; lastName: string; mrn: string }>(
+            `Patient?select=id,firstName,lastName,mrn&id=eq.${params.patientId}&organizationId=${orgFilter}&active=eq.true&limit=1`,
+          );
+          if (!patientRow) {
+            return { error: `Paciente ${params.patientId} no encontrado en el tenant.` };
+          }
+          const [userRow] = await rpcQuery<{ id: string; fullName: string }>(
+            `User?select=id,fullName&id=eq.${params.providerId}&active=eq.true&limit=1`,
+          );
+          if (!userRow) {
+            return { error: `Médico (User ${params.providerId}) no encontrado o inactivo.` };
+          }
+
+          // Devuelve draft normalizado.
+          const dt = new Date(params.scheduledAt);
+          const summary =
+            `Cita ambulatoria para **${patientRow.firstName} ${patientRow.lastName}** ` +
+            `(MRN ${patientRow.mrn}) con **${userRow.fullName}** ` +
+            `el **${dt.toLocaleString("es-SV", { dateStyle: "long", timeStyle: "short" })}** ` +
+            `(${params.durationMinutes} min). Motivo: ${params.reason}.`;
+
+          return {
+            type: "pending_action" as const,
+            actionType: "scheduleOutpatientAppointment",
+            params,
+            summary,
+            requiresRoles: ["PHYSICIAN", "NURSE", "ADMIN", "ADMISSION_CLERK", "DIR"],
+          };
+        } catch (err) {
+          return { error: err instanceof Error ? err.message : String(err) };
+        }
       },
     }),
   };

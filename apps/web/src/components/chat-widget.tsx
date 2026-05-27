@@ -449,6 +449,7 @@ function ToolCallChip({
     searchPatient: "Buscando pacientes",
     getMyPatientsAsPhysician: "Consultando tus pacientes",
     suggestNavigation: "Sugerencia de navegación",
+    scheduleOutpatientAppointmentDraft: "Preparando cita ambulatoria",
   };
   const label = LABELS[tc.toolName] ?? tc.toolName;
   const inProgress = tc.state === "input-streaming" || tc.state === "input-available" || tc.state === "executing";
@@ -469,6 +470,27 @@ function ToolCallChip({
             <ExternalLink className="h-3 w-3" aria-hidden /> {out.label ?? "Ir"}
           </button>
         </div>
+      );
+    }
+  }
+
+  // Fase 5: pending_action — card de confirmación humana para escrituras.
+  if (done && tc.output) {
+    const out = tc.output as {
+      type?: string;
+      actionType?: string;
+      params?: Record<string, unknown>;
+      summary?: string;
+      error?: string;
+    };
+    if (out.type === "pending_action" && out.actionType && out.params && out.summary) {
+      return (
+        <PendingActionCard
+          actionType={out.actionType}
+          params={out.params}
+          summary={out.summary}
+          onNavigate={onNavigate}
+        />
       );
     }
   }
@@ -599,4 +621,114 @@ function extractToolCalls(m: AnyMessage): ToolCallInfo[] {
     });
   }
   return calls;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fase 5: Pending action card (confirmación humana para tools de escritura)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PendingActionCard({
+  actionType,
+  params,
+  summary,
+  onNavigate,
+}: {
+  actionType: string;
+  params: Record<string, unknown>;
+  summary: string;
+  onNavigate: (url: string) => void;
+}) {
+  const [status, setStatus] = React.useState<"pending" | "executing" | "done" | "error">("pending");
+  const [resultMsg, setResultMsg] = React.useState<string>("");
+  const [navigateTo, setNavigateTo] = React.useState<string | null>(null);
+
+  async function handleConfirm() {
+    setStatus("executing");
+    try {
+      const res = await fetch("/api/chat/execute-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionType, params }),
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        message?: string;
+        navigateTo?: string;
+      };
+      if (data.ok) {
+        setStatus("done");
+        setResultMsg(data.message ?? "Acción ejecutada.");
+        if (data.navigateTo) setNavigateTo(data.navigateTo);
+      } else {
+        setStatus("error");
+        setResultMsg(data.message ?? "Error al ejecutar.");
+      }
+    } catch (err) {
+      setStatus("error");
+      setResultMsg(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleCancel() {
+    setStatus("error");
+    setResultMsg("Cancelado por el usuario.");
+  }
+
+  return (
+    <div className="rounded-md border-2 border-amber-300 bg-amber-50 p-3 text-xs space-y-2">
+      <div className="flex items-start gap-2">
+        <Sparkles className="h-4 w-4 text-amber-700 shrink-0 mt-0.5" aria-hidden />
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-amber-900">Confirma esta acción</p>
+          <p
+            className="text-amber-900 mt-1"
+            // El summary viene del server y contiene **markdown** simple.
+            dangerouslySetInnerHTML={{ __html: renderMarkdown(summary) }}
+          />
+        </div>
+      </div>
+
+      {status === "pending" && (
+        <div className="flex gap-2 justify-end">
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="rounded-md border border-amber-400 bg-white px-3 py-1 text-xs hover:bg-amber-100"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleConfirm}
+            className="rounded-md bg-amber-600 text-white px-3 py-1 text-xs hover:bg-amber-700"
+          >
+            Confirmar
+          </button>
+        </div>
+      )}
+
+      {status === "executing" && (
+        <p className="text-amber-900 italic">Ejecutando...</p>
+      )}
+
+      {status === "done" && (
+        <div className="space-y-2">
+          <p className="text-green-800 font-medium">✓ {resultMsg}</p>
+          {navigateTo && (
+            <button
+              type="button"
+              onClick={() => onNavigate(navigateTo)}
+              className="inline-flex items-center gap-1 rounded-md bg-green-600 text-white px-2 py-1 text-xs hover:bg-green-700"
+            >
+              <ExternalLink className="h-3 w-3" aria-hidden /> Ver resultado
+            </button>
+          )}
+        </div>
+      )}
+
+      {status === "error" && (
+        <p className="text-red-700 font-medium">⚠️ {resultMsg}</p>
+      )}
+    </div>
+  );
 }
