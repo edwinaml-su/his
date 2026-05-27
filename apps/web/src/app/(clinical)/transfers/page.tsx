@@ -57,6 +57,9 @@ export default function TransfersPage() {
     fromServiceId: string | null;
     toServiceId: string;
     reason: string;
+    status: "SENT" | "RECEIVED" | "CANCELLED";
+    receivedAt: string | Date | null;
+    receivedBy: { id: string; fullName: string } | null;
     encounter: {
       id: string;
       encounterNumber: string;
@@ -67,6 +70,17 @@ export default function TransfersPage() {
       };
     };
   }>;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const confirm = (trpc as any).encounterTransfer.confirmReceipt.useMutation({
+    onSuccess: () => {
+      if (utils?.encounterTransfer?.listRecent?.invalidate) {
+        utils.encounterTransfer.listRecent.invalidate();
+      } else {
+        list.refetch();
+      }
+    },
+  });
 
   const total = (list.data?.total as number) ?? 0;
   const pageSize = (list.data?.pageSize as number) ?? 20;
@@ -164,7 +178,7 @@ export default function TransfersPage() {
                       {t.reason}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="outline">
                       {serviceName(t.fromServiceId)}
                     </Badge>
@@ -172,6 +186,36 @@ export default function TransfersPage() {
                     <Badge variant="success">
                       {serviceName(t.toServiceId)}
                     </Badge>
+                    {t.status === "SENT" ? (
+                      <Badge variant="warning">En tránsito</Badge>
+                    ) : t.status === "RECEIVED" ? (
+                      <Badge variant="default" title={
+                        t.receivedBy
+                          ? `Recibido por ${t.receivedBy.fullName}${
+                              t.receivedAt
+                                ? " · " +
+                                  new Date(t.receivedAt).toLocaleString("es-SV")
+                                : ""
+                            }`
+                          : "Recibido"
+                      }>
+                        Recibido
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">Cancelado</Badge>
+                    )}
+                    {t.status === "SENT" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={confirm.isPending}
+                        onClick={() =>
+                          confirm.mutate({ transferId: t.id })
+                        }
+                      >
+                        Confirmar recepción
+                      </Button>
+                    ) : null}
                     <span className="ml-3 text-xs text-muted-foreground">
                       {new Date(t.occurredAt).toLocaleString("es-SV")}
                     </span>

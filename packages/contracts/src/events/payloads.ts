@@ -1088,6 +1088,44 @@ export const ipsg6MorseSlaExceededPayloadSchema = z.object({
 export type Ipsg6MorseSlaExceededPayload = z.infer<typeof ipsg6MorseSlaExceededPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// patient.transfer.{sent,confirmed,cancelled} — sql/56 handoff interno
+// -----------------------------------------------------------------------------
+
+/**
+ * Payload base de un traslado interno (cama → SOP / URPA / piso).
+ * Usado por `patient.transfer.sent` y `patient.transfer.cancelled`.
+ */
+export const patientTransferPayloadSchema = z.object({
+  transferId:       z.string().uuid(),
+  encounterId:      z.string().uuid(),
+  patientId:        z.string().uuid(),
+  fromServiceId:    z.string().uuid().nullable(),
+  toServiceId:      z.string().uuid(),
+  fromBedId:        z.string().uuid().nullable(),
+  toBedId:          z.string().uuid().nullable(),
+  reason:           z.string(),
+  occurredAt:       z.string().datetime(),
+  /** UUID del usuario que disparó la mutación (origen). */
+  byUserId:         z.string().uuid().nullable(),
+});
+
+/**
+ * Extiende el base con receivedBy / receivedAt. Emitido cuando el receptor
+ * confirma la recepción en el destino (transfer.confirmReceipt).
+ */
+export const patientTransferConfirmedPayloadSchema =
+  patientTransferPayloadSchema.extend({
+    receivedAt:    z.string().datetime(),
+    receivedById:  z.string().uuid(),
+    receivedNote:  z.string().nullable(),
+  });
+
+export type PatientTransferPayload = z.infer<typeof patientTransferPayloadSchema>;
+export type PatientTransferConfirmedPayload = z.infer<
+  typeof patientTransferConfirmedPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1460,6 +1498,19 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
       completadoEn: z.string().datetime(),
       completadoPor: z.string().uuid(),
     }),
+  }),
+  // sql/56 — Handoff interno (cama → SOP / URPA / piso)
+  z.object({
+    eventType: z.literal("patient.transfer.sent"),
+    payload: patientTransferPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("patient.transfer.confirmed"),
+    payload: patientTransferConfirmedPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("patient.transfer.cancelled"),
+    payload: patientTransferPayloadSchema,
   }),
 ]);
 

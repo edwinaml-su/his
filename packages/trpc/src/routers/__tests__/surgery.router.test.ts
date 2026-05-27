@@ -180,15 +180,41 @@ describe("surgeryRouter", () => {
   // WHO checklist — signIn
   // --------------------------------------------------------------------------
   describe("case.signIn", () => {
-    it("NOT_FOUND si caso no existe o ya tiene signIn", async () => {
-      prisma.surgeryCase.updateMany.mockResolvedValue({ count: 0 } as never);
+    it("NOT_FOUND si el caso no existe", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
       const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.case.signIn({ id: u })).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
     });
 
-    it("OK registra signInAt + signInById", async () => {
+    it("PRECONDITION_FAILED si hay transfer SENT pendiente (sql/56 gate)", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: "enc-1",
+        signInAt: null,
+        status: "SCHEDULED",
+      } as never);
+      prisma.encounterTransfer.findFirst.mockResolvedValue({
+        id: "t-pending",
+        toServiceId: "svc-sop",
+      } as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.case.signIn({ id: u })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      // Sign-In NO debe ejecutarse si hay handoff pendiente.
+      expect(prisma.surgeryCase.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("OK registra signInAt + signInById sin handoff pendiente", async () => {
+      prisma.surgeryCase.findFirst.mockResolvedValue({
+        id: u,
+        encounterId: "enc-1",
+        signInAt: null,
+        status: "SCHEDULED",
+      } as never);
+      prisma.encounterTransfer.findFirst.mockResolvedValue(null as never);
       prisma.surgeryCase.updateMany.mockResolvedValue({ count: 1 } as never);
       const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.case.signIn({ id: u });

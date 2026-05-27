@@ -158,6 +158,10 @@ export const EVENT_TYPES = [
   "ece.orden_ingreso.creada",
   "ece.orden_ingreso.firmada",
   "ece.orden_ingreso.anulada",
+  // sql/56 — Handoff interno de paciente (cama → SOP / URPA / piso)
+  "patient.transfer.sent",
+  "patient.transfer.confirmed",
+  "patient.transfer.cancelled",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

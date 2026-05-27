@@ -215,10 +215,50 @@ export const surgeryRouter = router({
 
     // ------------------------------------------------------------------
     // WHO Surgical Safety Checklist — Sign In
+    //
+    // Gate sql/56 (handoff interno): NO se permite iniciar Sign-In si el
+    // paciente tiene un traslado pendiente de recepción (`status='SENT'`).
+    // El coordinador del quirófano debe confirmar la llegada con
+    // `encounterTransfer.confirmReceipt` antes del Sign-In.
     // ------------------------------------------------------------------
     signIn: tenantProcedure
       .input(surgeryCaseSignInInput)
       .mutation(async ({ ctx, input }) => {
+        // 1) Cargar el caso para conocer encounterId.
+        const surgeryCase = await ctx.prisma.surgeryCase.findFirst({
+          where: {
+            id: input.id,
+            organizationId: ctx.tenant.organizationId,
+            deletedAt: null,
+          },
+          select: { id: true, encounterId: true, signInAt: true, status: true },
+        });
+        if (!surgeryCase) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Caso quirúrgico no encontrado.",
+          });
+        }
+
+        // 2) Gate handoff: ¿hay traslado SENT pendiente? Rechazar.
+        const pendingHandoff = await ctx.prisma.encounterTransfer.findFirst({
+          where: {
+            encounterId: surgeryCase.encounterId,
+            status: "SENT",
+          },
+          select: { id: true, toServiceId: true },
+        });
+        if (pendingHandoff) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "El paciente tiene un traslado pendiente de recepción. " +
+              "Confirme la llegada (Recibir paciente) antes del Sign-In WHO.",
+            cause: { pendingTransferId: pendingHandoff.id },
+          });
+        }
+
+        // 3) Sign-In (idempotente, único).
         const updated = await ctx.prisma.surgeryCase.updateMany({
           where: {
             id: input.id,
