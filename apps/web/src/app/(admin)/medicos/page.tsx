@@ -15,6 +15,7 @@ export default function MedicosPage() {
       noun="médico"
       jvpLabel="JVPM (Junta de Vigilancia)"
       profesionHint="Ej. Cirujano General, Cardiólogo, Anestesiólogo"
+      detailBasePath="/medicos"
     />
   );
 }

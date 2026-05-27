@@ -83,6 +83,8 @@ interface PersonalSaludScreenProps {
   jvpLabel: string;
   /** Hint del campo profesión por contexto. */
   profesionHint: string;
+  /** Ruta base para link al detalle (/admin/medicos | /admin/profesionales-salud). */
+  detailBasePath: string;
 }
 
 export function PersonalSaludScreen({
@@ -92,6 +94,7 @@ export function PersonalSaludScreen({
   noun,
   jvpLabel,
   profesionHint,
+  detailBasePath,
 }: PersonalSaludScreenProps) {
   const [search, setSearch] = React.useState("");
   const [activoFilter, setActivoFilter] = React.useState<"activos" | "inactivos" | "todos">("activos");
@@ -339,6 +342,11 @@ export function PersonalSaludScreen({
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="inline-flex gap-2">
+                        <Button asChild size="sm" variant="outline">
+                          <a href={`${detailBasePath}/${p.id}`} aria-label={`Ver ${p.nombreCompleto}`}>
+                            Ver
+                          </a>
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => setEditTarget(p.id)}>
                           Editar
                         </Button>
