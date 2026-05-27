@@ -15,7 +15,7 @@
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useChat } from "@ai-sdk/react";
-import { MessageCircle, X, Send, Sparkles, ExternalLink } from "lucide-react";
+import { MessageCircle, X, Send, Sparkles, ExternalLink, ThumbsUp, ThumbsDown } from "lucide-react";
 import { Button } from "@his/ui/components/button";
 import { cn } from "@his/ui/lib/utils";
 
@@ -54,13 +54,39 @@ const QUICK_ACTIONS = [
 ];
 
 const SESSION_KEY = "his-chat-history";
+const SESSION_ID_KEY = "his-chat-session-id";
+
+/** Genera (o recupera) un UUID v4 estable por sessionStorage para tracking. */
+function getOrCreateSessionId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    const existing = sessionStorage.getItem(SESSION_ID_KEY);
+    if (existing) return existing;
+    // Generación robusta — sin lib externa.
+    const newId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem(SESSION_ID_KEY, newId);
+    return newId;
+  } catch {
+    return "";
+  }
+}
 
 export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidgetProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [input, setInput] = React.useState("");
+  const [sessionId, setSessionId] = React.useState("");
+  /** Feedback de la sesión completa: undefined = sin votar, 1 = up, -1 = down. */
+  const [sessionFeedback, setSessionFeedback] = React.useState<1 | -1 | undefined>(undefined);
   const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    setSessionId(getOrCreateSessionId());
+  }, []);
 
   const { messages, sendMessage, status, error, setMessages } = useChat({
     onError: (err: Error) => {
@@ -115,6 +141,7 @@ export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidget
             organizationName,
             userId: chatAuth?.userId,
             organizationId: chatAuth?.organizationId,
+            sessionId,
           },
         },
       },
@@ -122,16 +149,41 @@ export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidget
     setInput("");
   }
 
+  async function handleSessionFeedback(vote: 1 | -1) {
+    if (!sessionId) return;
+    const previous = sessionFeedback;
+    setSessionFeedback(vote); // optimistic
+    try {
+      const res = await fetch("/api/chat/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, feedback: vote }),
+      });
+      if (!res.ok) setSessionFeedback(previous);
+    } catch {
+      setSessionFeedback(previous);
+    }
+  }
+
+  function handleClearAll() {
+    setMessages([]);
+    setSessionFeedback(undefined);
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem(SESSION_KEY);
+      // Genera nuevo sessionId para que el siguiente turno cree nueva sesión.
+      sessionStorage.removeItem(SESSION_ID_KEY);
+      setSessionId(getOrCreateSessionId());
+    }
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     handleSend(input);
   }
 
+  // (handleClearAll está arriba; mantengo este shim por compat.)
   function handleClearHistory() {
-    setMessages([]);
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem(SESSION_KEY);
-    }
+    handleClearAll();
   }
 
   // Click en links del markdown — interceptar para navegación SPA.
@@ -290,10 +342,42 @@ export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidget
             </Button>
           </form>
 
-          {/* Footer */}
-          <p className="px-4 pb-2 text-[10px] text-muted-foreground">
-            Powered by Claude · No comparte datos clínicos sensibles
-          </p>
+          {/* Footer con feedback */}
+          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1">
+            <p className="text-[10px] text-muted-foreground">
+              Powered by Claude · No comparte datos clínicos sensibles
+            </p>
+            {messages.length > 0 && (
+              <div className="flex items-center gap-1" aria-label="Calificar conversación">
+                <button
+                  type="button"
+                  onClick={() => handleSessionFeedback(1)}
+                  className={cn(
+                    "rounded p-1 hover:bg-muted transition-colors",
+                    sessionFeedback === 1 ? "text-green-600" : "text-muted-foreground",
+                  )}
+                  aria-label="Útil"
+                  aria-pressed={sessionFeedback === 1}
+                  title="La conversación fue útil"
+                >
+                  <ThumbsUp className="h-3 w-3" aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSessionFeedback(-1)}
+                  className={cn(
+                    "rounded p-1 hover:bg-muted transition-colors",
+                    sessionFeedback === -1 ? "text-red-600" : "text-muted-foreground",
+                  )}
+                  aria-label="No útil"
+                  aria-pressed={sessionFeedback === -1}
+                  title="La conversación no fue útil"
+                >
+                  <ThumbsDown className="h-3 w-3" aria-hidden />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </>

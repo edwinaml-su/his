@@ -160,6 +160,8 @@ import { comiteEceRouter } from "./ece/comite-ece.router";
 import { patientDedupRouter } from "./patient-dedup.router";
 // Mantenimiento de personal de salud (B2B2C — médicos y profesionales no-médicos)
 import { personalSaludRouter } from "./personal-salud.router";
+// Avante Asistente — analytics Fase 4 (telemetría chat)
+import { chatAnalyticsRouter } from "./chat-analytics.router";
 import { portalArcoRouter } from "./portal-arco.router";
 // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
 import { auditOutlierRouter } from "./audit-outlier.router";
@@ -374,6 +376,7 @@ export const appRouter = router({
   patientDedup: patientDedupRouter,
   // Mantenimiento de personal de salud (B2B2C)
   personalSalud: personalSaludRouter,
+  chatAnalytics: chatAnalyticsRouter,
   portalArco: portalArcoRouter,
   // F2-S15 Stream D — Audit Outlier Detection (US.F2.7.13, 16)
   auditOutlier: auditOutlierRouter,
