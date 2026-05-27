@@ -63,7 +63,10 @@ export default function PortalLoginPage() {
       </form>
       <p className="text-center text-xs text-slate-500">
         ¿Aún no tiene cuenta?{" "}
-        <a href="/register" className="text-blue-600 hover:underline">
+        <a
+          href="/portal/register"
+          className="text-blue-600 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+        >
           Regístrese aquí
         </a>
       </p>
