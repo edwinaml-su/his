@@ -22,6 +22,8 @@
     "test:perf": "playwright test e2e/perf/lighthouse-baseline.spec.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.80",
+    "@ai-sdk/react": "^3.0.193",
     "@dagrejs/dagre": "^1.1.4",
     "@his/contracts": "*",
     "@his/database": "*",
@@ -40,6 +42,7 @@
     "@trpc/react-query": "^11.0.0-rc.660",
     "@trpc/server": "^11.0.0-rc.660",
     "@zxing/browser": "^0.2.0",
+    "ai": "^6.0.191",
     "bwip-js": "^4.10.1",
     "html-to-image": "^1.11.13",
     "idb": "^8",
@@ -60,7 +63,7 @@
     "workbox-routing": "^7",
     "workbox-strategies": "^7",
     "xlsx": "^0.18.5",
-    "zod": "^3.23.8"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.1",
