@@ -511,11 +511,14 @@ export function AppShell({
   children,
   topbar,
   roleCodes = [],
+  chatAuth,
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
   /** Roles del usuario activo — usados para filtrar items con requiredRoles. */
   roleCodes?: string[];
+  /** Identidad del usuario para tools tenant-scoped del chatbot. */
+  chatAuth?: { userId: string; organizationId?: string };
 }) {
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
@@ -654,7 +657,7 @@ export function AppShell({
         </div>
       </div>
       {/* Asistente HIS — copiloto flotante context-aware. */}
-      <ChatWidget roleCodes={roleCodes} />
+      <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />
     </TooltipProvider>
   );
 }

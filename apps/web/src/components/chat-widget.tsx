@@ -24,6 +24,8 @@ interface ChatWidgetProps {
   roleCodes?: string[];
   /** Nombre de la organización del tenant — solo display. */
   organizationName?: string;
+  /** Identidad para que el bot pueda invocar tools tenant-scoped. */
+  chatAuth?: { userId: string; organizationId?: string };
 }
 
 /** Shape común de mensajes del SDK que usamos (soporta parts[] o content). */
@@ -31,7 +33,17 @@ type AnyMessage = {
   id?: string;
   role?: "user" | "assistant" | "system";
   content?: string;
-  parts?: Array<{ type?: string; text?: string }>;
+  parts?: Array<MessagePart>;
+};
+
+/** Una part del mensaje — texto, tool-call, tool-result, etc. */
+type MessagePart = {
+  type?: string;
+  text?: string;
+  toolName?: string;
+  state?: string;
+  input?: unknown;
+  output?: unknown;
 };
 
 const QUICK_ACTIONS = [
@@ -43,7 +55,7 @@ const QUICK_ACTIONS = [
 
 const SESSION_KEY = "his-chat-history";
 
-export function ChatWidget({ roleCodes, organizationName }: ChatWidgetProps) {
+export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidgetProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
@@ -101,6 +113,8 @@ export function ChatWidget({ roleCodes, organizationName }: ChatWidgetProps) {
             currentPath: pathname,
             roleCodes,
             organizationName,
+            userId: chatAuth?.userId,
+            organizationId: chatAuth?.organizationId,
           },
         },
       },
@@ -227,7 +241,12 @@ export function ChatWidget({ roleCodes, organizationName }: ChatWidgetProps) {
                 key={m.id}
                 role={m.role}
                 content={extractText(m)}
+                toolCalls={extractToolCalls(m)}
                 onContentClick={handleContentClick}
+                onNavigate={(url) => {
+                  router.push(url);
+                  setOpen(false);
+                }}
               />
             ))}
 
@@ -285,31 +304,108 @@ export function ChatWidget({ roleCodes, organizationName }: ChatWidgetProps) {
 // Sub-componentes
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface ToolCallInfo {
+  toolName: string;
+  state: string;
+  input?: unknown;
+  output?: unknown;
+}
+
 function Message({
   role,
   content,
+  toolCalls,
   onContentClick,
+  onNavigate,
 }: {
   role: "user" | "assistant" | "system";
   content: string;
+  toolCalls?: ToolCallInfo[];
   onContentClick: (e: React.MouseEvent<HTMLDivElement>) => void;
+  onNavigate: (url: string) => void;
 }) {
   if (role === "system") return null;
   const isUser = role === "user";
   return (
-    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
-      <div
-        className={cn(
-          "max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words",
-          isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-muted text-foreground",
-        )}
-        onClick={onContentClick}
-        dangerouslySetInnerHTML={isUser ? undefined : { __html: renderMarkdown(content) }}
-      >
-        {isUser ? content : undefined}
-      </div>
+    <div className={cn("flex flex-col gap-1", isUser ? "items-end" : "items-start")}>
+      {/* Tool calls inline antes del texto final */}
+      {!isUser && toolCalls && toolCalls.length > 0 && (
+        <div className="flex flex-col gap-1 w-full max-w-[90%]">
+          {toolCalls.map((tc, i) => (
+            <ToolCallChip key={`${tc.toolName}-${i}`} tc={tc} onNavigate={onNavigate} />
+          ))}
+        </div>
+      )}
+      {content && (
+        <div
+          className={cn(
+            "max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap break-words",
+            isUser
+              ? "bg-primary text-primary-foreground"
+              : "bg-muted text-foreground",
+          )}
+          onClick={onContentClick}
+          dangerouslySetInnerHTML={isUser ? undefined : { __html: renderMarkdown(content) }}
+        >
+          {isUser ? content : undefined}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallChip({
+  tc,
+  onNavigate,
+}: {
+  tc: ToolCallInfo;
+  onNavigate: (url: string) => void;
+}) {
+  const LABELS: Record<string, string> = {
+    searchPatient: "Buscando pacientes",
+    getMyPatientsAsPhysician: "Consultando tus pacientes",
+    suggestNavigation: "Sugerencia de navegación",
+  };
+  const label = LABELS[tc.toolName] ?? tc.toolName;
+  const inProgress = tc.state === "input-streaming" || tc.state === "input-available" || tc.state === "executing";
+  const done = tc.state === "output-available";
+
+  // Caso especial: suggestNavigation muestra botón "Ir ahí".
+  if (tc.toolName === "suggestNavigation" && done && tc.output) {
+    const out = tc.output as { url?: string; label?: string; reason?: string };
+    if (out.url) {
+      return (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-2 text-xs space-y-1">
+          <p className="text-muted-foreground">{out.reason ?? "Sugerencia"}</p>
+          <button
+            type="button"
+            onClick={() => onNavigate(out.url!)}
+            className="inline-flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-xs hover:bg-primary/90"
+          >
+            <ExternalLink className="h-3 w-3" aria-hidden /> {out.label ?? "Ir"}
+          </button>
+        </div>
+      );
+    }
+  }
+
+  // Caso general: search/patient queries.
+  let resultSummary = "";
+  if (done && tc.output) {
+    const out = tc.output as { count?: number; error?: string; patients?: Array<{ name?: string; mrn?: string }> };
+    if (out.error) {
+      resultSummary = `⚠️ ${out.error}`;
+    } else if (typeof out.count === "number") {
+      resultSummary = `${out.count} resultado(s)`;
+    }
+  }
+
+  return (
+    <div className="rounded-md border bg-muted/40 p-2 text-xs flex items-center gap-2">
+      <Sparkles className="h-3 w-3 text-primary shrink-0" aria-hidden />
+      <span className="font-medium">{label}</span>
+      {inProgress && <span className="text-muted-foreground italic">en curso…</span>}
+      {done && resultSummary && <span className="text-muted-foreground">— {resultSummary}</span>}
     </div>
   );
 }
@@ -398,4 +494,25 @@ function extractText(m: AnyMessage): string {
       .join("");
   }
   return "";
+}
+
+/**
+ * Extrae las tool calls del mensaje (Fase 3 agente). El SDK las representa
+ * como parts con `type: "tool-{toolName}"`. Devuelve metadata para que el
+ * ChatWidget las renderice como chips con estado y resultados.
+ */
+function extractToolCalls(m: AnyMessage): ToolCallInfo[] {
+  if (!Array.isArray(m.parts)) return [];
+  const calls: ToolCallInfo[] = [];
+  for (const p of m.parts) {
+    if (!p.type || !p.type.startsWith("tool-")) continue;
+    const toolName = p.toolName ?? p.type.replace(/^tool-/, "");
+    calls.push({
+      toolName,
+      state: p.state ?? "unknown",
+      input: p.input,
+      output: p.output,
+    });
+  }
+  return calls;
 }

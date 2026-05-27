@@ -12,9 +12,10 @@
  * Rate limit: por sesión Supabase (ctx.user.id) — middleware fuera de scope MVP.
  */
 import { anthropic } from "@ai-sdk/anthropic";
-import { streamText, convertToModelMessages } from "ai";
+import { streamText, convertToModelMessages, stepCountIs } from "ai";
 import { buildSystemPrompt } from "@/lib/chat/system-prompt";
 import { searchKnowledge, formatChunksForContext } from "@/lib/chat/rag";
+import { buildTools } from "@/lib/chat/tools";
 
 // Edge runtime para streaming low-latency.
 export const runtime = "edge";
@@ -48,6 +49,9 @@ interface ChatRequestBody {
     currentPath?: string;
     roleCodes?: string[];
     organizationName?: string;
+    /** Fase 3: identidad para tools tenant-scoped. */
+    userId?: string;
+    organizationId?: string;
   };
 }
 
@@ -102,14 +106,23 @@ export async function POST(req: Request) {
     }
   }
 
+  // Fase 3: tools tenant-scoped (read-only).
+  const tools = buildTools({
+    userId: body.context?.userId,
+    organizationId: body.context?.organizationId,
+    roleCodes: body.context?.roleCodes,
+  });
+
   const result = streamText({
     model: anthropic("claude-sonnet-4-5"),
     system: buildSystemPrompt(body.context) + ragContext,
     messages: modelMessages,
-    // Tokens generosos: el prompt incluye el catálogo (~1500 tok),
-    // respuestas típicas <500 tok, max 2K para flujos largos.
+    tools,
+    // stopWhen: el modelo puede hacer hasta 3 pasos (call tool → ver
+    // resultado → responder). Suficiente para flujos como "busca al
+    // paciente X y dime su última cirugía".
+    stopWhen: stepCountIs(3),
     maxOutputTokens: 2048,
-    // Temperature media-baja: factual + conversacional pero no creativo.
     temperature: 0.3,
   });
 
