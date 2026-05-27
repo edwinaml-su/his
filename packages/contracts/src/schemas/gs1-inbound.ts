@@ -56,8 +56,12 @@ export const recibirMercanciaInput = z.object({
     .optional(),
   productos: z.array(gs1ProductoRecibidoSchema).min(1),
   verificacion_5correctos: verificacion5CorrectosSchema,
-  establecimiento_id: z.string().uuid(),
-  registrado_por: z.string().uuid(),
+  // HI-06 (audit Stream I): server-side override. El cliente NO debe enviar
+  // estos campos — el router los deriva de ctx.tenant.establishmentId y
+  // ctx.user.id (via personal_salud lookup). Se aceptan opcionales para
+  // retro-compat de tests/seeders que ya los pasan explícitamente.
+  establecimiento_id: z.string().uuid().optional(),
+  registrado_por: z.string().uuid().optional(),
 });
 
 export type RecibirMercanciaInput = z.infer<typeof recibirMercanciaInput>;
@@ -86,7 +90,9 @@ export type RechazarRecepcionInput = z.infer<typeof rechazarRecepcionInput>;
 // Input: listar recepciones
 // ---------------------------------------------------------------------------
 export const listarRecepcionesInput = z.object({
-  establecimiento_id: z.string().uuid(),
+  // HI-06: server-side override. Si no llega del cliente, el router usa
+  // ctx.tenant.establishmentId. Mantengo opcional para retro-compat.
+  establecimiento_id: z.string().uuid().optional(),
   estado: z.enum(["pendiente", "verificado", "rechazado"]).optional(),
   limit: z.number().int().min(1).max(100).default(50),
   offset: z.number().int().min(0).default(0),

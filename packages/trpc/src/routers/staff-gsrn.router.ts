@@ -14,6 +14,7 @@
  * el aislamiento es por tenant_id gestionado por tenantProcedure / requireRole.
  */
 
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
@@ -26,10 +27,11 @@ import { gs1CheckDigitValid } from "@his/contracts";
 
 /** Genera un GSRN-18 con prefijo de empresa GS1 y dígito verificador correcto. */
 function generateGsrn(companyPrefix: string = "801234567890"): string {
-  // Prefijo de empresa (12 dígitos) + referencia aleatoria (5 dígitos) + check digit
-  const random5 = Math.floor(Math.random() * 100000)
-    .toString()
-    .padStart(5, "0");
+  // HI-20 (audit Stream I): randomInt usa CSPRNG (Node crypto). Antes
+  // Math.random() era PRNG predecible — permitía enumeración de badges
+  // institucionales válidos del personal médico (AI 8018).
+  // Prefijo de empresa (12 dígitos) + referencia aleatoria (5 dígitos) + check digit.
+  const random5 = randomInt(0, 100000).toString().padStart(5, "0");
   const root = companyPrefix + random5;
   let sum = 0;
   for (let i = 0; i < root.length; i++) {

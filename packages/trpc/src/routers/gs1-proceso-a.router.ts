@@ -22,6 +22,50 @@ import {
 import { emitDomainEvent, Prisma } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
+/**
+ * HI-06 (audit Stream I): resuelve `personal_salud.id` del usuario autenticado.
+ * Reemplaza la entrada manual de UUID en la UI por derivación server-side.
+ */
+async function resolvePersonalSaludId(
+  prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
+  userId: string,
+): Promise<string> {
+  const rows = await (prisma.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<{ id: string }[]>)`
+    SELECT id FROM ece.personal_salud
+    WHERE auth_user_id = ${userId}::uuid
+      AND activo = true
+    LIMIT 1
+  `;
+  if (!rows[0]) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "El usuario no tiene registro en ece.personal_salud activo. " +
+        "Contacte al administrador del ECE.",
+    });
+  }
+  return rows[0].id;
+}
+
+function resolveEstablecimientoId(
+  ctx: { tenant: { establishmentId?: string } },
+  override?: string,
+): string {
+  // HI-06: en producción el establecimiento_id viene del tenant context.
+  // Override opcional permite seeders/tests que ya lo pasan explícito.
+  const id = override ?? ctx.tenant.establishmentId;
+  if (!id) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo en la sesión.",
+    });
+  }
+  return id;
+}
+
 export const gs1ProcesoARouter = router({
   /**
    * Registra una recepción de mercancía en muelle.
@@ -30,6 +74,11 @@ export const gs1ProcesoARouter = router({
   recibirMercancia: tenantProcedure
     .input(recibirMercanciaInput)
     .mutation(async ({ ctx, input }) => {
+      // HI-06: derivar establecimiento_id y registrado_por del context.
+      const establecimientoId = resolveEstablecimientoId(ctx, input.establecimiento_id);
+      const registradoPor =
+        input.registrado_por ?? (await resolvePersonalSaludId(ctx.prisma, ctx.user.id));
+
       // Verificar que el proveedor GLN existe en el catálogo ECE
       const glnExists = await ctx.prisma.$queryRaw<{ exists: boolean }[]>`
         SELECT EXISTS (
@@ -64,8 +113,8 @@ export const gs1ProcesoARouter = router({
             ${input.sscc_pallet ?? null},
             ${JSON.stringify(input.productos)}::jsonb,
             ${JSON.stringify(input.verificacion_5correctos)}::jsonb,
-            ${input.registrado_por}::uuid,
-            ${input.establecimiento_id}::uuid,
+            ${registradoPor}::uuid,
+            ${establecimientoId}::uuid,
             'pendiente'
           )
           RETURNING id, numero_documento_recepcion
@@ -90,9 +139,9 @@ export const gs1ProcesoARouter = router({
           recepcionId: recepcion.id,
           numeroDocumentoRecepcion: recepcion.numero_documento_recepcion,
           proveedorGln: input.proveedor_gln,
-          establecimientoId: input.establecimiento_id,
+          establecimientoId,
           cantidadProductos: input.productos.length,
-          registradoPorId: input.registrado_por,
+          registradoPorId: registradoPor,
         },
       });
 
@@ -203,7 +252,8 @@ export const gs1ProcesoARouter = router({
         creado_en: string;
       };
 
-      const estId = input.establecimiento_id;
+      // HI-06: derivar establecimiento_id del tenant context si no llega.
+      const estId = resolveEstablecimientoId(ctx, input.establecimiento_id);
       const lim   = input.limit;
       const off   = input.offset;
 

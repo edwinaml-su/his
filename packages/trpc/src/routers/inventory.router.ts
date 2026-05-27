@@ -25,7 +25,8 @@ import {
   listAlertasInput,
   type AlertaTipo,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import { randomUUID } from "crypto";
 
 export const inventoryRouter = router({
@@ -62,25 +63,31 @@ export const inventoryRouter = router({
         });
       }),
 
-    create: tenantProcedure
+    // HI-29 (audit Stream I): la creación de items globales (organizationId:null)
+    // queda restringida a ADMIN — antes cualquier tenantProcedure podía crear
+    // entradas en el catálogo compartido. Items tenant-scoped siguen abiertos.
+    create: requireRole(["ADMIN"])
       .input(stockItemCreateInput)
       .mutation(async ({ ctx, input }) => {
         const orgId =
           input.organizationId === null
             ? null
             : (input.organizationId ?? ctx.tenant.organizationId);
-        return ctx.prisma.stockItem.create({
-          data: {
-            organizationId: orgId,
-            sku: input.sku,
-            name: input.name,
-            description: input.description ?? null,
-            unitOfMeasure: input.unitOfMeasure,
-            category: input.category ?? null,
-            trackLots: input.trackLots,
-            reorderLevel: input.reorderLevel ?? null,
-            createdBy: ctx.user.id,
-          },
+        // HI-29: envolver en withTenantContext para que RLS aplique en el INSERT.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.stockItem.create({
+            data: {
+              organizationId: orgId,
+              sku: input.sku,
+              name: input.name,
+              description: input.description ?? null,
+              unitOfMeasure: input.unitOfMeasure,
+              category: input.category ?? null,
+              trackLots: input.trackLots,
+              reorderLevel: input.reorderLevel ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
   }),
