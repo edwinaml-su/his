@@ -1,4 +1,4 @@
-/**
+﻿/**
  * §19 Inventory — router (Beta.10 hardening layer 1).
  *
  * Rules implemented:

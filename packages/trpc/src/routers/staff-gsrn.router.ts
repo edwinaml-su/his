@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Router tRPC: Catálogo GSRN Profesionales (US.F2.6.2).
  *
  * Gestiona el catálogo de GSRN asignados al personal de salud (médicos,
