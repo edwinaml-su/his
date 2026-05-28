@@ -4,6 +4,15 @@ import { updateSession } from "@/lib/supabase/middleware";
 const PUBLIC_PATHS = [
   "/login",
   "/signup",
+  // /sso y /sso/callback: callback OAuth/OIDC (Microsoft Azure AD via Supabase).
+  // CRÍTICO que sea público: la sesión Supabase la CREA el route handler de
+  // /sso/callback haciendo exchangeCodeForSession(code). Si el middleware lo
+  // bloquea por "no hay sesión", el callback nunca corre y el usuario queda
+  // en loop /login → Microsoft → /sso/callback → /login.
+  "/sso",
+  // /recover y /recover/reset: flujo de recuperación de contraseña (PR #306).
+  // El usuario llega aquí sin sesión activa por definición.
+  "/recover",
   "/api/trpc",
   "/api/health",
   "/_next",
