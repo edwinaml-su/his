@@ -32,16 +32,32 @@ import {
   type VitalSnapshot,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 export const emergencyRouter = router({
   visit: router({
     list: tenantProcedure
       .input(emergencyVisitListInput)
       .query(async ({ ctx, input }) => {
+        // Nivel B — EmergencyVisit no tiene serviceUnitId propio; scope via
+        // el Encounter padre (siempre EMERGENCY, encounter.serviceUnitId = ER
+        // o similar). Incluye nulls (encounters recién creados sin servicio).
+        const encScope = serviceUnitWhereFragment(
+          ctx.tenant,
+          "serviceUnitId",
+          { includeNullable: true },
+        );
+        const encounterFilter =
+          Object.keys(encScope).length > 0 ? { encounter: encScope } : {};
+
         return ctx.prisma.emergencyVisit.findMany({
           where: {
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
+            ...encounterFilter,
             ...(input.disposition && { disposition: input.disposition }),
             ...(input.patientId && { patientId: input.patientId }),
             ...(input.treatingId && { treatingId: input.treatingId }),
@@ -116,7 +132,7 @@ export const emergencyRouter = router({
             id: input.encounterId,
             organizationId: ctx.tenant.organizationId,
           },
-          select: { id: true, patientId: true },
+          select: { id: true, patientId: true, serviceUnitId: true },
         });
         if (!enc) {
           throw new TRPCError({
@@ -128,6 +144,16 @@ export const emergencyRouter = router({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "patientId no coincide con encounter.",
+          });
+        }
+        // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
+        // enc.serviceUnitId puede ser null (encounter recién admitido sin
+        // clasificar) → el helper lo permite (no podemos validar).
+        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
 

@@ -11,6 +11,7 @@ import {
 } from "@his/contracts";
 import { withTenantContext } from "../rls-context";
 import { router, tenantProcedure } from "../trpc";
+import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 
 /** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
 function formatNnSuffix(d: Date): string {
@@ -168,6 +169,10 @@ export const triageRouter = router({
         dischargedAt: null,
         admittedAt: { gte: since },
         triages: { none: { status: "COMPLETED" } },
+        // Nivel B — la cola de pendientes solo debe mostrar pacientes del
+        // servicio del triador. Incluye nulls (encounters recién admitidos sin
+        // servicio definido — el triador los clasifica).
+        ...serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true }),
       },
       include: {
         patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
@@ -497,6 +502,12 @@ export const triageRouter = router({
     const since = new Date();
     since.setHours(0, 0, 0, 0);
 
+    // Nivel B — todos los counts se restringen al scope del triador (incluye
+    // registros sin servicio aún clasificado).
+    const scope = serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", {
+      includeNullable: true,
+    });
+
     const [waitingTriage, inProgress, completedToday, withoutVitals] = await Promise.all([
       ctx.prisma.encounter.count({
         where: {
@@ -505,6 +516,7 @@ export const triageRouter = router({
           dischargedAt: null,
           admittedAt: { gte: since },
           triages: { none: {} },
+          ...scope,
         },
       }),
       ctx.prisma.triageEvaluation.count({
@@ -512,6 +524,7 @@ export const triageRouter = router({
           organizationId: ctx.tenant.organizationId,
           status: "IN_PROGRESS",
           startedAt: { gte: since },
+          ...scope,
         },
       }),
       ctx.prisma.triageEvaluation.count({
@@ -519,6 +532,7 @@ export const triageRouter = router({
           organizationId: ctx.tenant.organizationId,
           status: "COMPLETED",
           completedAt: { gte: since },
+          ...scope,
         },
       }),
       ctx.prisma.triageEvaluation.count({
@@ -527,6 +541,7 @@ export const triageRouter = router({
           status: "IN_PROGRESS",
           startedAt: { gte: since },
           vitalSigns: { none: {} },
+          ...scope,
         },
       }),
     ]);

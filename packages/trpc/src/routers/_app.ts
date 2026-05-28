@@ -14,6 +14,7 @@ import { mfaRouter } from "./mfa.router";
 import { exchangeRateRouter } from "./exchange-rate.router";
 import { rbacRouter } from "./rbac.router";
 import { userAdminRouter } from "./user-admin.router";
+import { userServiceUnitRouter } from "./user-service-unit.router";
 import { localeRouter } from "./locale.router";
 import { ledgerRouter } from "./ledger.router";
 import { auditIntegrityRouter } from "./audit-integrity.router";
@@ -228,6 +229,7 @@ export const appRouter = router({
   exchangeRate: exchangeRateRouter,
   rbac: rbacRouter,
   userAdmin: userAdminRouter,
+  userServiceUnit: userServiceUnitRouter,
   locale: localeRouter,
   ledger: ledgerRouter,
   auditIntegrity: auditIntegrityRouter,

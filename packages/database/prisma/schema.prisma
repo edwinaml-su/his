@@ -607,6 +607,8 @@ model User {
   costCentersResponsable    CostCenter[]                 @relation("CostCenterResponsable")
   // Handoff interno de traslados — sql/56
   transfersReceived         EncounterTransfer[]          @relation("TransferReceiver")
+  // Nivel A scope por servicio — sql/60
+  assignedServiceUnits      UserServiceUnitAssignment[]  @relation("UserAssignedServiceUnits")
 
   @@schema("public")
 }
@@ -678,6 +680,8 @@ model Role {
   permissions          RolePermission[]
   userRoles            UserOrganizationRole[]
   notificationDefaults RoleNotificationDefault[]
+  // Nivel A scope por servicio — sql/60
+  serviceUnitAssignments UserServiceUnitAssignment[] @relation("RoleAssignedServiceUnits")
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -1002,8 +1006,37 @@ model ServiceUnit {
   triages       TriageEvaluation[]
   // Finance — sql/127
   invoiceItems  InvoiceItem[]      @relation("InvoiceItemServiceUnit")
+  // Nivel A — sql/60
+  assignments   UserServiceUnitAssignment[] @relation("ServiceUnitAssignments")
 
   @@unique([establishmentId, code])
+  @@schema("public")
+}
+
+/// Scoping de usuarios a unidades operativas — sql/60 (Nivel A).
+/// Sin entries para un usuario = sin restricción (compat backward).
+/// Con entries = el usuario solo ve sidebar/rutas de esos servicios.
+/// Roles cross-servicio (ADMIN, DIR, COO, CFO, CEO, MEDICAL_DIRECTOR, AUDITOR)
+/// bypassean este filtro y ven todo dentro de la org.
+model UserServiceUnitAssignment {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  serviceUnitId  String    @db.Uuid
+  /// Si NULL: aplica con cualquier rol del usuario. Si presente: solo cuando
+  /// el usuario actúa con ese rol específico.
+  roleId         String?   @db.Uuid
+  validFrom      DateTime  @default(now()) @db.Timestamptz()
+  validTo        DateTime? @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  createdBy      String?   @db.Uuid
+
+  user        User        @relation("UserAssignedServiceUnits", fields: [userId], references: [id], onDelete: Cascade)
+  serviceUnit ServiceUnit @relation("ServiceUnitAssignments", fields: [serviceUnitId], references: [id], onDelete: Cascade)
+  role        Role?       @relation("RoleAssignedServiceUnits", fields: [roleId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, serviceUnitId, roleId], map: "user_service_role_unique")
+  @@index([userId])
+  @@index([serviceUnitId])
   @@schema("public")
 }
 

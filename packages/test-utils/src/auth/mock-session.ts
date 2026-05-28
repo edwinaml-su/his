@@ -11,6 +11,12 @@ type TenantContext = {
   organizationId: string;
   establishmentId?: string;
   roleCodes: string[];
+  /** Nivel A — IDs de ServiceUnit asignados; `[]` = sin restricción. */
+  assignedServiceUnitIds: string[];
+  /** Codes paralelos a `assignedServiceUnitIds`. */
+  assignedServiceUnitCodes: string[];
+  /** ADMIN/DIR/COO/CFO/CEO/MEDICAL_DIRECTOR/AUDITOR bypassean filtro. */
+  isCrossServiceRole: boolean;
 };
 
 export interface MockSessionUser {
@@ -37,6 +43,11 @@ export const MOCK_TENANT: TenantContext = {
   countryId: "00000000-0000-0000-0000-0000000000bb",
   establishmentId: "00000000-0000-0000-0000-0000000000cc",
   roleCodes: ["ADMIN", "PHYSICIAN", "TRIAGIST"],
+  // ADMIN es cross-service, así que en runtime real `assignedServiceUnitIds`
+  // queda vacío y `isCrossServiceRole` = true. Replicamos esa semántica aquí.
+  assignedServiceUnitIds: [],
+  assignedServiceUnitCodes: [],
+  isCrossServiceRole: true,
 };
 
 export const MOCK_TENANT_NO_ESTABLISHMENT: TenantContext = {
@@ -55,6 +66,9 @@ export const MOCK_TENANT_OTHER_ORG: TenantContext = {
   countryId: "00000000-0000-0000-0000-0000000000bb",
   establishmentId: "00000000-0000-0000-0000-0000000000dd",
   roleCodes: ["ADMIN", "PHYSICIAN"],
+  assignedServiceUnitIds: [],
+  assignedServiceUnitCodes: [],
+  isCrossServiceRole: true,
 };
 
 /** Helper de conveniencia para construir un contexto tRPC mínimo en tests. */

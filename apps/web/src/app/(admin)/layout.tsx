@@ -15,6 +15,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <AppShell
       roleCodes={tenant?.roleCodes ?? []}
+      assignedServiceUnitCodes={tenant?.assignedServiceUnitCodes ?? []}
+      isCrossServiceRole={tenant?.isCrossServiceRole ?? false}
       chatAuth={{
         userId: user.id,
         organizationId: tenant?.organizationId,

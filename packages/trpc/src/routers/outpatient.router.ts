@@ -22,6 +22,10 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import type { PrismaClient } from "@prisma/client";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 async function detectAppointmentConflict(
   prisma: PrismaClient,
@@ -83,6 +87,12 @@ export const outpatientRouter = router({
           where: {
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
+            // Nivel B — restringe a citas del servicio del usuario; incluye
+            // nulls porque appointment.serviceUnitId todavía no se popula
+            // siempre desde la UI (es opcional al crear).
+            ...serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", {
+              includeNullable: true,
+            }),
             ...(input.providerId && { providerId: input.providerId }),
             ...(input.patientId && { patientId: input.patientId }),
             ...(input.status && { status: input.status }),
@@ -117,6 +127,13 @@ export const outpatientRouter = router({
     create: tenantProcedure
       .input(outpatientAppointmentCreateInput)
       .mutation(async ({ ctx, input }) => {
+        // Nivel B — si vino serviceUnitId, debe pertenecer al scope del usuario.
+        if (input.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El servicio seleccionado no está en tus asignaciones.",
+          });
+        }
         const hasConflict = await detectAppointmentConflict(
           ctx.prisma,
           ctx.tenant.organizationId,

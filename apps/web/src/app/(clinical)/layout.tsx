@@ -14,6 +14,13 @@ export default async function ClinicalLayout({ children }: { children: React.Rea
 
   return (
     <AppShell
+      roleCodes={tenant?.roleCodes ?? []}
+      assignedServiceUnitCodes={tenant?.assignedServiceUnitCodes ?? []}
+      isCrossServiceRole={tenant?.isCrossServiceRole ?? false}
+      chatAuth={{
+        userId: user.id,
+        organizationId: tenant?.organizationId,
+      }}
       topbar={
         <div className="flex w-full items-center justify-end gap-1 sm:gap-2">
           {tenant ? <NotificationsBadge /> : null}

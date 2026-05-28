@@ -37,6 +37,10 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 /**
  * Beta.15 — mapping del shape interno de `evaluateVitalAlerts`
@@ -79,10 +83,22 @@ export const inpatientRouter = router({
     list: tenantProcedure
       .input(inpatientAdmissionListInput)
       .query(async ({ ctx, input }) => {
+        // Nivel B — InpatientAdmission no tiene serviceUnitId; scope via el
+        // Encounter padre (UCIN, MED, SURG, etc.). Incluye nulls porque
+        // admissions recién creadas pueden no tener servicio aún.
+        const encScope = serviceUnitWhereFragment(
+          ctx.tenant,
+          "serviceUnitId",
+          { includeNullable: true },
+        );
+        const encounterFilter =
+          Object.keys(encScope).length > 0 ? { encounter: encScope } : {};
+
         return ctx.prisma.inpatientAdmission.findMany({
           where: {
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
+            ...encounterFilter,
             ...(input.status && { status: input.status }),
             ...(input.patientId && { patientId: input.patientId }),
             ...(input.attendingId && { attendingId: input.attendingId }),
@@ -124,7 +140,7 @@ export const inpatientRouter = router({
             id: input.encounterId,
             organizationId: ctx.tenant.organizationId,
           },
-          select: { id: true, patientId: true },
+          select: { id: true, patientId: true, serviceUnitId: true },
         });
         if (!enc) {
           throw new TRPCError({
@@ -136,6 +152,14 @@ export const inpatientRouter = router({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "patientId no coincide con encounter.",
+          });
+        }
+        // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
+        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
 
