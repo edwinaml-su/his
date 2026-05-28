@@ -3,6 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { NotificationsBadge } from "@/components/notifications-badge";
 import { OrgRoleSwitcher } from "@/components/org-role-switcher";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { UserMenu } from "@/components/user-menu";
 import { PerfTracker } from "@/components/perf-tracker";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 
@@ -19,18 +20,15 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         organizationId: tenant?.organizationId,
       }}
       topbar={
-        <div className="flex w-full items-center justify-between gap-2 sm:gap-4">
-          <span className="hidden truncate text-sm sm:inline">
-            <span className="font-medium text-foreground">{user.fullName}</span>
-            {!tenant && (
-              <span className="ml-2 text-muted-foreground">— sin organización asignada</span>
-            )}
-          </span>
-          <div className="ml-auto flex items-center gap-1 sm:gap-2">
-            {tenant ? <NotificationsBadge /> : null}
-            {tenant ? <OrgRoleSwitcher /> : null}
-            <ThemeToggle />
-          </div>
+        <div className="flex w-full items-center justify-end gap-1 sm:gap-2">
+          {tenant ? <NotificationsBadge /> : null}
+          {tenant ? <OrgRoleSwitcher /> : null}
+          <ThemeToggle />
+          <UserMenu
+            fullName={user.fullName}
+            email={user.email}
+            noTenant={!tenant}
+          />
         </div>
       }
     >
