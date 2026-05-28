@@ -86,6 +86,20 @@ const config: Config = {
           DEFAULT: "hsl(var(--allergy))",
           foreground: "hsl(var(--allergy-foreground))",
         },
+        // Sidebar — branding Avante navy. Tokens en globals.css con override
+        // por tema. SIN este mapeo, las clases bg-sidebar-background, etc. no
+        // se generan y el sidebar pierde el fondo navy → logo blanco invisible
+        // en tema claro.
+        sidebar: {
+          background: "hsl(var(--sidebar-background))",
+          foreground: "hsl(var(--sidebar-foreground))",
+          border: "hsl(var(--sidebar-border))",
+          accent: {
+            DEFAULT: "hsl(var(--sidebar-accent))",
+            foreground: "hsl(var(--sidebar-accent-foreground))",
+          },
+          ring: "hsl(var(--ring))",
+        },
         // Manchester Triage System — ver docs/07_design_system.md §2.2.
         // Paleta fija auditada WCAG AA. NO modificar por tenant.
         triage: {
