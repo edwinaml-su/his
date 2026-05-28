@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
+import { Abbr } from "@his/ui/components/abbr";
 import { trpc } from "@/lib/trpc/react";
 import { StatusBadge, type AppointmentStatus } from "./_components/status-badge";
 
@@ -98,7 +99,9 @@ export default function OutpatientListPage() {
         <CardContent>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
             <div className="space-y-1.5">
-              <Label htmlFor="filter-provider">Proveedor (UUID)</Label>
+              <Label htmlFor="filter-provider">
+                Proveedor (<Abbr term="UUID" />)
+              </Label>
               <Input
                 id="filter-provider"
                 placeholder="UUID del usuario"
