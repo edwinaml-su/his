@@ -78,11 +78,71 @@ describe("patientRouter", () => {
 
     it("retorna paciente con relaciones cuando existe", async () => {
       setupTx();
-      const fake = { id: MOCK_USER_ADMIN.id, firstName: "Ana" };
+      const fake = {
+        id: MOCK_USER_ADMIN.id,
+        firstName: "Ana",
+        biologicalSexId: "00000000-0000-0000-0000-000000000001",
+        genderId: null,
+        maritalStatusId: null,
+      };
       prisma.patient.findFirst.mockResolvedValue(fake as never);
+      // Mock de las 9 sub-queries paralelas (post-refactor a resilient includes).
+      prisma.patientIdentifier.findMany.mockResolvedValue([] as never);
+      prisma.patientAddress.findMany.mockResolvedValue([] as never);
+      prisma.patientPhone.findMany.mockResolvedValue([] as never);
+      prisma.patientEmail.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.biologicalSex.findUnique.mockResolvedValue(null as never);
+      prisma.gender.findUnique.mockResolvedValue(null as never);
+      prisma.maritalStatus.findUnique.mockResolvedValue(null as never);
+
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       const out = await caller.get({ id: MOCK_USER_ADMIN.id });
-      expect(out).toEqual(fake);
+      // El shape ahora es: paciente base + relaciones embed (todas vacías en test).
+      expect(out).toMatchObject({
+        ...fake,
+        identifiers: [],
+        addresses: [],
+        phones: [],
+        emails: [],
+        emergencyContacts: [],
+        allergies: [],
+        biologicalSex: null,
+        gender: null,
+        maritalStatus: null,
+      });
+    });
+
+    it("resiliente: si un include lanza, devuelve fallback (no tumba la query)", async () => {
+      setupTx();
+      const fake = {
+        id: MOCK_USER_ADMIN.id,
+        firstName: "Ana",
+        biologicalSexId: "00000000-0000-0000-0000-000000000001",
+        genderId: null,
+        maritalStatusId: null,
+      };
+      prisma.patient.findFirst.mockResolvedValue(fake as never);
+      // Simulamos schema drift: la query de identifiers lanza 42P01.
+      prisma.patientIdentifier.findMany.mockRejectedValue(
+        new Error('relation "PatientIdentifierType" does not exist'),
+      );
+      prisma.patientAddress.findMany.mockResolvedValue([] as never);
+      prisma.patientPhone.findMany.mockResolvedValue([] as never);
+      prisma.patientEmail.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.biologicalSex.findUnique.mockResolvedValue(null as never);
+      prisma.gender.findUnique.mockResolvedValue(null as never);
+      prisma.maritalStatus.findUnique.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const out = await caller.get({ id: MOCK_USER_ADMIN.id });
+
+      // No lanza — devuelve fallback [] para identifiers y el resto OK.
+      expect(out.identifiers).toEqual([]);
+      expect(out.firstName).toBe("Ana");
     });
 
     it("RLS — get corre dentro de $transaction + demote", async () => {
