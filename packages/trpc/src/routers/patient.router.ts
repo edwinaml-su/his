@@ -161,7 +161,6 @@ const FK_REASSIGN_TABLES = [
   "triageEvaluation",
 ] as const;
 
-const MERGE_REVERSE_WINDOW_DAYS = 7;
 
 export const patientRouter = router({
   search: tenantProcedure.input(patientSearchSchema).query(async ({ ctx, input }) => {
@@ -594,63 +593,22 @@ export const patientRouter = router({
   // ===========================================================================
   // US-4.4 — Unmerge (reversible dentro de ventana de 7 días).
   // ===========================================================================
+  // H1-08 (audit Stream A — P1 ALTA): unmerge deshabilitado hasta Sprint X.
+  // El restore actual solo recupera `deletedAt` del paciente "from" pero NO
+  // restaura los encuentros, alergias y demás FKs reasignadas durante el merge.
+  // Dejar esa operación a medias deja al paciente restaurado sin historial clínico,
+  // lo cual es peor que no tener unmerge. Se requiere snapshot completo en
+  // PatientMerge.snapshotJson antes de habilitar de nuevo.
+  // Referencia: H1-08 audit 2026-05-19, re-audit 2026-05-24 — ABIERTO.
   unmerge: tenantProcedure
     .input(unmergeInput)
-    .mutation(async ({ ctx, input }) => {
-      const merge = await ctx.prisma.patientMerge.findUnique({
-        where: { id: input.mergeId },
-        include: { from: true, to: true },
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "METHOD_NOT_SUPPORTED",
+        message:
+          "Unmerge de pacientes no está disponible en esta versión. " +
+          "Requiere implementación de snapshot completo de relaciones (Sprint X). " +
+          "Contacte soporte técnico para reversiones manuales.",
       });
-      if (!merge) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Merge no encontrado." });
-      }
-      if (merge.to.organizationId !== ctx.tenant.organizationId) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "Merge fuera del tenant." });
-      }
-      // El campo `reversedAt` no existe en schema actual; usamos heurística:
-      // un merge se considera reversible si `from.deletedAt != null` y han pasado
-      // < 7 días. La reversa en MVP solamente restaura el paciente "from"
-      // (deletedAt = null). Las relaciones reasignadas NO se restauran — por eso
-      // se documenta como acción no idempotente y se etiqueta en audit.
-      if (!merge.from.deletedAt) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "El merge ya fue revertido o el paciente from sigue activo.",
-        });
-      }
-      const ageMs = Date.now() - merge.mergedAt.getTime();
-      if (ageMs > MERGE_REVERSE_WINDOW_DAYS * 86400000) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `El merge solo puede revertirse dentro de ${MERGE_REVERSE_WINDOW_DAYS} días.`,
-        });
-      }
-
-      await ctx.prisma.$transaction(async (tx) => {
-        await tx.patient.update({
-          where: { id: merge.fromPatientId },
-          data: { deletedAt: null, deletedBy: null, active: true, updatedBy: ctx.user.id },
-        });
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "UPDATE",
-            entity: "Patient",
-            entityId: merge.fromPatientId,
-            afterJson: {
-              op: "UNMERGE_PATIENTS",
-              mergeId: merge.id,
-              note: "MVP: relaciones reasignadas NO restauradas (TODO Sprint 3 con snapshot completo).",
-            },
-            justification: `Reverso de merge ${merge.id}`,
-          },
-        });
-      });
-
-      return { ok: true as const, restoredPatientId: merge.fromPatientId };
     }),
 });

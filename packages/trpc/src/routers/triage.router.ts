@@ -12,6 +12,7 @@ import {
 import { withTenantContext } from "../rls-context";
 import { router, tenantProcedure } from "../trpc";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
+import { nextEncounterNumber } from "../lib/encounter-numbering";
 
 /** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
 function formatNnSuffix(d: Date): string {
@@ -22,22 +23,6 @@ function formatNnSuffix(d: Date): string {
   );
 }
 
-/**
- * Genera un encounter number EMERGENCY: ENC-YYYY-XXXXXX.
- * Replicación local del helper de `encounter.router.ts` (Juliet) para evitar
- * tocar ese archivo durante el sprint.
- */
-async function nextEncounterNumber(
-  prisma: { encounter: { count: (args: { where: { organizationId: string; admittedAt: { gte: Date } } }) => Promise<number> } },
-  organizationId: string,
-): Promise<string> {
-  const year = new Date().getFullYear();
-  const start = new Date(`${year}-01-01T00:00:00Z`);
-  const count = await prisma.encounter.count({
-    where: { organizationId, admittedAt: { gte: start } },
-  });
-  return `ENC-${year}-${String(count + 1).padStart(6, "0")}`;
-}
 
 /**
  * Resuelve la moneda funcional del país del tenant (`CountryCurrency.isFunctional`).

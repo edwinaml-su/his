@@ -25,10 +25,9 @@ export const dischargeTypeEnum = z.enum([
  * `EMERGENCY` la cama puede asignarse en triage. `BIRTH/NEWBORN` quedan
  * como TODO Sprint 4 (requieren vínculo madre/RN).
  *
- * Campos no persistidos en MVP (chiefComplaint, accompanyingPersonName,
- * valuables, isReferral, referralOrigin) viajan como metadata informativa
- * para el wizard y se reservan en el contrato; persistirán cuando el schema
- * agregue las columnas (Sprint 4 — referrals + custodia de valuables).
+ * H2-01 (audit Stream A): chiefComplaint, accompanyingPersonName, valuables,
+ * isReferral, referralOrigin ahora persisten en Encounter. Columnas agregadas
+ * en sql/104_encounter_admission_fields.sql.
  */
 export const admitSchema = z.object({
   patientId: z.string().uuid(),
@@ -40,7 +39,6 @@ export const admitSchema = z.object({
   currencyId: z.string().uuid(),
   /** Cama opcional. Requerida para SCHEDULED. */
   bedId: z.string().uuid().optional(),
-  /** Pendiente persistencia en schema (Sprint 4). */
   isReferral: z.boolean().optional(),
   referralOrigin: z.string().max(200).optional(),
   accompanyingPersonName: z.string().max(200).optional(),
