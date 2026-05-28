@@ -30,6 +30,7 @@ import {
   surgeryCaseUpdateIntraopNotesInput,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import type { PrismaClient } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
@@ -107,10 +108,20 @@ export const surgeryRouter = router({
     list: tenantProcedure
       .input(surgeryCaseListInput)
       .query(async ({ ctx, input }) => {
+        // Nivel B — SurgeryCase no tiene serviceUnitId propio; scope via el OR
+        // padre. includeNullable=true para no ocultar casos sin OR aún asignado
+        // (e.g. casos programados en estado SCHEDULED sin sala confirmada).
+        const orScope = serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", {
+          includeNullable: true,
+        });
+        const orFilter =
+          Object.keys(orScope).length > 0 ? { operatingRoom: orScope } : {};
+
         return ctx.prisma.surgeryCase.findMany({
           where: {
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
+            ...orFilter,
             ...(input.status && { status: input.status }),
             ...(input.primarySurgeonId && {
               primarySurgeonId: input.primarySurgeonId,

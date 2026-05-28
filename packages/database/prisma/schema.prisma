@@ -1008,6 +1008,8 @@ model ServiceUnit {
   invoiceItems  InvoiceItem[]      @relation("InvoiceItemServiceUnit")
   // Nivel A — sql/60
   assignments   UserServiceUnitAssignment[] @relation("ServiceUnitAssignments")
+  // Nivel B — sql/61
+  operatingRooms OperatingRoom[]
 
   @@unique([establishmentId, code])
   @@schema("public")
@@ -2698,6 +2700,9 @@ enum AsaClass {
 model OperatingRoom {
   id              String   @id @default(uuid()) @db.Uuid
   establishmentId String   @db.Uuid
+  /// Nivel B — sql/61. FK opcional al ServiceUnit (típicamente QX).
+  /// Permite filtrar SurgeryCase por el servicio operativo del OR.
+  serviceUnitId   String?  @db.Uuid
   code            String   @db.VarChar(40)
   name            String   @db.VarChar(120)
   active          Boolean  @default(true)
@@ -2705,10 +2710,12 @@ model OperatingRoom {
   updatedAt       DateTime @updatedAt @db.Timestamptz()
 
   establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  serviceUnit   ServiceUnit?  @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
   cases         SurgeryCase[]
 
   @@unique([establishmentId, code])
   @@index([establishmentId])
+  @@index([serviceUnitId])
   @@schema("public")
 }
 
