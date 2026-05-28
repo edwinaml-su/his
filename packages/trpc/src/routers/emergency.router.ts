@@ -32,16 +32,29 @@ import {
   type VitalSnapshot,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 
 export const emergencyRouter = router({
   visit: router({
     list: tenantProcedure
       .input(emergencyVisitListInput)
       .query(async ({ ctx, input }) => {
+        // Nivel B — EmergencyVisit no tiene serviceUnitId propio; scope via
+        // el Encounter padre (siempre EMERGENCY, encounter.serviceUnitId = ER
+        // o similar). Incluye nulls (encounters recién creados sin servicio).
+        const encScope = serviceUnitWhereFragment(
+          ctx.tenant,
+          "serviceUnitId",
+          { includeNullable: true },
+        );
+        const encounterFilter =
+          Object.keys(encScope).length > 0 ? { encounter: encScope } : {};
+
         return ctx.prisma.emergencyVisit.findMany({
           where: {
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
+            ...encounterFilter,
             ...(input.disposition && { disposition: input.disposition }),
             ...(input.patientId && { patientId: input.patientId }),
             ...(input.treatingId && { treatingId: input.treatingId }),
