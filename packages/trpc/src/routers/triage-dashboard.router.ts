@@ -32,6 +32,11 @@ import {
   type TriageMonitorResponse,
 } from "@his/contracts/schemas/triage-monitor";
 import { router, tenantProcedure } from "../trpc";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
+import { TRPCError } from "@trpc/server";
 
 /** elapsed / max → NORMAL (<70%) / WARNING (70-100%) / CRITICAL (>100%). */
 function severityFor(elapsedMinutes: number, maxMinutes: number): TriageTimerSeverity {
@@ -75,11 +80,22 @@ export const triageDashboardRouter = router({
 
       const search = filters.search && filters.search.length >= 2 ? filters.search : undefined;
 
+      // Nivel B — valida y aplica scope sobre serviceUnitId (nullable).
+      if (filters.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, filters.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El servicio seleccionado no está en tus asignaciones.",
+        });
+      }
+      const scopedSU = filters.serviceUnitId
+        ? { serviceUnitId: filters.serviceUnitId }
+        : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
+
       const evaluations = await ctx.prisma.triageEvaluation.findMany({
         where: {
           organizationId: ctx.tenant.organizationId,
           ...(establishmentId ? { establishmentId } : {}),
-          ...(filters.serviceUnitId ? { serviceUnitId: filters.serviceUnitId } : {}),
+          ...scopedSU,
           status: { notIn: ["COMPLETED", "CANCELLED"] },
           ...(search
             ? {
@@ -261,12 +277,24 @@ export const triageDashboardRouter = router({
       const dayStart = new Date(now);
       dayStart.setHours(0, 0, 0, 0);
 
+      // Nivel B — el wallboard solo muestra pacientes del servicio del usuario
+      // (incluye nulls — recién admitidos sin servicio aún clasificado).
+      if (input?.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El servicio seleccionado no está en tus asignaciones.",
+        });
+      }
+      const scopedSU = input?.serviceUnitId
+        ? { serviceUnitId: input.serviceUnitId }
+        : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
+
       // 1. Triage evaluations: IN_PROGRESS o COMPLETED del día.
       const evaluations = await ctx.prisma.triageEvaluation.findMany({
         where: {
           organizationId: ctx.tenant.organizationId,
           ...(establishmentId ? { establishmentId } : {}),
-          ...(input?.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+          ...scopedSU,
           status: { in: ["IN_PROGRESS", "COMPLETED"] },
           startedAt: { gte: dayStart },
         },

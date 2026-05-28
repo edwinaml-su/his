@@ -7,14 +7,30 @@ import {
   bedReleaseSchema,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 export const bedRouter = router({
   list: tenantProcedure.input(bedListSchema).query(async ({ ctx, input }) => {
+    // Nivel B — si el usuario pidió un servicio y NO está en su scope, 403.
+    if (input.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "El servicio seleccionado no está en tus asignaciones.",
+      });
+    }
     return ctx.prisma.bed.findMany({
       where: {
         organizationId: ctx.tenant.organizationId,
         active: true,
-        ...(input.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+        // Si vino input.serviceUnitId (ya validado en scope), úsalo directo.
+        // Si no, aplica el scope agregado del usuario. Bed.serviceUnitId es
+        // REQUIRED → no incluimos nullable.
+        ...(input.serviceUnitId
+          ? { serviceUnitId: input.serviceUnitId }
+          : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
         ...(input.status ? { status: input.status } : {}),
       },
       include: {
@@ -32,7 +48,12 @@ export const bedRouter = router({
   /** Igual que list pero agrupado por servicio para el componente BedMap. */
   getMap: tenantProcedure.query(async ({ ctx }) => {
     const services = await ctx.prisma.serviceUnit.findMany({
-      where: { organizationId: ctx.tenant.organizationId, active: true },
+      where: {
+        organizationId: ctx.tenant.organizationId,
+        active: true,
+        // Nivel B — el wallboard solo muestra los servicios del usuario.
+        ...serviceUnitWhereFragment(ctx.tenant, "id"),
+      },
       include: {
         beds: {
           where: { active: true },
@@ -54,6 +75,20 @@ export const bedRouter = router({
   updateStatus: tenantProcedure
     .input(bedUpdateStatusSchema)
     .mutation(async ({ ctx, input }) => {
+      // Nivel B — la cama debe pertenecer a un servicio del usuario.
+      const bed = await ctx.prisma.bed.findFirst({
+        where: { id: input.bedId, organizationId: ctx.tenant.organizationId },
+        select: { id: true, serviceUnitId: true },
+      });
+      if (!bed) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Cama no encontrada." });
+      }
+      if (isOutOfServiceUnitScope(ctx.tenant, bed.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "La cama pertenece a un servicio fuera de tus asignaciones.",
+        });
+      }
       return ctx.prisma.bed.update({
         where: { id: input.bedId },
         data: { status: input.status },
@@ -68,12 +103,21 @@ export const bedRouter = router({
   findAvailable: tenantProcedure
     .input(bedFindAvailableSchema)
     .query(async ({ ctx, input }) => {
+      // Nivel B — valida que el filtro pedido esté en el scope del usuario.
+      if (input.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El servicio seleccionado no está en tus asignaciones.",
+        });
+      }
       return ctx.prisma.bed.findMany({
         where: {
           organizationId: ctx.tenant.organizationId,
           active: true,
           status: "FREE",
-          ...(input.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+          ...(input.serviceUnitId
+            ? { serviceUnitId: input.serviceUnitId }
+            : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
         },
         include: {
           serviceUnit: { select: { id: true, code: true, name: true } },
@@ -115,6 +159,13 @@ export const bedRouter = router({
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Cama no encontrada.",
+          });
+        }
+        // Nivel B — la cama debe pertenecer a un servicio del usuario.
+        if (isOutOfServiceUnitScope(ctx.tenant, bed.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "La cama pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (bed.status !== "FREE") {

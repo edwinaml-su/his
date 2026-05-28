@@ -12,6 +12,10 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -313,11 +317,23 @@ export const encounterRouter = router({
     .input(encounterListOpenByOrgSchema)
     .query(async ({ ctx, input }) => {
       const q = input.query?.trim();
+      // Nivel B — bloquea explícitamente si pidieron un servicio fuera de scope.
+      if (input.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El servicio seleccionado no está en tus asignaciones.",
+        });
+      }
+      // Encounter.serviceUnitId es NULLABLE: incluimos nulls para no ocultar
+      // encuentros recién admitidos por triage (aún sin servicio definido).
+      const scopedSU = input.serviceUnitId
+        ? { serviceUnitId: input.serviceUnitId }
+        : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
       const where = {
         organizationId: ctx.tenant.organizationId,
         dischargedAt: null,
         ...(input.admissionType ? { admissionType: input.admissionType } : {}),
-        ...(input.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+        ...scopedSU,
         ...(input.costCenterId ? { costCenterId: input.costCenterId } : {}),
         ...(q
           ? {
@@ -365,10 +381,20 @@ export const encounterRouter = router({
   getCensus: tenantProcedure
     .input(encounterCensusSchema)
     .query(async ({ ctx, input }) => {
+      if (input?.serviceUnitId && isOutOfServiceUnitScope(ctx.tenant, input.serviceUnitId)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El servicio seleccionado no está en tus asignaciones.",
+        });
+      }
+      // Nivel B — incluye nulls (encuentros sin servicio aún no clasificado).
+      const scopedSU = input?.serviceUnitId
+        ? { serviceUnitId: input.serviceUnitId }
+        : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
       const where = {
         organizationId: ctx.tenant.organizationId,
         dischargedAt: null,
-        ...(input?.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
+        ...scopedSU,
       };
 
       const [items, byService, byAdmissionType] = await Promise.all([
