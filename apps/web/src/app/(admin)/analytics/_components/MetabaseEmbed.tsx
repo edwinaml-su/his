@@ -36,8 +36,16 @@ export function MetabaseEmbed({ kpiId, title, height = 600 }: MetabaseEmbedProps
         if (cancelled) return;
 
         if ("error" in result) {
-          // Diferenciar entre "no configurado" y error de permiso/sistema.
-          if (result.error.includes("no configurado") || result.error.includes("incompleta")) {
+          // Diferenciar entre "no configurado" (BI todavía no desplegado o
+          // env vars faltantes) y error de permiso/sistema.
+          const lower = result.error.toLowerCase();
+          const isUnconfigured =
+            lower.includes("no configurado") ||
+            lower.includes("incompleta") ||
+            lower.includes("no disponible") ||
+            lower.includes("aún no está") ||
+            lower.includes("pendiente");
+          if (isUnconfigured) {
             setState({ status: "unconfigured" });
           } else {
             setState({ status: "error", message: result.error });
@@ -45,9 +53,14 @@ export function MetabaseEmbed({ kpiId, title, height = 600 }: MetabaseEmbedProps
         } else {
           setState({ status: "ready", iframeUrl: result.iframeUrl });
         }
-      } catch {
+      } catch (err) {
+        // Si la Server Action falla (red, hidratación, deploy parcial) NO
+        // mostramos "Error de conexión" — degradamos a "unconfigured" que
+        // es más útil para el usuario operativo. El detalle se mantiene
+        // disponible en console.error para debugging.
+        console.error("[MetabaseEmbed] action error", err);
         if (!cancelled) {
-          setState({ status: "error", message: "Error de conexion al cargar el dashboard." });
+          setState({ status: "unconfigured" });
         }
       }
     }
@@ -74,18 +87,39 @@ export function MetabaseEmbed({ kpiId, title, height = 600 }: MetabaseEmbedProps
   if (state.status === "unconfigured") {
     return (
       <div
-        className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-6 text-center"
+        className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-8 text-center"
         style={{ height }}
         role="status"
       >
-        <p className="text-sm font-medium text-muted-foreground">
-          Dashboard en configuracion
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Este KPI estara disponible una vez que el equipo de BI configure el dashboard en
-          Metabase. Consulte{" "}
-          <span className="font-mono">docs/blueprints/beta19c_metabase_setup.md</span>.
-        </p>
+        <div className="rounded-full bg-muted p-3" aria-hidden>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-6 w-6 text-muted-foreground"
+          >
+            <path d="M3 3v18h18" />
+            <path d="M7 16l4-4 4 4 6-6" />
+          </svg>
+        </div>
+        <div className="space-y-1">
+          <p className="text-base font-semibold">Dashboard pendiente de configuración</p>
+          <p className="max-w-md text-sm text-muted-foreground">
+            Este KPI estará disponible cuando el equipo de BI termine de configurar
+            Metabase y se carguen las variables de entorno en Vercel
+            (<span className="font-mono text-xs">METABASE_SITE_URL</span>,{" "}
+            <span className="font-mono text-xs">METABASE_SECRET_KEY</span>,{" "}
+            <span className="font-mono text-xs">METABASE_DASHBOARD_{kpiId.replace(/-/g, "_")}</span>).
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Referencia:{" "}
+            <span className="font-mono">docs/blueprints/beta19c_metabase_setup.md</span>
+          </p>
+        </div>
       </div>
     );
   }

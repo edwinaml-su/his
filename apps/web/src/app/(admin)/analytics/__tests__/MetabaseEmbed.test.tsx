@@ -58,7 +58,7 @@ describe("MetabaseEmbed", () => {
     render(<MetabaseEmbed kpiId="K-CLI-01" title="Dashboard Censo" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Dashboard en configuracion")).toBeInTheDocument();
+      expect(screen.getByText("Dashboard pendiente de configuración")).toBeInTheDocument();
     });
 
     // No debe haber iframe.
@@ -78,17 +78,24 @@ describe("MetabaseEmbed", () => {
     });
   });
 
-  it("muestra error generico cuando el fetch lanza una excepcion", async () => {
+  it("degrada a estado 'pendiente' cuando la Server Action lanza", async () => {
+    // Comportamiento intencional post-fix: si la action falla (red, deploy
+    // parcial, getCurrentUser/getTenantContext lanza), el componente cae a
+    // "unconfigured" en lugar de mostrar banner rojo "Error de conexión".
+    // El error sigue disponible en console.error para debugging.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     mockGetToken.mockRejectedValueOnce(new Error("Network error"));
 
     render(<MetabaseEmbed kpiId="K-OPS-01" title="Dashboard Transfusiones" />);
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
-      expect(
-        screen.getByText("Error de conexion al cargar el dashboard.")
-      ).toBeInTheDocument();
+      expect(screen.getByText("Dashboard pendiente de configuración")).toBeInTheDocument();
     });
+    // No alert rojo.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    // Pero sí se loguea para debugging.
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it("el iframe tiene sandbox restrictivo", async () => {
