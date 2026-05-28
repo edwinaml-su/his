@@ -612,14 +612,17 @@ const shiftQueueRouter = router({
       const userId = ctx.user.id;
       const now    = new Date();
 
-      // Turno activo del enfermero
+      // Turno activo del enfermero.
+      // Fix 42883: fecha_inicio/fin son timestamptz; sin cast explícito el
+      // driver pasa el ISO string como `text` y Postgres no encuentra el
+      // operador `timestamptz <= text`. Casteamos $3 a timestamptz.
       const scheduleRows = await ctx.prisma.$queryRawUnsafe<{ servicio_id: string | null }[]>(
         `SELECT servicio_id
            FROM ece.staff_schedule
           WHERE organization_id = $1::uuid
             AND user_id = $2::uuid
-            AND fecha_inicio <= $3
-            AND fecha_fin    >= $3
+            AND fecha_inicio <= $3::timestamptz
+            AND fecha_fin    >= $3::timestamptz
           ORDER BY fecha_inicio DESC
           LIMIT 1`,
         orgId,
