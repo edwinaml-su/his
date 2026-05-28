@@ -1126,6 +1126,30 @@ export type PatientTransferConfirmedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42)
+// Emitidos cuando DIR aprueba o rechaza una solicitud de rectificación.
+// -----------------------------------------------------------------------------
+
+export const eceRectificacionAprobadaPayloadSchema = z.object({
+  rectificacionId: z.string().uuid(),
+  documentoInstanciaId: z.string().uuid(),
+  /** UUID del autor que solicitó la rectificación — receptor del inbox. */
+  solicitanteId: z.string().uuid(),
+  aprobadorId: z.string().uuid(),
+});
+
+export const eceRectificacionRechazadaPayloadSchema = z.object({
+  rectificacionId: z.string().uuid(),
+  documentoInstanciaId: z.string().uuid(),
+  solicitanteId: z.string().uuid(),
+  rechazadoPorId: z.string().uuid(),
+  motivoRechazo: z.string().min(1),
+});
+
+export type EceRectificacionAprobadaPayload = z.infer<typeof eceRectificacionAprobadaPayloadSchema>;
+export type EceRectificacionRechazadaPayload = z.infer<typeof eceRectificacionRechazadaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1511,6 +1535,15 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("patient.transfer.cancelled"),
     payload: patientTransferPayloadSchema,
+  }),
+  // HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42)
+  z.object({
+    eventType: z.literal("ece.rectificacion.aprobada"),
+    payload: eceRectificacionAprobadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("ece.rectificacion.rechazada"),
+    payload: eceRectificacionRechazadaPayloadSchema,
   }),
 ]);
 

@@ -162,6 +162,9 @@ export const EVENT_TYPES = [
   "patient.transfer.sent",
   "patient.transfer.confirmed",
   "patient.transfer.cancelled",
+  // HG-15 (Stream G, P2) — Rectificaciones ECE: notificación al solicitante (NTEC Art. 42)
+  "ece.rectificacion.aprobada",
+  "ece.rectificacion.rechazada",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

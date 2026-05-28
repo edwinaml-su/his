@@ -104,9 +104,13 @@ export default function ContingenciaPage() {
       setError("El motivo es requerido.");
       return;
     }
+    // HG-29: datetime-local produce "YYYY-MM-DDTHH:MM" sin offset.
+    // Zod { offset: true } exige un ISO 8601 con offset explícito.
+    // Fijamos -06:00 (El Salvador CST) para que el router lo acepte.
+    const esperadoHastaConZona = esperadoHasta ? `${esperadoHasta}:00-06:00` : undefined;
     activar.mutate({
       motivo: motivo.trim(),
-      ...(esperadoHasta ? { esperadoHasta } : {}),
+      ...(esperadoHastaConZona ? { esperadoHasta: esperadoHastaConZona } : {}),
     });
   };
 
