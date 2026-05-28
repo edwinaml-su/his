@@ -42,3 +42,14 @@ export {
   type EmailSendInput,
   type EmailSendResult,
 } from "@his/contracts";
+
+// SMTP M365 / Exchange Online — adapter + helpers de uso directo.
+export {
+  SmtpProvider,
+  type SmtpProviderOptions,
+  classifySmtpError,
+  createEmailProviderFromEnv,
+  sendMail,
+  EmailNotConfiguredError,
+  __resetEmailProviderCache,
+} from "./smtp";
