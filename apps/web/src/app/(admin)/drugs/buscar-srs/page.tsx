@@ -169,7 +169,12 @@ export default function BuscarSrsPage() {
             </div>
             <div>
               <Label htmlFor="estado">Estado</Label>
-              <Select value={estado} onValueChange={(v) => setEstado(v as Estado)}>
+              <Select
+                value={estado || "all"}
+                onValueChange={(v) =>
+                  setEstado((v === "all" ? "" : v) as Estado)
+                }
+              >
                 <SelectTrigger id="estado">
                   <SelectValue />
                 </SelectTrigger>
@@ -178,7 +183,8 @@ export default function BuscarSrsPage() {
                   <SelectItem value="SUSPENDIDO">Suspendidos</SelectItem>
                   <SelectItem value="CANCELADO">Cancelados</SelectItem>
                   <SelectItem value="ELIMINADO">Eliminados</SelectItem>
-                  <SelectItem value="">Todos</SelectItem>
+                  {/* Radix Select prohíbe value="" — centinela "all". */}
+                  <SelectItem value="all">Todos</SelectItem>
                 </SelectContent>
               </Select>
             </div>
