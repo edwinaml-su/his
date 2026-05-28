@@ -37,13 +37,17 @@ COMMENT ON CONSTRAINT "chk_bcma_scans_on_given" ON "MedicationAdministration"
 -- gsrnPaciente y gsrnEnfermera son opcionales (puede administrarse manualmente
 -- sin escáner GS1), pero si se capturan deben tener formato válido.
 
+-- NOTA: las columnas GS1 (gsrn_paciente, gsrn_enfermera, gtin_scanned,
+-- lote_scanned, serie_scanned) están en snake_case en BD aunque los booleanos
+-- de scan (*BarcodeScanned, *BadgeScanned) están en camelCase. Mixto histórico
+-- del schema; respetamos los nombres reales detectados via information_schema.
 ALTER TABLE "MedicationAdministration"
   DROP CONSTRAINT IF EXISTS "chk_med_admin_gsrn_paciente";
 
 ALTER TABLE "MedicationAdministration"
   ADD CONSTRAINT "chk_med_admin_gsrn_paciente"
   CHECK (
-    "gsrnPaciente" IS NULL OR "gsrnPaciente" ~ '^\d{18}$'
+    gsrn_paciente IS NULL OR gsrn_paciente ~ '^\d{18}$'
   );
 
 ALTER TABLE "MedicationAdministration"
@@ -52,10 +56,10 @@ ALTER TABLE "MedicationAdministration"
 ALTER TABLE "MedicationAdministration"
   ADD CONSTRAINT "chk_med_admin_gsrn_enfermera"
   CHECK (
-    "gsrnEnfermera" IS NULL OR "gsrnEnfermera" ~ '^\d{18}$'
+    gsrn_enfermera IS NULL OR gsrn_enfermera ~ '^\d{18}$'
   );
 
--- ─── CHECK: formato GTIN-14 (14 dígitos) cuando gtinScanned está presente ───
+-- ─── CHECK: formato GTIN-14 (14 dígitos) cuando gtin_scanned está presente ───
 
 ALTER TABLE "MedicationAdministration"
   DROP CONSTRAINT IF EXISTS "chk_med_admin_gtin_scanned";
@@ -63,7 +67,7 @@ ALTER TABLE "MedicationAdministration"
 ALTER TABLE "MedicationAdministration"
   ADD CONSTRAINT "chk_med_admin_gtin_scanned"
   CHECK (
-    "gtinScanned" IS NULL OR "gtinScanned" ~ '^\d{14}$'
+    gtin_scanned IS NULL OR gtin_scanned ~ '^\d{14}$'
   );
 
 COMMENT ON CONSTRAINT "chk_med_admin_gsrn_paciente" ON "MedicationAdministration"
