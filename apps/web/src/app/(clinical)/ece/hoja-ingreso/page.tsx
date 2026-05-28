@@ -131,14 +131,17 @@ export default function HojaIngresoListPage() {
             <div className="space-y-1.5">
               <Label htmlFor="filter-estado">Estado</Label>
               <Select
-                value={estado}
-                onValueChange={(v) => setEstado(v as EstadoHojaIngreso | "")}
+                value={estado || "all"}
+                onValueChange={(v) =>
+                  setEstado(v === "all" ? "" : (v as EstadoHojaIngreso))
+                }
               >
                 <SelectTrigger id="filter-estado">
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos</SelectItem>
+                  {/* Radix Select prohíbe value="" — usamos centinela "all". */}
+                  <SelectItem value="all">Todos</SelectItem>
                   <SelectItem value="borrador">Borrador</SelectItem>
                   <SelectItem value="en_revision">En revisión</SelectItem>
                   <SelectItem value="firmado">Firmado</SelectItem>

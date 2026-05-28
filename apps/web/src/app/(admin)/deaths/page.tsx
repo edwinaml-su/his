@@ -126,14 +126,17 @@ export default function DeathsListPage() {
             <div className="space-y-1.5">
               <Label>Estado workflow</Label>
               <Select
-                value={estado}
-                onValueChange={(v) => setEstado(v as EstadoWorkflow | "")}
+                value={estado || "all"}
+                onValueChange={(v) =>
+                  setEstado(v === "all" ? "" : (v as EstadoWorkflow))
+                }
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todos</SelectItem>
+                  {/* Radix Select prohíbe value="" — centinela "all". */}
+                  <SelectItem value="all">Todos</SelectItem>
                   {(Object.keys(ESTADO_LABEL) as EstadoWorkflow[]).map((e) => (
                     <SelectItem key={e} value={e}>
                       {ESTADO_LABEL[e]}

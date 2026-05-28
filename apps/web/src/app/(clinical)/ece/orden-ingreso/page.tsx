@@ -124,14 +124,17 @@ export default function OrdenIngresoListPage() {
             <div className="space-y-1.5">
               <Label htmlFor="filter-modalidad">Modalidad</Label>
               <Select
-                value={modalidad}
-                onValueChange={(v) => setModalidad(v as ModalidadIng | "")}
+                value={modalidad || "all"}
+                onValueChange={(v) =>
+                  setModalidad(v === "all" ? "" : (v as ModalidadIng))
+                }
               >
                 <SelectTrigger id="filter-modalidad">
                   <SelectValue placeholder="Todas" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Todas</SelectItem>
+                  {/* Radix Select prohíbe value="" — centinela "all". */}
+                  <SelectItem value="all">Todas</SelectItem>
                   {MODALIDAD_ING.map((m) => (
                     <SelectItem key={m} value={m}>{MODALIDAD_LABEL[m]}</SelectItem>
                   ))}

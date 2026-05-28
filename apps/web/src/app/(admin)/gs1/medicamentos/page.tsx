@@ -124,14 +124,17 @@ export default function MedicamentosPage() {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-muted-foreground">Estado recall:</span>
           <Select
-            value={recallFilter}
-            onValueChange={(v) => setRecallFilter(v as RecallStatus | "")}
+            value={recallFilter || "all"}
+            onValueChange={(v) =>
+              setRecallFilter(v === "all" ? "" : (v as RecallStatus))
+            }
           >
             <SelectTrigger className="w-[180px]" data-testid="filter-recall">
               <SelectValue placeholder="Todos" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">Todos</SelectItem>
+              {/* Radix Select prohíbe value="" — centinela "all". */}
+              <SelectItem value="all">Todos</SelectItem>
               {(["ALERTA", "RECALL_VOLUNTARIO", "RECALL_REGULATORIO"] as RecallStatus[]).map((s) => (
                 <SelectItem key={s} value={s}>{RECALL_LABELS[s]}</SelectItem>
               ))}
@@ -142,14 +145,16 @@ export default function MedicamentosPage() {
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-muted-foreground">Vencimiento en:</span>
           <Select
-            value={vencFilter?.toString() ?? ""}
-            onValueChange={(v) => setVencFilter(v ? parseInt(v, 10) : undefined)}
+            value={vencFilter?.toString() ?? "all"}
+            onValueChange={(v) =>
+              setVencFilter(v === "all" ? undefined : parseInt(v, 10))
+            }
           >
             <SelectTrigger className="w-[140px]" data-testid="filter-vencimiento">
               <SelectValue placeholder="Todos" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">Todos</SelectItem>
+              <SelectItem value="all">Todos</SelectItem>
               <SelectItem value="7">7 días</SelectItem>
               <SelectItem value="30">30 días</SelectItem>
               <SelectItem value="90">90 días</SelectItem>

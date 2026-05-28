@@ -83,12 +83,16 @@ export default function PharmacyCartListPage() {
           </SelectContent>
         </Select>
 
-        <Select value={status} onValueChange={(v) => setStatus(v as CartStatus | "")}>
+        <Select
+          value={status || "all"}
+          onValueChange={(v) => setStatus(v === "all" ? "" : (v as CartStatus))}
+        >
           <SelectTrigger className="w-44">
             <SelectValue placeholder="Todos los estados" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">Todos</SelectItem>
+            {/* Radix Select prohíbe value="" — centinela "all". */}
+            <SelectItem value="all">Todos</SelectItem>
             <SelectItem value="ARMANDO">Armando</SelectItem>
             <SelectItem value="LISTO">Listo</SelectItem>
             <SelectItem value="DESPACHADO">Despachado</SelectItem>
