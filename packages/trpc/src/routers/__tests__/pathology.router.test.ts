@@ -6,14 +6,24 @@
  *  - Aislamiento cross-tenant: tenant B no puede ver/mutar registros de tenant A.
  *  - Constraint immutable post-sign: report.sign sobre un reporte ya FINAL → NOT_FOUND.
  *  - Emisión de eventos: pathology.reportSigned y pathology.criticalFinding.
+ *  - HH-18: report.sign requiere PIN argon2id — rechaza PIN incorrecto con UNAUTHORIZED.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { pathologyRouter } from "../pathology.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT, MOCK_TENANT_OTHER_ORG } from "@his/test-utils";
 import type { TenantContext } from "@his/contracts";
+
+// Mock del módulo argon2 de @his/infrastructure para controlar verify en tests.
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn().mockResolvedValue(true), // PIN correcto por defecto
+    hash: vi.fn().mockResolvedValue("$argon2id$mock"),
+    argon2id: 2,
+  },
+}));
 
 // UUIDs de fixtures
 const ORG_A = MOCK_TENANT.organizationId;
@@ -49,6 +59,39 @@ function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
   });
   // applyTenantContext usa $executeRawUnsafe (SET LOCAL / set_tenant_context)
   prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+}
+
+/**
+ * Stub de $queryRaw para simular personal_salud + firma_electronica válidos.
+ * verifyPinOrThrow hace dos llamadas secuenciales: primero personal, luego firma.
+ * El comportamiento real del PIN (correcto/incorrecto) lo controla el mock de argon2.
+ */
+function wireQueryRawForPin(
+  prisma: DeepMockProxy<PrismaClient>,
+  opts: { personalId?: string; pinHash?: string; failedAttempts?: number } = {},
+): void {
+  const personalId = opts.personalId ?? "00000000-0000-0000-0000-000000000099";
+  const pinHash = opts.pinHash ?? "$argon2id$mock_hash";
+  const failedAttempts = opts.failedAttempts ?? 0;
+
+  let callCount = 0;
+  prisma.$queryRaw.mockImplementation(async () => {
+    callCount += 1;
+    if (callCount === 1) {
+      // Primera llamada: personal_salud
+      return [{ id: personalId }];
+    }
+    // Segunda llamada: firma_electronica
+    return [
+      {
+        id: "00000000-0000-0000-0000-000000000098",
+        pin_hash: pinHash,
+        failed_attempts: failedAttempts,
+        locked_until: null,
+      },
+    ];
+  });
+  prisma.$executeRaw.mockResolvedValue(1 as never);
 }
 
 describe("pathologyRouter", () => {
@@ -346,14 +389,17 @@ describe("pathologyRouter", () => {
   describe("report.sign", () => {
     it("NOT_FOUND si el reporte no existe o ya está FINAL", async () => {
       // El query filtra status in [DRAFT, PRELIMINARY], si está FINAL no retorna nada.
+      // verifyPinOrThrow corre primero — $queryRaw debe devolver personal y firma válidos.
+      wireQueryRawForPin(prisma);
       prisma.pathologyReport.findFirst.mockResolvedValue(null as never);
       const caller = pathologyRouter.createCaller(makeCtx({ prisma, tenant: MOCK_TENANT_PATHOLOGIST }));
       await expect(
-        caller.report.sign({ reportId: REPORT_ID }),
+        caller.report.sign({ reportId: REPORT_ID, pin: "1234" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("firma el reporte: status → FINAL, signedAt seteado, orden → REPORTED", async () => {
+      wireQueryRawForPin(prisma);
       prisma.pathologyReport.findFirst.mockResolvedValue({
         id: REPORT_ID,
         status: "DRAFT",
@@ -376,7 +422,7 @@ describe("pathologyRouter", () => {
       prisma.auditLog.create.mockResolvedValue({} as never);
 
       const caller = pathologyRouter.createCaller(makeCtx({ prisma, tenant: MOCK_TENANT_PATHOLOGIST }));
-      await caller.report.sign({ reportId: REPORT_ID });
+      await caller.report.sign({ reportId: REPORT_ID, pin: "1234" });
 
       const updateArgs = prisma.pathologyReport.update.mock.calls[0]![0];
       expect(updateArgs.data.status).toBe("FINAL");
@@ -387,6 +433,7 @@ describe("pathologyRouter", () => {
     });
 
     it("emite pathology.reportSigned al firmar", async () => {
+      wireQueryRawForPin(prisma);
       prisma.pathologyReport.findFirst.mockResolvedValue({
         id: REPORT_ID,
         status: "DRAFT",
@@ -409,7 +456,7 @@ describe("pathologyRouter", () => {
       prisma.auditLog.create.mockResolvedValue({} as never);
 
       const caller = pathologyRouter.createCaller(makeCtx({ prisma, tenant: MOCK_TENANT_PATHOLOGIST }));
-      await caller.report.sign({ reportId: REPORT_ID });
+      await caller.report.sign({ reportId: REPORT_ID, pin: "1234" });
 
       // Verifica que emitDomainEvent (implementado como domainEvent.create) fue llamado
       // con eventType pathology.reportSigned.
@@ -422,6 +469,7 @@ describe("pathologyRouter", () => {
     });
 
     it("emite pathology.criticalFinding adicional cuando criticalFinding=true", async () => {
+      wireQueryRawForPin(prisma);
       prisma.pathologyReport.findFirst.mockResolvedValue({
         id: REPORT_ID,
         status: "PRELIMINARY",
@@ -444,7 +492,7 @@ describe("pathologyRouter", () => {
       prisma.auditLog.create.mockResolvedValue({} as never);
 
       const caller = pathologyRouter.createCaller(makeCtx({ prisma, tenant: MOCK_TENANT_PATHOLOGIST }));
-      await caller.report.sign({ reportId: REPORT_ID, serviceHeadId: U3 });
+      await caller.report.sign({ reportId: REPORT_ID, pin: "1234", serviceHeadId: U3 });
 
       const createCalls = prisma.domainEvent.create.mock.calls;
       const criticalEvent = createCalls.find(
@@ -457,6 +505,21 @@ describe("pathologyRouter", () => {
         (c) => c[0]?.data?.eventType === "pathology.reportSigned",
       );
       expect(signedEvent).toBeDefined();
+    });
+
+    // HH-18 — PIN incorrecto → UNAUTHORIZED (no llega a buscar el reporte).
+    it("HH-18: report.sign rechaza PIN incorrecto con UNAUTHORIZED", async () => {
+      const { argon2: mockArgon2 } = await import("@his/infrastructure");
+      vi.mocked(mockArgon2.verify).mockResolvedValueOnce(false);
+      wireQueryRawForPin(prisma, { failedAttempts: 0 });
+
+      const caller = pathologyRouter.createCaller(makeCtx({ prisma, tenant: MOCK_TENANT_PATHOLOGIST }));
+      await expect(
+        caller.report.sign({ reportId: REPORT_ID, pin: "9999" }),
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+      // El reporte NO debe haberse buscado — la verificación de PIN falla primero.
+      expect(prisma.pathologyReport.findFirst).not.toHaveBeenCalled();
     });
   });
 

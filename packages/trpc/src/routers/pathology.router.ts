@@ -19,6 +19,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
+import { argon2 } from "@his/infrastructure";
 import { router, requireRole, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import type {
@@ -93,6 +94,8 @@ const reportDraftInput = z.object({
 
 const reportSignInput = z.object({
   reportId: uuidInput,
+  /** PIN argon2id del patólogo — requerido para firma legal (TDR §8.16). */
+  pin: z.string().min(4).max(8),
   /** Permite emitir criticalFinding a un jefe de servicio adicional. */
   serviceHeadId: uuidInput.optional(),
 });
@@ -107,6 +110,105 @@ const reportAmendInput = z.object({
   tumorGrade: z.string().max(20).optional(),
   criticalFinding: z.boolean().default(false),
 });
+
+// ---------------------------------------------------------------------------
+// Helpers internos — firma electrónica argon2id
+// ---------------------------------------------------------------------------
+
+/** Tipo mínimo de transacción Prisma que soporta raw SQL. */
+type RawTx = {
+  $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+  $executeRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+};
+
+const LOCKOUT_MAX = 5;
+
+/**
+ * Verifica el PIN argon2id del patólogo contra `ece.firma_electronica`.
+ * Replica el patrón de `solicitud-estudio.router.ts` (misma tabla de firma).
+ * Lanza TRPCError si:
+ *   - No existe personal_salud vinculado al his_user_id.
+ *   - No hay firma electrónica configurada.
+ *   - La firma está bloqueada por intentos fallidos.
+ *   - El PIN es incorrecto (incrementa failed_attempts, puede bloquear).
+ */
+async function verifyPinOrThrow(
+  tx: RawTx,
+  hisUserId: string,
+  pin: string,
+): Promise<void> {
+  interface PersonalRow { id: string }
+  interface FirmaRow {
+    id: string;
+    pin_hash: string;
+    failed_attempts: number;
+    locked_until: Date | null;
+  }
+
+  const personalRows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<PersonalRow[]>)`
+    SELECT id::text
+    FROM ece.personal_salud
+    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
+    LIMIT 1
+  `;
+  const personal = personalRows[0] ?? null;
+  if (!personal) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró un profesional de salud asociado a su cuenta.",
+    });
+  }
+
+  const firmaRows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<FirmaRow[]>)`
+    SELECT id::text, pin_hash, failed_attempts, locked_until
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personal.id}::uuid AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  const firma = firmaRows[0] ?? null;
+  if (!firma) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada.",
+    });
+  }
+
+  if (firma.locked_until !== null && new Date(firma.locked_until) > new Date()) {
+    const mins = Math.ceil((new Date(firma.locked_until).getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+      UPDATE ece.firma_electronica
+      SET failed_attempts = failed_attempts + 1
+      WHERE id = ${firma.id}::uuid
+    `;
+    const remaining = LOCKOUT_MAX - (firma.failed_attempts + 1);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        remaining > 0
+          ? `PIN incorrecto. Intentos restantes: ${remaining}.`
+          : "PIN incorrecto. La firma quedará bloqueada.",
+    });
+  }
+
+  // Reset del contador de intentos fallidos en verificación exitosa.
+  await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+    UPDATE ece.firma_electronica SET failed_attempts = 0 WHERE id = ${firma.id}::uuid
+  `;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers de validación de state machine
@@ -407,6 +509,10 @@ export const pathologyRouter = router({
       .input(reportSignInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // HH-18 (audit Stream H): firma de reporte patológico requiere PIN
+          // argon2id del patólogo (TDR §8.16 — firma electrónica en documentos médicos).
+          await verifyPinOrThrow(tx as unknown as RawTx, ctx.user.id, input.pin);
+
           const report = await tx.pathologyReport.findFirst({
             where: {
               id: input.reportId,
