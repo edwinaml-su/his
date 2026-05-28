@@ -9,6 +9,9 @@
  *
  * Acceso: roles DIR, ARCH, ADMIN.
  * Accesibilidad: WCAG 2.2 AA.
+ *
+ * HG-11: corregido timezone shift en ExportPanel (new Date("YYYY-MM-DD") → T00:00:00/T23:59:59).
+ * HG-12: reemplazados <input>/<select> nativos con componentes Shadcn (Input, Select).
  */
 
 import * as React from "react";
@@ -20,6 +23,15 @@ import {
 } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
+import { Input } from "@his/ui/components/input";
+import { Label } from "@his/ui/components/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@his/ui/components/select";
 import {
   Table,
   TableBody,
@@ -100,10 +112,13 @@ function ExportPanel() {
   const [tipo, setTipo] = React.useState<"MINSAL" | "ISSS" | "INTERNO">("INTERNO");
   const [ready, setReady] = React.useState(false);
 
+  // HG-11: evitar timezone shift — new Date("2026-05-19") en UTC-6 produce
+  // 2026-05-18T18:00:00Z. Usar T00:00:00 / T23:59:59 para que JS interprete
+  // la fecha en hora local del cliente.
   const { data, isLoading, isError } = trpc.comiteEce.exportReport.useQuery(
     {
-      periodoInicio: new Date(periodoInicio),
-      periodoFin: new Date(periodoFin),
+      periodoInicio: new Date(`${periodoInicio}T00:00:00`),
+      periodoFin: new Date(`${periodoFin}T23:59:59`),
       tipo,
     },
     { enabled: ready },
@@ -120,45 +135,57 @@ function ExportPanel() {
         <CardTitle>Reporte institucional (US.F2.7.48)</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <form onSubmit={handleGenerate} className="flex flex-wrap items-end gap-3" aria-label="Generar reporte de auditoría">
-          <div>
-            <label className="block text-xs font-medium mb-1" htmlFor="periodo-inicio">
-              Período inicio
-            </label>
-            <input
+        {/* HG-12: reemplazados <input type="date"> y <select> nativos con
+            componentes Shadcn para consistencia WCAG y design system. */}
+        <form
+          onSubmit={handleGenerate}
+          className="flex flex-wrap items-end gap-3"
+          aria-label="Generar reporte de auditoría"
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="periodo-inicio">Período inicio</Label>
+            <Input
               id="periodo-inicio"
               type="date"
-              className="rounded border px-2 py-1 text-sm"
               value={periodoInicio}
-              onChange={(e) => { setPeriodoInicio(e.target.value); setReady(false); }}
+              onChange={(e) => {
+                setPeriodoInicio(e.target.value);
+                setReady(false);
+              }}
+              className="w-[160px]"
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium mb-1" htmlFor="periodo-fin">
-              Período fin
-            </label>
-            <input
+          <div className="space-y-1.5">
+            <Label htmlFor="periodo-fin">Período fin</Label>
+            <Input
               id="periodo-fin"
               type="date"
-              className="rounded border px-2 py-1 text-sm"
               value={periodoFin}
-              onChange={(e) => { setPeriodoFin(e.target.value); setReady(false); }}
+              onChange={(e) => {
+                setPeriodoFin(e.target.value);
+                setReady(false);
+              }}
+              className="w-[160px]"
             />
           </div>
-          <div>
-            <label className="block text-xs font-medium mb-1" htmlFor="tipo-reporte">
-              Tipo
-            </label>
-            <select
-              id="tipo-reporte"
-              className="rounded border px-2 py-1 text-sm"
+          <div className="space-y-1.5">
+            <Label htmlFor="tipo-reporte">Tipo</Label>
+            <Select
               value={tipo}
-              onChange={(e) => { setTipo(e.target.value as typeof tipo); setReady(false); }}
+              onValueChange={(v) => {
+                setTipo(v as typeof tipo);
+                setReady(false);
+              }}
             >
-              <option value="INTERNO">Interno</option>
-              <option value="MINSAL">MINSAL</option>
-              <option value="ISSS">ISSS</option>
-            </select>
+              <SelectTrigger id="tipo-reporte" className="w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="INTERNO">Interno</SelectItem>
+                <SelectItem value="MINSAL">MINSAL</SelectItem>
+                <SelectItem value="ISSS">ISSS</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <Button type="submit" disabled={isLoading}>
             {isLoading ? "Generando…" : "Generar"}
@@ -172,7 +199,11 @@ function ExportPanel() {
         )}
 
         {data && (
-          <div className="rounded border p-4 space-y-3 text-sm" aria-live="polite" aria-label="Resultado del reporte">
+          <div
+            className="rounded border p-4 space-y-3 text-sm"
+            aria-live="polite"
+            aria-label="Resultado del reporte"
+          >
             <p>
               <strong>Período:</strong>{" "}
               {new Date(data.periodoInicio).toLocaleDateString("es-SV")} —{" "}
