@@ -97,11 +97,30 @@ export async function GET(req: NextRequest) {
 
   const supaUser = exchange.data.session.user;
   const email = supaUser.email?.toLowerCase().trim();
-  const provider =
-    supaUser.app_metadata?.provider ??
-    supaUser.app_metadata?.providers?.[0] ??
-    "azure";
-  const issuer = SUPPORTED_ISSUERS[provider] ?? null;
+
+  // Detección del provider OAuth federado:
+  //
+  // `app_metadata.provider` puede ser "email" cuando el usuario ya existía en
+  // auth.users por sign-up email/password antes de vincular Microsoft — esa
+  // propiedad refleja la identidad PRIMARY, no la última usada para entrar.
+  // Por eso buscamos en `identities[]` (que tiene todas las identidades
+  // vinculadas) un provider soportado. También revisamos
+  // `app_metadata.providers[]` como fallback (algunos drivers de Supabase
+  // lo exponen así).
+  const identityProviders = (supaUser.identities ?? [])
+    .map((i) => i.provider)
+    .filter((p): p is string => typeof p === "string");
+  const metadataProviders = (
+    supaUser.app_metadata?.providers as string[] | undefined
+  ) ?? [];
+  const candidateProviders = [
+    ...identityProviders,
+    ...metadataProviders,
+    supaUser.app_metadata?.provider,
+  ].filter(Boolean) as string[];
+
+  const matchedProvider = candidateProviders.find((p) => SUPPORTED_ISSUERS[p]);
+  const issuer = matchedProvider ? SUPPORTED_ISSUERS[matchedProvider] : null;
 
   if (!email) {
     await supabase.auth.signOut();
@@ -114,7 +133,10 @@ export async function GET(req: NextRequest) {
     await supabase.auth.signOut();
     const target = new URL("/login", req.url);
     target.searchParams.set("error", "unsupported_provider");
-    target.searchParams.set("error_description", String(provider));
+    target.searchParams.set(
+      "error_description",
+      candidateProviders.join(",") || "unknown",
+    );
     return NextResponse.redirect(target);
   }
 
