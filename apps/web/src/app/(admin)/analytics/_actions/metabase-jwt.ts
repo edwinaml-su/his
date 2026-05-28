@@ -47,74 +47,94 @@ export interface MetabaseTokenError {
 /**
  * Firma un JWT Metabase para el KPI solicitado.
  * Retorna el token y la URL del iframe, o un error descriptivo.
+ *
+ * Contrato: NUNCA lanza. Cualquier excepción interna (sesión rota, env vars
+ * faltantes, cookie rota) se captura y se retorna como `{ error }`. Esto
+ * evita que el cliente caiga en el catch genérico "Error de conexión" — el
+ * usuario siempre ve un mensaje específico y accionable.
  */
 export async function getMetabaseEmbedToken(
   kpiId: KpiId
 ): Promise<MetabaseTokenResult | MetabaseTokenError> {
-  // 1. Validar sesion y tenant.
-  const user = await getCurrentUser();
-  if (!user) {
-    return { error: "No autenticado" };
-  }
-
-  const tenant = await getTenantContext();
-  if (!tenant) {
-    return { error: "Sin organización asignada" };
-  }
-
-  // 2. Verificar permiso RBAC.
-  const requiredRoles = KPI_REQUIRED_ROLES[kpiId];
-  const hasPermission = tenant.roleCodes.some((role: string) => requiredRoles.includes(role));
-  if (!hasPermission) {
-    return { error: "Sin permiso para ver este dashboard" };
-  }
-
-  // 3. Resolver dashboard_id desde env vars.
-  const envKey = KPI_ENV_MAP[kpiId];
-  const dashboardIdStr = process.env[envKey];
-  if (!dashboardIdStr) {
-    return {
-      error: `Dashboard ${kpiId} no configurado. Contacte al administrador.`,
-    };
-  }
-  const dashboardId = parseInt(dashboardIdStr, 10);
-  if (isNaN(dashboardId)) {
-    return { error: `ID de dashboard invalido para ${kpiId}` };
-  }
-
-  // 4. Verificar METABASE_SECRET_KEY.
-  const secretKey = process.env.METABASE_SECRET_KEY;
-  if (!secretKey) {
-    return { error: "Configuracion de BI incompleta (METABASE_SECRET_KEY)" };
-  }
-
-  const siteUrl = process.env.METABASE_SITE_URL;
-  if (!siteUrl) {
-    return { error: "Configuracion de BI incompleta (METABASE_SITE_URL)" };
-  }
-
-  // 5. Firmar JWT Metabase (HS256).
-  // Payload segun spec Metabase Signed Embedding:
-  // https://www.metabase.com/docs/latest/embedding/signed-embedding#how-to-sign-embeds
-  const iat = Math.floor(Date.now() / 1000);
-  const exp = iat + 5 * 60; // TTL 5 minutos.
-
-  const payload = {
-    resource: { dashboard: dashboardId },
-    params: {
-      // organization_id es un filtro "locked" en el dashboard de Metabase.
-      // Garantiza aislamiento multi-tenant: el usuario solo ve datos de su org.
-      organization_id: tenant.organizationId,
-    },
-    exp,
-  };
-
   try {
+    // 0. Fast path: si NINGUNA env var Metabase está configurada, retorna
+    //    "no configurado" antes de tocar sesión/RLS — útil para entornos
+    //    pre-Beta.19c donde Metabase todavía no está deployado y la
+    //    consulta a `getTenantContext` podría fallar por otras razones.
+    const hasAnyMetabaseEnv =
+      !!process.env.METABASE_SECRET_KEY ||
+      !!process.env.METABASE_SITE_URL ||
+      !!process.env[KPI_ENV_MAP[kpiId]];
+    if (!hasAnyMetabaseEnv) {
+      return {
+        error: `Dashboard ${kpiId} no configurado. Metabase aún no está desplegado para este entorno (Beta.19c pendiente).`,
+      };
+    }
+
+    // 1. Validar sesion y tenant.
+    const user = await getCurrentUser();
+    if (!user) {
+      return { error: "No autenticado" };
+    }
+
+    const tenant = await getTenantContext();
+    if (!tenant) {
+      return { error: "Sin organización asignada" };
+    }
+
+    // 2. Verificar permiso RBAC.
+    const requiredRoles = KPI_REQUIRED_ROLES[kpiId];
+    const hasPermission = tenant.roleCodes.some((role: string) =>
+      requiredRoles.includes(role),
+    );
+    if (!hasPermission) {
+      return { error: "Sin permiso para ver este dashboard" };
+    }
+
+    // 3. Resolver dashboard_id desde env vars.
+    const envKey = KPI_ENV_MAP[kpiId];
+    const dashboardIdStr = process.env[envKey];
+    if (!dashboardIdStr) {
+      return {
+        error: `Dashboard ${kpiId} no configurado. Contacte al administrador.`,
+      };
+    }
+    const dashboardId = parseInt(dashboardIdStr, 10);
+    if (isNaN(dashboardId)) {
+      return { error: `ID de dashboard invalido para ${kpiId}` };
+    }
+
+    // 4. Verificar METABASE_SECRET_KEY y SITE_URL.
+    const secretKey = process.env.METABASE_SECRET_KEY;
+    if (!secretKey) {
+      return { error: "Configuracion de BI incompleta (METABASE_SECRET_KEY)" };
+    }
+    const siteUrl = process.env.METABASE_SITE_URL;
+    if (!siteUrl) {
+      return { error: "Configuracion de BI incompleta (METABASE_SITE_URL)" };
+    }
+
+    // 5. Firmar JWT Metabase (HS256).
+    const iat = Math.floor(Date.now() / 1000);
+    const exp = iat + 5 * 60; // TTL 5 minutos.
+    const payload = {
+      resource: { dashboard: dashboardId },
+      params: {
+        organization_id: tenant.organizationId,
+      },
+      exp,
+    };
     const token = await signJwtHS256(payload, secretKey);
     const iframeUrl = `${siteUrl}/embed/dashboard/${token}#bordered=true&titled=true`;
     return { token, iframeUrl };
-  } catch {
-    return { error: "Error al generar token de acceso" };
+  } catch (err) {
+    // Catch-all: log server-side para diagnóstico, pero al cliente solo
+    // un mensaje genérico — evita filtrar detalles internos al iframe del
+    // analytics tab que cualquier usuario logueado puede ver.
+    console.error("[metabase-jwt] uncaught error", err);
+    return {
+      error: "Configuracion de BI no disponible. Contacte al administrador.",
+    };
   }
 }
 
