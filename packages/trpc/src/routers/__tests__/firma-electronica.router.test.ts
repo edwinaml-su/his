@@ -307,6 +307,39 @@ describe("firmaElectronicaRouter", () => {
       expect(prisma.$executeRaw).toHaveBeenCalledOnce();
     });
 
+    it("rechaza código TOTP dummy '000000' cuando el secret no lo produce (HG-24 regresión)", async () => {
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+      // Secret cuyo código TOTP actual NO es "000000" con probabilidad prácticamente 1.
+      // JBSWY3DPEHPK3PXP (well-known test secret) — generar código real tomaría
+      // conocer el timestamp exacto; usar un código inválido es suficiente para
+      // verificar que el check no es dummy.
+      const testSecretHash = makeTestSecretHash({ secret: "JBSWY3DPEHPK3PXP", codes: [] });
+
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { id: FIRMA_ID, recovery_expires_at: expiresAt },
+      ]);
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { his_user_id: MOCK_USER_ADMIN.id },
+      ]);
+      prisma.userCredential.findFirst.mockResolvedValueOnce({
+        id: "cred-id-1",
+        secretHash: testSecretHash,
+      } as never);
+
+      const caller = firmaElectronicaRouter.createCaller(
+        makeCtx({ prisma, user: null }),
+      );
+      // "000000" es el código canónico de un MFA dummy — el router DEBE rechazarlo.
+      await expect(
+        caller.completeRecovery({
+          token: VALID_TOKEN,
+          mfaCode: "000000",
+          newPin: VALID_PIN,
+          confirmPin: VALID_PIN,
+        }),
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    });
+
     it("sin MFA configurado devuelve PRECONDITION_FAILED", async () => {
       const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
       prisma.$queryRaw.mockResolvedValueOnce([
