@@ -275,19 +275,23 @@ export const workflowInboxRouter = router({
         paciente_id: string;
       }> = isEnabled("VALORACION_INICIAL_PENDING")
         ? await prisma.$queryRawUnsafe(`
-            SELECT eh.id::text AS id,
-                   eh.id::text AS episodio_hospitalario_id,
-                   eh.fecha_ingreso AS admitted_at,
+            -- Schema real ece.episodio_hospitalario:
+            --   PK = episodio_id (FK directa a episodio_atencion.id, mismo UUID)
+            --   fecha_hora_orden_ingreso (no 'fecha_ingreso')
+            --   fecha_hora_egreso        (no 'fecha_egreso')
+            SELECT eh.episodio_id::text AS id,
+                   eh.episodio_id::text AS episodio_hospitalario_id,
+                   eh.fecha_hora_orden_ingreso AS admitted_at,
                    ea.paciente_id::text AS paciente_id
             FROM ece.episodio_hospitalario eh
-            JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_atencion_id
+            JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_id
             LEFT JOIN ece.valoracion_inicial_enfermeria vie
-              ON vie.episodio_hospitalario_id = eh.id
+              ON vie.episodio_hospitalario_id = eh.episodio_id
               AND vie.estado_registro IN ('firmado','validado')
-            WHERE eh.fecha_egreso IS NULL
+            WHERE eh.fecha_hora_egreso IS NULL
               AND vie.id IS NULL
-              AND eh.fecha_ingreso > now() - interval '7 days'
-            ORDER BY eh.fecha_ingreso ASC
+              AND eh.fecha_hora_orden_ingreso > now() - interval '7 days'
+            ORDER BY eh.fecha_hora_orden_ingreso ASC
             LIMIT 100
           `)
         : [];
@@ -403,9 +407,10 @@ export const workflowInboxRouter = router({
                    vie.registrado_en,
                    vie.episodio_hospitalario_id::text AS episodio_hospitalario_id
             FROM ece.valoracion_inicial_enfermeria vie
-            JOIN ece.episodio_hospitalario eh ON eh.id = vie.episodio_hospitalario_id
+            -- PK de episodio_hospitalario es episodio_id (no id).
+            JOIN ece.episodio_hospitalario eh ON eh.episodio_id = vie.episodio_hospitalario_id
             WHERE vie.escala_morse > 45
-              AND eh.fecha_egreso IS NULL
+              AND eh.fecha_hora_egreso IS NULL
               AND vie.registrado_en < now() - interval '24 hours'
             ORDER BY vie.registrado_en ASC
             LIMIT 100
