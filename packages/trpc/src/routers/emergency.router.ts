@@ -32,7 +32,10 @@ import {
   type VitalSnapshot,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
-import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
+import {
+  isOutOfServiceUnitScope,
+  serviceUnitWhereFragment,
+} from "../lib/service-unit-scope";
 
 export const emergencyRouter = router({
   visit: router({
@@ -129,7 +132,7 @@ export const emergencyRouter = router({
             id: input.encounterId,
             organizationId: ctx.tenant.organizationId,
           },
-          select: { id: true, patientId: true },
+          select: { id: true, patientId: true, serviceUnitId: true },
         });
         if (!enc) {
           throw new TRPCError({
@@ -141,6 +144,16 @@ export const emergencyRouter = router({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "patientId no coincide con encounter.",
+          });
+        }
+        // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
+        // enc.serviceUnitId puede ser null (encounter recién admitido sin
+        // clasificar) → el helper lo permite (no podemos validar).
+        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
 
