@@ -112,8 +112,17 @@ function DetalleResultadoInner() {
           </span>
         </div>
 
-        {/* Rango de referencia */}
-        {(test.refRangeLow != null || test.refRangeHigh != null) && (
+        {/* Rango de referencia — estratificado (edad+sexo) cuando esté disponible */}
+        {data.stratifiedRange ? (
+          <div className="text-sm text-slate-600">
+            <p className="text-xs text-slate-400 mb-0.5">Rango de referencia (para su perfil)</p>
+            {data.stratifiedRange.minValue != null && data.stratifiedRange.maxValue != null
+              ? `${data.stratifiedRange.minValue} – ${data.stratifiedRange.maxValue} ${test.unit ?? ""}`
+              : data.stratifiedRange.maxValue != null
+              ? `< ${data.stratifiedRange.maxValue} ${test.unit ?? ""}`
+              : `> ${data.stratifiedRange.minValue} ${test.unit ?? ""}`}
+          </div>
+        ) : (test.refRangeLow != null || test.refRangeHigh != null) ? (
           <div className="text-sm text-slate-600">
             <p className="text-xs text-slate-400 mb-0.5">Rango de referencia</p>
             {test.refRangeLow != null && test.refRangeHigh != null
@@ -122,7 +131,13 @@ function DetalleResultadoInner() {
               ? `< ${test.refRangeHigh} ${test.unit ?? ""}`
               : `> ${test.refRangeLow} ${test.unit ?? ""}`}
           </div>
-        )}
+        ) : test.refRangeText ? (
+          // K-26: resultados cualitativos (cultivos, serológicos) sin rango numérico.
+          <div className="text-sm text-slate-600">
+            <p className="text-xs text-slate-400 mb-0.5">Referencia</p>
+            {test.refRangeText}
+          </div>
+        ) : null}
 
         {/* Notas */}
         {data.notes && (

@@ -26,7 +26,8 @@ const estadoArco = z.enum(["PENDIENTE", "APROBADA", "RECHAZADA", "EJECUTADA"]);
 
 const crearSolicitudInput = z.object({
   tipo: tipoArco,
-  documentoTarget: z.string().max(200).optional(),
+  // K-24: RFC 5321 + límite razonable para referencias documentales (500 chars).
+  documentoTarget: z.string().max(500).optional(),
   motivo: z.string().min(20, "El motivo debe tener al menos 20 caracteres.").max(2000),
 });
 
