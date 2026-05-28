@@ -2,40 +2,40 @@
 
 /**
  * Página de configuración de MFA (TOTP) en el Portal del Paciente.
- * Flujo: idle → enrolling (muestra secreto/QR) → done.
+ * Flujo: idle → enrolling (muestra QR + código manual) → done.
  *
- * K-07 (audit Stream K): el secreto TOTP llega del backend en plaintext
- * (necesario para render del QR + entrada manual). Mitigaciones:
- *   1. Secret SOLO se almacena en useState del componente (no localStorage).
- *   2. Mutation se invalida tras `verifyMfa.onSuccess` → React Query
- *      olvida el secret de su caché.
- *   3. Al transicionar a `state="done"`, `setSecret(null)` limpia el state
- *      local. Si el usuario vuelve, debe re-enrollar (genera secret nuevo).
- *   4. La transmisión es siempre TLS + cookie HttpOnly → no expuesto a XSS.
- *   5. Logs server-side redactan (K-03).
+ * K-07 (audit Stream K): el QR se genera server-side; el cliente recibe un
+ * PNG como data URL opaco. El secret base32 se recibe en `secretForManualEntry`
+ * solo para ingreso manual en autenticadores — no existe un campo `secret`
+ * plano que frameworks de logging puedan capturar automáticamente.
  *
- * Trade-off no resuelto en esta iteración (follow-up): el secret aparece en
- * la respuesta tRPC y por tanto en DevTools Network. Mitigación completa
- * exigiría generar QR server-side y devolver solo SVG opaco (sin secret).
- * Aceptable en MVP dado que el navegador es del propio paciente.
+ * Mitigaciones adicionales:
+ *   1. `secretForManualEntry` SOLO en useState (no localStorage).
+ *   2. React Query caché limpiada post-enrollment (verifyMfa.onSuccess).
+ *   3. Al transicionar a `state="done"`, state se limpia. Re-enroll genera nuevo secret.
+ *   4. Transmisión via TLS + cookie HttpOnly.
  */
 import { useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { trpc } from "@/lib/trpc/react";
 
 type State = "idle" | "enrolling" | "done";
 
+type EnrollData = {
+  qrDataUrl: string;
+  secretForManualEntry: string;
+};
+
 export default function MfaSettingsPage() {
   const [state, setState] = useState<State>("idle");
-  const [secret, setSecret] = useState<string | null>(null);
+  const [enrollData, setEnrollData] = useState<EnrollData | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const trpcUtils = trpc.useUtils();
 
   const enableMfa = trpc.portal.account.enableMfa.useMutation({
-    onSuccess: (data: { secret: string }) => {
-      setSecret(data.secret);
+    onSuccess: (data: { qrDataUrl: string; secretForManualEntry: string }) => {
+      setEnrollData({ qrDataUrl: data.qrDataUrl, secretForManualEntry: data.secretForManualEntry });
       setState("enrolling");
     },
     onError: () => setError("Error al iniciar la configuración. Intente de nuevo."),
@@ -43,9 +43,8 @@ export default function MfaSettingsPage() {
 
   const verifyMfa = trpc.portal.account.verifyMfa.useMutation({
     onSuccess: () => {
-      // K-07: limpiar el secret del state Y de la caché React Query
-      // para que no quede recuperable tras la activación.
-      setSecret(null);
+      // K-07: limpiar datos de enrollment del state Y de la caché React Query.
+      setEnrollData(null);
       setTotpCode("");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (trpcUtils.portal.account as any).enableMfa?.reset?.();
@@ -79,9 +78,7 @@ export default function MfaSettingsPage() {
     );
   }
 
-  if (state === "enrolling" && secret) {
-    const otpauthUrl = `otpauth://totp/Portal%20Avante?secret=${secret}&issuer=HIS-Avante`;
-
+  if (state === "enrolling" && enrollData) {
     return (
       <div className="rounded-xl border bg-white p-8 space-y-6">
         <h1 className="text-lg font-semibold">Configurar autenticador</h1>
@@ -90,13 +87,20 @@ export default function MfaSettingsPage() {
           <li>
             Agregue una cuenta manualmente con este código secreto:
             <code className="ml-2 rounded bg-slate-100 px-2 py-1 font-mono text-xs break-all">
-              {secret}
+              {enrollData.secretForManualEntry}
             </code>
           </li>
           <li>O escanee el código QR:</li>
         </ol>
         <div className="flex justify-center">
-          <QRCodeSVG value={otpauthUrl} size={200} />
+          {/* K-07: QR generado server-side — la imagen PNG opaca no expone el secret en el DOM */}
+          <img
+            src={enrollData.qrDataUrl}
+            alt="Código QR para configurar TOTP"
+            width={200}
+            height={200}
+            className="rounded"
+          />
         </div>
         <p className="text-xs text-slate-500 text-center">
           El QR contiene su llave TOTP. NO comparta esta imagen ni el código de respaldo.

@@ -149,12 +149,18 @@ describe("portal.account.enableMfa", () => {
   let prisma;
   beforeEach(() => { prisma = mockDeep(); process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx"; });
 
-  it("genera secret y otpauthUri", async () => {
+  it("genera QR server-side y secretForManualEntry (K-07)", async () => {
     prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
     prisma.portalAccount.update.mockResolvedValue({});
     const r = await portalRouter.createCaller(pc(prisma)).account.enableMfa({});
+    // K-07: el campo top-level `secret` fue eliminado; en su lugar tenemos:
+    //   - qrDataUrl: PNG en base64 generado server-side
+    //   - secretForManualEntry: base32 para ingreso manual en autenticadores
     expect(r.otpauthUri).toContain("otpauth://totp/");
-    expect(r.secret).toHaveLength(32);
+    expect(r.secretForManualEntry).toHaveLength(32);
+    expect(r.qrDataUrl).toMatch(/^data:image\/png;base64,/);
+    // secret plano NO debe existir como campo top-level
+    expect((r as Record<string, unknown>).secret).toBeUndefined();
   });
 
   it("UNAUTHORIZED sin portalAccount", async () => {

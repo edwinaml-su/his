@@ -25,12 +25,14 @@
     "@his/infrastructure": "*",
     "@trpc/server": "^11.0.0-rc.660",
     "@node-rs/argon2": "^2.0.2",
+    "qrcode": "^1.5.4",
     "superjson": "^2.2.2",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@his/test-utils": "*",
     "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",

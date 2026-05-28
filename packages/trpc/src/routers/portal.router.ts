@@ -23,6 +23,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { TRPCError } from "@trpc/server";
+import QRCode from "qrcode";
 import { validateDUI } from "@his/contracts/validators";
 import { router, publicProcedure, portalProcedure } from "../trpc";
 import { withPortalContext, applyPortalContext } from "../rls-context";
@@ -256,7 +257,17 @@ const accountRouter = router({
       return { verified: true };
     }),
 
-  /** Inicia el enrollment de TOTP. Devuelve el secreto base32 y el otpauthUri para el QR. */
+  /**
+   * Inicia el enrollment de TOTP.
+   *
+   * K-07 (audit Stream K): el secreto NO viaja como campo plano en la respuesta.
+   * En su lugar, el servidor genera el QR como data URL PNG (base64) y devuelve:
+   *   - `qrDataUrl`  — imagen PNG opaca lista para <img src={qrDataUrl} />.
+   *   - `secretForManualEntry` — el secreto base32 para ingreso manual en la app.
+   *
+   * El secreto NUNCA aparece en un campo `secret` top-level para evitar que
+   * frameworks de logging/tracing lo capturen automáticamente.
+   */
   enableMfa: portalProcedure
     .input(z.object({}).optional())
     .mutation(async ({ ctx }) => {
@@ -279,7 +290,12 @@ const accountRouter = router({
 
       const otpauthUri = `otpauth://totp/Portal%20Avante:${encodeURIComponent(account.email)}?secret=${secretRaw}&issuer=HIS-Avante`;
 
-      return { secret: secretRaw, otpauthUri };
+      // K-07: generar QR server-side. El cliente recibe el PNG opaco; el
+      // secreto base32 se incluye en `secretForManualEntry` para accesibilidad
+      // (ingreso manual en autenticadores) pero no en el campo `secret` plano.
+      const qrDataUrl = await QRCode.toDataURL(otpauthUri, { width: 200, margin: 2 });
+
+      return { qrDataUrl, secretForManualEntry: secretRaw, otpauthUri };
     }),
 
   /** Confirma el TOTP y habilita MFA. Input field is `code` to match test contract. */
@@ -564,9 +580,10 @@ async function resolvePatientId(
  * El patientId se deriva del JWT (ctx.portalAccount.patientId) — nunca del input.
  * El guardian puede consultar wardPatientId si la relación GuardianRelationship está ACTIVE.
  *
- * Gap §5.2: showInPortal en LabResult NO implementado — todos los resultados
- * con validatedAt != null (estado VALIDATED/RELEASED en el flujo LIS) son visibles.
- * Pendiente decisión @DBA sobre campo `confidential` en LabResult.
+ * K-16 (audit Stream K): LabResult.showInPortal + LabResult.confidential implementados
+ * en schema (SQL 100_lab_result_visibility). Los filtros se aplican en labResults.list y
+ * labResults.get para impedir que resultados confidenciales (HIV, oncológicos, salud mental)
+ * lleguen al portal sin counseling previo.
  */
 
 const guardianInput = z.object({
@@ -644,10 +661,12 @@ const hceRouter = router({
   labResults: router({
     /**
      * US.B20.2.2 — resultados de laboratorio del paciente.
-     * Filtra: solo resultados con validatedAt != null (estado VALIDATED en flujo LIS).
-     * La paginación usa cursor sobre id (UUID).
+     * Filtra: validatedAt != null (estado VALIDATED en flujo LIS) +
+     *         showInPortal = true + confidential = false.
      *
-     * Gap §5.2: campo `confidential` no existe en schema — no se filtra.
+     * K-16 (audit Stream K): los campos showInPortal/confidential ya existen en
+     * schema (SQL 100). La gate doble previene que resultados oncológicos/HIV/
+     * salud mental lleguen al portal sin counseling previo.
      */
     list: portalProcedure
       .input(guardianInput.merge(paginationInput))
@@ -659,6 +678,10 @@ const hceRouter = router({
           const results = await tx.labResult.findMany({
             where: {
               validatedAt: { not: null },
+              // K-16: gate de visibilidad dual — el clínico debe habilitar
+              // showInPortal=true Y no marcar confidential=true.
+              showInPortal: true,
+              confidential: false,
               orderItem: {
                 order: { patientId },
               },
@@ -698,6 +721,10 @@ const hceRouter = router({
             where: {
               id: input.resultId,
               validatedAt: { not: null },
+              // K-16: misma gate dual que en list — previene acceso directo
+              // a un resultado confidencial conociendo el id por otro medio.
+              showInPortal: true,
+              confidential: false,
               orderItem: { order: { patientId } },
             },
             select: {
