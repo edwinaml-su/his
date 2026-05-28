@@ -65,6 +65,13 @@ describe("bedRouter", () => {
 
   describe("updateStatus", () => {
     it("actualiza el estado de la cama", async () => {
+      // Nivel B (PR #324) — updateStatus ahora hace findFirst previo para
+      // validar que la cama pertenece a un servicio del usuario. Para el
+      // tenant default (ADMIN, cross-service) la validación pasa siempre.
+      prisma.bed.findFirst.mockResolvedValue({
+        id: "00000000-0000-0000-0000-000000000010",
+        serviceUnitId: "00000000-0000-0000-0000-0000000000ER",
+      } as never);
       prisma.bed.update.mockResolvedValue({ id: "b1", status: "DIRTY" } as never);
 
       const caller = bedRouter.createCaller(makeCtx({ prisma }));
