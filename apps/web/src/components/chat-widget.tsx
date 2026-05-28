@@ -342,42 +342,37 @@ export function ChatWidget({ roleCodes, organizationName, chatAuth }: ChatWidget
             </Button>
           </form>
 
-          {/* Footer con feedback */}
-          <div className="flex items-center justify-between gap-2 px-3 pb-2 pt-1">
-            <p className="text-[10px] text-muted-foreground">
-              Powered by Claude · No comparte datos clínicos sensibles
-            </p>
-            {messages.length > 0 && (
-              <div className="flex items-center gap-1" aria-label="Calificar conversación">
-                <button
-                  type="button"
-                  onClick={() => handleSessionFeedback(1)}
-                  className={cn(
-                    "rounded p-1 hover:bg-muted transition-colors",
-                    sessionFeedback === 1 ? "text-green-600" : "text-muted-foreground",
-                  )}
-                  aria-label="Útil"
-                  aria-pressed={sessionFeedback === 1}
-                  title="La conversación fue útil"
-                >
-                  <ThumbsUp className="h-3 w-3" aria-hidden />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSessionFeedback(-1)}
-                  className={cn(
-                    "rounded p-1 hover:bg-muted transition-colors",
-                    sessionFeedback === -1 ? "text-red-600" : "text-muted-foreground",
-                  )}
-                  aria-label="No útil"
-                  aria-pressed={sessionFeedback === -1}
-                  title="La conversación no fue útil"
-                >
-                  <ThumbsDown className="h-3 w-3" aria-hidden />
-                </button>
-              </div>
-            )}
-          </div>
+          {/* Footer con feedback — solo se renderiza si hay conversación activa */}
+          {messages.length > 0 && (
+            <div className="flex items-center justify-end gap-1 px-3 pb-2 pt-1" aria-label="Calificar conversación">
+              <button
+                type="button"
+                onClick={() => handleSessionFeedback(1)}
+                className={cn(
+                  "rounded p-1 hover:bg-muted transition-colors",
+                  sessionFeedback === 1 ? "text-green-600" : "text-muted-foreground",
+                )}
+                aria-label="Útil"
+                aria-pressed={sessionFeedback === 1}
+                title="La conversación fue útil"
+              >
+                <ThumbsUp className="h-3 w-3" aria-hidden />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSessionFeedback(-1)}
+                className={cn(
+                  "rounded p-1 hover:bg-muted transition-colors",
+                  sessionFeedback === -1 ? "text-red-600" : "text-muted-foreground",
+                )}
+                aria-label="No útil"
+                aria-pressed={sessionFeedback === -1}
+                title="La conversación no fue útil"
+              >
+                <ThumbsDown className="h-3 w-3" aria-hidden />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>
