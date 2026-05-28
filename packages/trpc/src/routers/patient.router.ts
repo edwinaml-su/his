@@ -195,6 +195,12 @@ export const patientRouter = router({
     .query(async ({ ctx, input }) => {
       // H1-06 — RLS demote para evitar leer pacientes de otra org si el
       // `where` por organizationId fallara por cualquier motivo.
+      //
+      // Estrategia de resiliencia: el findFirst principal solo carga el
+      // Patient base (sin includes). Después cada relación se carga en
+      // paralelo con `catch` individual. Si UNA relación falla (schema drift,
+      // 42703, etc.) las demás siguen mostrándose en lugar de tumbar la
+      // página entera con "Unexpected end of JSON input".
       const patient = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         return tx.patient.findFirst({
           where: {
@@ -202,23 +208,116 @@ export const patientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          include: {
-            identifiers: { include: { identifierType: true } },
-            addresses: true,
-            phones: true,
-            emails: true,
-            emergencyContacts: true,
-            allergies: { where: { active: true } },
-            biologicalSex: true,
-            gender: true,
-            maritalStatus: true,
-          },
         });
       });
       if (!patient) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
       }
-      return patient;
+
+      // Helper: ejecuta una promesa de Prisma y devuelve fallback si falla,
+      // loggeando el error real para diagnóstico server-side.
+      const safe = async <T>(label: string, p: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await p;
+        } catch (err) {
+          console.error(`[patient.get] include "${label}" failed:`, err);
+          return fallback;
+        }
+      };
+
+      // Tipo explícito para identifiers con su include de identifierType.
+      // Sin esto, el fallback `[]` pierde el shape del include y rompe el
+      // consumer (page.tsx accede a `i.identifierType.code`).
+      type IdentifierWithType = Awaited<
+        ReturnType<
+          typeof ctx.prisma.patientIdentifier.findMany<{
+            where: { patientId: string };
+            include: { identifierType: true };
+          }>
+        >
+      >;
+
+      const [
+        identifiers,
+        addresses,
+        phones,
+        emails,
+        emergencyContacts,
+        allergies,
+        biologicalSex,
+        gender,
+        maritalStatus,
+      ] = await Promise.all([
+        safe<IdentifierWithType>(
+          "identifiers",
+          ctx.prisma.patientIdentifier.findMany({
+            where: { patientId: patient.id },
+            include: { identifierType: true },
+          }) as Promise<IdentifierWithType>,
+          [] as IdentifierWithType,
+        ),
+        safe(
+          "addresses",
+          ctx.prisma.patientAddress.findMany({ where: { patientId: patient.id } }),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientAddress.findMany>>,
+        ),
+        safe(
+          "phones",
+          ctx.prisma.patientPhone.findMany({ where: { patientId: patient.id } }),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientPhone.findMany>>,
+        ),
+        safe(
+          "emails",
+          ctx.prisma.patientEmail.findMany({ where: { patientId: patient.id } }),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientEmail.findMany>>,
+        ),
+        safe(
+          "emergencyContacts",
+          ctx.prisma.patientEmergencyContact.findMany({ where: { patientId: patient.id } }),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientEmergencyContact.findMany>>,
+        ),
+        safe(
+          "allergies",
+          ctx.prisma.patientAllergy.findMany({
+            where: { patientId: patient.id, active: true },
+          }),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientAllergy.findMany>>,
+        ),
+        safe(
+          "biologicalSex",
+          ctx.prisma.biologicalSex.findUnique({ where: { id: patient.biologicalSexId } }),
+          null as Awaited<ReturnType<typeof ctx.prisma.biologicalSex.findUnique>>,
+        ),
+        patient.genderId
+          ? safe(
+              "gender",
+              ctx.prisma.gender.findUnique({ where: { id: patient.genderId } }),
+              null as Awaited<ReturnType<typeof ctx.prisma.gender.findUnique>>,
+            )
+          : Promise.resolve(null as Awaited<ReturnType<typeof ctx.prisma.gender.findUnique>>),
+        patient.maritalStatusId
+          ? safe(
+              "maritalStatus",
+              ctx.prisma.maritalStatus.findUnique({ where: { id: patient.maritalStatusId } }),
+              null as Awaited<ReturnType<typeof ctx.prisma.maritalStatus.findUnique>>,
+            )
+          : Promise.resolve(
+              null as Awaited<ReturnType<typeof ctx.prisma.maritalStatus.findUnique>>,
+            ),
+      ]);
+
+      return {
+        ...patient,
+        identifiers,
+        addresses,
+        phones,
+        emails,
+        emergencyContacts,
+        allergies,
+        biologicalSex,
+        gender,
+        maritalStatus,
+      };
     }),
 
   create: tenantProcedure.input(patientCreateSchema).mutation(async ({ ctx, input }) => {
