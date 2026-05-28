@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Form, FormField } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { Textarea } from "@his/ui/components/textarea";
 import { Button } from "@his/ui/components/button";
 import {
   Select,
@@ -318,13 +319,12 @@ export default function NewImagingOrderPage() {
             </FormField>
             <FormField>
               <Label htmlFor="clinicalIndication">Indicación clínica</Label>
-              <textarea
+              <Textarea
                 id="clinicalIndication"
                 rows={3}
                 required
                 value={form.clinicalIndication}
                 onChange={(e) => update("clinicalIndication", e.target.value)}
-                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </FormField>
             <FormField>

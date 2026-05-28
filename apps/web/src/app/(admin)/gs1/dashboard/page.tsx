@@ -87,6 +87,16 @@ function CountCard({
 // Componente principal
 // ---------------------------------------------------------------------------
 
+// HI-01: anclar comparaciones de fecha a medianoche local El Salvador (UTC-6).
+// Date.now() puede caer en "hoy SV" o "mañana SV" dependiendo de la hora UTC.
+const TZ_SV = "America/El_Salvador";
+
+function localMidnightSV(): Date {
+  // YYYY-MM-DD en zona SV → Date a medianoche UTC de ese día local.
+  const dateStr = new Date().toLocaleDateString("sv-SE", { timeZone: TZ_SV });
+  return new Date(`${dateStr}T00:00:00`);
+}
+
 export default function Gs1DashboardPage() {
   const [vencimientosDias, setVencimientosDias] = React.useState(30);
 
@@ -96,7 +106,7 @@ export default function Gs1DashboardPage() {
       { staleTime: 60_000 },
     );
 
-  const now = Date.now();
+  const todaySV = localMidnightSV();
   const DIAS_ROJO = 7;
 
   return (
@@ -204,8 +214,8 @@ export default function Gs1DashboardPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {(data.vencimientosPróximos as VencimientoItem[]).map((item) => {
-                  const isRojo =
-                    new Date(item.loteVencimiento).getTime() - now < DIAS_ROJO * 86400000;
+                  const vencMs = new Date(item.loteVencimiento).getTime();
+                  const isRojo = vencMs - todaySV.getTime() < DIAS_ROJO * 86400000;
                   return (
                     <tr key={item.id} data-testid={`venc-row-${item.id}`}>
                       <td className="py-2.5 font-mono text-xs">{item.codigo}</td>
@@ -218,7 +228,7 @@ export default function Gs1DashboardPage() {
                               : "font-medium text-yellow-700 dark:text-yellow-400"
                           }
                         >
-                          {new Date(item.loteVencimiento).toLocaleDateString("es-SV")}
+                          {new Date(item.loteVencimiento).toLocaleDateString("es-SV", { timeZone: TZ_SV })}
                         </span>
                       </td>
                       <td className="py-2.5">
@@ -298,6 +308,7 @@ export default function Gs1DashboardPage() {
           {new Date(data.generadoEn).toLocaleString("es-SV", {
             dateStyle: "medium",
             timeStyle: "short",
+            timeZone: TZ_SV,
           })}
         </p>
       )}
