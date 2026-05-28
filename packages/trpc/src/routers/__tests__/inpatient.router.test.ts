@@ -694,6 +694,11 @@ describe("inpatientRouter", () => {
     });
 
     it("updateStatus a COMPLETED setea completedAt", async () => {
+      // El router ahora carga el plan primero para Nivel B scope check.
+      prisma.inpatientCarePlan.findFirst.mockResolvedValue({
+        id: u,
+        admission: { encounter: { serviceUnitId: null } },
+      } as never);
       prisma.inpatientCarePlan.updateMany.mockResolvedValue({ count: 1 } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
       await caller.carePlan.updateStatus({ id: u, status: "COMPLETED" });
@@ -702,7 +707,19 @@ describe("inpatientRouter", () => {
       expect((args.data as { completedAt: Date }).completedAt).toBeInstanceOf(Date);
     });
 
-    it("updateStatus NOT_FOUND si count===0", async () => {
+    it("updateStatus NOT_FOUND si plan no existe", async () => {
+      prisma.inpatientCarePlan.findFirst.mockResolvedValue(null as never);
+      const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.carePlan.updateStatus({ id: u, status: "ACTIVE" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("updateStatus NOT_FOUND si updateMany count===0 (race condition)", async () => {
+      prisma.inpatientCarePlan.findFirst.mockResolvedValue({
+        id: u,
+        admission: { encounter: { serviceUnitId: null } },
+      } as never);
       prisma.inpatientCarePlan.updateMany.mockResolvedValue({ count: 0 } as never);
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
       await expect(

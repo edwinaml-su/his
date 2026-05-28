@@ -208,9 +208,20 @@ export const emergencyRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, disposition: true },
+          select: {
+            id: true,
+            disposition: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
+        }
 
         const from = visit.disposition as EmergencyDispositionType;
         const to = input.disposition;
@@ -240,49 +251,56 @@ export const emergencyRouter = router({
     startObservation: tenantProcedure
       .input(emergencyVisitStartObservationInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.emergencyVisit.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            observationStartedAt: null,
-            deletedAt: null,
-          },
-          data: {
-            observationStartedAt: new Date(),
-            updatedBy: ctx.user.id,
-          },
+        // Nivel B — load mínimo para scope check antes del updateMany.
+        const visit = await ctx.prisma.emergencyVisit.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: { id: true, observationStartedAt: true, encounter: { select: { serviceUnitId: true } } },
         });
-        if (updated.count === 0) {
+        if (!visit) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
+        }
+        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
           throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Visita no existe u observación ya iniciada.",
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
+        if (visit.observationStartedAt !== null) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
+        }
+        await ctx.prisma.emergencyVisit.update({
+          where: { id: input.id },
+          data: { observationStartedAt: new Date(), updatedBy: ctx.user.id },
+        });
         return { ok: true as const };
       }),
 
     endObservation: tenantProcedure
       .input(emergencyVisitEndObservationInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.emergencyVisit.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            observationStartedAt: { not: null },
-            observationEndedAt: null,
-            deletedAt: null,
-          },
-          data: {
-            observationEndedAt: new Date(),
-            updatedBy: ctx.user.id,
+        // Nivel B — load mínimo para scope check antes del update.
+        const visit = await ctx.prisma.emergencyVisit.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: {
+            id: true,
+            observationStartedAt: true,
+            observationEndedAt: true,
+            encounter: { select: { serviceUnitId: true } },
           },
         });
-        if (updated.count === 0) {
+        if (!visit || visit.observationStartedAt === null || visit.observationEndedAt !== null) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe, sin observación abierta." });
+        }
+        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
           throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Visita no existe, sin observación abierta.",
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
+        await ctx.prisma.emergencyVisit.update({
+          where: { id: input.id },
+          data: { observationEndedAt: new Date(), updatedBy: ctx.user.id },
+        });
         return { ok: true as const };
       }),
 
@@ -379,9 +397,21 @@ export const emergencyRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, encounterId: true, disposition: true },
+          select: {
+            id: true,
+            encounterId: true,
+            disposition: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
+        }
         if (isTerminalEmergencyDisposition(visit.disposition as EmergencyDispositionType)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -453,12 +483,23 @@ export const emergencyRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, disposition: true },
+          select: {
+            id: true,
+            disposition: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!visit) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Visita no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         // Beta.4: bloqueo de notas sobre visitas terminadas para preservar
