@@ -1,7 +1,9 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
@@ -68,15 +70,20 @@ function LoginForm() {
   const redirect = params.get("redirect") ?? "/dashboard";
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   // Inicializamos `error` con el código que venga del callback OAuth, para
   // que el usuario vea por qué fue rechazado al volver a /login.
   const callbackError = params.get("error");
   const callbackEmail = params.get("email");
   const callbackErrorDescription = params.get("error_description");
+  const recovered = params.get("recovered") === "true";
   const [error, setError] = React.useState<string | null>(
     callbackError
       ? mapCallbackError(callbackError, callbackEmail, callbackErrorDescription)
       : null,
+  );
+  const [success, setSuccess] = React.useState<string | null>(
+    recovered ? "Contraseña actualizada. Inicia sesión con la nueva." : null,
   );
   const [warning, setWarning] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
@@ -191,6 +198,11 @@ function LoginForm() {
               <AlertDescription>{warning}</AlertDescription>
             </Alert>
           )}
+          {success && !error && (
+            <Alert>
+              <AlertDescription>{success}</AlertDescription>
+            </Alert>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="email">Correo electrónico</Label>
             <Input
@@ -203,15 +215,40 @@ function LoginForm() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="password">Contraseña</Label>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="password">Contraseña</Label>
+              <Link
+                href="/recover"
+                className="text-xs font-medium text-primary hover:underline"
+              >
+                ¿Olvidaste tu contraseña?
+              </Link>
+            </div>
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                aria-pressed={showPassword}
+                tabIndex={-1}
+                className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-r-md"
+              >
+                {showPassword ? (
+                  <EyeOff className="h-4 w-4" aria-hidden />
+                ) : (
+                  <Eye className="h-4 w-4" aria-hidden />
+                )}
+              </button>
+            </div>
           </div>
         </CardContent>
         <CardFooter className="flex flex-col gap-3">
