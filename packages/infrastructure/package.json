@@ -12,6 +12,7 @@
     "./observability/health-check": "./src/observability/health-check.ts",
     "./notifications": "./src/notifications/index.ts",
     "./notifications/resend": "./src/notifications/resend.ts",
+    "./notifications/smtp": "./src/notifications/smtp.ts",
     "./firma/argon2": "./src/firma/argon2.ts",
     "./src/firma/pin-hasher": "./src/firma/pin-hasher.ts"
   },
@@ -25,11 +26,13 @@
   "dependencies": {
     "@his/contracts": "*",
     "@node-rs/argon2": "^2.0.2",
+    "nodemailer": "^6.10.1",
     "pino": "^9.5.0"
   },
   "devDependencies": {
     "@prisma/client": "^5.22.0",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.23",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",
