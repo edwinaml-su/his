@@ -1542,8 +1542,16 @@ model Encounter {
   currencyId         String         @db.Uuid
   exchangeRateToFunc Decimal        @db.Decimal(18, 8)
   // Wave 10 — imputación a centro de costo productivo (migration cost_center_id_clinical_modules_2026_05_25)
-  costCenterId       String?        @db.Uuid
-  createdAt          DateTime       @default(now()) @db.Timestamptz()
+  costCenterId           String?  @db.Uuid
+  // H2-01 (audit Stream A — P1 ALTA): campos capturados en wizard de admisión
+  // que no persistían. sql/104_encounter_admission_fields.sql agrega las columnas a BD.
+  chiefComplaint         String?  @db.VarChar(500)
+  accompanyingPersonName String?  @db.VarChar(200)
+  /// Lista de pertenencias declaradas. Almacenada como JSON array de strings.
+  valuables              Json?
+  isReferral             Boolean  @default(false)
+  referralOrigin         String?  @db.VarChar(200)
+  createdAt              DateTime @default(now()) @db.Timestamptz()
   createdBy          String?        @db.Uuid
   updatedAt          DateTime       @updatedAt @db.Timestamptz()
   updatedBy          String?        @db.Uuid

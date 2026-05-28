@@ -10,12 +10,14 @@ import {
   buildGSRN,
   validateGSRN,
 } from "@his/contracts";
+import { Prisma } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
+import { nextEncounterNumber } from "../lib/encounter-numbering";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -26,37 +28,6 @@ function serialFromMrn(mrn: string): number {
   return Array.from(mrn).reduce((acc, c) => acc + c.charCodeAt(0), 0) % 1_000_000;
 }
 
-/**
- * Genera un número de encuentro legible: ENC-YYYY-XXXXXX.
- *
- * MVP (US-5.1): contamos los encounters de la organización en el año en curso
- * y emitimos `count + 1` con padding. Es suficiente para volumen de Sprint 1
- * y la transacción Postgres serializa lecturas dentro del mismo write.
- *
- * Limitaciones conocidas (TODO Sprint 2):
- *   - Bajo concurrencia alta dos transacciones podrían leer el mismo `count`
- *     y colisionar en el unique `(organizationId, encounterNumber)`. La
- *     restricción de unicidad lanzaría un error que el cliente reintentaría.
- *   - Mover a una `SEQUENCE` Postgres dedicada o a una tabla de contadores
- *     con `SELECT ... FOR UPDATE` para garantizar emisión sin saltos.
- */
-async function nextEncounterNumber(
-  prisma: {
-    encounter: {
-      count: (args: {
-        where: { organizationId: string; admittedAt: { gte: Date } };
-      }) => Promise<number>;
-    };
-  },
-  organizationId: string,
-): Promise<string> {
-  const year = new Date().getFullYear();
-  const start = new Date(`${year}-01-01T00:00:00Z`);
-  const count = await prisma.encounter.count({
-    where: { organizationId, admittedAt: { gte: start } },
-  });
-  return `ENC-${year}-${String(count + 1).padStart(6, "0")}`;
-}
 
 export const encounterRouter = router({
   /**
@@ -193,6 +164,12 @@ export const encounterRouter = router({
           // TODO(Sprint 2): resolver tipo de cambio real desde ExchangeRate.
           exchangeRateToFunc: 1,
           createdBy: ctx.user.id,
+          // H2-01 (audit Stream A — P1 ALTA): campos de admisión ahora persistidos.
+          chiefComplaint: input.chiefComplaint ?? null,
+          accompanyingPersonName: input.accompanyingPersonName ?? null,
+          valuables: input.valuables ? (input.valuables as Prisma.InputJsonValue) : Prisma.JsonNull,
+          isReferral: input.isReferral ?? false,
+          referralOrigin: input.referralOrigin ?? null,
         },
       });
 
