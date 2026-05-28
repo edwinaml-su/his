@@ -19,7 +19,7 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { prisma } from "@his/database";
-import type { TenantContext } from "@his/contracts";
+import { type TenantContext, isCrossServiceRoleCode } from "@his/contracts";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const ORG_COOKIE = "his.org";
@@ -138,6 +138,35 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
       ? availableRoleCodes.filter((code) => selectedFromCookie.includes(code))
       : availableRoleCodes;
 
+  const finalRoleCodes =
+    activeRoleCodes.length > 0 ? activeRoleCodes : availableRoleCodes;
+
+  // Nivel A — scope por servicio:
+  // Si el usuario tiene rol cross-servicio (ADMIN, DIR, COO, etc.) bypassea
+  // el filtro y ve todo. Si NO, leemos sus asignaciones vigentes.
+  const isCrossServiceRole = finalRoleCodes.some(isCrossServiceRoleCode);
+  const assignments = isCrossServiceRole
+    ? []
+    : await prisma.userServiceUnitAssignment.findMany({
+        where: {
+          userId: user.id,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gte: now } }],
+          // Solo asignaciones en servicios de la org elegida (evita ruido
+          // si el usuario tiene asignaciones en otra org del holding).
+          serviceUnit: { organizationId: chosen.organizationId },
+        },
+        // Resolvemos id + code en un solo JOIN. Los codes los consume el
+        // sidebar (Nivel A en cliente); los IDs los consumen routers tRPC
+        // que filtran data (Nivel B).
+        select: {
+          serviceUnitId: true,
+          serviceUnit: { select: { code: true } },
+        },
+      });
+  const assignedServiceUnitIds = assignments.map((a) => a.serviceUnitId);
+  const assignedServiceUnitCodes = assignments.map((a) => a.serviceUnit.code);
+
   return {
     userId: user.id,
     countryId: chosen.organization.countryId,
@@ -146,7 +175,10 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
     // `roleCodes` mantiene la semántica del contrato: lo que el motor usa
     // para autorización en runtime. Cuando el usuario marca un subset, ese
     // subset gobierna.
-    roleCodes: activeRoleCodes.length > 0 ? activeRoleCodes : availableRoleCodes,
+    roleCodes: finalRoleCodes,
+    assignedServiceUnitIds,
+    assignedServiceUnitCodes,
+    isCrossServiceRole,
   };
 });
 

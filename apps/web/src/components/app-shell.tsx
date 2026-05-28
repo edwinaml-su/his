@@ -81,6 +81,7 @@ import {
 } from "@his/ui/components/tooltip";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ChatWidget } from "./chat-widget";
+import { isItemVisible } from "./nav-visibility";
 
 interface NavItem {
   href: string;
@@ -88,6 +89,14 @@ interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
   /** Si se especifica, el item solo aparece si el usuario tiene alguno de estos roles. */
   requiredRoles?: string[];
+  /**
+   * Nivel A scope: si se especifica, el item solo aparece si el usuario
+   * está asignado a alguno de estos `ServiceUnit.code`s. Los roles
+   * cross-servicio (ADMIN/DIR/COO/etc.) bypassean este filtro.
+   * `undefined` (default) = item visible para todos los roles permitidos
+   * sin restricción de servicio.
+   */
+  requiredServiceUnits?: string[];
   /** Descripción corta para tooltip — explica qué hace la pantalla y a qué proceso pertenece. */
   description: string;
 }
@@ -130,12 +139,16 @@ const SECTIONS: NavSection[] = [
       { href: "/transfers", label: "Traslados", icon: Layers,
         description: "Traslados internos entre servicios y traslados externos a otros centros." },
       { href: "/triage", label: "Triage", icon: Stethoscope,
+        requiredServiceUnits: ["ER"],
         description: "Triage Manchester en emergencias. Clasifica pacientes por urgencia (RED/ORANGE/YELLOW/GREEN/BLUE)." },
       { href: "/triage/monitor", label: "Monitor Triage", icon: Activity,
+        requiredServiceUnits: ["ER"],
         description: "Wallboard kanban para TV: 5 columnas Manchester + sexo magenta/cian + paso del proceso." },
       { href: "/emergency", label: "Emergencias", icon: HeartPulse,
+        requiredServiceUnits: ["ER"],
         description: "Atención de emergencia: visitas, motivos de consulta y desenlaces." },
       { href: "/outpatient", label: "Consulta externa", icon: Calendar,
+        requiredServiceUnits: ["CE"],
         description: "Agendas y citas de consulta externa programada." },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine,
         description: "Solicitudes de rectificación de documentos ECE firmados (Art. 40 NTEC)." },
@@ -164,12 +177,15 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/estudios", label: "Estudios ECE", icon: FlaskConical,
         description: "Solicitudes y resultados de estudios diagnósticos centralizados." },
       { href: "/pharmacy", label: "Farmacia", icon: Pill,
+        requiredServiceUnits: ["FAR"],
         description: "Despacho de medicamentos. Validación de prescripción y stock." },
       { href: "/emar", label: "eMAR", icon: ScanLine,
         description: "Registro electrónico de administración de medicamentos (5 correctos + BCMA)." },
       { href: "/lis/results", label: "Laboratorio (LIS)", icon: FlaskConical,
+        requiredServiceUnits: ["LAB"],
         description: "Resultados de laboratorio clínico, rangos de referencia y validación." },
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon,
+        requiredServiceUnits: ["RX"],
         description: "Estudios radiológicos: solicitudes, programación, reportes." },
       { href: "/respiratory", label: "Respiratorio", icon: Wind,
         description: "Terapia respiratoria: ventilación, nebulizaciones, oxigenoterapia." },
@@ -182,22 +198,31 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid,
+        requiredServiceUnits: ["QX"],
         description: "Vista general de salas, casos del día y estado del proceso quirúrgico." },
       { href: "/surgery", label: "Quirófano", icon: Scissors,
+        requiredServiceUnits: ["QX"],
         description: "Listado de casos quirúrgicos: pendientes, en curso, completados." },
       { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList,
+        requiredServiceUnits: ["QX"],
         description: "Valoración preoperatoria: riesgo anestésico, exámenes, ayuno." },
       { href: "/ece/quirofano/who-check", label: "WHO Checklist", icon: CheckSquare,
+        requiredServiceUnits: ["QX"],
         description: "Lista de verificación OMS para cirugía segura (IPSG.4 JCI)." },
       { href: "/ece/quirofano/programacion", label: "Programación", icon: Scissors,
+        requiredServiceUnits: ["QX"],
         description: "Programación de cirugías por sala, fecha y equipo médico." },
       { href: "/ece/quirofano/acto-quirurgico", label: "Acto Quirúrgico", icon: Zap,
+        requiredServiceUnits: ["QX"],
         description: "Registro del acto quirúrgico: tiempos, equipo, hallazgos, procedimientos." },
       { href: "/ece/quirofano/consentimiento-qx", label: "Consentimiento Qx", icon: FileSignature,
+        requiredServiceUnits: ["QX"],
         description: "Consentimiento informado para procedimiento quirúrgico (NTEC, doble firma)." },
       { href: "/ece/registro-anestesico", label: "Anestésico", icon: Wind,
+        requiredServiceUnits: ["QX"],
         description: "Registro anestésico: medicamentos, ventilación, signos durante cirugía." },
       { href: "/ece/urpa", label: "URPA", icon: UserCheck,
+        requiredServiceUnits: ["QX", "URPA"],
         description: "Unidad de Recuperación Post-Anestésica: monitoreo y criterios de egreso." },
     ],
   },
@@ -222,6 +247,7 @@ const SECTIONS: NavSection[] = [
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList,
         description: "Resumen clínico al alta: diagnósticos, tratamiento, plan de seguimiento." },
       { href: "/ece/atencion-emergencia", label: "Atención Emergencia", icon: Siren,
+        requiredServiceUnits: ["ER"],
         description: "Documento NTEC de atención en sala de emergencias." },
       { href: "/ece/rri", label: "RRI", icon: ArrowLeftRight,
         description: "Referencia, Retorno e Interconsulta entre servicios o centros." },
@@ -282,14 +308,19 @@ const SECTIONS: NavSection[] = [
     defaultOpen: true,
     items: [
       { href: "/ece/obstetricia", label: "Dashboard Maternidad", icon: LayoutGrid,
+        requiredServiceUnits: ["PARTOS", "GYN_OB"],
         description: "Tablero del servicio de obstetricia: trabajo de parto, expulsión, post-parto." },
       { href: "/ece/obstetricia/expulsion", label: "Sala Expulsión", icon: BedDouble,
+        requiredServiceUnits: ["PARTOS", "GYN_OB"],
         description: "Sala de expulsión: progreso del parto, tipo de parto, complicaciones." },
       { href: "/ece/obstetricia/partograma", label: "Partograma", icon: Activity,
+        requiredServiceUnits: ["PARTOS", "GYN_OB"],
         description: "Curva del trabajo de parto: dilatación, descenso, contracciones." },
       { href: "/ece/atencion-rn", label: "Atención RN", icon: Baby,
+        requiredServiceUnits: ["PARTOS", "GYN_OB", "UCIN", "NEO"],
         description: "Atención inmediata del recién nacido: APGAR, antropometría, alta." },
       { href: "/ece/reanimacion-neonatal", label: "Reanimación NRP", icon: HeartHandshake,
+        requiredServiceUnits: ["PARTOS", "GYN_OB", "UCIN", "NEO"],
         description: "Reanimación neonatal según protocolo NRP/AHA." },
     ],
   },
@@ -349,6 +380,9 @@ const SECTIONS: NavSection[] = [
         description: "Lee el esquema de res.partner en Odoo (READ-ONLY) para diseñar la réplica de campos del paciente en el HIS local." },
       { href: "/roles", label: "Roles y permisos", icon: KeyRound,
         description: "Catálogo de roles RBAC y permisos asignados por rol." },
+      { href: "/asignaciones-servicio", label: "Asignaciones a servicio", icon: UserCog,
+        requiredRoles: ["ADMIN", "DIR", "DIRECTOR", "MEDICAL_DIRECTOR"],
+        description: "Nivel A — asigna usuarios a servicios (Emergencias, Quirófano, etc.). Filtra el menú y futuro data layer por servicio." },
       { href: "/abac", label: "Políticas ABAC", icon: ShieldAlert,
         description: "Políticas de control de acceso basadas en atributos." },
       { href: "/audit", label: "Auditoría", icon: History,
@@ -438,21 +472,24 @@ function SidebarNoResults({
   query,
   sections,
   roleCodes,
+  assignedServiceUnitCodes,
+  isCrossServiceRole,
 }: {
   query: string;
   sections: NavSection[];
   roleCodes: string[];
+  assignedServiceUnitCodes: string[];
+  isCrossServiceRole: boolean;
 }) {
   const q = query.trim().toLowerCase();
   if (!q) return null;
   // Verifica si CUALQUIER sección tiene al menos un match (label o description)
-  // considerando los filtros de rol. Si hay matches, no mostramos este bloque
-  // (cada SectionGroup mostrará lo suyo).
+  // considerando los filtros de rol + servicio. Si hay matches, no mostramos
+  // este bloque (cada SectionGroup mostrará lo suyo).
   const hasAnyMatch = sections.some((s) =>
     s.items.some(
       (i) =>
-        (!i.requiredRoles ||
-          i.requiredRoles.some((r) => roleCodes.includes(r))) &&
+        isItemVisible(i, roleCodes, assignedServiceUnitCodes, isCrossServiceRole) &&
         (i.label.toLowerCase().includes(q) ||
           i.description.toLowerCase().includes(q)),
     ),
@@ -464,7 +501,7 @@ function SidebarNoResults({
       aria-live="polite"
       className="mt-2 rounded-md border border-dashed border-sidebar-border/60 px-3 py-3 text-center text-xs text-sidebar-foreground/70"
     >
-      Sin resultados para <span className="font-semibold">"{query}"</span>
+      Sin resultados para <span className="font-semibold">&ldquo;{query}&rdquo;</span>
     </div>
   );
 }
@@ -473,19 +510,25 @@ function SectionGroup({
   section,
   pathname,
   roleCodes,
+  assignedServiceUnitCodes,
+  isCrossServiceRole,
   collapsed = false,
   searchQuery = "",
 }: {
   section: NavSection;
   pathname: string | null;
   roleCodes: string[];
+  /** Nivel A — codes de los servicios a los que el usuario está asignado. */
+  assignedServiceUnitCodes: string[];
+  /** Bypass del filtro de servicio para ADMIN/DIR/COO/etc. */
+  isCrossServiceRole: boolean;
   /** Si true, renderiza solo iconos (modo rail desktop). */
   collapsed?: boolean;
   /** Filtra items por label / description (case-insensitive). */
   searchQuery?: string;
 }) {
   const visibleItems = section.items.filter((item) =>
-    !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
+    isItemVisible(item, roleCodes, assignedServiceUnitCodes, isCrossServiceRole),
   );
 
   // Filtrado por búsqueda — case-insensitive sobre label y description.
@@ -621,12 +664,26 @@ export function AppShell({
   children,
   topbar,
   roleCodes = [],
+  assignedServiceUnitCodes = [],
+  isCrossServiceRole = false,
   chatAuth,
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
   /** Roles del usuario activo — usados para filtrar items con requiredRoles. */
   roleCodes?: string[];
+  /**
+   * Nivel A — `code`s de los `ServiceUnit` a los que el usuario está asignado.
+   * Default `[]` = sin restricción (backward compat). Items con
+   * `requiredServiceUnits` se ocultan si NO hay intersección y el usuario
+   * tampoco es cross-service.
+   */
+  assignedServiceUnitCodes?: string[];
+  /**
+   * `true` si el usuario tiene rol cross-servicio (ADMIN, DIR, COO, CFO,
+   * CEO, MEDICAL_DIRECTOR, AUDITOR). Bypassea el filtro de servicio.
+   */
+  isCrossServiceRole?: boolean;
   /** Identidad del usuario para tools tenant-scoped del chatbot. */
   chatAuth?: { userId: string; organizationId?: string };
 }) {
@@ -698,6 +755,8 @@ export function AppShell({
             section={section}
             pathname={pathname}
             roleCodes={roleCodes}
+            assignedServiceUnitCodes={assignedServiceUnitCodes}
+            isCrossServiceRole={isCrossServiceRole}
             collapsed={collapsed}
             searchQuery={collapsed ? "" : searchQuery}
           />
@@ -708,6 +767,8 @@ export function AppShell({
             query={searchQuery}
             sections={SECTIONS}
             roleCodes={roleCodes}
+            assignedServiceUnitCodes={assignedServiceUnitCodes}
+            isCrossServiceRole={isCrossServiceRole}
           />
         )}
       </nav>
