@@ -1,44 +1,39 @@
 /**
- * US-2.5 — Supabase Auth Callback handler para SSO (OAuth/OIDC).
+ * Supabase Auth Callback handler — OAuth/OIDC (Microsoft Azure AD).
  *
- * Esta ruta es invocada por el IdP (Google/Microsoft/WorkOS/Auth0) tras la
- * autenticación. La URL completa configurada en cada provider apunta aquí:
+ * Activado por el provider Azure habilitado en Supabase Dashboard. URL:
  *
  *   https://<host>/sso/callback?code=<authCode>&state=<state>
  *
- * MVP STUB:
- *   - La ruta existe y parsea la query, pero como ningún IdP está cableado
- *     todavía, en condiciones reales esta ruta no debería recibir tráfico.
- *   - Si llega un callback, lo loggeamos y redirigimos a /sso con un mensaje
- *     de error explicando que SSO no está activo.
- *
- * Sprint 2 — implementación completa:
- *   1. Validar `state` contra cookie HTTP-only (CSRF + nonce).
- *   2. `supabase.auth.exchangeCodeForSession(code)` — Supabase intercambia
- *      el authorization code por session JWT.
- *   3. Leer claims (email, sub, given_name, family_name) del token.
- *   4. `handleSsoCallback(claims, provider)` — upsert User local +
- *      UserExternalIdentity (atómico).
- *   5. Set cookie sesión, redirect a `next` (validado contra whitelist).
+ * Flujo:
+ *   1. Intercambia el code por una sesión Supabase (cookies HTTP-only).
+ *   2. Lee el email del usuario federado.
+ *   3. Busca `public.User` por email (case-insensitive vía citext).
+ *   4. Regla de admisión (opción B): si NO existe ⇒ signOut + redirect a
+ *      /login con `error=not_authorized`. Si existe pero `active=false`
+ *      ⇒ signOut + `error=account_inactive`. Solo entran usuarios
+ *      pre-creados por el ADMIN desde /users.
+ *   5. Upsert `UserExternalIdentity { provider=OIDC, issuer='azure',
+ *      subject=auth.users.id }` para mantener el linker auth ↔ public.User.
+ *   6. Redirect a `/dashboard` (o `next` si está en la whitelist).
  *
  * Por qué Route Handler y no Server Action:
- *   - El IdP hace HTTP GET con querystring — es un endpoint público.
+ *   - El IdP hace HTTP GET con querystring — endpoint público.
  *   - Server Actions requieren POST con CSRF token, no aplicable aquí.
- *   - Route Handlers son la primitiva Next.js correcta para webhooks.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
 import { ssoCallbackInputSchema } from "@his/contracts";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { prisma } from "@his/database";
 
 /**
  * Whitelist de paths a los que está permitido redirigir tras login.
- * Evita open-redirect: un atacante podría poner `?next=//evil.com` en su
- * link de phishing.
+ * Evita open-redirect: un atacante podría poner `?next=//evil.com`.
  */
-const SAFE_REDIRECT_PREFIXES = ["/dashboard", "/patients", "/admin", "/sso-config"];
+const SAFE_REDIRECT_PREFIXES = ["/dashboard", "/patients", "/admin", "/sso-config", "/users"];
 
 function safeRedirect(req: NextRequest, target: string): URL {
-  // Solo paths internos (empiezan con `/` y NO `//`) y prefijos whitelisted.
   if (!target.startsWith("/") || target.startsWith("//")) {
     return new URL("/dashboard", req.url);
   }
@@ -48,25 +43,31 @@ function safeRedirect(req: NextRequest, target: string): URL {
   return new URL(prefixOk ? target : "/dashboard", req.url);
 }
 
+/**
+ * Mapeo provider Supabase → issuer canónico que persistimos en
+ * `UserExternalIdentity.issuer`. Por ahora solo Azure (single-tenant Avante).
+ */
+const SUPPORTED_ISSUERS: Record<string, string> = {
+  azure: "azure",
+};
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const params = Object.fromEntries(url.searchParams);
 
-  // Parsear con schema. Los tres campos son opcionales por separado pero al
-  // menos uno (code o error) debería venir.
   const parsed = ssoCallbackInputSchema.safeParse(params);
   if (!parsed.success) {
     return NextResponse.redirect(
-      new URL("/sso?error=invalid_callback", req.url),
+      new URL("/login?error=invalid_callback", req.url),
     );
   }
 
-  const { code, state, error, errorDescription } = parsed.data;
+  const { code, error, errorDescription } = parsed.data;
 
-  // Caso 1: el IdP devolvió un error (usuario canceló, app no autorizada).
+  // Caso 1: el IdP devolvió error (usuario canceló, app no autorizada, etc.).
   if (error) {
     console.warn("[SSO CALLBACK] IdP returned error", { error, errorDescription });
-    const target = new URL("/sso", req.url);
+    const target = new URL("/login", req.url);
     target.searchParams.set("error", error);
     if (errorDescription) {
       target.searchParams.set("error_description", errorDescription);
@@ -74,48 +75,110 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(target);
   }
 
-  // Caso 2: callback "exitoso" — pero MVP no procesa porque no hay IdP real.
-  // Loggeamos para debugging si alguien activó algo en Supabase dashboard
-  // sin coordinar.
-  if (code) {
-    console.warn("[SSO CALLBACK STUB] Received code but SSO not wired in MVP", {
-      hasState: !!state,
-      codePrefix: code.slice(0, 8),
-    });
-
-    // TODO(Sprint 2): reemplazar por:
-    //   const supabase = createSupabaseServerClient(cookies());
-    //   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-    //   if (error) return NextResponse.redirect(new URL('/sso?error=exchange_failed', req.url));
-    //   const claims = parseClaimsFromSession(data.session);
-    //   await upsertUserFromSso(claims, provider);
-    //   const next = safeRedirect(req, url.searchParams.get('next') ?? '/dashboard');
-    //   return NextResponse.redirect(next);
-
-    const target = new URL("/sso", req.url);
-    target.searchParams.set("error", "not_configured");
-    target.searchParams.set(
-      "error_description",
-      "SSO recibido pero MVP no procesa. Activación en Sprint 2.",
+  // Caso 2: sin code ni error — request raro (scan o reintento). Redirect home.
+  if (!code) {
+    return NextResponse.redirect(
+      safeRedirect(req, url.searchParams.get("next") ?? "/dashboard"),
     );
+  }
+
+  // 2.1) Intercambio code → session. Supabase setea cookies HTTP-only.
+  const supabase = createSupabaseServerClient();
+  const exchange = await supabase.auth.exchangeCodeForSession(code);
+  if (exchange.error || !exchange.data.session) {
+    console.warn("[SSO CALLBACK] exchangeCodeForSession failed", exchange.error?.message);
+    const target = new URL("/login", req.url);
+    target.searchParams.set("error", "exchange_failed");
+    if (exchange.error?.message) {
+      target.searchParams.set("error_description", exchange.error.message);
+    }
     return NextResponse.redirect(target);
   }
 
-  // Caso 3: ni código ni error — request raro, posible scan o reintento manual.
+  const supaUser = exchange.data.session.user;
+  const email = supaUser.email?.toLowerCase().trim();
+  const provider =
+    supaUser.app_metadata?.provider ??
+    supaUser.app_metadata?.providers?.[0] ??
+    "azure";
+  const issuer = SUPPORTED_ISSUERS[provider] ?? null;
+
+  if (!email) {
+    await supabase.auth.signOut();
+    const target = new URL("/login", req.url);
+    target.searchParams.set("error", "missing_email");
+    return NextResponse.redirect(target);
+  }
+
+  if (!issuer) {
+    await supabase.auth.signOut();
+    const target = new URL("/login", req.url);
+    target.searchParams.set("error", "unsupported_provider");
+    target.searchParams.set("error_description", String(provider));
+    return NextResponse.redirect(target);
+  }
+
+  // 2.2) Buscar User local por email (case-insensitive — citext).
+  const hisUser = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true, active: true },
+  });
+
+  // Regla opción B: si NO existe en public.User ⇒ NO autorizado.
+  if (!hisUser) {
+    await supabase.auth.signOut();
+    const target = new URL("/login", req.url);
+    target.searchParams.set("error", "not_authorized");
+    target.searchParams.set("email", email);
+    return NextResponse.redirect(target);
+  }
+
+  if (!hisUser.active) {
+    await supabase.auth.signOut();
+    const target = new URL("/login", req.url);
+    target.searchParams.set("error", "account_inactive");
+    target.searchParams.set("email", email);
+    return NextResponse.redirect(target);
+  }
+
+  // 2.3) Upsert UserExternalIdentity (idempotente vía unique [provider, issuer, subject]).
+  //      best-effort: si falla, NO bloqueamos el login — el usuario ya está
+  //      autenticado contra Supabase, solo nos quedamos sin el row de linker
+  //      que el ADMIN puede recrear desde /users.
+  try {
+    await prisma.userExternalIdentity.upsert({
+      where: {
+        provider_issuer_subject: {
+          provider: "OIDC",
+          issuer,
+          subject: supaUser.id,
+        },
+      },
+      update: {},
+      create: {
+        userId: hisUser.id,
+        provider: "OIDC",
+        issuer,
+        subject: supaUser.id,
+      },
+    });
+  } catch (e) {
+    console.warn("[SSO CALLBACK] upsert UserExternalIdentity failed", (e as Error).message);
+  }
+
+  // 2.4) Redirect final.
   const next = safeRedirect(req, url.searchParams.get("next") ?? "/dashboard");
   return NextResponse.redirect(next);
 }
 
 /**
- * Algunos IdP SAML envían el response como POST x-www-form-urlencoded.
- * MVP: rechazamos con 501 Not Implemented y log para futuras integraciones.
+ * SAML POST binding — pendiente WorkOS integration (no Azure).
  */
-export async function POST(req: NextRequest) {
-  console.warn("[SSO CALLBACK] POST received — SAML response handling not implemented in MVP");
+export async function POST() {
   return NextResponse.json(
     {
       error: "not_implemented",
-      message: "SAML POST binding pendiente Sprint 2 (WorkOS integration).",
+      message: "SAML POST binding pendiente (WorkOS).",
     },
     { status: 501 },
   );

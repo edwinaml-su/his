@@ -25,9 +25,41 @@ export default function LoginPage() {
 /** Umbral en el que mostramos el warning "te quedan N intentos". */
 const LOW_ATTEMPTS_WARNING_THRESHOLD = 2;
 
+/** Feature flag para mostrar el botón "Iniciar con Microsoft". Por default ON
+ *  porque el provider ya está configurado en Supabase; el flag permite
+ *  desactivarlo temporal sin redeploy si surge incidente. */
+const MICROSOFT_LOGIN_ENABLED =
+  (process.env.NEXT_PUBLIC_AUTH_MICROSOFT_ENABLED ?? "true").toLowerCase() !== "false";
+
 /** Formatea HH:MM en horario local del navegador para el aviso de lock. */
 function formatTime(date: Date): string {
   return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Mapea los códigos de error que devuelve /sso/callback a mensajes ES-SV. */
+function mapCallbackError(code: string, email: string | null, description: string | null): string {
+  switch (code) {
+    case "not_authorized":
+      return email
+        ? `La cuenta ${email} no está registrada en el HIS. Solicita al administrador que la dé de alta antes de iniciar sesión con Microsoft.`
+        : "Tu cuenta Microsoft no está registrada en el HIS. Solicita al administrador que la dé de alta.";
+    case "account_inactive":
+      return email
+        ? `La cuenta ${email} está inactiva. Contacta al administrador.`
+        : "Tu cuenta HIS está inactiva. Contacta al administrador.";
+    case "missing_email":
+      return "Microsoft no devolvió un email. Verifica que tu cuenta tenga email principal configurado.";
+    case "unsupported_provider":
+      return "Proveedor de inicio de sesión no soportado.";
+    case "exchange_failed":
+      return description
+        ? `No pudimos completar el login con Microsoft: ${description}`
+        : "No pudimos completar el login con Microsoft. Reintenta.";
+    case "invalid_callback":
+      return "Callback de inicio de sesión inválido.";
+    default:
+      return description ?? `Error de inicio de sesión: ${code}`;
+  }
 }
 
 function LoginForm() {
@@ -36,9 +68,41 @@ function LoginForm() {
   const redirect = params.get("redirect") ?? "/dashboard";
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
-  const [error, setError] = React.useState<string | null>(null);
+  // Inicializamos `error` con el código que venga del callback OAuth, para
+  // que el usuario vea por qué fue rechazado al volver a /login.
+  const callbackError = params.get("error");
+  const callbackEmail = params.get("email");
+  const callbackErrorDescription = params.get("error_description");
+  const [error, setError] = React.useState<string | null>(
+    callbackError
+      ? mapCallbackError(callbackError, callbackEmail, callbackErrorDescription)
+      : null,
+  );
   const [warning, setWarning] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [msLoading, setMsLoading] = React.useState(false);
+
+  /** Inicia el flow OAuth con Microsoft Azure AD via Supabase Auth. */
+  const onMicrosoftSignIn = async () => {
+    setMsLoading(true);
+    setError(null);
+    setWarning(null);
+    const supabase = createSupabaseBrowserClient();
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    const next = encodeURIComponent(redirect);
+    const { error: err } = await supabase.auth.signInWithOAuth({
+      provider: "azure",
+      options: {
+        redirectTo: `${origin}/sso/callback?next=${next}`,
+        scopes: "email profile openid offline_access",
+      },
+    });
+    if (err) {
+      setError(`No pudimos iniciar el flujo con Microsoft: ${err.message}`);
+      setMsLoading(false);
+    }
+    // Si no hubo error, el navegador ya está siendo redirigido a Microsoft.
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -150,10 +214,45 @@ function LoginForm() {
             />
           </div>
         </CardContent>
-        <CardFooter>
-          <Button type="submit" className="w-full" disabled={loading}>
+        <CardFooter className="flex flex-col gap-3">
+          <Button type="submit" className="w-full" disabled={loading || msLoading}>
             {loading ? "Ingresando…" : "Ingresar"}
           </Button>
+
+          {MICROSOFT_LOGIN_ENABLED && (
+            <>
+              <div
+                className="flex w-full items-center gap-2 text-xs text-muted-foreground"
+                aria-hidden
+              >
+                <span className="h-px flex-1 bg-border" />
+                <span>o</span>
+                <span className="h-px flex-1 bg-border" />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={onMicrosoftSignIn}
+                disabled={loading || msLoading}
+                aria-label="Iniciar sesión con Microsoft 365 corporativo"
+              >
+                {/* Logo Microsoft (4 cuadros) — SVG inline para no traer libs. */}
+                <svg
+                  className="mr-2 h-4 w-4"
+                  viewBox="0 0 23 23"
+                  xmlns="http://www.w3.org/2000/svg"
+                  aria-hidden
+                >
+                  <rect x="1"  y="1"  width="10" height="10" fill="#F25022" />
+                  <rect x="12" y="1"  width="10" height="10" fill="#7FBA00" />
+                  <rect x="1"  y="12" width="10" height="10" fill="#00A4EF" />
+                  <rect x="12" y="12" width="10" height="10" fill="#FFB900" />
+                </svg>
+                {msLoading ? "Redirigiendo…" : "Iniciar sesión con Microsoft"}
+              </Button>
+            </>
+          )}
         </CardFooter>
       </form>
     </Card>
