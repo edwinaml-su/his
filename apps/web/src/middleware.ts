@@ -18,8 +18,37 @@ const PORTAL_PUBLIC_PATHS = ["/portal/login", "/portal/verify", "/portal/registe
 // y no puede importar módulos Node.js como node:crypto que usa portal-session.ts).
 const PORTAL_SESSION_COOKIE = "his.portal.session";
 
+// Dominio canónico de producción. Cualquier acceso a un alias "alternativo"
+// (típicamente el dominio largo de Vercel del proyecto) se redirige aquí.
+// Esto evita que los usuarios queden atrapados en deployments protegidos por
+// Vercel Deployment Protection, y garantiza que las cookies/sesiones siempre
+// vivan en un único dominio.
+const CANONICAL_HOST =
+  process.env.NEXT_PUBLIC_CANONICAL_HOST ?? "his-avante.vercel.app";
+
+// Aliases que se redirigen al canónico. NO incluimos dominios `*-git-*`
+// (previews por feature branch) — esos deben seguir accesibles para QA.
+// Solo el alias largo del project root del último deploy de production,
+// que es el que confunde a los usuarios al aparecer en historial/autofill.
+const STALE_ALIASES = new Set<string>([
+  "his-avante-edwinaml-sus-projects.vercel.app",
+]);
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // 0) Canonical host redirect — si llegamos por un alias "stale", redirigir
+  //    308 al canónico preservando path + query. 308 (vs 301) garantiza que
+  //    el método HTTP no se cambia (POST sigue siendo POST tras redirect)
+  //    y que el navegador cachea el redirect agresivamente.
+  const host = request.headers.get("host");
+  if (host && STALE_ALIASES.has(host) && host !== CANONICAL_HOST) {
+    const canonical = request.nextUrl.clone();
+    canonical.host = CANONICAL_HOST;
+    canonical.protocol = "https:";
+    canonical.port = "";
+    return NextResponse.redirect(canonical, 308);
+  }
 
   // K-11: las rutas /portal/* usan auth propia (PortalSession cookie); sacarlas
   // del flow Supabase para evitar redireccionamientos incorrectos a /login admin.
