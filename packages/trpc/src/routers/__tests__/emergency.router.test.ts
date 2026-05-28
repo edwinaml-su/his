@@ -219,16 +219,67 @@ describe("emergencyRouter", () => {
   });
 
   describe("visit.startObservation / endObservation", () => {
-    it("startObservation NOT_FOUND si ya iniciada (count===0)", async () => {
-      prisma.emergencyVisit.updateMany.mockResolvedValue({ count: 0 } as never);
+    it("startObservation NOT_FOUND si visita no existe", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
       const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
       await expect(
         caller.visit.startObservation({ id: u }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("startObservation NOT_FOUND si observación ya iniciada", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        observationStartedAt: new Date(),
+        encounter: { serviceUnitId: null },
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.startObservation({ id: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("startObservation OK cuando observación no estaba iniciada", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        observationStartedAt: null,
+        encounter: { serviceUnitId: null },
+      } as never);
+      prisma.emergencyVisit.update.mockResolvedValue({ id: u } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.visit.startObservation({ id: u });
+      expect(r.ok).toBe(true);
+    });
+
+    it("endObservation NOT_FOUND si visita no existe", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue(null as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.endObservation({ id: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("endObservation NOT_FOUND si observación no está abierta", async () => {
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        observationStartedAt: null,
+        observationEndedAt: null,
+        encounter: { serviceUnitId: null },
+      } as never);
+      const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.visit.endObservation({ id: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
     it("endObservation OK", async () => {
-      prisma.emergencyVisit.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.emergencyVisit.findFirst.mockResolvedValue({
+        id: u,
+        observationStartedAt: new Date(),
+        observationEndedAt: null,
+        encounter: { serviceUnitId: null },
+      } as never);
+      prisma.emergencyVisit.update.mockResolvedValue({ id: u } as never);
       const caller = emergencyRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.visit.endObservation({ id: u });
       expect(r.ok).toBe(true);

@@ -244,13 +244,20 @@ export const inpatientRouter = router({
       .mutation(async ({ ctx, input }) => {
         const enc = await ctx.prisma.encounter.findFirst({
           where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-          select: { id: true, patientId: true },
+          select: { id: true, patientId: true, serviceUnitId: true },
         });
         if (!enc) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe." });
         }
         if (enc.patientId !== input.patientId) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide." });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
         }
         const now = new Date();
         return ctx.prisma.inpatientAdmission.create({
@@ -285,9 +292,23 @@ export const inpatientRouter = router({
       .mutation(async ({ ctx, input }) => {
         const adm = await ctx.prisma.inpatientAdmission.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+            notes: true,
+            establishmentId: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!adm) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
         }
         if (!canTransitionInpatient(adm.status as InpatientStatusType, "BED_ASSIGNED")) {
           throw new TRPCError({
@@ -343,9 +364,24 @@ export const inpatientRouter = router({
       .mutation(async ({ ctx, input }) => {
         const adm = await ctx.prisma.inpatientAdmission.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+            notes: true,
+            bedId: true,
+            encounterId: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!adm) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
         }
         if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
           throw new TRPCError({
@@ -405,9 +441,22 @@ export const inpatientRouter = router({
       .mutation(async ({ ctx, input }) => {
         const adm = await ctx.prisma.inpatientAdmission.findFirst({
           where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: {
+            id: true,
+            status: true,
+            notes: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!adm) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
         }
         if (adm.status !== "ADMISSION_DECIDED") {
           throw new TRPCError({
@@ -439,12 +488,24 @@ export const inpatientRouter = router({
               organizationId: ctx.tenant.organizationId,
               deletedAt: null,
             },
-            select: { id: true, status: true, encounterId: true },
+            select: {
+              id: true,
+              status: true,
+              encounterId: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
           if (!adm) {
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
             });
           }
           if (!canTransitionInpatient(adm.status as InpatientStatusType, "DISCHARGED")) {
@@ -480,12 +541,19 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true, notes: true },
+          select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
         });
         if (!adm) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Admisión no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (!canTransitionInpatient(adm.status as InpatientStatusType, "ON_LEAVE")) {
@@ -515,12 +583,19 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true, notes: true },
+          select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
         });
         if (!adm) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Admisión no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
@@ -554,12 +629,25 @@ export const inpatientRouter = router({
               organizationId: ctx.tenant.organizationId,
               deletedAt: null,
             },
-            select: { id: true, status: true, notes: true, encounterId: true },
+            select: {
+              id: true,
+              status: true,
+              notes: true,
+              encounterId: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
           if (!adm) {
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
             });
           }
           if (
@@ -614,12 +702,24 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true, patientId: true },
+          select: {
+            id: true,
+            status: true,
+            patientId: true,
+            encounter: { select: { serviceUnitId: true } },
+          },
         });
         if (!adm) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Admisión no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
@@ -713,12 +813,19 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true },
+          select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
         });
         if (!adm) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Admisión no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
@@ -749,12 +856,19 @@ export const inpatientRouter = router({
             organizationId: ctx.tenant.organizationId,
             deletedAt: null,
           },
-          select: { id: true, status: true },
+          select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
         });
         if (!adm) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Admisión no existe en la organización.",
+          });
+        }
+        // Nivel B — mutation defense.
+        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
           });
         }
         if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
@@ -777,6 +891,18 @@ export const inpatientRouter = router({
     updateStatus: tenantProcedure
       .input(inpatientCarePlanUpdateStatusInput)
       .mutation(async ({ ctx, input }) => {
+        // Nivel B — load mínimo para scope check; navega carePlan → admission → encounter.
+        const plan = await ctx.prisma.inpatientCarePlan.findFirst({
+          where: { id: input.id, admission: { organizationId: ctx.tenant.organizationId } },
+          select: { id: true, admission: { select: { encounter: { select: { serviceUnitId: true } } } } },
+        });
+        if (!plan) throw new TRPCError({ code: "NOT_FOUND" });
+        if (isOutOfServiceUnitScope(ctx.tenant, plan.admission?.encounter?.serviceUnitId ?? null)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          });
+        }
         const updated = await ctx.prisma.inpatientCarePlan.updateMany({
           where: {
             id: input.id,
