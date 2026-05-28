@@ -148,17 +148,22 @@ export const inventoryRouter = router({
             message: "Item de stock no visible para el tenant.",
           });
         }
-        return ctx.prisma.stockLot.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            itemId: input.itemId,
-            lotNumber: input.lotNumber,
-            expiryDate: input.expiryDate ?? null,
-            quantityOnHand: input.quantityOnHand,
-            costPerUnit: input.costPerUnit ?? null,
-            createdBy: ctx.user.id,
-          },
+        // HI-29 (audit Stream I): envolver INSERT en withTenantContext para que
+        // RLS aplique. Las validaciones previas (establishment, item) son reads de
+        // control y pueden usar ctx.prisma directo (misma defensa que portal-arco).
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.stockLot.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              itemId: input.itemId,
+              lotNumber: input.lotNumber,
+              expiryDate: input.expiryDate ?? null,
+              quantityOnHand: input.quantityOnHand,
+              costPerUnit: input.costPerUnit ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
   }),
@@ -275,18 +280,21 @@ export const inventoryRouter = router({
           }
         }
 
-        return ctx.prisma.stockMovement.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            itemId: input.itemId,
-            lotId: input.lotId ?? null,
-            type: input.type,
-            quantity: input.quantity,
-            reason: input.reason ?? null,
-            referenceCode: input.referenceCode ?? null,
-            performedById: ctx.user.id,
-          },
+        // HI-29: envolver INSERT en withTenantContext para RLS.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.stockMovement.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              itemId: input.itemId,
+              lotId: input.lotId ?? null,
+              type: input.type,
+              quantity: input.quantity,
+              reason: input.reason ?? null,
+              referenceCode: input.referenceCode ?? null,
+              performedById: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -343,18 +351,21 @@ export const inventoryRouter = router({
           }
         }
 
-        return ctx.prisma.stockMovement.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            itemId: input.itemId,
-            lotId: input.lotId ?? null,
-            type: "OUT",
-            quantity: input.quantity,
-            reason: input.reason ?? null,
-            referenceCode: input.referenceCode ?? null,
-            performedById: ctx.user.id,
-          },
+        // HI-29: envolver INSERT en withTenantContext para RLS.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.stockMovement.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              itemId: input.itemId,
+              lotId: input.lotId ?? null,
+              type: "OUT",
+              quantity: input.quantity,
+              reason: input.reason ?? null,
+              referenceCode: input.referenceCode ?? null,
+              performedById: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -422,26 +433,35 @@ export const inventoryRouter = router({
           performedById: ctx.user.id,
         };
 
-        const [outMovement, inMovement] = await ctx.prisma.$transaction([
-          ctx.prisma.stockMovement.create({
-            data: {
-              ...baseData,
-              establishmentId: input.srcEstablishmentId,
-              lotId: input.srcLotId,
-              type: "TRANSFER",
-            },
-          }),
-          ctx.prisma.stockMovement.create({
-            data: {
-              ...baseData,
-              establishmentId: input.dstEstablishmentId,
-              lotId: input.dstLotId ?? null,
-              type: "TRANSFER",
-            },
-          }),
-        ]);
+        // HI-29: withTenantContext aplica SET LOCAL ROLE authenticated → RLS activa.
+        // Las dos inserciones corren dentro del mismo callback (misma tx de Postgres).
+        const { outMovementId, inMovementId } = await withTenantContext(
+          ctx.prisma,
+          ctx.tenant,
+          async (tx) => {
+            const [outMovement, inMovement] = await Promise.all([
+              tx.stockMovement.create({
+                data: {
+                  ...baseData,
+                  establishmentId: input.srcEstablishmentId,
+                  lotId: input.srcLotId,
+                  type: "TRANSFER",
+                },
+              }),
+              tx.stockMovement.create({
+                data: {
+                  ...baseData,
+                  establishmentId: input.dstEstablishmentId,
+                  lotId: input.dstLotId ?? null,
+                  type: "TRANSFER",
+                },
+              }),
+            ]);
+            return { outMovementId: outMovement.id, inMovementId: inMovement.id };
+          },
+        );
 
-        return { transferGroupId, outMovementId: outMovement.id, inMovementId: inMovement.id };
+        return { transferGroupId, outMovementId, inMovementId };
       }),
 
     get: tenantProcedure
@@ -481,27 +501,30 @@ export const inventoryRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "GLN no encontrado." });
         }
 
-        await ctx.prisma.$executeRaw`
-          INSERT INTO ece.inventory_threshold
-            (gtin_id, ubicacion_gln, organization_id, stock_minimo, stock_critico,
-             reorder_point, dias_caducidad_alerta, configurado_por)
-          VALUES (
-            ${input.gtinId}::uuid,
-            ${input.ubicacionGln},
-            ${ctx.tenant.organizationId}::uuid,
-            ${input.stockMinimo},
-            ${input.stockCritico},
-            ${input.reorderPoint},
-            ${input.diasCaducidadAlerta},
-            ${ctx.user.id}::uuid
-          )
-          ON CONFLICT (gtin_id, ubicacion_gln) DO UPDATE SET
-            stock_minimo          = EXCLUDED.stock_minimo,
-            stock_critico         = EXCLUDED.stock_critico,
-            reorder_point         = EXCLUDED.reorder_point,
-            dias_caducidad_alerta = EXCLUDED.dias_caducidad_alerta,
-            configurado_por       = EXCLUDED.configurado_por
-        `;
+        // HI-29: withTenantContext para que RLS de ece.inventory_threshold aplique.
+        await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          await tx.$executeRaw`
+            INSERT INTO ece.inventory_threshold
+              (gtin_id, ubicacion_gln, organization_id, stock_minimo, stock_critico,
+               reorder_point, dias_caducidad_alerta, configurado_por)
+            VALUES (
+              ${input.gtinId}::uuid,
+              ${input.ubicacionGln},
+              ${ctx.tenant.organizationId}::uuid,
+              ${input.stockMinimo},
+              ${input.stockCritico},
+              ${input.reorderPoint},
+              ${input.diasCaducidadAlerta},
+              ${ctx.user.id}::uuid
+            )
+            ON CONFLICT (gtin_id, ubicacion_gln) DO UPDATE SET
+              stock_minimo          = EXCLUDED.stock_minimo,
+              stock_critico         = EXCLUDED.stock_critico,
+              reorder_point         = EXCLUDED.reorder_point,
+              dias_caducidad_alerta = EXCLUDED.dias_caducidad_alerta,
+              configurado_por       = EXCLUDED.configurado_por
+          `;
+        });
 
         return { ok: true };
       }),

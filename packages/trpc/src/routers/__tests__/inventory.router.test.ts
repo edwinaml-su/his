@@ -21,6 +21,18 @@ describe("inventoryRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // withTenantContext usa prisma.$transaction(callback). El mock deep no ejecuta
+    // el callback por defecto — lo configuramos para que lo haga con prisma como tx,
+    // lo que permite que los mocks de stockMovement.create, stockLot.create, etc. sean
+    // interceptados dentro del withTenantContext. Aplica solo cuando el arg es función.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma.$transaction as any).mockImplementation(async (fnOrArray: unknown) => {
+      if (typeof fnOrArray === "function") {
+        return fnOrArray(prisma);
+      }
+      // Forma array (no usada en inventory ahora, pero por compatibilidad):
+      return Promise.all(fnOrArray as Promise<unknown>[]);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -443,9 +455,11 @@ describe("inventoryRouter", () => {
         .mockResolvedValueOnce(null as never)
         .mockResolvedValueOnce({ id: u, quantityOnHand: 100 } as never);
 
-      const outMov = { id: "out-id" };
-      const inMov = { id: "in-id" };
-      prisma.$transaction.mockResolvedValue([outMov, inMov] as never);
+      // withTenantContext usa callback; el beforeEach ya configura $transaction para
+      // ejecutar el callback con prisma. Solo necesitamos mockear los creates:
+      prisma.stockMovement.create
+        .mockResolvedValueOnce({ id: "out-id" } as never)
+        .mockResolvedValueOnce({ id: "in-id" } as never);
 
       const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.movement.transfer({
