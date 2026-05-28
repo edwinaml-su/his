@@ -67,6 +67,8 @@ import {
   Menu,
   BriefcaseMedical,
   UserCog,
+  Search as SearchIcon,
+  X as XIcon,
 } from "lucide-react";
 import { cn } from "@his/ui/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@his/ui/components/sheet";
@@ -380,21 +382,115 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
+/** Input de búsqueda del menú. Filtra items por label/description. ESC limpia. */
+function SidebarSearch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative mb-2">
+      <SearchIcon
+        className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sidebar-foreground/50"
+        aria-hidden="true"
+      />
+      <input
+        type="search"
+        role="searchbox"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onChange("");
+        }}
+        placeholder="Buscar en el menú…"
+        aria-label="Buscar en el menú"
+        className={cn(
+          "w-full rounded-md border border-sidebar-border bg-sidebar-background",
+          "py-1.5 pl-8 pr-7 text-sm text-sidebar-foreground",
+          "placeholder:text-sidebar-foreground/50",
+          "focus:outline-none focus:ring-2 focus:ring-sidebar-ring focus:border-transparent",
+        )}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          aria-label="Limpiar búsqueda"
+          className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+        >
+          <XIcon className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Estado vacío global del menú cuando ninguna sección tiene matches. */
+function SidebarNoResults({
+  query,
+  sections,
+  roleCodes,
+}: {
+  query: string;
+  sections: NavSection[];
+  roleCodes: string[];
+}) {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  // Verifica si CUALQUIER sección tiene al menos un match (label o description)
+  // considerando los filtros de rol. Si hay matches, no mostramos este bloque
+  // (cada SectionGroup mostrará lo suyo).
+  const hasAnyMatch = sections.some((s) =>
+    s.items.some(
+      (i) =>
+        (!i.requiredRoles ||
+          i.requiredRoles.some((r) => roleCodes.includes(r))) &&
+        (i.label.toLowerCase().includes(q) ||
+          i.description.toLowerCase().includes(q)),
+    ),
+  );
+  if (hasAnyMatch) return null;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="mt-2 rounded-md border border-dashed border-sidebar-border/60 px-3 py-3 text-center text-xs text-sidebar-foreground/70"
+    >
+      Sin resultados para <span className="font-semibold">"{query}"</span>
+    </div>
+  );
+}
+
 function SectionGroup({
   section,
   pathname,
   roleCodes,
   collapsed = false,
+  searchQuery = "",
 }: {
   section: NavSection;
   pathname: string | null;
   roleCodes: string[];
   /** Si true, renderiza solo iconos (modo rail desktop). */
   collapsed?: boolean;
+  /** Filtra items por label / description (case-insensitive). */
+  searchQuery?: string;
 }) {
   const visibleItems = section.items.filter((item) =>
     !item.requiredRoles || item.requiredRoles.some((r) => roleCodes.includes(r)),
   );
+
+  // Filtrado por búsqueda — case-insensitive sobre label y description.
+  const q = searchQuery.trim().toLowerCase();
+  const filteredItems = q
+    ? visibleItems.filter(
+        (i) =>
+          i.label.toLowerCase().includes(q) ||
+          i.description.toLowerCase().includes(q),
+      )
+    : visibleItems;
 
   // ENFOQUE VISUAL: solo la sección que contiene el item activo arranca abierta.
   // Las demás están colapsadas para reducir ruido. El usuario puede expandirlas
@@ -411,14 +507,19 @@ function SectionGroup({
     if (sectionHasActive) setOpen(true);
   }, [sectionHasActive]);
 
-  if (visibleItems.length === 0) return null;
+  // Cuando hay búsqueda activa con resultados, forzamos la sección abierta
+  // para que el usuario vea los matches sin tener que expandir manualmente.
+  const effectiveOpen = q ? filteredItems.length > 0 : open;
+
+  // Sin items tras filtros (rol + búsqueda) → no renderizar la sección.
+  if (filteredItems.length === 0) return null;
 
   // Modo rail (collapsed): renderiza solo los iconos directamente, sin
   // botón de sección. Tooltip Radix con label + descripción a la derecha.
   if (collapsed) {
     return (
       <ul className="mb-2 space-y-0.5 border-b border-sidebar-border/40 pb-2 last:border-0">
-        {visibleItems.map((item) => {
+        {filteredItems.map((item) => {
           const Icon = item.icon;
           const active = pathname?.startsWith(item.href);
           return (
@@ -460,19 +561,20 @@ function SectionGroup({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        aria-expanded={effectiveOpen}
+        disabled={!!q}
+        className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground disabled:opacity-100 disabled:cursor-default"
       >
         <span>{section.label}</span>
-        {open ? (
+        {effectiveOpen ? (
           <ChevronDown className="h-3 w-3" aria-hidden="true" />
         ) : (
           <ChevronRight className="h-3 w-3" aria-hidden="true" />
         )}
       </button>
-      {open && (
+      {effectiveOpen && (
         <ul className="mt-0.5 space-y-0.5">
-          {visibleItems.map((item) => {
+          {filteredItems.map((item) => {
             const Icon = item.icon;
             const active = pathname?.startsWith(item.href);
             return (
@@ -524,6 +626,8 @@ export function AppShell({
 }) {
   const pathname = usePathname();
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
+  /** Búsqueda en el menú lateral — filtra items por label / description. */
+  const [searchQuery, setSearchQuery] = React.useState("");
 
   // Estado collapse desktop (persiste en localStorage para sobrevivir refresh).
   // Hidratación diferida para evitar mismatch SSR.
@@ -540,10 +644,11 @@ export function AppShell({
     });
   }, []);
 
-  // Cierra el drawer mobile al navegar (los items son <Link>; el cambio de
-  // pathname implica que el usuario tocó uno).
+  // Cierra el drawer mobile + limpia la búsqueda al navegar (los items son
+  // <Link>; el cambio de pathname implica que el usuario tocó uno).
   React.useEffect(() => {
     setMobileNavOpen(false);
+    setSearchQuery("");
   }, [pathname]);
 
   // Nav body reutilizado entre sidebar desktop y sheet mobile.
@@ -573,6 +678,14 @@ export function AppShell({
         className={cn("flex-1 overflow-y-auto", collapsed ? "p-1.5" : "p-2")}
         aria-label="Principal"
       >
+        {/* Buscador del menú — solo en modo expandido. Filtra items por
+            label / description. Forza apertura de las secciones con matches. */}
+        {!collapsed && (
+          <SidebarSearch
+            value={searchQuery}
+            onChange={setSearchQuery}
+          />
+        )}
         {SECTIONS.map((section) => (
           <SectionGroup
             key={section.label}
@@ -580,8 +693,17 @@ export function AppShell({
             pathname={pathname}
             roleCodes={roleCodes}
             collapsed={collapsed}
+            searchQuery={collapsed ? "" : searchQuery}
           />
         ))}
+        {/* Estado vacío global cuando hay query sin matches en ninguna sección. */}
+        {!collapsed && searchQuery.trim() && (
+          <SidebarNoResults
+            query={searchQuery}
+            sections={SECTIONS}
+            roleCodes={roleCodes}
+          />
+        )}
       </nav>
     </>
   );
