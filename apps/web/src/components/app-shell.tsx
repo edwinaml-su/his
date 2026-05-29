@@ -19,10 +19,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@his/ui/components/tooltip";
+import { SidebarProvider, SidebarTrigger } from "@his/ui/components/sidebar";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ChatWidget } from "./chat-widget";
 import { isItemVisible } from "./nav-visibility";
-import { SECTIONS, type NavItem, type NavSection } from "./nav-sections";
+import { SECTIONS, type NavSection } from "./nav-sections";
+import { AppSidebar } from "./app-sidebar";
 
 /** Input de búsqueda del menú. Filtra items por label/description. ESC limpia. */
 function SidebarSearch({
@@ -294,21 +296,6 @@ export function AppShell({
   /** Búsqueda en el menú lateral — filtra items por label / description. */
   const [searchQuery, setSearchQuery] = React.useState("");
 
-  // Estado collapse desktop (persiste en localStorage para sobrevivir refresh).
-  // Hidratación diferida para evitar mismatch SSR.
-  const [desktopCollapsed, setDesktopCollapsed] = React.useState(false);
-  React.useEffect(() => {
-    const stored = window.localStorage.getItem("his.sidebar.collapsed");
-    if (stored === "true") setDesktopCollapsed(true);
-  }, []);
-  const toggleDesktopCollapse = React.useCallback(() => {
-    setDesktopCollapsed((prev) => {
-      const next = !prev;
-      window.localStorage.setItem("his.sidebar.collapsed", String(next));
-      return next;
-    });
-  }, []);
-
   // Cierra el drawer mobile + limpia la búsqueda al navegar (los items son
   // <Link>; el cambio de pathname implica que el usuario tocó uno).
   React.useEffect(() => {
@@ -378,31 +365,29 @@ export function AppShell({
   );
 
   return (
-    // delayDuration corto: 200ms para tooltips aparezcan rápido al pasar el
-    // cursor por items del sidebar. skipDelayDuration default permite que al
-    // mover entre items vecinos el tooltip cambie sin re-esperar el delay.
-    <TooltipProvider delayDuration={200} skipDelayDuration={100}>
-      <div className="flex min-h-screen">
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          Saltar al contenido principal
-        </a>
+    // SidebarProvider gestiona el estado open/collapsed del sidebar desktop.
+    // La cookie `sidebar:state` persiste entre sesiones (7 días).
+    <SidebarProvider>
+      {/* Sidebar desktop — Shadcn sidebar con collapsible="icon" */}
+      <AppSidebar
+        roleCodes={roleCodes}
+        assignedServiceUnitCodes={assignedServiceUnitCodes}
+        isCrossServiceRole={isCrossServiceRole}
+      />
 
-        {/* Sidebar desktop (≥ md) — ancho condicional */}
-        <aside
-          className={cn(
-            "hidden shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground transition-[width] duration-200 md:flex md:flex-col",
-            desktopCollapsed ? "w-16" : "w-64",
-          )}
-        >
-          {renderNavBody(desktopCollapsed)}
-        </aside>
+      {/* Área derecha: header + contenido */}
+      <div className="flex min-w-0 flex-1 flex-col min-h-svh">
+        {/* TooltipProvider para los tooltips del Sheet mobile */}
+        <TooltipProvider delayDuration={200} skipDelayDuration={100}>
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            Saltar al contenido principal
+          </a>
 
-        <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
-            {/* Hamburguesa mobile (< md) abre Sheet */}
+            {/* Hamburguesa mobile (< md) abre Sheet — intacto hasta Tarea 2c */}
             <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
               <SheetTrigger asChild>
                 <Button
@@ -422,17 +407,11 @@ export function AppShell({
               </SheetContent>
             </Sheet>
 
-            {/* Toggle desktop collapse (≥ md) */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden h-9 w-9 p-0 md:inline-flex"
-              onClick={toggleDesktopCollapse}
-              aria-label={desktopCollapsed ? "Expandir barra lateral" : "Contraer barra lateral"}
-              aria-pressed={desktopCollapsed}
-            >
-              <Menu className="h-5 w-5" aria-hidden />
-            </Button>
+            {/* Toggle desktop collapse — SidebarTrigger de Shadcn (≥ md) */}
+            <SidebarTrigger
+              className="hidden md:inline-flex"
+              aria-label="Mostrar/ocultar menú lateral"
+            />
 
             <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
           </header>
@@ -447,10 +426,11 @@ export function AppShell({
           >
             {children}
           </main>
-        </div>
+        </TooltipProvider>
       </div>
+
       {/* Asistente HIS — copiloto flotante context-aware. */}
       <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />
-    </TooltipProvider>
+    </SidebarProvider>
   );
 }
