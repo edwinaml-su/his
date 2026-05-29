@@ -51,9 +51,40 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Defensa: cookie Supabase malformada (mismatch entre versiones de
+  // @supabase/ssr al setear vs leer, típicamente tras upgrade del paquete).
+  // El error clásico es:
+  //   TypeError: Cannot create property 'user' on string '{"access_token":...
+  // El lib trata de mutar `.user` sobre lo que cree un objeto pero quedó
+  // como string sin parsear. Atrapamos + limpiamos cookies sb-* + devolvemos
+  // user=null para forzar re-login fresh (formato actual). Evita 500 críptico.
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    return { response, user };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isMalformedCookie =
+      err instanceof TypeError &&
+      (msg.includes("Cannot create property") ||
+        msg.includes("Cannot convert undefined") ||
+        msg.includes("is not iterable"));
 
-  return { response, user };
+    if (!isMalformedCookie) throw err;
+
+    console.error(
+      "[middleware] cookie Supabase malformada — limpiando para forzar re-login. " +
+        `Path=${request.nextUrl.pathname}. Original: ${msg.slice(0, 120)}…`,
+    );
+
+    // Limpiar TODAS las cookies sb-* (auth-token + chunks .0 .1 .2 …).
+    const fresh = NextResponse.next({ request });
+    for (const cookie of request.cookies.getAll()) {
+      if (cookie.name.startsWith("sb-")) {
+        fresh.cookies.delete(cookie.name);
+      }
+    }
+    return { response: fresh, user: null };
+  }
 }
