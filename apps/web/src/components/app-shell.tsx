@@ -19,8 +19,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@his/ui/components/tooltip";
+import {
+  SidebarProvider,
+  SidebarInset,
+  SidebarTrigger,
+} from "@his/ui/components/sidebar";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ChatWidget } from "./chat-widget";
+import { AppSidebar } from "./app-sidebar";
 import { isItemVisible } from "./nav-visibility";
 import { SECTIONS, type NavItem, type NavSection } from "./nav-sections";
 
@@ -301,13 +307,7 @@ export function AppShell({
     const stored = window.localStorage.getItem("his.sidebar.collapsed");
     if (stored === "true") setDesktopCollapsed(true);
   }, []);
-  const toggleDesktopCollapse = React.useCallback(() => {
-    setDesktopCollapsed((prev) => {
-      const next = !prev;
-      window.localStorage.setItem("his.sidebar.collapsed", String(next));
-      return next;
-    });
-  }, []);
+  // El colapso desktop ahora lo gestiona SidebarProvider (onOpenChange abajo).
 
   // Cierra el drawer mobile + limpia la búsqueda al navegar (los items son
   // <Link>; el cambio de pathname implica que el usuario tocó uno).
@@ -382,7 +382,10 @@ export function AppShell({
     // cursor por items del sidebar. skipDelayDuration default permite que al
     // mover entre items vecinos el tooltip cambie sin re-esperar el delay.
     <TooltipProvider delayDuration={200} skipDelayDuration={100}>
-      <div className="flex min-h-screen">
+      <SidebarProvider defaultOpen={!desktopCollapsed} onOpenChange={(open) => {
+        setDesktopCollapsed(!open);
+        window.localStorage.setItem("his.sidebar.collapsed", String(!open));
+      }}>
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
@@ -390,17 +393,14 @@ export function AppShell({
           Saltar al contenido principal
         </a>
 
-        {/* Sidebar desktop (≥ md) — ancho condicional */}
-        <aside
-          className={cn(
-            "hidden shrink-0 border-r border-sidebar-border bg-sidebar-background text-sidebar-foreground transition-[width] duration-200 md:flex md:flex-col",
-            desktopCollapsed ? "w-16" : "w-64",
-          )}
-        >
-          {renderNavBody(desktopCollapsed)}
-        </aside>
+        {/* Sidebar desktop (≥ md) — Shadcn sidebar collapsible="icon" */}
+        <AppSidebar
+          roleCodes={roleCodes}
+          assignedServiceUnitCodes={assignedServiceUnitCodes}
+          isCrossServiceRole={isCrossServiceRole}
+        />
 
-        <div className="flex min-w-0 flex-1 flex-col">
+        <SidebarInset>
           <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
             {/* Hamburguesa mobile (< md) abre Sheet */}
             <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
@@ -422,17 +422,8 @@ export function AppShell({
               </SheetContent>
             </Sheet>
 
-            {/* Toggle desktop collapse (≥ md) */}
-            <Button
-              variant="ghost"
-              size="sm"
-              className="hidden h-9 w-9 p-0 md:inline-flex"
-              onClick={toggleDesktopCollapse}
-              aria-label={desktopCollapsed ? "Expandir barra lateral" : "Contraer barra lateral"}
-              aria-pressed={desktopCollapsed}
-            >
-              <Menu className="h-5 w-5" aria-hidden />
-            </Button>
+            {/* Toggle desktop collapse (≥ md) — delegado al SidebarProvider */}
+            <SidebarTrigger className="hidden md:inline-flex" />
 
             <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
           </header>
@@ -447,8 +438,8 @@ export function AppShell({
           >
             {children}
           </main>
-        </div>
-      </div>
+        </SidebarInset>
+      </SidebarProvider>
       {/* Asistente HIS — copiloto flotante context-aware. */}
       <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />
     </TooltipProvider>
