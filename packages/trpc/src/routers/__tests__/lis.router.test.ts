@@ -58,6 +58,52 @@ describe("lisRouter", () => {
     });
   });
 
+  describe("order.listPending", () => {
+    it("HH-11: retorna resultados sin validar de órdenes RESULTED (filtro server-side)", async () => {
+      const mockResult = {
+        id: u,
+        orderItemId: v,
+        specimenId: null,
+        resultedAt: new Date(),
+        resultedById: w,
+        valueNumeric: null,
+        valueText: "Positivo",
+        valueUnit: null,
+        flag: "CRITICAL",
+        notes: null,
+        validatedAt: null,
+        validatedById: null,
+        confidential: false,
+        showInPortal: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        orderItem: {
+          id: v,
+          orderId: w,
+          testId: u,
+          status: "RESULTED",
+          notes: null,
+          test: { code: "718-7", name: "Hemoglobina" },
+          order: {
+            id: w,
+            orderedAt: new Date(),
+            patient: { firstName: "Ana", lastName: "García", mrn: "MRN001" },
+          },
+        },
+      };
+      prisma.labResult.findMany.mockResolvedValue([mockResult] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.listPending({ limit: 50 });
+      expect(result).toHaveLength(1);
+      // Verifica que el where incluye validatedAt: null y status: "RESULTED".
+      const findArgs = prisma.labResult.findMany.mock.calls[0]![0];
+      expect(findArgs!.where!.validatedAt).toBeNull();
+      expect(findArgs!.where!.orderItem).toMatchObject({
+        order: { status: "RESULTED" },
+      });
+    });
+  });
+
   describe("order.get", () => {
     it("NOT_FOUND si orden no existe en tenant", async () => {
       prisma.labOrder.findFirst.mockResolvedValue(null as never);

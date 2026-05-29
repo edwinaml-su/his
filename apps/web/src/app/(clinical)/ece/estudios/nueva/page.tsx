@@ -41,12 +41,21 @@ interface FieldErrors {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PIN_RE = /^\d{6,8}$/;
+// HH-04: formato LOINC canónico — 1-5 dígitos, guion, 1 dígito verificador.
+const LOINC_RE = /^\d{1,5}-\d$/;
 
 function validate(episodioId: string, estudiosRaw: string, pin: string): FieldErrors {
   const errs: FieldErrors = {};
   if (!UUID_RE.test(episodioId.trim())) errs.episodioId = "Debe ser un UUID válido";
   const codigos = estudiosRaw.split(",").map((s) => s.trim()).filter(Boolean);
-  if (codigos.length === 0) errs.estudiosRaw = "Ingrese al menos un código de estudio";
+  if (codigos.length === 0) {
+    errs.estudiosRaw = "Ingrese al menos un código de estudio";
+  } else {
+    const invalidos = codigos.filter((c) => !LOINC_RE.test(c));
+    if (invalidos.length > 0) {
+      errs.estudiosRaw = `Código(s) LOINC inválido(s): ${invalidos.join(", ")}. Formato requerido: NNNNN-N`;
+    }
+  }
   if (!PIN_RE.test(pin)) errs.pin = "PIN debe ser 6-8 dígitos";
   return errs;
 }
@@ -139,7 +148,7 @@ export default function NuevaSolicitudEstudioPage() {
               </Label>
               <Input
                 id="estudiosRaw"
-                placeholder="Ej: 2093-3, 2075-0, CBC"
+                placeholder="Ej: 2093-3, 2075-0, 718-7"
                 value={estudiosRaw}
                 onChange={(e) => setEstudiosRaw(e.target.value)}
               />

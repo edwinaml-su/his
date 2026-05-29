@@ -140,6 +140,47 @@ export const lisRouter = router({
         });
       }),
 
+    /**
+     * HH-11: cola de resultados pendientes de validación — filtro server-side.
+     * Retorna LabResults con validatedAt=null de órdenes en estado RESULTED.
+     * Reemplaza el filtrado client-side previo de /lis/results/page.tsx.
+     */
+    listPending: tenantProcedure
+      .input(z.object({ limit: z.number().int().min(1).max(200).default(100) }))
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.labResult.findMany({
+            where: {
+              validatedAt: null,
+              orderItem: {
+                order: {
+                  organizationId: ctx.tenant.organizationId,
+                  status: "RESULTED",
+                },
+              },
+            },
+            include: {
+              orderItem: {
+                include: {
+                  test: { select: { code: true, name: true } },
+                  order: {
+                    select: {
+                      id: true,
+                      orderedAt: true,
+                      patient: {
+                        select: { firstName: true, lastName: true, mrn: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { createdAt: "asc" },
+            take: input.limit,
+          });
+        });
+      }),
+
     create: tenantProcedure.input(labOrderCreateInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const enc = await tx.encounter.findFirst({

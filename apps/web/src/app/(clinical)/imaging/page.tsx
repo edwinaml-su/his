@@ -168,6 +168,7 @@ export default function ImagingListPage() {
                 <TableRow>
                   <TableHead>Fecha</TableHead>
                   <TableHead>Paciente</TableHead>
+                  <TableHead>Solicitante</TableHead>
                   <TableHead>Modalidad</TableHead>
                   <TableHead>Estudio</TableHead>
                   <TableHead>Prioridad</TableHead>
@@ -179,12 +180,16 @@ export default function ImagingListPage() {
                   const patientName = o.patient
                     ? `${o.patient.firstName} ${o.patient.lastName}`
                     : "—";
+                  const providerName = o.orderingProvider?.fullName ?? "—";
                   return (
                     <TableRow key={o.id}>
                       <TableCell className="tabular-nums">
                         {dateFmt.format(new Date(o.createdAt))}
                       </TableCell>
                       <TableCell>{patientName}</TableCell>
+                      <TableCell className="max-w-[12rem] truncate">
+                        {providerName}
+                      </TableCell>
                       <TableCell>{o.modalityType}</TableCell>
                       <TableCell className="max-w-[20rem] truncate">
                         {o.studyDescription}

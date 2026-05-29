@@ -23,6 +23,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Form, FormField, FormError } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { Textarea } from "@his/ui/components/textarea";
 import { Button } from "@his/ui/components/button";
 import {
   Select,
@@ -257,13 +258,12 @@ export default function NewLisOrderPage(): React.ReactElement {
 
             <FormField>
               <Label htmlFor="clinical">Indicación clínica</Label>
-              <textarea
+              <Textarea
                 id="clinical"
                 value={clinicalIndication}
                 onChange={(e) => setClinicalIndication(e.target.value)}
                 rows={3}
                 maxLength={2000}
-                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 placeholder="Sospecha clínica, diagnóstico de trabajo, etc."
               />
             </FormField>

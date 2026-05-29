@@ -6,17 +6,18 @@
  *   - Vencimientos próximos en N días (por defecto 30).
  *   - GSRN profesionales pendientes de renovación.
  *
- * Seguridad: tenantProcedure — solo lectura, cualquier usuario del tenant.
- * No requiere withTenantContext porque son queries de solo lectura con
- * tenantProcedure (RLS aplica si el rol authenticated tiene permisos SELECT).
+ * Seguridad: tenantProcedure + withTenantContext.
+ * HI-02: sin withTenantContext el rol Postgres permanece como postgres.<ref>
+ * que tiene BYPASSRLS — RLS nunca aplica. Aunque las tablas ece.* no tienen
+ * RLS por fila de org, la consistencia de contrato obliga a demotar el rol.
  *
- * Trade-off: usamos $queryRawUnsafe para la CTE consolidada porque Prisma
- * no tiene modelo para las tablas ece.*. Alternativa ORM requeriría modelos
- * custom en schema.prisma — out-of-scope para este sprint.
+ * Trade-off: usamos $queryRawUnsafe para las CTEs porque Prisma no tiene
+ * modelos para ece.*. Alternativa ORM requeriría modelos custom — out-of-scope.
  */
 
 import { z } from "zod";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Tipos de resultado
@@ -58,8 +59,9 @@ export const gs1DashboardRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
       // Conteos globales de las 3 entidades principales.
-      const countsRows = await ctx.prisma.$queryRawUnsafe<CountRow[]>(
+      const countsRows = await tx.$queryRawUnsafe<CountRow[]>(
         `SELECT
            (SELECT COUNT(*)::text FROM ece.gs1_gsrn WHERE activo = true)  AS gsrn_activos,
            (SELECT COUNT(*)::text FROM ece.gs1_gln  WHERE activo = true)  AS gln_registrados,
@@ -74,7 +76,7 @@ export const gs1DashboardRouter = router({
       };
 
       // GTINs con vencimiento próximo (rojo si ≤ vencimientosDias desde hoy).
-      const vencimientos = await ctx.prisma.$queryRawUnsafe<VencimientoRow[]>(
+      const vencimientos = await tx.$queryRawUnsafe<VencimientoRow[]>(
         `SELECT id, codigo, descripcion, lote_vencimiento,
                 COALESCE(recall_status, 'NONE') AS recall_status
            FROM ece.gs1_gtin
@@ -88,7 +90,7 @@ export const gs1DashboardRouter = router({
 
       // GSRN profesionales sin renovación reciente (más de 1 año sin movimiento).
       // "Pendiente renovación" = activo pero sin actualizado_en en los últimos 365 días.
-      const gsrnRenovacion = await ctx.prisma.$queryRawUnsafe<GsrnRenovacionRow[]>(
+      const gsrnRenovacion = await tx.$queryRawUnsafe<GsrnRenovacionRow[]>(
         `SELECT id, codigo, tipo, referencia_id
            FROM ece.gs1_gsrn
           WHERE tipo = 'profesional'
@@ -119,5 +121,6 @@ export const gs1DashboardRouter = router({
         })),
         generadoEn: new Date(),
       };
+      }); // end withTenantContext
     }),
 });
