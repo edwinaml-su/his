@@ -36,6 +36,14 @@ const nextConfig = {
         destination: "/triage",
         permanent: true,
       },
+      // Safari macOS intenta /site.webmanifest además del estándar /manifest.json.
+      // Sin este alias recibe el HTML 404 y lanza "Parsing application manifest:
+      // The manifest is not valid JSON data" en consola.
+      {
+        source: "/site.webmanifest",
+        destination: "/manifest.json",
+        permanent: true,
+      },
     ];
   },
 };
