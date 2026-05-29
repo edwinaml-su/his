@@ -3,6 +3,37 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getSupabaseEnvOrNull } from "./env";
 
 /**
+ * Setea Set-Cookie de expiración para TODAS las cookies sb-* conocidas SIN
+ * iterar `request.cookies.getAll()` (que puede fallar con Invalid UTF-8 si
+ * alguna cookie tiene bytes corruptos). Le dice al browser que las elimine.
+ *
+ * @his/ssr chunkea cookies grandes en `.0`, `.1`, `.2`… cuando exceden 4KB.
+ * También usa `-code-verifier` durante OAuth PKCE flow. Cubrimos hasta .9.
+ */
+function nukeSupabaseCookies(response: NextResponse, supabaseUrl: string) {
+  // ejacvsgbewcerxtjtwto.supabase.co → "ejacvsgbewcerxtjtwto"
+  const ref = supabaseUrl
+    .replace(/^https?:\/\//, "")
+    .split(".")[0] ?? "";
+  if (!ref) return;
+  const base = `sb-${ref}-auth-token`;
+  const suffixes = ["", ".0", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9", "-code-verifier"];
+  for (const sfx of suffixes) {
+    try {
+      response.cookies.set({
+        name: `${base}${sfx}`,
+        value: "",
+        maxAge: 0,
+        path: "/",
+      });
+    } catch {
+      // Edge runtime puede lanzar si el nombre tiene caracteres raros (improbable
+      // aquí porque hardcoded). Ignorar — best-effort cleanup.
+    }
+  }
+}
+
+/**
  * Refresh de la sesión Supabase en cada request.
  * Patrón oficial @supabase/ssr middleware.
  *
@@ -51,13 +82,18 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // Defensa: cookie Supabase malformada (mismatch entre versiones de
-  // @supabase/ssr al setear vs leer, típicamente tras upgrade del paquete).
-  // El error clásico es:
-  //   TypeError: Cannot create property 'user' on string '{"access_token":...
-  // El lib trata de mutar `.user` sobre lo que cree un objeto pero quedó
-  // como string sin parsear. Atrapamos + limpiamos cookies sb-* + devolvemos
-  // user=null para forzar re-login fresh (formato actual). Evita 500 críptico.
+  // Defensa: cookie Supabase corrupta o malformada. Casos cubiertos:
+  //
+  //   1. "Cannot create property 'user' on string" — mismatch versión @supabase/ssr
+  //      al setear vs leer (string JSON sin parsear).
+  //   2. "Invalid UTF-8 sequence" — bytes corruptos en cookie value (Edge runtime
+  //      falla al decodificar). Puede pasar tras rotación parcial de cookies o
+  //      ataques de fuzzing.
+  //   3. "is not iterable" / "Cannot convert undefined" — variantes documentadas.
+  //
+  // En todos los casos limpiamos las cookies sb-* del response (sin iterar
+  // request.cookies.getAll() que también puede fallar con UTF-8 inválido) y
+  // devolvemos user=null para forzar re-login con cookies frescas.
   try {
     const {
       data: { user },
@@ -65,26 +101,24 @@ export async function updateSession(request: NextRequest) {
     return { response, user };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const isMalformedCookie =
-      err instanceof TypeError &&
-      (msg.includes("Cannot create property") ||
-        msg.includes("Cannot convert undefined") ||
-        msg.includes("is not iterable"));
+    const isRecoverable =
+      msg.includes("Cannot create property") ||
+      msg.includes("Cannot convert undefined") ||
+      msg.includes("is not iterable") ||
+      msg.includes("Invalid UTF-8") ||
+      msg.includes("invalid byte sequence");
 
-    if (!isMalformedCookie) throw err;
+    if (!isRecoverable) throw err;
 
     console.error(
-      "[middleware] cookie Supabase malformada — limpiando para forzar re-login. " +
-        `Path=${request.nextUrl.pathname}. Original: ${msg.slice(0, 120)}…`,
+      "[middleware] cookie Supabase corrupta — limpiando para forzar re-login. " +
+        `Path=${request.nextUrl.pathname}. Tipo=${err instanceof Error ? err.name : "?"}. Mensaje=${msg.slice(0, 200)}`,
     );
 
-    // Limpiar TODAS las cookies sb-* (auth-token + chunks .0 .1 .2 …).
+    // Limpiar cookies sb-* hardcoded (NO iterar request.cookies — puede fallar
+    // con el mismo Invalid UTF-8 que originó el problema).
     const fresh = NextResponse.next({ request });
-    for (const cookie of request.cookies.getAll()) {
-      if (cookie.name.startsWith("sb-")) {
-        fresh.cookies.delete(cookie.name);
-      }
-    }
+    nukeSupabaseCookies(fresh, env.url);
     return { response: fresh, user: null };
   }
 }
