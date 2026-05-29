@@ -99,15 +99,21 @@ const config: Config = {
         },
         // Sidebar — branding Avante navy. Sin este mapeo, las clases
         // bg-sidebar-background etc. no se generan y el sidebar pierde fondo.
+        // DEFAULT y primary/ring añadidos en Tarea 2b para primitivos Shadcn sidebar.
         sidebar: {
+          DEFAULT: "var(--sidebar)",
           background: "var(--sidebar-background)",
           foreground: "var(--sidebar-foreground)",
           border: "var(--sidebar-border)",
+          primary: {
+            DEFAULT: "var(--sidebar-primary)",
+            foreground: "var(--sidebar-primary-foreground)",
+          },
           accent: {
             DEFAULT: "var(--sidebar-accent)",
             foreground: "var(--sidebar-accent-foreground)",
           },
-          ring: "var(--ring)",
+          ring: "var(--sidebar-ring)",
         },
         // Manchester Triage System — ver docs/07_design_system.md §2.2.
         // Paleta fija auditada WCAG AA. NO modificar por tenant.

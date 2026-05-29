@@ -133,6 +133,11 @@
     --sidebar-border:         oklch(0.3540 0.0578 279.88);
     --sidebar-accent:         oklch(0.5393 0.1394 247.04);
     --sidebar-accent-foreground: oklch(1.0000 0.0001 263.28);
+    /* Alias requeridos por primitivos Shadcn sidebar (Tarea 2b) */
+    --sidebar:                oklch(0.2711 0.0664 277.92);
+    --sidebar-primary:        oklch(0.5393 0.1394 247.04);
+    --sidebar-primary-foreground: oklch(1.0000 0.0001 263.28);
+    --sidebar-ring:           oklch(0.5393 0.1394 247.04);
   }
 
   /* ── Densidad comfortable (default explícito) ──────────────────────────── */
@@ -233,6 +238,11 @@
     --sidebar-border:         oklch(0.2635 0.0479 279.45);
     --sidebar-accent:         oklch(0.5393 0.1394 247.04);
     --sidebar-accent-foreground: oklch(1.0000 0.0001 263.28);
+    /* Alias requeridos por primitivos Shadcn sidebar (Tarea 2b) */
+    --sidebar:                oklch(0.1798 0.0482 277.31);
+    --sidebar-primary:        oklch(0.5393 0.1394 247.04);
+    --sidebar-primary-foreground: oklch(1.0000 0.0001 263.28);
+    --sidebar-ring:           oklch(0.5393 0.1394 247.04);
   }
 }
 
