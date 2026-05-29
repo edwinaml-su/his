@@ -29,6 +29,7 @@ import { ChatWidget } from "./chat-widget";
 import { AppSidebar } from "./app-sidebar";
 import { isItemVisible } from "./nav-visibility";
 import { SECTIONS, type NavItem, type NavSection } from "./nav-sections";
+import { CommandPalette, CommandPaletteButton } from "./command-palette";
 
 /** Input de búsqueda del menú. Filtra items por label/description. ESC limpia. */
 function SidebarSearch({
@@ -386,59 +387,72 @@ export function AppShell({
         setDesktopCollapsed(!open);
         window.localStorage.setItem("his.sidebar.collapsed", String(!open));
       }}>
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          Saltar al contenido principal
-        </a>
-
-        {/* Sidebar desktop (≥ md) — Shadcn sidebar collapsible="icon" */}
-        <AppSidebar
+        {/* CommandPalette actúa como Context Provider. Sus children son todo
+            el contenido del shell — esto permite que CommandPaletteButton
+            (en el topbar) consuma el Context sin prop drilling. El dialog
+            modal se renderiza dentro de CommandPalette. */}
+        <CommandPalette
           roleCodes={roleCodes}
           assignedServiceUnitCodes={assignedServiceUnitCodes}
           isCrossServiceRole={isCrossServiceRole}
-        />
-
-        <SidebarInset>
-          <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
-            {/* Hamburguesa mobile (< md) abre Sheet */}
-            <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-              <SheetTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-9 w-9 p-0 md:hidden"
-                  aria-label="Abrir menú de navegación"
-                >
-                  <Menu className="h-5 w-5" aria-hidden />
-                </Button>
-              </SheetTrigger>
-              <SheetContent
-                side="left"
-                className="flex w-72 max-w-[85vw] flex-col border-r-sidebar-border bg-sidebar-background p-0 text-sidebar-foreground"
-              >
-                {renderNavBody(false)}
-              </SheetContent>
-            </Sheet>
-
-            {/* Toggle desktop collapse (≥ md) — delegado al SidebarProvider */}
-            <SidebarTrigger className="hidden md:inline-flex" />
-
-            <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
-          </header>
-
-          {/* Breadcrumbs (barra de navegabilidad) */}
-          <Breadcrumbs pathname={pathname} />
-
-          <main
-            id="main-content"
-            tabIndex={-1}
-            className="flex-1 bg-muted/30 p-3 sm:p-4 lg:p-6"
+        >
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
           >
-            {children}
-          </main>
-        </SidebarInset>
+            Saltar al contenido principal
+          </a>
+
+          {/* Sidebar desktop (≥ md) — Shadcn sidebar collapsible="icon" */}
+          <AppSidebar
+            roleCodes={roleCodes}
+            assignedServiceUnitCodes={assignedServiceUnitCodes}
+            isCrossServiceRole={isCrossServiceRole}
+          />
+
+          <SidebarInset>
+            <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
+              {/* Hamburguesa mobile (< md) abre Sheet */}
+              <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+                <SheetTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 w-9 p-0 md:hidden"
+                    aria-label="Abrir menú de navegación"
+                  >
+                    <Menu className="h-5 w-5" aria-hidden />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent
+                  side="left"
+                  className="flex w-72 max-w-[85vw] flex-col border-r-sidebar-border bg-sidebar-background p-0 text-sidebar-foreground"
+                >
+                  {renderNavBody(false)}
+                </SheetContent>
+              </Sheet>
+
+              {/* Toggle desktop collapse (≥ md) — delegado al SidebarProvider */}
+              <SidebarTrigger className="hidden md:inline-flex" />
+
+              {/* Paleta de comandos — botón visual + atajo Ctrl+K en el topbar */}
+              <CommandPaletteButton />
+
+              <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
+            </header>
+
+            {/* Breadcrumbs (barra de navegabilidad) */}
+            <Breadcrumbs pathname={pathname} />
+
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className="flex-1 bg-muted/30 p-3 sm:p-4 lg:p-6"
+            >
+              {children}
+            </main>
+          </SidebarInset>
+        </CommandPalette>
       </SidebarProvider>
       {/* Asistente HIS — copiloto flotante context-aware. */}
       <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />

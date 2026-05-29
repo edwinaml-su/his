@@ -15,9 +15,11 @@
  */
 import * as React from "react";
 import Link from "next/link";
+import { Users } from "lucide-react";
 import { Badge } from "@his/ui/components/badge";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
+import { EmptyState, ErrorState } from "@his/ui/components/states";
 import {
   Table,
   TableBody,
@@ -140,9 +142,11 @@ export default function UsersPage() {
       </div>
 
       {query.error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          Error: {query.error.message}
-        </p>
+        <ErrorState
+          title="No pudimos cargar la información"
+          description="Verifica tu conexión e intenta de nuevo."
+          retry={() => query.refetch()}
+        />
       ) : null}
 
       <div className="rounded-md border">
@@ -159,10 +163,15 @@ export default function UsersPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.length === 0 && !query.isLoading ? (
+            {items.length === 0 && !query.isLoading && !query.error ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
-                  Sin usuarios.
+                <TableCell colSpan={7} className="p-0">
+                  <EmptyState
+                    icon={Users}
+                    title="Sin usuarios"
+                    description="Crea el primer usuario para empezar."
+                    action={{ label: "Nuevo usuario", onClick: () => { setEditing(null); setFormOpen(true); } }}
+                  />
                 </TableCell>
               </TableRow>
             ) : null}
