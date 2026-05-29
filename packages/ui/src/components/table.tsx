@@ -55,7 +55,7 @@ export const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      "h-10 px-2 text-left align-middle text-xs font-medium text-muted-foreground sm:h-12 sm:px-4 sm:text-sm [&:has([role=checkbox])]:pr-0",
+      "h-10 px-4 text-left align-middle text-xs font-medium text-foreground/80 sm:h-12 sm:text-sm [&:has([role=checkbox])]:pr-0",
       className,
     )}
     {...props}
@@ -63,19 +63,26 @@ export const TableHead = React.forwardRef<
 ));
 TableHead.displayName = "TableHead";
 
-export const TableCell = React.forwardRef<
-  HTMLTableCellElement,
-  React.TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => (
-  <td
-    ref={ref}
-    className={cn(
-      "px-2 py-2 align-middle text-xs sm:p-4 sm:text-sm [&:has([role=checkbox])]:pr-0",
-      className,
-    )}
-    {...props}
-  />
-));
+export interface TableCellProps extends React.TdHTMLAttributes<HTMLTableCellElement> {
+  /** Si true, aplica tabular-nums y text-right para valores numéricos. */
+  numeric?: boolean;
+}
+
+export const TableCell = React.forwardRef<HTMLTableCellElement, TableCellProps>(
+  ({ className, numeric, ...props }, ref) => (
+    <td
+      ref={ref}
+      className={cn(
+        // padding por data-density en el ancestro <table> o wrapper
+        "align-middle text-xs sm:text-sm [&:has([role=checkbox])]:pr-0",
+        "py-3 px-4 [[data-density=compact]_&]:py-2 [[data-density=compact]_&]:px-3",
+        numeric && "tabular-nums text-right",
+        className,
+      )}
+      {...props}
+    />
+  ),
+);
 TableCell.displayName = "TableCell";
 
 /**
