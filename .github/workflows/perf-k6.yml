@@ -1,0 +1,155 @@
+name: Performance k6
+
+# Manual únicamente — el operador decide cuándo y contra qué URL.
+# NO corre automáticamente en cada PR para no impactar producción accidentalmente.
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'URL target (ej. https://his.complejoavante.com o URL de Vercel preview)'
+        required: false
+        default: 'https://his.complejoavante.com'
+      scenario:
+        description: 'Scenario a correr'
+        required: true
+        default: 'smoke'
+        type: choice
+        options:
+          - smoke
+          - auth
+          - triage
+          - bed-map
+          - bcma
+          - portal
+          - all
+      vus:
+        description: 'Virtual Users (sobreescribe el default del script)'
+        required: false
+        default: '5'
+      duration:
+        description: 'Duración (ej. 30s, 1m, 2m)'
+        required: false
+        default: '30s'
+
+concurrency:
+  group: perf-k6-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  k6:
+    name: k6 — ${{ github.event.inputs.scenario }} @ ${{ github.event.inputs.base_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      BASE_URL:         ${{ github.event.inputs.base_url || 'https://his.complejoavante.com' }}
+      VUS:              ${{ github.event.inputs.vus || '5' }}
+      DURATION:         ${{ github.event.inputs.duration || '30s' }}
+      SUPABASE_URL:     ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      # Credenciales de usuario de prueba — nunca hardcodear en scripts.
+      K6_USER_EMAIL:    ${{ secrets.E2E_ADMIN_EMAIL }}
+      K6_USER_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -q
+          sudo apt-get install -q k6
+
+      - name: Resolver script del scenario
+        id: resolve
+        run: |
+          SCENARIO="${{ github.event.inputs.scenario }}"
+          case "$SCENARIO" in
+            smoke)   SCRIPT="infra/k6/scenarios/01-smoke.js" ;;
+            auth)    SCRIPT="infra/k6/scenarios/02-auth-baseline.js" ;;
+            triage)  SCRIPT="infra/k6/scenarios/03-triage-queue.js" ;;
+            bed-map) SCRIPT="infra/k6/scenarios/04-bed-map-read.js" ;;
+            bcma)    SCRIPT="infra/k6/scenarios/05-bcma-validate.js" ;;
+            portal)  SCRIPT="infra/k6/scenarios/06-portal-paciente.js" ;;
+            all)     SCRIPT="all" ;;
+            *)
+              echo "Scenario desconocido: $SCENARIO"
+              exit 1
+          esac
+          echo "script=$SCRIPT" >> "$GITHUB_OUTPUT"
+
+      - name: Correr k6 (scenario único)
+        if: steps.resolve.outputs.script != 'all'
+        run: |
+          k6 run \
+            --out json=k6-results.json \
+            --summary-export=k6-summary.json \
+            "${{ steps.resolve.outputs.script }}"
+        env:
+          BASE_URL:          ${{ env.BASE_URL }}
+          VUS:               ${{ env.VUS }}
+          DURATION:          ${{ env.DURATION }}
+          SUPABASE_URL:      ${{ env.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
+          K6_USER_EMAIL:     ${{ env.K6_USER_EMAIL }}
+          K6_USER_PASSWORD:  ${{ env.K6_USER_PASSWORD }}
+
+      - name: Correr k6 (todos los scenarios)
+        if: steps.resolve.outputs.script == 'all'
+        run: |
+          SCENARIOS=(
+            "infra/k6/scenarios/01-smoke.js"
+            "infra/k6/scenarios/02-auth-baseline.js"
+            "infra/k6/scenarios/03-triage-queue.js"
+            "infra/k6/scenarios/04-bed-map-read.js"
+            "infra/k6/scenarios/05-bcma-validate.js"
+            "infra/k6/scenarios/06-portal-paciente.js"
+          )
+          EXIT_CODE=0
+          for SCRIPT in "${SCENARIOS[@]}"; do
+            NAME=$(basename "$SCRIPT" .js)
+            echo "--- Corriendo: $NAME ---"
+            k6 run \
+              --out json="k6-results-${NAME}.json" \
+              --summary-export="k6-summary-${NAME}.json" \
+              "$SCRIPT" || EXIT_CODE=$?
+          done
+          exit $EXIT_CODE
+        env:
+          BASE_URL:          ${{ env.BASE_URL }}
+          VUS:               ${{ env.VUS }}
+          DURATION:          ${{ env.DURATION }}
+          SUPABASE_URL:      ${{ env.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ env.SUPABASE_ANON_KEY }}
+          K6_USER_EMAIL:     ${{ env.K6_USER_EMAIL }}
+          K6_USER_PASSWORD:  ${{ env.K6_USER_PASSWORD }}
+
+      - name: Subir resultados como artefactos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-results-${{ github.event.inputs.scenario }}-${{ github.run_id }}
+          path: |
+            k6-results*.json
+            k6-summary*.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Notificar regresión en Slack (opcional)
+        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": ":rotating_light: *k6 regression* — scenario `${{ github.event.inputs.scenario }}` contra `${{ github.event.inputs.base_url }}`.\nRepo: `${{ github.repository }}` | <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Ver run>"
+            }
+        env:
+          SLACK_WEBHOOK_URL:  ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
