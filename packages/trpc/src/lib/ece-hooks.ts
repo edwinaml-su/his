@@ -23,6 +23,12 @@ type PrismaLike = {
 };
 
 // ─── Mapeos admissionType → valores ECE ──────────────────────────────────────
+// IMPORTANTE: el enum public."AdmissionType" REAL solo tiene:
+//   EMERGENCY, SCHEDULED, TRANSFER_IN, BIRTH, NEWBORN
+// NO existe OUTPATIENT (verificado via MCP 2026-05-29). Outpatient se
+// modela en módulo Appointment, no en Encounter. Para encounters tipo
+// "ambulatorio" no existe path — el switch deja default 'hospitalario'
+// que es lo correcto para EMERGENCY/SCHEDULED/TRANSFER_IN.
 
 function toServicioCategoria(
   admissionType: string,
@@ -30,17 +36,17 @@ function toServicioCategoria(
   switch (admissionType) {
     case "EMERGENCY":
       return "emergencia";
-    case "OUTPATIENT":
-      return "consulta_externa";
     case "SCHEDULED":
-    case "TRANSFER":
+    case "TRANSFER_IN":
     default:
       return "hospitalizacion";
   }
 }
 
-function toModalidad(admissionType: string): "ambulatorio" | "hospitalario" {
-  return admissionType === "OUTPATIENT" ? "ambulatorio" : "hospitalario";
+function toModalidad(_admissionType: string): "ambulatorio" | "hospitalario" {
+  // Todos los AdmissionType actuales son hospitalarios (no hay OUTPATIENT).
+  // Si en el futuro se agrega un tipo ambulatorio al enum, mapearlo aquí.
+  return "hospitalario";
 }
 
 // ─── Hook 1: ece.paciente ─────────────────────────────────────────────────────

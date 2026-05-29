@@ -310,8 +310,13 @@ export const eceBridgePatientRouter = router({
             });
           }
 
-          // Tipo de registro: si hay DUI o NIE, "verificado"; sino "sin_documento".
-          const tipoRegistro = hisDui || hisNie ? "verificado" : "sin_documento";
+          // Tipo de registro identidad: el CHECK constraint `ck_nui_requerido`
+          // EXIGE que si `nui IS NULL`, entonces tipo IN ('sin_documento','desconocido').
+          // NUI (Número Único de Identificación, 20 chars [A-Z0-9]) es DISTINTO de DUI.
+          // No estamos seteando nui aquí (NUI no viene del HIS), así que aunque haya
+          // DUI/NIE el tipo correcto sigue siendo 'sin_documento' hasta que alguien
+          // agregue el NUI explícitamente.
+          const tipoRegistro = "sin_documento";
 
           const created = await tx.$queryRaw<{ id: string }[]>`
             INSERT INTO ece.paciente (
