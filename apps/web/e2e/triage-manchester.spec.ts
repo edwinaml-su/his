@@ -13,7 +13,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("Triage Manchester", () => {
+test.describe("@smoke - Triage Manchester", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "triagist");
   });

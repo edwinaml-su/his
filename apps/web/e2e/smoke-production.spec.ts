@@ -33,7 +33,7 @@ test.skip(
   'Suite smoke producción deshabilitada. Setear PROD_SMOKE=1 para activar.',
 );
 
-test.describe('Smoke Production — Vercel deployment', () => {
+test.describe('@smoke - Smoke Production — Vercel deployment', () => {
   test.describe.configure({ mode: 'serial' });
 
   test('1) Healthcheck /api/health retorna 200 con db+supabase OK', async ({ request }) => {

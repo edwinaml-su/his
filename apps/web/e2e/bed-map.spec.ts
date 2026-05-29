@@ -5,7 +5,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("Mapa de camas", () => {
+test.describe("@smoke - Mapa de camas", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

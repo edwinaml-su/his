@@ -11,7 +11,7 @@
 import { test, expect } from "@playwright/test";
 import { TEST_CREDENTIALS, login } from "./_helpers/auth";
 
-test.describe("Autenticación", () => {
+test.describe("@smoke - Autenticación", () => {
   test("login exitoso redirige a área autenticada", async ({ page }) => {
     await login(page, "admin");
     // El layout autenticado debe mostrar el menú lateral.

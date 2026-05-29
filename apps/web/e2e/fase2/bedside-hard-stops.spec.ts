@@ -211,7 +211,7 @@ async function setupHardStopTest(
 // Suite principal
 // ---------------------------------------------------------------------------
 
-test.describe("Bedside — Hard Stops (US.F2.6.27-30)", () => {
+test.describe("@smoke - Bedside — Hard Stops (US.F2.6.27-30)", () => {
   test.skip(SKIP, "SKIP_E2E_BEDSIDE_HS=1 — omitido por env");
 
   test.beforeEach(async ({ page }) => {

@@ -106,7 +106,7 @@ async function assertSinDatosCrossTenant(page: Page, path: string): Promise<bool
 // Suite
 // ---------------------------------------------------------------------------
 
-test.describe("ECE — RLS cross-tenant", () => {
+test.describe("@smoke - ECE — RLS cross-tenant", () => {
   test.skip(!HAS_REAL_SUPABASE, "Requiere Supabase real. CI ephemeral usa dummy URL — skip.");
 
   // -------------------------------------------------------------------------
