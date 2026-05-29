@@ -891,7 +891,8 @@ const hceRouter = router({
   vaccinations: router({
     /** US.B20.2.4 — historial de vacunación del paciente. */
     list: portalProcedure
-      .input(guardianInput)
+      // K-25: skip opcional para paginación offset (vacunaciones no usan cursor UUID).
+      .input(guardianInput.extend({ skip: z.number().int().min(0).default(0) }))
       .query(async ({ ctx, input }) => {
         const patientId = await resolvePatientId(ctx, input.wardPatientId);
 
@@ -911,6 +912,7 @@ const hceRouter = router({
             },
             orderBy: { administeredAt: "desc" },
             take: 100,
+            skip: input.skip,
           });
         });
       }),

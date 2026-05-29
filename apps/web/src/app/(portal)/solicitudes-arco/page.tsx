@@ -100,10 +100,10 @@ function NuevaSolicitudForm({ onSuccess }: { onSuccess: () => void }) {
             value={documentoTarget}
             onChange={(e) => setDocumentoTarget(e.target.value)}
             placeholder="Ej.: Fecha de nacimiento, Historia clínica HC-2026-001"
-            maxLength={200}
+            maxLength={500}
           />
           <p className="text-xs text-muted-foreground">
-            {documentoTarget.length}/200
+            {documentoTarget.length}/500
           </p>
         </div>
 
