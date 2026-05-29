@@ -8,7 +8,7 @@
  *   ece.bridge.linkPatient        — vincula ece.paciente a public.Patient
  *   ece.bridge.unlinkPatient      — desvincula (SET NULL)
  *   ece.bridge.syncFromHis        — HIS → ECE: crea/actualiza ece.paciente
- *   ece.bridge.syncToHis          — ECE → HIS: actualiza campos demográficos
+ *   ece.bridge.syncToHis          — ECE → HIS: actualiza identificadores
  *   ece.bridge.listLinkedPatients — pacientes con vínculo activo (paginado)
  *
  * Autorización: requireRole(["ARCH","ADM","DIR"]).
@@ -17,12 +17,32 @@
  *   - "ece.paciente.linked"  tras linkPatient.
  *   - "ece.paciente.synced"  tras syncFromHis / syncToHis.
  *
- * Validación de consistencia en sync:
- *   Si ambos registros tienen DUI/NIE/expediente y difieren → BAD_REQUEST.
- *   Campos sincronizados (NTEC Art. 15 demográficos):
- *     firstName, lastName, secondLastName, birthDate, biologicalSexId.
+ * ===========================================================================
+ * SCHEMA REAL (verificado 2026-05-29 vía MCP)
+ * ===========================================================================
  *
- * Raw SQL para ece.paciente; Prisma model para public.Patient.
+ * `ece.paciente` NO almacena datos demográficos (firstName/lastName/birthDate/
+ * biologicalSex). Esos viven solo en `public.Patient` y se acceden via JOIN
+ * por `public_patient_id`. Lo que `ece.paciente` SÍ almacena:
+ *
+ *   - id, public_patient_id (FK opcional a public.Patient)
+ *   - establecimiento_id (NOT NULL — public.Establishment)
+ *   - numero_expediente (NOT NULL — text único por establecimiento; mapea a Patient.mrn)
+ *   - dui, nui, cun, carnet_minoridad, pasaporte (identificadores opcionales SV)
+ *   - tipo_registro_identidad (NOT NULL default 'verificado')
+ *   - estado_expediente / estado_registro / fallecido (flags admin)
+ *   - estado_familiar, ocupacion, nacionalidad, direccion, telefono (opcionales)
+ *
+ * Esto significa que la "sincronización" se reduce a IDENTIFICADORES + numero_expediente.
+ * Los demográficos siempre vienen de public.Patient.
+ *
+ * Mapeo HIS → ECE:
+ *   public.Patient.mrn                        → ece.paciente.numero_expediente
+ *   public.Patient.identifiers (kind=DUI)     → ece.paciente.dui
+ *   public.Patient.identifiers (kind=NIE)     → ece.paciente.carnet_minoridad
+ *                                              (NTEC no tiene "NIE" como tal;
+ *                                              carnet de minoridad es el más
+ *                                              cercano para extranjeros menores)
  *
  * Spec: docs/blueprints/ece_his_bridge.md
  */
@@ -37,31 +57,29 @@ import {
   listLinkedPatientsInput,
 } from "@his/contracts";
 
-// ─── Tipos raw SQL ECE ────────────────────────────────────────────────────────
+// ─── Tipos raw SQL ECE (columnas reales — no demograficos) ────────────────────
 
 interface EcePacienteRow {
   id: string;
   public_patient_id: string | null;
-  primer_nombre: string;
-  primer_apellido: string;
-  segundo_apellido: string | null;
-  fecha_nacimiento: Date | null;
-  sexo_biologico_id: string | null;
-  expediente_numero: string | null;
-  dui: string | null;
-  nie: string | null;
   establecimiento_id: string;
+  numero_expediente: string;
+  dui: string | null;
+  nui: string | null;
+  cun: string | null;
+  carnet_minoridad: string | null;
+  pasaporte: string | null;
+  tipo_registro_identidad: string;
+  estado_expediente: string;
+  estado_registro: string;
+  fallecido: boolean;
 }
 
-// ─── Campos demográficos NTEC Art. 15 que se sincronizan ────────────────────
+// ─── Campos identificador que se sincronizan ──────────────────────────────────
+// Antes incluía firstName/lastName/birthDate/etc — esos NO están en ece.paciente.
+// Solo se sincronizan los identificadores que existen en ambos lados.
 
-const SYNCED_FIELDS = [
-  "firstName",
-  "lastName",
-  "secondLastName",
-  "birthDate",
-  "biologicalSexId",
-] as const;
+const SYNCED_FIELDS = ["numero_expediente", "dui"] as const;
 
 // ─── Base procedure ──────────────────────────────────────────────────────────
 
@@ -172,13 +190,18 @@ export const eceBridgePatientRouter = router({
   /**
    * Sincronización HIS → ECE.
    *
-   * Lee public.Patient y sus identificadores DUI/NIE, luego:
-   *   - Si ecePacienteId se da: valida consistencia de identificadores y actualiza
-   *     los campos demográficos en ece.paciente.
-   *   - Si no se da: crea una nueva fila en ece.paciente y establece el vínculo.
+   * Lee public.Patient (mrn + identificadores DUI/NIE) y:
+   *   - Si ecePacienteId se da: valida consistencia de identificadores y
+   *     actualiza dui/carnet_minoridad + numero_expediente + public_patient_id.
+   *   - Si no se da: crea una nueva fila en ece.paciente con los identificadores
+   *     mapeados y `numero_expediente = patient.mrn`.
    *
-   * Consistencia: si ece.paciente tiene DUI/NIE y HIS tiene un identificador
-   * del mismo tipo con valor diferente → BAD_REQUEST (conflicto de identidad).
+   * NO sincroniza datos demográficos (firstName/lastName/birthDate/etc.) —
+   * esos no existen en `ece.paciente` (schema NTEC simplificado verificado
+   * 2026-05-29). Los demográficos se acceden vía JOIN a public.Patient.
+   *
+   * Consistencia: si ece.paciente tiene DUI y HIS tiene DUI con valor
+   * diferente → BAD_REQUEST (conflicto de identidad).
    */
   syncFromHis: bridgeBase
     .input(syncFromHisInput)
@@ -192,11 +215,7 @@ export const eceBridgePatientRouter = router({
           where: { id: patientId, organizationId: orgId, deletedAt: null },
           select: {
             id: true,
-            firstName: true,
-            lastName: true,
-            secondLastName: true,
-            birthDate: true,
-            biologicalSexId: true,
+            mrn: true,
             identifiers: {
               select: { kind: true, value: true },
               where: { kind: { in: ["DUI", "NIE"] } },
@@ -217,20 +236,22 @@ export const eceBridgePatientRouter = router({
         const fieldsUpdated: string[] = [];
 
         if (ecePacienteId) {
-          // 2a. Actualizar ece.paciente existente — verificar consistencia primero
+          // 2a. Actualizar ece.paciente existente — verificar consistencia primero.
           const eceRows = await tx.$queryRaw<EcePacienteRow[]>`
             SELECT
               id::text,
               public_patient_id::text,
-              primer_nombre,
-              primer_apellido,
-              segundo_apellido,
-              fecha_nacimiento,
-              sexo_biologico_id::text,
-              expediente_numero,
+              establecimiento_id::text,
+              numero_expediente,
               dui,
-              nie,
-              establecimiento_id::text
+              nui,
+              cun,
+              carnet_minoridad,
+              pasaporte,
+              tipo_registro_identidad,
+              estado_expediente,
+              estado_registro,
+              fallecido
             FROM ece.paciente
             WHERE id = ${ecePacienteId}::uuid
             LIMIT 1
@@ -251,30 +272,37 @@ export const eceBridgePatientRouter = router({
               message: `Conflicto DUI: HIS=${hisDui}, ECE=${ece.dui}. Corrija antes de sincronizar.`,
             });
           }
-          if (hisNie && ece.nie && hisNie !== ece.nie) {
+          // NIE en HIS → carnet_minoridad en ECE (no existe NIE como columna).
+          if (hisNie && ece.carnet_minoridad && hisNie !== ece.carnet_minoridad) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: `Conflicto NIE: HIS=${hisNie}, ECE=${ece.nie}. Corrija antes de sincronizar.`,
+              message: `Conflicto NIE/carnet: HIS=${hisNie}, ECE=${ece.carnet_minoridad}. Corrija antes de sincronizar.`,
             });
           }
 
-          // Aplicar campos demográficos
+          // Aplicar identificadores. numero_expediente solo se setea si está vacío
+          // (no sobrescribimos un número operativo que ya esté en uso).
           await tx.$executeRaw`
             UPDATE ece.paciente
             SET
-              primer_nombre      = ${patient.firstName},
-              primer_apellido    = ${patient.lastName},
-              segundo_apellido   = ${patient.secondLastName ?? null},
-              fecha_nacimiento   = ${patient.birthDate ?? null}::date,
-              sexo_biologico_id  = ${patient.biologicalSexId}::uuid,
+              dui                = COALESCE(${hisDui}::text, dui),
+              carnet_minoridad   = COALESCE(${hisNie}::text, carnet_minoridad),
+              numero_expediente  = CASE
+                WHEN numero_expediente IS NULL OR numero_expediente = ''
+                THEN ${patient.mrn}::text
+                ELSE numero_expediente
+              END,
               public_patient_id  = ${patientId}::uuid
             WHERE id = ${ecePacienteId}::uuid
           `;
 
-          fieldsUpdated.push(...SYNCED_FIELDS);
+          if (hisDui && hisDui !== ece.dui) fieldsUpdated.push("dui");
+          if (hisNie && hisNie !== ece.carnet_minoridad) fieldsUpdated.push("carnet_minoridad");
+          if (!ece.numero_expediente) fieldsUpdated.push("numero_expediente");
+          fieldsUpdated.push("public_patient_id");
         } else {
-          // 2b. Crear nueva fila en ece.paciente
-          // Requiere establecimientoId del tenant — obligatorio en ECE.
+          // 2b. Crear nueva fila en ece.paciente. numero_expediente y
+          // establecimiento_id son NOT NULL.
           if (!ctx.tenant.establishmentId) {
             throw new TRPCError({
               code: "BAD_REQUEST",
@@ -282,34 +310,33 @@ export const eceBridgePatientRouter = router({
             });
           }
 
+          // Tipo de registro: si hay DUI o NIE, "verificado"; sino "sin_documento".
+          const tipoRegistro = hisDui || hisNie ? "verificado" : "sin_documento";
+
           const created = await tx.$queryRaw<{ id: string }[]>`
             INSERT INTO ece.paciente (
-              primer_nombre,
-              primer_apellido,
-              segundo_apellido,
-              fecha_nacimiento,
-              sexo_biologico_id,
-              establecimiento_id,
               public_patient_id,
+              establecimiento_id,
+              numero_expediente,
               dui,
-              nie
+              carnet_minoridad,
+              tipo_registro_identidad
             )
             VALUES (
-              ${patient.firstName},
-              ${patient.lastName},
-              ${patient.secondLastName ?? null},
-              ${patient.birthDate ?? null}::date,
-              ${patient.biologicalSexId}::uuid,
-              ${ctx.tenant.establishmentId}::uuid,
               ${patientId}::uuid,
+              ${ctx.tenant.establishmentId}::uuid,
+              ${patient.mrn},
               ${hisDui}::text,
-              ${hisNie}::text
+              ${hisNie}::text,
+              ${tipoRegistro}
             )
             RETURNING id::text
           `;
 
           targetId = created[0]!.id;
-          fieldsUpdated.push(...SYNCED_FIELDS, "dui", "nie");
+          fieldsUpdated.push("numero_expediente", "public_patient_id");
+          if (hisDui) fieldsUpdated.push("dui");
+          if (hisNie) fieldsUpdated.push("carnet_minoridad");
         }
 
         // 3. Emitir evento outbox
@@ -336,10 +363,21 @@ export const eceBridgePatientRouter = router({
   /**
    * Sincronización ECE → HIS.
    *
-   * Lee ece.paciente y actualiza solo los campos demográficos NTEC Art. 15
-   * en public.Patient vinculado. No crea un Patient si no existe vínculo.
+   * Lee ece.paciente (identificadores) y actualiza public.Patient.mrn si
+   * ece.numero_expediente difiere y no hay conflicto de identidad.
    *
-   * Consistencia: si los identificadores DUI/NIE difieren → BAD_REQUEST.
+   * NO actualiza demográficos (firstName/lastName/birthDate/etc.) porque
+   * `ece.paciente` no los almacena (schema NTEC simplificado).
+   *
+   * Consistencia: si los identificadores DUI/NIE/carnet difieren con valores
+   * presentes en ambos lados → BAD_REQUEST.
+   *
+   * Caso de uso: un Archivero captura una corrección de DUI en ECE; este
+   * procedure propaga ese cambio al MPI principal (public.Patient.identifiers).
+   * No implementado todavía: actualización de identificadores en HIS desde ECE
+   * requiere `PatientIdentifier` upsert que respete uniqueness — queda como
+   * follow-up. Por ahora solo sincroniza `numero_expediente → mrn` cuando
+   * el de HIS está vacío.
    */
   syncToHis: bridgeBase
     .input(syncToHisInput)
@@ -353,15 +391,17 @@ export const eceBridgePatientRouter = router({
           SELECT
             id::text,
             public_patient_id::text,
-            primer_nombre,
-            primer_apellido,
-            segundo_apellido,
-            fecha_nacimiento,
-            sexo_biologico_id::text,
-            expediente_numero,
+            establecimiento_id::text,
+            numero_expediente,
             dui,
-            nie,
-            establecimiento_id::text
+            nui,
+            cun,
+            carnet_minoridad,
+            pasaporte,
+            tipo_registro_identidad,
+            estado_expediente,
+            estado_registro,
+            fallecido
           FROM ece.paciente
           WHERE id = ${ecePacienteId}::uuid
           LIMIT 1
@@ -391,6 +431,7 @@ export const eceBridgePatientRouter = router({
           },
           select: {
             id: true,
+            mrn: true,
             identifiers: {
               select: { kind: true, value: true },
               where: { kind: { in: ["DUI", "NIE"] } },
@@ -414,27 +455,31 @@ export const eceBridgePatientRouter = router({
             message: `Conflicto DUI: ECE=${ece.dui}, HIS=${hisDui}. Corrija antes de sincronizar.`,
           });
         }
-        if (ece.nie && hisNie && ece.nie !== hisNie) {
+        if (ece.carnet_minoridad && hisNie && ece.carnet_minoridad !== hisNie) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Conflicto NIE: ECE=${ece.nie}, HIS=${hisNie}. Corrija antes de sincronizar.`,
+            message: `Conflicto NIE/carnet: ECE=${ece.carnet_minoridad}, HIS=${hisNie}. Corrija antes de sincronizar.`,
           });
         }
 
-        // 3. Actualizar Patient HIS con campos demográficos NTEC Art. 15
-        await tx.patient.update({
-          where: { id: ece.public_patient_id },
-          data: {
-            firstName: ece.primer_nombre,
-            lastName: ece.primer_apellido,
-            secondLastName: ece.segundo_apellido ?? null,
-            birthDate: ece.fecha_nacimiento ?? null,
-            biologicalSexId: ece.sexo_biologico_id ?? undefined,
-            updatedBy: ctx.user.id,
-          },
-        });
+        const fieldsUpdated: string[] = [];
 
-        const fieldsUpdated = [...SYNCED_FIELDS];
+        // 3. Actualizar mrn de Patient HIS desde numero_expediente si HIS está vacío
+        //    y ECE tiene valor. No sobrescribimos un mrn HIS preexistente.
+        if (!patient.mrn && ece.numero_expediente) {
+          await tx.patient.update({
+            where: { id: ece.public_patient_id },
+            data: {
+              mrn: ece.numero_expediente,
+              updatedBy: ctx.user.id,
+            },
+          });
+          fieldsUpdated.push("mrn");
+        }
+
+        // NOTA: upsert de identifiers (PatientIdentifier) queda como follow-up.
+        // Requiere validación uniqueness por kind y manejo de identifierTypeId.
+        // Si esa funcionalidad se necesita: ver issue de seguimiento.
 
         // 4. Emitir evento outbox
         await emitDomainEvent(tx, {
@@ -464,6 +509,9 @@ export const eceBridgePatientRouter = router({
   /**
    * Lista pacientes con vínculo ECE↔HIS activo.
    * Paginación por cursor (id de ece.paciente).
+   *
+   * Hace LEFT JOIN a public."Patient" para obtener firstName/lastName/etc.
+   * (esos campos no viven en ece.paciente).
    */
   listLinkedPatients: bridgeBase
     .input(listLinkedPatientsInput)
@@ -474,30 +522,33 @@ export const eceBridgePatientRouter = router({
       // El cursor es un UUID validado por Zod — escapamos comillas simples
       // como defensa adicional antes de interpolarlo.
       const cursorClause = cursor
-        ? `AND id > '${String(cursor).replace(/'/g, "''")}'::uuid`
+        ? `AND ece.id > '${String(cursor).replace(/'/g, "''")}'::uuid`
         : "";
 
       const rows = await ctx.prisma.$queryRawUnsafe<
         {
           ece_id: string;
           public_patient_id: string;
-          primer_nombre: string;
-          primer_apellido: string;
-          expediente_numero: string | null;
+          numero_expediente: string;
           dui: string | null;
+          first_name: string | null;
+          last_name: string | null;
         }[]
       >(
         `SELECT
-           id::text          AS ece_id,
-           public_patient_id::text,
-           primer_nombre,
-           primer_apellido,
-           expediente_numero,
-           dui
-         FROM ece.paciente
-         WHERE public_patient_id IS NOT NULL
+           ece.id::text                       AS ece_id,
+           ece.public_patient_id::text,
+           ece.numero_expediente,
+           ece.dui,
+           p."firstName"                       AS first_name,
+           p."lastName"                        AS last_name
+         FROM ece.paciente ece
+         LEFT JOIN public."Patient" p
+           ON p.id = ece.public_patient_id
+          AND p."deletedAt" IS NULL
+         WHERE ece.public_patient_id IS NOT NULL
            ${cursorClause}
-         ORDER BY id
+         ORDER BY ece.id
          LIMIT ${limit + 1}`,
       );
 
