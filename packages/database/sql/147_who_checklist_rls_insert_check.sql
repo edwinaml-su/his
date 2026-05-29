@@ -37,6 +37,10 @@ $$;
 
 -- Recrear la policy INSERT con WITH CHECK que verifica que el acto_quirurgico
 -- pertenezca al establecimiento del usuario autenticado.
+-- FK chain real (verificada via information_schema):
+--   who_checklist.acto_quirurgico_id → acto_quirurgico.id
+--   acto_quirurgico.episodio_id      → ece.episodio_atencion.id (directo, no via episodio_hospitalario)
+--   episodio_atencion.establecimiento_id → public.Establishment.id
 CREATE POLICY who_checklist_insert
   ON ece.who_checklist
   FOR INSERT
@@ -45,11 +49,11 @@ CREATE POLICY who_checklist_insert
     EXISTS (
       SELECT 1
         FROM ece.acto_quirurgico aq
-        JOIN ece.episodio_hospitalario eh ON eh.id = aq.episodio_hospitalario_id
+        JOIN ece.episodio_atencion ea ON ea.id = aq.episodio_id
        WHERE aq.id = who_checklist.acto_quirurgico_id
-         AND eh.establecimiento_id = (current_setting('app.current_estab_id', true))::uuid
+         AND ea.establecimiento_id = (current_setting('app.current_estab_id', true))::uuid
     )
   );
 
 COMMENT ON POLICY who_checklist_insert ON ece.who_checklist
-  IS 'HE-18 (audit 2026-05-19): WITH CHECK verifica que acto_quirurgico pertenezca al establecimiento del usuario.';
+  IS 'HE-18 (audit 2026-05-19): WITH CHECK verifica que acto_quirurgico pertenezca al establecimiento del usuario (via episodio_atencion).';
