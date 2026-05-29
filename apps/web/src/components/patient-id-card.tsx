@@ -15,6 +15,10 @@ import * as React from "react";
  *   2. Validación Módulo-10 en cliente (mismo algoritmo que router).
  *   3. Lookup tRPC → ficha paciente.
  *   4. Callback onIdentified / onError según resultado.
+ *
+ * Layout adaptativo: `PatientCard` interno usa `@container` (Tarea 8) para
+ * adaptar el header al tamaño del CONTENEDOR (no el viewport). Funciona tanto
+ * en drawers estrechos como en páginas de ancho completo.
  */
 
 import { useState, useRef, useCallback, useEffect } from "react";
@@ -114,6 +118,11 @@ function PatientDetail({ label, value }: { label: string; value: string | null |
   );
 }
 
+/**
+ * PatientCard usa `@container` para adaptar el layout al TAMAÑO DEL CONTENEDOR,
+ * no al viewport. En contenedores estrechos (< @sm ≈ 384px) el header es
+ * vertical; en contenedores anchos el avatar y los datos van en fila.
+ */
 function PatientCard({ data }: { data: LookupResult }) {
   const { patient, allergies, activeEncounter, gsrn } = data;
 
@@ -133,9 +142,11 @@ function PatientCard({ data }: { data: LookupResult }) {
     : null;
 
   return (
-    <div className="rounded-lg border border-green-300 bg-green-50 p-4 space-y-3">
-      {/* Cabecera */}
-      <div className="flex items-start gap-3">
+    // @container: los hijos pueden usar @sm:, @md:, etc. según el ancho del
+    // componente padre, independientemente del viewport.
+    <div className="@container rounded-lg border border-green-300 bg-green-50 p-4 space-y-3">
+      {/* Cabecera — vertical en contenedores estrechos, horizontal en anchos */}
+      <div className="flex flex-col gap-3 @sm:flex-row @sm:items-start">
         {/* Avatar placeholder */}
         <div className="h-14 w-14 rounded-full bg-gray-200 flex items-center justify-center text-gray-500 text-xl font-bold shrink-0">
           {patient.firstName[0]}

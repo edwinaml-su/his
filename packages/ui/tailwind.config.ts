@@ -1,6 +1,7 @@
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
 import typography from "@tailwindcss/typography";
+import containerQueries from "@tailwindcss/container-queries";
 
 /**
  * Tailwind config base del paquete `@his/ui` (HIS Multipaís).
@@ -201,7 +202,7 @@ const config: Config = {
       },
     },
   },
-  plugins: [animate, typography],
+  plugins: [animate, typography, containerQueries],
 };
 
 export default config;
