@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 /**
  * ECE — Nuevo Certificado de Defunción.

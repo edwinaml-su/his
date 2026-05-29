@@ -1,4 +1,4 @@
-/**
+﻿/**
  * US-5.6 — Router del certificado médico de defunción digital.
  *
  * Reglas (DoD):

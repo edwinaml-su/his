@@ -1,4 +1,4 @@
-/**
+﻿/**
  * GS1 Proceso B — Transferencias de inventario entre depósitos (GLN→GLN).
  *
  * Tabla operada (raw SQL — schema ece):
@@ -17,23 +17,44 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../trpc";
 import { emitDomainEvent } from "@his/database";
+import { gs1CheckDigitValid } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
 // ---------------------------------------------------------------------------
 
+// HI-17: tipo explícito exportado para uso en la UI.
+export interface ProductoTransferencia {
+  gtin: string;
+  lote: string;
+  fechaVencimiento: string;
+  cantidad: number;
+  uom: string;
+}
+
 const productoTransferenciaSchema = z.object({
   gtin:             z.string().min(8).max(14),
   lote:             z.string().min(1).max(50),
-  fechaVencimiento: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Formato YYYY-MM-DD"),
+  // HI-16: la fecha debe ser futura para evitar transferir medicamentos vencidos.
+  fechaVencimiento: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "Formato YYYY-MM-DD")
+    .refine((d) => new Date(d + "T00:00:00") > new Date(), "La fecha de vencimiento debe ser futura"),
   cantidad:         z.number().int().positive(),
-  uom:             z.string().min(1).max(20).default("EA"),
+  uom:              z.string().min(1).max(20).default("EA"),
 });
 
+// HI-15: GLN-13 requiere check-digit GS1 Módulo-10 válido.
+const glnSchema = z
+  .string()
+  .length(13, "GLN debe tener exactamente 13 dígitos")
+  .regex(/^\d{13}$/, "GLN debe ser numérico")
+  .refine(gs1CheckDigitValid, "Dígito verificador GS1 (GLN-13) inválido");
+
 const enviarTransferenciaInput = z.object({
-  origenGln:   z.string().min(13).max(13, "GLN debe tener 13 dígitos"),
-  destinoGln:  z.string().min(13).max(13, "GLN debe tener 13 dígitos"),
+  origenGln:   glnSchema,
+  destinoGln:  glnSchema,
   ssccPallet:  z.string().length(18).optional(),
   productos:   z.array(productoTransferenciaSchema).min(1, "Debe incluir al menos un producto"),
   fechaEnvio:  z.coerce.date().optional(),
@@ -64,7 +85,8 @@ export interface TransferenciaInventarioRow {
   origen_gln: string;
   destino_gln: string;
   sscc_pallet: string | null;
-  productos: unknown;
+  /** HI-17: JSONB en BD — parseado y validado al leer. */
+  productos: ProductoTransferencia[];
   fecha_envio: Date | null;
   fecha_recepcion: Date | null;
   estado: string;
