@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { AllergyAlert } from "@his/ui/components/AllergyAlert";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
+import { PatientShellBar } from "@/components/patient-shell-bar";
 
 /**
  * Vista 360° del paciente (TDR §8.1).
@@ -21,6 +22,7 @@ export default function PatientDetailPage() {
 
   return (
     <div className="space-y-4">
+      <PatientShellBar patientId={params.id} />
       <div>
         <h1 className="text-2xl font-bold">
           {p.lastName}
