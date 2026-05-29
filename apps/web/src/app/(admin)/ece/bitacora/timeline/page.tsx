@@ -204,9 +204,10 @@ export default function BitacoraTimelinePage() {
   const [committed, setCommitted] = React.useState({ desde: "", hasta: "" });
   const [offset, setOffset] = React.useState(0);
 
+  // HG-04: evitar timezone shift de new Date("YYYY-MM-DD").toISOString().
   const queryInput = {
-    desde:  committed.desde ? new Date(committed.desde).toISOString() : undefined,
-    hasta:  committed.hasta ? new Date(committed.hasta).toISOString() : undefined,
+    desde:  committed.desde ? `${committed.desde}T00:00:00` : undefined,
+    hasta:  committed.hasta ? `${committed.hasta}T23:59:59`  : undefined,
     limit:  PAGE_SIZE,
     offset,
   };

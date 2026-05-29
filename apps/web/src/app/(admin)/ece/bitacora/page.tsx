@@ -97,14 +97,23 @@ const FILTERS_INITIAL: Filters = {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * HG-04: Evita timezone shift de new Date("YYYY-MM-DD").toISOString().
+ * En UTC-6, new Date("2026-05-19") produce 2026-05-18T18:00:00Z.
+ * Enviamos el string sin conversión de zona para que el servidor lo interprete correctamente.
+ */
+function parseDateOnly(s: string, endOfDay = false): string {
+  return endOfDay ? `${s}T23:59:59` : `${s}T00:00:00`;
+}
+
 function buildListInput(f: Filters, offset: number) {
   const accionesEfectivas: Accion[] = f.soloCriticos
     ? [...ACCIONES_CRITICAS]
     : f.acciones;
 
   return {
-    desde:  f.desde ? new Date(f.desde).toISOString()  : undefined,
-    hasta:  f.hasta ? new Date(f.hasta).toISOString()  : undefined,
+    desde:  f.desde ? parseDateOnly(f.desde)          : undefined,
+    hasta:  f.hasta ? parseDateOnly(f.hasta, true)     : undefined,
     // El router acepta una sola accion — enviamos la primera si hay exactamente una.
     // Si hay varias, no filtramos por acción (se muestra todo); el filtro visual
     // queda en el cliente para no romper el contrato del router existente.
@@ -117,16 +126,16 @@ function buildListInput(f: Filters, offset: number) {
 function buildExportInput(f: Filters) {
   const accionesEfectivas = f.soloCriticos ? [...ACCIONES_CRITICAS] : f.acciones;
   return {
-    desde:  f.desde ? new Date(f.desde).toISOString()  : undefined,
-    hasta:  f.hasta ? new Date(f.hasta).toISOString()  : undefined,
+    desde:  f.desde ? parseDateOnly(f.desde)          : undefined,
+    hasta:  f.hasta ? parseDateOnly(f.hasta, true)     : undefined,
     accion: accionesEfectivas.length === 1 ? accionesEfectivas[0] : undefined,
   };
 }
 
 function buildMetricsInput(f: Filters) {
   return {
-    desde: f.desde ? new Date(f.desde).toISOString() : undefined,
-    hasta: f.hasta ? new Date(f.hasta).toISOString() : undefined,
+    desde: f.desde ? parseDateOnly(f.desde)          : undefined,
+    hasta: f.hasta ? parseDateOnly(f.hasta, true)     : undefined,
   };
 }
 
@@ -142,17 +151,37 @@ function downloadCsv(base64: string) {
 }
 
 /**
- * Genera un reporte HTML imprimible con cabecera MINSAL / pie de firma DIR.
- * Usa window.print() como fallback cuando no hay librería PDF instalada.
+ * HG-03: genera un hash SHA-256 del contenido del reporte para integridad básica.
+ * La firma DIR formal requiere un endpoint server-side (TODO: /api/bitacora/report.pdf).
+ * Esta implementación cubre la integridad verificable del contenido imprimible.
  */
-function printPdfReport(
-  rows: ReturnType<typeof buildListInput> | null,
+async function computeReportHash(content: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(content);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Genera un reporte HTML imprimible con cabecera MINSAL, parámetros de filtro
+ * visibles y hash SHA-256 del contenido (Art. 52 NTEC — integridad documental).
+ *
+ * TODO (HG-03 pendiente parcial): para reportes firmados digitalmente válidos ante
+ * reguladores, implementar endpoint /api/bitacora/report.pdf server-side que genere
+ * PDF con PIN DIR verificado vía argon2id antes de entregar.
+ */
+async function printPdfReport(
+  filterParams: string,
   tableHtml: string,
 ) {
+  const fecha = new Date().toLocaleString("es-SV");
+  const contentToHash = `${fecha}|${filterParams}|${tableHtml}`;
+  const hash = await computeReportHash(contentToHash);
+
   const win = window.open("", "_blank");
   if (!win) return;
 
-  const fecha = new Date().toLocaleString("es-SV");
   win.document.write(`<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -162,10 +191,12 @@ function printPdfReport(
     body { font-family: Arial, sans-serif; font-size: 10pt; margin: 20mm; }
     h1 { font-size: 14pt; margin-bottom: 2px; }
     .sub { font-size: 9pt; color: #555; }
+    .hash { font-family: monospace; font-size: 7pt; color: #333; word-break: break-all; }
     table { width: 100%; border-collapse: collapse; margin-top: 12pt; }
     th { background: #1a3c5e; color: white; padding: 4px 6px; font-size: 9pt; }
     td { border-bottom: 1px solid #ddd; padding: 3px 6px; font-size: 8pt; }
     .footer { margin-top: 24pt; border-top: 1px solid #000; padding-top: 8px; font-size: 9pt; }
+    .params { background: #f5f5f5; border: 1px solid #ddd; padding: 6px 8px; margin: 8px 0; font-size: 8pt; }
     @media print { button { display: none; } }
   </style>
 </head>
@@ -174,12 +205,22 @@ function printPdfReport(
     <h1>Ministerio de Salud — MINSAL</h1>
     <p class="sub">Reporte de Bitácora ECE — Arts. 45-52 NTEC</p>
     <p class="sub">Generado: ${fecha}</p>
+    <div class="params">
+      <strong>Parámetros de consulta:</strong> ${filterParams || "Sin filtros aplicados"}
+    </div>
+    <p class="sub">Hash SHA-256 de integridad del reporte:</p>
+    <p class="hash">${hash}</p>
+    <p class="sub" style="color:#c00">
+      NOTA: Este reporte es de uso interno. Para reporte oficial firmado ante MINSAL,
+      solicitar al Director exportar desde el módulo de reportes con PIN DIR.
+    </p>
   </div>
   ${tableHtml}
   <div class="footer">
     <p>Director/a de establecimiento (firma): _______________________________</p>
     <p>Este reporte fue generado automáticamente por el HIS Avante. Su veracidad es
        responsabilidad del personal autorizado conforme al NTEC Art. 52.</p>
+    <p class="hash">Integridad SHA-256: ${hash}</p>
   </div>
   <br/>
   <button onclick="window.print()">Imprimir / Guardar PDF</button>
@@ -401,8 +442,8 @@ type MetricsPanelProps = {
 
 function MetricsPanel({ desde, hasta }: MetricsPanelProps) {
   const input = {
-    desde: desde ? new Date(desde).toISOString() : undefined,
-    hasta: hasta ? new Date(hasta).toISOString() : undefined,
+    desde: desde ? parseDateOnly(desde)          : undefined,
+    hasta: hasta ? parseDateOnly(hasta, true)     : undefined,
   };
 
   const { data, isLoading } = trpc.bitacora.metrics.useQuery(input);
@@ -525,7 +566,13 @@ export default function BitacoraEcePage() {
 
   function handleExportPdf() {
     if (!tableRef.current) return;
-    printPdfReport(null, tableRef.current.outerHTML);
+    const params = [
+      committed.desde ? `Desde: ${committed.desde}` : "",
+      committed.hasta ? `Hasta: ${committed.hasta}` : "",
+      committed.soloCriticos ? "Solo críticos" : "",
+      committed.acciones.length > 0 ? `Acciones: ${committed.acciones.join(", ")}` : "",
+    ].filter(Boolean).join(" | ");
+    void printPdfReport(params, tableRef.current.outerHTML);
   }
 
   /** Filtra filas del cliente si hay múltiples acciones seleccionadas. */

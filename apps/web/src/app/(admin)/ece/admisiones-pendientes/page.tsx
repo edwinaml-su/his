@@ -6,6 +6,10 @@
  * Lista órdenes de ingreso validadas sin episodio creado.
  * Muestra: paciente, servicio destino, circunstancia, antigüedad.
  * Botón "Admitir" navega al wizard pre-populado (query param ?ordenId=...).
+ *
+ * HG-13: detecta error FORBIDDEN/UNAUTHORIZED del router y muestra mensaje
+ *   de "Acceso restringido" en lugar de pantalla vacía sin contexto.
+ * HG-14: verificado — la ruta /ece/hoja-ingreso/nueva existe (page.tsx presente).
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -41,10 +45,16 @@ export default function AdmisionesPendientesPage() {
   const router = useRouter();
   const [page, setPage] = React.useState(1);
 
-  const { data, isLoading, refetch } = trpc.eceBridgeAdmision.listOrdenesPendientesAdmision.useQuery(
-    { page, pageSize: 25 },
-    { refetchInterval: 30_000 }, // auto-refresh cada 30 s
-  );
+  const { data, isLoading, isError, error, refetch } =
+    trpc.eceBridgeAdmision.listOrdenesPendientesAdmision.useQuery(
+      { page, pageSize: 25 },
+      { refetchInterval: 30_000 }, // auto-refresh cada 30 s
+    );
+
+  // HG-13: distinguir error de autorización para informar el rol requerido.
+  const isForbidden =
+    isError &&
+    (error?.data?.code === "FORBIDDEN" || error?.data?.code === "UNAUTHORIZED");
 
   return (
     <div className="space-y-4">
@@ -60,6 +70,29 @@ export default function AdmisionesPendientesPage() {
         </Button>
       </div>
 
+      {/* HG-13: informar rol requerido cuando el router rechaza por autorización. */}
+      {isForbidden && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+        >
+          <p className="font-medium">Acceso restringido</p>
+          <p className="mt-1 text-xs">
+            Esta sección requiere el rol de Admisiones (ADM). Contacte al
+            administrador del sistema si cree que esto es un error.
+          </p>
+        </div>
+      )}
+
+      {isError && !isForbidden && (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          Error al cargar la cola de admisiones. Intente actualizar la página.
+        </div>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -74,7 +107,7 @@ export default function AdmisionesPendientesPage() {
             </p>
           )}
 
-          {!isLoading && data?.items.length === 0 && (
+          {!isLoading && !isError && data?.items.length === 0 && (
             <p className="rounded-md border bg-muted/40 p-6 text-center text-sm text-muted-foreground">
               No hay órdenes pendientes de admisión en este momento.
             </p>

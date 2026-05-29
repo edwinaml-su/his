@@ -384,7 +384,32 @@ export default function CertificacionDirPage() {
   const [bulkProgress, setBulkProgress] = React.useState<BulkProgress | null>(null);
   const [submitting, setSubmitting] = React.useState(false);
 
-  const colaQuery = trpc.eceCertificacion.listCola.useQuery({ incluirCertificados });
+  // HG-06: el router usa cursor pagination — acumulamos páginas en el cliente.
+  const [cursor, setCursor] = React.useState<string | undefined>(undefined);
+  const [allDocumentos, setAllDocumentos] = React.useState<DocumentoItem[]>([]);
+
+  const colaQuery = trpc.eceCertificacion.listCola.useQuery({
+    incluirCertificados,
+    cursor,
+  });
+
+  // Acumular documentos en la lista cuando cambia la página.
+  React.useEffect(() => {
+    if (colaQuery.data?.items) {
+      if (!cursor) {
+        // Primera página — reemplazar.
+        setAllDocumentos(colaQuery.data.items);
+      } else {
+        // Páginas siguientes — acumular sin duplicados.
+        setAllDocumentos((prev) => {
+          const existingIds = new Set(prev.map((d) => d.id));
+          const newItems = colaQuery.data!.items.filter((d) => !existingIds.has(d.id));
+          return [...prev, ...newItems];
+        });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colaQuery.data]);
 
   const certificarMutation = trpc.eceCertificacion.certificar.useMutation({
     onSuccess: () => {
@@ -393,6 +418,9 @@ export default function CertificacionDirPage() {
       setBulkMode(false);
       setDialogDoc(null);
       setMutationError(null);
+      // Refrescar desde primera página.
+      setCursor(undefined);
+      setAllDocumentos([]);
       colaQuery.refetch();
     },
     onError: (err: { message: string }) => {
@@ -422,6 +450,9 @@ export default function CertificacionDirPage() {
           `${data.exitosos.length} certificado(s) correctamente. ${data.fallidos.length} con error (ver detalle abajo).`,
         );
       }
+      // Refrescar desde la primera página.
+      setCursor(undefined);
+      setAllDocumentos([]);
       colaQuery.refetch();
     },
     onError: (err: { message: string }) => {
@@ -430,7 +461,7 @@ export default function CertificacionDirPage() {
     },
   });
 
-  const documentos: DocumentoItem[] = colaQuery.data?.items ?? [];
+  const documentos: DocumentoItem[] = allDocumentos;
 
   // Filtrar por servicio
   const documentosFiltrados = filtroServicio
@@ -522,7 +553,12 @@ export default function CertificacionDirPage() {
           <Switch
             id="toggle-certificados"
             checked={incluirCertificados}
-            onCheckedChange={setIncluirCertificados}
+            onCheckedChange={(v) => {
+              setIncluirCertificados(v);
+              // HG-06: resetear paginación al cambiar el filtro principal.
+              setCursor(undefined);
+              setAllDocumentos([]);
+            }}
             aria-label="Mostrar documentos ya certificados"
           />
         </div>
@@ -619,18 +655,34 @@ export default function CertificacionDirPage() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {documentosFiltrados.map((doc) => (
-            <DocumentoCard
-              key={doc.id}
-              doc={doc}
-              selected={selected.has(doc.id)}
-              onToggleSelect={handleToggleSelect}
-              onCertificar={handleCertificarOne}
-              disabled={isPending}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {documentosFiltrados.map((doc) => (
+              <DocumentoCard
+                key={doc.id}
+                doc={doc}
+                selected={selected.has(doc.id)}
+                onToggleSelect={handleToggleSelect}
+                onCertificar={handleCertificarOne}
+                disabled={isPending}
+              />
+            ))}
+          </div>
+          {/* HG-06: botón "Cargar más" cuando el router indica que hay siguiente cursor */}
+          {colaQuery.data?.nextCursor && (
+            <div className="flex justify-center pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={colaQuery.isFetching}
+                onClick={() => setCursor(colaQuery.data.nextCursor)}
+                aria-label="Cargar más documentos de la cola"
+              >
+                {colaQuery.isFetching ? "Cargando…" : "Cargar más"}
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Modal PIN */}

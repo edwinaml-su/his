@@ -37,7 +37,8 @@ type Step = 1 | 2 | 3;
 // ---------------------------------------------------------------------------
 
 const PIN_MIN = 6;
-const PIN_MAX = 12;
+// HG-23: el servidor valida /^\d{6,8}$/ — sincronizar el máximo del wizard con el router.
+const PIN_MAX = 8;
 const RE_DIGITS_ONLY = /^\d*$/;
 
 function validatePin(pin: string): string | null {
