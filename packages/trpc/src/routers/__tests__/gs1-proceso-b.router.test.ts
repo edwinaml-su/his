@@ -37,8 +37,10 @@ import { emitDomainEvent } from "@his/database";
 const ORG_ID        = MOCK_TENANT.organizationId;
 const TRANSFER_ID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const USER_ID       = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-const ORIGEN_GLN    = "7501234567890";  // 13 dígitos
-const DESTINO_GLN   = "7501234567891";  // 13 dígitos
+// HI-15 (PR #337): productoTransferenciaSchema ahora valida check digit GS1.
+// GLNs originales tenían check digit incorrecto. Estos pasan gs1CheckDigitValid.
+const ORIGEN_GLN    = "7501234567893";  // 13 dígitos válidos (check 3)
+const DESTINO_GLN   = "7509876543213";  // 13 dígitos válidos (check 3)
 
 const PRODUCTO_MOCK = {
   gtin: "07501234567894",

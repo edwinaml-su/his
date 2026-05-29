@@ -18,6 +18,15 @@ let prisma: DeepMockProxy<PrismaClient>;
 
 beforeEach(() => {
   prisma = mockDeep<PrismaClient>();
+  // HI-02 (PR #338): el router envuelve en withTenantContext → prisma.$transaction.
+  // Mockear $transaction para ejecutar el callback con prisma directo, y
+  // $executeRawUnsafe como no-op (lo llama applyTenantContext con SET LOCAL).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma.$transaction as any).mockImplementation(async (cb: any) => {
+    if (typeof cb === "function") return cb(prisma);
+    return undefined;
+  });
+  prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
 });
 
 function mockQuerySequence(returnValues: unknown[]) {
