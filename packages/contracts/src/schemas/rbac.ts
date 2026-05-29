@@ -92,6 +92,16 @@ export const rbacListRolesInput = z
     /** Filtra por activos (default true). */
     activeOnly: z.boolean().default(true),
     search: z.string().trim().min(1).max(120).optional(),
+    /**
+     * Filtrar por una organización ESPECÍFICA (no la del tenant del caller).
+     * Útil cuando un admin con visibilidad multi-org está asignando un rol a
+     * un usuario en una org DISTINTA a la suya activa. Si se omite, se usa
+     * ctx.tenant.organizationId (comportamiento default histórico).
+     *
+     * Seguridad: el caller debe tener membresía vigente en la org pedida —
+     * el router valida antes de devolver datos.
+     */
+    organizationId: z.string().uuid().optional(),
   })
   .default({});
 

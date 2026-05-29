@@ -57,11 +57,14 @@ export function RoleAssignmentDialog({
   // Lista de orgs visibles para el admin (las que ya tiene asociadas).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const orgsQ = (trpc as any).organization.listAll.useQuery(undefined, { enabled: open });
-  // Lista de roles del tenant actual + globales.
+  // Lista de roles para la ORGANIZACIÓN ELEGIDA (no la del tenant activo del admin).
+  // Sin el parámetro `organizationId`, el router usaría ctx.tenant.organizationId
+  // del admin → si el admin está en una org distinta a la elegida, vería los
+  // roles de SU org en lugar de la org destino → dropdown vacío al filtrar.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rolesQ = (trpc as any).rbac.listRoles.useQuery(
-    { activeOnly: true, includeGlobal: true },
-    { enabled: open },
+    { activeOnly: true, includeGlobal: true, organizationId: orgId || undefined },
+    { enabled: open && !!orgId },
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
