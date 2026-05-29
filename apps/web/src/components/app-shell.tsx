@@ -14,6 +14,7 @@ import {
 import { Breadcrumbs } from "./breadcrumbs";
 import { ChatWidget } from "./chat-widget";
 import { AppSidebar } from "./app-sidebar";
+import { CommandPalette, CommandPaletteButton } from "./command-palette";
 
 export function AppShell({
   children,
@@ -82,24 +83,35 @@ export function AppShell({
         />
 
         <SidebarInset>
-          <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
-            {/* SidebarTrigger cubre desktop (colapsa panel) y mobile (abre Sheet).
-                Shadcn Sidebar detecta breakpoint internamente via useIsMobile. */}
-            <SidebarTrigger aria-label="Mostrar u ocultar menú" />
-
-            <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
-          </header>
-
-          {/* Breadcrumbs (barra de navegabilidad) */}
-          <Breadcrumbs pathname={pathname} />
-
-          <main
-            id="main-content"
-            tabIndex={-1}
-            className="flex-1 bg-muted/30 p-3 sm:p-4 lg:p-6"
+          {/* CommandPalette provee Context (Ctrl+K) + el botón opcional del top bar.
+              El dialog se renderiza una sola vez y CommandPaletteButton consume el Context. */}
+          <CommandPalette
+            roleCodes={roleCodes}
+            assignedServiceUnitCodes={assignedServiceUnitCodes}
+            isCrossServiceRole={isCrossServiceRole}
           >
-            {children}
-          </main>
+            <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
+              {/* SidebarTrigger cubre desktop (colapsa panel) y mobile (abre Sheet).
+                  Shadcn Sidebar detecta breakpoint internamente via useIsMobile. */}
+              <SidebarTrigger aria-label="Mostrar u ocultar menú" />
+
+              {/* Botón paleta de comandos — abre dialog Ctrl+K. */}
+              <CommandPaletteButton />
+
+              <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
+            </header>
+
+            {/* Breadcrumbs (barra de navegabilidad) */}
+            <Breadcrumbs pathname={pathname} />
+
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className="flex-1 bg-muted/30 p-3 sm:p-4 lg:p-6"
+            >
+              {children}
+            </main>
+          </CommandPalette>
         </SidebarInset>
       </SidebarProvider>
       {/* Asistente HIS — copiloto flotante context-aware. */}
