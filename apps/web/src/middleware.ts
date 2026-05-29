@@ -44,6 +44,25 @@ const STALE_ALIASES = new Set<string>([
 ]);
 
 export async function middleware(request: NextRequest) {
+  try {
+    return await middlewareCore(request);
+  } catch (err) {
+    // Última defensa: cualquier error no atrapado abajo (típicamente Invalid
+    // UTF-8 sequence en cookie parsing del runtime Edge ANTES de llegar al
+    // try/catch específico de updateSession). Dejamos pasar la request sin
+    // contexto de sesión + log con detalle. Mejor servir páginas públicas o
+    // forzar relogin en protegidas que 500 MIDDLEWARE_INVOCATION_FAILED.
+    const msg = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error(
+      "[middleware] error no atrapado — degradando a pass-through. " +
+        `Path=${request.nextUrl.pathname}. Mensaje=${msg.slice(0, 200)}`,
+    );
+    return NextResponse.next({ request });
+  }
+}
+
+async function middlewareCore(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
 
   // 0) Canonical host redirect — si llegamos por un alias "stale", redirigir
