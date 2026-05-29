@@ -114,7 +114,12 @@ const indicacionItemSchema = z.object({
 
 const createSchema = z.object({
   episodioId: z.string().uuid(),
-  medicoPrescriptor: z.string().uuid(),
+  // Si no viene del cliente, el server lo resuelve a ctx.user.id (el médico
+  // autenticado). Esto evita exponer el UUID del médico en la UI y permite
+  // que el form simplemente no pida ese campo en el caso 99% (el prescriptor
+  // es el usuario logueado). Override solo necesario para uso administrativo
+  // o registro retroactivo (digitado_retroactivamente=true).
+  medicoPrescriptor: z.string().uuid().optional(),
   items: z.array(indicacionItemSchema).min(1).max(50),
 });
 
@@ -332,6 +337,11 @@ export const indicacionesMedicasRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = eceIds(ctx);
 
+      // Resolver médico prescriptor: si no vino del cliente, usar el usuario
+      // autenticado (caso 99%). Override server-side blanqueado para evitar
+      // suplantación arbitraria — sólo lo aceptamos si vino explícito.
+      const medicoPrescriptor = input.medicoPrescriptor ?? personalId;
+
       return withEceContext(
         ctx.prisma,
         personalId,
@@ -344,7 +354,7 @@ export const indicacionesMedicasRouter = router({
                digitado_retroactivamente, registrado_en, fecha_hora)
             VALUES (
               ${input.episodioId}::uuid,
-              ${input.medicoPrescriptor}::uuid,
+              ${medicoPrescriptor}::uuid,
               1,
               'ACTIVA',
               'borrador',
