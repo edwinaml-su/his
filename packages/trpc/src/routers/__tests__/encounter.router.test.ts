@@ -1,7 +1,8 @@
 /**
  * Tests del encounter router — admit, transfer, discharge.
+ * Incluye verificación del hook automático ECE (ece.episodio_atencion).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
@@ -175,6 +176,115 @@ describe("encounterRouter", () => {
       const args = prisma.encounter.update.mock.calls[0]![0];
       expect(args.data.dischargeType).toBe("MEDICAL");
       expect(args.data.dischargedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  describe("admit — hook ECE automático", () => {
+    /**
+     * Verifica que al admitir un encuentro no-BIRTH/NEWBORN, el hook ECE
+     * ejecuta queries en ece.* a través de $queryRaw.
+     *
+     * Los hooks (resolveEceEstablecimientoId, hookEceEpisodioAfterAdmit) son
+     * named imports — vi.spyOn no puede interceptarlos post-import en ESM.
+     * En su lugar verificamos el comportamiento observable: las llamadas a
+     * $queryRaw que el hook ejecuta internamente.
+     */
+    it("ejecuta queries ECE en $queryRaw tras admit exitoso", async () => {
+      let qrawCallCount = 0;
+      // $queryRaw respuestas en orden:
+      //  0: resolveEceEstablecimientoId → ece.establecimiento encontrado
+      //  1: hookEceEpisodioAfterAdmit: SELECT episodio existente → no existe
+      //  2: hookEceEpisodioAfterAdmit: SELECT paciente ECE → existe
+      //  3: hookEceEpisodioAfterAdmit: INSERT episodio → ok
+      //  4+: GSRN tx (patient.findFirst, org, etc — no $queryRaw)
+      prisma.$queryRaw.mockImplementation(() => {
+        const responses = [
+          [{ id: "ece-estab-uuid" }],  // resolveEceEstablecimientoId
+          [],                           // SELECT episodio → no existe
+          [{ id: "ece-pac-uuid" }],    // SELECT paciente ECE → existe
+          [{ id: "episodio-new" }],    // INSERT episodio RETURNING
+        ];
+        return Promise.resolve(responses[qrawCallCount++] ?? []) as never;
+      });
+
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: "p1", active: true } as never) // admit: verificar paciente
+        .mockResolvedValueOnce({ id: "p1", mrn: "MRN-001" } as never) // hook ECE: cargar mrn
+        .mockResolvedValueOnce(null as never); // GSRN: ya sin gsrn
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.organization.findUnique
+        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "enc-uuid",
+        admittedAt: new Date("2026-05-29"),
+        admissionType: "EMERGENCY",
+      } as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      const out = await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "EMERGENCY",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      // El admit retorna el encounter correctamente.
+      expect((out as { id: string }).id).toBe("enc-uuid");
+      // El hook ECE ejecutó al menos la query de resolveEceEstablecimientoId.
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+      // Se ejecutaron las 4 queries ECE esperadas.
+      expect(qrawCallCount).toBeGreaterThanOrEqual(4);
+    });
+
+    it("admit no falla si ece.establecimiento no está inicializado (hook non-fatal)", async () => {
+      // $queryRaw retorna vacío → resolveEceEstablecimientoId = null → warn + return
+      prisma.$queryRaw.mockResolvedValue([] as never);
+
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: "p1", active: true } as never)
+        .mockResolvedValueOnce({ id: "p1", mrn: "MRN-001" } as never)
+        .mockResolvedValueOnce(null as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.organization.findUnique
+        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "enc-uuid-2",
+        admittedAt: new Date(),
+        admissionType: "EMERGENCY",
+      } as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      // Debe resolver aunque ECE no esté inicializado (warn en stderr)
+      const out = await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "EMERGENCY",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      expect((out as { id: string }).id).toBe("enc-uuid-2");
+    });
+
+    it("admit BIRTH no ejecuta queries ECE (flujo exclusivo atencion-rn)", async () => {
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "BIRTH",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toBeInstanceOf(TRPCError);
+
+      // BIRTH lanza NOT_IMPLEMENTED — nunca llega al hook ECE.
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
     });
   });
 
