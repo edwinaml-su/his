@@ -4,6 +4,8 @@ import * as React from "react";
 import { AlertTriangle, Shield, PersonStanding } from "lucide-react";
 import { Badge } from "@his/ui/components/badge";
 import { Separator } from "@his/ui/components/separator";
+import { Sparkline } from "@his/ui/components/sparkline";
+import type { SparklineProps } from "@his/ui/components/sparkline";
 import { cn } from "@his/ui/lib/utils";
 
 // Calcula edad en años completos desde birthDate hasta hoy.
@@ -15,6 +17,12 @@ function calcAge(birthDate: Date): number {
     age--;
   }
   return age;
+}
+
+export interface VitalSparklinesProps {
+  systolic?: { values: number[]; severity?: SparklineProps["severity"] };
+  heartRate?: { values: number[]; severity?: SparklineProps["severity"] };
+  spo2?: { values: number[]; severity?: SparklineProps["severity"] };
 }
 
 export interface PatientContextBarProps {
@@ -38,6 +46,11 @@ export interface PatientContextBarProps {
     fallRisk?: "LOW" | "MEDIUM" | "HIGH";
     lasa?: boolean;
   };
+  /**
+   * Sparklines opcionales de signos vitales recientes.
+   * La severidad debe calcularse en el caller (lógica clínica fuera de este componente).
+   */
+  vitals?: VitalSparklinesProps;
   className?: string;
 }
 
@@ -66,6 +79,7 @@ export function PatientContextBar({
   patient,
   location,
   alerts,
+  vitals,
   className,
 }: PatientContextBarProps) {
   const isUnknown = patient.isUnknown ?? false;
@@ -89,6 +103,9 @@ export function PatientContextBar({
     !!alerts?.isolation ||
     !!alerts?.fallRisk ||
     !!alerts?.lasa;
+
+  const hasVitals = !!(vitals?.systolic ?? vitals?.heartRate ?? vitals?.spo2);
+  const hasRight = hasAlerts || hasVitals;
 
   return (
     <div
@@ -130,9 +147,66 @@ export function PatientContextBar({
         </>
       )}
 
-      {/* DERECHA — chips de alertas */}
-      {hasAlerts && (
+      {/* DERECHA — sparklines vitales + chips de alertas */}
+      {hasRight && (
         <div className="ml-auto flex shrink-0 flex-wrap items-center gap-1.5">
+          {/* Sparklines de signos vitales (60×16 px) */}
+          {vitals?.systolic && (
+            <Sparkline
+              values={vitals.systolic.values}
+              ariaLabel="Presión sistólica reciente"
+              severity={vitals.systolic.severity}
+              showTrend
+              width={60}
+              height={16}
+              valueLabel={
+                vitals.systolic.values.length > 0
+                  ? String(vitals.systolic.values[vitals.systolic.values.length - 1])
+                  : undefined
+              }
+              unit="mmHg"
+              className="shrink-0"
+            />
+          )}
+          {vitals?.heartRate && (
+            <Sparkline
+              values={vitals.heartRate.values}
+              ariaLabel="Frecuencia cardíaca reciente"
+              severity={vitals.heartRate.severity}
+              showTrend
+              width={60}
+              height={16}
+              valueLabel={
+                vitals.heartRate.values.length > 0
+                  ? String(vitals.heartRate.values[vitals.heartRate.values.length - 1])
+                  : undefined
+              }
+              unit="bpm"
+              className="shrink-0"
+            />
+          )}
+          {vitals?.spo2 && (
+            <Sparkline
+              values={vitals.spo2.values}
+              ariaLabel="SpO2 reciente"
+              severity={vitals.spo2.severity}
+              showTrend
+              width={60}
+              height={16}
+              valueLabel={
+                vitals.spo2.values.length > 0
+                  ? String(vitals.spo2.values[vitals.spo2.values.length - 1])
+                  : undefined
+              }
+              unit="%"
+              className="shrink-0"
+            />
+          )}
+
+          {/* Separador visual entre sparklines y alertas si coexisten */}
+          {hasVitals && hasAlerts && (
+            <Separator orientation="vertical" className="h-4" />
+          )}
           {alerts?.allergies?.map((allergy) => (
             <Badge
               key={allergy.name}
