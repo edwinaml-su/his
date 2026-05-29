@@ -12,7 +12,15 @@
     "./tailwind.config": "./tailwind.config.ts",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/abbreviations": "./src/lib/abbreviations.ts",
-    "./components/*": "./src/components/*.tsx"
+    "./components/*": {
+      "types": "./src/components/*.tsx",
+      "default": "./src/components/*.tsx"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "components/*": ["./src/components/*"]
+    }
   },
   "files": [
     "src",

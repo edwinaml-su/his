@@ -33,16 +33,23 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-      "@his/ui/lib/utils": path.resolve(
-        __dirname,
-        "../../packages/ui/src/lib/utils.ts",
-      ),
-      "@his/contracts": path.resolve(
-        __dirname,
-        "../../packages/contracts/src/index.ts",
-      ),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "src") },
+      {
+        find: "@his/ui/lib/utils",
+        replacement: path.resolve(__dirname, "../../packages/ui/src/lib/utils.ts"),
+      },
+      // Resuelve @his/ui/components/sidebar al worktree local.
+      // Necesario porque node_modules/@his/ui es symlink al proyecto raíz
+      // (main branch) que no tiene sidebar.tsx hasta que Tarea 2b se mergee.
+      {
+        find: "@his/ui/components/sidebar",
+        replacement: path.resolve(__dirname, "../../packages/ui/src/components/sidebar.tsx"),
+      },
+      {
+        find: "@his/contracts",
+        replacement: path.resolve(__dirname, "../../packages/contracts/src/index.ts"),
+      },
+    ],
   },
 });
