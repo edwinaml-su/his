@@ -548,14 +548,15 @@ La integridad de la cadena de hash del audit log es un indicador de seguridad â€
 
 ```sql
 -- Via Supabase SQL Editor:
+-- Tabla: audit."AuditLog" (PascalCase Prisma); columnas tambiÃ©n camelCase quoted.
 SELECT
-  table_name,
-  MAX(created_at) AS ultimo_registro,
-  SUM(CASE WHEN chain_hash IS NULL THEN 1 ELSE 0 END) AS sin_hash,
+  entity AS table_name,
+  MAX("occurredAt") AS ultimo_registro,
+  SUM(CASE WHEN "chainHash" IS NULL THEN 1 ELSE 0 END) AS sin_hash,
   COUNT(*) AS total_24h
-FROM audit.audit_log
-WHERE created_at > NOW() - INTERVAL '24 hours'
-GROUP BY table_name
+FROM audit."AuditLog"
+WHERE "occurredAt" > NOW() - INTERVAL '24 hours'
+GROUP BY entity
 ORDER BY sin_hash DESC;
 -- Meta: sin_hash = 0 en todas las tablas
 ```
