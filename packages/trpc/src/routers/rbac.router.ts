@@ -64,7 +64,30 @@ export const rbacRouter = router({
    * Trae contadores agregados (usuarios vigentes y permisos asignados).
    */
   listRoles: tenantProcedure.input(rbacListRolesInput).query(async ({ ctx, input }) => {
-    const orgId = ctx.tenant.organizationId;
+    // Si el caller pidió una org específica (multi-org admin asignando a
+    // otra org), valida que tenga membresía vigente allí antes de devolver
+    // roles. Esto evita que un user filtre roles de orgs sin acceso.
+    let orgId = ctx.tenant.organizationId;
+    if (input.organizationId && input.organizationId !== orgId) {
+      const now = new Date();
+      const membership = await ctx.prisma.userOrganizationRole.findFirst({
+        where: {
+          userId: ctx.user.id,
+          organizationId: input.organizationId,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gte: now } }],
+        },
+        select: { id: true },
+      });
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No tienes membresía vigente en la organización solicitada.",
+        });
+      }
+      orgId = input.organizationId;
+    }
+
     const includeGlobal = input.includeGlobal ?? true;
     const activeOnly = input.activeOnly ?? true;
 
