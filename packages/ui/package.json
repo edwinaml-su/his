@@ -10,9 +10,24 @@
   "exports": {
     "./globals.css": "./src/styles/globals.css",
     "./tailwind.config": "./tailwind.config.ts",
-    "./lib/utils": "./src/lib/utils.ts",
-    "./lib/abbreviations": "./src/lib/abbreviations.ts",
-    "./components/*": "./src/components/*.tsx"
+    "./lib/utils": {
+      "types": "./src/lib/utils.ts",
+      "default": "./src/lib/utils.ts"
+    },
+    "./lib/abbreviations": {
+      "types": "./src/lib/abbreviations.ts",
+      "default": "./src/lib/abbreviations.ts"
+    },
+    "./components/*": {
+      "types": "./src/components/*.tsx",
+      "default": "./src/components/*.tsx"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "components/*": ["./src/components/*.tsx"],
+      "lib/*": ["./src/lib/*.ts"]
+    }
   },
   "files": [
     "src",
