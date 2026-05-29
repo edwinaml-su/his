@@ -86,11 +86,13 @@
     --triage-blue-foreground: 0 0% 100%;
 
     /* Sidebar — Avante navy #1F2145 como fondo branding */
+    --sidebar: 236 38% 20%;
     --sidebar-background: 236 38% 20%;
     --sidebar-foreground: 0 0% 96%;
     --sidebar-border: 236 25% 28%;
     --sidebar-accent: 204 92% 38%;
     --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-ring: 204 92% 38%;
   }
 
   .dark {
@@ -160,11 +162,13 @@
     --triage-blue-foreground: 0 0% 100%;
 
     /* Sidebar dark — navy aún más profundo */
+    --sidebar: 236 50% 10%;
     --sidebar-background: 236 50% 10%;
     --sidebar-foreground: 0 0% 96%;
     --sidebar-border: 236 30% 18%;
     --sidebar-accent: 204 92% 38%;
     --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-ring: 204 92% 60%;
   }
 }
 

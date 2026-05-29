@@ -91,6 +91,7 @@ const config: Config = {
         // se generan y el sidebar pierde el fondo navy → logo blanco invisible
         // en tema claro.
         sidebar: {
+          DEFAULT: "hsl(var(--sidebar))",
           background: "hsl(var(--sidebar-background))",
           foreground: "hsl(var(--sidebar-foreground))",
           border: "hsl(var(--sidebar-border))",
@@ -98,7 +99,7 @@ const config: Config = {
             DEFAULT: "hsl(var(--sidebar-accent))",
             foreground: "hsl(var(--sidebar-accent-foreground))",
           },
-          ring: "hsl(var(--ring))",
+          ring: "hsl(var(--sidebar-ring))",
         },
         // Manchester Triage System — ver docs/07_design_system.md §2.2.
         // Paleta fija auditada WCAG AA. NO modificar por tenant.
