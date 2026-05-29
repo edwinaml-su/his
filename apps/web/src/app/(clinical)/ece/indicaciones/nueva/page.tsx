@@ -12,7 +12,7 @@
  * Redirige a /ece/indicaciones tras exito.
  */
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Card,
   CardContent,
@@ -126,11 +126,21 @@ const emptyItem = (): ItemDraft => ({
 
 // ─── Pagina ───────────────────────────────────────────────────────────────────
 
+// Regex UUID v4 para validación cliente-side ANTES de enviar al server
+// (evita roundtrip + error críptico).
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export default function NuevaIndicacionPage(): React.ReactElement {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [episodioId, setEpisodioId] = React.useState("");
-  const [medicoPrescriptor, setMedicoPrescriptor] = React.useState("");
+  // episodioId viene de query param cuando se entra desde
+  // /ece/episodio-hospitalario/[id] → botón "Nueva indicación".
+  // Si no viene (acceso directo a /ece/indicaciones/nueva), el campo es
+  // editable como fallback admin.
+  const episodioIdFromUrl = searchParams.get("episodioId") ?? "";
+  const [episodioId, setEpisodioId] = React.useState(episodioIdFromUrl);
+  const isEpisodioFromUrl = episodioIdFromUrl.length > 0;
   const [items, setItems] = React.useState<ItemDraft[]>([emptyItem()]);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
@@ -157,9 +167,12 @@ export default function NuevaIndicacionPage(): React.ReactElement {
 
   const validate = (): boolean => {
     const fe: Record<string, string> = {};
-    if (!episodioId.trim()) fe.episodioId = "Episodio requerido.";
-    if (!medicoPrescriptor.trim())
-      fe.medicoPrescriptor = "Medico prescriptor requerido.";
+    const epId = episodioId.trim();
+    if (!epId) {
+      fe.episodioId = "Episodio requerido (acceder desde el episodio hospitalario).";
+    } else if (!UUID_RE.test(epId)) {
+      fe.episodioId = "El identificador del episodio no es un UUID válido.";
+    }
     if (items.length === 0) fe.items = "Agregue al menos un item.";
     items.forEach((it, idx) => {
       if (!it.descripcion.trim())
@@ -182,13 +195,14 @@ export default function NuevaIndicacionPage(): React.ReactElement {
       duracion: it.duracion.trim() || undefined,
     }));
 
+  // medicoPrescriptor lo resuelve el server desde ctx.user.id — no lo enviamos.
+  // Override admin sólo necesario en flujos retroactivos (no expuestos aquí).
   const handleGuardar = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
     setServerError(null);
     createMutation.mutate({
       episodioId: episodioId.trim(),
-      medicoPrescriptor: medicoPrescriptor.trim(),
       items: buildItems(),
     });
   };
@@ -201,7 +215,6 @@ export default function NuevaIndicacionPage(): React.ReactElement {
     createMutation.mutate(
       {
         episodioId: episodioId.trim(),
-        medicoPrescriptor: medicoPrescriptor.trim(),
         items: buildItems(),
       },
       {
@@ -236,35 +249,36 @@ export default function NuevaIndicacionPage(): React.ReactElement {
               </Label>
               <input
                 id="episodioId"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring aria-invalid:border-destructive"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring aria-invalid:border-destructive disabled:cursor-not-allowed disabled:opacity-60"
                 value={episodioId}
                 onChange={(e) => setEpisodioId(e.target.value)}
-                placeholder="UUID del episodio"
+                placeholder={isEpisodioFromUrl ? undefined : "Pegue el UUID del episodio (acceso admin)"}
                 aria-invalid={Boolean(errors.episodioId)}
                 data-testid="input-episodio-id"
+                readOnly={isEpisodioFromUrl}
+                disabled={isEpisodioFromUrl}
               />
+              {isEpisodioFromUrl ? (
+                <p className="text-xs text-muted-foreground">
+                  Episodio cargado desde la ficha hospitalaria.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Acceder desde &quot;Episodio hospitalario → Nueva indicación&quot; carga el episodio automáticamente.
+                </p>
+              )}
               {errors.episodioId ? (
                 <p className="text-xs text-destructive">{errors.episodioId}</p>
               ) : null}
             </div>
             <div className="space-y-1">
-              <Label htmlFor="medicoPrescriptor">
-                Medico prescriptor <span className="text-destructive">*</span>
-              </Label>
-              <input
-                id="medicoPrescriptor"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring aria-invalid:border-destructive"
-                value={medicoPrescriptor}
-                onChange={(e) => setMedicoPrescriptor(e.target.value)}
-                placeholder="UUID del medico"
-                aria-invalid={Boolean(errors.medicoPrescriptor)}
-                data-testid="input-medico-prescriptor"
-              />
-              {errors.medicoPrescriptor ? (
-                <p className="text-xs text-destructive">
-                  {errors.medicoPrescriptor}
-                </p>
-              ) : null}
+              <Label>Médico prescriptor</Label>
+              <div className="flex h-9 w-full items-center rounded-md border border-input bg-muted/50 px-3 py-1 text-sm text-muted-foreground">
+                Usuario actual (resuelto automáticamente)
+              </div>
+              <p className="text-xs text-muted-foreground">
+                La firma usa el usuario autenticado. Para registros retroactivos por terceros, contactar admin.
+              </p>
             </div>
           </CardContent>
         </Card>

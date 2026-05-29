@@ -113,7 +113,16 @@ export default function IndicacionesListPage(): React.ReactElement {
           </p>
         </div>
         <Button asChild className="w-full sm:w-auto">
-          <Link href="/ece/indicaciones/nueva">Nueva indicación</Link>
+          {/* Propagar episodioId al form para auto-llenarlo (fix UUID-en-blanco). */}
+          <Link
+            href={
+              validUuid
+                ? `/ece/indicaciones/nueva?episodioId=${episodioId.trim()}`
+                : "/ece/indicaciones/nueva"
+            }
+          >
+            Nueva indicación
+          </Link>
         </Button>
       </div>
 
