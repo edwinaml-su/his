@@ -42,6 +42,7 @@ import {
   listSsoProvidersForLogin,
   resolveProviderByEmail,
 } from "@/app/actions/sso";
+import { createSupabaseBrowserClient, safeGetSession } from "@/lib/supabase/client";
 import type { SsoProvider } from "@his/contracts";
 
 interface ProviderRow {
@@ -71,6 +72,17 @@ export default function SsoPage() {
     title: string;
     message: string;
   } | null>(null);
+
+  // Auto-heal Safari: si la sesión actual del browser está corrupta
+  // (typical post-upgrade @supabase/supabase-js), limpiar storage ANTES
+  // del OAuth flow para evitar TypeError "Attempted to assign to readonly
+  // property" en _recoverAndRefresh cuando supabase.auth.signInWithOAuth
+  // intenta refrescar la sesión vieja.
+  React.useEffect(() => {
+    const supabase = createSupabaseBrowserClient();
+    // No await — best-effort, no bloquea render.
+    void safeGetSession(supabase);
+  }, []);
 
   // Cargar listado al montar.
   React.useEffect(() => {
