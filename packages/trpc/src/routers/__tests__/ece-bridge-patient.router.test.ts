@@ -1,20 +1,26 @@
 /**
  * Tests del eceBridgePatientRouter (Fase 2 — Bridge ECE↔HIS).
  *
+ * REFACTOR 2026-05-29: schema real de ece.paciente NO tiene columnas
+ * demográficas (primer_nombre/primer_apellido/fecha_nacimiento/etc).
+ * Tiene solo identificadores + flags admin. Los fixtures usan las
+ * columnas reales: numero_expediente, dui, carnet_minoridad,
+ * tipo_registro_identidad, estado_expediente, estado_registro, fallecido.
+ *
  * Estrategia:
  *   - Prisma se mockea con vitest-mock-extended (DeepMockProxy).
  *   - emitDomainEvent se mockea para evitar INSERT a DomainEvent.
  *   - $queryRaw / $executeRaw / $queryRawUnsafe se mockan por caso.
  *
- * Cubre (≥6 tests):
+ * Cubre (10 tests):
  *   1. linkPatient — happy path
  *   2. linkPatient — NOT_FOUND Patient HIS
  *   3. linkPatient — CONFLICT vínculo previo diferente
  *   4. unlinkPatient — happy path
  *   5. syncFromHis — crea nueva fila ECE (sin ecePacienteId)
  *   6. syncFromHis — BAD_REQUEST conflicto DUI
- *   7. syncToHis   — happy path
- *   8. syncToHis   — NOT_FOUND ece.paciente sin vínculo
+ *   7. syncToHis   — happy path (actualiza mrn si HIS vacío)
+ *   8. syncToHis   — BAD_REQUEST sin vínculo public_patient_id
  *   9. listLinkedPatients — paginación con nextCursor
  *  10. listLinkedPatients — sin resultados (nextCursor null)
  */
@@ -46,6 +52,7 @@ const PATIENT_ID    = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const ECE_ID        = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const ECE_ID_OTHER  = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const ESTAB_ID      = MOCK_TENANT.establishmentId!;
+const MRN           = "EXP-2026-0001";
 
 const ECE_TENANT = {
   ...MOCK_TENANT,
@@ -70,6 +77,40 @@ function setupTransaction(prisma: DeepMockProxy<PrismaClient>) {
 function makeCaller(prisma: DeepMockProxy<PrismaClient>) {
   const ctx = makeCtx({ prisma: prisma as unknown as Partial<PrismaClient>, tenant: ECE_TENANT });
   return eceBridgePatientRouter.createCaller(ctx);
+}
+
+/** Construye un fixture row de ece.paciente con todas las columnas reales. */
+function makeEceRow(overrides: Partial<{
+  id: string;
+  public_patient_id: string | null;
+  establecimiento_id: string;
+  numero_expediente: string;
+  dui: string | null;
+  nui: string | null;
+  cun: string | null;
+  carnet_minoridad: string | null;
+  pasaporte: string | null;
+  tipo_registro_identidad: string;
+  estado_expediente: string;
+  estado_registro: string;
+  fallecido: boolean;
+}> = {}) {
+  return {
+    id: ECE_ID,
+    public_patient_id: null,
+    establecimiento_id: ESTAB_ID,
+    numero_expediente: MRN,
+    dui: null,
+    nui: null,
+    cun: null,
+    carnet_minoridad: null,
+    pasaporte: null,
+    tipo_registro_identidad: "verificado",
+    estado_expediente: "activo",
+    estado_registro: "vigente",
+    fallecido: false,
+    ...overrides,
+  };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -156,13 +197,10 @@ describe("eceBridgePatientRouter", () => {
   it("syncFromHis: crea ece.paciente cuando no se pasa ecePacienteId", async () => {
     setupTransaction(prisma);
 
+    // El router lee mrn + identifiers (no firstName/lastName/etc).
     prisma.patient.findFirst.mockResolvedValue({
       id: PATIENT_ID,
-      firstName: "María",
-      lastName: "García",
-      secondLastName: "López",
-      birthDate: new Date("1990-05-10"),
-      biologicalSexId: "sex-uuid",
+      mrn: MRN,
       identifiers: [{ kind: "DUI", value: "01234567-8" }],
     } as never);
 
@@ -174,7 +212,8 @@ describe("eceBridgePatientRouter", () => {
 
     expect(result.ecePacienteId).toBe(ECE_ID);
     expect(result.publicPatientId).toBe(PATIENT_ID);
-    expect(result.fieldsUpdated).toContain("firstName");
+    expect(result.fieldsUpdated).toContain("numero_expediente");
+    expect(result.fieldsUpdated).toContain("dui");
     expect(emitDomainEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ eventType: "ece.paciente.synced" }),
@@ -188,29 +227,13 @@ describe("eceBridgePatientRouter", () => {
 
     prisma.patient.findFirst.mockResolvedValue({
       id: PATIENT_ID,
-      firstName: "Juan",
-      lastName: "Pérez",
-      secondLastName: null,
-      birthDate: null,
-      biologicalSexId: "sex-uuid",
+      mrn: MRN,
       identifiers: [{ kind: "DUI", value: "09876543-2" }],
     } as never);
 
-    // ece.paciente con DUI distinto
+    // ece.paciente con DUI distinto (usando schema real).
     prisma.$queryRaw.mockResolvedValueOnce([
-      {
-        id: ECE_ID,
-        public_patient_id: null,
-        primer_nombre: "Juan",
-        primer_apellido: "Pérez",
-        segundo_apellido: null,
-        fecha_nacimiento: null,
-        sexo_biologico_id: "sex-uuid",
-        expediente_numero: null,
-        dui: "01234567-8",   // diferente al del HIS
-        nie: null,
-        establecimiento_id: ESTAB_ID,
-      },
+      makeEceRow({ dui: "01234567-8" }),
     ]);
 
     const caller = makeCaller(prisma);
@@ -221,29 +244,22 @@ describe("eceBridgePatientRouter", () => {
 
   // ── 7. syncToHis — happy path ────────────────────────────────────────────
 
-  it("syncToHis: actualiza Patient HIS con campos NTEC Art. 15 y emite evento", async () => {
+  it("syncToHis: actualiza mrn HIS desde numero_expediente cuando HIS está vacío", async () => {
     setupTransaction(prisma);
 
-    // ece.paciente con vínculo
+    // ece.paciente con vínculo y numero_expediente
     prisma.$queryRaw.mockResolvedValueOnce([
-      {
-        id: ECE_ID,
+      makeEceRow({
         public_patient_id: PATIENT_ID,
-        primer_nombre: "Ana",
-        primer_apellido: "Martínez",
-        segundo_apellido: "Rivas",
-        fecha_nacimiento: new Date("1985-03-22"),
-        sexo_biologico_id: "sex-f",
-        expediente_numero: "EXP-001",
+        numero_expediente: "EXP-001",
         dui: "01234567-8",
-        nie: null,
-        establecimiento_id: ESTAB_ID,
-      },
+      }),
     ]);
 
-    // Patient HIS sin conflicto de identificadores
+    // Patient HIS sin mrn (escenario donde el ECE tiene el valor canónico).
     prisma.patient.findFirst.mockResolvedValue({
       id: PATIENT_ID,
+      mrn: null,
       identifiers: [{ kind: "DUI", value: "01234567-8" }],
     } as never);
 
@@ -253,11 +269,11 @@ describe("eceBridgePatientRouter", () => {
     const result = await caller.syncToHis({ ecePacienteId: ECE_ID });
 
     expect(result.publicPatientId).toBe(PATIENT_ID);
-    expect(result.fieldsUpdated).toContain("lastName");
+    expect(result.fieldsUpdated).toContain("mrn");
     expect(prisma.patient.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: PATIENT_ID },
-        data: expect.objectContaining({ firstName: "Ana" }),
+        data: expect.objectContaining({ mrn: "EXP-001" }),
       }),
     );
     expect(emitDomainEvent).toHaveBeenCalledWith(
@@ -272,19 +288,7 @@ describe("eceBridgePatientRouter", () => {
     setupTransaction(prisma);
 
     prisma.$queryRaw.mockResolvedValueOnce([
-      {
-        id: ECE_ID,
-        public_patient_id: null,
-        primer_nombre: "Test",
-        primer_apellido: "Test",
-        segundo_apellido: null,
-        fecha_nacimiento: null,
-        sexo_biologico_id: null,
-        expediente_numero: null,
-        dui: null,
-        nie: null,
-        establecimiento_id: ESTAB_ID,
-      },
+      makeEceRow({ public_patient_id: null }),
     ]);
 
     const caller = makeCaller(prisma);
@@ -296,11 +300,11 @@ describe("eceBridgePatientRouter", () => {
   // ── 9. listLinkedPatients — paginación con nextCursor ────────────────────
 
   it("listLinkedPatients: devuelve nextCursor cuando hay más resultados que el límite", async () => {
-    // Simular limit=2, resultado 3 filas → hasMore=true
+    // El router ahora hace LEFT JOIN a public.Patient — shape distinta.
     const fakeRows = [
-      { ece_id: "id-1", public_patient_id: PATIENT_ID, primer_nombre: "A", primer_apellido: "B", expediente_numero: null, dui: null },
-      { ece_id: "id-2", public_patient_id: PATIENT_ID, primer_nombre: "C", primer_apellido: "D", expediente_numero: null, dui: null },
-      { ece_id: "id-3", public_patient_id: PATIENT_ID, primer_nombre: "E", primer_apellido: "F", expediente_numero: null, dui: null },
+      { ece_id: "id-1", public_patient_id: PATIENT_ID, numero_expediente: "E-1", dui: null, first_name: "Ana",  last_name: "Pérez" },
+      { ece_id: "id-2", public_patient_id: PATIENT_ID, numero_expediente: "E-2", dui: null, first_name: "Beto", last_name: "García" },
+      { ece_id: "id-3", public_patient_id: PATIENT_ID, numero_expediente: "E-3", dui: null, first_name: "Cris", last_name: "Lima" },
     ];
     prisma.$queryRawUnsafe.mockResolvedValue(fakeRows);
 
@@ -319,7 +323,7 @@ describe("eceBridgePatientRouter", () => {
 
   it("listLinkedPatients: devuelve nextCursor null cuando no hay más páginas", async () => {
     const fakeRows = [
-      { ece_id: "id-1", public_patient_id: PATIENT_ID, primer_nombre: "A", primer_apellido: "B", expediente_numero: null, dui: null },
+      { ece_id: "id-1", public_patient_id: PATIENT_ID, numero_expediente: "E-1", dui: null, first_name: "Ana", last_name: "Pérez" },
     ];
     prisma.$queryRawUnsafe.mockResolvedValue(fakeRows);
 
