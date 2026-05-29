@@ -9,7 +9,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("Audit trail", () => {
+test.describe("@smoke - Audit trail", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

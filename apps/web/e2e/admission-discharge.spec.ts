@@ -14,7 +14,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("Admisión → Traslado → Alta", () => {
+test.describe("@smoke - Admisión → Traslado → Alta", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

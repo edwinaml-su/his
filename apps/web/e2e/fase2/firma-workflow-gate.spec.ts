@@ -43,7 +43,7 @@ const TEST_MRN = `E2E-${Date.now()}`;
 // Suite principal
 // ---------------------------------------------------------------------------
 
-test.describe("Fase 2 — Gate: firma electrónica + HC", () => {
+test.describe("@smoke - Fase 2 — Gate: firma electrónica + HC", () => {
   test.skip(SKIP, "SKIP_E2E_FASE2=1 — omitido por env");
 
   test.beforeEach(async ({ page }) => {

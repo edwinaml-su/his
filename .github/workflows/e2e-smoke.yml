@@ -1,0 +1,88 @@
+name: E2E Smoke (PR)
+
+# Corre en cada PR a main o develop. Solo los ~15-20 tests marcados @smoke.
+# Objetivo: fallar rápido (<10 min) si un cambio rompe un camino crítico.
+# La suite completa sigue corriéndose nightly via e2e.yml.
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  # Cancela runs anteriores del mismo PR para no saturar el runner.
+  group: e2e-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  smoke:
+    name: Playwright Smoke (@smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
+      DIRECT_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
+      NEXT_PUBLIC_SUPABASE_URL: https://e2e-dummy.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-dummy-anon
+      SUPABASE_SERVICE_ROLE_KEY: e2e-dummy-service-role
+      AUTH_SECRET: e2e-dummy-secret
+      NODE_ENV: test
+      # Activa el filtro de tags en playwright.config.ts:
+      # solo corren tests cuyo describe/test contiene "@smoke".
+      E2E_GREP: '@smoke'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Boot test stack (Postgres efímero)
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/database/prisma/schema.prisma
+
+      - name: Sync schema to ephemeral DB
+        # Sin carpeta prisma/migrations (ver CLAUDE.md §db). db push crea el
+        # schema completo de una sola vez en la BD efímera del runner.
+        run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
+
+      - name: Seed minimal data
+        run: npm run db:seed
+        continue-on-error: true
+
+      - name: Build app
+        run: npm run build
+
+      - name: Run Smoke E2E (@smoke only)
+        run: npm run test:e2e
+
+      - name: Upload Playwright report (solo si falla)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-smoke-report-${{ github.run_id }}
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v

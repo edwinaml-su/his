@@ -34,11 +34,11 @@ const FAKE_DATAMATRIX = "(01)07501000001234(10)L2024A(17)261231";
 const FAKE_PATIENT_ID = "00000000-0000-4000-8000-000000000001";
 const FAKE_INDICATION_ID = "00000000-0000-4000-8000-000000000002";
 
-test.describe("Bedside PWA — flujo de escaneo 3-step", () => {
+test.describe("@smoke - Bedside PWA — flujo de escaneo 3-step", () => {
   test.skip(SKIP, "SKIP_E2E_BEDSIDE=1");
 
   test.beforeEach(async ({ page }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
   });
 
   test("1. Cola de turno /bedside carga sin error 500", async ({ page }) => {

@@ -18,7 +18,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("WHO Surgical Safety Checklist", () => {
+test.describe("@smoke - WHO Surgical Safety Checklist", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

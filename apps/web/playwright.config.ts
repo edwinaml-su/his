@@ -5,10 +5,19 @@
  *   contra build previa (más rápido, más fiel a producción).
  * - baseURL: `http://localhost:3000`.
  * - Reportes JUnit + HTML para integrarse con el pipeline.
+ *
+ * Filtrado por tag:
+ *   E2E_GREP=@smoke npm run test:e2e   → solo specs marcados @smoke
+ *   E2E_GREP=@smoke npx playwright test → equivalente directo
+ *
+ * La convención de tagging usa el nombre del describe/test:
+ *   test.describe("@smoke - Admisión", () => { ... })
  */
 import { defineConfig, devices } from "@playwright/test";
 
 const isCI = !!process.env.CI;
+// Inyectar filtro de tags desde env. Smoke PR usa E2E_GREP=@smoke.
+const grepFilter = process.env.E2E_GREP ? new RegExp(process.env.E2E_GREP) : undefined;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -17,6 +26,10 @@ export default defineConfig({
   workers: 1,
   timeout: 60_000,
   expect: { timeout: 8_000 },
+  // Smoke PR: 1 retry (fallos transitorios de red). Full nightly: 2 retries.
+  ...(grepFilter ? { retries: isCI ? 1 : 0 } : {}),
+  // Filtrado por tag (E2E_GREP=@smoke selecciona solo tests cuyo nombre contiene @smoke).
+  ...(grepFilter ? { grep: grepFilter } : {}),
   reporter: isCI
     ? [["html", { open: "never" }], ["junit", { outputFile: "playwright-report/results.xml" }]]
     : [["list"], ["html", { open: "never" }]],

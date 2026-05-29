@@ -10,7 +10,7 @@ import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 import { VALID_DUIS } from "@his/test-utils";
 
-test.describe("MPI — registro y búsqueda de paciente", () => {
+test.describe("@smoke - MPI — registro y búsqueda de paciente", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

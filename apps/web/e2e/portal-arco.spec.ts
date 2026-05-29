@@ -18,7 +18,7 @@ import { login } from "./_helpers/auth";
 
 // ─── Cola DIR/ADMIN ───────────────────────────────────────────────────────────
 
-test.describe("ARCO — cola de solicitudes (DIR/ADMIN)", () => {
+test.describe("@smoke - ARCO — cola de solicitudes (DIR/ADMIN)", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });

@@ -18,7 +18,7 @@ import { login } from "./_helpers/auth";
 
 const ROUTE_FIRMA = "/admin/firma-electronica";
 
-test.describe("LOCK-01: página firma electrónica", () => {
+test.describe("@smoke - LOCK-01: página firma electrónica", () => {
   test("la página de firma electrónica carga para usuarios autenticados", async ({
     page,
   }) => {
@@ -36,7 +36,7 @@ test.describe("LOCK-01: página firma electrónica", () => {
   });
 });
 
-test.describe("LOCK-02/03: mensajes de error PIN", () => {
+test.describe("@smoke - LOCK-02/03: mensajes de error PIN", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
     await page.goto(ROUTE_FIRMA);

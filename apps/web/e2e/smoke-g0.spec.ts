@@ -9,7 +9,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-test.describe("Smoke G0", () => {
+test.describe("@smoke - Smoke G0", () => {
   test("login + navegación rutas críticas + visibilidad seed", async ({ page }) => {
     test.setTimeout(60_000);
 
