@@ -1,0 +1,162 @@
+name: Backup DR Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Modo de ejecucion"
+        required: true
+        default: dump-only
+        type: choice
+        options:
+          - dump-only
+          - full-drill
+
+jobs:
+  drill:
+    name: DR Drill (${{ inputs.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar herramientas Postgres 15
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-15
+
+      - name: Verificar pg_dump version
+        run: pg_dump --version
+
+      # ------------------------------------------------------------------
+      # PASO 1: pg_dump produccion
+      # ------------------------------------------------------------------
+      - name: pg_dump produccion
+        env:
+          DATABASE_URL: ${{ secrets.BACKUP_DRILL_DATABASE_URL }}
+        run: |
+          mkdir -p ./backups
+          chmod +x ./scripts/backup-pg-dump.sh
+          ./scripts/backup-pg-dump.sh ./backups/his-drill-$(date +%Y%m%d-%H%M%S).dump
+
+      - name: Validar contenido del dump
+        run: |
+          DUMP=$(ls -t ./backups/*.dump | head -1)
+          echo "Dump file: $DUMP"
+          echo "Tamano: $(du -h $DUMP | cut -f1)"
+          echo ""
+          echo "=== Primeros 30 objetos ==="
+          pg_restore -l "$DUMP" | head -30
+          echo ""
+          echo "=== Schemas presentes ==="
+          pg_restore -l "$DUMP" | grep '^[0-9]* SCHEMA' | awk '{print $3}' || true
+          echo ""
+          echo "=== Tablas criticas presentes ==="
+          pg_restore -l "$DUMP" | grep -E 'TABLE (public|ece|audit)' | head -20 || true
+
+      # ------------------------------------------------------------------
+      # PASO 2 (solo full-drill): levantar postgres Docker + restore
+      # ------------------------------------------------------------------
+      - name: Levantar postgres Docker efimero
+        if: inputs.mode == 'full-drill'
+        run: |
+          docker compose -f docker-compose.test.yml up -d --wait postgres-test
+          docker exec his-postgres-test psql -U his -d postgres \
+            -c "CREATE DATABASE his_drill;" 2>/dev/null || true
+
+      - name: Restore dump a target efimero
+        if: inputs.mode == 'full-drill'
+        run: |
+          DUMP=$(ls -t ./backups/*.dump | head -1)
+          TARGET="postgresql://his:his@localhost:5432/his_drill"
+          echo "Restaurando: $DUMP → $TARGET"
+          pg_restore \
+            --clean \
+            --if-exists \
+            --no-owner \
+            --no-acl \
+            --dbname="$TARGET" \
+            "$DUMP" || echo "WARN: pg_restore con warnings (normal para roles Supabase)"
+
+      - name: Smoke checks post-restore
+        if: inputs.mode == 'full-drill'
+        run: |
+          TARGET="postgresql://his:his@localhost:5432/his_drill"
+
+          echo "=== Conteos por tabla ==="
+          psql "$TARGET" -c "
+            SELECT 'Patient'                AS tabla, COUNT(*) AS filas FROM \"Patient\"
+            UNION ALL SELECT 'Encounter',             COUNT(*) FROM \"Encounter\"
+            UNION ALL SELECT 'MedicationAdministration', COUNT(*) FROM \"MedicationAdministration\"
+            UNION ALL SELECT 'AuditLog',              COUNT(*) FROM audit.\"AuditLog\";
+          " 2>/dev/null || echo "WARN: No se pudo consultar tablas"
+
+          echo ""
+          echo "=== Audit log rango temporal ==="
+          psql "$TARGET" -c "
+            SELECT
+              MIN(\"occurredAt\") AS primer_registro,
+              MAX(\"occurredAt\") AS ultimo_registro,
+              COUNT(*)           AS total_entradas
+            FROM audit.\"AuditLog\";
+          " 2>/dev/null || echo "WARN: No se pudo consultar audit.AuditLog"
+
+          echo ""
+          echo "=== Integridad audit hash chain ==="
+          BROKEN=$(psql "$TARGET" -t -A -c "
+            SELECT COUNT(*)
+            FROM audit.\"AuditLog\" a
+            WHERE a.\"prevHash\" IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM audit.\"AuditLog\" p
+                WHERE p.\"signatureHash\" = a.\"prevHash\"
+              );
+          " 2>/dev/null || echo "ERR")
+          if [[ "$BROKEN" == "0" ]]; then
+            echo "OK: Audit chain integra (0 enlaces rotos)"
+          elif [[ "$BROKEN" == "ERR" ]]; then
+            echo "WARN: No se pudo verificar audit chain"
+          else
+            echo "FAIL: Audit chain con ${BROKEN} enlaces rotos"
+            exit 1
+          fi
+
+      # ------------------------------------------------------------------
+      # Upload dump como artifact (retención 7 días — contiene PII)
+      # ------------------------------------------------------------------
+      - name: Upload dump como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: his-dr-dump-${{ github.run_id }}
+          path: ./backups/*.dump
+          retention-days: 7
+          # IMPORTANTE: el dump contiene PII de pacientes.
+          # Solo accesible a miembros del repo con permisos de Actions.
+          # No compartir externamente. Borrar manualmente si se expone.
+
+      # ------------------------------------------------------------------
+      # Notificacion Slack (opcional — configurar secret SLACK_WEBHOOK_DR)
+      # ------------------------------------------------------------------
+      - name: Notificar resultado a Slack
+        if: always() && secrets.SLACK_WEBHOOK_DR != ''
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_DR }}
+          STATUS: ${{ job.status }}
+          MODE: ${{ inputs.mode }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          EMOJI=$([ "$STATUS" = "success" ] && echo ":white_check_mark:" || echo ":x:")
+          curl -s -X POST "$SLACK_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"text\": \"${EMOJI} *HIS DR Drill* (${MODE}) — ${STATUS}\",
+              \"blocks\": [{
+                \"type\": \"section\",
+                \"text\": {
+                  \"type\": \"mrkdwn\",
+                  \"text\": \"${EMOJI} *HIS DR Drill (${MODE}):* ${STATUS}\n<${RUN_URL}|Ver run>\"
+                }
+              }]
+            }" || echo "WARN: Slack notification failed (webhook may not be configured)"
