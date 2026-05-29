@@ -6,6 +6,10 @@ const nextConfig = {
     optimizePackageImports: ["lucide-react", "@his/ui"],
     // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
     serverComponentsExternalPackages: ["@node-rs/argon2"],
+    // Habilita la View Transitions API del navegador en navegaciones de ruta.
+    // Degradación elegante: browsers sin soporte navegan instantáneamente.
+    // Animaciones desactivadas con `prefers-reduced-motion` (ver globals.css Tarea 8).
+    viewTransition: true,
   },
   // Permitir importar paquetes del monorepo en src.
   transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database", "@his/infrastructure"],

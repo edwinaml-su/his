@@ -1,6 +1,19 @@
 import * as React from "react";
 import { cn } from "../lib/utils";
 
+/**
+ * Card — superficie de elevación con soporte para container queries.
+ *
+ * Agregar `@container` al wrapper padre permite que los hijos usen variantes
+ * `@sm:`, `@md:`, etc. para adaptar su layout al TAMAÑO DEL CONTENEDOR
+ * (no del viewport). Útil cuando el mismo Card aparece en sidebar estrecho
+ * vs. grilla completa o en un drawer/modal.
+ *
+ * Ejemplo de uso:
+ *   <div className="@container">
+ *     <Card><CardContent className="@md:flex gap-4">…</CardContent></Card>
+ *   </div>
+ */
 export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div

@@ -278,5 +278,15 @@
       --motion-base: 0ms;
       --motion-slow: 0ms;
     }
+    /* ── View Transitions API — desactivar animaciones (Tarea 8) ──────────
+     * Las pseudo-clases ::view-transition-* no son alcanzadas por la regla
+     * general de `*`. Se deben suprimir explícitamente para cumplir §3.
+     * Aplica tanto a transiciones de ruta (experimental.viewTransition) como
+     * a startViewTransition() llamado desde ViewTransitionProvider. */
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+      animation: none !important;
+    }
   }
 }
