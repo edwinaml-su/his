@@ -1,11 +1,20 @@
 /*
- * HIS Multipaís — Tokens globales del Design System
+ * HIS Multipaís — Tokens globales del Design System v2.0
  * Paquete: @his/ui
- * Convención: Shadcn/ui (variables CSS HSL, light/dark via clase `.dark` en <html>).
- * Documentación: docs/07_design_system.md
+ * Convención: OKLCH (perceptualmente uniforme, gamut-safe P3). Light/dark via `.dark` en <html>.
+ * Documentación: docs/07_design_system.md, docs/08_rediseno_visual_v2.md
  *
- * IMPORTANTE: Toda variable está en formato HSL sin la función hsl() para que
- * Tailwind pueda envolverla con alpha (`hsl(var(--primary) / 0.5)`).
+ * NOTA TAILWIND: los tokens semánticos usan oklch() directo (Tailwind CSS v3.3+
+ * soporta oklch en `theme.extend.colors` vía CSS variables).
+ * Para alpha en Tailwind: usar bg-primary/50 requiere que la variable esté en
+ * formato "L C H" sin función — ver tokens de Tailwind en tailwind.config.ts.
+ * Los tokens aquí usan oklch() completo (mejor legibilidad); el preset Tailwind
+ * apunta a las mismas variables.
+ *
+ * TOKENS PROTEGIDOS §3:
+ *   Triage Manchester hex: #DC2626 / #EA580C / #CA8A04 / #16A34A / #2563EB
+ *   Allergy: #A6133E  |  LASA: #7A2E10
+ *   Estos valores NUNCA cambian — están auditados WCAG AA.
  */
 
 @tailwind base;
@@ -14,157 +23,216 @@
 
 @layer base {
   :root {
-    /* Base */
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    /* ── Base semántica ────────────────────────────────────────────────────── */
+    --background:             oklch(1.0000 0.0001 263.28);
+    --foreground:             oklch(0.2064 0.0388 265.55);
 
-    --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card:                   oklch(1.0000 0.0001 263.28);
+    --card-foreground:        oklch(0.2064 0.0388 265.55);
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover:                oklch(1.0000 0.0001 263.28);
+    --popover-foreground:     oklch(0.2064 0.0388 265.55);
 
-    /* Avante brand — deep blue #174281 (action primaria) */
-    --primary: 216 70% 30%;
-    --primary-foreground: 0 0% 100%;
+    /* Avante brand — deep blue #174281 (acción primaria) */
+    --primary:                oklch(0.3873 0.1183 258.76);
+    --primary-foreground:     oklch(1.0000 0.0001 263.28);
 
-    /* Avante navy #1F2145 oscurecido como base de secciones */
-    --secondary: 216 30% 94%;
-    --secondary-foreground: 236 38% 20%;
+    /* Avante navy #1F2145 — base de secciones */
+    --secondary:              oklch(0.9503 0.0085 258.39);
+    --secondary-foreground:   oklch(0.2711 0.0664 277.92);
 
-    --muted: 216 30% 96%;
-    --muted-foreground: 236 15% 40%;
+    --muted:                  oklch(0.9669 0.0056 258.40);
+    --muted-foreground:       oklch(0.4726 0.0461 281.28);
 
     /* Avante bright blue #0975BA — accent interactivo */
-    --accent: 204 70% 94%;
-    --accent-foreground: 204 92% 25%;
+    --accent:                 oklch(0.9536 0.0180 236.83);
+    --accent-foreground:      oklch(0.4017 0.1004 246.00);
 
     /* Avante red #D21D2B */
-    --destructive: 356 75% 47%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive:            oklch(0.5541 0.2101 25.18);
+    --destructive-foreground: oklch(1.0000 0.0001 263.28);
 
-    --border: 216 25% 88%;
-    --input: 216 25% 88%;
-    --ring: 204 92% 38%;
+    --border:                 oklch(0.9013 0.0143 258.38);
+    --input:                  oklch(0.9013 0.0143 258.38);
+    --ring:                   oklch(0.5393 0.1394 247.04);
 
-    --radius: 0.5rem;
+    /* ── Superficie / Elevación (Tarea 1 v2.0) ─────────────────────────────
+     * Capas sutiles de luminancia. Borde 1px implícito en componentes que usen
+     * border-surface-* (ver tailwind.config.ts). Sin sombras dramáticas.
+     * surface-0: fondo de página | surface-3: diálogos  */
+    --surface-0:              oklch(1.0000 0.0000 0);
+    --surface-1:              oklch(0.9850 0.0040 264.00);
+    --surface-2:              oklch(0.9700 0.0060 264.00);
+    --surface-3:              oklch(0.9550 0.0080 264.00);
 
-    /* Estados clínicos semánticos (alineados con Avante red #D21D2B) */
-    --success: 142 71% 36%;
-    --success-foreground: 0 0% 100%;
+    /* ── Radios estandarizados (Tarea 1 v2.0) ──────────────────────────────
+     * --radius conservado como alias de md para retrocompatibilidad Shadcn. */
+    --radius-sm:              6px;
+    --radius-md:              8px;
+    --radius-lg:              12px;
+    --radius-xl:              16px;
+    --radius:                 8px;   /* alias retrocompat Shadcn → md */
 
-    --warning: 43 94% 36%;
-    --warning-foreground: 0 0% 100%;
+    /* ── Movimiento (Tarea 1 v2.0) ─────────────────────────────────────────
+     * Easing estándar: cubic-bezier(0.2, 0, 0, 1) — aprobado por UIUX.
+     * Colapsado a 0ms bajo prefers-reduced-motion (regla global abajo). */
+    --motion-fast:            120ms;
+    --motion-base:            180ms;
+    --motion-slow:            260ms;
+    --motion-easing:          cubic-bezier(0.2, 0, 0, 1);
 
-    --critical: 356 75% 47%;
-    --critical-foreground: 0 0% 100%;
+    /* ── Densidad (Tarea 1 v2.0 — toggle UI en Tarea 8) ───────────────────
+     * Se activan por atributo data-density en <html>. Default: comfortable. */
+    --density-row-height:     44px;
+    --density-padding-x:      1rem;
 
-    --info: 204 92% 38%;
-    --info-foreground: 0 0% 100%;
+    /* ── Estados clínicos semánticos ───────────────────────────────────────*/
+    --success:                oklch(0.6112 0.1611 149.72);
+    --success-foreground:     oklch(1.0000 0.0001 263.28);
 
-    /* Banners clínicos especiales */
-    --lasa: 17 75% 26%;          /* marrón oscuro — distinto de cualquier triage */
-    --lasa-foreground: 0 0% 100%;
+    --warning:                oklch(0.6356 0.1298 81.53);
+    --warning-foreground:     oklch(1.0000 0.0001 263.28);
 
-    --allergy: 348 83% 36%;       /* rosa oscuro — distinto del rojo de triage */
-    --allergy-foreground: 0 0% 100%;
+    --critical:               oklch(0.5541 0.2101 25.18);
+    --critical-foreground:    oklch(1.0000 0.0001 263.28);
 
-    /* Manchester Triage System (auditado WCAG 2.1 AA) */
-    --triage-red: 0 74% 50%;            /* #DC2626 sobre blanco -> 5.9:1 */
-    --triage-red-foreground: 0 0% 100%;
+    --info:                   oklch(0.5393 0.1394 247.04);
+    --info-foreground:        oklch(1.0000 0.0001 263.28);
 
-    --triage-orange: 21 90% 48%;        /* #EA580C sobre blanco -> 4.6:1 */
-    --triage-orange-foreground: 0 0% 100%;
+    /* ── Banners clínicos especiales ────────────────────────────────────────
+     * LASA #7A2E10 marrón oscuro | Allergy #A6133E rosa oscuro.
+     * Hex PROTEGIDOS §3 — valores OKLCH equivalentes calculados. */
+    --lasa:                   oklch(0.4062 0.1137 39.90);   /* #7A2E10 */
+    --lasa-foreground:        oklch(1.0000 0.0001 263.28);
 
-    --triage-yellow: 43 96% 39%;        /* #CA8A04, foreground oscuro -> 8.2:1 */
-    --triage-yellow-foreground: 0 0% 10%;
+    --allergy:                oklch(0.4696 0.1771 12.68);   /* #A6133E */
+    --allergy-foreground:     oklch(1.0000 0.0001 263.28);
 
-    --triage-green: 142 76% 36%;        /* #16A34A sobre blanco -> 4.5:1 */
-    --triage-green-foreground: 0 0% 100%;
+    /* ── Manchester Triage System (PROTEGIDO §3 — auditado WCAG 2.1 AA) ───
+     * Hex fijos: #DC2626 / #EA580C / #CA8A04 / #16A34A / #2563EB.
+     * Los OKLCH son conversión matemática exacta — mismo color percibido.
+     * NO modificar por tenant. Ver docs/07_design_system.md §2.2. */
+    --triage-red:             oklch(0.5771 0.2151 27.32);   /* #DC2626 — 5.9:1 */
+    --triage-red-foreground:  oklch(1.0000 0.0001 263.28);
 
-    --triage-blue: 221 83% 53%;         /* #2563EB sobre blanco -> 5.7:1 */
-    --triage-blue-foreground: 0 0% 100%;
+    --triage-orange:          oklch(0.6461 0.1943 41.11);   /* #EA580C — 4.6:1 */
+    --triage-orange-foreground: oklch(1.0000 0.0001 263.28);
 
-    /* Sidebar — Avante navy #1F2145 como fondo branding */
-    --sidebar-background: 236 38% 20%;
-    --sidebar-foreground: 0 0% 96%;
-    --sidebar-border: 236 25% 28%;
-    --sidebar-accent: 204 92% 38%;
-    --sidebar-accent-foreground: 0 0% 100%;
+    --triage-yellow:          oklch(0.6807 0.1422 75.83);   /* #CA8A04 — foreground oscuro 8.2:1 */
+    --triage-yellow-foreground: oklch(0.2064 0.0000 0);
+
+    --triage-green:           oklch(0.6270 0.1699 149.23);  /* #16A34A — 4.5:1 */
+    --triage-green-foreground: oklch(1.0000 0.0001 263.28);
+
+    --triage-blue:            oklch(0.5461 0.2153 262.89);  /* #2563EB — 5.7:1 */
+    --triage-blue-foreground: oklch(1.0000 0.0001 263.28);
+
+    /* ── Sidebar — Avante navy #1F2145 ─────────────────────────────────────*/
+    --sidebar-background:     oklch(0.2711 0.0664 277.92);
+    --sidebar-foreground:     oklch(0.9696 0.0001 263.28);
+    --sidebar-border:         oklch(0.3540 0.0578 279.88);
+    --sidebar-accent:         oklch(0.5393 0.1394 247.04);
+    --sidebar-accent-foreground: oklch(1.0000 0.0001 263.28);
   }
 
+  /* ── Densidad comfortable (default explícito) ──────────────────────────── */
+  [data-density="comfortable"],
+  :root:not([data-density]) {
+    --density-row-height: 44px;
+    --density-padding-x:  1rem;
+  }
+
+  /* ── Densidad compact ───────────────────────────────────────────────────── */
+  [data-density="compact"] {
+    --density-row-height: 36px;
+    --density-padding-x:  0.75rem;
+  }
+
+  /* ── Touch: nunca <44px en dispositivos táctiles ──────────────────────── */
+  @media (pointer: coarse) {
+    [data-density="compact"] {
+      --density-row-height: 44px;
+    }
+  }
+
+  /* ── Dark mode ─────────────────────────────────────────────────────────── */
   .dark {
-    /* Base */
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
+    --background:             oklch(0.1573 0.0228 265.66);
+    --foreground:             oklch(0.9838 0.0036 248.23);
 
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
+    --card:                   oklch(0.1773 0.0294 265.82);
+    --card-foreground:        oklch(0.9838 0.0036 248.23);
 
-    --popover: 222 47% 8%;
-    --popover-foreground: 210 40% 98%;
+    --popover:                oklch(0.1773 0.0294 265.82);
+    --popover-foreground:     oklch(0.9838 0.0036 248.23);
 
-    /* Avante bright blue #0975BA en dark — más luminoso para contraste */
-    --primary: 204 92% 55%;
-    --primary-foreground: 236 38% 10%;
+    /* Avante bright blue #0975BA dark — más luminoso para contraste */
+    --primary:                oklch(0.6855 0.1614 244.80);
+    --primary-foreground:     oklch(0.1873 0.0367 279.12);
 
-    --secondary: 236 38% 18%;
-    --secondary-foreground: 0 0% 96%;
+    --secondary:              oklch(0.2549 0.0607 278.08);
+    --secondary-foreground:   oklch(0.9696 0.0001 263.28);
 
-    --muted: 236 25% 14%;
-    --muted-foreground: 215 20% 65%;
+    --muted:                  oklch(0.2335 0.0321 280.44);
+    --muted-foreground:       oklch(0.7100 0.0349 256.80);
 
-    --accent: 204 92% 28%;
-    --accent-foreground: 0 0% 100%;
+    --accent:                 oklch(0.4344 0.1097 246.32);
+    --accent-foreground:      oklch(1.0000 0.0001 263.28);
 
-    --destructive: 356 75% 58%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive:            oklch(0.6201 0.1966 21.50);
+    --destructive-foreground: oklch(1.0000 0.0001 263.28);
 
-    --border: 236 25% 22%;
-    --input: 236 25% 22%;
-    --ring: 204 92% 60%;
+    --border:                 oklch(0.3038 0.0472 280.05);
+    --input:                  oklch(0.3038 0.0472 280.05);
+    --ring:                   oklch(0.7145 0.1478 242.63);
 
-    /* Estados clínicos */
-    --success: 142 71% 45%;
-    --success-foreground: 0 0% 100%;
+    /* ── Superficie dark ──────────────────────────────────────────────────*/
+    --surface-0:              oklch(0.1573 0.0228 265.66);
+    --surface-1:              oklch(0.1773 0.0294 265.82);
+    --surface-2:              oklch(0.2000 0.0320 266.00);
+    --surface-3:              oklch(0.2200 0.0350 266.00);
 
-    --warning: 48 96% 53%;
-    --warning-foreground: 0 0% 10%;
+    /* ── Estados clínicos dark ────────────────────────────────────────────*/
+    --success:                oklch(0.7205 0.1920 149.51);
+    --success-foreground:     oklch(1.0000 0.0001 263.28);
 
-    --critical: 356 75% 58%;
-    --critical-foreground: 0 0% 100%;
+    --warning:                oklch(0.8611 0.1733 91.97);
+    --warning-foreground:     oklch(0.2156 0.0000 263.28);
 
-    --info: 204 92% 60%;
-    --info-foreground: 0 0% 100%;
+    --critical:               oklch(0.6201 0.1966 21.50);
+    --critical-foreground:    oklch(1.0000 0.0001 263.28);
 
-    --lasa: 17 60% 45%;
-    --lasa-foreground: 0 0% 100%;
+    --info:                   oklch(0.7145 0.1478 242.63);
+    --info-foreground:        oklch(1.0000 0.0001 263.28);
 
-    --allergy: 348 70% 50%;
-    --allergy-foreground: 0 0% 100%;
+    --lasa:                   oklch(0.5661 0.1385 41.01);
+    --lasa-foreground:        oklch(1.0000 0.0001 263.28);
 
-    /* Manchester Triage en dark (auditado WCAG 2.1 AA) */
-    --triage-red: 0 84% 60%;
-    --triage-red-foreground: 0 0% 100%;
+    --allergy:                oklch(0.5762 0.2097 17.05);
+    --allergy-foreground:     oklch(1.0000 0.0001 263.28);
 
-    --triage-orange: 25 95% 60%;
-    --triage-orange-foreground: 0 0% 10%;
+    /* Manchester Triage dark (auditado WCAG 2.1 AA) */
+    --triage-red:             oklch(0.6356 0.2082 25.37);
+    --triage-red-foreground:  oklch(1.0000 0.0001 263.28);
 
-    --triage-yellow: 48 96% 53%;
-    --triage-yellow-foreground: 0 0% 10%;
+    --triage-orange:          oklch(0.7411 0.1644 52.16);
+    --triage-orange-foreground: oklch(0.2156 0.0000 263.28);
 
-    --triage-green: 142 71% 45%;
-    --triage-green-foreground: 0 0% 100%;
+    --triage-yellow:          oklch(0.8611 0.1733 91.97);
+    --triage-yellow-foreground: oklch(0.2156 0.0000 263.28);
 
-    --triage-blue: 217 91% 60%;
-    --triage-blue-foreground: 0 0% 100%;
+    --triage-green:           oklch(0.7205 0.1920 149.51);
+    --triage-green-foreground: oklch(1.0000 0.0001 263.28);
+
+    --triage-blue:            oklch(0.6261 0.1860 259.60);
+    --triage-blue-foreground: oklch(1.0000 0.0001 263.28);
 
     /* Sidebar dark — navy aún más profundo */
-    --sidebar-background: 236 50% 10%;
-    --sidebar-foreground: 0 0% 96%;
-    --sidebar-border: 236 30% 18%;
-    --sidebar-accent: 204 92% 38%;
-    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-background:     oklch(0.1798 0.0482 277.31);
+    --sidebar-foreground:     oklch(0.9696 0.0001 263.28);
+    --sidebar-border:         oklch(0.2635 0.0479 279.45);
+    --sidebar-accent:         oklch(0.5393 0.1394 247.04);
+    --sidebar-accent-foreground: oklch(1.0000 0.0001 263.28);
   }
 }
 
@@ -184,7 +252,7 @@
   :focus-visible {
     @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
-  /* Reduce motion (accesibilidad — usuarios con vestibular disorders) */
+  /* Reduce motion (accesibilidad — WCAG 2.1 AA 2.3.3, users con vestibular disorders) */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -193,6 +261,12 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
+    }
+    /* Colapsar tokens de movimiento a cero */
+    :root {
+      --motion-fast: 0ms;
+      --motion-base: 0ms;
+      --motion-slow: 0ms;
     }
   }
 }

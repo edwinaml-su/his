@@ -6,8 +6,12 @@ import typography from "@tailwindcss/typography";
  * Tailwind config base del paquete `@his/ui` (HIS Multipaís).
  * Las apps (`apps/web`, `apps/mobile`) extienden este preset y añaden su propio `content`.
  *
- * - Colores semánticos: variables CSS HSL definidas en `globals.css` (light/dark).
- * - Triage Manchester: paleta fija (no tematizable por tenant — ver docs/07_design_system.md §2.2).
+ * v2.0 (rediseño visual):
+ * - Colores semánticos: variables OKLCH en `globals.css` (light/dark).
+ * - Superficie: bg-surface-0/1/2/3 para capas de elevación.
+ * - Radios: rounded-sm/md/lg/xl mapeados a variables --radius-*.
+ * - Movimiento: transition-fast/base/slow con easing estándar.
+ * - Triage Manchester: paleta fija auditada WCAG AA (ver docs/07_design_system.md §2.2).
  * - Dark mode: `class` strategy.
  */
 const config: Config = {
@@ -26,109 +30,119 @@ const config: Config = {
     },
     extend: {
       colors: {
-        // Tokens semánticos Shadcn (resueltos vía CSS variables HSL).
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
+        // Tokens semánticos Shadcn (resueltos vía CSS variables OKLCH).
+        border: "var(--border)",
+        input: "var(--input)",
+        ring: "var(--ring)",
+        background: "var(--background)",
+        foreground: "var(--foreground)",
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: "var(--primary)",
+          foreground: "var(--primary-foreground)",
         },
         secondary: {
-          DEFAULT: "hsl(var(--secondary))",
-          foreground: "hsl(var(--secondary-foreground))",
+          DEFAULT: "var(--secondary)",
+          foreground: "var(--secondary-foreground)",
         },
         destructive: {
-          DEFAULT: "hsl(var(--destructive))",
-          foreground: "hsl(var(--destructive-foreground))",
+          DEFAULT: "var(--destructive)",
+          foreground: "var(--destructive-foreground)",
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: "var(--muted)",
+          foreground: "var(--muted-foreground)",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "var(--accent)",
+          foreground: "var(--accent-foreground)",
         },
         popover: {
-          DEFAULT: "hsl(var(--popover))",
-          foreground: "hsl(var(--popover-foreground))",
+          DEFAULT: "var(--popover)",
+          foreground: "var(--popover-foreground)",
         },
         card: {
-          DEFAULT: "hsl(var(--card))",
-          foreground: "hsl(var(--card-foreground))",
+          DEFAULT: "var(--card)",
+          foreground: "var(--card-foreground)",
+        },
+        // Superficie / elevación (Tarea 1 v2.0).
+        surface: {
+          "0": "var(--surface-0)",
+          "1": "var(--surface-1)",
+          "2": "var(--surface-2)",
+          "3": "var(--surface-3)",
         },
         // Estados clínicos semánticos.
         success: {
-          DEFAULT: "hsl(var(--success))",
-          foreground: "hsl(var(--success-foreground))",
+          DEFAULT: "var(--success)",
+          foreground: "var(--success-foreground)",
         },
         warning: {
-          DEFAULT: "hsl(var(--warning))",
-          foreground: "hsl(var(--warning-foreground))",
+          DEFAULT: "var(--warning)",
+          foreground: "var(--warning-foreground)",
         },
         critical: {
-          DEFAULT: "hsl(var(--critical))",
-          foreground: "hsl(var(--critical-foreground))",
+          DEFAULT: "var(--critical)",
+          foreground: "var(--critical-foreground)",
         },
         info: {
-          DEFAULT: "hsl(var(--info))",
-          foreground: "hsl(var(--info-foreground))",
+          DEFAULT: "var(--info)",
+          foreground: "var(--info-foreground)",
         },
         // Banners clínicos especiales (no colisionan con triage).
         lasa: {
-          DEFAULT: "hsl(var(--lasa))",
-          foreground: "hsl(var(--lasa-foreground))",
+          DEFAULT: "var(--lasa)",
+          foreground: "var(--lasa-foreground)",
         },
         allergy: {
-          DEFAULT: "hsl(var(--allergy))",
-          foreground: "hsl(var(--allergy-foreground))",
+          DEFAULT: "var(--allergy)",
+          foreground: "var(--allergy-foreground)",
         },
-        // Sidebar — branding Avante navy. Tokens en globals.css con override
-        // por tema. SIN este mapeo, las clases bg-sidebar-background, etc. no
-        // se generan y el sidebar pierde el fondo navy → logo blanco invisible
-        // en tema claro.
+        // Sidebar — branding Avante navy. Sin este mapeo, las clases
+        // bg-sidebar-background etc. no se generan y el sidebar pierde fondo.
         sidebar: {
-          background: "hsl(var(--sidebar-background))",
-          foreground: "hsl(var(--sidebar-foreground))",
-          border: "hsl(var(--sidebar-border))",
+          background: "var(--sidebar-background)",
+          foreground: "var(--sidebar-foreground)",
+          border: "var(--sidebar-border)",
           accent: {
-            DEFAULT: "hsl(var(--sidebar-accent))",
-            foreground: "hsl(var(--sidebar-accent-foreground))",
+            DEFAULT: "var(--sidebar-accent)",
+            foreground: "var(--sidebar-accent-foreground)",
           },
-          ring: "hsl(var(--ring))",
+          ring: "var(--ring)",
         },
         // Manchester Triage System — ver docs/07_design_system.md §2.2.
         // Paleta fija auditada WCAG AA. NO modificar por tenant.
         triage: {
           red: {
-            DEFAULT: "hsl(var(--triage-red))",
-            foreground: "hsl(var(--triage-red-foreground))",
+            DEFAULT: "var(--triage-red)",
+            foreground: "var(--triage-red-foreground)",
           },
           orange: {
-            DEFAULT: "hsl(var(--triage-orange))",
-            foreground: "hsl(var(--triage-orange-foreground))",
+            DEFAULT: "var(--triage-orange)",
+            foreground: "var(--triage-orange-foreground)",
           },
           yellow: {
-            DEFAULT: "hsl(var(--triage-yellow))",
-            foreground: "hsl(var(--triage-yellow-foreground))",
+            DEFAULT: "var(--triage-yellow)",
+            foreground: "var(--triage-yellow-foreground)",
           },
           green: {
-            DEFAULT: "hsl(var(--triage-green))",
-            foreground: "hsl(var(--triage-green-foreground))",
+            DEFAULT: "var(--triage-green)",
+            foreground: "var(--triage-green-foreground)",
           },
           blue: {
-            DEFAULT: "hsl(var(--triage-blue))",
-            foreground: "hsl(var(--triage-blue-foreground))",
+            DEFAULT: "var(--triage-blue)",
+            foreground: "var(--triage-blue-foreground)",
           },
         },
       },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        // Radios estandarizados v2.0 (Tarea 1). --radius = alias de md.
+        sm:  "var(--radius-sm)",
+        md:  "var(--radius-md)",
+        lg:  "var(--radius-lg)",
+        xl:  "var(--radius-xl)",
+        // Retrocompat: Shadcn usa `rounded-lg` / `rounded-md` / `rounded-sm`
+        // y espera `var(--radius)` o valores derivados. Redirigimos a los
+        // nuevos tokens para consistencia sin romper componentes existentes.
       },
       fontFamily: {
         sans: [
@@ -148,8 +162,16 @@ const config: Config = {
         ],
       },
       fontFeatureSettings: {
-        // tabular-nums activado donde se aplique font-variant-numeric.
         tabular: '"tnum"',
+      },
+      // Transiciones con tokens de movimiento v2.0 (Tarea 1).
+      transitionDuration: {
+        fast: "var(--motion-fast)",
+        base: "var(--motion-base)",
+        slow: "var(--motion-slow)",
+      },
+      transitionTimingFunction: {
+        standard: "var(--motion-easing)",
       },
       keyframes: {
         "accordion-down": {
