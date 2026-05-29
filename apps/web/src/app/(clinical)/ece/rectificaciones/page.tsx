@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import {
@@ -20,6 +21,10 @@ type EstadoRectificacion = "PENDIENTE" | "APROBADA" | "RECHAZADA" | "FIRMADA";
 /**
  * ECE — Mis rectificaciones pendientes (PHYSICIAN/NURSE).
  * Filtra por documentoInstanciaId desde query param.
+ *
+ * HG-17: usa useSearchParams() en lugar de prop searchParams para evitar
+ * el error de Next.js 14 sobre acceso a searchParams en Client Components
+ * sin Suspense.
  */
 
 const dateFmt = new Intl.DateTimeFormat("es-SV", {
@@ -38,12 +43,9 @@ function EstadoBadge({ estado }: { estado: EstadoRectificacion }) {
   return <Badge variant={variant}>{label}</Badge>;
 }
 
-export default function EceRectificacionesPage({
-  searchParams,
-}: {
-  searchParams: { documentoInstanciaId?: string };
-}) {
-  const docId = searchParams.documentoInstanciaId ?? "";
+export default function EceRectificacionesPage() {
+  const searchParams = useSearchParams();
+  const docId = searchParams.get("documentoInstanciaId") ?? "";
 
   const query = trpc.eceRectificacion.list.useQuery(
     { documentoInstanciaId: docId },

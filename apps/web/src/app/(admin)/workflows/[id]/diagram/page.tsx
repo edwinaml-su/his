@@ -29,14 +29,15 @@ export default function WorkflowDiagramRedirect() {
             Esta vista fue movida al Workflow Designer, que incluye grafo de
             estados, editor de transiciones y matriz de roles funcionales.
           </p>
+          {/* HG-21: `id` es el UUID de la instancia, no el código del tipo de documento.
+              El Workflow Designer indexa por código (ej. HOJA_ING, TRIAJE).
+              Redirigimos a la lista para que el usuario elija el tipo correcto. */}
           <div className="flex gap-2">
             <Button asChild>
-              <Link href={`/workflow-designer/${id}`}>Abrir en Workflow Designer</Link>
-            </Button>
-            <Button asChild variant="outline">
-              <Link href="/workflow-designer">Ver todos los workflows</Link>
+              <Link href="/workflow-designer">Ver Workflow Designer</Link>
             </Button>
           </div>
+          <p className="text-xs text-muted-foreground font-mono">Instancia: {id}</p>
         </CardContent>
       </Card>
     </div>

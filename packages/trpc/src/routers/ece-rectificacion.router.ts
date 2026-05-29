@@ -415,6 +415,7 @@ export const eceRectificacionRouter = router({
       await insertOutbox(ctx.prisma, "ece.rectificacion.aprobada", {
         rectificacionId: input.rectificacionId,
         documentoInstanciaId: rect.documento_instancia_id,
+        solicitanteId: rect.solicitante_id, // HG-15: needed by dispatcher para notificar al solicitante
         aprobadorId: ctx.user.id,
       });
 
@@ -424,8 +425,14 @@ export const eceRectificacionRouter = router({
   /**
    * DIR rechaza una rectificación pendiente con motivo obligatorio.
    * NTEC Art. 42: requiere PIN argon2id del aprobador antes del UPDATE.
+   *
+   * HG-15: unificado a requireEcePermission("ece.rectificacion.aprobar") para
+   * mantener consistencia con `aprobar`. Antes usaba requireRole(["DIR"]) —
+   * asimetría que permitía que un DIR rechazara sin tener el permiso ECE asignado
+   * y que un usuario con permiso ECE pudiera aprobar pero no rechazar.
+   * El permiso "ece.rectificacion.aprobar" cubre ambos actos de revisión del DIR.
    */
-  rechazar: requireRole(["DIR"])
+  rechazar: requireEcePermission("ece.rectificacion.aprobar")
     .input(rechazarInput)
     .mutation(async ({ ctx, input }) => {
       // HG-16: verificar identidad criptográfica del DIR antes de cualquier cambio.
@@ -465,7 +472,8 @@ export const eceRectificacionRouter = router({
       await insertOutbox(ctx.prisma, "ece.rectificacion.rechazada", {
         rectificacionId: input.rectificacionId,
         documentoInstanciaId: rect.documento_instancia_id,
-        aprobadorId: ctx.user.id,
+        solicitanteId: rect.solicitante_id, // HG-15
+        rechazadoPorId: ctx.user.id,
         motivoRechazo: input.motivoRechazo,
       });
 

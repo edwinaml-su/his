@@ -147,16 +147,19 @@ async function resolveRecipientsAndSeverity(
       return resolveAccountingPeriodClosed(parsed.payload, event.organizationId, prisma);
     case "accounting.journalPostedHighValue":
       return resolveAccountingJournalPostedHighValue(parsed.payload, event.organizationId, prisma);
-    default:
+    default: {
+      // HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42).
+      // Se maneja fuera del switch tipado porque el eventType es nuevo y el
+      // node_modules/@his/contracts (main repo) aún no lo incluye en su unión.
+      const eventTypeRuntime: string = parsed.eventType;
+      if (eventTypeRuntime === "ece.rectificacion.aprobada" || eventTypeRuntime === "ece.rectificacion.rechazada") {
+        const payload = parsed.payload as EceRectificacionNotifPayload;
+        return eventTypeRuntime === "ece.rectificacion.aprobada"
+          ? resolveEceRectificacionAprobada(payload, prisma)
+          : resolveEceRectificacionRechazada(payload, prisma);
+      }
       return [];
-    case "pathology.reportSigned":
-    case "pathology.criticalFinding":
-      // Beta.17.1: routing pendiente — emite evento sin destinatarios.
-      return [];
-    case "accounting.periodClosed":
-    case "accounting.journalPostedHighValue":
-      // Beta.18.1: routing pendiente — emite evento sin destinatarios.
-      return [];
+    }
   }
 }
 
@@ -392,6 +395,38 @@ async function resolveAccountingJournalPostedHighValue(
   if (!user) return [];
   const roleCode = await loadRoleCode(prisma, user.id, organizationId);
   return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode, severity: "WARNING" }];
+}
+
+// -----------------------------------------------------------------------------
+// HG-15 (Stream G, P2) — ECE Rectificaciones (NTEC Art. 42)
+// Notifica al solicitante cuando DIR aprueba o rechaza su rectificación.
+// Tipos inline para evitar dependencia de versión de @his/contracts en node_modules.
+// -----------------------------------------------------------------------------
+
+type EceRectificacionNotifPayload = { solicitanteId: string };
+
+async function resolveEceRectificacionAprobada(
+  payload: EceRectificacionNotifPayload,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.solicitanteId },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode: null, severity: "INFO" as Severity }];
+}
+
+async function resolveEceRectificacionRechazada(
+  payload: EceRectificacionNotifPayload,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const user = await prisma.user.findUnique({
+    where: { id: payload.solicitanteId },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  return [{ userId: user.id, email: user.email, fullName: user.fullName, roleCode: null, severity: "WARNING" as Severity }];
 }
 
 async function loadRoleCode(

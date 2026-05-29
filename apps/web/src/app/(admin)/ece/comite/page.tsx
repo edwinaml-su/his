@@ -249,8 +249,11 @@ function NuevaMinutaForm({ onSuccess }: NuevaMinutaFormProps) {
     }
     setFormError(null);
 
+    // HG-09: new Date("YYYY-MM-DD") en TZ UTC-6 produce día anterior.
+    // Fijamos mediodía local para que el Date resultante sea siempre el día correcto
+    // en cualquier timezone ±12h. El servidor almacena como date (sin hora).
     create.mutate({
-      fechaReunion: new Date(fecha),
+      fechaReunion: new Date(`${fecha}T12:00:00`),
       asistentes,
       temasAgenda: temas,
       acuerdos: [],
