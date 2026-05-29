@@ -15,6 +15,7 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
 
 // =============================================================================
 // US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
@@ -320,12 +321,39 @@ export const patientRouter = router({
     }),
 
   create: tenantProcedure.input(patientCreateSchema).mutation(async ({ ctx, input }) => {
-    return ctx.prisma.patient.create({
-      data: {
-        ...input,
-        organizationId: ctx.tenant.organizationId,
-        createdBy: ctx.user.id,
-      },
+    if (!ctx.tenant.establishmentId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Selecciona un establecimiento antes de registrar pacientes.",
+      });
+    }
+
+    const establishmentId = ctx.tenant.establishmentId;
+
+    return ctx.prisma.$transaction(async (tx) => {
+      const patient = await tx.patient.create({
+        data: {
+          ...input,
+          organizationId: ctx.tenant.organizationId,
+          createdBy: ctx.user.id,
+        },
+      });
+
+      // Hook automático: crear ece.paciente para habilitar documentos clínicos ECE.
+      // Non-fatal: si falla, el Patient ya se creó y se puede backfillear luego.
+      await hookEcePacienteAfterCreate(
+        tx,
+        patient.id,
+        establishmentId,
+        patient.mrn,
+      ).catch((err: unknown) => {
+        console.error(
+          `[patient.create] hook ECE falló para patient=${patient.id}:`,
+          err,
+        );
+      });
+
+      return patient;
     });
   }),
 

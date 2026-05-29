@@ -8,7 +8,7 @@ import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { patientRouter } from "../patient.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_TENANT, MOCK_USER_ADMIN, VALID_DUIS, INVALID_DUIS } from "@his/test-utils";
+import { MOCK_TENANT, MOCK_TENANT_NO_ESTABLISHMENT, MOCK_USER_ADMIN, VALID_DUIS, INVALID_DUIS } from "@his/test-utils";
 
 describe("patientRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
@@ -160,7 +160,14 @@ describe("patientRouter", () => {
 
   describe("create", () => {
     it("inyecta organizationId y createdBy desde el contexto", async () => {
-      prisma.patient.create.mockResolvedValue({ id: "new" } as never);
+      // create ahora corre dentro de $transaction (hook ECE).
+      prisma.patient.create.mockResolvedValue({ id: "new", mrn: "MRN-X" } as never);
+      // El hook ECE usa $queryRaw — retornamos vacío (idempotente: no existe aún).
+      prisma.$queryRaw.mockResolvedValue([] as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
       await caller.create({
@@ -187,6 +194,20 @@ describe("patientRouter", () => {
           biologicalSexId: "00000000-0000-0000-0000-000000000099",
         } as never),
       ).rejects.toBeInstanceOf(TRPCError);
+    });
+
+    it("falla con FORBIDDEN si el tenant no tiene establecimiento", async () => {
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+      );
+      await expect(
+        caller.create({
+          mrn: "MRN-X",
+          firstName: "Juan",
+          lastName: "Pérez",
+          biologicalSexId: "00000000-0000-0000-0000-000000000099",
+        } as never),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 

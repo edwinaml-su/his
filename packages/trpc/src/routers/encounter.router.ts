@@ -18,6 +18,10 @@ import {
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
 import { nextEncounterNumber } from "../lib/encounter-numbering";
+import {
+  hookEceEpisodioAfterAdmit,
+  resolveEceEstablecimientoId,
+} from "../lib/ece-hooks";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -190,6 +194,52 @@ export const encounterRouter = router({
 
       return encounter;
     }).then(async (encounter) => {
+      // Hook ECE: crear ece.paciente + ece.episodio_atencion para habilitar
+      // documentos clínicos NTEC. TX separada — si falla, no revierte la admisión
+      // (se puede backfillear con scripts/backfill-ece.mjs).
+      // EXCEPCIÓN: BIRTH/NEWBORN se gestionan en atencion-rn.router (ya crean ece.*).
+      if (
+        input.admissionType !== "BIRTH" &&
+        input.admissionType !== "NEWBORN"
+      ) {
+        await ctx.prisma.$transaction(async (tx) => {
+          const eceEstabId = await resolveEceEstablecimientoId(
+            tx,
+            ctx.tenant.establishmentId!,
+          );
+          if (!eceEstabId) {
+            // ece.establecimiento no inicializado: ejecutar backfill-ece.mjs primero.
+            console.warn(
+              `[encounter.admit] ece.establecimiento no encontrado para estab=${ctx.tenant.establishmentId}. ` +
+                "Ejecuta scripts/backfill-ece.mjs para inicializar el schema ECE.",
+            );
+            return;
+          }
+
+          const patient = await tx.patient.findFirst({
+            where: { id: input.patientId },
+            select: { id: true, mrn: true },
+          });
+          if (!patient) return;
+
+          await hookEceEpisodioAfterAdmit(
+            tx,
+            encounter.id,
+            input.patientId,
+            input.admissionType ?? "SCHEDULED",
+            encounter.admittedAt,
+            eceEstabId,
+            ctx.tenant.establishmentId!,
+            patient.mrn,
+          );
+        }).catch((err: unknown) => {
+          console.error(
+            `[encounter.admit] hook ECE falló para encounter=${encounter.id}:`,
+            err,
+          );
+        });
+      }
+
       // Hook US.F2.6.1: asignar GSRN al confirmar admisión hospitalaria.
       // TX separada — no bloquea la admisión si el GSRN falla.
       // Silencia CONFLICT (paciente ya tiene GSRN de un encuentro previo).
