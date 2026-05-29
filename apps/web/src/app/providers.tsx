@@ -6,7 +6,7 @@ import { TooltipProvider } from "@his/ui/components/tooltip";
 import { ToastProvider, ToastViewport } from "@his/ui/components/toast";
 import { TRPCProvider } from "@/lib/trpc/react";
 import { IdleMonitor } from "@/components/idle-monitor";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { createSupabaseBrowserClient, safeGetSession } from "@/lib/supabase/client";
 
 /**
  * Hook interno: indica si hay sesión Supabase activa en el cliente.
@@ -27,8 +27,9 @@ function useHasSession(): boolean {
     const supabase = createSupabaseBrowserClient();
     let cancelled = false;
 
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!cancelled) setHasSession(!!data.session);
+    // Wrapper resiliente: Safari + _recoverAndRefresh bug → auto-heal limpiando storage.
+    void safeGetSession(supabase).then(({ session }) => {
+      if (!cancelled) setHasSession(!!session);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
