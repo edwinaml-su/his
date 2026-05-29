@@ -17,6 +17,27 @@ import { PanelLeft } from "lucide-react";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "../lib/utils";
 import { Button } from "./button";
+import { Sheet, SheetContent } from "./sheet";
+
+// ── Mobile breakpoint hook ────────────────────────────────────────────────────
+
+const MOBILE_BREAKPOINT = 768; // px — equivale a Tailwind `md`
+
+export function useIsMobile(): boolean {
+  const [isMobile, setIsMobile] = React.useState(false);
+  React.useEffect(() => {
+    // Guard: jsdom y entornos SSR no implementan matchMedia.
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`);
+    setIsMobile(mql.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  return isMobile;
+}
 
 // ── Context ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +76,9 @@ export function SidebarProvider({
   style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
-  const [openState, setOpenState] = React.useState(defaultOpen);
+  const isMobile = useIsMobile();
+  // Mobile siempre arranca cerrado (es Sheet, no panel persistido).
+  const [openState, setOpenState] = React.useState(isMobile ? false : defaultOpen);
   const open = openProp !== undefined ? openProp : openState;
   const setOpen = React.useCallback(
     (value: boolean) => {
@@ -64,10 +87,13 @@ export function SidebarProvider({
       } else {
         setOpenState(value);
       }
-      // Persistir en cookie para SSR hint (mismo nombre que Shadcn oficial).
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${value}; path=/; max-age=${60 * 60 * 24 * 7}`;
+      // Solo persistir cookie en desktop — en mobile el Sheet no debe afectar
+      // el estado colapsado desktop que sobrevive al refresh.
+      if (!isMobile) {
+        document.cookie = `${SIDEBAR_COOKIE_NAME}=${value}; path=/; max-age=${60 * 60 * 24 * 7}`;
+      }
     },
-    [onOpenChange],
+    [onOpenChange, isMobile],
   );
 
   const toggleSidebar = React.useCallback(() => setOpen(!open), [open, setOpen]);
@@ -116,7 +142,8 @@ export function Sidebar({
   className?: string;
   children: React.ReactNode;
 }) {
-  const { open } = useSidebar();
+  const { open, setOpen } = useSidebar();
+  const isMobile = useIsMobile();
 
   if (collapsible === "none") {
     return (
@@ -131,6 +158,31 @@ export function Sidebar({
     );
   }
 
+  // En mobile: renderizar como Sheet desde el lado izquierdo.
+  // El mismo `open` state de SidebarContext controla apertura/cierre.
+  if (isMobile) {
+    return (
+      <Sheet open={open} onOpenChange={setOpen}>
+        <SheetContent
+          side="left"
+          className={cn(
+            "flex w-72 max-w-[85vw] flex-col border-r border-sidebar-border bg-sidebar p-0 text-sidebar-foreground",
+            className,
+          )}
+        >
+          <div
+            data-state="expanded"
+            data-collapsible={collapsible}
+            className="group flex h-full flex-col"
+          >
+            {children}
+          </div>
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  // Desktop: panel fijo con transición de ancho.
   return (
     <div
       data-state={open ? "expanded" : "collapsed"}
