@@ -13,6 +13,12 @@
  * HH-06 (2026-05-19):
  * - Todos los resolvers tenant-scoped envueltos en withTenantContext para
  *   garantizar demote a rol `authenticated` y aplicación de RLS de Postgres.
+ *
+ * IPSG.1-H1 (2026-05-30):
+ * - `specimen.collect` ahora persiste evidencia de verificación 2-IDs bedside:
+ *   gsrnPacienteVerificado, identifier2Kind, identifier2Value, verifiedAt, verifiedBy.
+ * - Agrega validación por kind (DUI/NOMBRE_COMPLETO/FECHA_NAC/MRN).
+ * - Emite evento `jci.ipsg1.lab_bedside_verified` dentro de la misma tx.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -32,6 +38,7 @@ import {
   type LisSex,
   type LisResultFlag,
   type LabCriticalValuePayload,
+  type Identifier2Kind,
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
@@ -227,10 +234,12 @@ export const lisRouter = router({
     /**
      * Registra la toma física de la muestra.
      *
-     * JCI Standard: IPSG.1 ME 4 — cuando se envía `patientGsrn` (flujo bedside),
-     * se verifica que el GSRN coincida con el paciente de la orden Y que el
-     * `secondIdentifier` coincida con el MRN o con al menos un PatientIdentifier
-     * (DUI / NIT / NIE / pasaporte). Si cualquiera de los dos no coincide, FORBIDDEN.
+     * JCI Standard: IPSG.1 ME 4 (IPSG.1-H1) — cuando se envía `patientGsrn`
+     * (flujo bedside), se requiere GSRN + identifier2Kind + secondIdentifier.
+     * Se verifica que el GSRN coincida con el paciente de la orden Y que el
+     * secondIdentifier coincida con el campo del paciente indicado por kind.
+     * La evidencia de verificación se persiste en LabSpecimen y se emite
+     * el evento jci.ipsg1.lab_bedside_verified dentro de la misma transacción.
      */
     collect: tenantProcedure.input(specimenCollectInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -240,12 +249,26 @@ export const lisRouter = router({
         });
         if (!order) throw new TRPCError({ code: "NOT_FOUND" });
 
-        // JCI Standard: IPSG.1 ME 4 — verificación 2-IDs (solo flujo bedside).
+        // IPSG.1-H1: verificación 2-IDs obligatoria en flujo bedside.
+        let bedsideVerification: {
+          gsrnPacienteVerificado: string;
+          identifier2Kind: string;
+          identifier2Value: string;
+          verifiedAt: Date;
+          verifiedBy: string;
+        } | null = null;
+
         if (input.patientGsrn !== undefined) {
           if (!input.secondIdentifier) {
             throw new TRPCError({
               code: "BAD_REQUEST",
               message: "IPSG.1: se requiere un segundo identificador junto al GSRN de pulsera.",
+            });
+          }
+          if (!input.identifier2Kind) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "IPSG.1: se requiere identifier2Kind para clasificar el segundo identificador.",
             });
           }
 
@@ -254,33 +277,45 @@ export const lisRouter = router({
             select: {
               gsrn: true,
               mrn: true,
+              firstName: true,
+              lastName: true,
+              birthDate: true,
               identifiers: { select: { value: true } },
             },
           });
           if (!patient) throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
 
-          // Verificar primer ID: GSRN de pulsera.
+          // Primer ID: GSRN de pulsera.
           if (patient.gsrn !== input.patientGsrn) {
             throw new TRPCError({
-              code: "FORBIDDEN",
+              code: "PRECONDITION_FAILED",
               message: "IPSG.1: el GSRN de la pulsera no coincide con el paciente de la orden.",
             });
           }
 
-          // Verificar segundo ID: MRN o cualquier PatientIdentifier registrado.
-          const knownIdentifiers = new Set<string>([
-            patient.mrn,
-            ...patient.identifiers.map((i) => i.value),
-          ]);
-          if (!knownIdentifiers.has(input.secondIdentifier)) {
+          // Segundo ID: validar según el kind declarado.
+          const identifier2Matched = matchIdentifier2(
+            input.identifier2Kind,
+            input.secondIdentifier,
+            patient,
+          );
+          if (!identifier2Matched) {
             throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "IPSG.1: el segundo identificador no coincide con el paciente de la orden.",
+              code: "PRECONDITION_FAILED",
+              message: `IPSG.1: el segundo identificador (${input.identifier2Kind}) no coincide con el paciente de la orden.`,
             });
           }
+
+          bedsideVerification = {
+            gsrnPacienteVerificado: input.patientGsrn,
+            identifier2Kind: input.identifier2Kind,
+            identifier2Value: input.secondIdentifier,
+            verifiedAt: new Date(),
+            verifiedBy: ctx.user.id,
+          };
         }
 
-        return tx.labSpecimen.create({
+        const specimen = await tx.labSpecimen.create({
           data: {
             orderId: input.orderId,
             type: input.type,
@@ -288,8 +323,30 @@ export const lisRouter = router({
             collectedAt: input.collectedAt ?? new Date(),
             collectedById: ctx.user.id,
             condition: "ACCEPTABLE",
+            ...bedsideVerification,
           },
         });
+
+        // Emitir evento de auditoría JCI solo cuando hubo verificación bedside.
+        if (bedsideVerification) {
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "jci.ipsg1.lab_bedside_verified",
+            aggregateType: "LabSpecimen",
+            aggregateId: specimen.id,
+            emittedById: ctx.user.id,
+            payload: {
+              specimenId: specimen.id,
+              orderId: input.orderId,
+              patientId: order.patientId,
+              gsrnVerificado: bedsideVerification.gsrnPacienteVerificado,
+              identifier2Kind: bedsideVerification.identifier2Kind,
+              verifiedBy: bedsideVerification.verifiedBy,
+            },
+          });
+        }
+
+        return specimen;
       });
     }),
 
@@ -533,4 +590,45 @@ function buildReferenceRangesFromTest(test: {
       criticalHigh,
     },
   ];
+}
+
+/**
+ * IPSG.1-H1 — Valida el segundo identificador bedside contra los datos del paciente
+ * en BD según el kind declarado por el operador.
+ */
+function matchIdentifier2(
+  kind: Identifier2Kind,
+  value: string,
+  patient: {
+    mrn: string;
+    firstName: string;
+    lastName: string;
+    birthDate: Date | null;
+    identifiers: { value: string }[];
+  },
+): boolean {
+  switch (kind) {
+    case "MRN":
+      return patient.mrn === value;
+    case "DUI":
+      // DUI se almacena en PatientIdentifier; acepta cualquier identifier registrado.
+      return patient.identifiers.some((id) => id.value === value);
+    case "NOMBRE_COMPLETO": {
+      const nombreBD = `${patient.firstName} ${patient.lastName}`.trim().toLowerCase();
+      return nombreBD === value.trim().toLowerCase();
+    }
+    case "FECHA_NAC": {
+      if (!patient.birthDate) return false;
+      // Acepta ISO 8601 (YYYY-MM-DD) o DD/MM/YYYY.
+      const normalized = value.includes("/")
+        ? value.split("/").reverse().join("-")
+        : value;
+      return patient.birthDate.toISOString().startsWith(normalized);
+    }
+    default: {
+      // Exhaustive check — nunca se llega aquí si Identifier2Kind está completo.
+      const _exhaustive: never = kind;
+      return _exhaustive;
+    }
+  }
 }

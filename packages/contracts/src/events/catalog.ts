@@ -169,6 +169,8 @@ export const EVENT_TYPES = [
   "jci.ipsg2.abbr_acknowledged",
   // JCI IPSG.3-H1 (US-21-D4) — Reconocimiento de medicamento LASA antes de administrar
   "jci.ipsg3.lasa_acknowledged",
+  // JCI IPSG.1-H1 (US-21-D5) — Verificación 2-IDs en toma de muestra de laboratorio bedside
+  "jci.ipsg1.lab_bedside_verified",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

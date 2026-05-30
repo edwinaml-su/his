@@ -1580,6 +1580,18 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
       ackedAt: z.string(),
     }),
   }),
+  // JCI IPSG.1-H1 (US-21-D5) — Verificación 2-IDs en toma de muestra de laboratorio bedside
+  z.object({
+    eventType: z.literal("jci.ipsg1.lab_bedside_verified"),
+    payload: z.object({
+      specimenId: z.string(),
+      orderId: z.string().uuid(),
+      patientId: z.string().uuid(),
+      gsrnVerificado: z.string().length(18),
+      identifier2Kind: z.enum(["DUI", "NOMBRE_COMPLETO", "FECHA_NAC", "MRN"]),
+      verifiedBy: z.string().uuid(),
+    }),
+  }),
 ]);
 
 export type DomainEventPayloadInput = z.infer<typeof domainEventPayloadSchema>;

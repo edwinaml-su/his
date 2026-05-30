@@ -6,6 +6,10 @@
  *   ranges, `applyReflexRules` para detectar pruebas reflex a ordenar
  *   automáticamente, `canTransitionLabOrder` state machine.
  * - Tipos para reference ranges age/sex stratified y reflex rules.
+ *
+ * IPSG.1-H1 (2026-05-30):
+ * - `identifier2KindEnum` para clasificar el segundo identificador en bedside.
+ * - `specimenCollectInput` extendido con `identifier2Kind`.
  */
 import { z } from "zod";
 
@@ -20,6 +24,15 @@ export const labPriorityEnum = z.enum(LAB_PRIORITY);
 export const labOrderStatusEnum = z.enum(LAB_ORDER_STATUS);
 export const specimenConditionEnum = z.enum(SPECIMEN_CONDITION);
 export const resultFlagEnum = z.enum(RESULT_FLAG);
+
+/**
+ * IPSG.1-H1 — Tipo del segundo identificador en flujo bedside de toma de muestra.
+ * JCI exige registrar explícitamente qué tipo de identificador se usó para
+ * poder auditar la verificación de 2-IDs.
+ */
+const IDENTIFIER_2_KIND = ["DUI", "NOMBRE_COMPLETO", "FECHA_NAC", "MRN"] as const;
+export const identifier2KindEnum = z.enum(IDENTIFIER_2_KIND);
+export type Identifier2Kind = z.infer<typeof identifier2KindEnum>;
 
 export const labPanelListInput = z.object({
   search: z.string().trim().max(120).optional(),
@@ -73,9 +86,14 @@ export const specimenCollectInput = z.object({
   /** GSRN de la pulsera del paciente (AI 8018, 18 dígitos). Requerido para bedside. */
   patientGsrn: z.string().length(18).regex(/^\d{18}$/).optional(),
   /**
-   * Segundo identificador: MRN interno o valor de PatientIdentifier (DUI/NIT/NIE).
-   * Cuando patientGsrn viene presente, secondIdentifier también debe venir — se
-   * valida en el router con refinement lógico para no bloquear uso en lab (sin pulsera).
+   * IPSG.1-H1: tipo del segundo identificador usado en la verificación bedside.
+   * Requerido cuando patientGsrn está presente — permite auditoría JCI del método.
+   */
+  identifier2Kind: identifier2KindEnum.optional(),
+  /**
+   * Valor del segundo identificador (MRN, DUI, nombre completo, fecha de nacimiento).
+   * Cuando patientGsrn viene presente, identifier2Kind + secondIdentifier son
+   * obligatorios — se valida en el router para no bloquear el flujo lab sin pulsera.
    */
   secondIdentifier: z.string().trim().min(1).max(80).optional(),
 });
