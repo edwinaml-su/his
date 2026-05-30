@@ -98,7 +98,11 @@ describe("portal.auth.requestLogin", () => {
 describe("portal.auth.verifyLogin", () => {
   let prisma;
   const vl = { id: "l", accountId: PA, purpose: "LOGIN", expiresAt: new Date(Date.now()+60000), consumedAt: null, account: { id: PA, status: "ACTIVE", mfaEnabled: false, mfaSecret: null, failedLoginAttempts: 0, lockedUntil: null } };
-  beforeEach(() => { prisma = mockDeep(); });
+  beforeEach(() => {
+    prisma = mockDeep();
+    // Vault retorna null → activa fallback app-layer para tests legados con mfaSecret.
+    prisma.$queryRaw.mockResolvedValue([{ get_portal_mfa_secret: null }]);
+  });
 
   it("happy-path sin MFA retorna token", async () => {
     prisma.portalMagicLink.findUnique.mockResolvedValue(vl);
@@ -147,7 +151,12 @@ describe("portal.auth.logout", () => {
 
 describe("portal.account.enableMfa", () => {
   let prisma;
-  beforeEach(() => { prisma = mockDeep(); process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx"; });
+  beforeEach(() => {
+    prisma = mockDeep();
+    process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
+    // Vault write mock (retorna bigint, valor ignorado por el router).
+    prisma.$executeRaw.mockResolvedValue(1n);
+  });
 
   it("genera QR server-side y secretForManualEntry (K-07)", async () => {
     prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, email: EM, mfaEnabled: false });
@@ -175,7 +184,12 @@ describe("portal.account.enableMfa", () => {
 
 describe("portal.account.verifyMfa", () => {
   let prisma;
-  beforeEach(() => { prisma = mockDeep(); process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx"; });
+  beforeEach(() => {
+    prisma = mockDeep();
+    process.env.AUTH_SECRET = "test-secret-minimum-32-chars-xxxx";
+    // Vault retorna null → activa fallback app-layer para tests legados.
+    prisma.$queryRaw.mockResolvedValue([{ get_portal_mfa_secret: null }]);
+  });
 
   it("PRECONDITION_FAILED sin mfaSecret", async () => {
     prisma.portalAccount.findUnique.mockResolvedValue({ id: PA, mfaSecret: null });

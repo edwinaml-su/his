@@ -4522,7 +4522,9 @@ enum GuardianRelationshipStatus {
 
 /// Cuenta del paciente en el Portal del Paciente. 1:1 con Patient.
 /// Auth es passwordless vía magic link + TOTP opcional.
-/// mfaSecret almacenado cifrado (AES-256-GCM, clave derivada de AUTH_SECRET).
+/// mfaSecret: cifrado AES-256-GCM (app-layer, legado). Nuevas escrituras usan Vault (SQL 161).
+/// mfaSecretVaultId: referencia al secret en vault.secrets (pgsodium XChaCha20).
+/// Exactamente uno de los dos debe ser no-null cuando mfaEnabled=true (CHECK en BD).
 model PortalAccount {
   id                   String              @id @default(uuid()) @db.Uuid
   patientId            String              @unique @db.Uuid
@@ -4530,8 +4532,10 @@ model PortalAccount {
   emailVerifiedAt      DateTime?           @db.Timestamptz()
   status               PortalAccountStatus @default(PENDING_VERIFICATION)
   mfaEnabled           Boolean             @default(false)
-  /// AES-256-GCM encrypted TOTP secret (null si MFA no configurado).
+  /// AES-256-GCM encrypted TOTP secret (legado app-layer). NULL cuando Vault está activo.
   mfaSecret            String?             @db.VarChar(512)
+  /// UUID del secret en vault.secrets (pgsodium). NULL cuando app-layer está activo.
+  mfaSecretVaultId     String?             @db.Uuid
   lastLoginAt          DateTime?           @db.Timestamptz()
   lastLoginIp          String?             @db.VarChar(45)
   failedLoginAttempts  Int                 @default(0)
