@@ -24,6 +24,37 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # Libs en versión 0.x — semver permite breaking changes en minor.
+      # Lección: tiptap-markdown 0.8.10→0.9.0 rompió build (PR #415).
+      # Cada lib listada aquí requiere migración manual guiada antes de bump minor.
+      - dependency-name: "tiptap-markdown"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@supabase/ssr"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@zxing/browser"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "lucide-react"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "next-themes"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "xlsx"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@tailwindcss/container-queries"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "class-variance-authority"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "@tailwindcss/typography"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "prettier-plugin-tailwindcss"
+        update-types: ["version-update:semver-minor"]
+      # AI SDK — minors frecuentemente cambian la API pública (3.x pre-estable)
+      - dependency-name: "@ai-sdk/*"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "ai"
+        update-types: ["version-update:semver-minor"]
+      # cmdk — 0→1 rompe API; mantener para tracking por si regresa a 0.x
+      - dependency-name: "cmdk"
+        update-types: ["version-update:semver-minor"]
     # Agrupar patches y minor para no inundar el backlog
     groups:
       dev-tools:
