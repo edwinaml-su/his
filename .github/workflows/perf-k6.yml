@@ -133,7 +133,7 @@ jobs:
 
       - name: Subir resultados como artefactos
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: k6-results-${{ github.event.inputs.scenario }}-${{ github.run_id }}
           path: |
