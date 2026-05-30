@@ -66,6 +66,13 @@ export default function UserDetailPage() {
     variant?: "default" | "success" | "destructive";
   } | null>(null);
 
+  // ─── Reset password (ADMIN only) ───────────────────────────────────────────
+  const [pwd, setPwd] = React.useState("");
+  const [pwdConfirm, setPwdConfirm] = React.useState("");
+  const [pwdReason, setPwdReason] = React.useState("");
+  const [pwdShow, setPwdShow] = React.useState(false);
+  const [pwdError, setPwdError] = React.useState<string | null>(null);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const query = (trpc as any).userAdmin.get.useQuery({ id }, { enabled: !!id });
   const user = query.data as UserDetail | undefined;
@@ -98,6 +105,49 @@ export default function UserDetailPage() {
     onError: (err: { message: string }) =>
       setToast({ title: "Error", description: err.message, variant: "destructive" }),
   });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resetPwdMut = (trpc as any).userAdmin.resetPassword.useMutation({
+    onSuccess: () => {
+      setPwd("");
+      setPwdConfirm("");
+      setPwdReason("");
+      setPwdError(null);
+      setToast({
+        title: "Password actualizado",
+        description: "La nueva contraseña ya está vigente. El usuario debe usar el password nuevo en el próximo login.",
+        variant: "success",
+      });
+    },
+    onError: (err: { message: string }) => {
+      setPwdError(err.message);
+      setToast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  function submitResetPassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwdError(null);
+    // Validación cliente: complejidad + match — defensa en profundidad
+    // (Zod en el server vuelve a validar — UX más amigable que el error backend).
+    if (pwd.length < 12) {
+      setPwdError("Mínimo 12 caracteres.");
+      return;
+    }
+    if (!/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd)) {
+      setPwdError("Debe incluir al menos una letra y un dígito.");
+      return;
+    }
+    if (pwd !== pwdConfirm) {
+      setPwdError("La confirmación no coincide.");
+      return;
+    }
+    if (pwdReason.trim().length < 5) {
+      setPwdError("Razón administrativa requerida (mínimo 5 caracteres).");
+      return;
+    }
+    resetPwdMut.mutate({ id, newPassword: pwd, reason: pwdReason.trim() });
+  }
 
   return (
     <div className="space-y-4">
@@ -259,6 +309,95 @@ export default function UserDetailPage() {
                   ))}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Cambiar contraseña</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="mb-3 text-sm text-muted-foreground">
+                Restablece la contraseña local del usuario. Requiere rol{" "}
+                <Badge variant="info">ADMIN</Badge>. El cambio queda registrado
+                en el audit log con la razón administrativa.
+              </p>
+              <Form onSubmit={submitResetPassword}>
+                <FormField>
+                  <Label htmlFor="newPassword">Nueva contraseña</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="newPassword"
+                      type={pwdShow ? "text" : "password"}
+                      value={pwd}
+                      onChange={(e) => setPwd(e.target.value)}
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={200}
+                      aria-describedby="pwd-hint"
+                      className="font-mono"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setPwdShow((v) => !v)}
+                      aria-pressed={pwdShow}
+                      aria-label={pwdShow ? "Ocultar contraseña" : "Mostrar contraseña"}
+                    >
+                      {pwdShow ? "Ocultar" : "Mostrar"}
+                    </Button>
+                  </div>
+                  <p id="pwd-hint" className="text-xs text-muted-foreground">
+                    Mínimo 12 caracteres, al menos 1 letra y 1 dígito.
+                  </p>
+                </FormField>
+                <FormField>
+                  <Label htmlFor="newPasswordConfirm">Confirmar contraseña</Label>
+                  <Input
+                    id="newPasswordConfirm"
+                    type={pwdShow ? "text" : "password"}
+                    value={pwdConfirm}
+                    onChange={(e) => setPwdConfirm(e.target.value)}
+                    autoComplete="new-password"
+                    minLength={12}
+                    maxLength={200}
+                    className="font-mono"
+                  />
+                </FormField>
+                <FormField>
+                  <Label htmlFor="resetReason">Razón administrativa</Label>
+                  <Input
+                    id="resetReason"
+                    value={pwdReason}
+                    onChange={(e) => setPwdReason(e.target.value)}
+                    placeholder="Ej. usuario solicitó reset por olvido, rotación trimestral, etc."
+                    minLength={5}
+                    maxLength={500}
+                  />
+                  <FormHint>Queda registrada en audit log.</FormHint>
+                </FormField>
+                {pwdError ? (
+                  <p
+                    role="alert"
+                    className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive"
+                  >
+                    {pwdError}
+                  </p>
+                ) : null}
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    No puedes resetear tu propio password aquí.
+                  </p>
+                  <Button
+                    type="submit"
+                    variant="destructive"
+                    disabled={resetPwdMut.isPending || user.id === ""}
+                  >
+                    {resetPwdMut.isPending ? "Restableciendo…" : "Restablecer contraseña"}
+                  </Button>
+                </div>
+              </Form>
             </CardContent>
           </Card>
 

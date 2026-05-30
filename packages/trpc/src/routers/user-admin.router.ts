@@ -32,7 +32,9 @@ import {
   userAdminDeactivateInput,
   userAdminAssignRoleInput,
   userAdminRevokeRoleInput,
+  userAdminResetPasswordInput,
 } from "@his/contracts";
+import { hashPin, logger } from "@his/infrastructure";
 import { router, tenantProcedure } from "../trpc";
 
 function rethrowPrisma(err: unknown): never {
@@ -201,6 +203,105 @@ export const userAdminRouter = router({
       rethrowPrisma(err);
     }
   }),
+
+  /**
+   * Reset de password por ADMIN. Cierra cualquier `UserCredential` activo
+   * con método PASSWORD (validTo=now) y crea uno nuevo en la misma tx.
+   *
+   * Seguridad:
+   *   - No puedes resetear tu propio password con esta mutation (usa el flujo
+   *     de cambio propio que valida el password anterior).
+   *   - El usuario destino debe existir y estar activo.
+   *   - Hash: argon2id (mismo perfil que firma electrónica — defensa GPU).
+   *   - Auditoría: emite evento `user.password_reset` con razón clínica.
+   *
+   * Nota: este reset NO toca Supabase Auth. Si el usuario está vinculado
+   * vía OIDC (UserExternalIdentity), seguirá autenticándose por ese proveedor
+   * y este password solo se usa cuando se permite login local (futuro).
+   *
+   * TODO Sprint 4 — gate por requireRole(['ADMIN']) cuando el helper esté
+   * disponible; por ahora `tenantProcedure` + validación explícita rol ADMIN.
+   */
+  resetPassword: tenantProcedure
+    .input(userAdminResetPasswordInput)
+    .mutation(async ({ ctx, input }) => {
+      if (input.id === ctx.user.id) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "No puedes resetear tu propio password aquí. Usa el flujo de cambio propio.",
+        });
+      }
+
+      // Validar que el caller es ADMIN — defensa explícita.
+      const callerRoles = await ctx.prisma.userOrganizationRole.findMany({
+        where: {
+          userId: ctx.user.id,
+          validFrom: { lte: new Date() },
+          OR: [{ validTo: null }, { validTo: { gte: new Date() } }],
+        },
+        include: { role: { select: { code: true } } },
+      });
+      const isAdmin = callerRoles.some((r) => r.role.code === "ADMIN");
+      if (!isAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Solo administradores pueden resetear passwords.",
+        });
+      }
+
+      const target = await ctx.prisma.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, email: true, active: true },
+      });
+      if (!target) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Usuario no encontrado." });
+      }
+      if (!target.active) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No se puede resetear password de un usuario inactivo. Reactívelo primero.",
+        });
+      }
+
+      const { hash } = await hashPin(input.newPassword);
+      const now = new Date();
+
+      // Atómico: cerrar credenciales PASSWORD activas + crear la nueva.
+      await ctx.prisma.$transaction([
+        ctx.prisma.userCredential.updateMany({
+          where: {
+            userId: input.id,
+            method: "PASSWORD",
+            OR: [{ validTo: null }, { validTo: { gt: now } }],
+          },
+          data: { validTo: now },
+        }),
+        ctx.prisma.userCredential.create({
+          data: {
+            userId: input.id,
+            method: "PASSWORD",
+            secretHash: hash,
+            validFrom: now,
+          },
+        }),
+      ]);
+
+      // Audit hash chain ya captura el INSERT en UserCredential (trigger BD).
+      // Adicionalmente registramos el motivo y caller — útil para investigación.
+      logger.info(
+        {
+          event: "user.password_reset",
+          targetUserId: input.id,
+          targetEmail: target.email,
+          resetBy: ctx.user.id,
+          reason: input.reason,
+        },
+        "Password reseteado por ADMIN",
+      );
+
+      return { ok: true as const, userId: target.id, resetAt: now };
+    }),
 
   /**
    * Soft-disable. NO revoca membresías vigentes (auditable). El login

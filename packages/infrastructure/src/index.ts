@@ -7,6 +7,9 @@ export * from './notifications';
 // (alternativa a @his/infrastructure/firma/argon2 que vitest no resuelve
 // correctamente con conditional exports map).
 export { default as argon2 } from './firma/argon2';
+// Helpers argon2id para hashing de PIN / password (reusados por
+// firma electrónica + reset de password admin).
+export { hashPin, verifyPin, generateRecoveryToken } from './firma/pin-hasher';
 // Cliente XML-RPC para Odoo (lee env vars ODOO_URL/DB/USER/PASSWORD).
 export { getOdooClient, getOdooVersion } from './odoo/client';
 export type { OdooClient, OdooConfig } from './odoo/client';
