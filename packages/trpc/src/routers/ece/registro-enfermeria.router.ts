@@ -110,9 +110,11 @@ const sbarSchema = z.object({
   recommendation: sbarFieldSchema,
 });
 
+// JCI IPSG.2-H3: SBAR es obligatorio en cierre de turno cuando hay paciente activo.
+// Defensa en profundidad: Zod rechaza primero (user-friendly); trigger BD es el último recurso.
 const eceCierreSchema = z.object({
-  id: z.string().uuid(),
-  sbar: sbarSchema.optional(),
+  id:   z.string().uuid(),
+  sbar: sbarSchema,
 });
 
 // ---------------------------------------------------------------------------
@@ -462,18 +464,14 @@ export const registroEnfermeriaRouter = router({
   /**
    * Cierra el turno de enfermería con handoff SBAR opcional.
    *
-   * JCI Standard: IPSG.2 ME 4 — structured handoff.
+   * JCI Standard: IPSG.2 ME 4 — structured handoff (IPSG.2-H3).
    *
    * Flujo:
-   *   borrador | en_revision → cierre_turno
+   *   borrador | en_revision → en_revision (con sbar persistido)
    *
-   * Si sbar es null y el episodio está activo (no dado de alta), la respuesta
-   * incluye un warning pero el cierre procede — el estándar JCI recomienda pero
-   * la norma local no lo hace obligatorio (enfermeras en urgencias pueden cerrar
-   * sin handoff formal cuando no hay enfermero entrante aún).
-   *
-   * Una vez cerrado el turno, el registro avanza a estado 'en_revision' para
-   * que la firma posterior sea posible.
+   * SBAR requerido: situation + assessment + recommendation (>=10 chars c/u).
+   * Background recomendado pero no bloqueante.
+   * Defensa en profundidad: Zod (primera línea) + trigger BD (segunda línea).
    */
   cerrarTurno: nurseRole
     .input(eceCierreSchema)
@@ -492,29 +490,19 @@ export const registroEnfermeriaRouter = router({
           });
         }
 
+        // JCI IPSG.2-H3: sbar es obligatorio (Zod ya lo validó arriba).
+        // El trigger BD fn_validate_sbar_handoff es la segunda línea de defensa.
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
           UPDATE ece.registro_enfermeria
           SET estado_registro = 'en_revision',
-              sbar            = ${input.sbar ? JSON.stringify(input.sbar) : null}::jsonb
+              sbar            = ${JSON.stringify(input.sbar)}::jsonb
           WHERE id = ${input.id}::uuid
         `;
 
-        // Warning cuando el paciente sigue activo y no se registró SBAR.
-        // El episodio activo se infiere por la existencia del registro_enfermeria
-        // en estado que no sea 'validado' o 'cerrado'.
-        const sbarMissing = input.sbar == null;
-
-        return {
-          ok: true as const,
-          ...(sbarMissing && {
-            warning:
-              "SBAR no registrado. JCI IPSG.2 ME 4 recomienda handoff estructurado " +
-              "al cierre de turno cuando el paciente permanece activo.",
-          }),
-        };
+        return { ok: true as const };
       });
     }),
 

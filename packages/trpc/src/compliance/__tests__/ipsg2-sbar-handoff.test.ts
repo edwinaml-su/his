@@ -30,22 +30,18 @@ const sbarSchema = z.object({
   recommendation: sbarFieldSchema,
 });
 
+// IPSG.2-H3: sbar es obligatorio (ya no optional())
 const eceCierreSchema = z.object({
   id:   z.string().uuid(),
-  sbar: sbarSchema.optional(),
+  sbar: sbarSchema,
 });
-
-type EceCierreInput = z.infer<typeof eceCierreSchema>;
 
 // ---------------------------------------------------------------------------
 // Lógica de cierre extraída como función pura
 // ---------------------------------------------------------------------------
 
 /** Replica el contrato de cerrarTurno para tests unitarios sin tRPC context. */
-function validateCierreInput(input: EceCierreInput): {
-  ok: true;
-  warning?: string;
-} {
+function validateCierreInput(input: unknown): { ok: true } {
   const parsed = eceCierreSchema.safeParse(input);
   if (!parsed.success) {
     throw new TRPCError({
@@ -54,15 +50,7 @@ function validateCierreInput(input: EceCierreInput): {
     });
   }
 
-  const sbarMissing = parsed.data.sbar == null;
-  return {
-    ok: true as const,
-    ...(sbarMissing && {
-      warning:
-        "SBAR no registrado. JCI IPSG.2 ME 4 recomienda handoff estructurado " +
-        "al cierre de turno cuando el paciente permanece activo.",
-    }),
-  };
+  return { ok: true as const };
 }
 
 // ---------------------------------------------------------------------------
@@ -82,14 +70,13 @@ const SBAR_COMPLETO = {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("IPSG.2 ME 4 — SBAR handoff al cierre de turno REG_ENF", () => {
-  describe("cerrarTurno con SBAR completo", () => {
-    it("acepta cierre con los 4 componentes SBAR y retorna ok sin warning", () => {
+describe("IPSG.2-H3 — SBAR handoff OBLIGATORIO al cierre de turno REG_ENF", () => {
+  describe("cerrarTurno con SBAR completo (happy path)", () => {
+    it("acepta cierre con los 4 componentes SBAR y retorna ok", () => {
       // JCI Standard: IPSG.2 ME 4
       const result = validateCierreInput({ id: VALID_ID, sbar: SBAR_COMPLETO });
 
       expect(result.ok).toBe(true);
-      expect(result.warning).toBeUndefined();
     });
 
     it("acepta cada campo SBAR con exactamente 10 caracteres (mínimo)", () => {
@@ -105,22 +92,31 @@ describe("IPSG.2 ME 4 — SBAR handoff al cierre de turno REG_ENF", () => {
     });
   });
 
-  describe("cerrarTurno sin SBAR (paciente normal)", () => {
-    it("permite cierre sin sbar y retorna warning informativo", () => {
-      // JCI Standard: IPSG.2 ME 4
-      // El estándar recomienda SBAR pero no bloquea si no hay enfermero entrante
-      const result = validateCierreInput({ id: VALID_ID });
-
-      expect(result.ok).toBe(true);
-      expect(result.warning).toContain("IPSG.2 ME 4");
+  describe("cerrarTurno sin SBAR — RECHAZADO (IPSG.2-H3 enforcement)", () => {
+    it("rechaza cierre sin sbar (ahora obligatorio)", () => {
+      // JCI Standard: IPSG.2 ME 4 / IPSG.2-H3
+      expect(() =>
+        validateCierreInput({ id: VALID_ID })
+      ).toThrow(TRPCError);
     });
 
-    it("permite cierre con sbar explícitamente undefined (equivalente a omitido)", () => {
-      // JCI Standard: IPSG.2 ME 4
-      const result = validateCierreInput({ id: VALID_ID, sbar: undefined });
+    it("rechaza cierre con sbar explícitamente undefined", () => {
+      // JCI Standard: IPSG.2 ME 4 / IPSG.2-H3
+      expect(() =>
+        validateCierreInput({ id: VALID_ID, sbar: undefined })
+      ).toThrow(TRPCError);
+    });
 
-      expect(result.ok).toBe(true);
-      expect(result.warning).toBeDefined();
+    it("el error de sbar ausente es BAD_REQUEST", () => {
+      // JCI Standard: IPSG.2 ME 4
+      let caught: TRPCError | null = null;
+      try {
+        validateCierreInput({ id: VALID_ID });
+      } catch (e) {
+        caught = e as TRPCError;
+      }
+      expect(caught).not.toBeNull();
+      expect(caught?.code).toBe("BAD_REQUEST");
     });
   });
 
