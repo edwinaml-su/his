@@ -22,7 +22,7 @@
     "test:perf": "playwright test e2e/perf/lighthouse-baseline.spec.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.80",
+    "@ai-sdk/anthropic": "^3.0.81",
     "@ai-sdk/react": "^3.0.195",
     "@dagrejs/dagre": "^1.1.4",
     "@his/contracts": "*",
