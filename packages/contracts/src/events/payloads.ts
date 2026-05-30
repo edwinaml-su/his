@@ -1536,6 +1536,16 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
     eventType: z.literal("patient.transfer.cancelled"),
     payload: patientTransferPayloadSchema,
   }),
+  // Fase 2 (S7) — Bedside BCMA (5 correctos + cancelación administración)
+  // Payloads validados como passthrough (shape libre — incluye lasaAlert, GS1 fields)
+  z.object({
+    eventType: z.literal("medication.administered.bedside"),
+    payload: z.object({}).passthrough(),
+  }),
+  z.object({
+    eventType: z.literal("medication.administration.canceled"),
+    payload: z.object({}).passthrough(),
+  }),
   // HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42)
   z.object({
     eventType: z.literal("ece.rectificacion.aprobada"),
@@ -1544,6 +1554,31 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("ece.rectificacion.rechazada"),
     payload: eceRectificacionRechazadaPayloadSchema,
+  }),
+  // JCI IPSG.2-H2 (US-21-D2) — Reconocimiento de abreviaciones prohibidas con razón clínica
+  z.object({
+    eventType: z.literal("jci.ipsg2.abbr_acknowledged"),
+    payload: z.object({
+      descripcion: z.string(),
+      reason: z.string(),
+      medicoId: z.string().uuid(),
+    }),
+  }),
+  // JCI IPSG.3-H1 (US-21-D4) — Reconocimiento de medicamento LASA antes de administrar
+  z.object({
+    eventType: z.literal("jci.ipsg3.lasa_acknowledged"),
+    payload: z.object({
+      medicationAdministrationId: z.string().uuid(),
+      nurseId: z.string().uuid(),
+      patientId: z.string().uuid(),
+      drugId: z.string().uuid().nullable(),
+      pairedDrugId: z.string().uuid(),
+      pairedDrugName: z.string(),
+      razon: z.string(),
+      severidad: z.string(),
+      reason: z.string().nullable(),
+      ackedAt: z.string(),
+    }),
   }),
 ]);
 

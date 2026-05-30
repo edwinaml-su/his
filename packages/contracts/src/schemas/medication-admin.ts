@@ -154,6 +154,16 @@ export const recordBedsideAdminInput = z.object({
   // JCI IPSG.3 ME 5 — dosis pediátrica máxima.
   /** Dosis administrada en mg — requerido para validación pediátrica si <18 años. */
   doseAmount:      z.number().positive().optional(),
+  // JCI IPSG.3-H1 (US-21-D4) — LASA acknowledgement bloqueante.
+  // Si el drug tiene un par LASA activo en ece.lasa_pair, estos campos son requeridos
+  // para que la administración proceda. El servidor los persiste + emite audit event.
+  /**
+   * El profesional reconoce explícitamente que el medicamento tiene un par LASA
+   * y que verificó contra la etiqueta original antes de administrar.
+   */
+  lasaAcknowledged:      z.boolean().optional(),
+  /** Razón clínica del acknowledgement (min 10 chars para forzar texto real). */
+  lasaAcknowledgementReason: z.string().trim().min(10).max(500).optional(),
 });
 
 export type RecordBedsideAdminInput = z.infer<typeof recordBedsideAdminInput>;

@@ -479,6 +479,30 @@ export const medicationAdminRouter = router({
           }
         }
 
+        // -- JCI IPSG.3-H1 (US-21-D4) — LASA acknowledgement bloqueante -----------
+        // Si el drug tiene un par LASA activo y el profesional no reconoció el riesgo
+        // explícitamente, la administración se rechaza. Esto cierra el gap auditado:
+        // "alerta LASA sin trazabilidad en BD" que el surveyor rechaza.
+        if (lasaAlert !== null) {
+          if (!input.lasaAcknowledged || !input.lasaAcknowledgementReason) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                `IPSG3_LASA_ACK_REQUIRED: El medicamento tiene un par LASA activo ` +
+                `("${lasaAlert.pairedDrugName}"). ` +
+                `Se requiere lasaAcknowledged=true y lasaAcknowledgementReason (razón clínica ≥10 chars) ` +
+                `para proceder con la administración.`,
+              cause: {
+                code: "IPSG3_LASA_ACK_REQUIRED",
+                pairedDrugId:   lasaAlert.pairedDrugId,
+                pairedDrugName: lasaAlert.pairedDrugName,
+                razon:          lasaAlert.razon,
+                severidad:      lasaAlert.severidad,
+              },
+            });
+          }
+        }
+
         // -- JCI IPSG.3 ME 5 — bloqueo de dosis máxima pediátrica -----------------
         // JCI Standard: IPSG.3 ME 5
         // Solo aplica cuando se especifica doseAmount en la administración.
@@ -654,6 +678,9 @@ export const medicationAdminRouter = router({
           doubleCheckPinHash = await argon2.hash(input.doubleCheckPin);
         }
 
+        // Timestamp y campos LASA ack — solo se persisten cuando el drug es LASA.
+        const lasaAckNow = lasaAlert !== null ? new Date() : null;
+
         const admin = await tx.medicationAdministration.create({
           data: {
             organizationId:       ctx.tenant.organizationId,
@@ -682,6 +709,10 @@ export const medicationAdminRouter = router({
             doubleCheckBy:  input.doubleCheckBy ?? null,
             doubleCheckAt:  requiresDoubleCheck && input.doubleCheckBy ? new Date() : null,
             doubleCheckPin: doubleCheckPinHash,
+            // JCI IPSG.3-H1 (US-21-D4) — LASA ack (null cuando drug no es LASA)
+            lasaAckAt:     lasaAckNow,
+            lasaAckBy:     lasaAlert !== null ? input.nurseId : null,
+            lasaAckReason: lasaAlert !== null ? (input.lasaAcknowledgementReason ?? null) : null,
           },
         });
 
@@ -700,6 +731,30 @@ export const medicationAdminRouter = router({
             lasaAlert,
           },
         });
+
+        // JCI IPSG.3-H1 — Emitir evento de audit específico para LASA ack
+        // (separado del evento bedside para que el auditor pueda filtrar fácilmente).
+        if (lasaAlert !== null && lasaAckNow !== null) {
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType:      "jci.ipsg3.lasa_acknowledged",
+            aggregateType:  "MedicationAdministration",
+            aggregateId:    admin.id,
+            emittedById:    input.nurseId,
+            payload: {
+              medicationAdministrationId: admin.id,
+              nurseId:        input.nurseId,
+              patientId:      input.patientId,
+              drugId:         indication.drug?.id ?? null,
+              pairedDrugId:   lasaAlert.pairedDrugId,
+              pairedDrugName: lasaAlert.pairedDrugName,
+              razon:          lasaAlert.razon,
+              severidad:      lasaAlert.severidad,
+              reason:         input.lasaAcknowledgementReason ?? null,
+              ackedAt:        lasaAckNow.toISOString(),
+            },
+          });
+        }
 
         return {
           requiresDoubleCheck: false as const,

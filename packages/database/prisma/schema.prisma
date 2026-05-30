@@ -2853,6 +2853,13 @@ model MedicationAdministration {
   doubleCheckAt           DateTime?      @db.Timestamptz()
   /// Hash argon2id del PIN de la verificadora. Nunca se almacena texto plano.
   doubleCheckPin          String?        @db.Text
+  /// JCI IPSG.3-H1 (US-21-D4) — LASA acknowledgement bloqueante.
+  /// Timestamp en que el profesional reconoció explícitamente el riesgo LASA.
+  lasaAckAt               DateTime?      @map("lasa_ack_at") @db.Timestamptz()
+  /// UUID del User que reconoció el par LASA (debe ser el mismo que administra).
+  lasaAckBy               String?        @map("lasa_ack_by") @db.Uuid
+  /// Razón clínica registrada en el acknowledgement LASA (audit trail JCI surveyor).
+  lasaAckReason           String?        @map("lasa_ack_reason") @db.VarChar(500)
   createdAt               DateTime       @default(now()) @db.Timestamptz()
   updatedAt               DateTime       @updatedAt @db.Timestamptz()
 
