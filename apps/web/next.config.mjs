@@ -23,32 +23,58 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   // ─────────────────────────────────────────────────────────────────────────
-  // Security Headers HTTP — OWASP A05 (cierra hallazgo pentest 2026-05-30)
+  // Security Headers HTTP — OWASP A05
   //
-  // CSP en modo report-only: NO enforce inicial para no romper scripts inline
-  // de Next.js 14 / Supabase / Vercel Analytics. Promover a enforce después
-  // de validar que el report-uri no arroja falsos positivos en staging.
+  // CSP en ENFORCE mode (promovido de report-only en Sprint 4 Beta.21,
+  // tras 1 semana sin violaciones bloqueantes reportadas).
   //
-  // Supabase Studio y los SDK usan:
-  //   - connect-src: *.supabase.co, wss://*.supabase.co
-  //   - img-src: *.supabase.co (storage public)
-  //   - frame-src: *.supabase.co (auth flows)
+  // DECISIONES DE DISEÑO:
+  //  - 'unsafe-inline' en script-src: requerido por Next.js 14 App Router
+  //    para hidratación SSR. Eliminar requeriría nonce-based CSP con middleware
+  //    custom — scope Sprint 5.
+  //  - 'unsafe-eval' en script-src: incluido SOLO en desarrollo (NODE_ENV=development)
+  //    para hot-reload. En producción se omite. Next.js 14 prod build no lo necesita.
+  //  - 'unsafe-eval' en worker-src/script-src de dev: necesario para el webpack HMR.
   //
-  // Vercel Analytics / Speed Insights usan:
-  //   - script-src: *.vercel-insights.com
-  //   - connect-src: *.vercel-insights.com
+  // ROLLBACK: cambiar la key de "Content-Security-Policy" a
+  //           "Content-Security-Policy-Report-Only" y redeploy.
+  //
+  // Supabase SDK usa: connect-src *.supabase.co wss://*.supabase.co,
+  //                   img-src *.supabase.co, frame-src *.supabase.co
+  // Vercel Analytics: script-src *.vercel-insights.com,
+  //                   connect-src *.vercel-insights.com
+  // Sentry SDK:       connect-src *.ingest.sentry.io
   // ─────────────────────────────────────────────────────────────────────────
   async headers() {
-    const cspDirectives = [
+    const isDev = process.env.NODE_ENV === "development";
+
+    // Enforce CSP — aplicado en producción y preview
+    const cspEnforce = [
       "default-src 'self'",
-      // Next.js requiere 'unsafe-inline' para styles en SSR y 'unsafe-eval'
-      // en desarrollo (hot-reload). En producción 'unsafe-eval' no se necesita
-      // pero mantenemos report-only para no bloquear nada aún.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.vercel-insights.com",
+      // 'unsafe-inline' necesario para Next.js SSR. 'unsafe-eval' solo en dev.
+      isDev
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.vercel-insights.com"
+        : "script-src 'self' 'unsafe-inline' https://*.vercel-insights.com",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https://*.supabase.co",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
+      "frame-src 'self' https://*.supabase.co",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; ");
+
+    // Report-Only más estricto: sin 'unsafe-eval', sin dominios legacy.
+    // Permite detectar futuras relajaciones antes de que lleguen a enforce.
+    const cspReportOnly = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://*.vercel-insights.com",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https://*.supabase.co",
+      "font-src 'self' data:",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
       "frame-src 'self' https://*.supabase.co",
       "frame-ancestors 'none'",
       "object-src 'none'",
@@ -81,10 +107,16 @@ const nextConfig = {
             value: "camera=(), microphone=(), geolocation=(), payment=()",
           },
           {
-            // Modo report-only: observar sin bloquear. Promover a
-            // Content-Security-Policy cuando los reports sean limpios.
+            // ENFORCE — bloquea violaciones activamente.
+            // Rollback: cambiar key a "Content-Security-Policy-Report-Only".
+            key: "Content-Security-Policy",
+            value: cspEnforce,
+          },
+          {
+            // Report-Only más estricto: detecta nuevas violaciones antes de enforce.
+            // Monitorear en Sentry con tag csp-violation.
             key: "Content-Security-Policy-Report-Only",
-            value: cspDirectives,
+            value: cspReportOnly,
           },
         ],
       },
