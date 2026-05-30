@@ -242,3 +242,19 @@ Fixes aplicados via PR que NO requerían intervención manual del owner:
 | Configurar `required reviewers` en GitHub Environments `preview/staging/production` | GitHub Settings → Environments | `db-migrate.yml` puede correr contra producción sin approval real |
 | Habilitar Network Restrictions en Supabase (allowlist Vercel IPs + GitHub Actions egress) | Supabase Dashboard → Settings → Network | BD Postgres directa accesible desde cualquier IP con credenciales comprometidas |
 | Verificar/inicializar Sentry (`SENTRY_DSN` en Vercel + archivos config) | Vercel Environment Variables | Errores de producción silenciosos — PHI expuesta sin visibilidad |
+
+---
+
+## Sprint 3 — Pentest Externo Prep (2026-05-30)
+
+Pentest engagement prep cerrado — ver `docs/pentest/`:
+
+- `docs/pentest/01_engagement_scope.md` — inventory de targets + areas in/out of scope
+- `docs/pentest/02_rules_of_engagement.md` — ventana, métodos, manejo de hallazgos, NDA
+- `docs/pentest/03_evidence_baseline.md` — postura actual, controles activos, hallazgos preexistentes
+- `docs/pentest/04_provider_evaluation.md` — criterios proveedor, scorecard, candidatos, template RFP
+- `docs/pentest/README.md` — índice + proceso step-by-step
+
+`apps/web/public/.well-known/security.txt` actualizado con campos `Hiring:` y `Acknowledgments:` (RFC 9116 full compliance).
+
+Quedan **7 TODOs de cliente** que deben completarse antes de contactar proveedores — ver `docs/pentest/README.md`.
