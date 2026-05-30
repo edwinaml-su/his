@@ -299,16 +299,21 @@ export const workflowInboxRouter = router({
       // ECE_RECTIFICACION_PENDING: rectificaciones recientes (heurística — el modelo
       // no tiene estado pendiente/aprobada explícito; mostramos las últimas 24h
       // que el DIR debe revisar).
+      // Columnas reales (verificadas en prod 2026-05-30): el modelo tiene
+      //   - creado_en              (no 'ejecutada_en')
+      //   - documento_original_id  (no 'instancia_id')
+      // Aliasamos para mantener la forma `ejecutada_en` consumida por los
+      // mapeos downstream (líneas ~1422).
       const rectifPending: Array<{ id: string; ejecutada_en: Date; paciente_id: string }> =
         isEnabled("ECE_RECTIFICACION_PENDING")
           ? await prisma.$queryRawUnsafe(`
               SELECT r.id::text AS id,
-                     r.ejecutada_en,
+                     r.creado_en AS ejecutada_en,
                      di.paciente_id::text AS paciente_id
               FROM ece.rectificacion r
-              JOIN ece.documento_instancia di ON di.id = r.instancia_id
-              WHERE r.ejecutada_en > now() - interval '7 days'
-              ORDER BY r.ejecutada_en DESC
+              JOIN ece.documento_instancia di ON di.id = r.documento_original_id
+              WHERE r.creado_en > now() - interval '7 days'
+              ORDER BY r.creado_en DESC
               LIMIT 100
             `)
           : [];
