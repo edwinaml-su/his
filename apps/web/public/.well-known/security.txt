@@ -1,0 +1,5 @@
+Contact: mailto:emartinez@complejoavante.com
+Expires: 2027-06-01T00:00:00.000Z
+Preferred-Languages: es, en
+Canonical: https://his-avante.vercel.app/.well-known/security.txt
+Policy: https://github.com/edwinaml-su/his/blob/main/SECURITY.md
