@@ -514,11 +514,10 @@ import { Skeleton } from "@his/ui/components/skeleton";
 | #368 | Tarea 4 | CommandPalette `Ctrl+K` con cmdk (3 grupos + debounce) | 2026-05-29 |
 | #363 | Tarea 5 | Refresh variantes Shadcn + tablas densas (`numeric`) | 2026-05-29 |
 | #365 | Tarea 6 | `<EmptyState>` + `<ErrorState>` primitivos | 2026-05-29 |
-| Tarea 7* | Tarea 7 | Sparkline SVG inline + BedMap leyenda colapsable | 2026-05-29 |
-| Tarea 8* | Tarea 8 | Densidad + container queries + View Transitions | 2026-05-29 |
+| #372 | Tarea 7 | Sparkline SVG inline + BedMap leyenda colapsable | 2026-05-29 |
+| #370 | Tarea 8 | Densidad + container queries + View Transitions | 2026-05-29 |
 | #369 | Fixup | Exports map explicito + typesVersions fallback | 2026-05-29 |
-
-*Tareas 7 y 8 en branches `feat/ds-v2-tarea-7-sparklines-fresh` y `feat/ds-v2-tarea-8-density-container-transitions` — pendientes de merge a `main` al momento del cierre de esta documentacion.
+| #373 | Tarea 9 | Cierre — doc Design System v2.0 (este archivo) | 2026-05-30 |
 
 ---
 
@@ -532,4 +531,4 @@ import { Skeleton } from "@his/ui/components/skeleton";
 
 4. **Storybook:** no hay catalogo visual de los componentes nuevos (EmptyState, ErrorState, Sparkline, PatientContextBar, CommandPalette). Deuda documentada para una iteracion futura de DX.
 
-5. **Merges pendientes:** Tareas 7 y 8 requieren PR formal y merge a `main`. La documentacion de este archivo describe el contrato de sus APIs segun los commits `d21fe13` y `682e8a4`.
+5. **Aplicacion de PatientContextBar a otros expedientes:** Tarea 3 solo lo integro en `apps/web/src/app/(clinical)/patients/[id]/page.tsx` como prueba. Cuando UAT lo valide, replicar en `triage/[id]`, `encounter/[id]`, etc. (layouts del expediente clinico).
