@@ -267,6 +267,10 @@ const accountRouter = router({
    *
    * El secreto NUNCA aparece en un campo `secret` top-level para evitar que
    * frameworks de logging/tracing lo capturen automáticamente.
+   *
+   * BD-P0-6 / Sprint 4: el secreto se persiste en Supabase Vault via
+   * set_portal_mfa_secret_vault() — SECURITY DEFINER que limpia mfaSecret
+   * (app-layer) y popula mfaSecretVaultId en la misma operación SQL.
    */
   enableMfa: portalProcedure
     .input(z.object({}).optional())
@@ -281,11 +285,16 @@ const accountRouter = router({
       }
 
       const secretRaw = base32Encode(randomBytes(TOTP_SECRET_BYTES));
-      const encrypted = encryptSecret(secretRaw);
+      const accountId = ctx.portalAccount.id;
 
+      // Escribir a Vault (el helper limpia mfaSecret y popula mfaSecretVaultId).
+      await ctx.prisma.$executeRaw`SELECT set_portal_mfa_secret_vault(${accountId}::uuid, ${secretRaw})`;
+
+      // Marcar setup en progreso (mfaEnabled=false hasta verifyMfa exitoso).
+      // No tocar mfaSecret — el helper SECDEF ya lo limpió.
       await ctx.prisma.portalAccount.update({
-        where: { id: ctx.portalAccount.id },
-        data: { mfaSecret: encrypted, mfaEnabled: false },
+        where: { id: accountId },
+        data: { mfaEnabled: false },
       });
 
       const otpauthUri = `otpauth://totp/Portal%20Avante:${encodeURIComponent(account.email)}?secret=${secretRaw}&issuer=HIS-Avante`;
@@ -302,22 +311,33 @@ const accountRouter = router({
   verifyMfa: portalProcedure
     .input(z.object({ code: z.string().length(6) }))
     .mutation(async ({ ctx, input }) => {
-      const account = await ctx.prisma.portalAccount.findUnique({
-        where: { id: ctx.portalAccount.id },
-        select: { mfaSecret: true },
-      });
+      const accountId = ctx.portalAccount.id;
 
-      if (!account?.mfaSecret) {
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "MFA no está configurado. Use enableMfa primero." });
+      // Vault-first: get_portal_mfa_secret() retorna el secret en claro si
+      // mfaSecretVaultId está populado, o NULL si el account usa app-layer.
+      const [vaultRow] = await ctx.prisma.$queryRaw<Array<{ get_portal_mfa_secret: string | null }>>`
+        SELECT get_portal_mfa_secret(${accountId}::uuid) AS get_portal_mfa_secret
+      `;
+      let secretPlain: string | null = vaultRow?.get_portal_mfa_secret ?? null;
+
+      if (secretPlain === null) {
+        // Fallback app-layer (accounts creados antes de Sprint 4 / BD-P0-6).
+        const account = await ctx.prisma.portalAccount.findUnique({
+          where: { id: accountId },
+          select: { mfaSecret: true },
+        });
+        if (!account?.mfaSecret) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "MFA no está configurado. Use enableMfa primero." });
+        }
+        secretPlain = decryptSecret(account.mfaSecret);
       }
 
-      const secretPlain = decryptSecret(account.mfaSecret);
       if (!verifyTotp(secretPlain, input.code)) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Código TOTP inválido." });
       }
 
       await ctx.prisma.portalAccount.update({
-        where: { id: ctx.portalAccount.id },
+        where: { id: accountId },
         data: { mfaEnabled: true },
       });
 
@@ -423,11 +443,22 @@ const authRouter = router({
         if (!input.totpCode) {
           throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Se requiere código TOTP." });
         }
-        if (!acct.mfaSecret) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Configuración MFA inconsistente." });
+
+        // Vault-first: get_portal_mfa_secret() retorna null si el account usa app-layer.
+        const [vaultRow] = await ctx.prisma.$queryRaw<Array<{ get_portal_mfa_secret: string | null }>>`
+          SELECT get_portal_mfa_secret(${acct.id}::uuid) AS get_portal_mfa_secret
+        `;
+        let mfaSecretPlain: string | null = vaultRow?.get_portal_mfa_secret ?? null;
+
+        if (mfaSecretPlain === null) {
+          // Fallback app-layer para accounts con mfaSecretVaultId IS NULL.
+          if (!acct.mfaSecret) {
+            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Configuración MFA inconsistente." });
+          }
+          mfaSecretPlain = decryptSecret(acct.mfaSecret);
         }
-        const secretPlain = decryptSecret(acct.mfaSecret);
-        if (!verifyTotp(secretPlain, input.totpCode)) {
+
+        if (!verifyTotp(mfaSecretPlain, input.totpCode)) {
           // K-12 (audit Stream K): incrementar contador de fallos en tx atómica.
           // Si supera umbral, set lockedUntil. Consumir el magic link también
           // (anti-replay: cada token solo se intenta una vez por código TOTP).
