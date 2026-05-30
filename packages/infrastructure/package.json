@@ -30,7 +30,7 @@
     "pino": "^9.5.0"
   },
   "devDependencies": {
-    "@prisma/client": "^5.22.0",
+    "@prisma/client": "^7.8.0",
     "@types/node": "^22.10.2",
     "@types/nodemailer": "^6.4.23",
     "@vitest/coverage-v8": "^2.1.8",

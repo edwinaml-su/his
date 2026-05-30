@@ -46,7 +46,7 @@
     "seed": "tsx --env-file=.env prisma/seed.ts"
   },
   "dependencies": {
-    "@prisma/client": "^5.22.0",
+    "@prisma/client": "^7.8.0",
     "@his/contracts": "*",
     "zod": "^3.23.8"
   },
