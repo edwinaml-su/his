@@ -66,6 +66,29 @@ export const userAdminUpdateInput = z.object({
 
 export const userAdminDeactivateInput = z.object({ id: z.string().uuid() });
 
+/**
+ * Reset de password por ADMIN. Sustituye cualquier `UserCredential` activo
+ * con método PASSWORD por uno nuevo (idempotente: cierra el viejo con
+ * validTo=now y crea el nuevo en una sola tx).
+ *
+ * Política mínima de complejidad — alineada con OWASP ASVS L2 v4.0.3 §2.1:
+ *   - 12+ caracteres
+ *   - al menos 1 letra y 1 dígito (defensa básica anti-diccionario)
+ *   - el caller no puede resetear su propio password aquí (debe usar el
+ *     flujo de cambio propio que valida el password anterior).
+ */
+export const userAdminResetPasswordInput = z.object({
+  id: z.string().uuid(),
+  newPassword: z
+    .string()
+    .min(12, "Mínimo 12 caracteres.")
+    .max(200, "Máximo 200 caracteres.")
+    .refine((v) => /[A-Za-z]/.test(v), "Debe incluir al menos una letra.")
+    .refine((v) => /[0-9]/.test(v), "Debe incluir al menos un dígito."),
+  /** Razón clínica/operativa registrada en audit log (compliance). */
+  reason: z.string().trim().min(5).max(500),
+});
+
 export const userAdminAssignRoleInput = z.object({
   userId: z.string().uuid(),
   organizationId: z.string().uuid(),
