@@ -42,9 +42,12 @@ describe("security headers HTTP (OWASP A05-1)", () => {
 
   it("HSTS tiene max-age >= 63072000 (2 años) e incluye preload", () => {
     const value = ACTUAL_HEADER_MAP["Strict-Transport-Security"];
-    const match = value.match(/max-age=(\d+)/);
+    expect(value).toBeDefined();
+    const match = value!.match(/max-age=(\d+)/);
     expect(match).not.toBeNull();
-    expect(parseInt(match![1])).toBeGreaterThanOrEqual(63072000);
+    const maxAge = match?.[1];
+    expect(maxAge).toBeDefined();
+    expect(parseInt(maxAge!, 10)).toBeGreaterThanOrEqual(63072000);
     expect(value).toContain("preload");
     expect(value).toContain("includeSubDomains");
   });
