@@ -12,13 +12,14 @@
  * Patrón: prisma mock con $queryRaw / $executeRaw stubbados,
  *   makeCtx con MOCK_USER_ADMIN, vitest-mock-extended para UserCredential.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, afterAll } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { firmaElectronicaRouter } from "../firma-electronica.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
+import { _resetRateLimitForTesting } from "../../middleware/rate-limit";
 
 // Helper: genera un secretHash AES-256-GCM válido para tests usando AUTH_SECRET de prueba.
 function makeTestSecretHash(payload: { secret: string; codes: string[] }): string {
@@ -75,12 +76,17 @@ describe("firmaElectronicaRouter", () => {
   beforeEach(async () => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    _resetRateLimitForTesting();
     // AUTH_SECRET requerida por getMfaEncryptionKey en el router.
     process.env.AUTH_SECRET = "test-auth-secret-32-chars-minimum!";
     // Re-establecer implementaciones por defecto después de clearAllMocks.
     const { argon2 } = await import("@his/infrastructure");
     vi.mocked(argon2.hash).mockResolvedValue("$argon2id$test$hash");
     vi.mocked(argon2.verify).mockResolvedValue(true);
+  });
+
+  afterAll(() => {
+    _resetRateLimitForTesting();
   });
 
   // ---------------------------------------------------------------------------
@@ -212,6 +218,40 @@ describe("firmaElectronicaRouter", () => {
       });
 
       expect(result.firmaId).toBe(FIRMA_ID);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // firma.requestRecovery — rate limit (A07-P1)
+  // ---------------------------------------------------------------------------
+  describe("requestRecovery — rate limit", () => {
+    it("bloquea TOO_MANY_REQUESTS después de 3 intentos por email en 1h", async () => {
+      // Los primeros 3 intentos deben pasar (incluso con email inexistente).
+      for (let i = 0; i < 3; i++) {
+        prisma.$queryRaw.mockResolvedValueOnce([]);
+        const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+        await caller.requestRecovery({ email: "victim@example.com" });
+      }
+      // El 4to debe ser bloqueado antes de llegar a la BD.
+      const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      await expect(
+        caller.requestRecovery({ email: "victim@example.com" }),
+      ).rejects.toMatchObject({ code: "TOO_MANY_REQUESTS" });
+    });
+
+    it("no interfiere: emails distintos tienen cubetas independientes", async () => {
+      // Agotar cuota de victim1
+      for (let i = 0; i < 3; i++) {
+        prisma.$queryRaw.mockResolvedValueOnce([]);
+        const caller = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+        await caller.requestRecovery({ email: "victim1@example.com" });
+      }
+      // victim2 sigue libre
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+      const caller2 = firmaElectronicaRouter.createCaller(makeCtx({ prisma, user: null }));
+      await expect(
+        caller2.requestRecovery({ email: "victim2@example.com" }),
+      ).resolves.toMatchObject({ ok: true });
     });
   });
 

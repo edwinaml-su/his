@@ -43,6 +43,7 @@ import { z } from "zod";
 import { protectedProcedure, publicProcedure, requireRole, router } from "../trpc";
 // argon2 must be in packages/trpc/package.json: "argon2": "^0.41.1"
 import { argon2 } from "@his/infrastructure";
+import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
 
 // =============================================================================
 // Constantes
@@ -630,6 +631,11 @@ export const firmaElectronicaRouter = router({
   requestRecovery: publicProcedure
     .input(requestRecoveryInput)
     .mutation(async ({ ctx, input }) => {
+      // A07-P1: rate limit por email + IP — publicProcedure, superficie atacable sin sesión.
+      const emailKey = input.email.toLowerCase();
+      rateLimitOrThrow({ key: `firma:recovery:email=${emailKey}`, max: 3, windowMs: 60 * 60_000 });
+      rateLimitOrThrow({ key: `firma:recovery:ip=${normalizeIp(ctx.ip)}`, max: 10, windowMs: 60 * 60_000 });
+
       const tokenPlain = generateRecoveryToken();
       const tokenHash = hashRecoveryToken(tokenPlain);
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hora

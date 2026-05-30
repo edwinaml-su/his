@@ -16,6 +16,7 @@ export function makeCtx(overrides: {
   user?: SessionUser | null;
   tenant?: TenantContext | null;
   portalAccount?: PortalAccountContext | null;
+  ip?: string;
 } = {}): TRPCContext {
   return {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -23,5 +24,6 @@ export function makeCtx(overrides: {
     user: overrides.user === undefined ? MOCK_USER_ADMIN : overrides.user,
     tenant: overrides.tenant === undefined ? MOCK_TENANT : overrides.tenant,
     portalAccount: overrides.portalAccount ?? null,
+    ip: overrides.ip,
   };
 }
