@@ -4,8 +4,11 @@
  * Fuente normativa: JCI Accreditation Standards (8th ed.) IPSG.2 ME 3;
  * The Joint Commission National Patient Safety Goals (NPSG.02.02.01).
  *
- * Política HIS: warning-only. No bloquea la firma. El médico decide.
- * Enforcement mode será definido por CMO en futura iteración.
+ * Política HIS (firmar):     warning-only. No bloquea la firma. El médico decide.
+ * Política HIS (create/update): bloqueante para severity="error" a menos que
+ *   el campo acompañante `forbiddenAbbrAcknowledged: true` esté presente con razón.
+ *   Cumple IPSG.2-H2 (US-21-D2): los items de indicación médica no pueden crearse
+ *   con abreviaciones JCI prohibidas sin reconocimiento explícito del prescriptor.
  */
 
 export interface AbbreviationWarning {
@@ -193,4 +196,64 @@ export function validateClinicalText(text: string): {
   }
 
   return { warnings, errors };
+}
+
+// ---------------------------------------------------------------------------
+// Zod refinement bloqueante — JCI IPSG.2-H2 (US-21-D2)
+// ---------------------------------------------------------------------------
+
+import { z } from "zod";
+
+/**
+ * Schema base para ítems de texto clínico que deben cumplir IPSG.2-H2.
+ *
+ * Uso en router de indicaciones médicas:
+ *
+ *   const itemSchema = z.object({
+ *     descripcion: z.string().trim().min(1),
+ *     forbiddenAbbrAcknowledged: z.boolean().optional(),
+ *     forbiddenAbbrReason: z.string().trim().min(10).max(500).optional(),
+ *   }).superRefine(forbiddenAbbreviationsRefine("descripcion"));
+ *
+ * Lanza ZodIssue con code "custom" y path [fieldName] cuando:
+ *   - El campo contiene abreviaciones de severity="error"
+ *   - Y `forbiddenAbbrAcknowledged` no es true
+ *
+ * Si `forbiddenAbbrAcknowledged = true` + `forbiddenAbbrReason` presente:
+ *   - Pasa la validación; el router registra el acknowledgement en audit log.
+ *
+ * Abreviaciones de severity="warning" nunca bloquean (solo se devuelven en
+ * la respuesta como `ipsg2Warnings` para que el UI las muestre).
+ */
+export function forbiddenAbbreviationsRefine(fieldName: string) {
+  return (
+    val: { [key: string]: unknown },
+    ctx: z.RefinementCtx,
+  ): void => {
+    const text = val[fieldName];
+    if (typeof text !== "string" || text.trim().length === 0) return;
+
+    const { errors } = validateClinicalText(text);
+    if (errors.length === 0) return;
+
+    const acknowledged = val["forbiddenAbbrAcknowledged"] === true;
+    if (acknowledged) return;
+
+    const abbrs = errors.map((e) => `"${e.match}"`).join(", ");
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [fieldName],
+      message:
+        `Abreviaciones JCI prohibidas detectadas: ${abbrs}. ` +
+        `Corrija el texto o indique forbiddenAbbrAcknowledged=true con forbiddenAbbrReason (razón clínica ≥10 chars).`,
+      params: {
+        type: "jci/ipsg2-abreviaciones",
+        findings: errors.map((e) => ({
+          match: e.match,
+          offset: e.offset,
+          replacement: e.replacement,
+        })),
+      },
+    });
+  };
 }

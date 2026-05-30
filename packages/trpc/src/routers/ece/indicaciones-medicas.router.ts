@@ -53,7 +53,10 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
-import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
+import {
+  validateClinicalText,
+  forbiddenAbbreviationsRefine,
+} from "@his/contracts/clinical/forbidden-abbreviations";
 
 // ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
 // La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
@@ -103,14 +106,34 @@ const estadoAdminEnum = z.enum([
   "RECHAZADA",
 ]);
 
-const indicacionItemSchema = z.object({
-  tipo: tipoIndicacionEnum,
-  descripcion: z.string().trim().min(1).max(500),
-  dosis: z.string().trim().max(100).optional(),
-  via: viaAdminEnum.optional(),
-  frecuencia: frecuenciaEnum.optional(),
-  duracion: z.string().trim().max(100).optional(),
-});
+const indicacionItemSchema = z
+  .object({
+    tipo: tipoIndicacionEnum,
+    descripcion: z.string().trim().min(1).max(500),
+    dosis: z.string().trim().max(100).optional(),
+    via: viaAdminEnum.optional(),
+    frecuencia: frecuenciaEnum.optional(),
+    duracion: z.string().trim().max(100).optional(),
+    /**
+     * JCI IPSG.2-H2 (US-21-D2): si la descripción contiene abreviaciones
+     * prohibidas de severity="error", este flag debe ser true para pasar
+     * la validación. Requiere forbiddenAbbrReason para audit trail.
+     */
+    forbiddenAbbrAcknowledged: z.boolean().optional(),
+    forbiddenAbbrReason: z.string().trim().min(10).max(500).optional(),
+  })
+  .superRefine(forbiddenAbbreviationsRefine("descripcion"))
+  .superRefine((val, ctx) => {
+    // Si se reconocen abreviaciones, la razón clínica es obligatoria.
+    if (val.forbiddenAbbrAcknowledged === true && !val.forbiddenAbbrReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["forbiddenAbbrReason"],
+        message:
+          "forbiddenAbbrReason es obligatorio cuando forbiddenAbbrAcknowledged=true (razón clínica ≥10 chars).",
+      });
+    }
+  });
 
 const createSchema = z.object({
   episodioId: z.string().uuid(),
@@ -381,6 +404,23 @@ export const indicacionesMedicasRouter = router({
                 ${item.duracion ?? null}
               )
             `;
+
+            // JCI IPSG.2-H2: si el médico reconoció abreviaciones prohibidas,
+            // registrar el acknowledgement en el audit log para trazabilidad JCI.
+            if (item.forbiddenAbbrAcknowledged === true && item.forbiddenAbbrReason) {
+              await emitDomainEvent(tx, {
+                organizationId: ctx.tenant.organizationId,
+                eventType: "jci.ipsg2.abbr_acknowledged",
+                aggregateType: "IndicacionMedica",
+                aggregateId: indicacionId,
+                emittedById: ctx.user.id,
+                payload: {
+                  descripcion: item.descripcion,
+                  reason: item.forbiddenAbbrReason,
+                  medicoId: medicoPrescriptor,
+                },
+              });
+            }
           }
 
           return { id: indicacionId, estadoRegistro: "borrador" as const, vigencia: "ACTIVA" as const };
@@ -432,6 +472,21 @@ export const indicacionesMedicasRouter = router({
                 ${item.duracion ?? null}
               )
             `;
+
+            if (item.forbiddenAbbrAcknowledged === true && item.forbiddenAbbrReason) {
+              await emitDomainEvent(tx, {
+                organizationId: ctx.tenant.organizationId,
+                eventType: "jci.ipsg2.abbr_acknowledged",
+                aggregateType: "IndicacionMedica",
+                aggregateId: input.id,
+                emittedById: ctx.user.id,
+                payload: {
+                  descripcion: item.descripcion,
+                  reason: item.forbiddenAbbrReason,
+                  medicoId: personalId,
+                },
+              });
+            }
           }
 
           // Incrementar version para optimistic lock
