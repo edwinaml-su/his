@@ -31,6 +31,10 @@ on:
         required: false
         default: '30s'
 
+# Scope mínimo: solo lectura. No escribe al repo. [infra-P1-3]
+permissions:
+  contents: read
+
 concurrency:
   group: perf-k6-${{ github.ref }}
   cancel-in-progress: true

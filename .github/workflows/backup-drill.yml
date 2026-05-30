@@ -12,6 +12,10 @@ on:
           - dump-only
           - full-drill
 
+# Scope mínimo: solo lectura. El dump se sube como artifact. [infra-P1-3]
+permissions:
+  contents: read
+
 jobs:
   drill:
     name: DR Drill (${{ inputs.mode }})

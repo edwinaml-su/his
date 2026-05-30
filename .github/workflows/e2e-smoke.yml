@@ -9,6 +9,10 @@ on:
       - main
       - develop
 
+# Scope mínimo: solo lectura. No escribe al repo ni comenta en PRs. [infra-P1-3]
+permissions:
+  contents: read
+
 concurrency:
   # Cancela runs anteriores del mismo PR para no saturar el runner.
   group: e2e-smoke-${{ github.ref }}
