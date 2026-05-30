@@ -17,6 +17,13 @@ updates:
       - "security"
     commit-message:
       prefix: "chore(deps)"
+    # Bloquea bumps mayores — los manejamos manualmente en sprints dedicados
+    # tras audit de breaking changes + migración guiada. Lección 2026-05-30:
+    # Dependabot abrió typescript 5→6, vitest 2→4, lighthouse 12→13 simultáneo
+    # y rompió CI con conflictos en package-lock.json.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     # Agrupar patches y minor para no inundar el backlog
     groups:
       dev-tools:
