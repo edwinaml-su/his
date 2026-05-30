@@ -5334,6 +5334,9 @@ model EceRegistroEnfermeria {
   notaEvolucion   String?  @map("nota_evolucion")
   planCuidados    String?  @map("plan_cuidados")
   data            Json?
+  /// Handoff SBAR al cierre de turno. JCI IPSG.2 ME 4. Migraciones 115+159.
+  /// Estructura: {situation, background, assessment, recommendation}
+  sbar            Json?
   registradoPorId String   @map("registrado_por") @db.Uuid
   registradoEn    DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro  String   @default("vigente") @map("estado_registro") @db.VarChar(20)
