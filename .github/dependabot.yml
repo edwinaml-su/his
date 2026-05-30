@@ -1,0 +1,58 @@
+version: 2
+
+updates:
+  # Dependencias npm — raíz del monorepo (turbo resuelve workspaces)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "America/El_Salvador"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "edwinaml-su"
+    labels:
+      - "dependencies"
+      - "security"
+    commit-message:
+      prefix: "chore(deps)"
+    # Agrupar patches y minor para no inundar el backlog
+    groups:
+      dev-tools:
+        patterns:
+          - "eslint*"
+          - "@typescript-eslint*"
+          - "prettier*"
+          - "vitest*"
+          - "@vitest*"
+          - "playwright*"
+          - "@playwright*"
+        update-types:
+          - "minor"
+          - "patch"
+      next-ecosystem:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@next*"
+        update-types:
+          - "patch"
+
+  # GitHub Actions — mantener actions actualizadas con SHA pinning
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "America/El_Salvador"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "edwinaml-su"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
