@@ -144,7 +144,7 @@ jobs:
 
       - name: Notificar regresión en Slack (opcional)
         if: failure() && secrets.SLACK_WEBHOOK_URL != ''
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@v3.0.3
         with:
           payload: |
             {
