@@ -218,3 +218,27 @@
 | Bug bounty disclosure policy | AUSENTE | `/.well-known/security.txt` con contacto de respuesta |
 
 **Estimado para estar "pentest-ready":** cerrar los 7 P1 + agregar CSP + `security.txt`. Tiempo estimado: 2 sprints de una semana. Con eso el Black Box encontrará la superficie real de la aplicación sin hallazgos triviales de configuración que contaminen el reporte.
+
+---
+
+## Sprint 2 Infra — Estado de Cierre (2026-05-30)
+
+Fixes aplicados via PR que NO requerían intervención manual del owner:
+
+| Fix | Hallazgo | PR | Estado |
+|---|---|---|---|
+| C1 — Dependabot config (npm + github-actions, weekly) | §9 P1 infra-P1-5 | [#384](https://github.com/edwinaml-su/his/pull/384) | MERGEADO |
+| C2 — security.txt RFC 9116 + SECURITY.md | Postura pentest / infra-P1-B | [#385](https://github.com/edwinaml-su/his/pull/385) | MERGEADO |
+| C3 — Permisos explícitos en 8 workflows (contenidos:read scope mínimo) | §2 P1 infra-P1-3 | [#402](https://github.com/edwinaml-su/his/pull/402) | ABIERTO |
+| C4 — SHA pinning actions de terceros (gitleaks@v2, slackapi@v3.0.3) | §9 P3 infra-P1-6 | [#404](https://github.com/edwinaml-su/his/pull/404) | ABIERTO |
+
+**Nota C4:** Al momento de crear la PR, Dependabot (activado por C1/#384) ya había actualizado automáticamente `slackapi/slack-github-action` de `v1.26.0` a `v3.0.3` (PR #388) y las actions oficiales de `actions/*` a versiones mayores (#389, #390, #391). C4 agrega el SHA commit inmutable como capa adicional de supply chain defense para los 2 actions de terceros restantes.
+
+### TODOs que requieren intervención manual del owner (NO automatizables via PR)
+
+| TODO | Dónde | Impacto si no se hace |
+|---|---|---|
+| Habilitar branch protection en `main` con required status checks CI + 1 review | GitHub Settings → Branches | Push directo a main sin CI — deploy de código no revisado |
+| Configurar `required reviewers` en GitHub Environments `preview/staging/production` | GitHub Settings → Environments | `db-migrate.yml` puede correr contra producción sin approval real |
+| Habilitar Network Restrictions en Supabase (allowlist Vercel IPs + GitHub Actions egress) | Supabase Dashboard → Settings → Network | BD Postgres directa accesible desde cualquier IP con credenciales comprometidas |
+| Verificar/inicializar Sentry (`SENTRY_DSN` en Vercel + archivos config) | Vercel Environment Variables | Errores de producción silenciosos — PHI expuesta sin visibilidad |
