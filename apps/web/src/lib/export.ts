@@ -9,7 +9,7 @@
  *   await exportToXlsx(rows, columns, "centros-costo");
  *
  * - CSV: nativo, sin deps. UTF-8 BOM para compatibilidad Excel.
- * - XLSX: `xlsx` (sheetjs CE) — lazy-loaded.
+ * - XLSX: `write-excel-file/browser` — lazy-loaded (~30KB, sin CVEs activos).
  * - PDF: `jspdf` — lazy-loaded; tabla manual (sin jspdf-autotable, no es dep).
  *
  * Los `accessor` reciben la fila y deben devolver `string | number | null`.
@@ -68,7 +68,8 @@ export function exportToCsv<TRow>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// XLSX (lazy import — la lib pesa ~700KB)
+// XLSX (lazy import — write-excel-file/browser ~30KB, reemplaza xlsx@0.18.5
+// que tenía CVEs activos de Prototype Pollution + ReDoS)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function exportToXlsx<TRow>(
@@ -77,24 +78,25 @@ export async function exportToXlsx<TRow>(
   filename: string,
   sheetName = "Datos",
 ): Promise<void> {
-  const XLSX = await import("xlsx");
-  const data = [
-    columns.map((c) => c.header),
+  const writeExcelFile = (await import("write-excel-file/browser")).default;
+  // Fila 0: cabeceras; filas 1..n: datos.
+  const sheetData = [
+    columns.map((c) => c.header as string | number),
     ...rows.map((r) => columns.map((c) => c.accessor(r) ?? "")),
   ];
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  // Ancho automático aproximado por columna.
-  ws["!cols"] = columns.map((c, idx) => {
+  // Ancho automático aproximado por columna (en "caracteres", igual que SheetJS wch).
+  const colWidths = columns.map((c) => {
     const headerLen = c.header.length;
     const maxRowLen = rows.reduce((max, r) => {
       const v = c.accessor(r);
       return Math.max(max, v == null ? 0 : String(v).length);
     }, 0);
-    return { wch: Math.min(50, Math.max(8, Math.max(headerLen, maxRowLen) + 2)) };
+    return { width: Math.min(50, Math.max(8, Math.max(headerLen, maxRowLen) + 2)) };
   });
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31)); // Excel limita a 31 chars.
-  XLSX.writeFile(wb, filename);
+  await writeExcelFile(sheetData, {
+    sheet: sheetName.slice(0, 31), // Excel limita a 31 chars.
+    columns: colWidths,
+  }).toFile(filename);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

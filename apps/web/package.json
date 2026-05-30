@@ -63,7 +63,7 @@
     "workbox-precaching": "^7",
     "workbox-routing": "^7",
     "workbox-strategies": "^7",
-    "xlsx": "^0.18.5",
+    "write-excel-file": "^4.0.7",
     "zod": "^3.25.76"
   },
   "devDependencies": {
