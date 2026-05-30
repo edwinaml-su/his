@@ -18,6 +18,10 @@ on:
         default: false
 
 # Solo una migración a la vez por ambiente
+# Scope mínimo: solo lectura. Consume secrets de ambiente. [infra-P1-3]
+permissions:
+  contents: read
+
 concurrency:
   group: db-migrate-${{ github.event.inputs.environment }}
   cancel-in-progress: false

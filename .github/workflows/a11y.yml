@@ -12,6 +12,10 @@ on:
     # Nightly 06:00 UTC = 00:00 America/El_Salvador (UTC-6)
     - cron: '0 6 * * *'
 
+# Scope mínimo: solo lectura. No escribe al repo ni comenta en PRs. [infra-P1-3]
+permissions:
+  contents: read
+
 concurrency:
   group: a11y-${{ github.ref }}
   cancel-in-progress: true
