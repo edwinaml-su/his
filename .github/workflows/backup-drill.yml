@@ -127,7 +127,7 @@ jobs:
       # Upload dump como artifact (retención 7 días — contiene PII)
       # ------------------------------------------------------------------
       - name: Upload dump como artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: his-dr-dump-${{ github.run_id }}
           path: ./backups/*.dump
