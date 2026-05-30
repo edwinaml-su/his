@@ -605,6 +605,8 @@ model User {
   windowAlertsAttended      EceMedicationWindowAlert[]   @relation("MedicationWindowAlertAttendedBy")
   // Finance / Cost Centers — sql/131
   costCentersResponsable    CostCenter[]                 @relation("CostCenterResponsable")
+  // IPSG.1-H1 — verificaciones bedside de toma de muestra de laboratorio
+  labSpecimensVerified      LabSpecimen[]                @relation("LabSpecimenVerifiedBy")
   // Handoff interno de traslados — sql/56
   transfersReceived         EncounterTransfer[]          @relation("TransferReceiver")
   // Nivel A scope por servicio — sql/60
@@ -2260,10 +2262,24 @@ model LabSpecimen {
   rejectionReason String?           @db.VarChar(400)
   createdAt       DateTime          @default(now()) @db.Timestamptz()
 
-  order   LabOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  results LabResult[]
+  /// IPSG.1-H1: GSRN escaneado de la pulsera del paciente en bedside (AI 8018).
+  /// Persiste evidencia de la verificación JCI; null en flujo lab sin pulsera.
+  gsrnPacienteVerificado String?  @db.VarChar(20)
+  /// IPSG.1-H1: tipo del segundo identificador usado (DUI/NOMBRE_COMPLETO/FECHA_NAC/MRN).
+  identifier2Kind        String?  @db.VarChar(20)
+  /// IPSG.1-H1: valor del segundo identificador verificado.
+  identifier2Value       String?  @db.Text
+  /// IPSG.1-H1: timestamp de la verificación 2-IDs. Null = flujo sin pulsera.
+  verifiedAt             DateTime? @db.Timestamptz()
+  /// IPSG.1-H1: usuario que realizó la verificación bedside.
+  verifiedBy             String?  @db.Uuid
+
+  order          LabOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  verifiedByUser User?       @relation("LabSpecimenVerifiedBy", fields: [verifiedBy], references: [id], onDelete: Restrict)
+  results        LabResult[]
 
   @@index([orderId])
+  @@index([verifiedAt])
   @@schema("public")
 }
 
