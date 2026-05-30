@@ -23,6 +23,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { argon2 } from "@his/infrastructure";
+import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 
@@ -43,6 +44,11 @@ interface VerbalOrderRow {
   dictado_en: Date;
   registrado_en: Date | null;
   confirmado_en: Date | null;
+  // JCI IPSG.2-H1 — campos read-back auditables (sql/158)
+  readback_at: Date | null;
+  readback_by: string | null;
+  readback_text: string | null;
+  readback_match: boolean | null;
 }
 
 interface PersonalRow {
@@ -195,6 +201,11 @@ const confirmReadbackInput = z.object({
   ordenConfirmada: z.boolean(),
   ordenCorregida: z.string().min(1).max(2000).optional(),
   pin: z.string().min(4),
+  // JCI IPSG.2-H1 — read-back auditable obligatorio
+  /** Texto exacto que el receptor repitió de vuelta al médico. */
+  readbackText: z.string().min(10).max(2000),
+  /** true si el MC confirmó que el read-back coincidió con la orden original. */
+  readbackMatch: z.boolean(),
 });
 
 const listInput = z.object({
@@ -288,7 +299,7 @@ export const verbalOrderRouter = router({
     .mutation(async ({ ctx, input }) => {
       const eceCtx = buildEceCtx(ctx);
 
-      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+      const result = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
         // Verificar que la orden existe y está en estado registrada
         const orderRows = await (tx.$queryRaw as (
           q: TemplateStringsArray,
@@ -330,6 +341,17 @@ export const verbalOrderRouter = router({
           });
         }
 
+        // JCI IPSG.2-H1: el read-back debe coincidir para poder confirmar la orden.
+        // Si el receptor detectó discrepancia (readbackMatch=false), la orden
+        // NO puede quedar en estado 'confirmada' — el médico debe corregirla primero.
+        if (!input.readbackMatch) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "El read-back no coincidió con la orden original. Corrija la orden antes de confirmar (IPSG.2-H1).",
+          });
+        }
+
         // Verificar PIN del médico
         await verifyPinOrThrow(tx, ctx.user.id, input.pin);
 
@@ -346,9 +368,13 @@ export const verbalOrderRouter = router({
           ...v: unknown[]
         ) => Promise<number>)`
           UPDATE ece.verbal_order
-          SET estado         = ${nuevoEstado},
-              texto_readback = ${textoReadback ?? null},
-              confirmado_en  = now()
+          SET estado          = ${nuevoEstado},
+              texto_readback  = ${textoReadback ?? null},
+              confirmado_en   = now(),
+              readback_at     = now(),
+              readback_by     = ${ctx.user.id}::uuid,
+              readback_text   = ${input.readbackText},
+              readback_match  = ${input.readbackMatch}
           WHERE id = ${input.orderId}::uuid
         `;
 
@@ -358,6 +384,22 @@ export const verbalOrderRouter = router({
           confirmedAt: new Date().toISOString(),
         };
       });
+
+      // Emitir evento auditable fuera del withWorkflowContext (abre su propia tx)
+      await emitDomainEvent(ctx.prisma, {
+        organizationId: ctx.tenant.organizationId,
+        eventType: "jci.ipsg2.readback_recorded",
+        aggregateType: "VerbalOrder",
+        aggregateId: input.orderId,
+        emittedById: ctx.user.id,
+        payload: {
+          verbalOrderId: input.orderId,
+          by: ctx.user.id,
+          match: input.readbackMatch,
+        },
+      });
+
+      return result;
     }),
 
   /**
