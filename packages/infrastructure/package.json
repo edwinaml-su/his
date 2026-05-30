@@ -34,7 +34,7 @@
     "@types/node": "^22.10.2",
     "@types/nodemailer": "^6.4.23",
     "@vitest/coverage-v8": "^2.1.8",
-    "typescript": "^5.6.3",
+    "typescript": "^6.0.3",
     "vitest": "^2.1.8",
     "vitest-mock-extended": "^2.0.2"
   }
