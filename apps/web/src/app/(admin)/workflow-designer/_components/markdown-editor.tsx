@@ -173,6 +173,9 @@ export function MarkdownEditor({
         openOnClick: false,
         HTMLAttributes: { rel: "noopener noreferrer", target: "_blank" },
       }),
+      // TODO Sprint 5: migrar a tiptap-markdown@^0.9.x cuando se haga bump de TipTap v2→v3.
+      // tiptap-markdown@0.9.0 exige peer @tiptap/core@^3.0.1 (incompatible con @tiptap/*@^2.27.2 actual).
+      // Ref: chore/tiptap-markdown-0.9-migration PR — bloqueado por dep tree.
       Markdown.configure({
         html: false,
         tightLists: true,
