@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.80",
-    "@ai-sdk/react": "^3.0.193",
+    "@ai-sdk/react": "^3.0.195",
     "@dagrejs/dagre": "^1.1.4",
     "@his/contracts": "*",
     "@his/database": "*",
