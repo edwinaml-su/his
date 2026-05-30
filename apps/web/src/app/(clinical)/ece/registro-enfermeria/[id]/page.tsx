@@ -439,9 +439,22 @@ function CierreTurnoModal({
       form.assessment.trim().length >= 10 &&
       form.recommendation.trim().length >= 10;
 
+    // SBAR es siempre required en el contrato (eceCierreSchema). Si el usuario
+    // marcó skipSbar (turno sin paciente activo) o algún campo no llega a 10
+    // chars, el servidor lo rechaza vía Zod min(5). Bloqueamos en UI primero
+    // como defensa en profundidad — UX más amigable que el round-trip al server.
+    if (!sbarValido) {
+      setWarning(
+        skipSbar
+          ? "SBAR es obligatorio (JCI IPSG.2 ME 4). Desmarque 'omitir SBAR' y complete el handoff."
+          : "Cada campo SBAR requiere mínimo 10 caracteres.",
+      );
+      return;
+    }
+
     cerrarMutation.mutate({
       id:   registroId,
-      sbar: sbarValido ? form : undefined,
+      sbar: form,
     });
   }
 

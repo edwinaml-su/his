@@ -1594,6 +1594,7 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
       reason: z.string().nullable(),
       ackedAt: z.string(),
     }),
+  }),
   // JCI IPSG.2-H1 (US-21-D1) — Read-back auditable de orden verbal (IPSG.2 ME 1)
   z.object({
     eventType: z.literal("jci.ipsg2.readback_recorded"),

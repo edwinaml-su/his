@@ -43,6 +43,24 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+// CommandPalette (renderizado dentro de AppShell desde Tarea 4 / PR #368)
+// usa `trpc.patient.search.useQuery`. En entorno de test no hay tRPC Provider
+// — stubeamos el cliente para que el hook devuelva data vacía sin throw.
+vi.mock("../../lib/trpc/react", () => ({
+  trpc: {
+    patient: {
+      search: {
+        useQuery: () => ({
+          data: undefined,
+          isPending: false,
+          isLoading: false,
+          isError: false,
+        }),
+      },
+    },
+  },
+}));
+
 import { AppShell } from "../app-shell";
 
 describe("<AppShell /> — skip link WCAG 2.4.1", () => {
