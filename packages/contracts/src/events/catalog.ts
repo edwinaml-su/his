@@ -165,6 +165,10 @@ export const EVENT_TYPES = [
   // HG-15 (Stream G, P2) — Rectificaciones ECE: notificación al solicitante (NTEC Art. 42)
   "ece.rectificacion.aprobada",
   "ece.rectificacion.rechazada",
+  // JCI IPSG.2-H2 (US-21-D2) — Reconocimiento de abreviaciones prohibidas con razón clínica
+  "jci.ipsg2.abbr_acknowledged",
+  // JCI IPSG.3-H1 (US-21-D4) — Reconocimiento de medicamento LASA antes de administrar
+  "jci.ipsg3.lasa_acknowledged",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
