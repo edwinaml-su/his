@@ -13,10 +13,35 @@ const PUBLIC_PATHS = [
   // /recover y /recover/reset: flujo de recuperación de contraseña (PR #306).
   // El usuario llega aquí sin sesión activa por definición.
   "/recover",
-  "/api/trpc",
   "/api/health",
   "/_next",
   "/favicon.ico",
+];
+
+// Endpoints tRPC que usan publicProcedure y deben ser accesibles sin sesión.
+// /api/trpc completo fue removido de PUBLIC_PATHS (hallazgo OWASP A05-2,
+// pentest 2026-05-30): el middleware ahora valida sesión para todo /api/trpc/*
+// y solo los prefijos listados aquí se eximen.
+//
+// publicProcedure activos documentados (packages/trpc/src/routers/):
+//   - currency.list, currency.exchangeRates (catálogos)
+//   - country.list (catálogo)
+//   - locale.geoDivisions, locale.holidays, locale.currentLocale (config SV)
+//   - portal.register, portal.verifyEmail, portal.requestLogin, portal.verifyLogin
+//   - firma.requestRecovery, firma.completeRecovery (recuperación PIN pre-sesión)
+//
+// Si se agrega un publicProcedure nuevo, añadir su prefijo aquí.
+const TRPC_PUBLIC_PREFIXES = [
+  "/api/trpc/currency.",
+  "/api/trpc/country.",
+  "/api/trpc/locale.",
+  "/api/trpc/portal.",
+  "/api/trpc/firma.requestRecovery",
+  "/api/trpc/firma.completeRecovery",
+  // Batch: tRPC batch queries pueden incluir procedures públicos.
+  // El batch endpoint no se puede filtrar por procedure individual en el path
+  // — se mantiene público para no romper llamadas compuestas desde el login.
+  "/api/trpc/batch",
 ];
 
 // K-11: rutas del portal del paciente que no requieren sesión portal.
@@ -98,7 +123,9 @@ async function middlewareCore(request: NextRequest): Promise<NextResponse> {
 
   const { response, user } = await updateSession(request);
 
-  const isPublic = PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"));
+  const isPublic =
+    PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/")) ||
+    TRPC_PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   if (!user && !isPublic) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
