@@ -1150,6 +1150,21 @@ export type EceRectificacionAprobadaPayload = z.infer<typeof eceRectificacionApr
 export type EceRectificacionRechazadaPayload = z.infer<typeof eceRectificacionRechazadaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// jci.ipsg2.readback_recorded  (JCI IPSG.2-H1, US-21-D1)
+// Emitido cuando el MC registra el resultado del read-back de una orden verbal.
+// -----------------------------------------------------------------------------
+
+export const jciIpsg2ReadbackRecordedPayloadSchema = z.object({
+  verbalOrderId: z.string().uuid(),
+  /** UUID del usuario HIS que registró el read-back (ctx.user.id). */
+  by: z.string().uuid(),
+  /** true = el read-back coincidió con la orden; false = había discrepancia. */
+  match: z.boolean(),
+});
+
+export type JciIpsg2ReadbackRecordedPayload = z.infer<typeof jciIpsg2ReadbackRecordedPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1579,6 +1594,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
       reason: z.string().nullable(),
       ackedAt: z.string(),
     }),
+  // JCI IPSG.2-H1 (US-21-D1) — Read-back auditable de orden verbal (IPSG.2 ME 1)
+  z.object({
+    eventType: z.literal("jci.ipsg2.readback_recorded"),
+    payload: jciIpsg2ReadbackRecordedPayloadSchema,
   }),
 ]);
 
