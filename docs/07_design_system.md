@@ -7,6 +7,27 @@
 **Stack:** Next.js 14 + Tailwind CSS + Shadcn/ui + Lucide React
 **Cumplimiento:** TDR §29.5 (Usabilidad) + WCAG 2.1 AA
 
+---
+
+> **AVISO — Design System v2.0 disponible (2026-05-29)**
+>
+> El rediseno visual v2.0 entrego 11 PRs que reemplazan o extienden varias secciones de este documento. La referencia tecnica completa esta en **`docs/42_design_system_v2.md`**.
+>
+> Resumen de cambios en v2.0:
+> - Tokens de color migrados de HSL a **OKLCH** (perceptualmente uniforme). Ver `docs/42_design_system_v2.md §2`.
+> - Nuevos tokens: superficie (`--surface-0/1/2/3`), radio (`--radius-sm/md/lg/xl`), movimiento (`--motion-fast/base/slow`), densidad. Ver §2.
+> - App shell renovado con Shadcn `<SidebarProvider>` + `<AppSidebar>`. Ver `docs/42_design_system_v2.md §3`.
+> - `<PatientContextBar>` para rutas del expediente. Ver `docs/42_design_system_v2.md §4`.
+> - `<CommandPalette>` (`Ctrl+K`) con 3 grupos y debounce. Ver `docs/42_design_system_v2.md §5`.
+> - Refresh de variantes en `Button`, `Badge`, `Input`, `Table`, `Tabs`, `Card`. Ver `docs/42_design_system_v2.md §6`.
+> - Primitivos de estado: `<EmptyState>`, `<ErrorState>`. Ver `docs/42_design_system_v2.md §7`.
+> - `<Sparkline>` SVG + BedMap leyenda colapsable. Ver `docs/42_design_system_v2.md §8`.
+> - Toggle de densidad + container queries + View Transitions. Ver `docs/42_design_system_v2.md §9`.
+>
+> Este documento v1.0 se conserva como historia de diseno. Para implementacion nueva, consultar v2.0.
+
+---
+
 > **Principio rector:** El error de un clínico cansado puede costar una vida. La UI debe **prevenir errores antes que corregirlos** y **acelerar el flujo correcto** sin pedir confirmaciones gratuitas.
 
 ---
@@ -25,6 +46,8 @@
 ---
 
 ## 2. Paleta de Colores
+
+> **Tokens HSL obsoletos → Ver v2.0 §2.** En v2.0 los tokens semanticos usan OKLCH. Los valores HSL de esta seccion han sido reemplazados en `packages/ui/src/styles/globals.css`. Los hex clinicos protegidos (Manchester, allergy, lasa) son matematicamente identicos.
 
 ### 2.1 Tokens semánticos (Shadcn convention)
 
@@ -138,6 +161,8 @@ Usamos los **defaults de Tailwind** (escala 4px). Convenciones:
 
 ## 6. Componentes
 
+> **Componentes custom actualizados → Ver v2.0 §3–§8.** En v2.0 se entregaron `<PatientContextBar>`, `<CommandPalette>`, `<EmptyState>`, `<ErrorState>`, `<Sparkline>`, app shell Shadcn. El listado de §6.2 es el plan original; el estado actual de implementacion esta en v2.0.
+
 ### 6.1 Componentes Shadcn/ui a usar (no reinventar)
 
 `accordion`, `alert`, `alert-dialog`, `avatar`, `badge`, `button`, `calendar`, `card`, `checkbox`, `collapsible`, `command` (paleta `Ctrl+K`), `context-menu`, `dialog`, `dropdown-menu`, `form` (react-hook-form + zod), `hover-card`, `input`, `label`, `menubar`, `popover`, `progress`, `radio-group`, `scroll-area`, `select`, `separator`, `sheet`, `skeleton`, `slider`, `sonner` (toasts), `switch`, `table`, `tabs`, `textarea`, `toggle`, `tooltip`.
@@ -200,6 +225,8 @@ Usamos los **defaults de Tailwind** (escala 4px). Convenciones:
 - Auditoría irreversible. Notificación al DPO/CISO. Ventana temporal limitada (4 h por defecto).
 
 ### 7.6 Atajos de teclado (TDR §29.5)
+
+> **Ctrl+K implementado → Ver v2.0 §5.** El resto de los atajos (Alt+P/N/T/M, Ctrl+/, Esc, Ctrl+Enter) son follow-up documentado en `docs/42_design_system_v2.md §13`.
 
 | Atajo | Acción |
 |-------|--------|
