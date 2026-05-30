@@ -70,7 +70,7 @@
     "@axe-core/playwright": "^4.10.1",
     "@his/eslint-config": "*",
     "@his/test-utils": "*",
-    "@playwright/test": "^1.49.0",
+    "@playwright/test": "^1.60.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.2",
