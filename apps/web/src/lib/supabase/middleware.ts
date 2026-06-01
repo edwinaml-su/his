@@ -43,12 +43,8 @@ function nukeSupabaseCookies(response: NextResponse, supabaseUrl: string) {
  * "sin sesión" y aplicará su política (redirect a /login si no es pública).
  * Esto evita 500 MIDDLEWARE_INVOCATION_FAILED críptico que confunde diagnóstico.
  */
-export async function updateSession(request: NextRequest, requestHeaders?: Headers) {
-  // Nonce-based CSP (Sprint 5): si el middleware nos pasa requestHeaders (con
-  // x-nonce + CSP), los forwardeamos downstream para que Next.js inyecte el
-  // nonce en sus scripts de hidratación. Fallback a request.headers si no.
-  const reqInit = { headers: requestHeaders ?? request.headers };
-  let response = NextResponse.next({ request: reqInit });
+export async function updateSession(request: NextRequest) {
+  let response = NextResponse.next({ request });
 
   const env = getSupabaseEnvOrNull();
   if (!env) {
@@ -74,12 +70,12 @@ export async function updateSession(request: NextRequest, requestHeaders?: Heade
         },
         set(name: string, value: string, options: CookieOptions) {
           request.cookies.set({ name, value, ...options });
-          response = NextResponse.next({ request: reqInit });
+          response = NextResponse.next({ request });
           response.cookies.set({ name, value, ...options });
         },
         remove(name: string, options: CookieOptions) {
           request.cookies.set({ name, value: "", ...options });
-          response = NextResponse.next({ request: reqInit });
+          response = NextResponse.next({ request });
           response.cookies.set({ name, value: "", ...options });
         },
       },
@@ -121,7 +117,7 @@ export async function updateSession(request: NextRequest, requestHeaders?: Heade
 
     // Limpiar cookies sb-* hardcoded (NO iterar request.cookies — puede fallar
     // con el mismo Invalid UTF-8 que originó el problema).
-    const fresh = NextResponse.next({ request: reqInit });
+    const fresh = NextResponse.next({ request });
     nukeSupabaseCookies(fresh, env.url);
     return { response: fresh, user: null };
   }
