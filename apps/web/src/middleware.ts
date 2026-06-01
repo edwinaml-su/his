@@ -16,7 +16,9 @@ const PUBLIC_PATHS = [
   "/api/health",
   // TEMPORAL (Sprint 5): endpoint de verificación Sentry, guardado por token.
   // Público para no quedar tras el gate de auth. Se remueve tras verificar.
-  "/api/_sentry-check",
+  // NOTA: sin prefijo "_" — las carpetas _foo son private folders en Next App
+  // Router (excluidas del routing → 404).
+  "/api/sentry-check",
   "/_next",
   "/favicon.ico",
 ];

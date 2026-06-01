@@ -9,7 +9,10 @@
  * pero queda guardado por token → sin `?token=<valor>` correcto responde 404.
  * El token NO es secreto real (solo evita ruido de bots). Se ELIMINA tras verificar.
  *
- * Uso: GET /api/_sentry-check?token=avante-sentry-verify-7f3a9c2e
+ * NOTA: la carpeta NO lleva prefijo "_" — en Next App Router las carpetas
+ * `_foo` son private folders (excluidas del routing → 404).
+ *
+ * Uso: GET /api/sentry-check?token=avante-sentry-verify-7f3a9c2e
  */
 import * as Sentry from "@sentry/nextjs";
 import { type NextRequest, NextResponse } from "next/server";
