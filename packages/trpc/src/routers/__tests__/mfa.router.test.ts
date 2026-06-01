@@ -19,6 +19,7 @@ import type { PrismaClient } from "@prisma/client";
 import { mfaRouter } from "../mfa.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
+import { _resetRateLimitForTesting } from "../../middleware/rate-limit";
 
 // AUTH_SECRET necesario para encriptar/desencriptar en las pruebas.
 // Al menos 32 caracteres para que getEncryptionKey() no lance error.
@@ -34,11 +35,16 @@ describe("mfaRouter", () => {
     prisma = mockDeep<PrismaClient>();
     originalAuthSecret = process.env["AUTH_SECRET"];
     process.env["AUTH_SECRET"] = TEST_AUTH_SECRET;
+    _resetRateLimitForTesting();
   });
 
   afterEach(() => {
     process.env["AUTH_SECRET"] = originalAuthSecret;
     vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    _resetRateLimitForTesting();
   });
 
   // ---------------------------------------------------------------------------
@@ -242,6 +248,61 @@ describe("mfaRouter", () => {
       // el error burbujea sin capturar => tRPC lo convierte en INTERNAL_SERVER_ERROR.
       await expect(caller.verify({ token: "000000" })).rejects.toMatchObject({
         code: "INTERNAL_SERVER_ERROR",
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // verify — rate limit (A07-P1)
+  // ---------------------------------------------------------------------------
+
+  describe("verify — rate limit", () => {
+    it("bloquea TOO_MANY_REQUESTS después de 10 intentos fallidos por userId en 15 min", async () => {
+      const { encryptTestCred } = await buildTestCredHelper();
+      // Los primeros 10 fallos deben pasar el rate limit (UNAUTHORIZED del cred incorrecto).
+      for (let i = 0; i < 10; i++) {
+        prisma.userCredential.findFirst.mockResolvedValueOnce({
+          id: credId,
+          secretHash: encryptTestCred,
+        } as never);
+        const caller = mfaRouter.createCaller(makeCtx({ prisma }));
+        await expect(caller.verify({ token: "000000" })).rejects.toMatchObject({
+          code: "UNAUTHORIZED",
+        });
+      }
+      // El 11vo debe ser bloqueado por rate limit antes de consultar BD.
+      const caller = mfaRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.verify({ token: "000000" })).rejects.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+      });
+    });
+
+    it("usuarios distintos tienen cubetas independientes (rate limit por userId)", async () => {
+      const { encryptTestCred } = await buildTestCredHelper();
+      // Agotar cuota del usuario admin (MOCK_USER_ADMIN.id)
+      for (let i = 0; i < 10; i++) {
+        prisma.userCredential.findFirst.mockResolvedValueOnce({
+          id: credId,
+          secretHash: encryptTestCred,
+        } as never);
+        const caller = mfaRouter.createCaller(makeCtx({ prisma }));
+        await expect(caller.verify({ token: "000000" })).rejects.toMatchObject({
+          code: "UNAUTHORIZED",
+        });
+      }
+      // Otro usuario con id distinto sigue libre — usa makeCtx con user diferente.
+      const otherCtx = makeCtx({
+        prisma,
+        user: { id: "99999999-9999-9999-9999-999999999999", email: "other@test.com", fullName: "Other" },
+      });
+      prisma.userCredential.findFirst.mockResolvedValueOnce({
+        id: credId,
+        secretHash: encryptTestCred,
+      } as never);
+      const otherCaller = mfaRouter.createCaller(otherCtx);
+      // "000000" sigue siendo un TOTP incorrecto, pero NO debe ser TOO_MANY_REQUESTS.
+      await expect(otherCaller.verify({ token: "000000" })).rejects.toMatchObject({
+        code: "UNAUTHORIZED",
       });
     });
   });
