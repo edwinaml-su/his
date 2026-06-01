@@ -14,6 +14,9 @@ const PUBLIC_PATHS = [
   // El usuario llega aquí sin sesión activa por definición.
   "/recover",
   "/api/health",
+  // TEMPORAL (Sprint 5): endpoint de verificación Sentry, guardado por token.
+  // Público para no quedar tras el gate de auth. Se remueve tras verificar.
+  "/api/_sentry-check",
   "/_next",
   "/favicon.ico",
 ];
