@@ -635,6 +635,20 @@ model UserCredential {
   @@schema("public")
 }
 
+/// Rate limit compartido (Postgres) — reemplaza el guard in-memory de PR #430.
+/// Ventana deslizante por `bucketKey` (ej. 'auth:request-login:ip=<ip>').
+/// NO contiene PHI; RLS habilitada sin policies (deny-all), la app accede
+/// vía el rol BYPASSRLS fuera de withTenantContext. SQL: 163_rate_limit_hit.sql.
+model RateLimitHit {
+  id         String   @id @default(uuid()) @db.Uuid
+  bucketKey  String   @map("bucketKey")
+  occurredAt DateTime @default(now()) @map("occurredAt") @db.Timestamptz()
+
+  @@index([bucketKey, occurredAt])
+  @@map("RateLimitHit")
+  @@schema("public")
+}
+
 /// TDR §6.1 — identidad federada (SAML/OIDC/LDAP). 4NF: independiente de credenciales locales.
 model UserExternalIdentity {
   id        String     @id @default(uuid()) @db.Uuid

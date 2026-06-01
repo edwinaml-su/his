@@ -12,14 +12,13 @@
  * Patrón: prisma mock con $queryRaw / $executeRaw stubbados,
  *   makeCtx con MOCK_USER_ADMIN, vitest-mock-extended para UserCredential.
  */
-import { describe, it, expect, beforeEach, afterEach, vi, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { firmaElectronicaRouter } from "../firma-electronica.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installRateLimitMock } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 import { createHash, createCipheriv, randomBytes } from "node:crypto";
-import { _resetRateLimitForTesting } from "../../middleware/rate-limit";
 
 // Helper: genera un secretHash AES-256-GCM válido para tests usando AUTH_SECRET de prueba.
 function makeTestSecretHash(payload: { secret: string; codes: string[] }): string {
@@ -76,7 +75,7 @@ describe("firmaElectronicaRouter", () => {
   beforeEach(async () => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
-    _resetRateLimitForTesting();
+    installRateLimitMock(prisma);
     // AUTH_SECRET requerida por getMfaEncryptionKey en el router.
     process.env.AUTH_SECRET = "test-auth-secret-32-chars-minimum!";
     // Re-establecer implementaciones por defecto después de clearAllMocks.
@@ -85,9 +84,6 @@ describe("firmaElectronicaRouter", () => {
     vi.mocked(argon2.verify).mockResolvedValue(true);
   });
 
-  afterAll(() => {
-    _resetRateLimitForTesting();
-  });
 
   // ---------------------------------------------------------------------------
   // firma.setup

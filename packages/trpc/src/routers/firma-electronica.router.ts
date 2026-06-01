@@ -633,8 +633,8 @@ export const firmaElectronicaRouter = router({
     .mutation(async ({ ctx, input }) => {
       // A07-P1: rate limit por email + IP — publicProcedure, superficie atacable sin sesión.
       const emailKey = input.email.toLowerCase();
-      rateLimitOrThrow({ key: `firma:recovery:email=${emailKey}`, max: 3, windowMs: 60 * 60_000 });
-      rateLimitOrThrow({ key: `firma:recovery:ip=${normalizeIp(ctx.ip)}`, max: 10, windowMs: 60 * 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `firma:recovery:email=${emailKey}`, max: 3, windowMs: 60 * 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `firma:recovery:ip=${normalizeIp(ctx.ip)}`, max: 10, windowMs: 60 * 60_000 });
 
       const tokenPlain = generateRecoveryToken();
       const tokenHash = hashRecoveryToken(tokenPlain);

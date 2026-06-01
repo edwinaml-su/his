@@ -27,3 +27,36 @@ export function makeCtx(overrides: {
     ip: overrides.ip,
   };
 }
+
+/**
+ * Instala un mock STATEFUL de `prisma.rateLimitHit` sobre un mock prisma
+ * (mockDeep) para que el rate-limiter compartido (Postgres) funcione en tests
+ * de routers que ejercitan brute-force. Sin esto, `mockDeep` devuelve
+ * `undefined` en `count()` y el límite nunca dispara.
+ *
+ * Reemplaza al antiguo `_resetRateLimitForTesting()` del rate-limiter in-memory.
+ * Llamar en `beforeEach` con el prisma mock fresco del test.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function installRateLimitMock(prisma: any): void {
+  const rows: { bucketKey: string; occurredAt: Date }[] = [];
+  prisma.rateLimitHit = {
+    count: async ({ where }: { where: { bucketKey: string; occurredAt: { gte: Date } } }) =>
+      rows.filter((r) => r.bucketKey === where.bucketKey && r.occurredAt >= where.occurredAt.gte)
+        .length,
+    findFirst: async ({
+      where,
+    }: {
+      where: { bucketKey: string; occurredAt: { gte: Date } };
+    }) => {
+      const matches = rows
+        .filter((r) => r.bucketKey === where.bucketKey && r.occurredAt >= where.occurredAt.gte)
+        .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+      return matches[0] ? { occurredAt: matches[0].occurredAt } : null;
+    },
+    create: async ({ data }: { data: { bucketKey: string } }) => {
+      rows.push({ bucketKey: data.bucketKey, occurredAt: new Date() });
+      return undefined;
+    },
+  };
+}
