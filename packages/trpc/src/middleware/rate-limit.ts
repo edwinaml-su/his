@@ -1,22 +1,25 @@
 /**
- * Rate-limiter in-memory para endpoints publicProcedure de auth (S-K-2 cierra K-04).
+ * Rate-limiter compartido (Postgres) para endpoints de auth.
+ *
+ * Historia: nació in-memory (S-K-2 cierra K-04, PR #430) con un `Map` por
+ * proceso. En Vercel serverless multi-pod cada instancia tenía su propio
+ * contador → un atacante distribuido evadía el límite global. Sprint 5
+ * Beta.22 lo migró a Postgres (tabla `RateLimitHit`) para estado compartido.
  *
  * Diseño:
- *   - `Map<key, timestamps[]>` por proceso. Cada llamada filtra timestamps
- *     fuera de la ventana, decide si admitir, y registra el nuevo timestamp.
- *   - Cleanup oportunista cada 5 min para liberar memoria de keys sin
- *     actividad reciente.
- *   - Sin dependencia externa (Redis/Upstash) — válido para deploy MVP de
- *     1-2 instancias Vercel. Si la app escala horizontalmente, sustituir
- *     `BUCKETS` por un store compartido (ver TODO al final del archivo).
+ *   - Ventana deslizante por `bucketKey`: contar hits con `occurredAt` dentro
+ *     de la ventana; si `>= max` rechazar (sin registrar); si no, insertar.
+ *   - `bucketKey` codifica el contexto (tipo + IP/email/userId) — ver call sites.
+ *   - Defensa por superposición: limitar por IP Y por email/userId con keys
+ *     distintas (atacante con muchos proxies sigue limitado por target).
+ *   - Falla cerrada: si `ip`/`email` son undefined → "unknown" (comparten cubeta).
  *
- * Estrategia de keys (defensa por superposición):
- *   - `auth:request-login:ip=<ip>` — limita ráfagas globales por IP.
- *   - `auth:request-login:email=<email>` — limita per-email cross-IP
- *     (atacante con muchos proxies sigue limitado por target).
+ * NO es tenant-scoped: es seguridad de plataforma. El insert/count corre con
+ * el `ctx.prisma` base (rol BYPASSRLS) FUERA de `withTenantContext`. La tabla
+ * tiene RLS habilitada sin policies (deny-all a anon/authenticated).
  *
- * Falla cerrada: si `ip` o `email` son `undefined`, usamos "unknown" como
- * partición — el atacante anónimo comparte cubeta con todos los anónimos.
+ * Atomicidad: count-luego-insert no es atómico, pero la carrera es benigna
+ * para rate-limiting (bajo concurrencia extrema podrían colarse 1-2 extra).
  */
 import { TRPCError } from "@trpc/server";
 
@@ -35,41 +38,54 @@ interface RateLimitResult {
   retryAfterSec?: number;
 }
 
-const BUCKETS = new Map<string, number[]>();
-const CLEANUP_INTERVAL_MS = 5 * 60_000;
-const MAX_KEYS_BEFORE_CLEANUP = 10_000;
-let lastCleanupAt = Date.now();
-
-function maybeCleanup(now: number, windowMs: number): void {
-  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS && BUCKETS.size < MAX_KEYS_BEFORE_CLEANUP) {
-    return;
-  }
-  for (const [k, ts] of BUCKETS) {
-    const filtered = ts.filter((t) => now - t < windowMs);
-    if (filtered.length === 0) BUCKETS.delete(k);
-    else BUCKETS.set(k, filtered);
-  }
-  lastCleanupAt = now;
+/**
+ * Interfaz mínima del store que necesita el rate-limiter. Permite inyectar
+ * `ctx.prisma` en runtime y un mock en tests sin acoplar al PrismaClient completo.
+ */
+export interface RateLimitStore {
+  rateLimitHit: {
+    count(args: {
+      where: { bucketKey: string; occurredAt: { gte: Date } };
+    }): Promise<number>;
+    findFirst(args: {
+      where: { bucketKey: string; occurredAt: { gte: Date } };
+      orderBy: { occurredAt: "asc" };
+      select: { occurredAt: true };
+    }): Promise<{ occurredAt: Date } | null>;
+    create(args: { data: { bucketKey: string } }): Promise<unknown>;
+  };
 }
 
-export function checkRateLimit(opts: RateLimitOptions): RateLimitResult {
+/**
+ * Verifica (y registra) un intento contra la ventana deslizante en Postgres.
+ * Si el límite se alcanzó NO registra el intento (preserva la semántica
+ * in-memory previa: la cubeta se vacía al expirar el más viejo).
+ */
+export async function checkRateLimit(
+  store: RateLimitStore,
+  opts: RateLimitOptions,
+): Promise<RateLimitResult> {
   const now = Date.now();
-  maybeCleanup(now, opts.windowMs);
+  const since = new Date(now - opts.windowMs);
 
-  const arr = BUCKETS.get(opts.key) ?? [];
-  const fresh = arr.filter((t) => now - t < opts.windowMs);
+  const count = await store.rateLimitHit.count({
+    where: { bucketKey: opts.key, occurredAt: { gte: since } },
+  });
 
-  if (fresh.length >= opts.max) {
-    BUCKETS.set(opts.key, fresh);
-    const oldest = fresh[0]!;
+  if (count >= opts.max) {
+    const oldest = await store.rateLimitHit.findFirst({
+      where: { bucketKey: opts.key, occurredAt: { gte: since } },
+      orderBy: { occurredAt: "asc" },
+      select: { occurredAt: true },
+    });
+    const oldestMs = oldest ? oldest.occurredAt.getTime() : now;
     return {
       ok: false,
-      retryAfterSec: Math.max(1, Math.ceil((opts.windowMs - (now - oldest)) / 1000)),
+      retryAfterSec: Math.max(1, Math.ceil((opts.windowMs - (now - oldestMs)) / 1000)),
     };
   }
 
-  fresh.push(now);
-  BUCKETS.set(opts.key, fresh);
+  await store.rateLimitHit.create({ data: { bucketKey: opts.key } });
   return { ok: true };
 }
 
@@ -77,8 +93,11 @@ export function checkRateLimit(opts: RateLimitOptions): RateLimitResult {
  * Wrapper que lanza `TOO_MANY_REQUESTS` cuando el límite se supera.
  * Mensaje user-friendly incluye `retryAfterSec` para que UI muestre cuenta atrás.
  */
-export function rateLimitOrThrow(opts: RateLimitOptions): void {
-  const result = checkRateLimit(opts);
+export async function rateLimitOrThrow(
+  store: RateLimitStore,
+  opts: RateLimitOptions,
+): Promise<void> {
+  const result = await checkRateLimit(store, opts);
   if (!result.ok) {
     throw new TRPCError({
       code: "TOO_MANY_REQUESTS",
@@ -93,13 +112,3 @@ export function normalizeIp(ip: string | null | undefined): string {
   // x-forwarded-for puede incluir varias IPs separadas por coma; tomamos la primera.
   return ip.split(",")[0]!.trim().toLowerCase();
 }
-
-/** Solo para tests: vacía el estado interno. NO usar en producción. */
-export function _resetRateLimitForTesting(): void {
-  BUCKETS.clear();
-  lastCleanupAt = Date.now();
-}
-
-// TODO US.S-K-X (escala horizontal): si la app crece a >2 instancias Vercel,
-// reemplazar `BUCKETS` por un store compartido (Upstash Redis sliding window).
-// El API público de `checkRateLimit` / `rateLimitOrThrow` se mantiene estable.

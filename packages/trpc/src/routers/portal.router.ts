@@ -173,8 +173,8 @@ const accountRouter = router({
       // enumeración de DUIs (combinado con anti-enumeration `{ sent: true }`).
       const ip = normalizeIp(ctx.ip);
       const emailKey = input.email.toLowerCase();
-      rateLimitOrThrow({ key: `auth:register:ip=${ip}`, max: 10, windowMs: 60_000 });
-      rateLimitOrThrow({ key: `auth:register:email=${emailKey}`, max: 3, windowMs: 5 * 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `auth:register:ip=${ip}`, max: 10, windowMs: 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `auth:register:email=${emailKey}`, max: 3, windowMs: 5 * 60_000 });
 
       // Verificar que el DUI corresponde al patientId (defensa contra IDOR)
       const identifier = await ctx.prisma.patientIdentifier.findFirst({
@@ -359,8 +359,8 @@ const authRouter = router({
       // por target; un IP saturando emails distintos también.
       const ip = normalizeIp(ctx.ip);
       const emailKey = input.email.toLowerCase();
-      rateLimitOrThrow({ key: `auth:request-login:ip=${ip}`, max: 10, windowMs: 60_000 });
-      rateLimitOrThrow({ key: `auth:request-login:email=${emailKey}`, max: 5, windowMs: 5 * 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `auth:request-login:ip=${ip}`, max: 10, windowMs: 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `auth:request-login:email=${emailKey}`, max: 5, windowMs: 5 * 60_000 });
 
       const account = await ctx.prisma.portalAccount.findUnique({
         where: { email: emailKey },
@@ -399,7 +399,7 @@ const authRouter = router({
     .mutation(async ({ ctx, input }) => {
       // K-04 (audit Stream K): rate-limit por IP. Más laxo que requestLogin
       // porque el usuario legítimo puede reintentar tras MFA fail.
-      rateLimitOrThrow({
+      await rateLimitOrThrow(ctx.prisma, {
         key: `auth:verify-login:ip=${normalizeIp(ctx.ip)}`,
         max: 20,
         windowMs: 60_000,

@@ -12,14 +12,13 @@
  * Patrón: vitest-mock-extended para Prisma, makeCtx con MOCK_USER_ADMIN,
  * AUTH_SECRET inyectada por el setup de tests.
  */
-import { describe, it, expect, beforeEach, afterEach, vi, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createHmac } from "node:crypto";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { mfaRouter } from "../mfa.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installRateLimitMock } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
-import { _resetRateLimitForTesting } from "../../middleware/rate-limit";
 
 // AUTH_SECRET necesario para encriptar/desencriptar en las pruebas.
 // Al menos 32 caracteres para que getEncryptionKey() no lance error.
@@ -35,16 +34,12 @@ describe("mfaRouter", () => {
     prisma = mockDeep<PrismaClient>();
     originalAuthSecret = process.env["AUTH_SECRET"];
     process.env["AUTH_SECRET"] = TEST_AUTH_SECRET;
-    _resetRateLimitForTesting();
+    installRateLimitMock(prisma);
   });
 
   afterEach(() => {
     process.env["AUTH_SECRET"] = originalAuthSecret;
     vi.useRealTimers();
-  });
-
-  afterAll(() => {
-    _resetRateLimitForTesting();
   });
 
   // ---------------------------------------------------------------------------

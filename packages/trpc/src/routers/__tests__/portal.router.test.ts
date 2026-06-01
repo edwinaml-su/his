@@ -41,7 +41,10 @@ describe("portal.account.register", () => {
   });
 
   it("rechaza DUI invalido", async () => {
-    await expect(portalRouter.createCaller(pub(prisma)).account.register({ email: EM, patientId: PT, dui: "000000000" })).rejects.toThrow();
+    // "000000019": body 00000001 con check digit 9 (el correcto es 8) → validateDUI=false.
+    // NOTA: "000000000" es un DUI VÁLIDO (todo ceros → check 0); el test previo
+    // pasaba solo por fuga de estado del rate-limiter in-memory global entre archivos.
+    await expect(portalRouter.createCaller(pub(prisma)).account.register({ email: EM, patientId: PT, dui: "000000019" })).rejects.toThrow();
   });
 });
 

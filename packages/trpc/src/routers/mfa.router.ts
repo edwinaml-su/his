@@ -304,7 +304,7 @@ export const mfaRouter = router({
       // A07-P1: brute-force en TOTP — 10 intentos fallidos / 15 min por userId.
       // El replay ya está cubierto por lastUsedTotpStep; este límite cubre
       // el caso de un atacante con sesión válida intentando múltiples tokens.
-      rateLimitOrThrow({ key: `mfa:verify:user=${ctx.user.id}`, max: 10, windowMs: 15 * 60_000 });
+      await rateLimitOrThrow(ctx.prisma, { key: `mfa:verify:user=${ctx.user.id}`, max: 10, windowMs: 15 * 60_000 });
 
       const cred = await ctx.prisma.userCredential.findFirst({
         where: { userId: ctx.user.id, method: "TOTP" },
