@@ -7,9 +7,15 @@ Refs: OWASP A05, TDR §29 (Seguridad)
 
 ## Estado actual
 
-CSP en **enforce mode** desde Sprint 4 Beta.21 (2026-05-30). Directiva enforce activa en `Content-Security-Policy`. Una directiva `Content-Security-Policy-Report-Only` mas estricta detecta nuevas violaciones antes de que lleguen a enforce.
+CSP en **enforce mode con nonce por request** desde Sprint 5 Beta.22.
 
-Configuracion en: `apps/web/next.config.mjs` — funcion `headers()`.
+- `Content-Security-Policy` se genera en **`apps/web/src/middleware.ts`** — un nonce único por request (`crypto.randomUUID()` base64). `script-src 'self' 'nonce-{nonce}' 'strict-dynamic'` — **sin `'unsafe-inline'`**.
+- El nonce se inyecta en los request headers (`x-nonce` + CSP) vía `NextResponse.next({ request: { headers } })`, threaded por `updateSession` (Supabase). Next.js 14 lo añade automáticamente a sus `<script>` de hidratación.
+- Los headers estáticos (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy) siguen en `apps/web/next.config.mjs` `headers()`.
+
+**Por qué middleware y no next.config:** `headers()` es estático (build-time) y no puede generar un valor aleatorio por request. El nonce DEBE generarse en Edge runtime.
+
+Server Components que necesiten el nonce: `import { headers } from "next/headers"; const nonce = headers().get("x-nonce")`.
 
 ---
 
@@ -25,14 +31,14 @@ Cuando una nueva integracion requiere un origen que no esta en la CSP:
    - Iframes: `frame-src`
    - Fonts: `font-src`
 
-2. Editar `next.config.mjs`, arrays `cspEnforce` y `cspReportOnly`:
+2. Editar `apps/web/src/middleware.ts`, función `buildCspHeader()`:
 
    ```js
    // Ejemplo: agregar api.mapbox.com para maps
    "connect-src 'self' https://*.supabase.co ... https://api.mapbox.com",
    ```
 
-3. Agregar en AMBOS arrays (`cspEnforce` y `cspReportOnly`) para consistencia.
+3. Editar la directiva correspondiente en el array de `buildCspHeader()`.
 
 4. Desplegar a Preview primero. Verificar que la nueva integracion funciona sin violaciones.
 
@@ -49,7 +55,7 @@ Las violaciones CSP llegan a Sentry con tag `csp-violation` (si se configura `re
 Para agregar `report-uri` (opcional, para reporte activo):
 
 ```js
-// En cspEnforce, agregar al final:
+// En buildCspHeader() (middleware.ts), agregar al final del array:
 "report-uri https://oYYY.ingest.sentry.io/api/ZZZ/security/?sentry_key=XXX",
 ```
 
@@ -65,39 +71,35 @@ Sin `report-uri`, las violaciones solo aparecen en la consola del browser del us
 
 ---
 
-## 3. Rollback a Report-Only
+## 3. Rollback
 
-Si CSP enforce bloquea funcionalidad critica en produccion:
+Si el nonce CSP bloquea funcionalidad critica en produccion (ej. scripts de
+hidratacion bloqueados → paginas en blanco):
 
-**Rollback inmediato (sin deploy):**
-No es posible — la CSP esta hardcodeada en `next.config.mjs` y requiere redeploy.
+**Rollback rápido (< 3 min, sin revertir el PR):**
+En `apps/web/src/middleware.ts`, función `buildCspHeader()`, agregar
+`'unsafe-inline'` temporalmente al `scriptSrc`:
+```js
+// ROLLBACK TEMPORAL — remover tras diagnóstico
+`script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-inline' https://*.vercel-insights.com`
+```
+Commit + push + merge → Vercel redeploy automático. (Con `'strict-dynamic'`
+presente, los browsers modernos IGNORAN `'unsafe-inline'`, pero los browsers
+sin soporte `strict-dynamic` caen a `'unsafe-inline'` — degradación segura.)
 
-**Rollback via deploy (< 3 min en Vercel):**
-
-1. Editar `apps/web/next.config.mjs`:
-   ```js
-   // Cambiar:
-   key: "Content-Security-Policy",
-   // Por:
-   key: "Content-Security-Policy-Report-Only",
-   ```
-2. Commit + push + merge a main.
-3. Vercel redeploy automatico.
-
-**Alternativamente**, si el commit esta en la branch reciente, usar Vercel Dashboard > Deployments > seleccionar el deploy anterior > Redeploy (instantaneo, sin nuevo commit).
+**Rollback completo:**
+1. `git revert` del PR de nonce-based CSP, o
+2. Vercel Dashboard > Deployments > deploy anterior > Redeploy (instantáneo).
 
 ---
 
-## 4. Promover Report-Only a Enforce (futuro Sprint 5)
+## 4. Nota: estado nonce-based ya alcanzado (Sprint 5)
 
-El objetivo final es remover `'unsafe-inline'` de `script-src` usando nonce-based CSP:
-
-1. Implementar `middleware.ts` que genera un nonce por request.
-2. Pasar el nonce a `headers()` y a los `<Script>` de Next.js.
-3. Reemplazar `'unsafe-inline'` por `'nonce-{nonce}'` en la CSP.
-4. Esta es la directiva mas estricta posible para Next.js App Router.
-
-Scope: Sprint 5 hardening. Requiere cambios en middleware + layout.
+El objetivo de remover `'unsafe-inline'` de `script-src` se logró en Sprint 5
+Beta.22 (ver "Estado actual" arriba). `script-src` usa `'nonce-{nonce}'` +
+`'strict-dynamic'`. Próximo endurecimiento posible (Sprint 6+): nonce también
+en `style-src` (eliminar `'unsafe-inline'` de estilos) — requiere refactor de
+estilos inline de Tailwind/Next, bajo ROI.
 
 ---
 
@@ -105,7 +107,7 @@ Scope: Sprint 5 hardening. Requiere cambios en middleware + layout.
 
 | Directiva | Origenes permitidos |
 |---|---|
-| `script-src` | `'self'`, `'unsafe-inline'`, (dev) `'unsafe-eval'`, `*.vercel-insights.com` |
+| `script-src` | `'self'`, `'nonce-{nonce}'`, `'strict-dynamic'`, (dev) `'unsafe-eval'`, `*.vercel-insights.com` |
 | `style-src` | `'self'`, `'unsafe-inline'` |
 | `img-src` | `'self'`, `data:`, `blob:`, `*.supabase.co` |
 | `font-src` | `'self'`, `data:` |
