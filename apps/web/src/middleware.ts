@@ -1,6 +1,52 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Nonce-based CSP (Sprint 5 Beta.22) — continúa #427 (enforce mode).
+//
+// Por qué vive en el middleware y no en next.config.mjs headers():
+//   `headers()` es estático (se evalúa al build) y NO puede producir un valor
+//   aleatorio por request. El nonce DEBE generarse por request en Edge runtime.
+//
+// Flujo (patrón oficial Next 14):
+//   1. generar nonce + construir CSP con 'nonce-{nonce}' + 'strict-dynamic'
+//   2. inyectar x-nonce + Content-Security-Policy en los REQUEST headers que se
+//      forwardean downstream (NextResponse.next({ request: { headers } })) — así
+//      Next.js extrae el nonce y lo añade a sus <script> de hidratación.
+//   3. setear Content-Security-Policy también en la RESPONSE (enforce browser).
+//
+// Ref: https://nextjs.org/docs/app/building-your-application/configuring/content-security-policy
+// ─────────────────────────────────────────────────────────────────────────────
+
+function generateNonce(): string {
+  return Buffer.from(crypto.randomUUID()).toString("base64");
+}
+
+function buildCspHeader(nonce: string, isDev: boolean): string {
+  // 'strict-dynamic' propaga la confianza del nonce a scripts cargados por
+  // scripts ya confiados (los chunks de Next.js). 'unsafe-eval' solo en dev
+  // (React Refresh / sourcemaps lo requieren); en prod se elimina.
+  const scriptSrc = isDev
+    ? `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-eval' https://*.vercel-insights.com`
+    : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' https://*.vercel-insights.com`;
+
+  return [
+    "default-src 'self'",
+    scriptSrc,
+    // style-src mantiene 'unsafe-inline': Tailwind/Next inyectan estilos inline
+    // y no hay vector XSS práctico vía CSS. Endurecer estilos es fuera de scope.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https://*.supabase.co",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
+    "frame-src 'self' https://*.supabase.co",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join("; ");
+}
+
 const PUBLIC_PATHS = [
   "/login",
   "/signup",
@@ -69,8 +115,18 @@ const STALE_ALIASES = new Set<string>([
 ]);
 
 export async function middleware(request: NextRequest) {
+  // Nonce + CSP por request. Los request headers (con x-nonce + CSP) se
+  // forwardean downstream para que Next.js inyecte el nonce en sus scripts.
+  const nonce = generateNonce();
+  const csp = buildCspHeader(nonce, process.env.NODE_ENV === "development");
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  requestHeaders.set("Content-Security-Policy", csp);
+
   try {
-    return await middlewareCore(request);
+    const response = await middlewareCore(request, requestHeaders);
+    response.headers.set("Content-Security-Policy", csp);
+    return response;
   } catch (err) {
     // Última defensa: cualquier error no atrapado abajo (típicamente Invalid
     // UTF-8 sequence en cookie parsing del runtime Edge ANTES de llegar al
@@ -83,11 +139,16 @@ export async function middleware(request: NextRequest) {
       "[middleware] error no atrapado — degradando a pass-through. " +
         `Path=${request.nextUrl.pathname}. Mensaje=${msg.slice(0, 200)}`,
     );
-    return NextResponse.next({ request });
+    const fallback = NextResponse.next({ request: { headers: requestHeaders } });
+    fallback.headers.set("Content-Security-Policy", csp);
+    return fallback;
   }
 }
 
-async function middlewareCore(request: NextRequest): Promise<NextResponse> {
+async function middlewareCore(
+  request: NextRequest,
+  requestHeaders: Headers,
+): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
 
   // 0) Canonical host redirect — si llegamos por un alias "stale", redirigir
@@ -118,10 +179,10 @@ async function middlewareCore(request: NextRequest): Promise<NextResponse> {
         return NextResponse.redirect(url);
       }
     }
-    return NextResponse.next();
+    return NextResponse.next({ request: { headers: requestHeaders } });
   }
 
-  const { response, user } = await updateSession(request);
+  const { response, user } = await updateSession(request, requestHeaders);
 
   const isPublic =
     PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/")) ||

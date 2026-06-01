@@ -25,63 +25,12 @@ const nextConfig = {
   // ─────────────────────────────────────────────────────────────────────────
   // Security Headers HTTP — OWASP A05
   //
-  // CSP en ENFORCE mode (promovido de report-only en Sprint 4 Beta.21,
-  // tras 1 semana sin violaciones bloqueantes reportadas).
-  //
-  // DECISIONES DE DISEÑO:
-  //  - 'unsafe-inline' en script-src: requerido por Next.js 14 App Router
-  //    para hidratación SSR. Eliminar requeriría nonce-based CSP con middleware
-  //    custom — scope Sprint 5.
-  //  - 'unsafe-eval' en script-src: incluido SOLO en desarrollo (NODE_ENV=development)
-  //    para hot-reload. En producción se omite. Next.js 14 prod build no lo necesita.
-  //  - 'unsafe-eval' en worker-src/script-src de dev: necesario para el webpack HMR.
-  //
-  // ROLLBACK: cambiar la key de "Content-Security-Policy" a
-  //           "Content-Security-Policy-Report-Only" y redeploy.
-  //
-  // Supabase SDK usa: connect-src *.supabase.co wss://*.supabase.co,
-  //                   img-src *.supabase.co, frame-src *.supabase.co
-  // Vercel Analytics: script-src *.vercel-insights.com,
-  //                   connect-src *.vercel-insights.com
-  // Sentry SDK:       connect-src *.ingest.sentry.io
+  // NOTA: Content-Security-Policy se movió a `src/middleware.ts` (Sprint 5
+  // Beta.22) porque el nonce-based CSP requiere un valor aleatorio POR REQUEST
+  // y `headers()` es estático (se evalúa al build). Aquí quedan solo los
+  // headers que SÍ pueden ser estáticos. Ver docs/runbooks/csp.md.
   // ─────────────────────────────────────────────────────────────────────────
   async headers() {
-    const isDev = process.env.NODE_ENV === "development";
-
-    // Enforce CSP — aplicado en producción y preview
-    const cspEnforce = [
-      "default-src 'self'",
-      // 'unsafe-inline' necesario para Next.js SSR. 'unsafe-eval' solo en dev.
-      isDev
-        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.vercel-insights.com"
-        : "script-src 'self' 'unsafe-inline' https://*.vercel-insights.com",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://*.supabase.co",
-      "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
-      "frame-src 'self' https://*.supabase.co",
-      "frame-ancestors 'none'",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; ");
-
-    // Report-Only más estricto: sin 'unsafe-eval', sin dominios legacy.
-    // Permite detectar futuras relajaciones antes de que lleguen a enforce.
-    const cspReportOnly = [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://*.vercel-insights.com",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https://*.supabase.co",
-      "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
-      "frame-src 'self' https://*.supabase.co",
-      "frame-ancestors 'none'",
-      "object-src 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; ");
-
     return [
       {
         source: "/:path*",
@@ -105,18 +54,6 @@ const nextConfig = {
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",
-          },
-          {
-            // ENFORCE — bloquea violaciones activamente.
-            // Rollback: cambiar key a "Content-Security-Policy-Report-Only".
-            key: "Content-Security-Policy",
-            value: cspEnforce,
-          },
-          {
-            // Report-Only más estricto: detecta nuevas violaciones antes de enforce.
-            // Monitorear en Sentry con tag csp-violation.
-            key: "Content-Security-Policy-Report-Only",
-            value: cspReportOnly,
           },
         ],
       },
