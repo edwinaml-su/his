@@ -205,22 +205,28 @@ export const userAdminRouter = router({
   }),
 
   /**
-   * Reset de password por ADMIN. Cierra cualquier `UserCredential` activo
-   * con método PASSWORD (validTo=now) y crea uno nuevo en la misma tx.
+   * Reset de password por ADMIN.
+   *
+   * FUNCIONAL: escribe la contraseña en **Supabase Auth** (`auth.users`), que es
+   * lo que el login (`supabase.auth.signInWithPassword`) realmente verifica. Para
+   * usuarios SSO (provider azure/oidc sin password local) crea además la
+   * identidad `email`, habilitando login dual (email/password + SSO).
+   *
+   * (El write a `UserCredential` PASSWORD se mantiene como rastro de auditoría
+   * local — NO es lo que valida el login. Lección Beta.22: el reset previo solo
+   * tocaba UserCredential y el "éxito" no afectaba el login real.)
    *
    * Seguridad:
    *   - No puedes resetear tu propio password con esta mutation (usa el flujo
    *     de cambio propio que valida el password anterior).
-   *   - El usuario destino debe existir y estar activo.
-   *   - Hash: argon2id (mismo perfil que firma electrónica — defensa GPU).
-   *   - Auditoría: emite evento `user.password_reset` con razón clínica.
+   *   - El usuario destino debe existir, estar activo y tener cuenta en
+   *     Supabase Auth (invitación/SSO completada al menos una vez).
+   *   - Hash Supabase Auth: bcrypt vía `extensions.crypt`/`gen_salt('bf',10)`
+   *     (mismo algoritmo que GoTrue verifica).
+   *   - Auditoría: emite evento `user.password_reset` con razón.
    *
-   * Nota: este reset NO toca Supabase Auth. Si el usuario está vinculado
-   * vía OIDC (UserExternalIdentity), seguirá autenticándose por ese proveedor
-   * y este password solo se usa cuando se permite login local (futuro).
-   *
-   * TODO Sprint 4 — gate por requireRole(['ADMIN']) cuando el helper esté
-   * disponible; por ahora `tenantProcedure` + validación explícita rol ADMIN.
+   * TODO — gate por requireRole(['ADMIN']) cuando el helper esté disponible;
+   * por ahora `tenantProcedure` + validación explícita rol ADMIN.
    */
   resetPassword: tenantProcedure
     .input(userAdminResetPasswordInput)
@@ -264,10 +270,49 @@ export const userAdminRouter = router({
         });
       }
 
+      // ── FUNCIONAL: actualizar la contraseña en Supabase Auth ──────────────
+      // El login va por supabase.auth.signInWithPassword → auth.users. Resolvemos
+      // la cuenta auth por email (User.id de HIS ≠ auth.users.id).
+      const authRows = await ctx.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT id::text AS id FROM auth.users
+        WHERE lower(email) = lower(${target.email}) AND deleted_at IS NULL
+        LIMIT 1
+      `;
+      if (authRows.length === 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "El usuario no tiene cuenta en el proveedor de autenticación (Supabase Auth). " +
+            "Debe completar la invitación o iniciar sesión por SSO al menos una vez antes de asignarle un password local.",
+        });
+      }
+      const authUserId = authRows[0]!.id;
+
+      // bcrypt vía pgcrypto (schema `extensions` en Supabase). Calificado porque
+      // el search_path del rol de la app puede no incluir `extensions`.
+      await ctx.prisma.$executeRaw`
+        UPDATE auth.users
+        SET encrypted_password = extensions.crypt(${input.newPassword}, extensions.gen_salt('bf', 10)),
+            updated_at = now()
+        WHERE id = ${authUserId}::uuid
+      `;
+      // Asegurar identidad 'email' — requerida por signInWithPassword. Para
+      // usuarios SSO (solo identidad azure) esto habilita el login dual.
+      await ctx.prisma.$executeRaw`
+        INSERT INTO auth.identities
+          (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at, id)
+        SELECT ${authUserId}, ${authUserId}::uuid,
+               jsonb_build_object('sub', ${authUserId}, 'email', ${target.email},
+                                  'email_verified', true, 'phone_verified', false),
+               'email', now(), now(), now(), gen_random_uuid()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM auth.identities WHERE user_id = ${authUserId}::uuid AND provider = 'email'
+        )
+      `;
+
+      // ── Rastro de auditoría local (NO valida el login) ────────────────────
       const { hash } = await hashPin(input.newPassword);
       const now = new Date();
-
-      // Atómico: cerrar credenciales PASSWORD activas + crear la nueva.
       await ctx.prisma.$transaction([
         ctx.prisma.userCredential.updateMany({
           where: {
