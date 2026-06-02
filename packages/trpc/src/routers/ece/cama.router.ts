@@ -30,9 +30,10 @@
  *   public."ServiceUnit"      — servicio/área donde está la cama (sustituye al
  *                               legacy "Ward" que NO existe en este schema)
  *   public."Patient"          — datos del paciente (firstName, lastName)
- *   ece.asignacion_cama       — asignaciones activas: cama_id, episodio_id, activa
- *   ece.episodio_hospitalario — para join con paciente via episodio_atencion
- *   ece.episodio_atencion     — datos base: paciente_id
+ *   ece.asignacion_cama       — asignaciones: cama_id, episodio_id, desde, hasta
+ *                               (activa = hasta IS NULL; episodio_id → episodio_hospitalario.episodio_id)
+ *   ece.episodio_hospitalario — PK episodio_id (= episodio_atencion.id); join via episodio_id
+ *   ece.episodio_atencion     — datos base: id, paciente_id
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -166,15 +167,15 @@ export const eceCamaRouter = router({
             ac.id::text                              AS asignacion_id,
             CONCAT(p."firstName", ' ', p."lastName") AS paciente_nombre,
             ea.id::text                              AS episodio_id,
-            ac.fecha_asignacion                      AS asignada_desde
+            ac.desde                                 AS asignada_desde
           FROM public."Bed" b
           LEFT JOIN public."ServiceUnit" su ON su.id = b."serviceUnitId"
           LEFT JOIN ece.asignacion_cama ac
-            ON ac.cama_id = b.id AND ac.activa = true
+            ON ac.cama_id = b.id AND ac.hasta IS NULL
           LEFT JOIN ece.episodio_hospitalario eh
-            ON eh.id = ac.episodio_hospitalario_id
+            ON eh.episodio_id = ac.episodio_id
           LEFT JOIN ece.episodio_atencion ea
-            ON ea.id = eh.episodio_atencion_id
+            ON ea.id = eh.episodio_id
           LEFT JOIN public."Patient" p
             ON p.id = ea.paciente_id
           WHERE b."serviceUnitId" = ${input.servicioId}::uuid
@@ -218,7 +219,7 @@ export const eceCamaRouter = router({
             )                                                AS mantenimiento
           FROM public."Bed" b
           LEFT JOIN ece.asignacion_cama ac
-            ON ac.cama_id = b.id AND ac.activa = true
+            ON ac.cama_id = b.id AND ac.hasta IS NULL
           WHERE b."serviceUnitId" = ${input.servicioId}::uuid
         `;
 
@@ -270,15 +271,15 @@ export const eceCamaRouter = router({
             ac.id::text                              AS asignacion_id,
             CONCAT(p."firstName", ' ', p."lastName") AS paciente_nombre,
             ea.id::text                              AS episodio_id,
-            ac.fecha_asignacion                      AS asignada_desde
+            ac.desde                                 AS asignada_desde
           FROM public."Bed" b
           JOIN public."ServiceUnit" su ON su.id = b."serviceUnitId"
           LEFT JOIN ece.asignacion_cama ac
-            ON ac.cama_id = b.id AND ac.activa = true
+            ON ac.cama_id = b.id AND ac.hasta IS NULL
           LEFT JOIN ece.episodio_hospitalario eh
-            ON eh.id = ac.episodio_hospitalario_id
+            ON eh.episodio_id = ac.episodio_id
           LEFT JOIN ece.episodio_atencion ea
-            ON ea.id = eh.episodio_atencion_id
+            ON ea.id = eh.episodio_id
           LEFT JOIN public."Patient" p
             ON p.id = ea.paciente_id
           WHERE b.active = true
@@ -326,7 +327,7 @@ export const eceCamaRouter = router({
           SELECT id::text
           FROM ece.asignacion_cama
           WHERE cama_id = ${input.camaId}::uuid
-            AND activa = true
+            AND hasta IS NULL
           LIMIT 1
         `;
 
