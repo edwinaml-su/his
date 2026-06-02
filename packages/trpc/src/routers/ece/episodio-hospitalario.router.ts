@@ -83,6 +83,14 @@ const listActivosInput = z.object({
   cursor: z.string().uuid().optional(),
 });
 
+const listAdmisionesInput = z.object({
+  /** false = solo admisiones activas; true = incluye egresados (histórico). */
+  incluirCerrados: z.boolean().default(false),
+  /** Filtra por número de expediente o de admisión (ILIKE). */
+  busqueda: z.string().trim().max(120).optional(),
+  limit: z.number().int().min(1).max(200).default(100),
+});
+
 const getDetalleInput = z.object({
   id: z.string().uuid(),
 });
@@ -122,6 +130,21 @@ export interface EpisodioDetalleRow extends EpisodioActivoRow {
   motivo_ingreso: string;
   orden_ingreso_id: string;
   documentos_firmados_count: number;
+}
+
+/** Fila de admisión (episodio de atención) para el landing del ECE. */
+export interface AdmisionRow {
+  id: string;
+  public_encounter_id: string | null;
+  numero_expediente: string | null;
+  modalidad: string;
+  servicio_categoria: string | null;
+  servicio_nombre: string | null;
+  estado: string;
+  fecha_inicio: Date;
+  fecha_cierre: Date | null;
+  /** true si existe ece.episodio_hospitalario → tiene página de detalle. */
+  tiene_hospitalizacion: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -164,13 +187,13 @@ export const eceEpisodioHospitalarioRouter = router({
 
       const rows = await tx.$queryRaw<EpisodioActivoRow[]>`
         SELECT
-          eh.id::text,
+          eh.episodio_id::text,
           ea.id::text                    AS episodio_atencion_id,
           ea.paciente_id::text,
-          COALESCE(p.primer_nombre || ' ' || p.primer_apellido, ea.paciente_id::text) AS paciente_nombre,
+          COALESCE(p.numero_expediente, ea.paciente_id::text) AS paciente_nombre,
           eh.servicio_id::text           AS sala_id,
           srv.nombre                     AS sala_nombre,
-          ac.cama_id::text,
+          eh.cama_id::text,
           c.codigo                       AS cama_codigo,
           eh.fecha_hora_orden_ingreso    AS fecha_ingreso,
           ea.estado,
@@ -179,8 +202,7 @@ export const eceEpisodioHospitalarioRouter = router({
         JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_id
         LEFT JOIN ece.paciente       p   ON p.id = ea.paciente_id
         LEFT JOIN ece.servicio       srv ON srv.id = eh.servicio_id
-        LEFT JOIN ece.asignacion_cama ac ON ac.episodio_hospitalario_id = eh.id AND ac.activa = true
-        LEFT JOIN ece.cama           c   ON c.id = ac.cama_id
+        LEFT JOIN ece.cama           c   ON c.id = eh.cama_id
         WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
           AND ea.estado NOT IN ('cerrado', 'cancelado')
           AND (${input.servicioId ?? null}::uuid IS NULL
@@ -188,8 +210,8 @@ export const eceEpisodioHospitalarioRouter = router({
           AND (${fechaStr}::date IS NULL
                OR eh.fecha_hora_orden_ingreso::date = ${fechaStr}::date)
           AND (${input.cursor ?? null}::uuid IS NULL
-               OR eh.id > ${input.cursor ?? null}::uuid)
-        ORDER BY eh.id ASC
+               OR eh.episodio_id > ${input.cursor ?? null}::uuid)
+        ORDER BY eh.episodio_id ASC
         LIMIT ${input.limit + 1}
       `;
 
@@ -203,39 +225,81 @@ export const eceEpisodioHospitalarioRouter = router({
    * Detalle completo de un episodio hospitalario:
    * paciente + cama + count de documentos firmados.
    */
+  /**
+   * Lista admisiones (episodios de atención) de TODAS las áreas, identificadas
+   * por número de admisión (public_encounter_id) y número de expediente del
+   * paciente. Por defecto solo activas (estado ≠ cerrado/cancelado);
+   * incluirCerrados=true agrega el histórico de egresados.
+   *
+   * Nota: el nombre del paciente vive en el índice maestro HIS (bridge); aquí
+   * se usa numero_expediente como identificador clínico estable de ECE.
+   */
+  listAdmisiones: readBase.input(listAdmisionesInput).query(async ({ ctx, input }) => {
+    const ece = withEceContext(ctx);
+
+    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      const busqueda = input.busqueda?.trim() || null;
+      return tx.$queryRaw<AdmisionRow[]>`
+        SELECT
+          ea.id::text,
+          ea.public_encounter_id::text,
+          p.numero_expediente,
+          ea.modalidad,
+          ea.servicio_categoria,
+          srv.nombre                  AS servicio_nombre,
+          ea.estado,
+          ea.fecha_hora_inicio        AS fecha_inicio,
+          ea.fecha_hora_cierre        AS fecha_cierre,
+          (eh.episodio_id IS NOT NULL) AS tiene_hospitalizacion
+        FROM ece.episodio_atencion ea
+        LEFT JOIN ece.paciente              p   ON p.id = ea.paciente_id
+        LEFT JOIN ece.servicio              srv ON srv.id = ea.servicio_id
+        LEFT JOIN ece.episodio_hospitalario eh  ON eh.episodio_id = ea.id
+        WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
+          AND (${input.incluirCerrados}::boolean
+               OR ea.estado NOT IN ('cerrado', 'cancelado'))
+          AND (${busqueda}::text IS NULL
+               OR p.numero_expediente ILIKE '%' || ${busqueda} || '%'
+               OR ea.public_encounter_id::text ILIKE '%' || ${busqueda} || '%')
+        ORDER BY ea.fecha_hora_inicio DESC NULLS LAST
+        LIMIT ${input.limit}
+      `;
+    });
+  }),
+
   getDetalle: readBase.input(getDetalleInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
     return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
       const rows = await tx.$queryRaw<EpisodioDetalleRow[]>`
         SELECT
-          eh.id::text,
+          eh.episodio_id::text,
           ea.id::text                    AS episodio_atencion_id,
           ea.paciente_id::text,
-          COALESCE(p.primer_nombre || ' ' || p.primer_apellido, ea.paciente_id::text) AS paciente_nombre,
+          COALESCE(p.numero_expediente, ea.paciente_id::text) AS paciente_nombre,
           eh.servicio_id::text           AS sala_id,
           srv.nombre                     AS sala_nombre,
-          ac.cama_id::text,
+          eh.cama_id::text,
           c.codigo                       AS cama_codigo,
           eh.fecha_hora_orden_ingreso    AS fecha_ingreso,
           ea.estado,
           NULL::text                     AS medico_nombre,
-          ea.motivo_consulta             AS motivo_ingreso,
+          ea.motivo                      AS motivo_ingreso,
           eh.episodio_id::text           AS orden_ingreso_id,
           COALESCE(docs.firmados, 0)     AS documentos_firmados_count
         FROM ece.episodio_hospitalario eh
         JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_id
         LEFT JOIN ece.paciente       p   ON p.id = ea.paciente_id
         LEFT JOIN ece.servicio       srv ON srv.id = eh.servicio_id
-        LEFT JOIN ece.asignacion_cama ac ON ac.episodio_hospitalario_id = eh.id AND ac.activa = true
-        LEFT JOIN ece.cama           c   ON c.id = ac.cama_id
+        LEFT JOIN ece.cama           c   ON c.id = eh.cama_id
         LEFT JOIN LATERAL (
           SELECT COUNT(*) AS firmados
-          FROM ece.documento_clinico dc
-          WHERE dc.episodio_id = ea.id
-            AND dc.estado_workflow IN ('firmado', 'validado', 'certificado')
+          FROM ece.documento_instancia di
+          JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          WHERE di.episodio_id = ea.id
+            AND (fe.codigo IN ('firmado', 'validado', 'certificado') OR fe.es_final = true)
         ) docs ON true
-        WHERE eh.id = ${input.id}::uuid
+        WHERE eh.episodio_id = ${input.id}::uuid
           AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         LIMIT 1
       `;
