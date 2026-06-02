@@ -350,7 +350,12 @@ export default function WorkflowGrafoPage() {
     { enabled: !!tipoDoc?.id },
   );
 
-  const { data: validacion, isLoading: loadingValidacion, refetch: refetchValidacion } = trpc.workflowValidator.validate.useQuery(
+  const {
+    data: validacion,
+    isLoading: loadingValidacion,
+    isFetching: fetchingValidacion,
+    refetch: refetchValidacion,
+  } = trpc.workflowValidator.validate.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
@@ -541,7 +546,10 @@ export default function WorkflowGrafoPage() {
       <ValidationPanel
         issues={validacion?.errors}
         onValidate={() => void refetchValidacion()}
-        isLoading={loadingValidacion}
+        // isFetching refleja el refetch del botón (isLoading solo es true en la
+        // 1ª carga). Sin esto, clickear "Validar" no mostraba spinner ni
+        // feedback → parecía que el botón "no funcionaba".
+        isLoading={loadingValidacion || fetchingValidacion}
         tipoDocCodigo={codigo}
       />
 
