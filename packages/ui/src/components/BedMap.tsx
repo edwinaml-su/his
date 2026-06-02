@@ -30,6 +30,8 @@ export interface BedCell {
   patientMrn?: string | null;
   /** ISO string de última actualización de estado */
   updatedAt?: string | null;
+  /** Episodio de atención activo en la cama — permite navegar al detalle de la admisión. */
+  episodioId?: string | null;
 }
 
 export interface BedMapServiceGroup {

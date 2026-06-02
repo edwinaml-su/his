@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Building2, AlertCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { BedMap, type BedMapServiceGroup, type BedStatus } from "@his/ui/components/BedMap";
@@ -14,6 +15,7 @@ interface CamaEce {
   codigo: string;
   estado: EstadoCama;
   pacienteNombre: string | null;
+  episodioId: string | null;
 }
 
 interface ServicioEce {
@@ -32,6 +34,7 @@ function eceStatusToBedStatus(estado: EstadoCama): BedStatus {
 }
 
 export default function BedsPage() {
+  const router = useRouter();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const map = trpc.eceCama.mapCompleto.useQuery() as { data?: ServicioEce[]; isLoading: boolean; error?: any };
 
@@ -44,6 +47,7 @@ export default function BedsPage() {
         code: c.codigo,
         status: eceStatusToBedStatus(c.estado),
         patientName: c.pacienteNombre,
+        episodioId: c.episodioId,
       })),
     })) ?? [];
 
@@ -87,7 +91,17 @@ export default function BedsPage() {
             </div>
           )}
 
-          {map.data && <BedMap groups={groups} />}
+          {map.data && (
+            <BedMap
+              groups={groups}
+              onBedClick={(bed) => {
+                // Solo las camas ocupadas tienen episodio → detalle de la admisión.
+                if (bed.episodioId) {
+                  router.push(`/ece/episodio-hospitalario/${bed.episodioId}`);
+                }
+              }}
+            />
+          )}
         </CardContent>
       </Card>
     </div>
