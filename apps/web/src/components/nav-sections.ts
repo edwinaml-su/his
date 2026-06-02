@@ -368,7 +368,7 @@ export const SECTIONS: NavSection[] = [
         description: "Políticas de control de acceso basadas en atributos." },
       { href: "/audit", label: "Auditoría", icon: History,
         description: "Bitácora de auditoría inmutable con hash chain (retención 10 años)." },
-      { href: "/catalogs/gender", label: "Catálogos", icon: Settings,
+      { href: "/catalogs", label: "Catálogos", icon: Settings,
         description: "Catálogos transversales: sexo biológico, género, estado civil, etc." },
       { href: "/countries", label: "Países", icon: Globe,
         description: "Configuración por país: validadores, identificadores, divisa." },
