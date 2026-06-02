@@ -137,7 +137,7 @@ export const personalSaludRouter = router({
         COALESCE(ARRAY_AGG(r.codigo) FILTER (WHERE r.codigo IS NOT NULL), '{}')::text[] AS roles_codigos,
         COALESCE(ARRAY_AGG(r.nombre) FILTER (WHERE r.nombre IS NOT NULL), '{}')::text[] AS roles_nombres
       FROM ece.personal_salud p
-      LEFT JOIN ece.asignacion_rol ar ON ar.personal_id = p.id AND ar.vigente = true
+      LEFT JOIN ece.asignacion_rol ar ON ar.personal_id = p.id AND ar.activo = true
       LEFT JOIN ece.rol r ON r.id = ar.rol_id
       WHERE p.establecimiento_id = ${estab}::uuid
         AND (${activoFilter}::boolean IS NULL OR p.activo = ${activoFilter}::boolean)
@@ -200,7 +200,7 @@ export const personalSaludRouter = router({
             WHERE fe.personal_id = p.id AND fe.revoked_at IS NULL
           ) AS firma_activa
         FROM ece.personal_salud p
-        LEFT JOIN ece.asignacion_rol ar ON ar.personal_id = p.id AND ar.vigente = true
+        LEFT JOIN ece.asignacion_rol ar ON ar.personal_id = p.id AND ar.activo = true
         LEFT JOIN ece.rol r ON r.id = ar.rol_id
         WHERE p.id = ${input.id}::uuid
           AND p.establecimiento_id = ${estab}::uuid
@@ -294,7 +294,7 @@ export const personalSaludRouter = router({
 
         for (const role of roles) {
           await tx.$executeRaw`
-            INSERT INTO ece.asignacion_rol (personal_id, rol_id, vigente, asignado_en)
+            INSERT INTO ece.asignacion_rol (personal_id, rol_id, activo, asignado_en)
             VALUES (${newId}::uuid, ${role.id}::uuid, true, now())
             ON CONFLICT (personal_id, rol_id, servicio_id) DO NOTHING
           `;
@@ -350,16 +350,16 @@ export const personalSaludRouter = router({
           }
           // Desactivar todas las asignaciones actuales.
           await tx.$executeRaw`
-            UPDATE ece.asignacion_rol SET vigente = false
-            WHERE personal_id = ${input.id}::uuid AND vigente = true
+            UPDATE ece.asignacion_rol SET activo = false
+            WHERE personal_id = ${input.id}::uuid AND activo = true
           `;
           // Re-insertar / re-activar.
           for (const role of roles) {
             await tx.$executeRaw`
-              INSERT INTO ece.asignacion_rol (personal_id, rol_id, vigente, asignado_en)
+              INSERT INTO ece.asignacion_rol (personal_id, rol_id, activo, asignado_en)
               VALUES (${input.id}::uuid, ${role.id}::uuid, true, now())
               ON CONFLICT (personal_id, rol_id, servicio_id)
-                DO UPDATE SET vigente = true, asignado_en = now()
+                DO UPDATE SET activo = true, asignado_en = now()
             `;
           }
         }
