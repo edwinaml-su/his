@@ -7,11 +7,11 @@
  *   orden_ingreso → episodio_atencion → episodio_hospitalario → preop_checklist
  *   → reserva_sala_qx → outbox event ece.cirugia.programada.
  *
+ * UX: paciente y médicos por BÚSQUEDA DINÁMICA (nombre/identificador), sala QX
+ * por SELECTOR de quirófanos (no más UUIDs pegados a mano).
+ *
  * Acceso: PHYSICIAN | ADM (validado server-side via requireRole).
  * Hard-stop: sala ocupada en horario propuesto → CONFLICT.
- *
- * @QA E2E: completar form → submit → redirigir a /ece/quirofano/programacion
- *   con la nueva cirugía visible; doble-reserva → mensaje CONFLICT.
  */
 
 import * as React from "react";
@@ -29,73 +29,221 @@ import { Label } from "@his/ui/components/label";
 import { Textarea } from "@his/ui/components/textarea";
 import { trpc } from "@/lib/trpc/react";
 
-interface FormState {
-  pacienteId: string;
-  procedimientoCie10: string;
-  fechaProgramada: string;
-  cirujanoId: string;
-  anestesiologoId: string;
-  salaQxId: string;
-  duracionEstimadaMin: number;
-  motivoIngreso: string;
+// ── Opción genérica para los selectores de búsqueda ──────────────────────────
+interface Opt {
+  id: string;
+  label: string;
+  sublabel?: string;
 }
 
-const INITIAL: FormState = {
-  pacienteId: "",
-  procedimientoCie10: "",
-  fechaProgramada: "",
-  cirujanoId: "",
-  anestesiologoId: "",
-  salaQxId: "",
-  duracionEstimadaMin: 60,
-  motivoIngreso: "",
-};
+function useDebounced<T>(value: T, ms = 300): T {
+  const [debounced, setDebounced] = React.useState(value);
+  React.useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
+/**
+ * Selector con búsqueda dinámica. Presentacional: el padre maneja la query
+ * (debounce + hook tRPC) y pasa las opciones. Al elegir, muestra un chip con
+ * botón "Cambiar".
+ */
+function EntitySearchSelect({
+  id,
+  label,
+  required,
+  placeholder,
+  hint,
+  query,
+  onQueryChange,
+  options,
+  loading,
+  selected,
+  onSelect,
+  onClear,
+}: {
+  id: string;
+  label: string;
+  required?: boolean;
+  placeholder: string;
+  hint?: string;
+  query: string;
+  onQueryChange: (v: string) => void;
+  options: Opt[];
+  loading: boolean;
+  selected: Opt | null;
+  onSelect: (opt: Opt) => void;
+  onClear: () => void;
+}) {
+  const [openList, setOpenList] = React.useState(false);
+
+  if (selected) {
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor={id}>
+          {label} {required && <span className="text-destructive">*</span>}
+        </Label>
+        <div className="flex items-center justify-between gap-2 rounded-md border border-input bg-muted/30 px-3 py-2 text-sm">
+          <span className="min-w-0 truncate">
+            <span className="font-medium">{selected.label}</span>
+            {selected.sublabel && (
+              <span className="ml-1.5 text-xs text-muted-foreground">{selected.sublabel}</span>
+            )}
+          </span>
+          <Button type="button" variant="ghost" size="sm" onClick={onClear}>
+            Cambiar
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={id}>
+        {label} {required && <span className="text-destructive">*</span>}
+      </Label>
+      <div className="relative">
+        <Input
+          id={id}
+          value={query}
+          onChange={(e) => {
+            onQueryChange(e.target.value);
+            setOpenList(true);
+          }}
+          onFocus={() => setOpenList(true)}
+          autoComplete="off"
+          placeholder={placeholder}
+          aria-expanded={openList}
+          aria-describedby={hint ? `${id}-hint` : undefined}
+        />
+        {openList && query.trim().length >= 2 && (
+          <ul
+            className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-md border border-input bg-popover py-1 text-sm shadow-md"
+            role="listbox"
+          >
+            {loading && (
+              <li className="px-3 py-2 text-muted-foreground">Buscando…</li>
+            )}
+            {!loading && options.length === 0 && (
+              <li className="px-3 py-2 text-muted-foreground">Sin resultados.</li>
+            )}
+            {options.map((o) => (
+              <li key={o.id} role="option" aria-selected="false">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelect(o);
+                    setOpenList(false);
+                  }}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:outline-none"
+                >
+                  <span className="min-w-0 truncate">{o.label}</span>
+                  {o.sublabel && (
+                    <span className="shrink-0 text-xs text-muted-foreground">{o.sublabel}</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {hint && (
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function toIsoOffset(local: string): string {
-  // Convierte input datetime-local (sin tz) a ISO con offset SV (-06:00).
   if (!local) return "";
   return `${local}:00-06:00`;
 }
 
 export default function NuevaProgramacionPage() {
   const router = useRouter();
-  const [form, setForm] = React.useState<FormState>(INITIAL);
-  const [submitting, setSubmitting] = React.useState(false);
+
+  // Entidades seleccionadas (objeto {id,label}) — el payload usa .id.
+  const [paciente, setPaciente] = React.useState<Opt | null>(null);
+  const [cirujano, setCirujano] = React.useState<Opt | null>(null);
+  const [anestesiologo, setAnestesiologo] = React.useState<Opt | null>(null);
+  const [salaQxId, setSalaQxId] = React.useState("");
+
+  // Campos simples
+  const [procedimientoCie10, setProcedimientoCie10] = React.useState("");
+  const [fechaProgramada, setFechaProgramada] = React.useState("");
+  const [duracionEstimadaMin, setDuracion] = React.useState(60);
+  const [motivoIngreso, setMotivoIngreso] = React.useState("");
+
+  // Queries de búsqueda
+  const [qPaciente, setQPaciente] = React.useState("");
+  const [qCirujano, setQCirujano] = React.useState("");
+  const [qAnest, setQAnest] = React.useState("");
+  const dqPaciente = useDebounced(qPaciente);
+  const dqCirujano = useDebounced(qCirujano);
+  const dqAnest = useDebounced(qAnest);
+
   const [error, setError] = React.useState<string | null>(null);
 
+  // ── tRPC ──
+  const pacienteSearch = trpc.patient.search.useQuery(
+    { query: dqPaciente, limit: 8 },
+    { enabled: !paciente && dqPaciente.trim().length >= 2, staleTime: 30_000 },
+  );
+  // userAdmin.listAll: búsqueda por nombre/email. Cast `as any` (convención del repo).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cirujanoSearch = (trpc as any).userAdmin.listAll.useQuery(
+    { search: dqCirujano, active: true, pageSize: 8 },
+    { enabled: !cirujano && dqCirujano.trim().length >= 2 },
+  );
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anestSearch = (trpc as any).userAdmin.listAll.useQuery(
+    { search: dqAnest, active: true, pageSize: 8 },
+    { enabled: !anestesiologo && dqAnest.trim().length >= 2 },
+  );
+  const roomsQ = trpc.surgery.operatingRoom.list.useQuery({ activeOnly: true, limit: 100 });
+
   const mutation = trpc.eceBridgeCirugia.programarCirugia.useMutation({
-    onSuccess: () => {
-      router.push("/ece/quirofano/programacion");
-    },
-    onError: (err: { message: string }) => {
-      setError(err.message ?? "Error al programar cirugía");
-      setSubmitting(false);
-    },
+    onSuccess: () => router.push("/ece/quirofano/programacion"),
+    onError: (err: { message: string }) =>
+      setError(err.message ?? "Error al programar cirugía"),
   });
 
-  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((prev) => ({ ...prev, [key]: value }));
-  }
+  // ── Mapeo de opciones ──
+  const pacienteOpts: Opt[] = (pacienteSearch.data ?? []).map((p) => ({
+    id: p.id,
+    label: [p.firstName, p.lastName, p.secondLastName].filter(Boolean).join(" "),
+    sublabel: p.mrn ? `#${p.mrn}` : undefined,
+  }));
+  const toUserOpts = (q: { data?: { items?: { id: string; fullName: string; email: string }[] } }): Opt[] =>
+    (q.data?.items ?? []).map((u) => ({ id: u.id, label: u.fullName, sublabel: u.email }));
+  const cirujanoOpts = toUserOpts(cirujanoSearch);
+  const anestOpts = toUserOpts(anestSearch);
+  const rooms = (roomsQ.data ?? []) as { id: string; code: string; name: string }[];
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
-    setSubmitting(true);
 
-    const payload = {
-      pacienteId: form.pacienteId.trim(),
-      procedimientoCie10: form.procedimientoCie10.trim(),
-      fechaProgramada: toIsoOffset(form.fechaProgramada),
-      cirujanoId: form.cirujanoId.trim(),
-      anestesiologoId: form.anestesiologoId.trim(),
-      salaQxId: form.salaQxId.trim(),
-      duracionEstimadaMin: form.duracionEstimadaMin,
-      ...(form.motivoIngreso.trim()
-        ? { motivoIngreso: form.motivoIngreso.trim() }
-        : {}),
-    };
+    if (!paciente || !cirujano || !anestesiologo || !salaQxId || !procedimientoCie10.trim() || !fechaProgramada) {
+      setError("Completa paciente, procedimiento, fecha, cirujano, anestesiólogo y sala.");
+      return;
+    }
 
-    mutation.mutate(payload);
+    mutation.mutate({
+      pacienteId: paciente.id,
+      procedimientoCie10: procedimientoCie10.trim(),
+      fechaProgramada: toIsoOffset(fechaProgramada),
+      cirujanoId: cirujano.id,
+      anestesiologoId: anestesiologo.id,
+      salaQxId,
+      duracionEstimadaMin,
+      ...(motivoIngreso.trim() ? { motivoIngreso: motivoIngreso.trim() } : {}),
+    });
   }
 
   return (
@@ -120,29 +268,32 @@ export default function NuevaProgramacionPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="pacienteId">Paciente (UUID) *</Label>
-                <Input
-                  id="pacienteId"
-                  value={form.pacienteId}
-                  onChange={(e) => update("pacienteId", e.target.value)}
-                  required
-                  placeholder="00000000-0000-0000-0000-000000000000"
-                  aria-describedby="hint-paciente"
-                />
-                <p id="hint-paciente" className="text-xs text-muted-foreground">
-                  UUID del registro Patient.
-                </p>
-              </div>
+              <EntitySearchSelect
+                id="paciente"
+                label="Paciente"
+                required
+                placeholder="Buscar por nombre o expediente…"
+                hint="Escribe ≥2 caracteres para buscar."
+                query={qPaciente}
+                onQueryChange={setQPaciente}
+                options={pacienteOpts}
+                loading={pacienteSearch.isFetching}
+                selected={paciente}
+                onSelect={setPaciente}
+                onClear={() => {
+                  setPaciente(null);
+                  setQPaciente("");
+                }}
+              />
 
               <div className="space-y-1.5">
-                <Label htmlFor="cie10">Procedimiento CIE-10 *</Label>
+                <Label htmlFor="cie10">
+                  Procedimiento CIE-10 <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="cie10"
-                  value={form.procedimientoCie10}
-                  onChange={(e) =>
-                    update("procedimientoCie10", e.target.value.toUpperCase())
-                  }
+                  value={procedimientoCie10}
+                  onChange={(e) => setProcedimientoCie10(e.target.value.toUpperCase())}
                   required
                   maxLength={20}
                   placeholder="K35.80"
@@ -150,12 +301,14 @@ export default function NuevaProgramacionPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="fecha">Fecha y hora programada *</Label>
+                <Label htmlFor="fecha">
+                  Fecha y hora programada <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="fecha"
                   type="datetime-local"
-                  value={form.fechaProgramada}
-                  onChange={(e) => update("fechaProgramada", e.target.value)}
+                  value={fechaProgramada}
+                  onChange={(e) => setFechaProgramada(e.target.value)}
                   required
                 />
                 <p className="text-xs text-muted-foreground">
@@ -164,57 +317,78 @@ export default function NuevaProgramacionPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="duracion">Duración estimada (min) *</Label>
+                <Label htmlFor="duracion">
+                  Duración estimada (min) <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="duracion"
                   type="number"
                   min={1}
                   max={1440}
-                  value={form.duracionEstimadaMin}
-                  onChange={(e) =>
-                    update(
-                      "duracionEstimadaMin",
-                      Number(e.target.value) || 60,
-                    )
-                  }
+                  value={duracionEstimadaMin}
+                  onChange={(e) => setDuracion(Number(e.target.value) || 60)}
                   required
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="cirujano">Cirujano (UUID) *</Label>
-                <Input
-                  id="cirujano"
-                  value={form.cirujanoId}
-                  onChange={(e) => update("cirujanoId", e.target.value)}
-                  required
-                  placeholder="UUID del usuario MEDICO"
-                />
-              </div>
+              <EntitySearchSelect
+                id="cirujano"
+                label="Cirujano"
+                required
+                placeholder="Buscar por nombre o email…"
+                query={qCirujano}
+                onQueryChange={setQCirujano}
+                options={cirujanoOpts}
+                loading={Boolean(cirujanoSearch.isFetching)}
+                selected={cirujano}
+                onSelect={setCirujano}
+                onClear={() => {
+                  setCirujano(null);
+                  setQCirujano("");
+                }}
+              />
 
-              <div className="space-y-1.5">
-                <Label htmlFor="anestesiologo">Anestesiólogo (UUID) *</Label>
-                <Input
-                  id="anestesiologo"
-                  value={form.anestesiologoId}
-                  onChange={(e) => update("anestesiologoId", e.target.value)}
-                  required
-                  placeholder="UUID del usuario MEDICO_ANESTESIA"
-                />
-              </div>
+              <EntitySearchSelect
+                id="anestesiologo"
+                label="Anestesiólogo"
+                required
+                placeholder="Buscar por nombre o email…"
+                query={qAnest}
+                onQueryChange={setQAnest}
+                options={anestOpts}
+                loading={Boolean(anestSearch.isFetching)}
+                selected={anestesiologo}
+                onSelect={setAnestesiologo}
+                onClear={() => {
+                  setAnestesiologo(null);
+                  setQAnest("");
+                }}
+              />
 
               <div className="space-y-1.5 md:col-span-2">
-                <Label htmlFor="sala">Sala QX (UUID) *</Label>
-                <Input
+                <Label htmlFor="sala">
+                  Sala QX (quirófano) <span className="text-destructive">*</span>
+                </Label>
+                <select
                   id="sala"
-                  value={form.salaQxId}
-                  onChange={(e) => update("salaQxId", e.target.value)}
+                  value={salaQxId}
+                  onChange={(e) => setSalaQxId(e.target.value)}
                   required
-                  placeholder="UUID de la sala quirúrgica"
-                />
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="">— Selecciona quirófano —</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.code})
+                    </option>
+                  ))}
+                </select>
                 <p className="text-xs text-muted-foreground">
-                  El servidor valida que la sala no tenga overlap en el horario
-                  propuesto (CONFLICT si está ocupada).
+                  {roomsQ.isFetching
+                    ? "Cargando quirófanos…"
+                    : rooms.length === 0
+                      ? "No hay quirófanos activos en tu organización."
+                      : "El servidor valida que la sala no tenga overlap en el horario propuesto (CONFLICT si está ocupada)."}
                 </p>
               </div>
 
@@ -222,8 +396,8 @@ export default function NuevaProgramacionPage() {
                 <Label htmlFor="motivo">Motivo de ingreso (opcional)</Label>
                 <Textarea
                   id="motivo"
-                  value={form.motivoIngreso}
-                  onChange={(e) => update("motivoIngreso", e.target.value)}
+                  value={motivoIngreso}
+                  onChange={(e) => setMotivoIngreso(e.target.value)}
                   maxLength={2000}
                   rows={3}
                   placeholder="Descripción clínica del motivo de hospitalización"
@@ -244,10 +418,8 @@ export default function NuevaProgramacionPage() {
               <Button type="button" variant="outline" asChild>
                 <Link href="/ece/quirofano/programacion">Cancelar</Link>
               </Button>
-              <Button type="submit" disabled={submitting || mutation.isPending}>
-                {submitting || mutation.isPending
-                  ? "Programando…"
-                  : "Programar cirugía"}
+              <Button type="submit" disabled={mutation.isPending}>
+                {mutation.isPending ? "Programando…" : "Programar cirugía"}
               </Button>
             </div>
           </form>
