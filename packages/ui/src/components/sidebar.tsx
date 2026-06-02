@@ -79,21 +79,27 @@ export function SidebarProvider({
   const isMobile = useIsMobile();
   // Mobile siempre arranca cerrado (es Sheet, no panel persistido).
   const [openState, setOpenState] = React.useState(isMobile ? false : defaultOpen);
-  const open = openProp !== undefined ? openProp : openState;
+  // Modo controlado SOLO si el padre pasa `open`. Si solo pasa `onOpenChange`
+  // (caso app-shell: lo usa para persistir), seguimos en modo NO-controlado:
+  // el estado interno se actualiza Y notificamos al callback. Si tratáramos
+  // `onOpenChange` como "controlado" sin recibir `open` de vuelta, el estado
+  // quedaría congelado y el trigger no colapsaría/abriría nada.
+  const isControlled = openProp !== undefined;
+  const open = isControlled ? openProp : openState;
   const setOpen = React.useCallback(
     (value: boolean) => {
-      if (onOpenChange) {
-        onOpenChange(value);
-      } else {
+      if (!isControlled) {
         setOpenState(value);
       }
+      // Notificar siempre (persistencia desktop en app-shell, etc.).
+      onOpenChange?.(value);
       // Solo persistir cookie en desktop — en mobile el Sheet no debe afectar
       // el estado colapsado desktop que sobrevive al refresh.
       if (!isMobile) {
         document.cookie = `${SIDEBAR_COOKIE_NAME}=${value}; path=/; max-age=${60 * 60 * 24 * 7}`;
       }
     },
-    [onOpenChange, isMobile],
+    [onOpenChange, isMobile, isControlled],
   );
 
   const toggleSidebar = React.useCallback(() => setOpen(!open), [open, setOpen]);
