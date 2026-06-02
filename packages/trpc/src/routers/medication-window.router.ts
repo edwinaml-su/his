@@ -55,34 +55,41 @@ export const medicationWindowRouter = router({
     .input(z.object({}).optional())
     .query(async ({ ctx }) => {
       const orgId  = ctx.tenant.organizationId;
+      const establishmentId = ctx.tenant.establishmentId;
       const userId = ctx.user.id;
       const now    = new Date();
       const cutoff = new Date(now.getTime() + WINDOW_ALERT_MINUTES * 60_000);
 
-      // Indicaciones activas cuya próxima administración está dentro del umbral
-      const rows = await ctx.prisma.$queryRawUnsafe<IndicacionProximaRow[]>(
-        `SELECT
-           i.id                          AS indication_id,
-           i.patient_id,
-           p.gsrn                        AS patient_gsrn,
-           i.gtin_medicamento,
-           g.nombre_comercial            AS nombre_medicamento,
-           i.proxima_administracion,
-           EXTRACT(EPOCH FROM (i.proxima_administracion - $3::timestamptz)) / 60
-                                         AS minutos_restantes
-         FROM ece.indicaciones_medicas i
-         LEFT JOIN "Patient" p ON p.id = i.patient_id
-         LEFT JOIN ece.gs1_gtin g ON g.codigo = i.gtin_medicamento AND g.activo = true
-         WHERE i.organization_id = $1::uuid
-           AND i.estado = 'ACTIVA'
-           AND i.proxima_administracion IS NOT NULL
-           AND i.proxima_administracion <= $2::timestamptz
-         ORDER BY i.proxima_administracion ASC
-         LIMIT 50`,
-        orgId,
-        cutoff.toISOString(),
-        now.toISOString(),
-      );
+      // Administraciones programadas pendientes cuya ventana terapéutica está
+      // dentro del umbral (o ya vencida). Fuente real: ece.administracion_medicamento
+      // (hora_programada/hora_aplicada) → indicacion_item → indicaciones_medicas →
+      // episodio_atencion. Se filtra por establecimiento activo del tenant.
+      const rows = establishmentId
+        ? await ctx.prisma.$queryRawUnsafe<IndicacionProximaRow[]>(
+            `SELECT
+               am.id::text                   AS indication_id,
+               ea.paciente_id::text          AS patient_id,
+               NULL::text                    AS patient_gsrn,
+               NULL::text                    AS gtin_medicamento,
+               it.descripcion                AS nombre_medicamento,
+               am.hora_programada            AS proxima_administracion,
+               EXTRACT(EPOCH FROM (am.hora_programada - $3::timestamptz)) / 60
+                                             AS minutos_restantes
+             FROM ece.administracion_medicamento am
+             JOIN ece.indicacion_item        it ON it.id = am.indicacion_item_id
+             JOIN ece.indicaciones_medicas   im ON im.id = it.indicacion_id
+             JOIN ece.episodio_atencion      ea ON ea.id = im.episodio_id
+             WHERE ea.establecimiento_id = $1::uuid
+               AND am.hora_aplicada IS NULL
+               AND am.hora_programada IS NOT NULL
+               AND am.hora_programada <= $2::timestamptz
+             ORDER BY am.hora_programada ASC
+             LIMIT 50`,
+            establishmentId,
+            cutoff.toISOString(),
+            now.toISOString(),
+          )
+        : [];
 
       // Alertas no atendidas para el turno (para mostrar badge)
       const alertasRows = await ctx.prisma.$queryRawUnsafe<AlertaRow[]>(
