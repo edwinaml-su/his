@@ -35,9 +35,13 @@ export const KNOWN_ROUTES = [
   // Clínico
   { path: "/patients", title: "Pacientes (MPI)", description: "Registro maestro, búsqueda, alta, deduplicación" },
   { path: "/patients/new", title: "Nuevo paciente", description: "Alta de paciente con DUI + datos demográficos" },
-  { path: "/admission", title: "Admisión", description: "Proceso de ingreso del paciente al hospital" },
-  { path: "/beds", title: "Camas", description: "Mapa de camas por servicio, asignación, limpieza" },
-  { path: "/census", title: "Censo", description: "Censo en tiempo real de hospitalizados" },
+  { path: "/patients/[id]", title: "Expediente del paciente", description: "Vista 360° del paciente: datos, alergias, identificadores. Es el HISTÓRICO del paciente, transversal a todas sus admisiones" },
+  { path: "/admission", title: "Admisión (proceso de ingreso)", description: "Iniciar/gestionar el proceso de admisión activa" },
+  { path: "/ece", title: "ECE — Landing de Admisiones", description: "Tabla de admisiones (episodios de atención) de todas las áreas con buscador por expediente o N° admisión. Click en fila abre la admisión actual" },
+  { path: "/ece/episodio-hospitalario", title: "Episodios Hospitalarios", description: "Tablero de admisiones hospitalarias activas agrupadas por sala. Botón 'Ver episodio' abre la admisión actual" },
+  { path: "/ece/episodio-hospitalario/[id]", title: "Detalle de la Admisión", description: "Episodio actual del paciente: signos, indicaciones, enfermería, triaje, documentos, evolución, estudios. Botón 'Iniciar alta' solo PHYSICIAN" },
+  { path: "/beds", title: "Camas", description: "Mapa de camas por servicio. Click en cama ocupada abre la admisión actual" },
+  { path: "/census", title: "Censo", description: "Censo en tiempo real de ocupación. Click en nombre del paciente abre el expediente histórico" },
   { path: "/transfers", title: "Traslados", description: "Internos entre servicios y externos a otros centros" },
   { path: "/triage", title: "Triage Manchester", description: "Clasificación por urgencia: RED/ORANGE/YELLOW/GREEN/BLUE" },
   { path: "/triage/monitor", title: "Monitor Triage", description: "Wallboard kanban para TV: cronómetros de espera" },
@@ -127,10 +131,29 @@ export const KNOWN_PROCESSES = `
 5. Si hay hard-stop (alergia, dosis errada), el sistema bloquea y solicita override.
 
 ### Alta hospitalaria
-1. Médico tratante registra epicrisis en /ece/evolucion (resumen del internamiento).
-2. Sistema verifica cuentas pendientes (facturación, indicaciones abiertas).
-3. Alta médica + alta administrativa.
-4. Liberar cama en /beds.
+1. Abrir la admisión del paciente en /ece/episodio-hospitalario (selecciona la fila/card del paciente).
+2. En el detalle del episodio, click "Iniciar alta" → completar epicrisis de egreso.
+3. Firmar epicrisis y confirmar el alta (estado pasa a 'cerrado').
+4. La cama queda automáticamente liberada en /beds.
+
+### Acceder a la admisión actual del paciente (proceso vigente)
+La "admisión" = episodio de atención activo (lo que está pasando ahora). Opciones:
+1. **Más directa**: /ece — tabla de admisiones por área. Buscar por N° de expediente o de admisión, click en la fila.
+2. /ece/episodio-hospitalario — tablero por sala. Card del paciente → "Ver episodio".
+3. /beds — mapa de camas. Click en la cama ocupada del paciente.
+Las pestañas reales del episodio son: Resumen · Signos · Indicaciones · Enfermería · Triaje · Documentos · Evolución · Estudios.
+Nota: eMAR, Lab y RIS son módulos del menú principal (no pestañas del episodio).
+
+### Acceder al expediente del paciente (histórico)
+El "expediente" = vista 360° del paciente, transversal a TODAS sus admisiones (histórico).
+1. /patients → buscar por nombre o MRN → click en la fila.
+2. O bien, desde /census, click en el NOMBRE del paciente en su cama (lleva directo al expediente).
+Tabs del expediente: General · Identificadores · Contacto. Subrutas: historia clínica, alergias, vacunación, GSRN, consentimientos.
+
+### Diferencia: admisión vs expediente
+- **Admisión** = un proceso/episodio puntual (este ingreso actual). Vive en /ece/episodio-hospitalario/[id].
+- **Expediente** = el paciente como tal a lo largo del tiempo (todas sus admisiones, antecedentes, alergias). Vive en /patients/[id].
+Si el usuario pide "ver el expediente" y se refiere al proceso actual → ofrécele AMBOS y deja que escoja.
 
 ### Registrar nuevo médico (B2B2C)
 1. Ir a /medicos → "+ Nuevo médico".
@@ -183,6 +206,7 @@ export function buildSystemPrompt(ctx?: ChatContextHints): string {
 - **Citas**: SIEMPRE incluye links \`[Texto](/ruta)\` cuando refieras a una pantalla.
 - **No inventes rutas**: solo usa las del catálogo de abajo. Si no encuentras la ruta exacta, dilo y sugiere /tareas (bandeja BPM) como fallback.
 - **No inventes campos o pasos**: si no estás seguro de un detalle clínico/regulatorio específico, dilo y sugiere consultar al DIR o revisar /workflow-designer.
+- **No inventes funcionalidad de UI**: NO digas "click en el nombre del paciente" o "filtra por servicio" si no estás 100% seguro de que el elemento es clickeable o el filtro existe. Verificado al 2026-06-03: en /census el NOMBRE del paciente sí lleva al expediente histórico; en /beds el click en la cama lleva a la admisión actual; /beds NO tiene filtro de servicio (agrupa automáticamente). NO recomiendes "Censo" como vía para abrir la admisión actual — eso es para el expediente; usa /ece o /ece/episodio-hospitalario.
 - **No des consejo médico**: no recomiendas dosis, diagnósticos ni tratamientos. Solo guías el uso del sistema.
 - **Privacidad**: nunca pidas datos personales del paciente (DUI, expediente). Si el usuario los menciona, no los repitas innecesariamente.
 

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { trpc } from "@/lib/trpc/react";
 
@@ -131,31 +132,42 @@ export function BedOccupancy({ serviceUnitId, establishmentId }: BedOccupancyPro
               <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8">
                 {group.beds.map((bed) => {
                   const tooltip = bed.patient
-                    ? `${bed.patient.fullName} · MRN ${bed.patient.mrn} · ${new Date(
+                    ? `${bed.patient.fullName} · MRN ${bed.patient.mrn} · Ingreso ${new Date(
                         bed.patient.admittedAt,
-                      ).toLocaleString()}`
+                      ).toLocaleString()} — Click: expediente histórico del paciente`
                     : `${bed.code} — ${STATUS_LABEL[bed.status] ?? bed.status}`;
+                  const cellClass = `flex h-20 w-full flex-col items-center justify-center rounded-md border-2 p-1 text-center transition-colors ${
+                    STATUS_STYLES[bed.status] ?? "bg-muted"
+                  }`;
+                  const inner = (
+                    <>
+                      <span className="text-sm font-bold tabular-nums">{bed.code}</span>
+                      <span className="text-[10px] uppercase">
+                        {STATUS_LABEL[bed.status] ?? bed.status}
+                      </span>
+                      {bed.patient ? (
+                        <span className="mt-0.5 line-clamp-1 text-[10px]">
+                          {bed.patient.fullName}
+                        </span>
+                      ) : null}
+                    </>
+                  );
                   return (
                     <li key={bed.id}>
-                      <div
-                        title={tooltip}
-                        className={`flex h-20 w-full flex-col items-center justify-center rounded-md border-2 p-1 text-center transition-colors ${
-                          STATUS_STYLES[bed.status] ?? "bg-muted"
-                        }`}
-                        aria-label={tooltip}
-                      >
-                        <span className="text-sm font-bold tabular-nums">
-                          {bed.code}
-                        </span>
-                        <span className="text-[10px] uppercase">
-                          {STATUS_LABEL[bed.status] ?? bed.status}
-                        </span>
-                        {bed.patient ? (
-                          <span className="mt-0.5 line-clamp-1 text-[10px]">
-                            {bed.patient.fullName}
-                          </span>
-                        ) : null}
-                      </div>
+                      {bed.patient ? (
+                        <Link
+                          href={`/patients/${bed.patient.id}`}
+                          title={tooltip}
+                          aria-label={tooltip}
+                          className={`${cellClass} hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
+                        >
+                          {inner}
+                        </Link>
+                      ) : (
+                        <div title={tooltip} aria-label={tooltip} className={cellClass}>
+                          {inner}
+                        </div>
+                      )}
                     </li>
                   );
                 })}
