@@ -1,20 +1,52 @@
 "use client";
 
 import * as React from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { AllergyAlert } from "@his/ui/components/AllergyAlert";
+import { Badge } from "@his/ui/components/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@his/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
 import { PatientShellBar } from "@/components/patient-shell-bar";
+
+const dateTimeFmt = new Intl.DateTimeFormat("es-SV", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+function fmtDT(value: Date | string | null | undefined): string {
+  return value ? dateTimeFmt.format(new Date(value)) : "—";
+}
+
+const ESTADO_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
+  abierto: "default",
+  en_curso: "default",
+  alta_iniciada: "secondary",
+  cerrado: "outline",
+  cancelado: "destructive",
+};
 
 /**
  * Vista 360° del paciente (TDR §8.1).
  * TODO(Sprint 2): historia clínica resumida, encuentros, signos vitales, órdenes.
  */
 export default function PatientDetailPage() {
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const query = trpc.patient.get.useQuery({ id: params.id });
+  const admisiones = trpc.eceEpisodioHospitalario.listAdmisionesPorPaciente.useQuery(
+    { patientId: params.id, incluirCerrados: true, limit: 100 },
+  );
 
   if (query.isLoading) return <p className="text-sm text-muted-foreground">Cargando…</p>;
   if (query.error) return <p className="text-sm text-destructive">{query.error.message}</p>;
@@ -45,6 +77,7 @@ export default function PatientDetailPage() {
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="ids">Identificadores</TabsTrigger>
           <TabsTrigger value="contact">Contacto</TabsTrigger>
+          <TabsTrigger value="admisiones">Admisiones</TabsTrigger>
         </TabsList>
         <TabsContent value="general">
           <Card>
@@ -93,6 +126,86 @@ export default function PatientDetailPage() {
                   <ul>{p.addresses.map((a) => <li key={a.id}>{a.line1}</li>)}</ul>
                 )}
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="admisiones">
+          <Card>
+            <CardHeader>
+              <CardTitle>Admisiones del paciente</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Histórico de admisiones (episodios de atención) en el establecimiento activo.
+                Click en una fila hospitalaria abre el detalle del episodio.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {admisiones.isLoading ? (
+                <p className="text-sm text-muted-foreground">Cargando admisiones…</p>
+              ) : admisiones.error ? (
+                <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                  {admisiones.error.message}
+                </p>
+              ) : (admisiones.data ?? []).length === 0 ? (
+                <p className="p-4 text-sm text-muted-foreground">Sin admisiones registradas para este paciente.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>N.º admisión</TableHead>
+                      <TableHead>Área</TableHead>
+                      <TableHead>Modalidad</TableHead>
+                      <TableHead>Estado</TableHead>
+                      <TableHead>Ingreso</TableHead>
+                      <TableHead>Egreso</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(admisiones.data ?? []).map((r) => {
+                      const tieneDetalle = r.tiene_hospitalizacion;
+                      const irAlDetalle = () => {
+                        if (tieneDetalle) router.push(`/ece/episodio-hospitalario/${r.id}`);
+                      };
+                      return (
+                        <TableRow
+                          key={r.id}
+                          role={tieneDetalle ? "button" : undefined}
+                          tabIndex={tieneDetalle ? 0 : undefined}
+                          aria-label={tieneDetalle ? "Abrir detalle de la admisión" : undefined}
+                          onClick={tieneDetalle ? irAlDetalle : undefined}
+                          onKeyDown={
+                            tieneDetalle
+                              ? (e) => {
+                                  if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    irAlDetalle();
+                                  }
+                                }
+                              : undefined
+                          }
+                          className={
+                            tieneDetalle
+                              ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              : undefined
+                          }
+                        >
+                          <TableCell className="font-mono text-xs">
+                            {r.public_encounter_id ? `${r.public_encounter_id.slice(0, 8)}…` : "—"}
+                          </TableCell>
+                          <TableCell>{r.servicio_nombre ?? r.servicio_categoria ?? "—"}</TableCell>
+                          <TableCell><Badge variant="outline">{r.modalidad}</Badge></TableCell>
+                          <TableCell>
+                            <Badge variant={ESTADO_VARIANT[r.estado] ?? "outline"}>
+                              {r.estado.replace(/_/g, " ")}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="tabular-nums">{fmtDT(r.fecha_inicio)}</TableCell>
+                          <TableCell className="tabular-nums">{fmtDT(r.fecha_cierre)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
