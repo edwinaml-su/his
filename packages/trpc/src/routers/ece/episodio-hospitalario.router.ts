@@ -99,6 +99,11 @@ const listAdmisionesPorPacienteInput = z.object({
   limit: z.number().int().min(1).max(200).default(100),
 });
 
+const getDetalleAdmisionInput = z.object({
+  /** id de ece.episodio_atencion (ambulatorio u hospitalario). */
+  id: z.string().uuid(),
+});
+
 const getDetalleInput = z.object({
   id: z.string().uuid(),
 });
@@ -153,6 +158,37 @@ export interface AdmisionRow {
   fecha_cierre: Date | null;
   /** true si existe ece.episodio_hospitalario → tiene página de detalle. */
   tiene_hospitalizacion: boolean;
+}
+
+/** Fila de admisión enriquecida con indicadores de contenido — usada en /patients/[id]. */
+export interface AdmisionConContenidoRow extends AdmisionRow {
+  procedimientos_count: number;
+  lab_count: number;
+  imagen_count: number;
+  gabinete_count: number;
+}
+
+/** Detalle de admisión (ambulatoria u hospitalaria) — usado en /ece/admision/[id]. */
+export interface AdmisionDetalleRow {
+  id: string;
+  public_encounter_id: string | null;
+  paciente_id: string;
+  paciente_nombre: string;
+  modalidad: string;
+  servicio_categoria: string | null;
+  servicio_id: string | null;
+  servicio_nombre: string | null;
+  motivo: string | null;
+  estado: string;
+  fecha_inicio: Date;
+  fecha_cierre: Date | null;
+  disposicion: string | null;
+  /** id de ece.episodio_hospitalario si existe; null para ambulatorias puras. */
+  episodio_hospitalario_id: string | null;
+  procedimientos_count: number;
+  lab_count: number;
+  imagen_count: number;
+  gabinete_count: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -291,7 +327,7 @@ export const eceEpisodioHospitalarioRouter = router({
       const ece = withEceContext(ctx);
 
       return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
-        return tx.$queryRaw<AdmisionRow[]>`
+        return tx.$queryRaw<AdmisionConContenidoRow[]>`
           SELECT
             ea.id::text,
             ea.public_encounter_id::text,
@@ -302,11 +338,34 @@ export const eceEpisodioHospitalarioRouter = router({
             ea.estado,
             ea.fecha_hora_inicio        AS fecha_inicio,
             ea.fecha_hora_cierre        AS fecha_cierre,
-            (eh.episodio_id IS NOT NULL) AS tiene_hospitalizacion
+            (eh.episodio_id IS NOT NULL) AS tiene_hospitalizacion,
+            COALESCE(aq.cnt, 0)::int    AS procedimientos_count,
+            COALESCE(lab.cnt, 0)::int   AS lab_count,
+            COALESCE(img.cnt, 0)::int   AS imagen_count,
+            COALESCE(gab.cnt, 0)::int   AS gabinete_count
           FROM ece.paciente p
           JOIN ece.episodio_atencion ea           ON ea.paciente_id = p.id
           LEFT JOIN ece.servicio              srv ON srv.id = ea.servicio_id
           LEFT JOIN ece.episodio_hospitalario eh  ON eh.episodio_id = ea.id
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.acto_quirurgico x
+            WHERE x.episodio_id = ea.id
+          ) aq ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'laboratorio'
+              AND s.estado <> 'anulado'
+          ) lab ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'imagenologia'
+              AND s.estado <> 'anulado'
+          ) img ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'gabinete'
+              AND s.estado <> 'anulado'
+          ) gab ON true
           WHERE p.public_patient_id = ${input.patientId}::uuid
             AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
             AND (${input.incluirCerrados}::boolean
@@ -314,6 +373,78 @@ export const eceEpisodioHospitalarioRouter = router({
           ORDER BY ea.fecha_hora_inicio DESC NULLS LAST
           LIMIT ${input.limit}
         `;
+      });
+    }),
+
+  /**
+   * Detalle genérico de una admisión (episodio_atencion) — ambulatoria u
+   * hospitalaria. Pensado para la ruta /ece/admision/[id]. Si la admisión
+   * tiene episodio_hospitalario, el campo episodio_hospitalario_id permite
+   * al frontend ofrecer un link a /ece/episodio-hospitalario/[id] sin
+   * forzar la redirección automática.
+   */
+  getDetalleAdmision: readBase
+    .input(getDetalleAdmisionInput)
+    .query(async ({ ctx, input }) => {
+      const ece = withEceContext(ctx);
+
+      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+        const rows = await tx.$queryRaw<AdmisionDetalleRow[]>`
+          SELECT
+            ea.id::text,
+            ea.public_encounter_id::text,
+            ea.paciente_id::text,
+            COALESCE(p.numero_expediente, ea.paciente_id::text) AS paciente_nombre,
+            ea.modalidad,
+            ea.servicio_categoria,
+            ea.servicio_id::text,
+            srv.nombre                  AS servicio_nombre,
+            ea.motivo,
+            ea.estado,
+            ea.fecha_hora_inicio        AS fecha_inicio,
+            ea.fecha_hora_cierre        AS fecha_cierre,
+            ea.disposicion,
+            eh.id::text                 AS episodio_hospitalario_id,
+            COALESCE(aq.cnt, 0)::int    AS procedimientos_count,
+            COALESCE(lab.cnt, 0)::int   AS lab_count,
+            COALESCE(img.cnt, 0)::int   AS imagen_count,
+            COALESCE(gab.cnt, 0)::int   AS gabinete_count
+          FROM ece.episodio_atencion ea
+          LEFT JOIN ece.paciente              p   ON p.id = ea.paciente_id
+          LEFT JOIN ece.servicio              srv ON srv.id = ea.servicio_id
+          LEFT JOIN ece.episodio_hospitalario eh  ON eh.episodio_id = ea.id
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.acto_quirurgico x
+            WHERE x.episodio_id = ea.id
+          ) aq ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'laboratorio'
+              AND s.estado <> 'anulado'
+          ) lab ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'imagenologia'
+              AND s.estado <> 'anulado'
+          ) img ON true
+          LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS cnt FROM ece.solicitud_estudio s
+            WHERE s.episodio_id = ea.id AND s.tipo = 'gabinete'
+              AND s.estado <> 'anulado'
+          ) gab ON true
+          WHERE ea.id = ${input.id}::uuid
+            AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
+          LIMIT 1
+        `;
+
+        if (rows.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Admisión no encontrada: ${input.id}`,
+          });
+        }
+
+        return rows[0]!;
       });
     }),
 

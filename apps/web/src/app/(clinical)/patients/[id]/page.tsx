@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
+import { BedDouble, Scissors, FlaskConical, ImageIcon, Activity } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { AllergyAlert } from "@his/ui/components/AllergyAlert";
 import { Badge } from "@his/ui/components/badge";
@@ -134,8 +135,10 @@ export default function PatientDetailPage() {
             <CardHeader>
               <CardTitle>Admisiones del paciente</CardTitle>
               <p className="text-xs text-muted-foreground">
-                Histórico de admisiones (episodios de atención) en el establecimiento activo.
-                Click en una fila hospitalaria abre el detalle del episodio.
+                Histórico de admisiones (episodios de atención) en el establecimiento activo,
+                ambulatorias y hospitalarias. La columna &ldquo;Contenido&rdquo; resume lo que se
+                registró dentro de cada admisión (hospitalización, procedimientos, exámenes,
+                imágenes, gabinete). Click en una fila abre el detalle de la admisión.
               </p>
             </CardHeader>
             <CardContent>
@@ -155,38 +158,37 @@ export default function PatientDetailPage() {
                       <TableHead>Área</TableHead>
                       <TableHead>Modalidad</TableHead>
                       <TableHead>Estado</TableHead>
+                      <TableHead>Contenido</TableHead>
                       <TableHead>Ingreso</TableHead>
                       <TableHead>Egreso</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {(admisiones.data ?? []).map((r) => {
-                      const tieneDetalle = r.tiene_hospitalizacion;
                       const irAlDetalle = () => {
-                        if (tieneDetalle) router.push(`/ece/episodio-hospitalario/${r.id}`);
+                        const href = r.tiene_hospitalizacion
+                          ? `/ece/episodio-hospitalario/${r.id}`
+                          : `/ece/admision/${r.id}`;
+                        router.push(href);
                       };
+                      const rowTitle = r.tiene_hospitalizacion
+                        ? "Click para abrir el detalle hospitalario"
+                        : "Click para abrir el detalle de la admisión ambulatoria";
                       return (
                         <TableRow
                           key={r.id}
-                          role={tieneDetalle ? "button" : undefined}
-                          tabIndex={tieneDetalle ? 0 : undefined}
-                          aria-label={tieneDetalle ? "Abrir detalle de la admisión" : undefined}
-                          onClick={tieneDetalle ? irAlDetalle : undefined}
-                          onKeyDown={
-                            tieneDetalle
-                              ? (e) => {
-                                  if (e.key === "Enter" || e.key === " ") {
-                                    e.preventDefault();
-                                    irAlDetalle();
-                                  }
-                                }
-                              : undefined
-                          }
-                          className={
-                            tieneDetalle
-                              ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              : undefined
-                          }
+                          role="button"
+                          tabIndex={0}
+                          aria-label={rowTitle}
+                          title={rowTitle}
+                          onClick={irAlDetalle}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              irAlDetalle();
+                            }
+                          }}
+                          className="cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <TableCell className="font-mono text-xs">
                             {r.public_encounter_id ? `${r.public_encounter_id.slice(0, 8)}…` : "—"}
@@ -197,6 +199,42 @@ export default function PatientDetailPage() {
                             <Badge variant={ESTADO_VARIANT[r.estado] ?? "outline"}>
                               {r.estado.replace(/_/g, " ")}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1.5">
+                              {r.tiene_hospitalizacion && (
+                                <Badge variant="secondary" className="gap-1" title="Hospitalización registrada">
+                                  <BedDouble className="h-3 w-3" aria-hidden /> Hospitalización
+                                </Badge>
+                              )}
+                              {r.procedimientos_count > 0 && (
+                                <Badge variant="secondary" className="gap-1" title="Procedimientos quirúrgicos">
+                                  <Scissors className="h-3 w-3" aria-hidden /> {r.procedimientos_count}
+                                </Badge>
+                              )}
+                              {r.lab_count > 0 && (
+                                <Badge variant="secondary" className="gap-1" title="Solicitudes de laboratorio">
+                                  <FlaskConical className="h-3 w-3" aria-hidden /> {r.lab_count}
+                                </Badge>
+                              )}
+                              {r.imagen_count > 0 && (
+                                <Badge variant="secondary" className="gap-1" title="Solicitudes de imagenología">
+                                  <ImageIcon className="h-3 w-3" aria-hidden /> {r.imagen_count}
+                                </Badge>
+                              )}
+                              {r.gabinete_count > 0 && (
+                                <Badge variant="secondary" className="gap-1" title="Estudios de gabinete">
+                                  <Activity className="h-3 w-3" aria-hidden /> {r.gabinete_count}
+                                </Badge>
+                              )}
+                              {!r.tiene_hospitalizacion
+                                && r.procedimientos_count === 0
+                                && r.lab_count === 0
+                                && r.imagen_count === 0
+                                && r.gabinete_count === 0 && (
+                                  <span className="text-xs text-muted-foreground">Sin registros</span>
+                                )}
+                            </div>
                           </TableCell>
                           <TableCell className="tabular-nums">{fmtDT(r.fecha_inicio)}</TableCell>
                           <TableCell className="tabular-nums">{fmtDT(r.fecha_cierre)}</TableCell>

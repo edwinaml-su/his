@@ -161,9 +161,13 @@ describe("eceEpisodioHospitalarioRouter", () => {
       fecha_inicio: new Date("2026-05-10T08:00:00Z"),
       fecha_cierre: null,
       tiene_hospitalizacion: true,
+      procedimientos_count: 1,
+      lab_count: 3,
+      imagen_count: 1,
+      gabinete_count: 0,
     };
 
-    it("3c. happy-path: devuelve admisiones del paciente (incluyendo cerradas por defecto)", async () => {
+    it("3c. happy-path: devuelve admisiones con indicadores de contenido por admisión", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([ADMISION_ROW]);
 
       const caller = makeNurseCaller(prisma);
@@ -176,6 +180,10 @@ describe("eceEpisodioHospitalarioRouter", () => {
       expect(result).toHaveLength(1);
       expect(result[0]?.id).toBe(EPISODIO_ATEN_ID);
       expect(result[0]?.tiene_hospitalizacion).toBe(true);
+      expect(result[0]?.procedimientos_count).toBe(1);
+      expect(result[0]?.lab_count).toBe(3);
+      expect(result[0]?.imagen_count).toBe(1);
+      expect(result[0]?.gabinete_count).toBe(0);
     });
 
     it("3d. lista vacía devuelve []", async () => {
@@ -196,6 +204,74 @@ describe("eceEpisodioHospitalarioRouter", () => {
       );
       await expect(
         sinRol.listAdmisionesPorPaciente({ patientId: PATIENT_ID, incluirCerrados: true, limit: 100 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  // ─── getDetalleAdmision ───────────────────────────────────────────────────
+
+  describe("getDetalleAdmision", () => {
+    const ADMISION_DETALLE_AMBULATORIO = {
+      id: EPISODIO_ATEN_ID,
+      public_encounter_id: "99999999-9999-9999-9999-999999999999",
+      paciente_id: PACIENTE_ID,
+      paciente_nombre: "EXP-001",
+      modalidad: "ambulatorio",
+      servicio_categoria: "emergencia",
+      servicio_id: "11111111-0000-0000-0000-000000000000",
+      servicio_nombre: "Emergencias",
+      motivo: "Dolor torácico súbito",
+      estado: "en_curso",
+      fecha_inicio: new Date("2026-06-01T15:30:00Z"),
+      fecha_cierre: null,
+      disposicion: null,
+      episodio_hospitalario_id: null,
+      procedimientos_count: 0,
+      lab_count: 2,
+      imagen_count: 1,
+      gabinete_count: 0,
+    };
+
+    it("3f. happy-path ambulatorio: devuelve detalle con conteos, sin hospitalización", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([ADMISION_DETALLE_AMBULATORIO]);
+
+      const caller = makeNurseCaller(prisma);
+      const result = await caller.getDetalleAdmision({ id: EPISODIO_ATEN_ID });
+
+      expect(result.id).toBe(EPISODIO_ATEN_ID);
+      expect(result.modalidad).toBe("ambulatorio");
+      expect(result.episodio_hospitalario_id).toBeNull();
+      expect(result.lab_count).toBe(2);
+      expect(result.imagen_count).toBe(1);
+    });
+
+    it("3g. happy-path hospitalario: incluye episodio_hospitalario_id para link al detalle hospitalario", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { ...ADMISION_DETALLE_AMBULATORIO, modalidad: "hospitalario", episodio_hospitalario_id: EPISODIO_HOSP_ID },
+      ]);
+
+      const caller = makeNurseCaller(prisma);
+      const result = await caller.getDetalleAdmision({ id: EPISODIO_ATEN_ID });
+
+      expect(result.modalidad).toBe("hospitalario");
+      expect(result.episodio_hospitalario_id).toBe(EPISODIO_HOSP_ID);
+    });
+
+    it("3h. NOT_FOUND cuando la admisión no existe", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = makeNurseCaller(prisma);
+      await expect(
+        caller.getDetalleAdmision({ id: EPISODIO_ATEN_ID }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("3i. FORBIDDEN si no tiene rol PHYSICIAN | NURSE | ADM", async () => {
+      const sinRol = eceEpisodioHospitalarioRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PORTAL"], establishmentId: ESTAB_ID } }),
+      );
+      await expect(
+        sinRol.getDetalleAdmision({ id: EPISODIO_ATEN_ID }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
