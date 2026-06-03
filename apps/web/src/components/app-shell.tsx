@@ -59,43 +59,47 @@ export function AppShell({
     // cursor por items del sidebar. skipDelayDuration default permite que al
     // mover entre items vecinos el tooltip cambie sin re-esperar el delay.
     <TooltipProvider delayDuration={200} skipDelayDuration={100}>
-      <SidebarProvider defaultOpen={!desktopCollapsed} onOpenChange={(open) => {
-        // Solo persistir el estado en desktop — el Sheet mobile no debe
-        // sobreescribir la preferencia de colapso del panel desktop.
-        if (!isMobile) {
-          setDesktopCollapsed(!open);
-          window.localStorage.setItem("his.sidebar.collapsed", String(!open));
-        }
-      }}>
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          Saltar al contenido principal
-        </a>
+      {/* CommandPalette provee Context (Ctrl+K) y envuelve sidebar + main para que
+          CommandPaletteButton se pueda usar tanto en el SidebarHeader como en el top bar.
+          El dialog se renderiza una sola vez y los botones consumen el Context. */}
+      <CommandPalette
+        roleCodes={roleCodes}
+        assignedServiceUnitCodes={assignedServiceUnitCodes}
+        isCrossServiceRole={isCrossServiceRole}
+      >
+        <SidebarProvider defaultOpen={!desktopCollapsed} onOpenChange={(open) => {
+          // Solo persistir el estado en desktop — el Sheet mobile no debe
+          // sobreescribir la preferencia de colapso del panel desktop.
+          if (!isMobile) {
+            setDesktopCollapsed(!open);
+            window.localStorage.setItem("his.sidebar.collapsed", String(!open));
+          }
+        }}>
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:fixed focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            Saltar al contenido principal
+          </a>
 
-        {/* AppSidebar gestiona desktop (panel) y mobile (Sheet) automáticamente
-            via useIsMobile en el primitivo Sidebar de @his/ui. */}
-        <AppSidebar
-          roleCodes={roleCodes}
-          assignedServiceUnitCodes={assignedServiceUnitCodes}
-          isCrossServiceRole={isCrossServiceRole}
-        />
-
-        <SidebarInset>
-          {/* CommandPalette provee Context (Ctrl+K) + el botón opcional del top bar.
-              El dialog se renderiza una sola vez y CommandPaletteButton consume el Context. */}
-          <CommandPalette
+          {/* AppSidebar gestiona desktop (panel) y mobile (Sheet) automáticamente
+              via useIsMobile en el primitivo Sidebar de @his/ui.
+              Incluye el botón de búsqueda Ctrl+K en su SidebarHeader. */}
+          <AppSidebar
             roleCodes={roleCodes}
             assignedServiceUnitCodes={assignedServiceUnitCodes}
             isCrossServiceRole={isCrossServiceRole}
-          >
+          />
+
+          <SidebarInset>
             <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
               {/* SidebarTrigger cubre desktop (colapsa panel) y mobile (abre Sheet).
                   Shadcn Sidebar detecta breakpoint internamente via useIsMobile. */}
               <SidebarTrigger aria-label="Mostrar u ocultar menú" />
 
-              {/* Botón paleta de comandos — abre dialog Ctrl+K. */}
+              {/* Botón paleta de comandos — abre dialog Ctrl+K.
+                  También vive en el sidebar; aquí queda como fallback cuando el sidebar
+                  está colapsado a iconos (entonces el botón del sidebar no se ve). */}
               <CommandPaletteButton />
 
               <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
@@ -111,9 +115,9 @@ export function AppShell({
             >
               {children}
             </main>
-          </CommandPalette>
-        </SidebarInset>
-      </SidebarProvider>
+          </SidebarInset>
+        </SidebarProvider>
+      </CommandPalette>
       {/* Asistente HIS — copiloto flotante context-aware. */}
       <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />
     </TooltipProvider>

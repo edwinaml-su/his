@@ -37,6 +37,7 @@ import {
 } from "@his/ui/components/sidebar";
 import { isItemVisible } from "./nav-visibility";
 import { SECTIONS } from "./nav-sections";
+import { CommandPaletteButton } from "./command-palette";
 
 interface AppSidebarProps {
   roleCodes: string[];
@@ -96,13 +97,21 @@ export function AppSidebar({
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
+      <SidebarHeader className="gap-2">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src="/avante-logo.svg"
           alt="AVANTE Complejo Hospitalario"
           className="h-8 w-auto brightness-0 invert"
         />
+        {/* Buscador Ctrl+K — solo visible cuando el sidebar está expandido.
+            En modo iconos (collapsed) no hay espacio para el texto "Buscar…"; el
+            usuario sigue teniendo el botón en el top bar + el atajo Ctrl+K global. */}
+        {sidebarExpanded && (
+          <CommandPaletteButton
+            className="flex w-full items-center gap-1.5 rounded-md border border-sidebar-border bg-sidebar-accent/40 px-2.5 py-1.5 text-sm text-sidebar-foreground/80 shadow-sm hover:bg-sidebar-accent hover:text-sidebar-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          />
+        )}
       </SidebarHeader>
 
       <SidebarContent>
