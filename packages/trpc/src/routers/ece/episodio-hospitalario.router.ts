@@ -91,6 +91,14 @@ const listAdmisionesInput = z.object({
   limit: z.number().int().min(1).max(200).default(100),
 });
 
+const listAdmisionesPorPacienteInput = z.object({
+  /** HIS Patient.id (MPI). El router resuelve los ece.paciente vinculados (1:N por establecimiento). */
+  patientId: z.string().uuid(),
+  /** Default true para mostrar el histórico completo del paciente. */
+  incluirCerrados: z.boolean().default(true),
+  limit: z.number().int().min(1).max(200).default(100),
+});
+
 const getDetalleInput = z.object({
   id: z.string().uuid(),
 });
@@ -266,6 +274,48 @@ export const eceEpisodioHospitalarioRouter = router({
       `;
     });
   }),
+
+  /**
+   * Lista admisiones (episodios de atención) de un paciente del MPI.
+   *
+   * Bridge: ece.paciente.public_patient_id = public."Patient".id (1:N por
+   * establecimiento — un paciente MPI puede tener N expedientes ECE en N
+   * establecimientos). El filtro de tenant limita al establecimiento activo
+   * para mantener consistencia con listAdmisiones y respetar RLS.
+   *
+   * Usado por el tab "Admisiones" del expediente /patients/[id].
+   */
+  listAdmisionesPorPaciente: readBase
+    .input(listAdmisionesPorPacienteInput)
+    .query(async ({ ctx, input }) => {
+      const ece = withEceContext(ctx);
+
+      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+        return tx.$queryRaw<AdmisionRow[]>`
+          SELECT
+            ea.id::text,
+            ea.public_encounter_id::text,
+            p.numero_expediente,
+            ea.modalidad,
+            ea.servicio_categoria,
+            srv.nombre                  AS servicio_nombre,
+            ea.estado,
+            ea.fecha_hora_inicio        AS fecha_inicio,
+            ea.fecha_hora_cierre        AS fecha_cierre,
+            (eh.episodio_id IS NOT NULL) AS tiene_hospitalizacion
+          FROM ece.paciente p
+          JOIN ece.episodio_atencion ea           ON ea.paciente_id = p.id
+          LEFT JOIN ece.servicio              srv ON srv.id = ea.servicio_id
+          LEFT JOIN ece.episodio_hospitalario eh  ON eh.episodio_id = ea.id
+          WHERE p.public_patient_id = ${input.patientId}::uuid
+            AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
+            AND (${input.incluirCerrados}::boolean
+                 OR ea.estado NOT IN ('cerrado', 'cancelado'))
+          ORDER BY ea.fecha_hora_inicio DESC NULLS LAST
+          LIMIT ${input.limit}
+        `;
+      });
+    }),
 
   getDetalle: readBase.input(getDetalleInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);

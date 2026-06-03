@@ -146,6 +146,60 @@ describe("eceEpisodioHospitalarioRouter", () => {
     });
   });
 
+  // ─── listAdmisionesPorPaciente ────────────────────────────────────────────
+
+  describe("listAdmisionesPorPaciente", () => {
+    const PATIENT_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+    const ADMISION_ROW = {
+      id: EPISODIO_ATEN_ID,
+      public_encounter_id: "99999999-9999-9999-9999-999999999999",
+      numero_expediente: "EXP-001",
+      modalidad: "hospitalario",
+      servicio_categoria: "MI",
+      servicio_nombre: "Medicina Interna",
+      estado: "en_curso",
+      fecha_inicio: new Date("2026-05-10T08:00:00Z"),
+      fecha_cierre: null,
+      tiene_hospitalizacion: true,
+    };
+
+    it("3c. happy-path: devuelve admisiones del paciente (incluyendo cerradas por defecto)", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([ADMISION_ROW]);
+
+      const caller = makeNurseCaller(prisma);
+      const result = await caller.listAdmisionesPorPaciente({
+        patientId: PATIENT_ID,
+        incluirCerrados: true,
+        limit: 100,
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]?.id).toBe(EPISODIO_ATEN_ID);
+      expect(result[0]?.tiene_hospitalizacion).toBe(true);
+    });
+
+    it("3d. lista vacía devuelve []", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = makeNurseCaller(prisma);
+      const result = await caller.listAdmisionesPorPaciente({
+        patientId: PATIENT_ID,
+        incluirCerrados: true,
+        limit: 100,
+      });
+      expect(result).toHaveLength(0);
+    });
+
+    it("3e. FORBIDDEN si usuario no tiene rol PHYSICIAN | NURSE | ADM", async () => {
+      const sinRol = eceEpisodioHospitalarioRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PORTAL"], establishmentId: ESTAB_ID } }),
+      );
+      await expect(
+        sinRol.listAdmisionesPorPaciente({ patientId: PATIENT_ID, incluirCerrados: true, limit: 100 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
   // ─── getDetalle ───────────────────────────────────────────────────────────
 
   describe("getDetalle", () => {
