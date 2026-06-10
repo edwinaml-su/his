@@ -39,7 +39,8 @@ export const KNOWN_ROUTES = [
   { path: "/admission", title: "Admisión (proceso de ingreso)", description: "Iniciar/gestionar el proceso de admisión activa" },
   { path: "/ece", title: "ECE — Landing de Admisiones", description: "Tabla de admisiones (episodios de atención) de todas las áreas con buscador por expediente o N° admisión. Click en fila abre la admisión actual" },
   { path: "/ece/episodio-hospitalario", title: "Episodios Hospitalarios", description: "Tablero de admisiones hospitalarias activas agrupadas por sala. Botón 'Ver episodio' abre la admisión actual" },
-  { path: "/ece/episodio-hospitalario/[id]", title: "Detalle de la Admisión", description: "Episodio actual del paciente: signos, indicaciones, enfermería, triaje, documentos, evolución, estudios. Botón 'Iniciar alta' solo PHYSICIAN" },
+  { path: "/ece/episodio-hospitalario/[id]", title: "Detalle de admisión hospitalaria", description: "Episodio hospitalario: signos, indicaciones, enfermería, triaje, documentos, evolución, estudios + 'Iniciar alta' (PHYSICIAN)" },
+  { path: "/ece/admision/[id]", title: "Detalle de admisión ambulatoria", description: "Vista genérica de cualquier admisión (emergencia, consulta externa). Tabs dinámicos según contenido (triaje, signos, indicaciones, enfermería, estudios, procedimientos, evolución, documentos, imágenes). Si la admisión tiene hospitalización, banner para saltar al detalle hospitalario." },
   { path: "/beds", title: "Camas", description: "Mapa de camas por servicio. Click en cama ocupada abre la admisión actual" },
   { path: "/census", title: "Censo", description: "Censo en tiempo real de ocupación. Click en nombre del paciente abre el expediente histórico" },
   { path: "/transfers", title: "Traslados", description: "Internos entre servicios y externos a otros centros" },
@@ -139,10 +140,14 @@ export const KNOWN_PROCESSES = `
 ### Acceder a la admisión actual del paciente (proceso vigente)
 La "admisión" = episodio de atención activo (lo que está pasando ahora). Opciones:
 1. **Más directa**: /ece — tabla de admisiones por área. Buscar por N° de expediente o de admisión, click en la fila.
+   Si la admisión es hospitalaria → abre /ece/episodio-hospitalario/[id].
+   Si es ambulatoria (emergencia / consulta externa) → abre /ece/admision/[id].
 2. /ece/episodio-hospitalario — tablero por sala. Card del paciente → "Ver episodio".
 3. /beds — mapa de camas. Click en la cama ocupada del paciente.
-Las pestañas reales del episodio son: Resumen · Signos · Indicaciones · Enfermería · Triaje · Documentos · Evolución · Estudios.
-Nota: eMAR, Lab y RIS son módulos del menú principal (no pestañas del episodio).
+4. Desde el expediente: /patients/[id] → tab "Admisiones" → click en la fila (cualquier modalidad).
+Pestañas hospitalarias: Resumen · Signos · Indicaciones · Enfermería · Triaje · Documentos · Evolución · Estudios.
+Pestañas ambulatorias (dinámicas): Resumen · Triaje · Signos · Indicaciones · Enfermería · Estudios · Procedimientos · Evolución · Documentos · Imágenes.
+Nota: eMAR es un módulo del menú principal (no pestaña del episodio).
 
 ### Acceder al expediente del paciente (histórico)
 El "expediente" = vista 360° del paciente, transversal a TODAS sus admisiones (histórico).
