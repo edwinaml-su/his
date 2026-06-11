@@ -51,12 +51,12 @@ interface CertDefRow {
   episodio_id: string;
   paciente_id: string | null;
   fecha_hora_defuncion: Date;
-  lugar_defuncion: string;
-  causa_principal_cie10: string;
+  lugar_defuncion: string | null;
+  causa_principal_cie10: string | null;
   causas_intermedias_cie10: string[];
   causa_basica_cie10: string;
-  manera: string;
-  autopsia_realizada: boolean;
+  manera: string | null;
+  autopsia_realizada: boolean | null;
   observaciones: string | null;
   estado_workflow: string;
   medico_firmante_id: string | null;
@@ -67,7 +67,7 @@ interface CertDefRow {
   motivo_anulacion: string | null;
   payload_hash: string | null;
   registrado_en: Date;
-  establecimiento_id: string;
+  establecimiento_id: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -26,16 +26,30 @@
  *     Payload: { certDefId, pacienteId, medicoId, payloadHash, orgId }
  *   'ece.certificado_defuncion.certificado'  — emitido por certificar().
  *     Payload: { certDefId, directorId, payloadHash, orgId }
- *   payloadHash = SHA-256({ causaDirecta, causasIntermedias, causaFundamental,
- *                            muerteViolenta, fechaHoraMuerte })
+ *   payloadHash = SHA-256({ causa_principal_cie10, causas_intermedias,
+ *                            causa_basica_cie10, manera, fechaHoraMuerte })
  *
  * ---------------------------------------------------------------------------
- * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
+ * MAPEO DDL → Contrato UI
  * ---------------------------------------------------------------------------
- *   ece.certificado_defuncion   — fila principal: paciente_id, medico_id,
- *                                 fecha_hora_muerte, causa_directa_cie10,
- *                                 causas_intermedias_cie10 (JSONB), causa_fundamental_cie10,
- *                                 muerte_violenta bool, estado_workflow, payload_hash
+ *   ADD COLUMN (167_certificado_defuncion_campos_legales.sql):
+ *     lugar_defuncion, causa_principal_cie10, manera,
+ *     autopsia_realizada, observaciones, motivo_anulacion
+ *
+ *   MAP (alias SQL, columna real no cambia):
+ *     causas_intermedias_cie10 (UI) ↔ causas_intermedias (BD, jsonb)
+ *
+ *   DERIVE vía JOIN (no almacenados en certificado_defuncion):
+ *     paciente_id      → episodio_atencion.paciente_id
+ *     establecimiento_id → episodio_atencion.establecimiento_id
+ *       El filtro de list/get usa el JOIN en lugar de columna local.
+ *
+ * ---------------------------------------------------------------------------
+ * TABLAS BD (raw SQL — ece.* no está en schema.prisma como raw)
+ * ---------------------------------------------------------------------------
+ *   ece.certificado_defuncion   — fila principal (ver DDL + migración 167)
+ *   ece.documento_instancia     — instancia workflow; se crea antes del INSERT
+ *   ece.tipo_documento          — resuelve CERT_DEF → tipo_documento_id + estado inicial
  *   ece.firma_electronica       — credencial de firma: pin_hash, failed_attempts,
  *                                 locked_until (lockout tras 3 intentos)
  *   ece.personal_salud          — mapeo his_user_id → personal ECE id
@@ -129,13 +143,16 @@ export interface CertDefRow {
   id: string;
   episodio_id: string;
   epicrisis_id: string;
+  // paciente_id y establecimiento_id se derivan del episodio vía JOIN
   paciente_id: string | null;
+  establecimiento_id: string | null;
   fecha_hora_defuncion: Date;
-  lugar_defuncion: string;
-  causa_principal_cie10: string;
+  lugar_defuncion: string | null;
+  causa_principal_cie10: string | null;
+  // causas_intermedias_cie10 es alias de causas_intermedias en BD
   causas_intermedias_cie10: string[];
   causa_basica_cie10: string;
-  manera: string;
+  manera: string | null;
   autopsia_realizada: boolean;
   observaciones: string | null;
   estado_workflow: string;
@@ -147,7 +164,6 @@ export interface CertDefRow {
   motivo_anulacion: string | null;
   payload_hash: string | null;
   registrado_en: Date;
-  establecimiento_id: string;
 }
 
 interface PersonalRow {
@@ -185,10 +201,10 @@ function computePayloadHash(row: {
   id: string;
   episodio_id: string;
   fecha_hora_defuncion: Date;
-  causa_principal_cie10: string;
+  causa_principal_cie10: string | null;
   causas_intermedias_cie10: string[];
   causa_basica_cie10: string;
-  manera: string;
+  manera: string | null;
   autopsia_realizada: boolean;
 }): string {
   return createHash("sha256")
@@ -269,6 +285,7 @@ const dirProc = requireRole(["DIR"]);
 export const eceCertDefRouter = router({
   /**
    * Lista certificados de defunción con filtros opcionales.
+   * Filtra por establecimiento mediante JOIN con episodio_atencion.
    * Ordenados por fecha de defunción DESC.
    */
   list: readProc.input(listCertDefInput).query(async ({ ctx, input }) => {
@@ -276,9 +293,32 @@ export const eceCertDefRouter = router({
     const offset = (input.page - 1) * input.pageSize;
 
     const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
-      SELECT cd.*
+      SELECT
+        cd.id,
+        cd.episodio_id,
+        cd.epicrisis_id,
+        ea.paciente_id,
+        ea.establecimiento_id,
+        cd.fecha_hora_defuncion,
+        cd.lugar_defuncion,
+        cd.causa_principal_cie10,
+        COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
+        cd.causa_basica_cie10,
+        cd.manera,
+        COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
+        cd.observaciones,
+        cd.estado_workflow,
+        cd.medico_firmante_id,
+        cd.firmado_en,
+        cd.validado_en,
+        cd.certificado_en,
+        cd.anulado_en,
+        cd.motivo_anulacion,
+        cd.payload_hash,
+        cd.registrado_en
       FROM ece.certificado_defuncion cd
-      WHERE cd.establecimiento_id = ${ece.establecimientoId}::uuid
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
         AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
         AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
@@ -296,7 +336,8 @@ export const eceCertDefRouter = router({
     const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
       SELECT COUNT(*) AS total
       FROM ece.certificado_defuncion cd
-      WHERE cd.establecimiento_id = ${ece.establecimientoId}::uuid
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
         AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
         AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
@@ -319,6 +360,7 @@ export const eceCertDefRouter = router({
 
   /**
    * Retorna un certificado extendido con datos de paciente y episodio.
+   * paciente_id / establecimiento_id se derivan del episodio vía JOIN.
    */
   get: readProc.input(getCertDefInput).query(async ({ ctx, input }) => {
     const ece = buildEceCtx(ctx);
@@ -331,15 +373,36 @@ export const eceCertDefRouter = router({
       })[]
     >`
       SELECT
-        cd.*,
+        cd.id,
+        cd.episodio_id,
+        cd.epicrisis_id,
+        ea.paciente_id,
+        ea.establecimiento_id,
+        cd.fecha_hora_defuncion,
+        cd.lugar_defuncion,
+        cd.causa_principal_cie10,
+        COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
+        cd.causa_basica_cie10,
+        cd.manera,
+        COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
+        cd.observaciones,
+        cd.estado_workflow,
+        cd.medico_firmante_id,
+        cd.firmado_en,
+        cd.validado_en,
+        cd.certificado_en,
+        cd.anulado_en,
+        cd.motivo_anulacion,
+        cd.payload_hash,
+        cd.registrado_en,
         COALESCE(p."firstName" || ' ' || p."firstLastName", NULL) AS paciente_nombre,
-        p."nationalId"                                              AS paciente_dui,
-        ea.tipo                                                     AS episodio_tipo
+        p."nationalId"                                             AS paciente_dui,
+        ea.tipo                                                    AS episodio_tipo
       FROM ece.certificado_defuncion cd
-      LEFT JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
-      LEFT JOIN public."Patient"       p  ON p.id = cd.paciente_id
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      LEFT JOIN public."Patient"   p  ON p.id = ea.paciente_id
       WHERE cd.id = ${input.id}::uuid
-        AND cd.establecimiento_id = ${ece.establecimientoId}::uuid
+        AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
       LIMIT 1
     `;
 
@@ -354,14 +417,22 @@ export const eceCertDefRouter = router({
 
   /**
    * Crea un certificado de defunción en estado 'borrador'.
-   * Solo MC/PHYSICIAN. 1:1 con episodio (UNIQUE en episodio_id).
-   * B-04: valida que la epicrisis referenciada tenga tipo_egreso = 'fallecido'.
+   * Solo MC/PHYSICIAN. 1:1 con episodio (UNIQUE en episodio_id activo).
+   *
+   * Pasos:
+   *   1. Resolver personal_salud del usuario HIS.
+   *   2. B-04: validar que la epicrisis tenga tipo_egreso = 'fallecido'.
+   *   3. Verificar unicidad 1:1 por episodio.
+   *   4. Obtener paciente_id desde episodio (y validar pertenencia al establecimiento).
+   *   5. Resolver tipo_documento CERT_DEF + estado inicial (para documento_instancia).
+   *   6. Crear documento_instancia (workflow motor ECE).
+   *   7. INSERT en ece.certificado_defuncion referenciando instancia_id.
    */
   create: mcProc.input(createCertDefInput).mutation(async ({ ctx, input }) => {
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      // Resolver personal_salud vinculado al usuario HIS.
+      // 1. Resolver personal_salud vinculado al usuario HIS.
       const personalRows = await tx.$queryRaw<[{ id: string }?]>`
         SELECT id::text
         FROM ece.personal_salud
@@ -376,7 +447,7 @@ export const eceCertDefRouter = router({
       }
       const medicoPersonalId = personalRows[0].id;
 
-      // B-04: verificar que la epicrisis tenga tipo_egreso = 'fallecido'.
+      // 2. B-04: verificar que la epicrisis tenga tipo_egreso = 'fallecido'.
       const epicrisisRows = await tx.$queryRaw<[{ tipo_egreso: string }?]>`
         SELECT tipo_egreso
         FROM ece.epicrisis_egreso
@@ -396,7 +467,7 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // Verificar unicidad 1:1 por episodio.
+      // 3. Verificar unicidad 1:1 por episodio.
       const existing = await tx.$queryRaw<[{ id: string }?]>`
         SELECT id::text
         FROM ece.certificado_defuncion
@@ -411,7 +482,7 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // Obtener paciente_id desde el episodio.
+      // 4. Obtener paciente_id desde el episodio y validar establecimiento.
       const episodioRows = await tx.$queryRaw<[{ paciente_id: string }?]>`
         SELECT paciente_id::text
         FROM ece.episodio_atencion
@@ -427,30 +498,73 @@ export const eceCertDefRouter = router({
       }
       const pacienteId = episodioRows[0].paciente_id;
 
+      // 5. Resolver tipo_documento CERT_DEF y su estado inicial.
+      const tipoDocRows = await tx.$queryRaw<[{ tipo_id: string; estado_inicial_id: string }?]>`
+        SELECT td.id::text AS tipo_id, fe.id::text AS estado_inicial_id
+        FROM ece.tipo_documento td
+        JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+        WHERE td.codigo = 'CERT_DEF'
+        LIMIT 1
+      `;
+      if (!tipoDocRows[0]) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Tipo de documento CERT_DEF no configurado en el sistema.",
+        });
+      }
+      const { tipo_id: tipoDocumentoId, estado_inicial_id: estadoInicialId } = tipoDocRows[0];
+
+      // 6. Crear documento_instancia (motor workflow ECE).
+      const instanciaRows = await tx.$queryRaw<[{ id: string }?]>`
+        INSERT INTO ece.documento_instancia
+          (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+        VALUES
+          (${tipoDocumentoId}::uuid,
+           ${input.episodioId}::uuid,
+           ${pacienteId}::uuid,
+           ${estadoInicialId}::uuid,
+           ${medicoPersonalId}::uuid)
+        RETURNING id::text
+      `;
+      if (!instanciaRows[0]) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "No se pudo crear documento_instancia para el certificado.",
+        });
+      }
+      const instanciaId = instanciaRows[0].id;
+
+      // 7. INSERT principal.
+      // causas_intermedias_cie10 (UI) → causas_intermedias (columna BD)
+      // causa_principal_cie10 → columna nueva (migración 167)
+      // clasificacion se mapea desde manera: el CHECK de clasificacion acepta
+      // 'natural'|'violenta'|'accidente_transito'|'en_investigacion'.
+      // La manera clínica ('accidental','suicidio','homicidio') se clasifica como 'violenta'
+      // salvo 'natural' e 'indeterminada' → 'en_investigacion'.
+      const clasificacion = mapManeraToClasifc(input.manera);
       const causasJson = JSON.stringify(input.causasIntermediasCie10);
       const fechaDefuncion = input.fechaHoraDefuncion.toISOString();
 
       const rows = await tx.$queryRaw<[{ id: string }]>`
         INSERT INTO ece.certificado_defuncion (
+          instancia_id,
           episodio_id,
           epicrisis_id,
-          paciente_id,
-          establecimiento_id,
           fecha_hora_defuncion,
           lugar_defuncion,
           causa_principal_cie10,
-          causas_intermedias_cie10,
+          causas_intermedias,
           causa_basica_cie10,
           manera,
           autopsia_realizada,
           observaciones,
-          medico_certificante,
+          clasificacion,
+          medico_certificante_id,
           estado_workflow
         ) VALUES (
+          ${instanciaId}::uuid,
           ${input.episodioId}::uuid,
           ${input.epicrisisId}::uuid,
-          ${pacienteId}::uuid,
-          ${ece.establecimientoId}::uuid,
           ${fechaDefuncion}::timestamptz,
           ${input.lugarDefuncion},
           ${input.causaPrincipalCie10},
@@ -459,6 +573,7 @@ export const eceCertDefRouter = router({
           ${input.manera},
           ${input.autopsiaRealizada},
           ${input.observaciones ?? null},
+          ${clasificacion},
           ${medicoPersonalId}::uuid,
           'borrador'
         )
@@ -478,11 +593,22 @@ export const eceCertDefRouter = router({
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      // Leer y bloquear el registro.
       const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        SELECT
+          cd.id, cd.episodio_id, cd.epicrisis_id,
+          ea.paciente_id, ea.establecimiento_id,
+          cd.fecha_hora_defuncion, cd.lugar_defuncion,
+          cd.causa_principal_cie10,
+          COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
+          cd.causa_basica_cie10, cd.manera,
+          COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
+          cd.observaciones, cd.estado_workflow, cd.medico_firmante_id,
+          cd.firmado_en, cd.validado_en, cd.certificado_en, cd.anulado_en,
+          cd.motivo_anulacion, cd.payload_hash, cd.registrado_en
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -497,13 +623,11 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // Verificar PIN del MC.
       const personal = await resolvePersonal(tx, ece.personalId);
       await verifyPin(personal, input.pin);
 
       const payloadHash = computePayloadHash(cert);
 
-      // Transición borrador → firmado. El trigger de BD refuerza la inmutabilidad.
       await tx.$executeRaw`
         UPDATE ece.certificado_defuncion
         SET estado_workflow    = 'firmado',
@@ -514,7 +638,6 @@ export const eceCertDefRouter = router({
           AND estado_workflow = 'borrador'
       `;
 
-      // Outbox transaccional.
       await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
         organizationId: ctx.tenant.organizationId,
         eventType: "ece.certificado_defuncion.firmado",
@@ -537,16 +660,17 @@ export const eceCertDefRouter = router({
   /**
    * MC valida el certificado (firmado → validado).
    * B-03: requiere PIN del validador para trazabilidad de identidad (no-repudio).
-   * El validador puede ser diferente al firmante (segunda revisión clínica).
    */
   validar: mcProc.input(validarCertDefInput).mutation(async ({ ctx, input }) => {
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+      const rows = await tx.$queryRaw<Pick<CertDefRow, "id" | "estado_workflow">[]>`
+        SELECT cd.id, cd.estado_workflow
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -561,7 +685,6 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // B-03: verificar PIN del validador (Director Médico o MC con rol validador).
       const personal = await resolvePersonal(tx, ece.personalId);
       await verifyPin(personal, input.firmaPin);
 
@@ -586,10 +709,12 @@ export const eceCertDefRouter = router({
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+      const rows = await tx.$queryRaw<Pick<CertDefRow, "id" | "estado_workflow" | "episodio_id" | "paciente_id" | "payload_hash">[]>`
+        SELECT cd.id, cd.estado_workflow, cd.episodio_id, ea.paciente_id, cd.payload_hash
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -604,7 +729,6 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // Verificar PIN del DIR.
       const personal = await resolvePersonal(tx, ece.personalId);
       await verifyPin(personal, input.pin);
 
@@ -643,10 +767,12 @@ export const eceCertDefRouter = router({
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+      const rows = await tx.$queryRaw<Pick<CertDefRow, "id" | "estado_workflow">[]>`
+        SELECT cd.id, cd.estado_workflow
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -678,3 +804,38 @@ export const eceCertDefRouter = router({
     });
   }),
 });
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers internos
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Mapea la manera clínica al campo clasificacion (categoría legal RNPN).
+ *
+ * clasificacion CHECK: natural | violenta | accidente_transito | en_investigacion
+ * manera         CHECK: natural | violenta | accidental | suicidio | homicidio | indeterminada
+ *
+ * Reglas:
+ *   natural       → natural
+ *   violenta      → violenta
+ *   accidental    → accidente_transito   (forma más común de accidente en SV)
+ *   suicidio      → violenta
+ *   homicidio     → violenta
+ *   indeterminada → en_investigacion
+ */
+function mapManeraToClasifc(
+  manera: "natural" | "violenta" | "accidental" | "suicidio" | "homicidio" | "indeterminada",
+): string {
+  switch (manera) {
+    case "natural":
+      return "natural";
+    case "violenta":
+    case "suicidio":
+    case "homicidio":
+      return "violenta";
+    case "accidental":
+      return "accidente_transito";
+    case "indeterminada":
+      return "en_investigacion";
+  }
+}
