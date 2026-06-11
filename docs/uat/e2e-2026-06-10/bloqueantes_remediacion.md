@@ -2,13 +2,24 @@
 
 > De los ~28 routers con drift, **24 quedaron alineados al DDL** (typecheck trpc+web verde, 2560 tests verdes). Estos **5 ítems NO se pudieron cerrar solo alineando el router**: requieren una **decisión de DDL o de diseño** (la tabla está incompleta, falta, o tiene un conflicto). No los apliqué a producción por ser tablas clínicas/legales sensibles y necesitar criterio @DBA/@AS.
 
-## Estado de la remediación
-| | Routers |
+## Estado de la remediación — ✅ TODOS RESUELTOS (2026-06-11)
+| | |
 |---|---|
-| ✅ Alineados al DDL (verde) | 24 (incl. bridge-cirugia) |
-| 🔴 Bloqueados (este doc) | 5 |
+| ✅ Routers alineados al DDL | 24 (incl. bridge-cirugia) |
+| ✅ Bloqueantes B1–B5 | resueltos (ver abajo) |
+| DDL aplicado a prod (MCP) | sql/165–168 (drops + 14 columnas + jerarquía) |
+| Verificación | typecheck trpc+web verde · 2542 tests verde |
 
-Commits: `8879007` (quirófano), `eb6ea0b` (23 routers), `97d0924` (UI + reverts). Todo **local, sin push**.
+**Resumen de cierre:**
+- **B1** (CHECK contradictorios) → drop 4 legacy (`sql/165`).
+- **B2** (rectificacion) → flujo de aprobación en `solicitud_arco` + registro inmutable en `rectificacion` (`sql/166`); procedures `aprobar/rechazar/firmar` restaurados.
+- **B3** (certificado-defuncion) → +6 columnas legales (`sql/167`); router instancia-first preservando contrato UI.
+- **B4** (gs1_gln) → +`id`/`parent_id`/`establecimiento_id` (`sql/168`, `codigo` sigue PK por 10 FKs); jerarquía habilitada.
+- **B5** (bedside-hardstops) → eliminado (código muerto, no cableado).
+
+Commits: `8879007` (quirófano) · `eb6ea0b` (23 routers) · `97d0924` (UI+reverts) · `6a1b92d` (B1 drops) · `589ab4a` (B1–B5). Todo **local, sin push**.
+
+> Histórico de cada bloqueante (cómo estaba antes de resolverse) abajo.
 
 ---
 
