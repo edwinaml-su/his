@@ -12,10 +12,22 @@ Commits: `8879007` (quirófano), `eb6ea0b` (23 routers), `97d0924` (UI + reverts
 
 ---
 
-## B1 — `administracion_medicamento`: CHECK duplicado contradictorio
-**Impacto:** bloquea `registro-enfermeria` y `indicaciones-medicas` (registro de administración / eMAR).
-**Hecho:** la tabla tiene DOS CHECK sobre `estado` que se contradicen — `administracion_medicamento_estado_check` = `{administrado, omitido, diferido}` (minúsculas) y `chk_admin_med_estado` = `{PROGRAMADA, ADMINISTRADO, OMITIDA, RECHAZADA}` (mayúsculas). Postgres exige AMBOS → **ningún valor es insertable**. Además los dos routers escriben vocabularios distintos (registro-enfermeria minúsculas, indicaciones mayúsculas).
-**Decisión necesaria:** elegir vocabulario canónico. **Recomendado: minúsculas** (es el CHECK original del DDL). Acción: `DROP CONSTRAINT chk_admin_med_estado;` + ajustar `chk_motivo_omision_requerido` a minúsculas + alinear `indicaciones-medicas.registrarAdministracion` a `administrado/omitido/diferido`. (Verificar tabla vacía antes — lo está.)
+## B1 — CHECK duplicados contradictorios — ✅ RESUELTO (2026-06-11)
+**Era:** tres columnas tenían DOS CHECK contradictorios cada una (Postgres exige ambos → tabla inescribible):
+- `administracion_medicamento.estado`: `{administrado,omitido,diferido}` vs `chk_admin_med_estado {PROGRAMADA,...}`.
+- `historia_clinica.estado_registro`: `chk_hc_estado_registro {borrador,firmado,validado,anulado}` vs legacy `{vigente,rectificado}`.
+- `indicaciones_medicas.estado_registro` y `.vigencia`: workflow `{borrador,...}`/`{ACTIVA,...}` vs legacy `{vigente,rectificado}`/`{activa,suspendida,modificada}`.
+
+**Aplicado vía MCP execute_sql** (autorizado): `DROP CONSTRAINT` de los 4 legacy
+(`historia_clinica_estado_registro_check`, `indicaciones_medicas_vigencia_check`,
+`indicaciones_medicas_estado_registro_check`, `chk_admin_med_estado`). Verificado:
+cada columna queda con un solo CHECK (el de workflow). Dry-run de insertabilidad
+confirma que `borrador`/`ACTIVA`/`administrado` pasan el CHECK (solo bloquea FK/trigger,
+esperado). Desbloquea `registro-enfermeria`, `indicaciones-medicas`, `historia-clinica`.
+
+> Nota 1: `chk_motivo_omision_requerido` (admin_med) referencia mayúsculas `OMITIDA/RECHAZADA`; con el router escribiendo `omitido` minúsculas no dispara — inofensivo (no se recreó, por instrucción).
+> Nota 2: `indicaciones_medicas` tiene además un trigger JCI **IPSG.1** (`IPSG1_WRISTBAND_REQUIRED`) que exige GSRN de pulsera del paciente — lógica de negocio correcta, no drift.
+> ⚠️ Reproducibilidad: el DROP se aplicó solo en prod (execute_sql). Recomendado un `sql/NNN_*.sql` numerado que documente los drops, para que un rebuild desde `packages/database/sql/` no recree los constraints legacy.
 
 ## B2 — `ece-rectificacion`: tabla append-only vs workflow de aprobación en UI
 **Impacto:** la UI (`/ece/rectificaciones/cola`) llama `aprobar`/`rechazar`/`firmar`; la tabla `rectificacion` es **append-only** (`documento_original_id, tabla_origen, motivo, usuario_id, hash_original, campo, valor_anterior, valor_nuevo`) — **no tiene columna de estado** para un flujo aprobar/rechazar. El agente había eliminado esos procedures (rompía la UI) → **revertido** para preservar el contrato.
