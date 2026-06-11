@@ -103,3 +103,41 @@ rol, no un extra.
 El punto dulce de compra es **8 núcleos / 32 GB / NVMe 1 TB**: corre build + typecheck +
 suite completa + Docker + E2E sin pelear con la máquina. **No comprar por debajo de
 16 GB** — `next build` + Docker simultáneos hacen swap y matan la productividad.
+
+---
+
+# Costo estimado — CAPEX (equipos) + OPEX (licencias/asientos)
+
+> ⚠️ **Cifras en USD, indicativas / de planificación — NO es una cotización.** Confirmar
+> con proveedores reales. En El Salvador **sumar IVA (13%)** + importación/logística.
+> Equipo base asumido: 1 Lead + 1 Backend/DBA + 1 QA/SDET + 1 dominio clínico part-time.
+
+## CAPEX — equipos (compra única)
+| Ítem | Cant. | Unitario (USD) | Subtotal |
+|---|---|---|---|
+| Workstation dev tier-alto (8c / 32 GB / 1 TB) — Lead y DBA | 2 | ~2,300 | ~4,600 |
+| Workstation QA/SDET (8c / 32 GB) | 1 | ~2,100 | ~2,100 |
+| Equipo oficina (dominio part-time, 16 GB) | 1 | ~1,000 | ~1,000 |
+| Monitor externo 27" QHD/4K | 3 | ~350 | ~1,050 |
+| Periféricos + dock (teclado/mouse/headset/dock) | 3 | ~280 | ~840 |
+| **CAPEX total** | | | **≈ 9,600** *(rango ≈ 8,500 – 12,000 según marca/tier)* |
+
+## OPEX — licencias y asientos del equipo (recurrente)
+| Concepto | Base | USD/mes | Nota |
+|---|---|---|---|
+| GitHub Team | 4 users × ~$4 | ~16 | repo privado |
+| Vercel Pro (seats) | 3 × ~$20 | ~60 | preview/deploy por dev |
+| Sentry (Team) | 1 plan | ~26 | observabilidad (ya en el proyecto) |
+| Docker Desktop | 3 × ~$9 **si aplica** | 0 – 27 | gratis para org pequeña; alternativa Rancher/Podman = $0 |
+| JetBrains (opcional) | 3 × ~$15 | 0 – 45 | solo si NO usan VS Code (gratis) |
+| **OPEX equipo** | | **≈ 100 – 175 /mes** | **≈ 1,200 – 2,100 /año** |
+
+> **Aparte (NO es adquisición del equipo de mantenimiento):** la **infraestructura de
+> producción** ya corre independientemente — Supabase Pro (~$25/mes + uso) y el hosting
+> Vercel del proyecto. No los cargues al presupuesto de provisión del equipo; son OPEX
+> del producto, no del equipo.
+
+## Resumen para la propuesta
+- **Inversión inicial (CAPEX equipos):** ≈ **US$ 9,600** (+ IVA/importación).
+- **Costo recurrente (OPEX tooling del equipo):** ≈ **US$ 100 – 175 / mes**.
+- *(Producción Supabase/Vercel: línea separada, ya existente.)*
