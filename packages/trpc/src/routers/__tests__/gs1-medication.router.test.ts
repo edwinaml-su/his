@@ -39,7 +39,8 @@ const MOCK_MED_ROW = {
   excipientes_alergenos: [],
   recall_status: "NONE",
   recall_motivo: null,
-  recall_fecha: null,
+  // DDL real: columna es recall_iniciado_en, no recall_fecha.
+  recall_iniciado_en: null,
   lote_vencimiento: null,
 };
 
@@ -124,7 +125,7 @@ describe("gs1Medication.update", () => {
     await expect(caller.update({ id: UUID_A })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("serializa principiosActivos como JSON antes de enviar a BD", async () => {
+  it("pasa principiosActivos como text[] (array nativo) a BD", async () => {
     prisma.$executeRawUnsafe = mockQuery(1);
 
     const caller = gs1MedicationRouter.createCaller(makeCtx({ prisma }));
@@ -135,11 +136,14 @@ describe("gs1Medication.update", () => {
 
     const calls = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
     const params = calls[0] as unknown[];
-    // El JSON serializado aparece entre los params después de la query.
-    const jsonParam = params.find(
-      (p) => typeof p === "string" && p.includes("Ibuprofeno"),
+    // DDL real: text[] — se pasa el array nativo, no JSON.stringify.
+    const arrParam = params.find(
+      (p) => Array.isArray(p) && (p as string[]).includes("Ibuprofeno"),
     );
-    expect(jsonParam).toBe(JSON.stringify(["Ibuprofeno", "Excipiente X"]));
+    expect(arrParam).toEqual(["Ibuprofeno", "Excipiente X"]);
+    // La query debe castear a ::text[]
+    const sql = params[0] as string;
+    expect(sql).toContain("::text[]");
   });
 
   it("rechaza codigoAtc con formato inválido (Zod)", async () => {
@@ -175,7 +179,8 @@ describe("gs1Medication.markRecall", () => {
     expect(result.ok).toBe(true);
     const sql = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(sql).toContain("recall_status");
-    expect(sql).toContain("recall_fecha");
+    // DDL real: columna es recall_iniciado_en
+    expect(sql).toContain("recall_iniciado_en");
   });
 
   it("motivo demasiado corto lanza BAD_REQUEST", async () => {

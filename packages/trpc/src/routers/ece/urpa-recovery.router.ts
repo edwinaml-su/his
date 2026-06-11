@@ -278,12 +278,15 @@ export const eceUrpaRecoveryRouter = router({
       const { personalId, establecimientoId } = resolveEceIds(ctx);
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
-        // Verificar que el acto quirúrgico existe y es del establecimiento activo.
+        // Verificar que el acto quirúrgico existe y su episodio pertenece al
+        // establecimiento activo. acto_quirurgico no tiene establecimiento_id
+        // propio — la FK de tenancy va por episodio_id → episodio_atencion.
         const actoRows = await tx.$queryRaw<{ id: string }[]>`
           SELECT aq.id::text
           FROM ece.acto_quirurgico aq
+          JOIN ece.episodio_atencion ep ON ep.id = aq.episodio_id
           WHERE aq.id = ${input.actoQuirurgicoId}::uuid
-            AND aq.establecimiento_id = ${establecimientoId}::uuid
+            AND ep.establecimiento_id = ${establecimientoId}::uuid
           LIMIT 1
         `;
 

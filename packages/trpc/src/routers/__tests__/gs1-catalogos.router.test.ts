@@ -52,7 +52,7 @@ const SSCC_MUTATION  = "000000000000000000"; // 18 dígitos
 
 // UUIDs válidos para usar como IDs de prueba
 const UUID_GTIN_1 = "11111111-1111-1111-1111-111111111111";
-const UUID_GLN_1  = "22222222-2222-2222-2222-222222222222";
+// UUID_GLN_1 eliminado: gs1_gln PK es `codigo` (text), no uuid.
 const UUID_SSCC_1 = "33333333-3333-3333-3333-333333333333";
 const UUID_GSRN_1 = "44444444-4444-4444-4444-444444444444";
 const UUID_GIAI_1 = "55555555-5555-5555-5555-555555555555";
@@ -183,11 +183,13 @@ describe("gs1Catalogos.gtin", () => {
 // gln
 // ---------------------------------------------------------------------------
 
+// gln — DDL real: PK es `codigo` (text). Sin id, sin establecimiento_id.
 describe("gs1Catalogos.gln", () => {
   it("list sin filtro de tipo retorna filas del mock", async () => {
+    // Cols reales: codigo, descripcion, tipo, activo, creado_en
     const mockRow = {
-      id: UUID_GLN_1, codigo: VALID_GLN, descripcion: "Farmacia Central",
-      tipo: "farmacia", establecimiento_id: null, activo: true,
+      codigo: VALID_GLN, descripcion: "Farmacia Central",
+      tipo: "farmacia", activo: true, creado_en: new Date("2024-01-01"),
     };
     prisma.$queryRawUnsafe = mockQuery([mockRow]);
 
@@ -195,14 +197,16 @@ describe("gs1Catalogos.gln", () => {
     const result = await caller.gln.list({ limit: 50, offset: 0 });
 
     expect(result[0]!.tipo).toBe("farmacia");
+    expect(result[0]!.codigo).toBe(VALID_GLN);
   });
 
-  it("get retorna NOT_FOUND si no hay filas", async () => {
+  it("get retorna NOT_FOUND si no hay filas (busca por codigo)", async () => {
     prisma.$queryRawUnsafe = mockQuery([]);
 
     const caller = gs1CatalogosRouter.createCaller(makeCtx({ prisma }));
+    // get ahora recibe { codigo } no { id }
     await expect(
-      caller.gln.get({ id: UUID_NOT_FOUND }),
+      caller.gln.get({ codigo: VALID_GLN }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
@@ -215,6 +219,20 @@ describe("gs1Catalogos.gln", () => {
         tipo: "invalido" as "deposito",
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("create retorna codigo (no id) tras INSERT exitoso", async () => {
+    const GLN_MUTATION = "0000000000000";
+    prisma.$queryRawUnsafe = mockQuery([{ codigo: GLN_MUTATION }]);
+
+    const caller = gs1CatalogosRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.gln.create({
+      codigo: GLN_MUTATION,
+      descripcion: "Depósito Test",
+      tipo: "deposito",
+    });
+
+    expect(result.codigo).toBe(GLN_MUTATION);
   });
 });
 

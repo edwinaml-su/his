@@ -530,37 +530,47 @@ const administrationRouter = router({
           select: { id: true },
         });
 
-        // Evento EPCIS bedside — insertamos en ece.epcis_events (mismo patrón
-        // que validate5Correctos en este archivo). El DomainEvent outbox
-        // requiere @his/database que tiene un stub en este worktree;
-        // usamos el camino directo para evitar la dependencia del stub.
+        // Evento EPCIS bedside — tabla real: ece.gs1_epcis_event
+        // Cols: tipo_evento, subtipo, what, where_data, event_time, record_time,
+        //       why, who, payload_hash, indication_id, establecimiento_id, status
         const epcisEventId = randomUUID();
+        const now = new Date();
         const payloadHash = createHash("sha256")
           .update(JSON.stringify({ epcisEventId, gtin: input.medicamentoGtin, lote: input.lote, indicationId: input.indicationId }))
           .digest("hex");
+        // establecimientoId FK → ece.establecimiento; requiere tenant.establishmentId.
+        const establecimientoId = ctx.tenant.establishmentId;
+        if (!establecimientoId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
+          });
+        }
 
         await tx.$executeRawUnsafe(
-          `INSERT INTO ece.epcis_events
-             (organization_id, event_type, what, "where", "when", why, who)
-           VALUES ($1::uuid, 'ObjectEvent', $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb)`,
-          orgId,
+          `INSERT INTO ece.gs1_epcis_event
+             (tipo_evento, subtipo, what, where_data, event_time, record_time,
+              why, who, payload_hash, indication_id, establecimiento_id, status)
+           VALUES ('ObjectEvent', 'BEDSIDE_ADMIN', $1::jsonb, $2::jsonb, $3, $3,
+                   $4::jsonb, $5::jsonb, $6, $7::uuid, $8::uuid, 'COMMITTED')`,
           JSON.stringify({
-            subtipo:     "BEDSIDE_ADMIN",
             gtin:        input.medicamentoGtin,
             lote:        input.lote,
             serie:       input.serie ?? null,
             epcisEventId,
-            payloadHash,
             adminId:     admin.id,
             lasaAlert,
           }),
           JSON.stringify({ readPoint: "0000000000000" }),
-          new Date().toISOString(),
+          now.toISOString(),
           JSON.stringify({ businessStep: "administering", disposition: "consumed" }),
           JSON.stringify({
             gsrnProfesional: input.staffGsrn,
             gsrnPaciente:    input.patientGsrn,
           }),
+          payloadHash,
+          input.indicationId,
+          establecimientoId,
         );
 
         return admin;
@@ -631,22 +641,32 @@ const shiftQueueRouter = router({
       );
       const servicioId = scheduleRows[0]?.servicio_id ?? null;
 
-      // Indicaciones activas — filtradas por servicio si hay schedule
+      // Indicaciones activas — indicaciones_medicas no tiene patient_id/organization_id/estado.
+      // Obtenemos paciente vía instancia_id → documento_instancia.paciente_id.
+      // Filtramos por organización vía episodio_hospitalario.servicio_id cuando hay schedule.
+      // fecha_hora de indicaciones_medicas actúa como hora_programada.
+      // gtin proviene de indicacion_item.tipo = 'MEDICAMENTO' primer item.
       const indicRows = await ctx.prisma.$queryRawUnsafe<IndicacionPendienteRow[]>(
         `SELECT
-           i.id                    AS indicacion_id,
-           i.patient_id,
-           p.gsrn                  AS patient_gsrn,
-           i.gtin_medicamento      AS gtin,
-           i.proxima_administracion AS hora_programada
-         FROM ece.indicaciones_medicas i
-         LEFT JOIN "Patient" p ON p.id = i.patient_id
-         WHERE i.organization_id = $1::uuid
-           AND i.estado = 'ACTIVA'
-           ${servicioId ? `AND i.servicio_id = $2::uuid` : ""}
-         ORDER BY i.proxima_administracion ASC NULLS LAST
+           im.id                   AS indicacion_id,
+           di.paciente_id          AS patient_id,
+           g.codigo                AS patient_gsrn,
+           ii.descripcion          AS gtin,
+           im.fecha_hora           AS hora_programada
+         FROM ece.indicaciones_medicas im
+         JOIN ece.documento_instancia di ON di.id = im.instancia_id
+         LEFT JOIN ece.gs1_gsrn g ON g.referencia_id = di.paciente_id
+                                  AND g.tipo = 'paciente' AND g.activo = true
+         LEFT JOIN ece.indicacion_item ii
+               ON ii.indicacion_id = im.id AND ii.tipo = 'MEDICAMENTO'
+         ${servicioId
+           ? `JOIN ece.episodio_hospitalario eh ON eh.episodio_id = im.episodio_id
+              AND eh.servicio_id = $1::uuid`
+           : ""}
+         WHERE im.estado_registro = 'vigente'
+         ORDER BY im.fecha_hora ASC NULLS LAST
          LIMIT 100`,
-        ...(servicioId ? [orgId, servicioId] : [orgId]),
+        ...(servicioId ? [servicioId] : []),
       );
 
       const TOLERANCIA_MS = 30 * 60_000;
@@ -719,7 +739,7 @@ const validate5CorrectRouter = router({
 
 type Validate5CorrectosCtx = {
   prisma: PrismaClient;
-  tenant: { organizationId: string; userId: string };
+  tenant: { organizationId: string; userId: string; establishmentId?: string };
 };
 
 async function runValidate5Correctos(
@@ -931,16 +951,30 @@ async function runValidate5Correctos(
             input.glnUbicacion ?? null,
           );
 
-          // EPCIS ObjectEvent — 5 dimensiones
+          // EPCIS ObjectEvent — tabla real: ece.gs1_epcis_event
+          // Cols: tipo_evento, subtipo, what, where_data, event_time, record_time,
+          //       why, who, payload_hash, indication_id, establecimiento_id, status
+          const epcisHash = createHash("sha256")
+            .update(JSON.stringify({ gtin: gs1.gtin, lote: gs1.lote, indicationId: input.indicationId }))
+            .digest("hex");
+          // establecimientoId FK → ece.establecimiento; requiere tenant.establishmentId.
+        const establecimientoId = ctx.tenant.establishmentId;
+        if (!establecimientoId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
+          });
+        }
           await tx.$executeRawUnsafe(
-            `INSERT INTO ece.epcis_events
-               (organization_id, event_type, what, "where", "when", why, who)
-             VALUES ($1::uuid, 'ObjectEvent', $2::jsonb, $3::jsonb, $4, $5::jsonb, $6::jsonb)`,
-            orgId,
+            `INSERT INTO ece.gs1_epcis_event
+               (tipo_evento, subtipo, what, where_data, event_time, record_time,
+                why, who, payload_hash, indication_id, establecimiento_id, status)
+             VALUES ('ObjectEvent', 'BEDSIDE_ADMIN', $1::jsonb, $2::jsonb, $3, $3,
+                     $4::jsonb, $5::jsonb, $6, $7::uuid, $8::uuid, 'COMMITTED')`,
             JSON.stringify({
-              gtin: gs1.gtin,
-              lote: gs1.lote,
-              serie: gs1.serie,
+              gtin:      gs1.gtin,
+              lote:      gs1.lote,
+              serie:     gs1.serie,
               fechaVence: gs1.fechaVence,
             }),
             JSON.stringify({ gln: input.glnUbicacion ?? null }),
@@ -948,8 +982,11 @@ async function runValidate5Correctos(
             JSON.stringify({ businessStep: "administering", disposition: "in_progress" }),
             JSON.stringify({
               gsrnEnfermera: input.gsrnEnfermera,
-              gsrnPaciente: input.gsrnPaciente,
+              gsrnPaciente:  input.gsrnPaciente,
             }),
+            epcisHash,
+            input.indicationId,
+            establecimientoId,
           );
 
           return rows[0]!.id;

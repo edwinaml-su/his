@@ -302,15 +302,15 @@ export const eceAtencionRnRouter = router({
       // 3. Obtener paciente_madre ece para extraer organizationId del Patient público
       const madreEceRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
-      ) => Promise<Array<{ his_patient_id: string }>>)`
-        SELECT his_patient_id::text FROM ece.paciente
+      ) => Promise<Array<{ public_patient_id: string }>>)`
+        SELECT public_patient_id::text FROM ece.paciente
         WHERE id = ${input.pacienteMadreId}::uuid
         LIMIT 1
       `;
       if (madreEceRows.length === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente madre no encontrada en ECE." });
       }
-      const motherPublicId = madreEceRows[0]!.his_patient_id;
+      const motherPublicId = madreEceRows[0]!.public_patient_id;
 
       // 4. Obtener organizationId de la madre (para crear Patient RN en la misma org)
       const madrePublicRows = await (tx.$queryRaw as (
@@ -345,12 +345,25 @@ export const eceAtencionRnRouter = router({
       const rnPublicId = rnPublicRows[0]!.id;
 
       // 6. Crear ece.paciente RN
+      // NOT NULL requeridos: public_patient_id, establecimiento_id, numero_expediente
+      // tipo_registro_identidad y estado_* tienen defaults en la tabla pero los
+      // especificamos para claridad. MRN se genera con el mismo patrón de ece-hooks.
+      const mrnRnEce = `RN-${rnPublicId.substring(0, 8).toUpperCase()}`;
       const rnEceRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<Array<{ id: string }>>)`
-        INSERT INTO ece.paciente (his_patient_id)
-        VALUES (${rnPublicId}::uuid)
-        ON CONFLICT (his_patient_id) DO UPDATE SET his_patient_id = EXCLUDED.his_patient_id
+        INSERT INTO ece.paciente (
+          public_patient_id,
+          establecimiento_id,
+          numero_expediente,
+          tipo_registro_identidad
+        )
+        VALUES (
+          ${rnPublicId}::uuid,
+          ${eceCtx.establecimientoId}::uuid,
+          ${mrnRnEce},
+          'sin_documento'
+        )
         RETURNING id::text
       `;
       const rnEceId = rnEceRows[0]!.id;
@@ -371,6 +384,11 @@ export const eceAtencionRnRouter = router({
       `;
       const instanciaId = instanciaRows[0]!.id;
 
+      // sexo: el CHECK de la tabla exige 'masculino'|'femenino'|'indeterminado'.
+      // El input acepta 'M'|'F'|'I' por compatibilidad con el formulario HIS.
+      const sexoMap: Record<string, string> = { M: "masculino", F: "femenino", I: "indeterminado" };
+      const sexoEce = sexoMap[input.sexo] ?? "indeterminado";
+
       // 8. Insertar atencion_recien_nacido
       const atnRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
@@ -390,7 +408,7 @@ export const eceAtencionRnRouter = router({
           ${input.pesoG},
           ${input.tallaCm},
           ${input.perimetroCefalicoCm ?? null},
-          ${input.sexo},
+          ${sexoEce},
           ${input.edadGestacionalSemanas},
           ${input.apgar1min},
           ${input.apgar5min},

@@ -59,15 +59,17 @@ import {
 } from "@his/contracts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tipos para filas raw SQL (ece.triaje)
+// Tipos para filas raw SQL (ece.hoja_triaje — tabla real)
 // ─────────────────────────────────────────────────────────────────────────────
 
 type EceTriajeRow = {
   id: string;
+  instancia_id: string;
   episodio_id: string;
   nivel_prioridad: string;
   estado_registro: string;
-  data: Record<string, unknown> | null;
+  // hoja_triaje no tiene columna data JSONB; el vínculo HIS se almacena en evaluacion_triaje JSONB.
+  evaluacion_triaje: Record<string, unknown> | null;
 };
 
 type HisTriajeCompletedRow = {
@@ -95,21 +97,22 @@ async function fetchEceTriaje(
   prisma: RawClient,
   eceTriajeId: string,
 ): Promise<EceTriajeRow | null> {
+  // Tabla real: ece.hoja_triaje. estado_registro CHECK: vigente|rectificado (no 'anulado').
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<EceTriajeRow[]>)`
-    SELECT id, episodio_id, nivel_prioridad, estado_registro, data
-    FROM ece.triaje
+    SELECT id, instancia_id, episodio_id, nivel_prioridad, estado_registro, evaluacion_triaje
+    FROM ece.hoja_triaje
     WHERE id = ${eceTriajeId}::uuid
-      AND estado_registro != 'anulado'
     LIMIT 1
   `;
   return rows[0] ?? null;
 }
 
 /**
- * Escribe el campo hisTriageEvalId en data JSON de ece.triaje.
+ * Escribe el campo hisTriageEvalId en evaluacion_triaje JSONB de ece.hoja_triaje.
+ * hoja_triaje no tiene columna 'data'; el campo de vínculo va en evaluacion_triaje.
  * Usa jsonb_set para no sobreescribir otros campos del JSONB.
  */
 async function setHisLink(
@@ -122,8 +125,8 @@ async function setHisLink(
       tpl: TemplateStringsArray,
       ...vals: unknown[]
     ) => Promise<number>)`
-      UPDATE ece.triaje
-      SET data = data - 'hisTriageEvalId'
+      UPDATE ece.hoja_triaje
+      SET evaluacion_triaje = evaluacion_triaje - 'hisTriageEvalId'
       WHERE id = ${eceTriajeId}::uuid
     `;
   } else {
@@ -131,9 +134,9 @@ async function setHisLink(
       tpl: TemplateStringsArray,
       ...vals: unknown[]
     ) => Promise<number>)`
-      UPDATE ece.triaje
-      SET data = jsonb_set(
-            COALESCE(data, '{}'),
+      UPDATE ece.hoja_triaje
+      SET evaluacion_triaje = jsonb_set(
+            COALESCE(evaluacion_triaje, '{}'),
             '{hisTriageEvalId}',
             ${JSON.stringify(hisTriageId)}::jsonb
           )
@@ -143,54 +146,59 @@ async function setHisLink(
 }
 
 /**
- * Inserta una fila nueva en ece.triaje y retorna su id.
+ * Inserta una fila nueva en ece.hoja_triaje y retorna su id.
+ *
+ * instancia_id es NOT NULL → sigue el patrón instancia-first:
+ * el llamador ya creó el documento_instancia TRIAJE y pasa su id.
+ * estado_registro CHECK: vigente|rectificado (no borrador/firmado).
+ * El estado de workflow vive en documento_instancia.estado_actual_id.
  */
 async function insertEceTriaje(
   prisma: RawClient,
   opts: {
+    instanciaId: string;
     episodioId: string;
-    pacienteId: string | null;
-    motivo: string | null;
+    motivoConsulta: string | null;
     nivelPrioridad: string;
     destinoAsignado: string | null;
     signosVitalesId: string | null;
     registradoPorId: string;
-    estadoRegistro: "borrador" | "firmado";
     hisTriageId: string;
   },
 ): Promise<string> {
-  const dataJson = JSON.stringify({ hisTriageEvalId: opts.hisTriageId });
+  // El vínculo HIS se guarda en evaluacion_triaje JSONB (no hay columna 'data').
+  const evaluacionJson = JSON.stringify({ hisTriageEvalId: opts.hisTriageId });
 
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<Array<{ id: string }>>)`
-    INSERT INTO ece.triaje (
+    INSERT INTO ece.hoja_triaje (
+      instancia_id,
       episodio_id,
-      paciente_id,
-      motivo,
+      motivo_consulta,
       nivel_prioridad,
       destino_asignado,
       signos_vitales_id,
       registrado_por,
       estado_registro,
-      data
+      evaluacion_triaje
     ) VALUES (
+      ${opts.instanciaId}::uuid,
       ${opts.episodioId}::uuid,
-      ${opts.pacienteId}::uuid,
-      ${opts.motivo},
+      ${opts.motivoConsulta},
       ${opts.nivelPrioridad},
       ${opts.destinoAsignado},
       ${opts.signosVitalesId ?? null}::uuid,
       ${opts.registradoPorId}::uuid,
-      ${opts.estadoRegistro},
-      ${dataJson}::jsonb
+      'vigente',
+      ${evaluacionJson}::jsonb
     )
     RETURNING id
   `;
 
   const id = rows[0]?.id;
-  if (!id) throw new Error("INSERT ece.triaje no devolvió id");
+  if (!id) throw new Error("INSERT ece.hoja_triaje no devolvió id");
   return id;
 }
 
@@ -205,6 +213,7 @@ async function fetchCompletedUnlinkedTriages(
   limit: number,
 ): Promise<HisTriajeCompletedRow[]> {
   // JOIN con TriageLevel para extraer el priority (Manchester 1-5).
+  // Vínculo inverso: busca hoja_triaje donde evaluacion_triaje->>'hisTriageEvalId' coincide.
   return await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
@@ -221,9 +230,8 @@ async function fetchCompletedUnlinkedTriages(
     WHERE te.organization_id = ${organizationId}::uuid
       AND te.status = 'COMPLETED'
       AND NOT EXISTS (
-        SELECT 1 FROM ece.triaje t
-        WHERE t.data->>'hisTriageEvalId' = te.id::text
-          AND t.estado_registro != 'anulado'
+        SELECT 1 FROM ece.hoja_triaje ht
+        WHERE ht.evaluacion_triaje->>'hisTriageEvalId' = te.id::text
       )
     ORDER BY te.completed_at DESC
     LIMIT ${limit}
@@ -263,7 +271,7 @@ export const eceBridgeTriageRouter = router({
       }
 
       // Prevenir doble vínculo con un Triage HIS distinto.
-      const existing = eceTriaje.data?.["hisTriageEvalId"] as string | undefined;
+      const existing = eceTriaje.evaluacion_triaje?.["hisTriageEvalId"] as string | undefined;
       if (existing && existing !== input.triageId) {
         throw new TRPCError({
           code: "CONFLICT",
@@ -318,9 +326,8 @@ export const eceBridgeTriageRouter = router({
         ...vals: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         SELECT id
-        FROM ece.triaje
-        WHERE data->>'hisTriageEvalId' = ${input.triageId}
-          AND estado_registro != 'anulado'
+        FROM ece.hoja_triaje
+        WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
         LIMIT 1
       `;
 
@@ -368,9 +375,8 @@ export const eceBridgeTriageRouter = router({
         ...vals: unknown[]
       ) => Promise<Array<{ id: string; estado_registro: string; nivel_prioridad: string }>>)`
         SELECT id, estado_registro, nivel_prioridad
-        FROM ece.triaje
-        WHERE data->>'hisTriageEvalId' = ${input.triageId}
-          AND estado_registro != 'anulado'
+        FROM ece.hoja_triaje
+        WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
         LIMIT 1
       `;
 
@@ -379,7 +385,8 @@ export const eceBridgeTriageRouter = router({
           ok: true as const,
           eceTriajeId: existingRows[0].id,
           hisTriageId: input.triageId,
-          estadoRegistro: existingRows[0].estado_registro as "borrador" | "firmado",
+          // estado_registro CHECK: vigente|rectificado. El estado workflow vive en documento_instancia.
+          estadoRegistro: existingRows[0].estado_registro as "vigente" | "rectificado",
           nivelPrioridad: existingRows[0].nivel_prioridad,
         };
       }
@@ -390,22 +397,48 @@ export const eceBridgeTriageRouter = router({
       // El rol ENF puede firmar inmediatamente.
       const isNurse = ctx.tenant.roleCodes.includes("NURSE");
       const firmadoInmediatamente = input.firmarInmediatamente && isNurse;
-      const estadoRegistro: "borrador" | "firmado" = firmadoInmediatamente
-        ? "firmado"
-        : "borrador";
+      // estado_registro siempre 'vigente' (CHECK BD: vigente|rectificado).
+      // El estado de workflow (borrador→firmado) vive en documento_instancia.estado_actual_id.
 
       let eceTriajeId: string;
 
       await ctx.prisma.$transaction(async (tx) => {
-        eceTriajeId = await insertEceTriaje(tx as unknown as RawClient, {
+        const rawTx = tx as unknown as RawClient;
+
+        // Crear documento_instancia TRIAJE primero (instancia-first, instancia_id NOT NULL).
+        const instanciaResult = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ id: string; personal_id: string }>>)`
+          INSERT INTO ece.documento_instancia (
+            tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por
+          )
+          SELECT td.id, ep.id, ep.paciente_id, fe.id, ps.id
+          FROM ece.tipo_documento td
+          JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+          JOIN ece.episodio_atencion ep ON ep.id = ${input.episodioId}::uuid
+          JOIN ece.personal_salud ps ON ps.his_user_id = ${input.registradoPorId}::uuid AND ps.activo = true
+          WHERE td.codigo = 'TRIAJE' AND td.activo = true
+          LIMIT 1
+          RETURNING id::text, creado_por::text AS personal_id
+        `;
+        const instanciaId = instanciaResult[0]?.id;
+        const personalId  = instanciaResult[0]?.personal_id;
+        if (!instanciaId || !personalId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Tipo documento TRIAJE no configurado o profesional no encontrado.",
+          });
+        }
+
+        eceTriajeId = await insertEceTriaje(rawTx, {
+          instanciaId,
           episodioId: input.episodioId,
-          pacienteId: hisTriaje.patient.id,
-          motivo: null, // motivo viene de la evaluación — dejar en null para que enfermero complete
+          motivoConsulta: null, // motivo viene de la evaluación — dejar en null para que enfermero complete
           nivelPrioridad,
           destinoAsignado: input.destinoAsignado ?? null,
           signosVitalesId: input.signosVitalesId ?? null,
-          registradoPorId: input.registradoPorId,
-          estadoRegistro,
+          registradoPorId: personalId,
           hisTriageId: input.triageId,
         });
 
@@ -430,7 +463,7 @@ export const eceBridgeTriageRouter = router({
         ok: true as const,
         eceTriajeId: eceTriajeId!,
         hisTriageId: input.triageId,
-        estadoRegistro,
+        estadoRegistro: "vigente" as const,
         nivelPrioridad,
       };
     }),
@@ -475,15 +508,39 @@ export const eceBridgeTriageRouter = router({
           let eceTriajeId: string;
 
           await ctx.prisma.$transaction(async (tx) => {
-            eceTriajeId = await insertEceTriaje(tx as unknown as RawClient, {
+            const rawTx2 = tx as unknown as RawClient;
+
+            // Instancia-first para syncCompletedTriages.
+            const syncInstanciaResult = await (rawTx2.$queryRaw as (
+              tpl: TemplateStringsArray,
+              ...vals: unknown[]
+            ) => Promise<Array<{ id: string; personal_id: string }>>)`
+              INSERT INTO ece.documento_instancia (
+                tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por
+              )
+              SELECT td.id, ep.id, ep.paciente_id, fe.id, ps.id
+              FROM ece.tipo_documento td
+              JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+              JOIN ece.episodio_atencion ep ON ep.id = ${input.defaultEpisodioId!}::uuid
+              JOIN ece.personal_salud ps ON ps.his_user_id = ${input.registradoPorId}::uuid AND ps.activo = true
+              WHERE td.codigo = 'TRIAJE' AND td.activo = true
+              LIMIT 1
+              RETURNING id::text, creado_por::text AS personal_id
+            `;
+            const syncInstanciaId = syncInstanciaResult[0]?.id;
+            const syncPersonalId  = syncInstanciaResult[0]?.personal_id;
+            if (!syncInstanciaId || !syncPersonalId) {
+              throw new Error("Tipo TRIAJE no configurado o profesional no encontrado para sync.");
+            }
+
+            eceTriajeId = await insertEceTriaje(rawTx2, {
+              instanciaId: syncInstanciaId,
               episodioId: input.defaultEpisodioId!,
-              pacienteId: row.patient_id,
-              motivo: row.motivo_consulta,
+              motivoConsulta: row.motivo_consulta,
               nivelPrioridad,
               destinoAsignado: null,
               signosVitalesId: null,
-              registradoPorId: input.registradoPorId,
-              estadoRegistro: "borrador",
+              registradoPorId: syncPersonalId,
               hisTriageId: row.id,
             });
 

@@ -91,6 +91,12 @@ export interface ResultadoRow {
   interpretacion: string | null;
   responsable_validacion_id: string;
   fecha_hora_informe: Date;
+  /**
+   * CHECK: vigente | rectificado.
+   * NO existe estado 'pendiente_validacion' ni 'validado' en el DDL.
+   * La "validación médica" es un evento de dominio (ece.resultado_estudio.validado)
+   * sin cambio de estado_registro. El valor al insertar es siempre 'vigente'.
+   */
   estado_registro: string;
 }
 
@@ -267,19 +273,22 @@ export const eceResultadoEstudioRouter = router({
         });
       }
 
+      // estado_registro CHECK: vigente | rectificado. Se inserta 'vigente' (default de BD).
+      // La transición a "validado" no existe en DDL; se representa con evento de dominio.
       const valoresJson = JSON.stringify(input.valores);
       const resRows = await (tx.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO ece.resultado_estudio
-          (solicitud_id, valores, interpretacion, responsable_validacion_id, estado_registro)
+          (instancia_id, solicitud_id, valores, interpretacion, responsable_validacion_id, estado_registro)
         VALUES (
+          (SELECT instancia_id FROM ece.solicitud_estudio WHERE id = ${input.solicitudId}::uuid LIMIT 1),
           ${input.solicitudId}::uuid,
           ${valoresJson}::jsonb,
           ${input.interpretacion ?? null},
           ${personal.id}::uuid,
-          'pendiente_validacion'
+          'vigente'
         )
         RETURNING id::text
       `;
@@ -303,7 +312,15 @@ export const eceResultadoEstudioRouter = router({
     });
   }),
 
-  /** MC valida el resultado clínicamente (estado_registro → 'validado'). */
+  /**
+   * MC refrenda el resultado clínicamente.
+   *
+   * estado_registro solo admite 'vigente'|'rectificado' (CHECK DDL). No existe
+   * estado 'validado' ni 'pendiente_validacion'. La validación clínica se
+   * representa únicamente mediante el evento de dominio ece.resultado_estudio.validado.
+   * Si el resultado ya fue refrendado (validado) se permite idempotencia — el MC puede
+   * refrendar de nuevo sin error (reafirma la validación).
+   */
   validarResultado: mcProc.input(validarResultadoSchema).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
     return withEceCtx(ctx.prisma, eceCtx, async (tx) => {
@@ -311,18 +328,6 @@ export const eceResultadoEstudioRouter = router({
       if (!res) {
         throw new TRPCError({ code: "NOT_FOUND", message: `Resultado no encontrado: ${input.resultadoId}` });
       }
-      if (res.estado_registro !== "pendiente_validacion") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `El resultado no está pendiente de validación (estado_registro: ${res.estado_registro}).`,
-        });
-      }
-
-      await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-        UPDATE ece.resultado_estudio
-        SET estado_registro = 'validado'
-        WHERE id = ${input.resultadoId}::uuid
-      `;
 
       await emitDomainEvent(tx, {
         organizationId: ctx.tenant.organizationId,

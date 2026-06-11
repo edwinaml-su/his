@@ -57,7 +57,8 @@ const createSchema = z.object({
   motivoConsulta:        z.string().min(5).max(2_000),
   circunstanciaLlegada:  z.string().max(1_000).optional(),
   examenFisico:          z.string().min(5).max(5_000),
-  disposicion:           z.string().max(1_000).optional(),
+  // CHECK atencion_emergencia_disposicion_check: alta_ambulatoria|observacion|orden_ingreso|referencia
+  disposicion:           z.enum(["alta_ambulatoria", "observacion", "orden_ingreso", "referencia"]).optional(),
   diagnosticos:          jsonbTextField,
   manejoRealizado:       jsonbTextField,
 });
@@ -67,7 +68,8 @@ const updateSchema = z.object({
   motivoConsulta:        z.string().min(5).max(2_000).optional(),
   circunstanciaLlegada:  z.string().max(1_000).optional(),
   examenFisico:          z.string().min(5).max(5_000).optional(),
-  disposicion:           z.string().max(1_000).optional(),
+  // CHECK atencion_emergencia_disposicion_check: alta_ambulatoria|observacion|orden_ingreso|referencia
+  disposicion:           z.enum(["alta_ambulatoria", "observacion", "orden_ingreso", "referencia"]).optional(),
   diagnosticos:          jsonbTextField.optional(),
   manejoRealizado:       jsonbTextField.optional(),
 });

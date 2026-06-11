@@ -186,15 +186,16 @@ async function findFirmaElectronica(
 
 async function findPersonalSaludPorAuthUser(
   prisma: RawClient,
-  authUserId: string,
+  hisUserId: string,
 ): Promise<PersonalSaludRow | null> {
+  // Patrón canónico (orden-ingreso.router): his_user_id, no auth_user_id.
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<PersonalSaludRow[]>)`
     SELECT id, nombre_completo
     FROM ece.personal_salud
-    WHERE auth_user_id = ${authUserId}::uuid
+    WHERE his_user_id = ${hisUserId}::uuid
       AND activo = true
     LIMIT 1
   `;
@@ -267,10 +268,26 @@ export const eceBridgeAdmisionRouter = router({
           message: "Orden de ingreso no encontrada.",
         });
       }
-      if (orden.estado_registro !== "validado") {
+      // orden_ingreso.estado_registro CHECK: 'vigente'|'rectificado' — 'validado' no existe.
+      // El estado de workflow (firmado/validado) vive en documento_instancia → flujo_estado.
+      // El bridge necesita que la orden esté "firmada" en el circuito ECE antes de admitir.
+      // findOrdenIngreso no une con documento_instancia, así que verificamos directamente:
+      const estadoDocRows = await (ctx.prisma.$queryRaw as (
+        tpl: TemplateStringsArray,
+        ...vals: unknown[]
+      ) => Promise<Array<{ estado_doc: string }>>)`
+        SELECT fe.codigo AS estado_doc
+        FROM ece.orden_ingreso oi
+        JOIN ece.documento_instancia di ON di.id = oi.instancia_id
+        JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+        WHERE oi.id = ${orden.id}::uuid
+        LIMIT 1
+      `;
+      const estadoDoc = estadoDocRows[0]?.estado_doc ?? "borrador";
+      if (!["firmado", "validado", "certificado"].includes(estadoDoc)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: `La orden de ingreso está en estado '${orden.estado_registro}'. Se requiere estado 'validado' (firmada por MT y validada por MC).`,
+          message: `La orden de ingreso está en estado de workflow '${estadoDoc}'. Se requiere estado 'firmado' o superior (firmada por MC y validada).`,
         });
       }
       // Idempotencia: si ya tiene episodio, rechazar con CONFLICT.
@@ -286,7 +303,8 @@ export const eceBridgeAdmisionRouter = router({
         const rawTx = tx as unknown as RawClient;
         const fechaIngreso = new Date(input.fechaHoraIngreso);
 
-        // Paso 1: crear episodio_atencion
+        // Paso 1: crear episodio_atencion.
+        // Usa SELECT FROM personal_salud para obtener establecimiento_id directamente.
         const episodioRows = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
@@ -303,7 +321,7 @@ export const eceBridgeAdmisionRouter = router({
             creado_en
           )
           SELECT
-            ps.id AS paciente_id,
+            ${orden.paciente_id}::uuid,
             ps.establecimiento_id,
             'hospitalario',
             'hospitalizacion',
@@ -321,7 +339,8 @@ export const eceBridgeAdmisionRouter = router({
           throw new Error("No se pudo crear episodio_atencion.");
         }
 
-        // Paso 2: crear episodio_hospitalario
+        // Paso 2: crear episodio_hospitalario.
+        // PK es episodio_id (no tiene id propio). servicio_id es la columna real.
         await (rawTx.$executeRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
@@ -332,7 +351,7 @@ export const eceBridgeAdmisionRouter = router({
             procedencia_ingreso,
             modalidad_hospitalaria,
             fecha_hora_orden_ingreso,
-            servicio_ingreso_id
+            servicio_id
           ) VALUES (
             ${episodioId}::uuid,
             ${orden.circunstancia_ingreso},
@@ -343,31 +362,86 @@ export const eceBridgeAdmisionRouter = router({
           )
         `;
 
-        // Paso 3: crear hoja_ingreso
+        // Paso 3: resolver tipo_documento HOJA_ING + estado inicial (firmado por ADM).
+        // Instancia-first pattern (canónico): crear documento_instancia ANTES de hoja_ingreso
+        // porque hoja_ingreso.instancia_id es NOT NULL.
+        const tipoDocRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<IdRow[]>)`
+          SELECT id FROM ece.tipo_documento
+          WHERE codigo = 'HOJA_ING' AND activo = true
+          LIMIT 1
+        `;
+        const tipoDocId = tipoDocRows[0]?.id;
+
+        const estadoRows = tipoDocId
+          ? await (rawTx.$queryRaw as (
+              tpl: TemplateStringsArray,
+              ...vals: unknown[]
+            ) => Promise<IdRow[]>)`
+              SELECT fe.id
+              FROM ece.flujo_estado fe
+              WHERE fe.tipo_documento_id = ${tipoDocId}::uuid
+                AND fe.codigo = 'firmado'
+              LIMIT 1
+            `
+          : ([] as IdRow[]);
+        const estadoActualId = estadoRows[0]?.id;
+
+        if (!tipoDocId || !estadoActualId) {
+          throw new Error("tipo_documento HOJA_ING o su estado 'firmado' no está configurado.");
+        }
+
+        // Paso 4: crear documento_instancia (registro_id se actualiza en paso 6).
+        const docRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<IdRow[]>)`
+          INSERT INTO ece.documento_instancia (
+            tipo_documento_id,
+            episodio_id,
+            paciente_id,
+            estado_actual_id,
+            creado_por
+          ) VALUES (
+            ${tipoDocId}::uuid,
+            ${episodioId}::uuid,
+            ${orden.paciente_id}::uuid,
+            ${estadoActualId}::uuid,
+            ${personal.id}::uuid
+          )
+          RETURNING id
+        `;
+        const docInstanciaId = docRows[0]?.id;
+        if (!docInstanciaId) {
+          throw new Error("No se pudo crear documento_instancia.");
+        }
+
+        // Paso 5: crear hoja_ingreso con instancia_id ya conocido.
+        // hoja_ingreso no tiene columna paciente_id; el paciente se deriva via episodio_id.
         const hojaRows = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<IdRow[]>)`
           INSERT INTO ece.hoja_ingreso (
+            instancia_id,
             episodio_id,
-            paciente_id,
             orden_ingreso_id,
             servicio_id,
             cama_id,
             fecha_hora_ingreso,
             responsable_admision,
-            estado_registro,
-            registrado_en
+            estado_registro
           ) VALUES (
+            ${docInstanciaId}::uuid,
             ${episodioId}::uuid,
-            ${orden.paciente_id}::uuid,
             ${input.ordenIngresoId}::uuid,
             ${orden.servicio_ingreso_id ?? null}::uuid,
             ${input.camaId ?? null}::uuid,
             ${fechaIngreso}::timestamptz,
             ${personal.id}::uuid,
-            'vigente',
-            now()
+            'vigente'
           )
           RETURNING id
         `;
@@ -376,7 +450,17 @@ export const eceBridgeAdmisionRouter = router({
           throw new Error("No se pudo crear hoja_ingreso.");
         }
 
-        // Paso 4: actualizar orden_ingreso con el episodio creado
+        // Paso 6: apuntar registro_id → hoja_ingreso en documento_instancia.
+        await (rawTx.$executeRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<number>)`
+          UPDATE ece.documento_instancia
+          SET registro_id = ${hojaIngresoId}::uuid
+          WHERE id = ${docInstanciaId}::uuid
+        `;
+
+        // Paso 7: actualizar orden_ingreso con el episodio creado.
         await (rawTx.$executeRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
@@ -386,7 +470,8 @@ export const eceBridgeAdmisionRouter = router({
           WHERE id = ${input.ordenIngresoId}::uuid
         `;
 
-        // Paso 5 (condicional): asignar cama
+        // Paso 8 (condicional): asignar cama.
+        // asignacion_cama: episodio_id → episodio_atencion, desde (nullable), cama_id NOT NULL.
         let camaAsignadaId: string | null = null;
         if (input.camaId) {
           const camaRows = await (rawTx.$queryRaw as (
@@ -406,7 +491,7 @@ export const eceBridgeAdmisionRouter = router({
           `;
           camaAsignadaId = camaRows[0]?.id ?? null;
 
-          // Marcar cama como ocupada
+          // Marcar cama como ocupada en ece.cama.
           await (rawTx.$executeRaw as (
             tpl: TemplateStringsArray,
             ...vals: unknown[]
@@ -417,127 +502,53 @@ export const eceBridgeAdmisionRouter = router({
           `;
         }
 
-        // Paso 6: crear documento_instancia (hoja de ingreso como documento ECE)
-        // Buscamos el tipo_documento con código HOJA_INGRESO.
-        const tipoDocRows = await (rawTx.$queryRaw as (
+        // Paso 9: historial de firma con hash.
+        const payloadStr = JSON.stringify({
+          hojaIngresoId,
+          episodioId,
+          ordenIngresoId: input.ordenIngresoId,
+          admisionPorId: personal.id,
+        });
+        const payloadHash = createHash("sha256").update(payloadStr).digest("hex");
+
+        const rolRows = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<IdRow[]>)`
-          SELECT id FROM ece.tipo_documento
-          WHERE codigo = 'HOJA_INGRESO'
-            AND activo = true
-          LIMIT 1
+          SELECT id FROM ece.rol WHERE codigo = 'ADM' LIMIT 1
         `;
-        const tipoDocId = tipoDocRows[0]?.id;
+        const rolId = rolRows[0]?.id;
 
-        // El estado inicial "firmado" en el flujo ADM.
-        // Buscamos el flujo_estado correspondiente.
-        const estadoRows = await (rawTx.$queryRaw as (
-          tpl: TemplateStringsArray,
-          ...vals: unknown[]
-        ) => Promise<IdRow[]>)`
-          SELECT fe.id
-          FROM ece.flujo_estado fe
-          WHERE fe.tipo_documento_id = ${tipoDocId ?? null}::uuid
-            AND fe.codigo = 'firmado'
-          LIMIT 1
-        `;
-        const estadoActualId = estadoRows[0]?.id;
-
-        let docInstanciaId: string | null = null;
-        if (tipoDocId && estadoActualId) {
-          const docRows = await (rawTx.$queryRaw as (
-            tpl: TemplateStringsArray,
-            ...vals: unknown[]
-          ) => Promise<IdRow[]>)`
-            INSERT INTO ece.documento_instancia (
-              tipo_documento_id,
-              episodio_id,
-              paciente_id,
-              registro_id,
-              estado_actual_id,
-              version,
-              estado_registro,
-              creado_por,
-              creado_en
-            ) VALUES (
-              ${tipoDocId}::uuid,
-              ${episodioId}::uuid,
-              ${orden.paciente_id}::uuid,
-              ${hojaIngresoId}::uuid,
-              ${estadoActualId}::uuid,
-              1,
-              'vigente',
-              ${personal.id}::uuid,
-              now()
-            )
-            RETURNING id
-          `;
-          docInstanciaId = docRows[0]?.id ?? null;
-
-          // Paso 7: documento_instancia_historial con hash
-          if (docInstanciaId) {
-            const payloadStr = JSON.stringify({
-              hojaIngresoId,
-              episodioId,
-              ordenIngresoId: input.ordenIngresoId,
-              admisionPorId: personal.id,
-            });
-            const payloadHash = createHash("sha256").update(payloadStr).digest("hex");
-
-            // Buscamos el rol ECE del ADM
-            const rolRows = await (rawTx.$queryRaw as (
-              tpl: TemplateStringsArray,
-              ...vals: unknown[]
-            ) => Promise<IdRow[]>)`
-              SELECT id FROM ece.rol WHERE codigo = 'ADM' LIMIT 1
-            `;
-            const rolId = rolRows[0]?.id;
-
-            if (rolId) {
-              await (rawTx.$executeRaw as (
-                tpl: TemplateStringsArray,
-                ...vals: unknown[]
-              ) => Promise<number>)`
-                INSERT INTO ece.documento_instancia_historial (
-                  instancia_id,
-                  estado_anterior_id,
-                  estado_nuevo_id,
-                  accion,
-                  ejecutado_por,
-                  rol_ejecutor_id,
-                  firma_id,
-                  observacion,
-                  ejecutado_en
-                ) VALUES (
-                  ${docInstanciaId}::uuid,
-                  NULL,
-                  ${estadoActualId}::uuid,
-                  'admitir',
-                  ${personal.id}::uuid,
-                  ${rolId}::uuid,
-                  ${firma.id}::uuid,
-                  ${payloadHash},
-                  now()
-                )
-              `;
-            }
-          }
-        }
-
-        // Paso 8: actualizar instancia_id en hoja_ingreso si fue creado el doc
-        if (docInstanciaId) {
+        if (rolId) {
           await (rawTx.$executeRaw as (
             tpl: TemplateStringsArray,
             ...vals: unknown[]
           ) => Promise<number>)`
-            UPDATE ece.hoja_ingreso
-            SET instancia_id = ${docInstanciaId}::uuid
-            WHERE id = ${hojaIngresoId}::uuid
+            INSERT INTO ece.documento_instancia_historial (
+              instancia_id,
+              estado_anterior_id,
+              estado_nuevo_id,
+              accion,
+              ejecutado_por,
+              rol_ejecutor_id,
+              firma_id,
+              observacion,
+              ejecutado_en
+            ) VALUES (
+              ${docInstanciaId}::uuid,
+              NULL,
+              ${estadoActualId}::uuid,
+              'admitir',
+              ${personal.id}::uuid,
+              ${rolId}::uuid,
+              ${firma.id}::uuid,
+              ${payloadHash},
+              now()
+            )
           `;
         }
 
-        // Paso 9: outbox — ece.admision.completada
+        // Paso 10: outbox — ece.admision.completada
         await emitDomainEvent(tx, {
           organizationId: ctx.tenant.organizationId,
           eventType: "ece.admision.completada",
@@ -582,6 +593,9 @@ export const eceBridgeAdmisionRouter = router({
       let countRows: Array<{ total: bigint }>;
 
       if (input.servicioId) {
+        // ece.paciente no tiene nombre_completo; el nombre vive en public."Patient" via public_patient_id.
+        // Filtramos por estado del documento (firmado/validado), no por estado_registro del registro
+        // (CHECK: vigente|rectificado — 'validado' no es un valor válido).
         items = await (ctx.prisma.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
@@ -589,7 +603,7 @@ export const eceBridgeAdmisionRouter = router({
           SELECT
             o.id,
             o.paciente_id,
-            p.nombre_completo AS paciente_nombre,
+            COALESCE(pat."firstName" || ' ' || pat."lastName", ep.numero_expediente, o.paciente_id::text) AS paciente_nombre,
             s.nombre AS servicio_nombre,
             o.modalidad,
             o.procedencia,
@@ -598,9 +612,12 @@ export const eceBridgeAdmisionRouter = router({
             o.medico_ordena,
             o.registrado_en
           FROM ece.orden_ingreso o
-          JOIN ece.paciente p ON p.id = o.paciente_id
+          JOIN ece.documento_instancia di ON di.id = o.instancia_id
+          JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          LEFT JOIN ece.paciente ep ON ep.id = o.paciente_id
+          LEFT JOIN public."Patient" pat ON pat.id = ep.public_patient_id
           LEFT JOIN ece.servicio s ON s.id = o.servicio_ingreso_id
-          WHERE o.estado_registro = 'validado'
+          WHERE fe.codigo IN ('firmado', 'validado', 'certificado')
             AND o.episodio_id IS NULL
             AND o.servicio_ingreso_id = ${input.servicioId}::uuid
           ORDER BY o.registrado_en ASC
@@ -612,10 +629,12 @@ export const eceBridgeAdmisionRouter = router({
           ...vals: unknown[]
         ) => Promise<Array<{ total: bigint }>>)`
           SELECT COUNT(*) AS total
-          FROM ece.orden_ingreso
-          WHERE estado_registro = 'validado'
-            AND episodio_id IS NULL
-            AND servicio_ingreso_id = ${input.servicioId}::uuid
+          FROM ece.orden_ingreso o
+          JOIN ece.documento_instancia di ON di.id = o.instancia_id
+          JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          WHERE fe.codigo IN ('firmado', 'validado', 'certificado')
+            AND o.episodio_id IS NULL
+            AND o.servicio_ingreso_id = ${input.servicioId}::uuid
         `;
       } else {
         items = await (ctx.prisma.$queryRaw as (
@@ -625,7 +644,7 @@ export const eceBridgeAdmisionRouter = router({
           SELECT
             o.id,
             o.paciente_id,
-            p.nombre_completo AS paciente_nombre,
+            COALESCE(pat."firstName" || ' ' || pat."lastName", ep.numero_expediente, o.paciente_id::text) AS paciente_nombre,
             s.nombre AS servicio_nombre,
             o.modalidad,
             o.procedencia,
@@ -634,9 +653,12 @@ export const eceBridgeAdmisionRouter = router({
             o.medico_ordena,
             o.registrado_en
           FROM ece.orden_ingreso o
-          JOIN ece.paciente p ON p.id = o.paciente_id
+          JOIN ece.documento_instancia di ON di.id = o.instancia_id
+          JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          LEFT JOIN ece.paciente ep ON ep.id = o.paciente_id
+          LEFT JOIN public."Patient" pat ON pat.id = ep.public_patient_id
           LEFT JOIN ece.servicio s ON s.id = o.servicio_ingreso_id
-          WHERE o.estado_registro = 'validado'
+          WHERE fe.codigo IN ('firmado', 'validado', 'certificado')
             AND o.episodio_id IS NULL
           ORDER BY o.registrado_en ASC
           LIMIT ${input.pageSize}
@@ -647,9 +669,11 @@ export const eceBridgeAdmisionRouter = router({
           ...vals: unknown[]
         ) => Promise<Array<{ total: bigint }>>)`
           SELECT COUNT(*) AS total
-          FROM ece.orden_ingreso
-          WHERE estado_registro = 'validado'
-            AND episodio_id IS NULL
+          FROM ece.orden_ingreso o
+          JOIN ece.documento_instancia di ON di.id = o.instancia_id
+          JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+          WHERE fe.codigo IN ('firmado', 'validado', 'certificado')
+            AND o.episodio_id IS NULL
         `;
       }
 

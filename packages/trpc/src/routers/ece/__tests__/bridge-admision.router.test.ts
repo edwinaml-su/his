@@ -161,17 +161,18 @@ describe("eceBridgeAdmisionRouter", () => {
       });
     });
 
-    it("5. PRECONDITION_FAILED si orden no está en estado 'validado'", async () => {
-      const borrador = { ...ORDEN_ROW, estado_registro: "borrador" };
+    it("5. PRECONDITION_FAILED si orden no está en estado workflow firmado", async () => {
+      // [0] personal, [1] firma, [2] crypt OK, [3] orden, [4] estado doc → borrador
       prisma.$queryRaw
         .mockResolvedValueOnce([PERSONAL_ROW])
         .mockResolvedValueOnce([FIRMA_ROW])
         .mockResolvedValueOnce([{ ok: true }])
-        .mockResolvedValueOnce([borrador]);
+        .mockResolvedValueOnce([ORDEN_ROW])
+        .mockResolvedValueOnce([{ estado_doc: "borrador" }]);
       const caller = eceBridgeAdmisionRouter.createCaller(makeAdmCtx(prisma));
       await expect(caller.admitirDesdeOrden(BASE_INPUT)).rejects.toMatchObject({
         code: "PRECONDITION_FAILED",
-        message: expect.stringContaining("'validado'"),
+        message: expect.stringContaining("'firmado'"),
       });
     });
 
@@ -181,7 +182,8 @@ describe("eceBridgeAdmisionRouter", () => {
         .mockResolvedValueOnce([PERSONAL_ROW])
         .mockResolvedValueOnce([FIRMA_ROW])
         .mockResolvedValueOnce([{ ok: true }])
-        .mockResolvedValueOnce([yaAdmitida]);
+        .mockResolvedValueOnce([yaAdmitida])
+        .mockResolvedValueOnce([{ estado_doc: "firmado" }]);
       const caller = eceBridgeAdmisionRouter.createCaller(makeAdmCtx(prisma));
       await expect(caller.admitirDesdeOrden(BASE_INPUT)).rejects.toMatchObject({
         code: "CONFLICT",
@@ -191,26 +193,32 @@ describe("eceBridgeAdmisionRouter", () => {
 
     it("7. Happy-path sin cama: retorna episodioId + hojaIngresoId, camaAsignadaId=null", async () => {
       setupTx(prisma);
-      // Pre-tx: personal, firma, crypt, orden
-      // Dentro de tx: episodio INSERT, episodio_hosp INSERT (executeRaw),
-      //   hoja_ingreso INSERT, UPDATE orden, tipo_doc, flujo_estado, doc_instancia, rol, historial UPDATE hoja
+      // Secuencia nueva (instancia-first, pre-tx verifica estado doc):
+      // Pre-tx: [0]personal, [1]firma, [2]crypt, [3]orden, [4]estado_doc
+      // Dentro de tx (reordenado):
+      //   [5] INSERT episodio_atencion
+      //   executeRaw: INSERT episodio_hospitalario
+      //   [6] SELECT tipo_documento
+      //   [7] SELECT flujo_estado
+      //   [8] INSERT documento_instancia RETURNING id
+      //   [9] INSERT hoja_ingreso RETURNING id
+      //   executeRaw: UPDATE registro_id, UPDATE orden
+      //   [10] SELECT rol
+      //   executeRaw: INSERT historial
       mockQueryRawSequence(
         prisma,
         [PERSONAL_ROW],                   // 0: personal
         [FIRMA_ROW],                      // 1: firma
         [{ ok: true }],                   // 2: crypt
         [ORDEN_ROW],                      // 3: orden
+        [{ estado_doc: "firmado" }],      // 4: estado doc workflow
         // dentro de tx:
-        [{ id: EPISODIO_ID }],            // 4: INSERT episodio_atencion RETURNING id
-        // executeRaw (episodio_hosp) devuelve vacío
-        [{ id: HOJA_ID }],               // 5: INSERT hoja_ingreso RETURNING id
-        // executeRaw (UPDATE orden) devuelve vacío
-        [TIPO_DOC_ROW],                  // 6: SELECT tipo_documento
-        [ESTADO_ROW],                    // 7: SELECT flujo_estado
-        [{ id: "di-000000000001" }],     // 8: INSERT documento_instancia RETURNING id
-        [ROL_ROW],                       // 9: SELECT rol
-        // executeRaw (INSERT historial) devuelve vacío
-        // executeRaw (UPDATE hoja instancia_id) devuelve vacío
+        [{ id: EPISODIO_ID }],            // 5: INSERT episodio_atencion
+        [TIPO_DOC_ROW],                   // 6: SELECT tipo_documento
+        [ESTADO_ROW],                     // 7: SELECT flujo_estado
+        [{ id: "di-000000000001" }],      // 8: INSERT documento_instancia
+        [{ id: HOJA_ID }],               // 9: INSERT hoja_ingreso
+        [ROL_ROW],                       // 10: SELECT rol ADM
       );
       prisma.$executeRaw.mockResolvedValue(1);
 
@@ -224,20 +232,21 @@ describe("eceBridgeAdmisionRouter", () => {
 
     it("8. Happy-path con cama: camaAsignadaId presente + UPDATE cama ejecutado", async () => {
       setupTx(prisma);
+      // Con cama: asignacion_cama INSERT (paso 8) después de hoja_ingreso (paso 5/9)
       mockQueryRawSequence(
         prisma,
-        [PERSONAL_ROW],
-        [FIRMA_ROW],
-        [{ ok: true }],
-        [ORDEN_ROW],
-        // tx:
-        [{ id: EPISODIO_ID }],           // episodio
-        [{ id: HOJA_ID }],              // hoja_ingreso
-        [{ id: ASIG_ID }],              // INSERT asignacion_cama RETURNING id
-        [TIPO_DOC_ROW],
-        [ESTADO_ROW],
-        [{ id: "di-000000000002" }],
-        [ROL_ROW],
+        [PERSONAL_ROW],                  // 0: personal
+        [FIRMA_ROW],                     // 1: firma
+        [{ ok: true }],                  // 2: crypt
+        [ORDEN_ROW],                     // 3: orden
+        [{ estado_doc: "firmado" }],     // 4: estado doc workflow
+        [{ id: EPISODIO_ID }],           // 5: episodio_atencion
+        [TIPO_DOC_ROW],                  // 6: tipo_documento
+        [ESTADO_ROW],                    // 7: flujo_estado
+        [{ id: "di-000000000002" }],     // 8: documento_instancia
+        [{ id: HOJA_ID }],               // 9: hoja_ingreso
+        [{ id: ASIG_ID }],              // 10: asignacion_cama
+        [ROL_ROW],                      // 11: rol ADM
       );
       prisma.$executeRaw.mockResolvedValue(1);
 
@@ -264,12 +273,13 @@ describe("eceBridgeAdmisionRouter", () => {
 
       mockQueryRawSequence(
         prisma,
-        [PERSONAL_ROW],
-        [FIRMA_ROW],
-        [{ ok: true }],
-        [ORDEN_ROW],
-        [{ id: EPISODIO_ID }], // INSERT episodio_atencion — éxito
-        // luego $executeRaw[1] falla → tx rechaza
+        [PERSONAL_ROW],            // 0: findPersonalSalud
+        [FIRMA_ROW],               // 1: findFirmaElectronica
+        [{ ok: true }],            // 2: verificarPin
+        [ORDEN_ROW],               // 3: findOrdenIngreso
+        [{ estado_doc: "firmado" }], // 4: check estado workflow orden
+        [{ id: EPISODIO_ID }],     // 5: INSERT episodio_atencion — éxito
+        // luego $executeRaw[1] (INSERT episodio_hospitalario) falla → tx rechaza
       );
 
       // $transaction simula el rollback re-lanzando el error

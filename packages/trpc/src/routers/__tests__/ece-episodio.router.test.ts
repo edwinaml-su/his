@@ -171,8 +171,10 @@ describe("eceEpisodioRouter", () => {
   // ─── 5. crearHospitalario ───────────────────────────────────────────────────
 
   it("crearHospitalario crea episodio+hospitalario+cama y emite outbox abierto", async () => {
-    // queries en orden: INSERT atencion → INSERT hospitalario → (executeRaw asig cama)
-    const prisma = makePrisma([[{ id: EPISODIO_ID }], [{ id: EPISODIO_HOSP }]]);
+    // DDL vivo: episodio_hospitalario comparte PK con episodio_atencion
+    // (episodioHospId === episodioId). El INSERT hospitalario y la asignación de
+    // cama van por $executeRaw, así que solo hay 1 $queryRaw (INSERT atencion RETURNING).
+    const prisma = makePrisma([[{ id: EPISODIO_ID }]]);
     const caller = eceEpisodioRouter.createCaller(makeCtx(prisma));
 
     const result = await caller.crearHospitalario({
@@ -184,7 +186,7 @@ describe("eceEpisodioRouter", () => {
     });
 
     expect(result.episodioId).toBe(EPISODIO_ID);
-    expect(result.episodioHospId).toBe(EPISODIO_HOSP);
+    expect(result.episodioHospId).toBe(EPISODIO_ID);
     expect(emitDomainEvent).toHaveBeenCalledOnce();
     const [, payload] = (emitDomainEvent as ReturnType<typeof vi.fn>).mock.calls[0] as [unknown, { eventType: string; payload: { tipo: string } }];
     expect(payload.eventType).toBe("ece.episodio.abierto");

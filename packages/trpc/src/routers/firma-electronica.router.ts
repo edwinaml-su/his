@@ -119,16 +119,17 @@ const historyInput = z.object({
 // Tipos locales para filas raw SQL
 // =============================================================================
 
+// Columnas reales de ece.bitacora_acceso usadas en history
 type FirmaHistoryRow = {
-  id:            string;
-  firma_id:      string;
-  user_id:       string;
-  accion:        string;
-  exito:         boolean;
-  contexto:      string | null;
-  ip:            string | null;
-  registrado_en: Date;
-  total?:        bigint;
+  id:               string;
+  personal_id:      string | null;
+  accion:           string;
+  autorizado:       boolean;
+  ip_origen:        string | null;
+  ocurrido_en:      Date;
+  justificacion:    string | null;
+  auth_user_id:     string | null;
+  total?:           bigint;
 };
 
 type FirmaRow = {
@@ -391,26 +392,26 @@ async function insertSessionCache(
 async function insertBitacora(
   prisma: { $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown> },
   opts: {
-    firmaId: string;
-    userId: string;
+    personalId: string;     // ece.personal_salud.id (FK real de bitacora_acceso)
+    authUserId: string;     // public."User".id (auth_user_id)
     accion: string;
-    exito: boolean;
-    contexto?: string;
+    autorizado: boolean;    // col real (no "exito")
+    justificacion?: string; // col real (no "contexto")
     ip?: string;
   },
 ): Promise<void> {
-  const contexto = opts.contexto ?? null;
-  const ip = opts.ip ?? null;
+  const justificacion = opts.justificacion ?? null;
+  const ipOrigen = opts.ip ?? null;
   await (prisma.$executeRaw as (
     query: TemplateStringsArray,
     ...values: unknown[]
   ) => Promise<number>)`
     INSERT INTO ece.bitacora_acceso
-      (firma_id, user_id, accion, exito, contexto, ip, registrado_en)
+      (personal_id, auth_user_id, accion, autorizado, ip_origen, justificacion)
     VALUES
-      (${opts.firmaId}::uuid, ${opts.userId}::uuid,
-       ${opts.accion}, ${opts.exito},
-       ${contexto}, ${ip}, now())
+      (${opts.personalId}::uuid, ${opts.authUserId}::uuid,
+       ${opts.accion}, ${opts.autorizado},
+       ${ipOrigen}::inet, ${justificacion})
   `;
 }
 
@@ -489,11 +490,11 @@ async function checkPin(
     await incrementFailedAttempts(prisma, firma.id);
     // Auditar intento fallido best-effort (no bloquear el error al usuario).
     insertBitacora(prisma, {
-      firmaId: firma.id,
-      userId: opts.userId,
+      personalId: personal.id,
+      authUserId: opts.userId,
       accion: opts.accion,
-      exito: false,
-      contexto: opts.contexto,
+      autorizado: false,
+      justificacion: opts.contexto,
       ip: opts.ip,
     }).catch((e) => console.error("[firma.bitacora] error:", e));
 
@@ -513,11 +514,11 @@ async function checkPin(
     resetFailedAttempts(prisma, firma.id),
     insertSessionCache(prisma, firma.id, opts.userId),
     insertBitacora(prisma, {
-      firmaId: firma.id,
-      userId: opts.userId,
+      personalId: personal.id,
+      authUserId: opts.userId,
       accion: opts.accion,
-      exito: true,
-      contexto: opts.contexto,
+      autorizado: true,
+      justificacion: opts.contexto,
       ip: opts.ip,
     }),
   ]);
@@ -884,16 +885,19 @@ export const firmaElectronicaRouter = router({
         }
       }
 
-      const conditions: string[] = ["b.firma_id IN (SELECT id FROM ece.firma_electronica WHERE personal_id IN (SELECT id FROM ece.personal_salud WHERE his_user_id = $1::uuid))"];
+      // Filtra por personal_id (los accesos del personal vinculado a targetUserId)
+      const conditions: string[] = [
+        "b.personal_id IN (SELECT id FROM ece.personal_salud WHERE his_user_id = $1::uuid)",
+      ];
       const params: unknown[] = [targetUserId];
       let idx = 2;
 
       if (input.dateFrom) {
-        conditions.push(`b.registrado_en >= $${idx++}::timestamptz`);
+        conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`);
         params.push(input.dateFrom);
       }
       if (input.dateTo) {
-        conditions.push(`b.registrado_en <= $${idx++}::timestamptz`);
+        conditions.push(`b.ocurrido_en <= $${idx++}::timestamptz`);
         params.push(input.dateTo);
       }
       const where = conditions.join(" AND ");
@@ -913,25 +917,25 @@ export const firmaElectronicaRouter = router({
       const rows = await (ctx.prisma.$queryRawUnsafe as (
         sql: string, ...p: unknown[]
       ) => Promise<FirmaHistoryRow[]>)(
-        `SELECT b.id, b.firma_id, b.user_id, b.accion, b.exito,
-                b.contexto, b.ip, b.registrado_en
+        `SELECT b.id::text, b.personal_id, b.accion, b.autorizado,
+                b.ip_origen::text, b.ocurrido_en, b.justificacion, b.auth_user_id
          FROM ece.bitacora_acceso b
          WHERE ${where}
-         ORDER BY b.registrado_en DESC
+         ORDER BY b.ocurrido_en DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
         ...dataParams,
       );
 
       return {
         items: rows.map((r) => ({
-          id:          r.id,
-          firmaId:     r.firma_id,
-          userId:      r.user_id,
-          accion:      r.accion,
-          exito:       r.exito,
-          contexto:    r.contexto,
-          ip:          r.ip,
-          registradoEn: r.registrado_en.toISOString(),
+          id:            r.id,
+          personalId:    r.personal_id,
+          accion:        r.accion,
+          autorizado:    r.autorizado,
+          ipOrigen:      r.ip_origen,
+          ocurridoEn:    r.ocurrido_en.toISOString(),
+          justificacion: r.justificacion,
+          authUserId:    r.auth_user_id,
         })),
         total,
       };

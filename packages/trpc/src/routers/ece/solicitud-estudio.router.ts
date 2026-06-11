@@ -62,7 +62,9 @@ import { emitDomainEvent } from "@his/database";
 // Schemas locales (mirrors de contracts; evita symlink en worktrees)
 // ---------------------------------------------------------------------------
 
-const tipoEstudioSchema = z.enum(["laboratorio", "imagenologia", "otro"]);
+// CHECK ece.solicitud_estudio.tipo: laboratorio | imagenologia | gabinete (sin 'otro').
+// 'otro' se eliminó para alinearse al DDL vivo.
+const tipoEstudioSchema = z.enum(["laboratorio", "imagenologia", "gabinete"]);
 const prioridadEstudioSchema = z.enum(["rutina", "urgente", "stat"]);
 const pinSchema = z.string().trim().regex(/^\d{6,8}$/, "PIN debe ser 6-8 dígitos");
 

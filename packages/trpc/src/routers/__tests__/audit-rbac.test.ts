@@ -111,16 +111,18 @@ describe("firma.history", () => {
 
   it("[US.F2.7.5] retorna historial propio del usuario", async () => {
     const caller = makeFirmaCaller(prisma);
+    // Columnas reales de ece.bitacora_acceso (remapeadas): autorizado, ip_origen,
+    // ocurrido_en, auth_user_id, justificacion, personal_id FK.
     const historyRows = [
       {
         id:            "row-1",
-        firma_id:      FIRMA_ID,
-        user_id:       USER_ID,
+        personal_id:   PERSO_ID,
         accion:        "verify",
-        exito:         true,
-        contexto:      null,
-        ip:            "10.0.0.1",
-        registrado_en: new Date("2026-05-01T10:00:00Z"),
+        autorizado:    true,
+        ip_origen:     "10.0.0.1",
+        ocurrido_en:   new Date("2026-05-01T10:00:00Z"),
+        justificacion: null,
+        auth_user_id:  USER_ID,
       },
     ];
 
@@ -132,7 +134,7 @@ describe("firma.history", () => {
     expect(result.total).toBe(1);
     expect(result.items).toHaveLength(1);
     expect(result.items[0].accion).toBe("verify");
-    expect(result.items[0].exito).toBe(true);
+    expect(result.items[0].autorizado).toBe(true);
   });
 
   it("[US.F2.7.5] ADM puede consultar historial de otro usuario", async () => {

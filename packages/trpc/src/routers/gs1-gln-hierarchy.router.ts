@@ -42,63 +42,36 @@ const glnSchema = z
 const tipoGlnEnum = z.enum(["proveedor", "deposito", "farmacia", "servicio", "cama"]);
 
 // ---------------------------------------------------------------------------
-// Tipos internos de resultado
+// BLOQUEANTE: gs1_gln PK real es `codigo` (text). La tabla NO tiene columnas
+// `id` (uuid) ni `parent_id` (uuid). La jerarquía padre-hijo NO es modelable
+// con el DDL actual.
+//
+// Para desbloquear, @DBA debe aplicar:
+//   ALTER TABLE ece.gs1_gln
+//     ADD COLUMN id        uuid NOT NULL DEFAULT gen_random_uuid(),
+//     ADD COLUMN parent_id uuid REFERENCES ece.gs1_gln(id);
+//   ALTER TABLE ece.gs1_gln ADD PRIMARY KEY (id);
+//   CREATE UNIQUE INDEX ON ece.gs1_gln(codigo);
+//
+// Mientras tanto: `tree` devuelve lista plana (depth=0 para todos, sin children)
+// y `createChild` inserta sin parent_id. Esto evita que el router truene en
+// runtime sin los requisitos de schema.
 // ---------------------------------------------------------------------------
 
 export interface GlnTreeNode {
-  id: string;
   codigo: string;
   descripcion: string;
   tipo: string;
-  parentId: string | null;
   depth: number;
   activo: boolean;
   children: GlnTreeNode[];
 }
 
 interface GlnFlatRow {
-  id: string;
   codigo: string;
   descripcion: string;
   tipo: string;
-  parent_id: string | null;
-  depth: number;
   activo: boolean;
-}
-
-// Convierte filas planas de la CTE en árbol anidado.
-function buildTree(rows: GlnFlatRow[]): GlnTreeNode[] {
-  const map = new Map<string, GlnTreeNode>();
-  const roots: GlnTreeNode[] = [];
-
-  for (const row of rows) {
-    map.set(row.id, {
-      id: row.id,
-      codigo: row.codigo,
-      descripcion: row.descripcion,
-      tipo: row.tipo,
-      parentId: row.parent_id,
-      depth: row.depth,
-      activo: row.activo,
-      children: [],
-    });
-  }
-
-  for (const node of map.values()) {
-    if (node.parentId === null) {
-      roots.push(node);
-    } else {
-      const parent = map.get(node.parentId);
-      if (parent) {
-        parent.children.push(node);
-      } else {
-        // Nodo huérfano (padre fuera del subárbol solicitado) — tratar como raíz.
-        roots.push(node);
-      }
-    }
-  }
-
-  return roots;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,70 +80,62 @@ function buildTree(rows: GlnFlatRow[]): GlnTreeNode[] {
 
 export const glnHierarchyRouter = router({
   /**
-   * tree(rootId?) — devuelve el árbol completo de GLNs o el subárbol bajo rootId.
-   * Usa CTE recursiva `WITH RECURSIVE` para una sola query.
+   * tree — devuelve lista plana de GLNs (depth=0, sin children).
+   * La jerarquía recursiva es BLOQUEANTE hasta que @DBA agregue `id`/`parent_id`
+   * a ece.gs1_gln. Ver comentario al inicio del archivo.
+   * `rootCodigo` filtra por prefijo de código cuando se provee.
    */
   tree: tenantProcedure
-    .input(z.object({ rootId: z.string().uuid().optional() }))
+    .input(z.object({ rootCodigo: z.string().optional() }))
     .query(async ({ ctx, input }) => {
       const rows = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        if (input.rootId) {
-          // Subárbol desde un nodo raíz específico.
+        if (input.rootCodigo) {
           return tx.$queryRawUnsafe<GlnFlatRow[]>(
-            `WITH RECURSIVE gln_tree AS (
-               SELECT id, codigo, descripcion, tipo, parent_id, activo, 0 AS depth
-                 FROM ece.gs1_gln
-                WHERE id = $1::uuid
-               UNION ALL
-               SELECT g.id, g.codigo, g.descripcion, g.tipo, g.parent_id, g.activo,
-                      t.depth + 1
-                 FROM ece.gs1_gln g
-                 JOIN gln_tree t ON g.parent_id = t.id
-             )
-             SELECT * FROM gln_tree ORDER BY depth, descripcion`,
-            input.rootId,
+            `SELECT codigo, descripcion, tipo, activo
+               FROM ece.gs1_gln
+              WHERE codigo LIKE $1
+              ORDER BY descripcion`,
+            `${input.rootCodigo}%`,
           );
         }
-        // Árbol completo — raíces son nodos con parent_id IS NULL.
         return tx.$queryRawUnsafe<GlnFlatRow[]>(
-          `WITH RECURSIVE gln_tree AS (
-             SELECT id, codigo, descripcion, tipo, parent_id, activo, 0 AS depth
-               FROM ece.gs1_gln
-              WHERE parent_id IS NULL
-             UNION ALL
-             SELECT g.id, g.codigo, g.descripcion, g.tipo, g.parent_id, g.activo,
-                    t.depth + 1
-               FROM ece.gs1_gln g
-               JOIN gln_tree t ON g.parent_id = t.id
-           )
-           SELECT * FROM gln_tree ORDER BY depth, descripcion`,
+          `SELECT codigo, descripcion, tipo, activo
+             FROM ece.gs1_gln
+            ORDER BY descripcion`,
         );
       });
 
-      return buildTree(rows);
+      // Lista plana: todos a depth=0, sin children hasta que exista parent_id en DDL.
+      return rows.map((r): GlnTreeNode => ({
+        codigo: r.codigo,
+        descripcion: r.descripcion,
+        tipo: r.tipo,
+        depth: 0,
+        activo: r.activo,
+        children: [],
+      }));
     }),
 
   /**
-   * createChild — da de alta un GLN hijo bajo parentGlnId.
-   * Valida:
-   *   1. Código GLN-13 con dígito verificador módulo-10.
-   *   2. Unicidad del código dentro del tenant (cross-org guard).
+   * createChild — da de alta un GLN.
+   * BLOQUEANTE: `parentGlnId` se ignora (parent_id no existe en DDL).
+   * Ver comentario de ALTER TABLE al inicio del archivo.
    */
   createChild: requireRole(["ADMIN", "LOGISTIC"])
     .input(
       z.object({
-        parentGlnId:  z.string().uuid().optional(),
+        // parentGlnId aceptado en input pero ignorado hasta que DDL tenga parent_id.
+        parentGlnId:  z.string().optional(),
         codigo:       glnSchema,
         descripcion:  z.string().min(1).max(500),
         tipo:         tipoGlnEnum,
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      type IdRow = { id: string };
       type CountRow = { count: string };
+      type CodigoRow = { codigo: string };
 
-      const id = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        // Unicidad del código GLN dentro del tenant.
+      const codigo = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const existing = await tx.$queryRawUnsafe<CountRow[]>(
           `SELECT COUNT(*)::text AS count FROM ece.gs1_gln WHERE codigo = $1`,
           input.codigo,
@@ -178,22 +143,21 @@ export const glnHierarchyRouter = router({
         if (parseInt(existing[0]?.count ?? "0", 10) > 0) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: `El código GLN ${input.codigo} ya existe en esta organización`,
+            message: `El código GLN ${input.codigo} ya existe`,
           });
         }
 
-        const rows = await tx.$queryRawUnsafe<IdRow[]>(
-          `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo, parent_id)
-           VALUES ($1, $2, $3, $4::uuid)
-           RETURNING id`,
+        const rows = await tx.$queryRawUnsafe<CodigoRow[]>(
+          `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo)
+           VALUES ($1, $2, $3)
+           RETURNING codigo`,
           input.codigo,
           input.descripcion,
           input.tipo,
-          input.parentGlnId ?? null,
         );
-        return rows[0]!.id;
+        return rows[0]!.codigo;
       });
 
-      return { id };
+      return { codigo };
     }),
 });

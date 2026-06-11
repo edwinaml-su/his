@@ -70,7 +70,7 @@ interface MedicationRow {
   excipientes_alergenos: unknown;
   recall_status: string | null;
   recall_motivo: string | null;
-  recall_fecha: Date | null;
+  recall_iniciado_en: Date | null;
   lote_vencimiento: Date | null;
 }
 
@@ -90,7 +90,7 @@ function mapMedicationRow(r: MedicationRow) {
     excipientesAlergenos: (r.excipientes_alergenos as string[] | null) ?? [],
     recallStatus: (r.recall_status as z.infer<typeof recallStatusEnum> | null) ?? "NONE",
     recallMotivo: r.recall_motivo,
-    recallFecha: r.recall_fecha,
+    recallFecha: r.recall_iniciado_en,
     loteVencimiento: r.lote_vencimiento,
   };
 }
@@ -127,10 +127,10 @@ export const gs1MedicationRouter = router({
       const rows = await ctx.prisma.$queryRawUnsafe<MedicationRow[]>(
         `SELECT id, codigo, descripcion, fabricante, presentacion,
                 contenido_unidades, principio_activo, codigo_atc, activo, creado_en,
-                COALESCE(principios_activos, '[]'::jsonb) AS principios_activos,
-                COALESCE(excipientes_alergenos, '[]'::jsonb) AS excipientes_alergenos,
+                COALESCE(principios_activos, '{}'::text[]) AS principios_activos,
+                COALESCE(excipientes_alergenos, '{}'::text[]) AS excipientes_alergenos,
                 COALESCE(recall_status, 'NONE') AS recall_status,
-                recall_motivo, recall_fecha, lote_vencimiento
+                recall_motivo, recall_iniciado_en, lote_vencimiento
            FROM ece.gs1_gtin
           ${where}
           ORDER BY descripcion
@@ -150,10 +150,10 @@ export const gs1MedicationRouter = router({
       const rows = await ctx.prisma.$queryRawUnsafe<MedicationRow[]>(
         `SELECT id, codigo, descripcion, fabricante, presentacion,
                 contenido_unidades, principio_activo, codigo_atc, activo, creado_en,
-                COALESCE(principios_activos, '[]'::jsonb) AS principios_activos,
-                COALESCE(excipientes_alergenos, '[]'::jsonb) AS excipientes_alergenos,
+                COALESCE(principios_activos, '{}'::text[]) AS principios_activos,
+                COALESCE(excipientes_alergenos, '{}'::text[]) AS excipientes_alergenos,
                 COALESCE(recall_status, 'NONE') AS recall_status,
-                recall_motivo, recall_fecha, lote_vencimiento
+                recall_motivo, recall_iniciado_en, lote_vencimiento
            FROM ece.gs1_gtin WHERE id = $1::uuid`,
         input.id,
       );
@@ -200,8 +200,8 @@ export const gs1MedicationRouter = router({
         if (fields.contenidoUnidades !== undefined)    { sets.push(`contenido_unidades = $${idx++}`);   params.push(fields.contenidoUnidades); }
         if (fields.principioActivo !== undefined)      { sets.push(`principio_activo = $${idx++}`);     params.push(fields.principioActivo); }
         if (fields.codigoAtc !== undefined)            { sets.push(`codigo_atc = $${idx++}`);           params.push(fields.codigoAtc); }
-        if (fields.principiosActivos !== undefined)    { sets.push(`principios_activos = $${idx++}::jsonb`);    params.push(JSON.stringify(fields.principiosActivos)); }
-        if (fields.excipientesAlergenos !== undefined) { sets.push(`excipientes_alergenos = $${idx++}::jsonb`); params.push(JSON.stringify(fields.excipientesAlergenos)); }
+        if (fields.principiosActivos !== undefined)    { sets.push(`principios_activos = $${idx++}::text[]`);    params.push(fields.principiosActivos); }
+        if (fields.excipientesAlergenos !== undefined) { sets.push(`excipientes_alergenos = $${idx++}::text[]`); params.push(fields.excipientesAlergenos); }
         // HI-12: cast explícito a ::date — preserva el día calendario sin shift por TZ.
         if (fields.loteVencimiento !== undefined)      { sets.push(`lote_vencimiento = $${idx++}::date`); params.push(fields.loteVencimiento); }
 
@@ -233,10 +233,10 @@ export const gs1MedicationRouter = router({
       await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         await tx.$executeRawUnsafe(
           `UPDATE ece.gs1_gtin
-              SET recall_status  = $1,
-                  recall_motivo  = $2,
-                  recall_fecha   = now(),
-                  actualizado_en = now()
+              SET recall_status       = $1,
+                  recall_motivo        = $2,
+                  recall_iniciado_en   = now(),
+                  actualizado_en       = now()
             WHERE id = $3::uuid`,
           input.status,
           input.motivo,

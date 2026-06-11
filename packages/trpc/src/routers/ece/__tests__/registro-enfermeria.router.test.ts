@@ -83,19 +83,22 @@ const REGISTRO_ROW = {
 
 const INDICACION_ACTIVA = {
   id: INDICACION_ID,
-  estado: "activa",
+  // ece.indicacion_item no tiene 'estado'; se lee 'vigencia' de indicaciones_medicas vía JOIN.
+  vigencia: "ACTIVA",
   episodio_id: EPISODIO_ID,
+  // hora_indicada proviene de indicaciones_medicas.fecha_hora (anchor para scheduledSlot).
   hora_indicada: new Date("2026-05-17T06:00:00Z"),
-  frequencia: "Q8H",
+  // Columna real: 'frecuencia' (sin doble 'u').
+  frecuencia: "Q8H",
 };
 
 const INDICACION_SIN_SLOT = {
   ...INDICACION_ACTIVA,
   hora_indicada: null,
-  frequencia: null,
+  frecuencia: null,
 };
 
-const INDICACION_ANULADA = { ...INDICACION_ACTIVA, estado: "anulada" };
+const INDICACION_ANULADA = { ...INDICACION_ACTIVA, vigencia: "CANCELADA" };
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 

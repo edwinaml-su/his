@@ -78,7 +78,6 @@ const listCertDefInput = z.object({
   fechaDesde: z.coerce.date().optional(),
   fechaHasta: z.coerce.date().optional(),
   medicoId: z.string().uuid().optional(),
-  causaPrincipalCie10: cie10Schema.optional(),
   estado: z.enum(["borrador", "firmado", "validado", "certificado", "anulado"]).optional(),
   page: z.number().int().min(1).default(1),
   pageSize: z.number().int().min(1).max(50).default(20),
@@ -87,16 +86,15 @@ const listCertDefInput = z.object({
 const getCertDefInput = z.object({ id: z.string().uuid() });
 
 const createCertDefInput = z.object({
+  instanciaId: z.string().uuid(),
   episodioId: z.string().uuid(),
   epicrisisId: z.string().uuid(),
   fechaHoraDefuncion: z.coerce.date(),
-  lugarDefuncion: z.enum(["intrahospitalaria", "extrahospitalaria"]),
-  causaPrincipalCie10: cie10Schema,
-  causasIntermediasCie10: z.array(cie10Schema).max(3).default([]),
+  // clasificacion CHECK: natural|violenta|accidente_transito|en_investigacion
+  clasificacion: z.enum(["natural", "violenta", "accidente_transito", "en_investigacion"]),
   causaBasicaCie10: cie10Schema,
-  manera: z.enum(["natural", "violenta", "accidental", "suicidio", "homicidio", "indeterminada"]),
-  autopsiaRealizada: z.boolean(),
-  observaciones: z.string().trim().max(2_000).optional(),
+  causasIntermedias: z.array(cie10Schema).max(3).default([]),
+  causasContribuyentes: z.array(cie10Schema).max(3).default([]),
 });
 
 const firmarCertDefInput = z.object({
@@ -125,29 +123,32 @@ const anularCertDefInput = z.object({
 // Tipos de fila raw
 // ──────────────────────────────────────────────────────────────────────────────
 
+// Columnas reales de ece.certificado_defuncion (verificadas vía MCP 2026-06-11):
+// id, instancia_id!, episodio_id!, epicrisis_id!, fecha_hora_defuncion!,
+// causa_basica_cie10!, causas_intermedias(jsonb), causas_contribuyentes(jsonb),
+// clasificacion!(CHECK: natural/violenta/accidente_transito/en_investigacion),
+// numero_certificado, medico_certificante_id!, registrado_en, estado_workflow,
+// firmado_en, validado_en, certificado_en, anulado_en, payload_hash, medico_firmante_id
 export interface CertDefRow {
   id: string;
+  instancia_id: string;
   episodio_id: string;
   epicrisis_id: string;
-  paciente_id: string | null;
   fecha_hora_defuncion: Date;
-  lugar_defuncion: string;
-  causa_principal_cie10: string;
-  causas_intermedias_cie10: string[];
   causa_basica_cie10: string;
-  manera: string;
-  autopsia_realizada: boolean;
-  observaciones: string | null;
+  causas_intermedias: unknown; // jsonb
+  causas_contribuyentes: unknown; // jsonb
+  clasificacion: string;
+  numero_certificado: string | null;
+  medico_certificante_id: string;
+  registrado_en: Date;
   estado_workflow: string;
-  medico_firmante_id: string | null;
   firmado_en: Date | null;
   validado_en: Date | null;
   certificado_en: Date | null;
   anulado_en: Date | null;
-  motivo_anulacion: string | null;
   payload_hash: string | null;
-  registrado_en: Date;
-  establecimiento_id: string;
+  medico_firmante_id: string | null;
 }
 
 interface PersonalRow {
@@ -183,25 +184,23 @@ function buildEceCtx(ctx: {
 /** Calcula hash SHA-256 sobre los campos clínicos clave (inmutabilidad). */
 function computePayloadHash(row: {
   id: string;
+  instancia_id: string;
   episodio_id: string;
   fecha_hora_defuncion: Date;
-  causa_principal_cie10: string;
-  causas_intermedias_cie10: string[];
   causa_basica_cie10: string;
-  manera: string;
-  autopsia_realizada: boolean;
+  causas_intermedias: unknown;
+  clasificacion: string;
 }): string {
   return createHash("sha256")
     .update(
       JSON.stringify({
         id: row.id,
+        instancia_id: row.instancia_id,
         episodio_id: row.episodio_id,
         fecha_hora_defuncion: row.fecha_hora_defuncion,
-        causa_principal_cie10: row.causa_principal_cie10,
-        causas_intermedias_cie10: row.causas_intermedias_cie10,
         causa_basica_cie10: row.causa_basica_cie10,
-        manera: row.manera,
-        autopsia_realizada: row.autopsia_realizada,
+        causas_intermedias: row.causas_intermedias,
+        clasificacion: row.clasificacion,
       }),
     )
     .digest("hex");
@@ -275,18 +274,19 @@ export const eceCertDefRouter = router({
     const ece = buildEceCtx(ctx);
     const offset = (input.page - 1) * input.pageSize;
 
+    // Tenant scope: certificado_defuncion has no establecimiento_id col —
+    // scope via JOIN a episodio_atencion que sí tiene establecimiento_id.
     const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
       SELECT cd.*
       FROM ece.certificado_defuncion cd
-      WHERE cd.establecimiento_id = ${ece.establecimientoId}::uuid
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
         AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
         AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
         AND (${input.medicoId ?? null}::uuid IS NULL
-             OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
-        AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
-             OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
+             OR cd.medico_certificante_id = ${input.medicoId ?? null}::uuid)
         AND (${input.estado ?? null}::text IS NULL
              OR cd.estado_workflow = ${input.estado ?? null}::text)
       ORDER BY cd.fecha_hora_defuncion DESC
@@ -296,15 +296,14 @@ export const eceCertDefRouter = router({
     const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
       SELECT COUNT(*) AS total
       FROM ece.certificado_defuncion cd
-      WHERE cd.establecimiento_id = ${ece.establecimientoId}::uuid
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
         AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
         AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
              OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
         AND (${input.medicoId ?? null}::uuid IS NULL
-             OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
-        AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
-             OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
+             OR cd.medico_certificante_id = ${input.medicoId ?? null}::uuid)
         AND (${input.estado ?? null}::text IS NULL
              OR cd.estado_workflow = ${input.estado ?? null}::text)
     `;
@@ -326,20 +325,21 @@ export const eceCertDefRouter = router({
     const rows = await ctx.prisma.$queryRaw<
       (CertDefRow & {
         paciente_nombre: string | null;
-        paciente_dui: string | null;
-        episodio_tipo: string | null;
+        episodio_modalidad: string | null;
       })[]
     >`
       SELECT
         cd.*,
-        COALESCE(p."firstName" || ' ' || p."firstLastName", NULL) AS paciente_nombre,
-        p."nationalId"                                              AS paciente_dui,
-        ea.tipo                                                     AS episodio_tipo
+        COALESCE(p."firstName" || ' ' || p."firstLastName" || ' ' || COALESCE(p."firstLastName",''), NULL)
+                                         AS paciente_nombre,
+        ea.modalidad                     AS episodio_modalidad
       FROM ece.certificado_defuncion cd
-      LEFT JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
-      LEFT JOIN public."Patient"       p  ON p.id = cd.paciente_id
+      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+      -- paciente_id en cert_def no existe; Patient se obtiene vía episodio→paciente ECE→public
+      LEFT JOIN ece.paciente ep ON ep.id = ea.paciente_id
+      LEFT JOIN public."Patient" p ON p.id = ep.public_patient_id
       WHERE cd.id = ${input.id}::uuid
-        AND cd.establecimiento_id = ${ece.establecimientoId}::uuid
+        AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
       LIMIT 1
     `;
 
@@ -411,7 +411,7 @@ export const eceCertDefRouter = router({
         });
       }
 
-      // Obtener paciente_id desde el episodio.
+      // Verificar que el episodio pertenece al establecimiento.
       const episodioRows = await tx.$queryRaw<[{ paciente_id: string }?]>`
         SELECT paciente_id::text
         FROM ece.episodio_atencion
@@ -425,40 +425,33 @@ export const eceCertDefRouter = router({
           message: `Episodio no encontrado o no pertenece al establecimiento: ${input.episodioId}`,
         });
       }
-      const pacienteId = episodioRows[0].paciente_id;
 
-      const causasJson = JSON.stringify(input.causasIntermediasCie10);
+      const causasIntermediasJson = JSON.stringify(input.causasIntermedias);
+      const causasContribuyentesJson = JSON.stringify(input.causasContribuyentes);
       const fechaDefuncion = input.fechaHoraDefuncion.toISOString();
 
+      // Instancia-first: el caller ya creó documento_instancia y pasa su id.
       const rows = await tx.$queryRaw<[{ id: string }]>`
         INSERT INTO ece.certificado_defuncion (
+          instancia_id,
           episodio_id,
           epicrisis_id,
-          paciente_id,
-          establecimiento_id,
           fecha_hora_defuncion,
-          lugar_defuncion,
-          causa_principal_cie10,
-          causas_intermedias_cie10,
           causa_basica_cie10,
-          manera,
-          autopsia_realizada,
-          observaciones,
-          medico_certificante,
+          causas_intermedias,
+          causas_contribuyentes,
+          clasificacion,
+          medico_certificante_id,
           estado_workflow
         ) VALUES (
+          ${input.instanciaId}::uuid,
           ${input.episodioId}::uuid,
           ${input.epicrisisId}::uuid,
-          ${pacienteId}::uuid,
-          ${ece.establecimientoId}::uuid,
           ${fechaDefuncion}::timestamptz,
-          ${input.lugarDefuncion},
-          ${input.causaPrincipalCie10},
-          ${causasJson}::jsonb,
           ${input.causaBasicaCie10},
-          ${input.manera},
-          ${input.autopsiaRealizada},
-          ${input.observaciones ?? null},
+          ${causasIntermediasJson}::jsonb,
+          ${causasContribuyentesJson}::jsonb,
+          ${input.clasificacion},
           ${medicoPersonalId}::uuid,
           'borrador'
         )
@@ -478,11 +471,12 @@ export const eceCertDefRouter = router({
     const ece = buildEceCtx(ctx);
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
-      // Leer y bloquear el registro.
+      // Leer y bloquear el registro. Tenant scope vía episodio_atencion.
       const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        SELECT cd.* FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -523,8 +517,8 @@ export const eceCertDefRouter = router({
         emittedById: ctx.user.id,
         payload: {
           certDefId: input.id,
+          instanciaId: cert.instancia_id,
           episodioId: cert.episodio_id,
-          pacienteId: cert.paciente_id,
           payloadHash,
           medicoId: personal.id,
         },
@@ -544,9 +538,10 @@ export const eceCertDefRouter = router({
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        SELECT cd.* FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -587,9 +582,10 @@ export const eceCertDefRouter = router({
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        SELECT cd.* FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -624,8 +620,8 @@ export const eceCertDefRouter = router({
         emittedById: ctx.user.id,
         payload: {
           certDefId: input.id,
+          instanciaId: cert.instancia_id,
           episodioId: cert.episodio_id,
-          pacienteId: cert.paciente_id,
           payloadHash: cert.payload_hash,
           dirUserId: ctx.user.id,
         },
@@ -644,9 +640,10 @@ export const eceCertDefRouter = router({
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<CertDefRow[]>`
-        SELECT * FROM ece.certificado_defuncion
-        WHERE id = ${input.id}::uuid
-          AND establecimiento_id = ${ece.establecimientoId}::uuid
+        SELECT cd.* FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
         FOR UPDATE
         LIMIT 1
       `;
@@ -665,11 +662,11 @@ export const eceCertDefRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "El certificado ya está anulado." });
       }
 
+      // motivo_anulacion no existe en la tabla; se registra en historial vía outbox/audit.
       await tx.$executeRaw`
         UPDATE ece.certificado_defuncion
-        SET estado_workflow  = 'anulado',
-            anulado_en       = now(),
-            motivo_anulacion = ${input.motivoAnulacion}
+        SET estado_workflow = 'anulado',
+            anulado_en      = now()
         WHERE id = ${input.id}::uuid
           AND estado_workflow != 'certificado'
       `;

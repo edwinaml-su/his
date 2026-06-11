@@ -182,23 +182,30 @@ export const bedsideRondaRouter = router({
       const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
-      // Cargar indicaciones pendientes del turno (misma lógica que shiftQueue)
+      // Cargar indicaciones pendientes del turno.
+      // indicaciones_medicas real: instancia_id→documento_instancia.paciente_id.
+      // gs1_gln_beds no existe: cama/servicio vienen de episodio_hospitalario.
+      // gtin viene de indicacion_item primer item tipo=MEDICAMENTO.
       const indicRows = await ctx.prisma.$queryRawUnsafe<IndicacionPendienteRow[]>(
         `SELECT
-           i.id                        AS indicacion_id,
-           i.patient_id,
-           g.codigo                    AS patient_gsrn,
-           b.codigo                    AS cama,
-           b.servicio                  AS servicio,
-           i.proxima_administracion    AS hora_programada,
-           i.gtin_medicamento          AS gtin
-         FROM ece.indicaciones_medicas i
-         LEFT JOIN ece.gs1_gsrn g ON g.referencia_id = i.patient_id
+           im.id                   AS indicacion_id,
+           di.paciente_id          AS patient_id,
+           g.codigo                AS patient_gsrn,
+           eh.cama_id::text        AS cama,
+           eh.servicio_id::text    AS servicio,
+           im.fecha_hora           AS hora_programada,
+           ii.descripcion          AS gtin
+         FROM ece.indicaciones_medicas im
+         JOIN ece.documento_instancia di ON di.id = im.instancia_id
+         LEFT JOIN ece.gs1_gsrn g ON g.referencia_id = di.paciente_id
                                   AND g.tipo = 'paciente' AND g.activo = true
-         LEFT JOIN ece.gs1_gln_beds b ON b.patient_id = i.patient_id
-         WHERE i.organization_id = $1::uuid
-           AND i.estado = 'ACTIVA'
-         ORDER BY i.proxima_administracion ASC NULLS LAST
+         LEFT JOIN ece.episodio_hospitalario eh
+               ON eh.episodio_id = im.episodio_id
+              AND eh.fecha_hora_egreso IS NULL
+         LEFT JOIN ece.indicacion_item ii
+               ON ii.indicacion_id = im.id AND ii.tipo = 'MEDICAMENTO'
+         WHERE im.estado_registro = 'vigente'
+         ORDER BY im.fecha_hora ASC NULLS LAST
          LIMIT 50`,
         orgId,
       );

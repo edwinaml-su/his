@@ -201,7 +201,7 @@ async function certificarOneInTx({
     JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
     JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
     WHERE di.id = ${instanciaId}::uuid
-      AND di.estado_registro = 'activo'
+      AND di.estado_registro = 'vigente'
     FOR UPDATE
   `;
 
@@ -265,8 +265,7 @@ async function certificarOneInTx({
     UPDATE ece.documento_instancia
     SET
       estado_actual_id = ${estadoCertificado.id}::uuid,
-      version          = version + 1,
-      actualizado_en   = now()
+      version          = version + 1
     WHERE id      = ${instancia.id}::uuid
       AND version = ${instancia.version}
   `;
@@ -378,7 +377,7 @@ export const eceCertificacionRouter = router({
         LEFT JOIN public."Patient" p ON p.id = di.paciente_id
         LEFT JOIN public."User"    u ON u.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
-          AND di.estado_registro = 'activo'
+          AND di.estado_registro = 'vigente'
           ${input.cursor ? "AND di.id > $2::uuid" : ""}
         ORDER BY
           ${input.incluirCertificados
