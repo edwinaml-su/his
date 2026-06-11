@@ -6,7 +6,7 @@
  * HC-001: cubre la ausencia total de UI para crear historia clínica.
  * Campos NTEC Art. 7:
  *   - episodioId (FK obligatorio)
- *   - tipoConsulta (ingreso/control/urgencia/ambulatoria/interconsulta)
+ *   - tipoConsulta (primera_vez/subsecuente)
  *   - motivoConsulta, enfermedadActual
  *   - antecedentes (estructurado: personales/familiares/sociales/alergias)
  *   - examenFisico (sistemas + signos vitales)
@@ -37,19 +37,18 @@ import { trpc } from "@/lib/trpc/react";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
+// CHECK historia_clinica_tipo_consulta_check: primera_vez | subsecuente
 const TIPO_CONSULTA_OPTIONS = [
-  { value: "ingreso", label: "Ingreso hospitalario" },
-  { value: "control", label: "Control" },
-  { value: "urgencia", label: "Urgencia" },
-  { value: "ambulatoria", label: "Consulta ambulatoria" },
-  { value: "interconsulta", label: "Interconsulta" },
+  { value: "primera_vez", label: "Primera vez" },
+  { value: "subsecuente", label: "Subsecuente" },
 ] as const;
 
+// CHECK historia_clinica_disposicion_check: alta_ambulatoria | referencia | observacion | orden_ingreso
 const DISPOSICION_OPTIONS = [
-  { value: "ALTA", label: "Alta" },
-  { value: "INTERNAMIENTO", label: "Internamiento" },
-  { value: "REFERENCIA", label: "Referencia" },
-  { value: "OBSERVACION", label: "Observación" },
+  { value: "alta_ambulatoria", label: "Alta ambulatoria" },
+  { value: "orden_ingreso", label: "Orden de ingreso" },
+  { value: "referencia", label: "Referencia" },
+  { value: "observacion", label: "Observación" },
 ] as const;
 
 /** Regex CIE-10: letra mayúscula + 2 dígitos + subcodigo opcional */
@@ -154,10 +153,10 @@ export default function NuevaHistoriaClinicaPage() {
 
     create.mutate({
       episodioId: form.episodioId.trim(),
-      tipoConsulta: form.tipoConsulta as "ingreso" | "control" | "urgencia" | "ambulatoria" | "interconsulta",
+      tipoConsulta: form.tipoConsulta as "primera_vez" | "subsecuente",
       motivoConsulta: form.motivoConsulta.trim() || undefined,
       enfermedadActual: form.enfermedadActual.trim() || undefined,
-      disposicion: (form.disposicion as "ALTA" | "INTERNAMIENTO" | "REFERENCIA" | "OBSERVACION") || undefined,
+      disposicion: (form.disposicion as "alta_ambulatoria" | "referencia" | "observacion" | "orden_ingreso") || undefined,
       planManejo: form.planManejo.trim() || undefined,
       antecedentes:
         form.antecedentesPersonales || form.antecedentesFamiliares ||

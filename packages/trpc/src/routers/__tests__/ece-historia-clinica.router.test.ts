@@ -65,7 +65,8 @@ const SAMPLE_HC_RAW = {
   id: HC_ID,
   instancia_id: INSTANCIA_ID,
   episodio_id: EPISODIO_ID,
-  tipo_consulta: "ingreso",
+  // enum tipo_consulta remapeado a primera_vez|subsecuente (DDL vivo); "ingreso" → subsecuente.
+  tipo_consulta: "subsecuente",
   motivo_consulta: "Dolor abdominal severo",
   enfermedad_actual: null,
   disposicion: null,
@@ -223,7 +224,7 @@ describe("eceHistoriaClinicaRouter", () => {
 
       const result = await caller.create({
         episodioId: EPISODIO_ID,
-        tipoConsulta: "ingreso",
+        tipoConsulta: "subsecuente",
         motivoConsulta: "Dolor abdominal severo",
       });
 
@@ -236,7 +237,7 @@ describe("eceHistoriaClinicaRouter", () => {
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
       await expect(
-        caller.create({ episodioId: EPISODIO_ID, tipoConsulta: "ingreso", motivoConsulta: "Test" }),
+        caller.create({ episodioId: EPISODIO_ID, tipoConsulta: "subsecuente", motivoConsulta: "Test" }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });

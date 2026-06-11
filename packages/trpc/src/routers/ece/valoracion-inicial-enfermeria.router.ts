@@ -375,13 +375,22 @@ export const eceValoracionInicialRouter = router({
       }
 
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        // firmado_por FK → ece.personal_salud(id); resolver desde his_user_id
+        const personalId = await findPersonalId(tx, userId);
+        if (!personalId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No se encontró un profesional ECE asociado a su cuenta.",
+          });
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
           UPDATE ece.valoracion_inicial_enfermeria
              SET estado_registro = 'firmado',
-                 firmado_por     = ${userId}::uuid,
+                 firmado_por     = ${personalId}::uuid,
                  firmado_en      = now()
            WHERE id = ${input.id}::uuid
         `;
@@ -422,13 +431,22 @@ export const eceValoracionInicialRouter = router({
       }
 
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        // validado_por FK → ece.personal_salud(id); resolver desde his_user_id
+        const personalId = await findPersonalId(tx, userId);
+        if (!personalId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "No se encontró un profesional ECE asociado a su cuenta.",
+          });
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
           UPDATE ece.valoracion_inicial_enfermeria
              SET estado_registro = 'validado',
-                 validado_por    = ${userId}::uuid,
+                 validado_por    = ${personalId}::uuid,
                  validado_en     = now()
            WHERE id = ${input.id}::uuid
         `;

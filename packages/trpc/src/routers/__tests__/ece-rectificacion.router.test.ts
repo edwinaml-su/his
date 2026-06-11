@@ -1,9 +1,12 @@
 /**
  * Tests — eceRectificacionRouter (NTEC Art. 41 + Art. 42).
  *
+ * Modelo real: solicitud_arco (workflow state) + ece.rectificacion (registro inmutable).
+ * Ver sql/166_solicitud_arco_rectificacion_campos.sql.
+ *
  * Cubre:
  *   list:     devuelve filas filtradas por documentoInstanciaId.
- *   solicitar: crea rectificación en doc FIRMADO; rechaza doc no-FIRMADO y no-encontrado.
+ *   solicitar: crea solicitud en doc firmado; rechaza doc no-firmado y no-encontrado.
  *   aprobar:  HG-16 — sin PIN → ZodError; PIN incorrecto → UNAUTHORIZED;
  *             PIN correcto → aprueba PENDIENTE; CONFLICT si ya procesada; NOT_FOUND.
  *   rechazar: HG-16 — sin PIN → ZodError; PIN correcto → rechaza PENDIENTE;
@@ -26,19 +29,26 @@ vi.mock("@his/infrastructure", () => ({
   },
 }));
 
-type EstadoRectificacion = "PENDIENTE" | "APROBADA" | "RECHAZADA";
+// emitDomainEvent escribe a DomainEvent vía Prisma — el mock prisma cubre esto.
+vi.mock("@his/database", () => ({
+  emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-mock-id" }),
+}));
+
+type EstadoSolicitud = "PENDIENTE" | "APROBADA" | "RECHAZADA" | "EJECUTADA";
 
 // Tenant con rol DIR para procedures aprobar/rechazar.
 const TENANT_DIR = { ...MOCK_TENANT, roleCodes: ["DIR"] };
 
-const DOC_ID   = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-const RECT_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
-const USER_ID  = "cccccccc-cccc-cccc-cccc-cccccccccccc";
-const PERS_ID  = "dddddddd-dddd-dddd-dddd-dddddddddddd";
-const FIRMA_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const DOC_ID    = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+const RECT_ID   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const USER_ID   = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const PERS_ID   = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const FIRMA_ID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const PAC_ID    = "ffffffff-ffff-ffff-ffff-ffffffffffff";
 const VALID_PIN = "123456";
 
-function makeRectRow(estado: EstadoRectificacion = "PENDIENTE") {
+/** Fila de solicitud_arco mapeada al shape que devuelve `list`. */
+function makeRectRow(estado: EstadoSolicitud = "PENDIENTE") {
   return {
     id: RECT_ID,
     documento_instancia_id: DOC_ID,
@@ -46,13 +56,28 @@ function makeRectRow(estado: EstadoRectificacion = "PENDIENTE") {
     valor_anterior: "Hipertensión",
     valor_propuesto: "Hipertensión arterial esencial",
     motivo: "Precisión diagnóstica requerida por protocolo",
-    estado,
+    // list mapea EJECUTADA→FIRMADA; los tests de list reciben el shape ya mapeado.
+    estado: estado === "EJECUTADA" ? ("FIRMADA" as const) : estado,
     solicitante_id: USER_ID,
     solicitante_nombre: "Dr. Pérez",
     aprobador_id: null,
     fecha_aprobacion: null,
     motivo_rechazo: null,
     created_at: new Date().toISOString(),
+  };
+}
+
+/** Fila interna de solicitud_arco que usa findSolicitud (estado BD real). */
+function makeSolicitudRaw(estado: EstadoSolicitud = "PENDIENTE") {
+  return {
+    id: RECT_ID,
+    estado,
+    documento_instancia_id: DOC_ID,
+    solicitante_id: USER_ID,
+    campo: "diagnostico",
+    valor_anterior: "Hipertensión",
+    valor_propuesto: "Hipertensión arterial esencial",
+    motivo: "Precisión diagnóstica requerida por protocolo",
   };
 }
 
@@ -78,7 +103,6 @@ describe("eceRectificacionRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
-    // Restaurar verify a true tras clearAllMocks.
     vi.mocked(argon2.verify).mockResolvedValue(true);
   });
 
@@ -95,7 +119,7 @@ describe("eceRectificacionRouter", () => {
       expect(result[0]!.id).toBe(RECT_ID);
     });
 
-    it("devuelve lista vacía si no hay rectificaciones", async () => {
+    it("devuelve lista vacía si no hay solicitudes", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([]);
 
       const caller = eceRectificacionRouter.createCaller(makeCtx({ prisma }));
@@ -116,11 +140,12 @@ describe("eceRectificacionRouter", () => {
       motivo: "Precisión diagnóstica requerida por protocolo clínico",
     };
 
-    it("happy-path: crea rectificación y emite outbox", async () => {
+    it("happy-path: crea solicitud en doc firmado", async () => {
+      // 1ª query: documento_instancia + flujo_estado
       prisma.$queryRaw
-        .mockResolvedValueOnce([{ id: DOC_ID, estado: "FIRMADO" }])
+        .mockResolvedValueOnce([{ id: DOC_ID, paciente_public_id: PAC_ID, estado_codigo: "firmado" }])
+        // 2ª query: INSERT solicitud_arco RETURNING id
         .mockResolvedValueOnce([{ id: RECT_ID }]);
-      prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceRectificacionRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.solicitar(validInput);
@@ -136,8 +161,8 @@ describe("eceRectificacionRouter", () => {
       });
     });
 
-    it("PRECONDITION_FAILED si el documento no está FIRMADO", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: DOC_ID, estado: "BORRADOR" }]);
+    it("PRECONDITION_FAILED si el documento no está firmado", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: DOC_ID, paciente_public_id: PAC_ID, estado_codigo: "borrador" }]);
 
       const caller = eceRectificacionRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.solicitar(validInput)).rejects.toMatchObject({
@@ -173,7 +198,6 @@ describe("eceRectificacionRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()]);
-      // argon2.verify retorna false para este test.
       vi.mocked(argon2.verify).mockResolvedValueOnce(false);
 
       const caller = eceRectificacionRouter.createCaller(
@@ -184,15 +208,19 @@ describe("eceRectificacionRouter", () => {
       ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     });
 
-    it("happy-path: aprueba rectificación PENDIENTE con PIN correcto", async () => {
-      // personal_salud → firma → rectificacion
+    it("happy-path: aprueba solicitud PENDIENTE con PIN correcto", async () => {
+      // loadFirmaDir: personal_salud → firma
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()])
-        .mockResolvedValueOnce([makeRectRow("PENDIENTE")]);
-      prisma.$executeRaw
-        .mockResolvedValueOnce(1)  // UPDATE estado = APROBADA
-        .mockResolvedValueOnce(1); // outbox
+        // findSolicitud
+        .mockResolvedValueOnce([makeSolicitudRaw("PENDIENTE")])
+        // resolver personal_salud del aprobador para ece.rectificacion insert
+        .mockResolvedValueOnce([{ id: PERS_ID }]);
+      // UPDATE solicitud_arco
+      prisma.$executeRaw.mockResolvedValueOnce(1);
+      // INSERT ece.rectificacion
+      prisma.$executeRaw.mockResolvedValueOnce(1);
 
       const caller = eceRectificacionRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT_DIR }),
@@ -201,11 +229,11 @@ describe("eceRectificacionRouter", () => {
       expect(result.ok).toBe(true);
     });
 
-    it("NOT_FOUND si la rectificación no existe (post-PIN ok)", async () => {
+    it("NOT_FOUND si la solicitud no existe (post-PIN ok)", async () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()])
-        .mockResolvedValueOnce([]); // rectificacion no encontrada
+        .mockResolvedValueOnce([]); // solicitud no encontrada
 
       const caller = eceRectificacionRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT_DIR }),
@@ -219,7 +247,7 @@ describe("eceRectificacionRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()])
-        .mockResolvedValueOnce([makeRectRow("APROBADA")]);
+        .mockResolvedValueOnce([makeSolicitudRaw("APROBADA")]);
 
       const caller = eceRectificacionRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT_DIR }),
@@ -259,14 +287,12 @@ describe("eceRectificacionRouter", () => {
       ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
     });
 
-    it("happy-path: rechaza rectificación PENDIENTE con motivo y PIN correcto", async () => {
+    it("happy-path: rechaza solicitud PENDIENTE con motivo y PIN correcto", async () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()])
-        .mockResolvedValueOnce([makeRectRow("PENDIENTE")]);
-      prisma.$executeRaw
-        .mockResolvedValueOnce(1)  // UPDATE
-        .mockResolvedValueOnce(1); // outbox
+        .mockResolvedValueOnce([makeSolicitudRaw("PENDIENTE")]);
+      prisma.$executeRaw.mockResolvedValueOnce(1); // UPDATE
 
       const caller = eceRectificacionRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT_DIR }),
@@ -283,7 +309,7 @@ describe("eceRectificacionRouter", () => {
       prisma.$queryRaw
         .mockResolvedValueOnce([{ id: PERS_ID }])
         .mockResolvedValueOnce([makeFirmaRow()])
-        .mockResolvedValueOnce([makeRectRow("RECHAZADA")]);
+        .mockResolvedValueOnce([makeSolicitudRaw("RECHAZADA")]);
 
       const caller = eceRectificacionRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT_DIR }),

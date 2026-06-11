@@ -10,7 +10,7 @@
  * ---------------------------------------------------------------------------
  *   Paso 1 — iniciarAltaMedica (PHYSICIAN)
  *     Transición: episodio_atencion.estado → 'alta_pendiente'
- *     Acción: crea borrador de ece.epicrisis_egreso (EPICRISIS_EGRESO) para
+ *     Acción: crea borrador de ece.epicrisis_egreso (EPICRISIS) para
  *             que el médico complete el resumen de egreso antes del alta formal.
  *     Outbox: emite `ece.episodio.altaIniciada`
  *
@@ -404,7 +404,7 @@ export const eceEpisodioHospitalarioRouter = router({
             ea.fecha_hora_inicio        AS fecha_inicio,
             ea.fecha_hora_cierre        AS fecha_cierre,
             ea.disposicion,
-            eh.id::text                 AS episodio_hospitalario_id,
+            eh.episodio_id::text        AS episodio_hospitalario_id,
             COALESCE(aq.cnt, 0)::int    AS procedimientos_count,
             COALESCE(lab.cnt, 0)::int   AS lab_count,
             COALESCE(img.cnt, 0)::int   AS imagen_count,
@@ -517,7 +517,7 @@ export const eceEpisodioHospitalarioRouter = router({
           ea.id::text,
           ea.estado,
           ea.paciente_id::text,
-          eh.id::text AS episodio_hosp_id
+          eh.episodio_id::text AS episodio_hosp_id
         FROM ece.episodio_atencion ea
         JOIN ece.episodio_hospitalario eh ON eh.episodio_id = ea.id
         WHERE ea.id = ${input.episodioId}::uuid
@@ -541,10 +541,44 @@ export const eceEpisodioHospitalarioRouter = router({
         });
       }
 
-      // 2. Crear borrador de epicrisis
+      // 2. Crear borrador de epicrisis (instancia-first: instancia_id es NOT NULL).
+      // Paso 2a: crear documento_instancia EPICRISIS en borrador.
       const tipoEgreso = input.motivoAlta === "defuncion" ? "fallecido" : "vivo";
+      const instanciaEpiRows = await tx.$queryRaw<{ id: string }[]>`
+        INSERT INTO ece.documento_instancia (
+          tipo_documento_id,
+          episodio_id,
+          paciente_id,
+          estado_actual_id,
+          creado_por
+        )
+        SELECT
+          td.id,
+          ${input.episodioId}::uuid,
+          ea.paciente_id,
+          fe.id,
+          ps.id
+        FROM ece.tipo_documento td
+        JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+        JOIN ece.episodio_atencion ea ON ea.id = ${input.episodioId}::uuid
+        JOIN ece.personal_salud ps ON ps.his_user_id = ${ece.personalId}::uuid AND ps.activo = true
+        WHERE td.codigo = 'EPICRISIS' AND td.activo = true
+        LIMIT 1
+        RETURNING id::text
+      `;
+      const instanciaEpiId = instanciaEpiRows[0]?.id;
+      if (!instanciaEpiId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Tipo documento EPICRISIS no configurado en el motor de workflow.",
+        });
+      }
+
+      // Paso 2b: crear epicrisis_egreso con instancia ya conocida.
+      // epicrisis_egreso.episodio_id FK → ece.episodio_atencion.id.
       const epicrisisRows = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO ece.epicrisis_egreso (
+          instancia_id,
           episodio_id,
           fecha_hora_egreso,
           tipo_egreso,
@@ -557,7 +591,8 @@ export const eceEpisodioHospitalarioRouter = router({
           medico_tratante_id,
           estado_workflow
         ) VALUES (
-          ${episodio.episodio_hosp_id}::uuid,
+          ${instanciaEpiId}::uuid,
+          ${input.episodioId}::uuid,
           ${input.fechaHoraAlta.toISOString()}::timestamptz,
           ${tipoEgreso},
           ${input.motivoAlta},
@@ -572,26 +607,28 @@ export const eceEpisodioHospitalarioRouter = router({
         RETURNING id::text
       `;
 
-      const epicrisisId = epicrisisRows[0]!.id;
+      const epicrisisId = epicrisisRows[0]?.id;
+      if (!epicrisisId) {
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No se pudo crear epicrisis_egreso." });
+      }
 
-      // 3. Transicionar estado del episodio
-      await tx.$executeRaw`
-        UPDATE ece.episodio_atencion
-        SET estado = 'alta_iniciada', actualizado_en = NOW()
-        WHERE id = ${input.episodioId}::uuid
-      `;
+      // 3. Transicionar estado del episodio.
+      // 'alta_iniciada' no está en el enum ece.estado_episodio (abierto|en_curso|cerrado|cancelado).
+      // El estado de "alta en proceso" se refleja en epicrisis_egreso.estado_workflow='borrador';
+      // el episodio permanece 'en_curso' hasta confirmarAlta (→ cerrado).
+      // No se actualiza episodio_atencion.estado aquí — evita violar el enum.
 
-      // 4. Registrar log de transición
-      const observacionAlta = `Alta iniciada: ${input.motivoAlta}`;
+      // 4. Registrar log de transición (estado_previo / motivo — nombres reales de episodio_estado_log).
+      const motivoAlta = `Alta iniciada: ${input.motivoAlta}`;
       await tx.$executeRaw`
         INSERT INTO ece.episodio_estado_log
-          (episodio_id, estado_anterior, estado_nuevo, cambiado_por, observacion)
+          (episodio_id, estado_previo, estado_nuevo, cambiado_por, motivo)
         VALUES (
           ${input.episodioId}::uuid,
           'en_curso',
-          'alta_iniciada',
-          ${ece.personalId}::uuid,
-          ${observacionAlta}
+          'en_curso',
+          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
+          ${motivoAlta}
         )
       `;
 
@@ -643,7 +680,7 @@ export const eceEpisodioHospitalarioRouter = router({
         SELECT
           ea.id::text       AS episodio_id,
           ea.estado         AS estado_episodio,
-          eh.id::text       AS episodio_hosp_id,
+          eh.episodio_id::text AS episodio_hosp_id,
           epi.estado_workflow AS estado_epicrisis,
           ea.paciente_id::text
         FROM ece.episodio_atencion ea
@@ -664,10 +701,13 @@ export const eceEpisodioHospitalarioRouter = router({
 
       const row = rows[0]!;
 
-      if (row.estado_episodio !== "alta_iniciada") {
+      // 'alta_iniciada' no existe en ece.estado_episodio (abierto|en_curso|cerrado|cancelado).
+      // El flujo real: episodio permanece en 'en_curso' hasta confirmarAlta (→ cerrado).
+      // El estado de "alta en proceso" lo indica epicrisis_egreso.estado_workflow.
+      if (row.estado_episodio !== "en_curso") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `El alta solo puede confirmarse desde estado 'alta_iniciada'. Estado actual: ${row.estado_episodio}`,
+          message: `El alta solo puede confirmarse desde estado 'en_curso'. Estado actual: ${row.estado_episodio}`,
         });
       }
 
@@ -679,36 +719,40 @@ export const eceEpisodioHospitalarioRouter = router({
         });
       }
 
-      // 2. Cerrar episodio + fecha_hora_egreso (columna BD real)
+      // 2. Cerrar episodio. chk_cierre_estado exige fecha_hora_cierre IS NOT NULL
+      // cuando estado='cerrado'.
       await tx.$executeRaw`
         UPDATE ece.episodio_atencion
-        SET estado = 'cerrado', actualizado_en = NOW()
+        SET estado = 'cerrado', fecha_hora_cierre = NOW(), actualizado_en = NOW()
         WHERE id = ${input.episodioId}::uuid
       `;
 
+      // episodio_hospitalario PK es episodio_id (no tiene columna 'id').
       await tx.$executeRaw`
         UPDATE ece.episodio_hospitalario
         SET fecha_hora_egreso = NOW()
-        WHERE id = ${row.episodio_hosp_id}::uuid
+        WHERE episodio_id = ${row.episodio_hosp_id}::uuid
       `;
 
-      // 3. Liberar cama activa
+      // 3. Liberar cama activa.
+      // asignacion_cama real: episodio_id (FK a episodio_atencion), desde, hasta, motivo_cambio.
+      // No tiene activa, fecha_liberacion, episodio_hospitalario_id.
       await tx.$executeRaw`
         UPDATE ece.asignacion_cama
-        SET activa = false, fecha_liberacion = NOW()
-        WHERE episodio_hospitalario_id = ${row.episodio_hosp_id}::uuid
-          AND activa = true
+        SET hasta = NOW(), motivo_cambio = 'alta'
+        WHERE episodio_id = ${row.episodio_hosp_id}::uuid
+          AND hasta IS NULL
       `;
 
-      // 4. Registrar log de transición
+      // 4. Registrar log de transición (columnas reales: estado_previo, motivo).
       await tx.$executeRaw`
         INSERT INTO ece.episodio_estado_log
-          (episodio_id, estado_anterior, estado_nuevo, cambiado_por, observacion)
+          (episodio_id, estado_previo, estado_nuevo, cambiado_por, motivo)
         VALUES (
           ${input.episodioId}::uuid,
-          'alta_iniciada',
+          'en_curso',
           'cerrado',
-          ${ece.personalId}::uuid,
+          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
           'Alta confirmada'
         )
       `;

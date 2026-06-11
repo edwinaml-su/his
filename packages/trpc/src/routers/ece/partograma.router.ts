@@ -158,7 +158,7 @@ async function buildEceCtx(
 ): Promise<EceContext> {
   const personalRows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM ece.personal_salud
-    WHERE usuario_id = ${userId}::uuid
+    WHERE his_user_id = ${userId}::uuid
     LIMIT 1
   `;
   if (personalRows.length === 0) {

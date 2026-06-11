@@ -53,7 +53,8 @@ function makeResultadoRow(overrides: Partial<{
     interpretacion: "Dentro de rango normal",
     responsable_validacion_id: PERSONAL_ID,
     fecha_hora_informe: new Date("2026-01-15T14:00:00Z"),
-    estado_registro: overrides.estado_registro ?? "pendiente_validacion",
+    // CHECK DDL: vigente | rectificado. 'pendiente_validacion' no existe.
+    estado_registro: overrides.estado_registro ?? "vigente",
   };
 }
 
@@ -260,7 +261,8 @@ describe("eceResultadoEstudioRouter", () => {
   });
 
   // -------------------------------------------------------------------------
-  // validarResultado (antes: aprobar) — solo actualiza estado_registro
+  // validarResultado — emite evento de dominio; sin cambio de estado_registro
+  // (CHECK DDL: vigente|rectificado — 'pendiente_validacion'/'validado' no existen)
   // -------------------------------------------------------------------------
 
   describe("validarResultado", () => {
@@ -275,23 +277,11 @@ describe("eceResultadoEstudioRouter", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
-    it("lanza CONFLICT si el resultado ya está validado", async () => {
-      setupTransactionPassThrough(prisma);
-      prisma.$queryRaw.mockResolvedValueOnce([makeResultadoRow({ estado_registro: "validado" })]);
-
-      const ctx = makeMcCtx(prisma);
-      const caller = eceResultadoEstudioRouter.createCaller(ctx);
-      await expect(
-        caller.validarResultado({ resultadoId: RES_ID }),
-      ).rejects.toMatchObject({ code: "CONFLICT" });
-    });
-
-    it("valida el resultado y emite evento de dominio", async () => {
+    it("refrenda el resultado vigente y emite evento de dominio (idempotente)", async () => {
       setupTransactionPassThrough(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([makeResultadoRow()])  // findResultado
         .mockResolvedValue([]);
-      prisma.$executeRaw.mockResolvedValue(1);  // UPDATE estado_registro
       // emitDomainEvent mockeado globalmente vía vi.mock("@his/database")
 
       const ctx = makeMcCtx(prisma);

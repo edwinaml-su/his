@@ -38,6 +38,10 @@ const EPICRISIS_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const EPISODIO_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const FIRMA_ID     = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const PERSONAL_ID  = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+const PACIENTE_ID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+const TIPO_DOC_ID  = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+const ESTADO_INICIAL_ID = "11111111-1111-1111-1111-111111111111";
+const INSTANCIA_ID = "22222222-2222-2222-2222-222222222222";
 
 const MC_TENANT    = { ...MOCK_TENANT, establishmentId: "00000000-0000-0000-0000-000000000001", roleCodes: ["MC", "PHYSICIAN"] };
 const ESP_TENANT   = { ...MOCK_TENANT, establishmentId: "00000000-0000-0000-0000-000000000001", roleCodes: ["ESP"] };
@@ -127,15 +131,23 @@ describe("epicrisisRouter", () => {
   // 3 ────────────────────────────────────────────────────────────────────────
   describe("create", () => {
     it("crea epicrisis en estado borrador para rol MC", async () => {
+      // Instancia-first (DDL vivo): resuelve tipo_documento EPICRISIS, crea
+      // documento_instancia y luego inserta epicrisis_egreso con instancia_id.
       prisma.$queryRaw
-        .mockResolvedValueOnce([] as never)                                    // no existing
-        .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)                 // personal_salud
-        .mockResolvedValueOnce([{ id: EPICRISIS_ID }] as never);               // insert RETURNING
+        .mockResolvedValueOnce([] as never)                                          // no existing
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }] as never)                       // personal_salud
+        .mockResolvedValueOnce([                                                     // tipo_documento + estado inicial
+          { tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID },
+        ] as never)
+        .mockResolvedValueOnce([{ paciente_id: PACIENTE_ID }] as never)             // episodio
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }] as never)                     // documento_instancia INSERT
+        .mockResolvedValueOnce([{ id: EPICRISIS_ID }] as never);                    // epicrisis_egreso INSERT
 
       const caller = epicrisisRouter.createCaller(makeCtx({ prisma, tenant: MC_TENANT }));
       const result = await caller.create(CREATE_INPUT);
 
       expect(result.id).toBe(EPICRISIS_ID);
+      expect(result.instanciaId).toBe(INSTANCIA_ID);
     });
 
     // 4 ──────────────────────────────────────────────────────────────────────

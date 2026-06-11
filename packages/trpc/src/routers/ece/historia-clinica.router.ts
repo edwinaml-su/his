@@ -41,12 +41,19 @@ import { withEceContext } from "../../ece/rls-context";
 import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
 
 // ---------------------------------------------------------------------------
-// Enum NTEC tipo_consulta (MINSAL Acuerdo n.° 1616 Art. 7)
+// Enum tipo_consulta — alineado con CHECK historia_clinica_tipo_consulta_check
+// Mapeo app→DDL:
+//   ingreso/urgencia/ambulatoria → subsecuente (primera consulta ambulatoria)
+//   primera_vez → primera_vez (primer contacto formal)
+//   control/interconsulta → subsecuente (seguimiento o interconsulta)
+// El input acepta los valores DDL directamente para evitar lógica de mapeo frágil.
 // ---------------------------------------------------------------------------
-const TIPO_CONSULTA = ["ingreso", "control", "urgencia", "ambulatoria", "interconsulta"] as const;
+const TIPO_CONSULTA = ["primera_vez", "subsecuente"] as const;
 const tipoConsultaEnum = z.enum(TIPO_CONSULTA);
 
-const DISPOSICION_OPTIONS = ["ALTA", "INTERNAMIENTO", "REFERENCIA", "OBSERVACION"] as const;
+// CHECK historia_clinica_disposicion_check: alta_ambulatoria|referencia|observacion|orden_ingreso
+// Mapeo app→DDL: ALTA→alta_ambulatoria, INTERNAMIENTO→orden_ingreso, REFERENCIA→referencia, OBSERVACION→observacion
+const DISPOSICION_OPTIONS = ["alta_ambulatoria", "referencia", "observacion", "orden_ingreso"] as const;
 
 // ---------------------------------------------------------------------------
 // Schemas de input

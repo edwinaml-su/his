@@ -201,10 +201,13 @@ const expedientesRouter = router({
               ELSE NULL
             END                            AS dias_para_vencer
           FROM ece.episodio_atencion ea
-          WHERE ea.organization_id = ${orgId}::uuid
+          -- episodio_atencion no tiene organization_id; tenant scope vía establecimiento_id
+          JOIN ece.establecimiento est ON est.id = ea.establecimiento_id
+          WHERE est.organization_id = ${orgId}::uuid
             AND ea.fecha_vencimiento_retencion IS NOT NULL
             AND ea.fecha_vencimiento_retencion <= now() + (${input.diasProximos} || ' days')::interval
-            ${input.estadoConservacion ? Prisma.raw(`AND ea.estado_conservacion = '${input.estadoConservacion}'::ece.estado_conservacion`) : Prisma.raw("")}
+            AND (${input.estadoConservacion ?? null}::text IS NULL
+                 OR ea.estado_conservacion::text = ${input.estadoConservacion ?? null}::text)
           ORDER BY ea.fecha_vencimiento_retencion ASC
           LIMIT ${input.limit} OFFSET ${input.offset}
         `;

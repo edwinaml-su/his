@@ -35,6 +35,7 @@ const ECE_TRIAJE_ID = "22222222-0000-0000-0000-000000000002";
 const PATIENT_ID = "33333333-0000-0000-0000-000000000003";
 const EPISODIO_ID = "44444444-0000-0000-0000-000000000004";
 const PERSONAL_ID = "55555555-0000-0000-0000-000000000005";
+const INSTANCIA_ID = "66666666-0000-0000-0000-000000000006";
 const ORG_ID = MOCK_TENANT.organizationId;
 
 /** TriageEvaluation mock con nivel Manchester 2 (ORANGE → ECE "II"). */
@@ -47,13 +48,18 @@ const MOCK_HIS_TRIAJE = {
   patient: { id: PATIENT_ID },
 } as never;
 
-/** EceTriaje mock sin vínculo HIS. */
+/**
+ * EceTriaje mock sin vínculo HIS. DDL vivo: tabla ece.hoja_triaje.
+ * El vínculo HIS se guarda en evaluacion_triaje JSONB (no en columna `data`),
+ * y estado_registro tiene CHECK vigente|rectificado.
+ */
 const MOCK_ECE_TRIAJE_ROW = {
   id: ECE_TRIAJE_ID,
+  instancia_id: INSTANCIA_ID,
   episodio_id: EPISODIO_ID,
   nivel_prioridad: "II",
-  estado_registro: "borrador",
-  data: null,
+  estado_registro: "vigente",
+  evaluacion_triaje: null,
 };
 
 describe("eceBridgeTriageRouter", () => {
@@ -116,7 +122,8 @@ describe("eceBridgeTriageRouter", () => {
       const otroTriageId = "ffffffff-0000-0000-0000-ffffffffffff";
       const eceConVinculo = {
         ...MOCK_ECE_TRIAJE_ROW,
-        data: { hisTriageEvalId: otroTriageId },
+        // El router lee el vínculo desde evaluacion_triaje JSONB (DDL vivo).
+        evaluacion_triaje: { hisTriageEvalId: otroTriageId },
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$queryRaw as any).mockResolvedValueOnce([eceConVinculo]);
@@ -133,13 +140,18 @@ describe("eceBridgeTriageRouter", () => {
   // ─────────────────────────────────────────────────────────────────────────
 
   describe("createEceFromTriage", () => {
-    it("crea EceTriaje en borrador cuando firmarInmediatamente=false", async () => {
+    it("crea EceTriaje vigente cuando firmarInmediatamente=false", async () => {
       prisma.triageEvaluation.findFirst.mockResolvedValue(MOCK_HIS_TRIAJE);
 
+      // DDL vivo: patrón instancia-first. Secuencia de $queryRaw:
+      //   1. idempotencia SELECT (sin ECE previo)
+      //   2. INSERT documento_instancia RETURNING id + personal_id
+      //   3. INSERT ece.hoja_triaje RETURNING id
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$queryRaw as any)
         .mockResolvedValueOnce([]) // idempotencia: sin ECE previo
-        .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT RETURNING
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID, personal_id: PERSONAL_ID }]) // documento_instancia
+        .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT hoja_triaje RETURNING
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$executeRaw as any).mockResolvedValue(1);
@@ -154,16 +166,24 @@ describe("eceBridgeTriageRouter", () => {
 
       expect(result.ok).toBe(true);
       expect(result.nivelPrioridad).toBe("II");
-      expect(result.estadoRegistro).toBe("borrador");
+      // estado_registro siempre 'vigente' (CHECK BD: vigente|rectificado); el
+      // estado de workflow (borrador/firmado) vive en documento_instancia.
+      expect(result.estadoRegistro).toBe("vigente");
     });
 
-    it("estado firmado cuando firmarInmediatamente=true y rol NURSE está presente", async () => {
+    it("estado_registro 'vigente' aun con firmarInmediatamente=true y rol NURSE", async () => {
+      // CAMBIO DE COMPORTAMIENTO (DDL vivo): el router ya NO refleja la firma en
+      // estado_registro (CHECK vigente|rectificado). firmarInmediatamente solo
+      // alimenta el flag firmadoInmediatamente del outbox; el estado de firma
+      // del workflow vive en documento_instancia.estado_actual_id. La respuesta
+      // siempre trae estadoRegistro='vigente'.
       prisma.triageEvaluation.findFirst.mockResolvedValue(MOCK_HIS_TRIAJE);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$queryRaw as any)
         .mockResolvedValueOnce([]) // idempotencia
-        .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID, personal_id: PERSONAL_ID }]) // documento_instancia
+        .mockResolvedValueOnce([{ id: ECE_TRIAJE_ID }]); // INSERT hoja_triaje
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$executeRaw as any).mockResolvedValue(1);
@@ -180,7 +200,7 @@ describe("eceBridgeTriageRouter", () => {
         firmarInmediatamente: true,
       });
 
-      expect(result.estadoRegistro).toBe("firmado");
+      expect(result.estadoRegistro).toBe("vigente");
     });
 
     it("retorna el ECE existente si ya estaba vinculado (idempotencia)", async () => {
@@ -188,7 +208,8 @@ describe("eceBridgeTriageRouter", () => {
 
       const existente = {
         id: ECE_TRIAJE_ID,
-        estado_registro: "borrador",
+        // estado_registro CHECK BD: vigente|rectificado.
+        estado_registro: "vigente",
         nivel_prioridad: "II",
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

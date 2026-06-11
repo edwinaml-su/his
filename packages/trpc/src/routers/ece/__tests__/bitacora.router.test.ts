@@ -14,30 +14,40 @@ import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
 
 const ROW_ID    = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
-const FIRMA_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const PERSO_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const RECURSO_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const USER_ID   = MOCK_USER_ADMIN.id;
 
+// Columnas reales de ece.bitacora_acceso (remapeadas 2026-06-11):
+//   exito→autorizado, ip→ip_origen, registrado_en→ocurrido_en,
+//   user_id→auth_user_id, contexto→justificacion, + personal_id FK.
 function makeDbRow(overrides: Partial<{
   id: string;
-  firma_id: string | null;
-  user_id: string;
-  paciente_id: string | null;
+  personal_id: string | null;
+  recurso_id: string | null;
   accion: string;
-  exito: boolean;
-  contexto: string | null;
-  ip: string | null;
-  registrado_en: Date;
+  autorizado: boolean;
+  ip_origen: string | null;
+  ocurrido_en: Date;
+  justificacion: string | null;
+  auth_user_id: string | null;
+  establecimiento_id: string | null;
+  flag_outlier: boolean;
+  motivo_outlier: string | null;
 }> = {}) {
   return {
-    id:            overrides.id            ?? ROW_ID,
-    firma_id:      overrides.firma_id      ?? FIRMA_ID,
-    user_id:       overrides.user_id       ?? USER_ID,
-    paciente_id:   overrides.paciente_id   ?? null,
-    accion:        overrides.accion        ?? "view",
-    exito:         overrides.exito         ?? true,
-    contexto:      overrides.contexto      ?? null,
-    ip:            overrides.ip            ?? "127.0.0.1",
-    registrado_en: overrides.registrado_en ?? new Date("2026-01-15T10:00:00Z"),
+    id:                 overrides.id                 ?? ROW_ID,
+    personal_id:        overrides.personal_id        ?? PERSO_ID,
+    recurso_id:         overrides.recurso_id         ?? null,
+    accion:             overrides.accion             ?? "view",
+    autorizado:         overrides.autorizado         ?? true,
+    ip_origen:          overrides.ip_origen          ?? "127.0.0.1",
+    ocurrido_en:        overrides.ocurrido_en        ?? new Date("2026-01-15T10:00:00Z"),
+    justificacion:      overrides.justificacion      ?? null,
+    auth_user_id:       overrides.auth_user_id       ?? USER_ID,
+    establecimiento_id: overrides.establecimiento_id ?? null,
+    flag_outlier:       overrides.flag_outlier       ?? false,
+    motivo_outlier:     overrides.motivo_outlier     ?? null,
   };
 }
 
@@ -80,7 +90,7 @@ describe("bitacoraRouter", () => {
       expect(result.items).toHaveLength(1);
       expect(result.items[0]?.id).toBe(ROW_ID);
       expect(result.items[0]?.accion).toBe("view");
-      expect(result.items[0]?.registradoEn).toBe("2026-01-15T10:00:00.000Z");
+      expect(result.items[0]?.ocurridoEn).toBe("2026-01-15T10:00:00.000Z");
       expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
     });
 
@@ -123,7 +133,7 @@ describe("bitacoraRouter", () => {
   // -------------------------------------------------------------------------
   describe("exportCsv", () => {
     it("genera base64 con cabecera CSV y fila correcta", async () => {
-      const row = makeDbRow({ ip: "10.0.0.1", contexto: "historia::view" });
+      const row = makeDbRow({ ip_origen: "10.0.0.1", justificacion: "historia::view" });
       prisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
@@ -137,7 +147,7 @@ describe("bitacoraRouter", () => {
       // Cabecera
       expect(lines[0]).toContain("id");
       expect(lines[0]).toContain("accion");
-      expect(lines[0]).toContain("registrado_en");
+      expect(lines[0]).toContain("ocurrido_en");
 
       // Primera fila de datos
       expect(lines[1]).toContain(ROW_ID);
@@ -217,44 +227,49 @@ describe("bitacoraRouter", () => {
   // register
   // -------------------------------------------------------------------------
   describe("register", () => {
+    // El router remapeado siempre inserta ctx.user.id como auth_user_id; el
+    // auth_user_id ya no es un input del cliente, por lo que el antiguo guard
+    // "rechaza userId ajeno (FORBIDDEN)" dejó de aplicar — se reemplazó por una
+    // assertion de que el INSERT usa el id de la sesión.
     it("happy-path: inserta fila y devuelve ok:true", async () => {
       prisma.$executeRawUnsafe.mockResolvedValueOnce(1);
 
       const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.register({
-        userId:  USER_ID,
-        accion:  "view",
-        exito:   true,
-        firmaId: FIRMA_ID,
-        ip:      "192.168.1.1",
+        accion:     "view",
+        autorizado: true,
+        recursoId:  RECURSO_ID,
+        ip:         "192.168.1.1",
       });
 
       expect(result.ok).toBe(true);
       expect(prisma.$executeRawUnsafe).toHaveBeenCalledOnce();
+      // auth_user_id es el 7º parámetro del INSERT y proviene de ctx.user.id.
+      const callParams = prisma.$executeRawUnsafe.mock.calls[0]?.slice(1);
+      expect(callParams?.[6]).toBe(USER_ID);
     });
 
-    it("rechaza userId diferente al usuario en sesión (FORBIDDEN)", async () => {
-      const otroUserId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
-      const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
-      await expect(
-        caller.register({
-          userId:  otroUserId,
-          accion:  "view",
-          exito:   true,
-          firmaId: FIRMA_ID,
-        }),
-      ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    });
-
-    it("permite registro sin firmaId (log de sistema)", async () => {
+    it("registra acción no autorizada (autorizado:false)", async () => {
       prisma.$executeRawUnsafe.mockResolvedValueOnce(1);
 
       const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.register({
-        userId: USER_ID,
+        accion:     "view",
+        autorizado: false,
+      });
+
+      expect(result.ok).toBe(true);
+      const callParams = prisma.$executeRawUnsafe.mock.calls[0]?.slice(1);
+      expect(callParams?.[3]).toBe(false); // autorizado
+    });
+
+    it("permite registro sin recursoId (log de sistema)", async () => {
+      prisma.$executeRawUnsafe.mockResolvedValueOnce(1);
+
+      const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.register({
         accion: "view",
-        exito:  true,
-        // firmaId omitido → log de sistema
+        // recursoId omitido → log de sistema; autorizado usa default true
       });
 
       expect(result.ok).toBe(true);

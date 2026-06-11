@@ -1,22 +1,21 @@
 /**
  * Bridge Orden Quirúrgica (Fase 2 — ECE — Quirófano).
  *
- * Flujo atómico `programarCirugia`:
+ * Flujo atómico `programarCirugia` (instancia-first, alineado al DDL ECE):
  *   1. Valida disponibilidad de sala QX (sin overlap de cirugías activas)
- *   2. Crea ece.orden_ingreso (motivo=cirugía)
- *   3. Crea ece.episodio_atencion (modalidad=hospitalario)
+ *   2. Crea documento_instancia (ORD_ING) + ece.orden_ingreso (motivo=cirugía)
+ *   3. Crea ece.episodio_atencion (modalidad=hospitalario, estado=abierto)
  *   4. Crea ece.episodio_hospitalario (linked al episodio)
- *   5. Crea ece.preop_checklist (estado=borrador)
+ *   5. Crea documento_instancia (PREOP_CHECK) + ece.preop_checklist
  *   6. Crea ece.reserva_sala_qx (vincula sala, cirujano, anestesiólogo y horario)
  *   → emite ece.cirugia.programada en outbox
  *
- * `cancelarPrograma`:
- *   cascade soft-delete atómico:
- *   1. Cancela reserva_sala_qx (estado=cancelado)
- *   2. Cancela preop_checklist (estado=cancelado)
- *   3. Cierra episodio_atencion (estado=cancelado)
- *   4. Cancela orden_ingreso (estado_registro=cancelado)
+ * `cancelarPrograma` (cancelación mínima alineada al DDL):
+ *   1. Cancela reserva_sala_qx (estado=cancelado, con motivo)
+ *   2. Cierra episodio_atencion (estado=cancelado, fecha_hora_cierre)
  *   → emite ece.cirugia.cancelada en outbox
+ *   (orden_ingreso/preop_checklist NO se marcan en estado_registro: su CHECK es
+ *    vigente/rectificado; el workflow vive en documento_instancia.)
  *
  * Invariantes:
  *   - Sala QX libre: no debe haber reserva activa con overlap de horario.
@@ -86,8 +85,8 @@ type OrdenQxRow = {
   id: string;
   paciente_id: string;
   episodio_id: string | null;
-  estado_registro: string;
   reserva_sala_qx_id: string | null;
+  reserva_estado: string | null;
 };
 
 type ProgramacionRow = {
@@ -112,17 +111,20 @@ type RawClient = {
 // Helpers SQL
 // =============================================================================
 
-async function findPersonalSaludPorAuthUser(
+async function findPersonalSaludPorUsuario(
   prisma: RawClient,
-  authUserId: string,
+  hisUserId: string,
 ): Promise<PersonalSaludRow | null> {
+  // El profesional ECE se resuelve por his_user_id = User.id del HIS (ctx.user.id),
+  // igual que el router canónico orden-ingreso.router.ts. (auth_user_id es el id de
+  // Supabase auth, NO el de ctx.user — usarlo aquí devolvía null siempre.)
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<PersonalSaludRow[]>)`
     SELECT id, nombre_completo, establecimiento_id
     FROM ece.personal_salud
-    WHERE auth_user_id = ${authUserId}::uuid
+    WHERE his_user_id = ${hisUserId}::uuid
       AND activo = true
     LIMIT 1
   `;
@@ -179,14 +181,18 @@ async function findOrdenQx(
   prisma: RawClient,
   ordenId: string,
 ): Promise<OrdenQxRow | null> {
+  // El estado cancelable se evalúa por la reserva (programado/confirmado), no por
+  // estado_registro (que es la vigencia del registro: vigente/rectificado).
   const rows = await (prisma.$queryRaw as (
     tpl: TemplateStringsArray,
     ...vals: unknown[]
   ) => Promise<OrdenQxRow[]>)`
-    SELECT id, paciente_id, episodio_id, estado_registro, reserva_sala_qx_id
-    FROM ece.orden_ingreso
-    WHERE id = ${ordenId}::uuid
-      AND motivo_ingreso_tipo = 'cirugia'
+    SELECT oi.id, oi.paciente_id, oi.episodio_id, oi.reserva_sala_qx_id,
+           r.estado AS reserva_estado
+    FROM ece.orden_ingreso oi
+    LEFT JOIN ece.reserva_sala_qx r ON r.id = oi.reserva_sala_qx_id
+    WHERE oi.id = ${ordenId}::uuid
+      AND oi.motivo_ingreso_tipo = 'cirugia'
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -209,7 +215,7 @@ export const eceBridgeCirugiaRouter = router({
     .input(programarCirugiaInput)
     .mutation(async ({ ctx, input }) => {
       // ── 1. Resolver personal ECE del usuario en sesión ──────────────────
-      const personal = await findPersonalSaludPorAuthUser(ctx.prisma, ctx.user.id);
+      const personal = await findPersonalSaludPorUsuario(ctx.prisma, ctx.user.id);
       if (!personal) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -248,13 +254,53 @@ export const eceBridgeCirugiaRouter = router({
         async (tx) => {
         const rawTx = tx as unknown as RawClient;
 
-        // Paso 1: orden_ingreso (motivo=cirugía)
         const motivoTexto = input.motivoIngreso ?? `Procedimiento CIE-10: ${input.procedimientoCie10}`;
+
+        // Paso 1a: resolver tipo_documento ORD_ING + estado inicial. orden_ingreso.instancia_id
+        // es NOT NULL → patrón instancia-first (canónico orden-ingreso.router.ts).
+        const ordTipoRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ tipo_doc_id: string; estado_inicial_id: string }>>)`
+          SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
+          FROM ece.tipo_documento td
+          JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+          WHERE td.codigo = 'ORD_ING'
+          LIMIT 1
+        `;
+        if (ordTipoRows.length === 0) {
+          throw new Error("Tipo de documento ORD_ING no configurado en el catálogo ECE.");
+        }
+        const { tipo_doc_id: ordTipoId, estado_inicial_id: ordEstadoId } = ordTipoRows[0]!;
+
+        // Paso 1b: documento_instancia de la orden (workflow vive aquí, no en estado_registro)
+        const ordInstanciaRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<IdRow[]>)`
+          INSERT INTO ece.documento_instancia
+            (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+          VALUES (
+            ${ordTipoId}::uuid,
+            NULL,
+            ${input.pacienteId}::uuid,
+            ${ordEstadoId}::uuid,
+            ${personal.id}::uuid
+          )
+          RETURNING id::text
+        `;
+        const ordInstanciaId = ordInstanciaRows[0]?.id;
+        if (!ordInstanciaId) throw new Error("No se pudo crear documento_instancia para la orden de ingreso.");
+
+        // Paso 1c: orden_ingreso (motivo=cirugía). Valores alineados al DDL:
+        //   modalidad ∈ {hospitalizacion, hospital_de_dia}; procedencia ∈ (6 valores);
+        //   estado_registro default 'vigente' (no se setea 'borrador').
         const ordenRows = await (rawTx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<IdRow[]>)`
           INSERT INTO ece.orden_ingreso (
+            instancia_id,
             paciente_id,
             establecimiento_id,
             motivo_ingreso,
@@ -263,23 +309,20 @@ export const eceBridgeCirugiaRouter = router({
             circunstancia_ingreso,
             procedencia,
             modalidad,
-            estado_registro,
             fecha_hora_orden,
-            medico_ordena,
-            registrado_en
+            medico_ordena
           ) VALUES (
+            ${ordInstanciaId}::uuid,
             ${input.pacienteId}::uuid,
             ${personal.establecimiento_id}::uuid,
             ${motivoTexto},
             'cirugia',
             ${input.procedimientoCie10},
             'programada',
-            'interno',
-            'hospitalario',
-            'borrador',
+            'consulta_externa',
+            'hospitalizacion',
             ${fechaInicio}::timestamptz,
-            ${personal.id}::uuid,
-            now()
+            ${personal.id}::uuid
           )
           RETURNING id
         `;
@@ -299,15 +342,17 @@ export const eceBridgeCirugiaRouter = router({
             motivo,
             fecha_hora_inicio,
             estado,
+            creado_por,
             creado_en
           ) VALUES (
             ${input.pacienteId}::uuid,
             ${personal.establecimiento_id}::uuid,
             'hospitalario',
-            'cirugia',
+            'hospitalizacion',
             ${motivoTexto},
             ${fechaInicio}::timestamptz,
-            'programado',
+            'abierto',
+            ${personal.id}::uuid,
             now()
           )
           RETURNING id
@@ -325,15 +370,13 @@ export const eceBridgeCirugiaRouter = router({
             circunstancia_ingreso,
             procedencia_ingreso,
             modalidad_hospitalaria,
-            fecha_hora_orden_ingreso,
-            servicio_ingreso_id
+            fecha_hora_orden_ingreso
           ) VALUES (
             ${episodioId}::uuid,
             'programada',
             'interno',
             'hospitalario',
-            ${fechaInicio}::timestamptz,
-            NULL
+            ${fechaInicio}::timestamptz
           )
         `;
 
@@ -501,21 +544,20 @@ export const eceBridgeCirugiaRouter = router({
             r.fecha_inicio     AS fecha_programada,
             r.duracion_estimada_min AS duracion_min,
             r.procedimiento_cie10,
-            p.nombre_completo  AS paciente_nombre,
+            TRIM(CONCAT_WS(' ', pt."firstName", pt."lastName")) AS paciente_nombre,
             c.nombre_completo  AS cirujano_nombre,
             a.nombre_completo  AS anestesiologo_nombre,
             s.nombre           AS sala_nombre,
             r.estado,
             pc.id              AS preop_checklist_id
           FROM ece.reserva_sala_qx r
-          JOIN ece.paciente p       ON p.id = r.episodio_id  -- JOIN via episodio
-          -- El paciente se resuelve por la orden_ingreso
           JOIN ece.orden_ingreso oi ON oi.id = r.orden_qx_id
           JOIN ece.paciente pac     ON pac.id = oi.paciente_id
+          JOIN public."Patient" pt  ON pt.id = pac.public_patient_id
           JOIN ece.personal_salud c ON c.id = r.cirujano_id
           LEFT JOIN ece.personal_salud a ON a.id = r.anestesiologo_id
           JOIN ece.sala_qx s        ON s.id = r.sala_qx_id
-          LEFT JOIN ece.preop_checklist pc ON pc.orden_id = r.orden_qx_id
+          LEFT JOIN ece.preop_checklist pc ON pc.episodio_hospitalario_id = r.episodio_id
           WHERE r.sala_qx_id = ${input.salaQxId}::uuid
             AND r.fecha_inicio >= ${diaInicio}::timestamptz
             AND r.fecha_inicio <= ${diaFin}::timestamptz
@@ -532,7 +574,7 @@ export const eceBridgeCirugiaRouter = router({
             r.fecha_inicio     AS fecha_programada,
             r.duracion_estimada_min AS duracion_min,
             r.procedimiento_cie10,
-            pac.nombre_completo AS paciente_nombre,
+            TRIM(CONCAT_WS(' ', pt."firstName", pt."lastName")) AS paciente_nombre,
             c.nombre_completo   AS cirujano_nombre,
             a.nombre_completo   AS anestesiologo_nombre,
             s.nombre            AS sala_nombre,
@@ -541,10 +583,11 @@ export const eceBridgeCirugiaRouter = router({
           FROM ece.reserva_sala_qx r
           JOIN ece.orden_ingreso oi ON oi.id = r.orden_qx_id
           JOIN ece.paciente pac     ON pac.id = oi.paciente_id
+          JOIN public."Patient" pt  ON pt.id = pac.public_patient_id
           JOIN ece.personal_salud c ON c.id = r.cirujano_id
           LEFT JOIN ece.personal_salud a ON a.id = r.anestesiologo_id
           JOIN ece.sala_qx s        ON s.id = r.sala_qx_id
-          LEFT JOIN ece.preop_checklist pc ON pc.orden_id = r.orden_qx_id
+          LEFT JOIN ece.preop_checklist pc ON pc.episodio_hospitalario_id = r.episodio_id
           WHERE r.fecha_inicio >= ${diaInicio}::timestamptz
             AND r.fecha_inicio <= ${diaFin}::timestamptz
             AND r.estado <> 'cancelado'
@@ -575,7 +618,7 @@ export const eceBridgeCirugiaRouter = router({
     .input(cancelarProgramaInput)
     .mutation(async ({ ctx, input }) => {
       // ── 1. Resolver personal ECE ─────────────────────────────────────────
-      const personal = await findPersonalSaludPorAuthUser(ctx.prisma, ctx.user.id);
+      const personal = await findPersonalSaludPorUsuario(ctx.prisma, ctx.user.id);
       if (!personal) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -591,10 +634,13 @@ export const eceBridgeCirugiaRouter = router({
           message: "Orden quirúrgica no encontrada.",
         });
       }
-      if (!["borrador", "validado", "programado", "confirmado"].includes(orden.estado_registro)) {
+      // Cancelable si la reserva está programada o confirmada (no en_curso/finalizada
+      // ni ya cancelada). El estado de workflow vive en la reserva/episodio, no en
+      // estado_registro (que es vigente/rectificado).
+      if (orden.reserva_estado !== null && !["programado", "confirmado"].includes(orden.reserva_estado)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: `La orden en estado '${orden.estado_registro}' no puede cancelarse.`,
+          message: `La reserva en estado '${orden.reserva_estado}' no puede cancelarse.`,
         });
       }
 
@@ -621,22 +667,9 @@ export const eceBridgeCirugiaRouter = router({
           `;
         }
 
-        // Paso 2: cancelar preop_checklist
-        // Se filtra por episodio_hospitalario_id (no existe orden_id ni columna estado;
-        // el campo correcto es estado_registro — HE-11 fix).
-        if (orden.episodio_id) {
-          await (rawTx.$executeRaw as (
-            tpl: TemplateStringsArray,
-            ...vals: unknown[]
-          ) => Promise<number>)`
-            UPDATE ece.preop_checklist
-            SET estado_registro = 'cancelado'
-            WHERE episodio_hospitalario_id = ${orden.episodio_id}::uuid
-              AND estado_registro <> 'firmado'
-          `;
-        }
-
-        // Paso 3: cerrar episodio_atencion si existe
+        // Paso 2: cerrar episodio_atencion como cancelado.
+        // chk_cierre_estado exige fecha_hora_cierre IS NOT NULL cuando estado='cancelado'
+        // (la columna es fecha_hora_cierre, no fecha_hora_fin).
         if (orden.episodio_id) {
           await (rawTx.$executeRaw as (
             tpl: TemplateStringsArray,
@@ -644,23 +677,20 @@ export const eceBridgeCirugiaRouter = router({
           ) => Promise<number>)`
             UPDATE ece.episodio_atencion
             SET estado = 'cancelado',
-                fecha_hora_fin = now()
+                fecha_hora_cierre = now()
             WHERE id = ${orden.episodio_id}::uuid
           `;
         }
 
-        // Paso 4: cancelar orden_ingreso
-        await (rawTx.$executeRaw as (
-          tpl: TemplateStringsArray,
-          ...vals: unknown[]
-        ) => Promise<number>)`
-          UPDATE ece.orden_ingreso
-          SET estado_registro = 'cancelado',
-              motivo_cancelacion = ${input.motivo}
-          WHERE id = ${input.ordenId}::uuid
-        `;
+        // Nota: la cancelación de orden_ingreso y preop_checklist NO se escribe en
+        // estado_registro (CHECK = vigente/rectificado — no admite 'cancelado'). El
+        // motivo queda en reserva_sala_qx.motivo_cancelacion (Paso 1) y en el evento
+        // de outbox; la cirugía desaparece del cronograma porque listProgramacionDia
+        // filtra reserva.estado <> 'cancelado'. La anulación formal del documento (vía
+        // documento_instancia → 'anulado') requiere una transición borrador→anulado en
+        // el catálogo del motor — pendiente como refinamiento de workflow.
 
-        // Paso 5: outbox — ece.cirugia.cancelada
+        // Paso 3: outbox — ece.cirugia.cancelada
         await emitDomainEvent(tx, {
           organizationId: ctx.tenant.organizationId,
           eventType: "ece.cirugia.cancelada",

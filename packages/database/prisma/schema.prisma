@@ -5658,18 +5658,18 @@ model EceEpicrisisEgreso {
 /// 3.16 Certificado de Defuncion — HISTORICO, inmutable
 /// Columnas workflow agregadas en S2-Tier4 (B-01, NTEC Art. 40): estado_workflow,
 /// firmado_en, validado_en, certificado_en, anulado_en, payload_hash, medico_firmante_id.
+/// Columnas legales SV agregadas en migración 167 (B3): lugar_defuncion,
+/// causa_principal_cie10, manera, autopsia_realizada, observaciones, motivo_anulacion.
 model EceCertificadoDefuncion {
   id                   String    @id @default(uuid()) @db.Uuid
-  instanciaId          String?   @map("instancia_id") @db.Uuid
+  instanciaId          String    @map("instancia_id") @db.Uuid
   episodioId           String    @map("episodio_id") @db.Uuid
-  pacienteId           String?   @map("paciente_id") @db.Uuid
   epicrisisId          String    @map("epicrisis_id") @db.Uuid
   fechaHoraDefuncion   DateTime  @map("fecha_hora_defuncion") @db.Timestamptz()
-  causaBasicaCie10     String    @map("causa_basica_cie10") @db.VarChar(10)
+  causaBasicaCie10     String    @map("causa_basica_cie10")
   causasIntermedias    Json?     @map("causas_intermedias")
-  clasificacion        String    @db.VarChar(30)
-  data                 Json?
-  medicoCertificanteId String    @map("medico_certificante") @db.Uuid
+  clasificacion        String
+  medicoCertificanteId String    @map("medico_certificante_id") @db.Uuid
   registradoEn         DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoWorkflow       String    @default("borrador") @map("estado_workflow")
   firmadoEn            DateTime? @map("firmado_en") @db.Timestamptz()
@@ -5678,6 +5678,13 @@ model EceCertificadoDefuncion {
   anuladoEn            DateTime? @map("anulado_en") @db.Timestamptz()
   payloadHash          String?   @map("payload_hash")
   medicoFirmanteId     String?   @map("medico_firmante_id") @db.Uuid
+  // Campos legales SV — migración 167
+  lugarDefuncion       String?   @map("lugar_defuncion")
+  causaPrincipalCie10  String?   @map("causa_principal_cie10")
+  manera               String?
+  autopsiaRealizada    Boolean?  @map("autopsia_realizada")
+  observaciones        String?
+  motivoAnulacion      String?   @map("motivo_anulacion")
 
   episodio           EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   epicrisis          EceEpicrisisEgreso  @relation(fields: [epicrisisId], references: [id])
@@ -5885,15 +5892,27 @@ model EceValoracionInicialEnfermeria {
 // Modelos SQL 67–84 (tablas creadas en BD; stubs sin relaciones para compilar)
 // -----------------------------------------------------------------------------
 
-/// Lista de verificacion preoperatoria (SQL 67)
+/// Lista de verificacion preoperatoria (SQL 67) — paridad con DDL real:
+/// se enlaza por episodio_hospitalario_id (FK a episodio_hospitalario.episodio_id),
+/// NO por episodio_id. Los items clinicos son columnas tipadas (no un blob `datos`).
 model EcePreopChecklist {
-  id              String    @id @default(uuid()) @db.Uuid
-  episodioId      String    @map("episodio_id") @db.Uuid
-  instanciaId     String?   @map("instancia_id") @db.Uuid
-  datos           Json?
-  registradoPor   String    @map("registrado_por") @db.Uuid
-  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
-  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  id                              String    @id @default(uuid()) @db.Uuid
+  instanciaId                     String    @map("instancia_id") @db.Uuid
+  episodioHospitalarioId          String    @map("episodio_hospitalario_id") @db.Uuid
+  ayunoHoras                      Int?      @map("ayuno_horas") @db.SmallInt
+  marcapasos                      Boolean?
+  alergias                        String?
+  anticoagulantes                 Boolean?
+  retiroProtesis                  Boolean?  @map("retiro_protesis")
+  identificacionPacienteVerificada Boolean? @map("identificacion_paciente_verificada")
+  sitioMarcado                    Boolean?  @map("sitio_marcado")
+  consentimientoFirmado           Boolean?  @map("consentimiento_firmado")
+  riesgoAnestesicoAsa             Int?      @map("riesgo_anestesico_asa") @db.SmallInt
+  estadoRegistro                  String    @default("vigente") @map("estado_registro")
+  firmadoPor                      String?   @map("firmado_por") @db.Uuid
+  firmadoEn                       DateTime? @map("firmado_en") @db.Timestamptz()
+  registradoPor                   String    @map("registrado_por") @db.Uuid
+  registradoEn                    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
 
   @@map("preop_checklist")
   @@schema("ece")

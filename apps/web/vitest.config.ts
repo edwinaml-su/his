@@ -11,6 +11,9 @@ export default defineConfig({
     name: "web",
     environment: "jsdom",
     globals: false,
+    // Neutraliza la navegación de anclas en jsdom (flake "Not implemented:
+    // navigation" que en CI sale como unhandled error → exit 1). Ver el archivo.
+    setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/__tests__/**/*.test.{ts,tsx}"],
     // Excluye explícitamente la carpeta E2E para que no la intente correr Vitest.
     exclude: ["**/node_modules/**", "**/.next/**", "e2e/**"],

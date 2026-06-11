@@ -290,8 +290,53 @@ export const epicrisisRouter = router({
       const medicoId = personalRows[0].id;
       const tipoEgreso = input.motivoEgreso === "fallecido" ? "fallecido" : "vivo";
 
+      // instancia_id es NOT NULL en epicrisis_egreso — instancia-first igual que bridge-cirugia.
+      const tipoDocRows = await tx.$queryRaw<[{ tipo_doc_id: string; estado_inicial_id: string }?]>`
+        SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
+        FROM ece.tipo_documento td
+        JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+        WHERE td.codigo = 'EPICRISIS'
+        LIMIT 1
+      `;
+      if (!tipoDocRows[0]) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Tipo de documento EPICRISIS no configurado en el catálogo ECE.",
+        });
+      }
+      const { tipo_doc_id, estado_inicial_id } = tipoDocRows[0];
+
+      const episodioRows = await tx.$queryRaw<[{ paciente_id: string }?]>`
+        SELECT paciente_id::text
+        FROM ece.episodio_atencion
+        WHERE id = ${input.episodioHospitalarioId}::uuid
+        LIMIT 1
+      `;
+      if (!episodioRows[0]) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Episodio no encontrado: ${input.episodioHospitalarioId}`,
+        });
+      }
+      const pacienteId = episodioRows[0].paciente_id;
+
+      const instanciaRows = await tx.$queryRaw<[{ id: string }]>`
+        INSERT INTO ece.documento_instancia
+          (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+        VALUES (
+          ${tipo_doc_id}::uuid,
+          ${input.episodioHospitalarioId}::uuid,
+          ${pacienteId}::uuid,
+          ${estado_inicial_id}::uuid,
+          ${medicoId}::uuid
+        )
+        RETURNING id::text
+      `;
+      const instanciaId = instanciaRows[0]!.id;
+
       const rows = await tx.$queryRaw<[{ id: string }]>`
         INSERT INTO ece.epicrisis_egreso (
+          instancia_id,
           episodio_id,
           fecha_hora_egreso,
           tipo_egreso,
@@ -305,6 +350,7 @@ export const epicrisisRouter = router({
           medico_tratante_id,
           estado_workflow
         ) VALUES (
+          ${instanciaId}::uuid,
           ${input.episodioHospitalarioId}::uuid,
           ${input.fechaEgreso}::timestamptz,
           ${tipoEgreso},
@@ -321,7 +367,7 @@ export const epicrisisRouter = router({
         RETURNING id::text
       `;
 
-      return { id: rows[0]!.id };
+      return { id: rows[0]!.id, instanciaId };
     });
   }),
 

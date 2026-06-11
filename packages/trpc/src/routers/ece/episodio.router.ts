@@ -182,19 +182,19 @@ export const eceEpisodioRouter = router({
             ea.paciente_id::text,
             'ambulatorio' AS tipo,
             ea.estado,
-            ea.motivo_consulta  AS motivo,
-            ea.encounter_id::text,
+            ea.motivo            AS motivo,
+            ea.public_encounter_id::text AS encounter_id,
             ea.establecimiento_id::text,
             ea.creado_por::text,
             ea.creado_en,
             ea.actualizado_en
           FROM ece.episodio_atencion ea
           WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
-            AND ea.tipo = 'ambulatorio'
+            AND ea.modalidad = 'ambulatorio'
             AND (${input.pacienteId ?? null}::uuid IS NULL
                  OR ea.paciente_id = ${input.pacienteId ?? null}::uuid)
             AND (${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date IS NULL
-                 OR ea.creado_en::date = ${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date)
+                 OR ea.fecha_hora_inicio::date = ${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date)
             AND (${input.estado ?? null}::text IS NULL
                  OR ea.estado = ${input.estado ?? null}::text)
             AND (${input.cursor ?? null}::uuid IS NULL
@@ -224,23 +224,23 @@ export const eceEpisodioRouter = router({
             ea.paciente_id::text,
             'hospitalario' AS tipo,
             ea.estado,
-            ea.motivo_consulta  AS motivo,
-            NULL::text          AS encounter_id,
+            ea.motivo            AS motivo,
+            NULL::text           AS encounter_id,
             ea.establecimiento_id::text,
             ea.creado_por::text,
             ea.creado_en,
             ea.actualizado_en,
-            eh.orden_ingreso_id::text,
-            eh.sala_id::text,
-            eh.fecha_ingreso,
-            eh.fecha_egreso
+            eh.episodio_id::text AS orden_ingreso_id,
+            eh.servicio_id::text AS sala_id,
+            eh.fecha_hora_orden_ingreso AS fecha_ingreso,
+            eh.fecha_hora_egreso        AS fecha_egreso
           FROM ece.episodio_hospitalario eh
-          JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_atencion_id
+          JOIN ece.episodio_atencion ea ON ea.id = eh.episodio_id
           WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
             AND (${input.salaId ?? null}::uuid IS NULL
-                 OR eh.sala_id = ${input.salaId ?? null}::uuid)
+                 OR eh.servicio_id = ${input.salaId ?? null}::uuid)
             AND (${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date IS NULL
-                 OR eh.fecha_ingreso::date = ${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date)
+                 OR eh.fecha_hora_orden_ingreso::date = ${input.fecha ? input.fecha.toISOString().split("T")[0] : null}::date)
             AND (${input.cursor ?? null}::uuid IS NULL
                  OR ea.id > ${input.cursor ?? null}::uuid)
           ORDER BY ea.id ASC
@@ -264,10 +264,10 @@ export const eceEpisodioRouter = router({
         SELECT
           ea.id::text,
           ea.paciente_id::text,
-          ea.tipo,
+          ea.modalidad         AS tipo,
           ea.estado,
-          ea.motivo_consulta  AS motivo,
-          ea.encounter_id::text,
+          ea.motivo            AS motivo,
+          ea.public_encounter_id::text AS encounter_id,
           ea.establecimiento_id::text,
           ea.creado_por::text,
           ea.creado_en,
@@ -302,11 +302,12 @@ export const eceEpisodioRouter = router({
       const rows = await withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
         return tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.episodio_atencion
-            (paciente_id, tipo, estado, motivo_consulta, encounter_id,
-             establecimiento_id, creado_por, creado_en)
+            (paciente_id, modalidad, servicio_categoria, estado, motivo,
+             public_encounter_id, establecimiento_id, creado_por, fecha_hora_inicio)
           VALUES (
             ${input.pacienteId}::uuid,
             'ambulatorio',
+            'consulta_externa',
             'abierto',
             ${input.motivoConsulta},
             ${input.encounterId ?? null}::uuid,
@@ -351,14 +352,16 @@ export const eceEpisodioRouter = router({
       const fechaIngreso = (input.fechaIngreso ?? new Date()).toISOString();
 
       const result = await withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
-        // 1. Insertar episodio base
+        // 1. Insertar episodio base.
+        // servicio_categoria NOT NULL: 'hospitalizacion' es el valor correcto para hospitalario.
         const atencionRows = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.episodio_atencion
-            (paciente_id, tipo, estado, motivo_consulta,
-             establecimiento_id, creado_por, creado_en)
+            (paciente_id, modalidad, servicio_categoria, estado, motivo,
+             establecimiento_id, creado_por, fecha_hora_inicio)
           VALUES (
             ${input.pacienteId}::uuid,
             'hospitalario',
+            'hospitalizacion',
             'abierto',
             ${input.motivoIngreso},
             ${ece.establecimientoId}::uuid,
@@ -370,30 +373,36 @@ export const eceEpisodioRouter = router({
 
         const episodioId = atencionRows[0]!.id;
 
-        // 2. Insertar episodio hospitalario
-        const hospRows = await tx.$queryRaw<{ id: string }[]>`
+        // 2. Insertar episodio_hospitalario.
+        // PK = episodio_id (no hay columna id). salaId → servicio_id. No hay orden_ingreso_id.
+        // Columnas reales: episodio_id, circunstancia_ingreso!, procedencia_ingreso!, modalidad_hospitalaria!, servicio_id, cama_id, fecha_hora_orden_ingreso!
+        await tx.$executeRaw`
           INSERT INTO ece.episodio_hospitalario
-            (episodio_atencion_id, orden_ingreso_id, sala_id, fecha_ingreso)
+            (episodio_id, circunstancia_ingreso, procedencia_ingreso, modalidad_hospitalaria,
+             servicio_id, cama_id, fecha_hora_orden_ingreso)
           VALUES (
             ${episodioId}::uuid,
-            ${input.ordenIngresoId}::uuid,
+            'hospitalizacion',
+            'espontaneo',
+            'hospitalizacion',
             ${input.salaId}::uuid,
+            ${input.camaId}::uuid,
             ${fechaIngreso}::timestamptz
           )
-          RETURNING id::text
         `;
 
-        const episodioHospId = hospRows[0]!.id;
+        // episodioHospId = episodioId (misma PK compartida).
+        const episodioHospId = episodioId;
 
-        // 3. Asignar cama inicial
+        // 3. Asignar cama inicial.
+        // asignacion_cama real: episodio_id (FK a episodio_atencion), cama_id, desde.
         await tx.$executeRaw`
           INSERT INTO ece.asignacion_cama
-            (episodio_hospitalario_id, cama_id, fecha_asignacion, activa)
+            (episodio_id, cama_id, desde)
           VALUES (
-            ${episodioHospId}::uuid,
+            ${episodioId}::uuid,
             ${input.camaId}::uuid,
-            ${fechaIngreso}::timestamptz,
-            true
+            ${fechaIngreso}::timestamptz
           )
         `;
 
@@ -488,12 +497,12 @@ export const eceEpisodioRouter = router({
         // 4. Registrar en bitácora
         await tx.$executeRaw`
           INSERT INTO ece.episodio_estado_log
-            (episodio_id, estado_anterior, estado_nuevo, cambiado_por, observacion)
+            (episodio_id, estado_previo, estado_nuevo, cambiado_por, motivo)
           VALUES (
             ${input.episodioId}::uuid,
             ${estadoActual},
             ${input.nuevoEstado},
-            ${ece.personalId}::uuid,
+            (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
             ${input.observacion ?? null}
           )
         `;
@@ -531,11 +540,14 @@ export const eceEpisodioRouter = router({
 
       return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
         // Verificar que no haya asignación activa duplicada
+        // asignacion_cama usa episodio_id (FK a episodio_atencion) y desde/hasta para el rango.
+        // "Activa" = hasta IS NULL. episodioHospitalarioId en este router es el episodio_atencion.id
+        // (PK compartida con episodio_hospitalario).
         const activas = await tx.$queryRaw<{ id: string }[]>`
           SELECT id::text
           FROM ece.asignacion_cama
-          WHERE episodio_hospitalario_id = ${input.episodioHospitalarioId}::uuid
-            AND activa = true
+          WHERE episodio_id = ${input.episodioHospitalarioId}::uuid
+            AND hasta IS NULL
           LIMIT 1
         `;
 
@@ -548,12 +560,11 @@ export const eceEpisodioRouter = router({
 
         const rows = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.asignacion_cama
-            (episodio_hospitalario_id, cama_id, fecha_asignacion, activa)
+            (episodio_id, cama_id, desde)
           VALUES (
             ${input.episodioHospitalarioId}::uuid,
             ${input.camaId}::uuid,
-            ${input.fechaAsignacion.toISOString()}::timestamptz,
-            true
+            ${input.fechaAsignacion.toISOString()}::timestamptz
           )
           RETURNING id::text
         `;
@@ -573,10 +584,10 @@ export const eceEpisodioRouter = router({
       return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
         const rows = await tx.$queryRaw<{ id: string }[]>`
           UPDATE ece.asignacion_cama
-          SET activa = false,
-              fecha_liberacion = ${input.fechaLiberacion.toISOString()}::timestamptz
+          SET hasta = ${input.fechaLiberacion.toISOString()}::timestamptz,
+              motivo_cambio = 'liberacion'
           WHERE id = ${input.asignacionId}::uuid
-            AND activa = true
+            AND hasta IS NULL
           RETURNING id::text
         `;
 

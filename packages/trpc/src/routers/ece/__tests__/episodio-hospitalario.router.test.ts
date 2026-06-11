@@ -319,7 +319,9 @@ describe("eceEpisodioHospitalarioRouter", () => {
         paciente_id: PACIENTE_ID,
         episodio_hosp_id: EPISODIO_HOSP_ID,
       }]);
-      // INSERT epicrisis → retorna epicrisisId
+      // INSERT documento_instancia EPICRISIS (instancia-first) → retorna instanciaEpiId
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: "di-epi-0000-0000-000000000001" }]);
+      // INSERT epicrisis_egreso → retorna epicrisisId
       prisma.$queryRaw.mockResolvedValueOnce([{ id: EPICRISIS_ID }]);
       // UPDATE estado + INSERT estado_log ya mockeados con $executeRaw → 0
 
@@ -374,7 +376,7 @@ describe("eceEpisodioHospitalarioRouter", () => {
     it("9. happy-path: cierra episodio, libera cama, emite altaConfirmada en mismo tx (HD-10)", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{
         episodio_id: EPISODIO_ATEN_ID,
-        estado_episodio: "alta_iniciada",
+        estado_episodio: "en_curso",
         episodio_hosp_id: EPISODIO_HOSP_ID,
         estado_epicrisis: "firmado",
         paciente_id: PACIENTE_ID,
@@ -399,7 +401,7 @@ describe("eceEpisodioHospitalarioRouter", () => {
     it("10. CONFLICT si la epicrisis está en borrador", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{
         episodio_id: EPISODIO_ATEN_ID,
-        estado_episodio: "alta_iniciada",
+        estado_episodio: "en_curso",
         episodio_hosp_id: EPISODIO_HOSP_ID,
         estado_epicrisis: "borrador",
         paciente_id: PACIENTE_ID,
@@ -409,10 +411,10 @@ describe("eceEpisodioHospitalarioRouter", () => {
       await expect(caller.confirmarAlta(VALID_CONFIRM)).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
-    it("11. CONFLICT si el episodio no está en alta_iniciada", async () => {
+    it("11. CONFLICT si el episodio no está en_curso", async () => {
       prisma.$queryRaw.mockResolvedValueOnce([{
         episodio_id: EPISODIO_ATEN_ID,
-        estado_episodio: "en_curso",
+        estado_episodio: "cerrado",
         episodio_hosp_id: EPISODIO_HOSP_ID,
         estado_epicrisis: "firmado",
         paciente_id: PACIENTE_ID,

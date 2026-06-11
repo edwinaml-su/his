@@ -1,42 +1,42 @@
 /**
- * Router tRPC — ECE Rectificaciones (NTEC Art. 41).
+ * Router tRPC — ECE Rectificaciones (NTEC Art. 41 / Art. 42).
  *
- * Art. 41 obliga a registrar rectificaciones de documentos firmados sin
- * modificar el original. Implementación append-only sobre `ece.rectificacion`.
+ * Modelo de datos (DDL real — ver sql/166_solicitud_arco_rectificacion_campos.sql):
+ *
+ *   ece.solicitud_arco  — tabla de ESTADO del flujo ARCO.
+ *     Columnas clave para RECTIFICACION:
+ *       id, tipo='RECTIFICACION', estado (PENDIENTE/APROBADA/RECHAZADA/EJECUTADA),
+ *       documento_instancia_id, solicitante_id, campo, valor_anterior, valor_propuesto,
+ *       motivo, revisado_por_id, fecha_respuesta, motivo_respuesta,
+ *       creado_en, actualizado_en
+ *
+ *   ece.rectificacion   — registro INMUTABLE append-only (solo se inserta al APROBAR).
+ *     Columnas: id, documento_original_id, tabla_origen, motivo, usuario_id (→personal_salud),
+ *               hash_original, campo, valor_anterior, valor_nuevo, establecimiento_id, creado_en
  *
  * Procedures:
  *   eceRectificacion.list      — lista por documentoInstanciaId (PHYSICIAN/NURSE/DIR)
- *   eceRectificacion.solicitar — crea rectificación (PHYSICIAN/NURSE)
- *   eceRectificacion.aprobar   — aprueba rectificación (DIR)
- *   eceRectificacion.rechazar  — rechaza rectificación con motivo (DIR)
- *
- * Emite eventos outbox:
- *   ece.rectificacion.solicitada
- *   ece.rectificacion.aprobada
- *   ece.rectificacion.rechazada
+ *   eceRectificacion.solicitar — crea solicitud_arco PENDIENTE (PHYSICIAN/NURSE)
+ *   eceRectificacion.aprobar   — APROBADA + INSERT ece.rectificacion + domainEvent (DIR)
+ *   eceRectificacion.rechazar  — RECHAZADA + domainEvent (DIR)
+ *   eceRectificacion.firmar    — EJECUTADA / cierre por autor (PHYSICIAN/NURSE)
  */
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { emitDomainEvent } from "@his/database";
 import { requireRole, router } from "../trpc";
 import { requireEcePermission } from "../middleware/ece-permission";
 
-// Nota: withTenantContext está disponible en rls-context para cuando se active
-// el hardening RLS completo (Fase 3). Los routers MVP filtran por organizationId
-// en JS siguiendo el patrón establecido en el codebase.
-
 // ---------------------------------------------------------------------------
-// Schemas locales (los tipos se re-exportan desde @his/contracts para UI)
+// Schemas de input (contratos públicos — NO cambiar sin migrar la UI)
 // ---------------------------------------------------------------------------
 
-// PIN de firma: 6-8 dígitos numéricos (NTEC Art. 42 — autenticación DIR).
-// Mismo esquema que eceCertificacionRouter.
 const pinSchema = z
   .string()
   .trim()
   .regex(/^\d{6,8}$/, { message: "PIN debe ser 6-8 dígitos." });
 
-// Acepta filtrado por documentoInstanciaId directo O por episodioId (JOIN).
-// Al menos uno de los dos debe estar presente.
 const listInput = z
   .object({
     documentoInstanciaId: z.string().uuid().optional(),
@@ -59,27 +59,33 @@ const solicitarInput = z.object({
 
 const aprobarInput = z.object({
   rectificacionId: z.string().uuid(),
-  // HG-16: NTEC Art. 42 exige autenticación criptográfica del aprobador.
   pin: pinSchema,
 });
 
 const rechazarInput = z.object({
   rectificacionId: z.string().uuid(),
   motivoRechazo: z.string().min(10).max(500),
-  // HG-16: NTEC Art. 42 — también el rechazo requiere PIN del DIR.
   pin: pinSchema,
 });
 
-// Art. 42 NTEC: firma del autor original cierra la rectificación (estado FIRMADA).
 const firmarInput = z.object({
   rectificacionId: z.string().uuid(),
   pin: pinSchema,
 });
 
 // ---------------------------------------------------------------------------
-// Tipos locales
+// Tipos internos
 // ---------------------------------------------------------------------------
 
+/**
+ * Shape que devuelven las queries sobre solicitud_arco para el contrato UI.
+ * La UI espera los nombres de columna snake_case listados en RectificacionRow.
+ *
+ * Nota: solicitud_arco.motivo_respuesta se expone como motivo_rechazo.
+ * solicitud_arco.fecha_respuesta se expone como fecha_aprobacion.
+ * solicitud_arco.revisado_por_id se expone como aprobador_id.
+ * El campo "firmado_en" no existe en la BD — se omite o se fija null.
+ */
 type RectificacionRow = {
   id: string;
   documento_instancia_id: string;
@@ -87,21 +93,17 @@ type RectificacionRow = {
   valor_anterior: string;
   valor_propuesto: string;
   motivo: string;
+  // La UI admite "FIRMADA" como estado de display; en BD es "EJECUTADA".
+  // Mapeamos EJECUTADA→FIRMADA en SQL para mantener el contrato UI intacto.
   estado: "PENDIENTE" | "APROBADA" | "RECHAZADA" | "FIRMADA";
   solicitante_id: string;
   solicitante_nombre: string | null;
   aprobador_id: string | null;
   fecha_aprobacion: string | null;
   motivo_rechazo: string | null;
-  firmado_en: string | null;
   created_at: string;
 };
 
-// ---------------------------------------------------------------------------
-// Helpers raw SQL
-// ---------------------------------------------------------------------------
-
-// Tipo extendido para la query de firma (incluye pin_hash).
 type FirmaRow = {
   id: string;
   pin_hash: string;
@@ -110,10 +112,21 @@ type FirmaRow = {
   revoked_at: Date | null;
 };
 
-/**
- * Carga la firma electrónica del usuario (vía ece.personal_salud → ece.firma_electronica).
- * Lanza PRECONDITION_FAILED si no existe configuración de firma.
- */
+type SolicitudRow = {
+  id: string;
+  estado: string;
+  documento_instancia_id: string | null;
+  solicitante_id: string | null;
+  campo: string | null;
+  valor_anterior: string | null;
+  valor_propuesto: string | null;
+  motivo: string;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 async function loadFirmaDir(
   prisma: {
     $queryRaw: (
@@ -123,7 +136,6 @@ async function loadFirmaDir(
   },
   userId: string,
 ): Promise<FirmaRow> {
-  // Paso 1: resolver personal_salud a partir del usuario HIS.
   const personal = await (
     prisma.$queryRaw as (
       query: TemplateStringsArray,
@@ -141,7 +153,6 @@ async function loadFirmaDir(
     });
   }
 
-  // Paso 2: cargar firma electrónica del personal.
   const firmas = await (
     prisma.$queryRaw as (
       query: TemplateStringsArray,
@@ -162,12 +173,6 @@ async function loadFirmaDir(
   return firmas[0];
 }
 
-/**
- * Verifica el PIN argon2id contra la firma del DIR.
- * Lanza UNAUTHORIZED si el PIN es incorrecto, TOO_MANY_REQUESTS si está bloqueada,
- * FORBIDDEN si fue revocada.
- * Import lazy idéntico al patrón de eceCertificacionRouter.
- */
 async function checkPinDir(firma: FirmaRow, pin: string): Promise<void> {
   if (firma.revoked_at !== null) {
     throw new TRPCError({
@@ -192,7 +197,7 @@ async function checkPinDir(firma: FirmaRow, pin: string): Promise<void> {
   }
 }
 
-async function findRectificacion(
+async function findSolicitud(
   prisma: {
     $queryRaw: (
       query: TemplateStringsArray,
@@ -200,55 +205,20 @@ async function findRectificacion(
     ) => Promise<unknown>;
   },
   id: string,
-): Promise<RectificacionRow | null> {
+): Promise<SolicitudRow | null> {
   const rows = await (
     prisma.$queryRaw as (
       query: TemplateStringsArray,
       ...values: unknown[]
-    ) => Promise<RectificacionRow[]>
+    ) => Promise<SolicitudRow[]>
   )`
-    SELECT
-      r.id,
-      r.documento_instancia_id,
-      r.campo,
-      r.valor_anterior,
-      r.valor_propuesto,
-      r.motivo,
-      r.estado,
-      r.solicitante_id,
-      u.full_name AS solicitante_nombre,
-      r.aprobador_id,
-      r.fecha_aprobacion::text,
-      r.motivo_rechazo,
-      r.created_at::text
-    FROM ece.rectificacion r
-    LEFT JOIN public."User" u ON u.id = r.solicitante_id
-    WHERE r.id = ${id}::uuid
+    SELECT id, estado, documento_instancia_id, solicitante_id,
+           campo, valor_anterior, valor_propuesto, motivo
+    FROM ece.solicitud_arco
+    WHERE id = ${id}::uuid AND tipo = 'RECTIFICACION'
     LIMIT 1
   `;
   return rows[0] ?? null;
-}
-
-async function insertOutbox(
-  prisma: {
-    $executeRaw: (
-      query: TemplateStringsArray,
-      ...values: unknown[]
-    ) => Promise<unknown>;
-  },
-  eventType: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  const payloadJson = JSON.stringify(payload);
-  await (
-    prisma.$executeRaw as (
-      query: TemplateStringsArray,
-      ...values: unknown[]
-    ) => Promise<number>
-  )`
-    INSERT INTO public.outbox (event_type, payload, created_at)
-    VALUES (${eventType}, ${payloadJson}::jsonb, now())
-  `;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,13 +227,19 @@ async function insertOutbox(
 
 export const eceRectificacionRouter = router({
   /**
-   * Lista rectificaciones de un documento instancia.
-   * Accesible por PHYSICIAN, NURSE y DIR.
+   * Lista solicitudes de rectificación por documentoInstanciaId (o episodioId).
+   * Mapea columnas solicitud_arco → shape RectificacionRow esperado por la UI.
+   *
+   * El campo "EJECUTADA" (estado BD) se expone como "FIRMADA" para que el
+   * componente EstadoBadge de la UI lo reconozca.
    */
   list: requireRole(["PHYSICIAN", "NURSE", "DIR"])
     .input(listInput)
     .query(async ({ ctx, input }) => {
-      const estadoFilter = input.estado ?? null;
+      const estadoFilter = input.estado
+        // UI manda "FIRMADA" pero en BD el valor es "EJECUTADA"
+        ? input.estado === "FIRMADA" ? "EJECUTADA" : input.estado
+        : null;
       const instanciaFilter = input.documentoInstanciaId ?? null;
       const episodioFilter = input.episodioId ?? null;
 
@@ -274,47 +250,60 @@ export const eceRectificacionRouter = router({
         ) => Promise<RectificacionRow[]>
       )`
         SELECT
-          r.id,
-          r.documento_instancia_id,
-          r.campo,
-          r.valor_anterior,
-          r.valor_propuesto,
-          r.motivo,
-          r.estado,
-          r.solicitante_id,
-          u.full_name AS solicitante_nombre,
-          r.aprobador_id,
-          r.fecha_aprobacion::text,
-          r.motivo_rechazo,
-          r.firmado_en::text,
-          r.created_at::text
-        FROM ece.rectificacion r
-        LEFT JOIN public."User" u ON u.id = r.solicitante_id
-        LEFT JOIN ece.documento_instancia di ON di.id = r.documento_instancia_id
-        WHERE (${instanciaFilter}::uuid IS NULL OR r.documento_instancia_id = ${instanciaFilter}::uuid)
+          sa.id,
+          sa.documento_instancia_id,
+          sa.campo,
+          sa.valor_anterior,
+          sa.valor_propuesto,
+          sa.motivo,
+          CASE sa.estado
+            WHEN 'EJECUTADA' THEN 'FIRMADA'
+            ELSE sa.estado
+          END AS estado,
+          sa.solicitante_id,
+          u."fullName" AS solicitante_nombre,
+          sa.revisado_por_id  AS aprobador_id,
+          sa.fecha_respuesta::text AS fecha_aprobacion,
+          sa.motivo_respuesta AS motivo_rechazo,
+          sa.creado_en::text AS created_at
+        FROM ece.solicitud_arco sa
+        LEFT JOIN public."User" u ON u.id = sa.solicitante_id
+        LEFT JOIN ece.documento_instancia di ON di.id = sa.documento_instancia_id
+        WHERE sa.tipo = 'RECTIFICACION'
+          AND (${instanciaFilter}::uuid IS NULL OR sa.documento_instancia_id = ${instanciaFilter}::uuid)
           AND (${episodioFilter}::uuid IS NULL OR di.episodio_id = ${episodioFilter}::uuid)
-          AND (${estadoFilter}::text IS NULL OR r.estado::text = ${estadoFilter}::text)
-        ORDER BY r.created_at DESC
+          AND (${estadoFilter}::text IS NULL OR sa.estado = ${estadoFilter}::text)
+        ORDER BY sa.creado_en DESC
       `;
     }),
 
   /**
-   * Crea una solicitud de rectificación.
-   * NTEC Art. 41: el campo + valor original quedan inmutables en el registro.
+   * Crea una solicitud de rectificación sobre un documento firmado.
+   * NTEC Art. 41: el documento original no se modifica.
+   *
+   * Verifica que el documento esté en estado firmado/validado/certificado
+   * consultando el estado actual vía estado_actual_id → flujo_estado.
    */
   solicitar: requireRole(["PHYSICIAN", "NURSE"])
     .input(solicitarInput)
     .mutation(async ({ ctx, input }) => {
-      // Verificar que el documento exista y esté firmado.
+      if (!ctx.tenant) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Contexto de organización requerido." });
+      }
+      const orgId = ctx.tenant.organizationId;
+
+      // Verificar que el documento exista y esté en un estado "firmado" (NTEC Art. 41).
       const docRows = await (
         ctx.prisma.$queryRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
-        ) => Promise<Array<{ id: string; estado: string }>>
+        ) => Promise<Array<{ id: string; paciente_public_id: string | null; estado_codigo: string }>>
       )`
-        SELECT id, estado
-        FROM ece.documento_instancia
-        WHERE id = ${input.documentoInstanciaId}::uuid
+        SELECT di.id, p.public_patient_id::text AS paciente_public_id, fe.codigo AS estado_codigo
+        FROM ece.documento_instancia di
+        JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+        LEFT JOIN ece.paciente p ON p.id = di.paciente_id
+        WHERE di.id = ${input.documentoInstanciaId}::uuid
         LIMIT 1
       `;
 
@@ -325,10 +314,20 @@ export const eceRectificacionRouter = router({
         });
       }
 
-      if (docRows[0].estado !== "FIRMADO") {
+      const estadoFirmados = ["firmado", "validado", "certificado"];
+      if (!estadoFirmados.includes(docRows[0].estado_codigo)) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "Solo se pueden rectificar documentos con estado FIRMADO.",
+          message: "Solo se pueden rectificar documentos con estado firmado, validado o certificado.",
+        });
+      }
+
+      // solicitud_arco.paciente_id es FK a public."Patient".id (NO a ece.paciente.id).
+      const pacienteId = docRows[0].paciente_public_id;
+      if (!pacienteId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "El paciente del documento no está vinculado al MPI público.",
         });
       }
 
@@ -338,120 +337,161 @@ export const eceRectificacionRouter = router({
           ...values: unknown[]
         ) => Promise<Array<{ id: string }>>
       )`
-        INSERT INTO ece.rectificacion
-          (documento_instancia_id, campo, valor_anterior, valor_propuesto,
-           motivo, estado, solicitante_id, created_at)
+        INSERT INTO ece.solicitud_arco
+          (tipo, estado, documento_instancia_id, solicitante_id,
+           campo, valor_anterior, valor_propuesto, motivo,
+           organizacion_id, paciente_id)
         VALUES
-          (${input.documentoInstanciaId}::uuid,
-           ${input.campo},
-           ${input.valorAnterior},
-           ${input.valorPropuesto},
-           ${input.motivo},
-           'PENDIENTE',
+          ('RECTIFICACION', 'PENDIENTE',
+           ${input.documentoInstanciaId}::uuid,
            ${ctx.user.id}::uuid,
-           now())
+           ${input.campo}, ${input.valorAnterior}, ${input.valorPropuesto}, ${input.motivo},
+           ${orgId}::uuid, ${pacienteId}::uuid)
         RETURNING id
       `;
 
-      const rectificacionId = newRows[0]?.id;
-      if (!rectificacionId) {
+      const solicitudId = newRows[0]?.id;
+      if (!solicitudId) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Error al crear la rectificación.",
+          message: "Error al crear la solicitud de rectificación.",
         });
       }
 
-      await insertOutbox(ctx.prisma, "ece.rectificacion.solicitada", {
-        rectificacionId,
-        documentoInstanciaId: input.documentoInstanciaId,
-        campo: input.campo,
-        solicitanteId: ctx.user.id,
-      });
-
-      return { id: rectificacionId };
+      return { id: solicitudId };
     }),
 
   /**
-   * DIR aprueba una rectificación pendiente.
-   * NTEC Art. 42: requiere PIN argon2id del aprobador antes del UPDATE.
-   * Marca estado APROBADA + fecha de aprobación.
+   * DIR aprueba una solicitud PENDIENTE.
+   * NTEC Art. 42: requiere PIN argon2id.
+   * Al aprobar: estado→APROBADA + INSERT inmutable en ece.rectificacion.
    */
   aprobar: requireEcePermission("ece.rectificacion.aprobar")
     .input(aprobarInput)
     .mutation(async ({ ctx, input }) => {
-      // HG-16: verificar identidad criptográfica del DIR antes de cualquier cambio.
       const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
       await checkPinDir(firma, input.pin);
 
-      const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
+      const solicitud = await findSolicitud(ctx.prisma, input.rectificacionId);
 
-      if (!rect) {
+      if (!solicitud) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Rectificación no encontrada.",
+          message: "Solicitud de rectificación no encontrada.",
         });
       }
 
-      if (rect.estado !== "PENDIENTE") {
+      if (solicitud.estado !== "PENDIENTE") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `La rectificación ya fue ${rect.estado.toLowerCase()}.`,
+          message: `La solicitud ya fue ${solicitud.estado.toLowerCase()}.`,
         });
       }
 
+      // Resolver personal_salud del aprobador para insertar en ece.rectificacion.
+      const personalRows = await (
+        ctx.prisma.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<Array<{ id: string }>>
+      )`
+        SELECT id FROM ece.personal_salud
+        WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
+        LIMIT 1
+      `;
+      const personalId = personalRows[0]?.id ?? null;
+
+      // hash_original: SHA-256 del motivo + campo + valor_anterior (contenido de la solicitud).
+      // Sirve como huella del contexto al momento de la aprobación.
+      const hashContent = JSON.stringify({
+        solicitudId: solicitud.id,
+        campo: solicitud.campo,
+        valor_anterior: solicitud.valor_anterior,
+        motivo: solicitud.motivo,
+      });
+      const hashOriginal = createHash("sha256").update(hashContent).digest("hex");
+
+      // Transacción: UPDATE estado + INSERT registro inmutable.
       await (
         ctx.prisma.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>
       )`
-        UPDATE ece.rectificacion
-        SET estado           = 'APROBADA',
-            aprobador_id     = ${ctx.user.id}::uuid,
-            fecha_aprobacion = now()
+        UPDATE ece.solicitud_arco
+        SET estado          = 'APROBADA',
+            revisado_por_id = ${ctx.user.id}::uuid,
+            fecha_respuesta = now(),
+            actualizado_en  = now()
         WHERE id = ${input.rectificacionId}::uuid
       `;
 
-      await insertOutbox(ctx.prisma, "ece.rectificacion.aprobada", {
-        rectificacionId: input.rectificacionId,
-        documentoInstanciaId: rect.documento_instancia_id,
-        solicitanteId: rect.solicitante_id, // HG-15: needed by dispatcher para notificar al solicitante
-        aprobadorId: ctx.user.id,
-      });
+      // Registro inmutable NTEC: solo se inserta si tenemos personal_salud resuelto.
+      if (personalId && solicitud.documento_instancia_id) {
+        await (
+          ctx.prisma.$executeRaw as (
+            query: TemplateStringsArray,
+            ...values: unknown[]
+          ) => Promise<number>
+        )`
+          INSERT INTO ece.rectificacion
+            (documento_original_id, tabla_origen, motivo,
+             usuario_id, hash_original, campo, valor_anterior, valor_nuevo)
+          VALUES
+            (${solicitud.documento_instancia_id}::uuid,
+             'ece.documento_instancia',
+             ${solicitud.motivo},
+             ${personalId}::uuid,
+             ${hashOriginal},
+             ${solicitud.campo},
+             ${solicitud.valor_anterior},
+             ${solicitud.valor_propuesto})
+        `;
+      }
+
+      // Emitir evento de dominio (reemplaza insertOutbox que usaba public.outbox inexistente).
+      if (ctx.tenant && solicitud.documento_instancia_id && solicitud.solicitante_id) {
+        await emitDomainEvent(ctx.prisma, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "ece.rectificacion.aprobada",
+          aggregateType: "SolicitudArco",
+          aggregateId: input.rectificacionId,
+          emittedById: ctx.user.id,
+          payload: {
+            rectificacionId: input.rectificacionId,
+            documentoInstanciaId: solicitud.documento_instancia_id,
+            solicitanteId: solicitud.solicitante_id,
+            aprobadorId: ctx.user.id,
+          },
+        });
+      }
 
       return { ok: true as const };
     }),
 
   /**
-   * DIR rechaza una rectificación pendiente con motivo obligatorio.
-   * NTEC Art. 42: requiere PIN argon2id del aprobador antes del UPDATE.
-   *
-   * HG-15: unificado a requireEcePermission("ece.rectificacion.aprobar") para
-   * mantener consistencia con `aprobar`. Antes usaba requireRole(["DIR"]) —
-   * asimetría que permitía que un DIR rechazara sin tener el permiso ECE asignado
-   * y que un usuario con permiso ECE pudiera aprobar pero no rechazar.
-   * El permiso "ece.rectificacion.aprobar" cubre ambos actos de revisión del DIR.
+   * DIR rechaza una solicitud PENDIENTE con motivo obligatorio.
+   * NTEC Art. 42: requiere PIN argon2id.
    */
   rechazar: requireEcePermission("ece.rectificacion.aprobar")
     .input(rechazarInput)
     .mutation(async ({ ctx, input }) => {
-      // HG-16: verificar identidad criptográfica del DIR antes de cualquier cambio.
       const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
       await checkPinDir(firma, input.pin);
 
-      const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
+      const solicitud = await findSolicitud(ctx.prisma, input.rectificacionId);
 
-      if (!rect) {
+      if (!solicitud) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Rectificación no encontrada.",
+          message: "Solicitud de rectificación no encontrada.",
         });
       }
 
-      if (rect.estado !== "PENDIENTE") {
+      if (solicitud.estado !== "PENDIENTE") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `La rectificación ya fue ${rect.estado.toLowerCase()}.`,
+          message: `La solicitud ya fue ${solicitud.estado.toLowerCase()}.`,
         });
       }
 
@@ -461,70 +501,69 @@ export const eceRectificacionRouter = router({
           ...values: unknown[]
         ) => Promise<number>
       )`
-        UPDATE ece.rectificacion
+        UPDATE ece.solicitud_arco
         SET estado           = 'RECHAZADA',
-            aprobador_id     = ${ctx.user.id}::uuid,
-            fecha_aprobacion = now(),
-            motivo_rechazo   = ${input.motivoRechazo}
+            revisado_por_id  = ${ctx.user.id}::uuid,
+            fecha_respuesta  = now(),
+            motivo_respuesta = ${input.motivoRechazo},
+            actualizado_en   = now()
         WHERE id = ${input.rectificacionId}::uuid
       `;
 
-      await insertOutbox(ctx.prisma, "ece.rectificacion.rechazada", {
-        rectificacionId: input.rectificacionId,
-        documentoInstanciaId: rect.documento_instancia_id,
-        solicitanteId: rect.solicitante_id, // HG-15
-        rechazadoPorId: ctx.user.id,
-        motivoRechazo: input.motivoRechazo,
-      });
+      if (ctx.tenant && solicitud.documento_instancia_id && solicitud.solicitante_id) {
+        await emitDomainEvent(ctx.prisma, {
+          organizationId: ctx.tenant.organizationId,
+          eventType: "ece.rectificacion.rechazada",
+          aggregateType: "SolicitudArco",
+          aggregateId: input.rectificacionId,
+          emittedById: ctx.user.id,
+          payload: {
+            rectificacionId: input.rectificacionId,
+            documentoInstanciaId: solicitud.documento_instancia_id,
+            solicitanteId: solicitud.solicitante_id,
+            rechazadoPorId: ctx.user.id,
+            motivoRechazo: input.motivoRechazo,
+          },
+        });
+      }
 
       return { ok: true as const };
     }),
 
   /**
-   * Autor original firma la rectificación con PIN electrónico argon2id.
-   *
-   * NTEC Art. 42: la firma del autor cierra la rectificación (FIRMADA).
-   * La rectificación firmada es inmutable — para corregir errores en la propia
-   * rectificación se emite una nueva solicitud encadenada.
-   *
-   * Precondiciones:
-   *   - La rectificación debe existir y estar en estado APROBADA (impacto MEDIO+)
-   *     o PENDIENTE (impacto NINGUNO/BAJO — firma directa sin aprobación DIR).
-   *   - El solicitante debe coincidir con ctx.user.id (o tener rol JEFE_SERVICIO).
-   *   - El PIN debe verificarse correctamente contra ece.firma_electronica.
+   * El autor original cierra la solicitud aprobada (EJECUTADA en BD = FIRMADA en UI).
+   * NTEC Art. 42: la firma del autor cierra el ciclo.
    */
   firmar: requireRole(["PHYSICIAN", "NURSE"])
     .input(firmarInput)
     .mutation(async ({ ctx, input }) => {
-      // Verificar identidad criptográfica del firmante
       const firma = await loadFirmaDir(ctx.prisma, ctx.user.id);
       await checkPinDir(firma, input.pin);
 
-      const rect = await findRectificacion(ctx.prisma, input.rectificacionId);
+      const solicitud = await findSolicitud(ctx.prisma, input.rectificacionId);
 
-      if (!rect) {
+      if (!solicitud) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Rectificación no encontrada.",
+          message: "Solicitud de rectificación no encontrada.",
         });
       }
 
-      // Solo se puede firmar desde PENDIENTE (impacto bajo) o APROBADA (impacto alto)
-      if (rect.estado !== "PENDIENTE" && rect.estado !== "APROBADA") {
+      if (solicitud.estado !== "PENDIENTE" && solicitud.estado !== "APROBADA") {
         throw new TRPCError({
           code: "CONFLICT",
-          message: `La rectificación no puede firmarse desde el estado ${rect.estado}.`,
+          message: `La solicitud no puede firmarse desde el estado ${solicitud.estado}.`,
         });
       }
 
-      // El firmante debe ser el solicitante original (autor del documento)
-      if (rect.solicitante_id !== ctx.user.id) {
+      if (solicitud.solicitante_id !== ctx.user.id) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message:
-            "Solo el autor que solicitó la rectificación puede firmarla. Si el autor no está disponible, use el flujo de superior jerárquico.",
+          message: "Solo el autor que solicitó la rectificación puede firmarla.",
         });
       }
+
+      const firmadoEn = new Date().toISOString();
 
       await (
         ctx.prisma.$executeRaw as (
@@ -532,22 +571,12 @@ export const eceRectificacionRouter = router({
           ...values: unknown[]
         ) => Promise<number>
       )`
-        UPDATE ece.rectificacion
-        SET estado     = 'FIRMADA',
-            firmado_en = now()
+        UPDATE ece.solicitud_arco
+        SET estado         = 'EJECUTADA',
+            actualizado_en = now()
         WHERE id = ${input.rectificacionId}::uuid
       `;
 
-      await insertOutbox(ctx.prisma, "ece.rectificacion.firmada", {
-        rectificacionId: input.rectificacionId,
-        documentoInstanciaId: rect.documento_instancia_id,
-        autorId: ctx.user.id,
-        campo: rect.campo,
-        valorAnterior: rect.valor_anterior,
-        valorPropuesto: rect.valor_propuesto,
-        firmadoEn: new Date().toISOString(),
-      });
-
-      return { ok: true as const, firmadoEn: new Date().toISOString() };
+      return { ok: true as const, firmadoEn };
     }),
 });

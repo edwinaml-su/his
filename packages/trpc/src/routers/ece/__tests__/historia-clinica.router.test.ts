@@ -67,10 +67,10 @@ function baseGetRow(overrides: Record<string, unknown> = {}) {
     id: ID1,
     instancia_id: ID3,
     episodio_id: ID2,
-    tipo_consulta: "urgencia",
+    tipo_consulta: "subsecuente",
     motivo_consulta: "Cefalea intensa",
     enfermedad_actual: "Cefalea de 3 días de evolución",
-    disposicion: "OBSERVACION",
+    disposicion: "observacion",
     plan_manejo: "Hidratación IV + analgesia",
     antecedentes: { personales: "HTA", familiares: null },
     examen_fisico: { sistemas: [{ sistema: "Neurológico", hallazgo: "Sin déficit focal" }] },
@@ -92,7 +92,7 @@ function baseListRow(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     episodio_id: ID2,
-    tipo_consulta: "urgencia",
+    tipo_consulta: "subsecuente",
     motivo_consulta: "Consulta general",
     estado_registro: "borrador",
     registrado_en: new Date("2026-05-19T08:00:00Z"),
@@ -107,7 +107,7 @@ function baseHistoriaRow(overrides: Record<string, unknown> = {}) {
     id: ID1,
     instancia_id: null,
     episodio_id: ID2,
-    tipo_consulta: "ingreso",
+    tipo_consulta: "primera_vez",
     motivo_consulta: "Fiebre",
     enfermedad_actual: null,
     disposicion: null,
@@ -138,7 +138,7 @@ describe("eceHistoriaClinicaRouter.list", () => {
     expect(result.items[0]).toMatchObject({
       id: ID1,
       episodioId: ID2,
-      tipoConsulta: "urgencia",
+      tipoConsulta: "subsecuente",
       motivoConsulta: "Consulta general",
       estadoRegistro: "borrador",
       patient: { firstName: "Luis", lastName: "Pérez" },
@@ -173,7 +173,7 @@ describe("eceHistoriaClinicaRouter.get", () => {
     const result = await caller.get({ id: ID1 });
 
     expect(result.id).toBe(ID1);
-    expect(result.tipoConsulta).toBe("urgencia");
+    expect(result.tipoConsulta).toBe("subsecuente");
     expect(result.motivoConsulta).toBe("Cefalea intensa");
     expect(result.estadoRegistro).toBe("borrador");
     expect(result.patient).toEqual({
@@ -243,18 +243,18 @@ describe("eceHistoriaClinicaRouter.create", () => {
   it("7. crea historia con columnas reales y estado borrador", async () => {
     const ctx = buildCtx();
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
-      baseHistoriaRow({ tipo_consulta: "ingreso", motivo_consulta: "Fiebre y tos" }),
+      baseHistoriaRow({ tipo_consulta: "primera_vez", motivo_consulta: "Fiebre y tos" }),
     ]);
 
     const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
     const result = await caller.create({
       episodioId: ID2,
-      tipoConsulta: "ingreso",
+      tipoConsulta: "primera_vez",
       motivoConsulta: "Fiebre y tos",
     });
 
     expect(result.estado_registro).toBe("borrador");
-    expect(result.tipo_consulta).toBe("ingreso");
+    expect(result.tipo_consulta).toBe("primera_vez");
     expect(result.motivo_consulta).toBe("Fiebre y tos");
   });
 });
@@ -366,10 +366,10 @@ describe("historiaClinicaGetOutput (Zod schema)", () => {
       id: ID1,
       instanciaId: ID3,
       episodioId: ID2,
-      tipoConsulta: "urgencia",
+      tipoConsulta: "subsecuente",
       motivoConsulta: "Dolor abdominal",
       enfermedadActual: "Gastritis aguda",
-      disposicion: "ALTA",
+      disposicion: "alta_ambulatoria",
       planManejo: "Inhibidor de bomba de protones",
       antecedentes: { personales: "Sin antecedentes" },
       examenFisico: null,

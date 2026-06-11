@@ -76,7 +76,16 @@ const eceAdministracionSchema = z.object({
   registroEnfId: z.string().uuid(),
   indicacionItemId: z.string().uuid(),
   horaAplicada: z.coerce.date(),
-  estado: z.enum(["administrado", "omitido", "pospuesto"]).default("administrado"),
+  /**
+   * CHECK administracion_medicamento_estado_check (oid 23408): administrado|omitido|diferido.
+   * 'pospuesto' NO existe en ningún CHECK del DDL — se eliminó. 'diferido' es el valor correcto.
+   *
+   * NOTA @DBA: existe un segundo CHECK (chk_admin_med_estado, oid 26582) que exige
+   * mayúsculas PROGRAMADA|ADMINISTRADO|OMITIDA|RECHAZADA — contradict al constraint original.
+   * La tabla es literalmente inescribible en prod hasta que se elimine ese constraint.
+   * Pending: DROP CONSTRAINT chk_admin_med_estado ON ece.administracion_medicamento.
+   */
+  estado: z.enum(["administrado", "omitido", "diferido"]).default("administrado"),
   motivoOmision: z.string().trim().max(500).optional(),
   gs1: z.object({
     gtin: z.string().min(8).max(14),
@@ -137,10 +146,19 @@ export interface RegistroRow {
 
 export interface IndicacionItemRow {
   id: string;
-  estado: string;
+  /**
+   * 'vigencia' de la indicación madre (ece.indicaciones_medicas.vigencia).
+   * ece.indicacion_item no tiene columna 'estado'. Se lee vía JOIN.
+   */
+  vigencia: string;
   episodio_id: string;
+  /**
+   * fecha_hora de ece.indicaciones_medicas — sirve como anchor para computeScheduledSlot.
+   * ece.indicacion_item no tiene columna 'hora_indicada'.
+   */
   hora_indicada: Date | null;
-  frequencia: string | null;
+  /** Columna 'frecuencia' (sin doble 'u') en ece.indicacion_item. */
+  frecuencia: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +217,12 @@ async function findRegistro(
 }
 
 /**
- * Busca indicacion_item con hora_indicada + frequencia para derivar scheduledSlot.
+ * Busca indicacion_item con frecuencia para derivar scheduledSlot.
+ *
+ * ece.indicacion no existe — la tabla padre es ece.indicaciones_medicas.
+ * ece.indicacion_item no tiene 'estado' ni 'hora_indicada'; se obtienen
+ * via JOIN con indicaciones_medicas: vigencia (estado) y fecha_hora (anchor).
+ * Columna es 'frecuencia' (sin doble 'u').
  */
 async function findIndicacionItem(
   prisma: Pick<PrismaClient, "$queryRaw">,
@@ -210,11 +233,14 @@ async function findIndicacionItem(
     query: TemplateStringsArray,
     ...values: unknown[]
   ) => Promise<IndicacionItemRow[]>)`
-    SELECT ii.id, ii.estado, i.episodio_id,
-           ii.hora_indicada, ii.frequencia
+    SELECT ii.id,
+           im.vigencia,
+           im.episodio_id,
+           im.fecha_hora AS hora_indicada,
+           ii.frecuencia
     FROM ece.indicacion_item ii
-    JOIN ece.indicacion i ON i.id = ii.indicacion_id
-    JOIN ece.episodio_atencion ea ON ea.id = i.episodio_id
+    JOIN ece.indicaciones_medicas im ON im.id = ii.indicacion_id
+    JOIN ece.episodio_atencion ea ON ea.id = im.episodio_id
     WHERE ii.id = ${id}::uuid
       AND ea.establecimiento_id IN (
         SELECT id FROM public."Organization"
@@ -343,7 +369,9 @@ export const registroEnfermeriaRouter = router({
             message: "La indicación referenciada no existe en la organización.",
           });
         }
-        if (indicacion.estado === "anulada") {
+        // ece.indicaciones_medicas.vigencia CHECK (oid más nuevo): ACTIVA|SUSPENDIDA|CANCELADA.
+        // La indicación no es operable cuando está CANCELADA o suspendida.
+        if (indicacion.vigencia === "CANCELADA" || indicacion.vigencia === "SUSPENDIDA") {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "No se puede registrar administración sobre una indicación anulada.",
@@ -351,10 +379,10 @@ export const registroEnfermeriaRouter = router({
         }
 
         // HD-23: slot programado desde la indicación médica.
-        // Fallback a horaAplicada si no hay hora_indicada o frequencia disponibles.
+        // Fallback a horaAplicada si no hay hora_indicada o frecuencia disponibles.
         const horaProgramada: Date =
-          indicacion.hora_indicada !== null && indicacion.frequencia !== null
-            ? computeScheduledSlot(indicacion.hora_indicada, indicacion.frequencia, input.horaAplicada)
+          indicacion.hora_indicada !== null && indicacion.frecuencia !== null
+            ? computeScheduledSlot(indicacion.hora_indicada, indicacion.frecuencia, input.horaAplicada)
             : input.horaAplicada;
 
         if (input.gs1) {

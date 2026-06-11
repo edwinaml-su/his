@@ -533,14 +533,13 @@ export const indicacionesMedicasRouter = router({
           }
 
           // JCI IPSG.2 ME 3 — escanear texto libre de items (warning, no bloquea)
-          const itemTexts = await tx.$queryRaw<{ descripcion: string; notas: string | null }[]>`
-            SELECT descripcion, notas
+          // ece.indicacion_item no tiene columna 'notas'; solo descripcion es texto libre
+          const itemTexts = await tx.$queryRaw<{ descripcion: string }[]>`
+            SELECT descripcion
             FROM ece.indicacion_item
             WHERE indicacion_id = ${input.id}::uuid
           `;
-          const textoItems = itemTexts
-            .map((r) => [r.descripcion, r.notas ?? ""].join(" "))
-            .join(" ");
+          const textoItems = itemTexts.map((r) => r.descripcion).join(" ");
           const ipsg2 = validateClinicalText(textoItems);
           if (ipsg2.errors.length > 0 || ipsg2.warnings.length > 0) {
             console.warn(

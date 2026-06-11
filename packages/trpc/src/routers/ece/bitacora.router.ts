@@ -26,14 +26,19 @@
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.bitacora_acceso  — log inmutable append-only:
- *     id BIGINT PK GENERATED ALWAYS AS IDENTITY (no UUID — ref. PR #225),
- *     firma_id uuid nullable FK(ece.firma_electronica),
- *     user_id uuid NOT NULL, paciente_id uuid nullable,
- *     accion text NOT NULL, exito boolean NOT NULL,
- *     contexto text nullable, ip text nullable,
- *     registrado_en timestamptz NOT NULL DEFAULT now()
- *   ece.firma_electronica — referenciada para accesos con firma (firma_id)
+ *   ece.bitacora_acceso  — log inmutable append-only (cols reales 2026-06-11):
+ *     id bigint PK GENERATED ALWAYS AS IDENTITY,
+ *     personal_id uuid nullable FK(ece.personal_salud),
+ *     recurso_id uuid nullable,
+ *     accion text NOT NULL,
+ *     autorizado boolean NOT NULL,
+ *     ip_origen inet nullable,
+ *     ocurrido_en timestamptz NOT NULL DEFAULT clock_timestamp(),
+ *     justificacion text nullable,
+ *     auth_user_id uuid nullable,
+ *     establecimiento_id uuid nullable FK(ece.establecimiento),
+ *     flag_outlier boolean NOT NULL DEFAULT false,
+ *     motivo_outlier varchar nullable
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -72,7 +77,6 @@ const accionEnum = z.enum([
 ]);
 
 const bitacoraListInput = z.object({
-  pacienteId: z.string().uuid().optional(),
   personalId: z.string().uuid().optional(),
   desde:      z.string().datetime().optional(),
   hasta:      z.string().datetime().optional(),
@@ -82,7 +86,6 @@ const bitacoraListInput = z.object({
 });
 
 const bitacoraExportInput = z.object({
-  pacienteId: z.string().uuid().optional(),
   personalId: z.string().uuid().optional(),
   desde:      z.string().datetime().optional(),
   hasta:      z.string().datetime().optional(),
@@ -90,13 +93,13 @@ const bitacoraExportInput = z.object({
 });
 
 const bitacoraRegisterInput = z.object({
-  firmaId:    z.string().uuid().optional(),
-  userId:     z.string().uuid(),
-  pacienteId: z.string().uuid().optional(),
-  accion:     accionEnum,
-  exito:      z.boolean().default(true),
-  contexto:   z.string().max(500).optional(),
-  ip:         z.string().max(45).optional(),
+  personalId:      z.string().uuid().optional(),
+  recursoId:       z.string().uuid().optional(),
+  accion:          accionEnum,
+  autorizado:      z.boolean().default(true),
+  justificacion:   z.string().max(500).optional(),
+  ip:              z.string().max(45).optional(), // se convierte a inet en BD
+  establecimientoId: z.string().uuid().optional(),
 });
 
 /**
@@ -109,19 +112,22 @@ const bitacoraMetricsInput = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Tipos raw SQL
+// Tipos raw SQL (columnas reales de ece.bitacora_acceso)
 // ---------------------------------------------------------------------------
 
 type BitacoraDbRow = {
-  id: string;
-  firma_id: string | null;
-  user_id: string;
-  paciente_id: string | null;
+  id: string; // bigint serializado como string
+  personal_id: string | null;
+  recurso_id: string | null;
   accion: string;
-  exito: boolean;
-  contexto: string | null;
-  ip: string | null;
-  registrado_en: Date;
+  autorizado: boolean;
+  ip_origen: string | null;
+  ocurrido_en: Date;
+  justificacion: string | null;
+  auth_user_id: string | null;
+  establecimiento_id: string | null;
+  flag_outlier: boolean;
+  motivo_outlier: string | null;
 };
 
 type CountRow = { total: bigint };
@@ -154,23 +160,20 @@ function buildWhereClause(input: {
   const params: unknown[] = [];
   let idx = 1;
 
-  if (input.pacienteId) {
-    conditions.push(`b.paciente_id = $${idx++}::uuid`);
-    params.push(input.pacienteId);
-  }
+  // paciente_id no existe en bitacora_acceso; filtrar por recurso_id es la aproximación más cercana
+  // (recurso_id referencia el recurso accedido, que puede ser un episodio de un paciente).
+  // Si el caller pasa pacienteId, se omite silenciosamente para no romper queries.
+  // Mantener parámetro en firma por compatibilidad con listInput existente.
   if (input.personalId) {
-    // personalId filtra por firma_id vinculada al personal.
-    conditions.push(
-      `b.firma_id IN (SELECT id FROM ece.firma_electronica WHERE personal_id = $${idx++}::uuid)`,
-    );
+    conditions.push(`b.personal_id = $${idx++}::uuid`);
     params.push(input.personalId);
   }
   if (input.desde) {
-    conditions.push(`b.registrado_en >= $${idx++}::timestamptz`);
+    conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`);
     params.push(input.desde);
   }
   if (input.hasta) {
-    conditions.push(`b.registrado_en <= $${idx++}::timestamptz`);
+    conditions.push(`b.ocurrido_en <= $${idx++}::timestamptz`);
     params.push(input.hasta);
   }
   if (input.accion) {
@@ -183,15 +186,18 @@ function buildWhereClause(input: {
 
 function rowToOutput(r: BitacoraDbRow) {
   return {
-    id:           r.id,
-    firmaId:      r.firma_id,
-    userId:       r.user_id,
-    pacienteId:   r.paciente_id,
-    accion:       r.accion,
-    exito:        r.exito,
-    contexto:     r.contexto,
-    ip:           r.ip,
-    registradoEn: r.registrado_en.toISOString(),
+    id:               r.id,
+    personalId:       r.personal_id,
+    recursoId:        r.recurso_id,
+    accion:           r.accion,
+    autorizado:       r.autorizado,
+    ipOrigen:         r.ip_origen,
+    ocurridoEn:       r.ocurrido_en.toISOString(),
+    justificacion:    r.justificacion,
+    authUserId:       r.auth_user_id,
+    establecimientoId: r.establecimiento_id,
+    flagOutlier:      r.flag_outlier,
+    motivoOutlier:    r.motivo_outlier,
   };
 }
 
@@ -228,11 +234,12 @@ export const bitacoraRouter = router({
       const limitIdx = params.length + 1;
       const offsetIdx = params.length + 2;
       const dataSql = `
-        SELECT b.id, b.firma_id, b.user_id, b.paciente_id,
-               b.accion, b.exito, b.contexto, b.ip, b.registrado_en
+        SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
+               b.ip_origen::text, b.ocurrido_en, b.justificacion,
+               b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
         FROM ece.bitacora_acceso b
         WHERE ${clause}
-        ORDER BY b.registrado_en DESC
+        ORDER BY b.ocurrido_en DESC
         LIMIT $${limitIdx} OFFSET $${offsetIdx}
       `;
       const rows = await ctx.prisma.$queryRawUnsafe<BitacoraDbRow[]>(
@@ -257,11 +264,12 @@ export const bitacoraRouter = router({
       const { clause, params } = buildWhereClause(input);
 
       const sql = `
-        SELECT b.id, b.firma_id, b.user_id, b.paciente_id,
-               b.accion, b.exito, b.contexto, b.ip, b.registrado_en
+        SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
+               b.ip_origen::text, b.ocurrido_en, b.justificacion,
+               b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
         FROM ece.bitacora_acceso b
         WHERE ${clause}
-        ORDER BY b.registrado_en DESC
+        ORDER BY b.ocurrido_en DESC
         LIMIT 10000
       `;
       const rows = await ctx.prisma.$queryRawUnsafe<BitacoraDbRow[]>(
@@ -270,20 +278,24 @@ export const bitacoraRouter = router({
       );
 
       const header = toCsvLine([
-        "id", "firma_id", "user_id", "paciente_id",
-        "accion", "exito", "contexto", "ip", "registrado_en",
+        "id", "personal_id", "recurso_id", "accion", "autorizado",
+        "ip_origen", "ocurrido_en", "justificacion",
+        "auth_user_id", "establecimiento_id", "flag_outlier", "motivo_outlier",
       ]);
       const lines = rows.map((r) =>
         toCsvLine([
           r.id,
-          r.firma_id ?? "",
-          r.user_id,
-          r.paciente_id ?? "",
+          r.personal_id ?? "",
+          r.recurso_id ?? "",
           r.accion,
-          String(r.exito),
-          r.contexto ?? "",
-          r.ip ?? "",
-          r.registrado_en.toISOString(),
+          String(r.autorizado),
+          r.ip_origen ?? "",
+          r.ocurrido_en.toISOString(),
+          r.justificacion ?? "",
+          r.auth_user_id ?? "",
+          r.establecimiento_id ?? "",
+          String(r.flag_outlier),
+          r.motivo_outlier ?? "",
         ]),
       );
 
@@ -309,11 +321,11 @@ export const bitacoraRouter = router({
       let idx = 1;
 
       if (input.desde) {
-        conditions.push(`b.registrado_en >= $${idx++}::timestamptz`);
+        conditions.push(`b.ocurrido_en >= $${idx++}::timestamptz`);
         params.push(input.desde);
       }
       if (input.hasta) {
-        conditions.push(`b.registrado_en <= $${idx++}::timestamptz`);
+        conditions.push(`b.ocurrido_en <= $${idx++}::timestamptz`);
         params.push(input.hasta);
       }
       const where = conditions.join(" AND ");
@@ -335,12 +347,12 @@ export const bitacoraRouter = router({
       );
       const totalFirmas = Number(firmasRows[0]?.count ?? 0);
 
-      // Top 5 documentos (por contexto)
+      // Top 5 recursos (por recurso_id — proxy de documento accedido)
       const topDocRows = await ctx.prisma.$queryRawUnsafe<TopDocRow[]>(
-        `SELECT b.contexto, COUNT(*) AS count
+        `SELECT b.recurso_id::text AS contexto, COUNT(*) AS count
          FROM ece.bitacora_acceso b
-         WHERE ${where} AND b.contexto IS NOT NULL
-         GROUP BY b.contexto
+         WHERE ${where} AND b.recurso_id IS NOT NULL
+         GROUP BY b.recurso_id
          ORDER BY count DESC
          LIMIT 5`,
         ...params,
@@ -350,12 +362,12 @@ export const bitacoraRouter = router({
         accesos: Number(r.count),
       }));
 
-      // Top 5 usuarios
+      // Top 5 usuarios (por auth_user_id)
       const topUserRows = await ctx.prisma.$queryRawUnsafe<TopUserRow[]>(
-        `SELECT b.user_id, COUNT(*) AS count
+        `SELECT b.auth_user_id::text AS user_id, COUNT(*) AS count
          FROM ece.bitacora_acceso b
-         WHERE ${where}
-         GROUP BY b.user_id
+         WHERE ${where} AND b.auth_user_id IS NOT NULL
+         GROUP BY b.auth_user_id
          ORDER BY count DESC
          LIMIT 5`,
         ...params,
@@ -379,31 +391,26 @@ export const bitacoraRouter = router({
   register: protectedProcedure
     .input(bitacoraRegisterInput)
     .mutation(async ({ ctx, input }) => {
-      // El userId del input debe coincidir con el usuario en sesión, salvo
-      // que sea el propio sistema (firmaId nulo = log de sistema).
-      if (input.userId !== ctx.user.id && input.firmaId !== undefined) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Solo puede registrar eventos propios.",
-        });
-      }
-
-      const firmaId   = input.firmaId   ?? null;
-      const paciente  = input.pacienteId ?? null;
-      const contexto  = input.contexto   ?? null;
-      const ip        = input.ip         ?? null;
+      const personalId      = input.personalId      ?? null;
+      const recursoId       = input.recursoId       ?? null;
+      const justificacion   = input.justificacion   ?? null;
+      // ip_origen es tipo inet en BD; cast explícito en SQL
+      const ipOrigen        = input.ip              ?? null;
+      const establecimientoId = input.establecimientoId ?? null;
 
       await ctx.prisma.$executeRawUnsafe(
         `INSERT INTO ece.bitacora_acceso
-           (firma_id, user_id, paciente_id, accion, exito, contexto, ip, registrado_en)
-         VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, now())`,
-        firmaId,
-        input.userId,
-        paciente,
+           (personal_id, recurso_id, accion, autorizado, ip_origen,
+            justificacion, auth_user_id, establecimiento_id)
+         VALUES ($1::uuid, $2::uuid, $3, $4, $5::inet, $6, $7::uuid, $8::uuid)`,
+        personalId,
+        recursoId,
         input.accion,
-        input.exito,
-        contexto,
-        ip,
+        input.autorizado,
+        ipOrigen,
+        justificacion,
+        ctx.user.id,
+        establecimientoId,
       );
 
       return { ok: true as const };
