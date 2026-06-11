@@ -36,8 +36,9 @@ function gs1AppendCheckDigit(root: string): string {
 const VALID_GLN  = gs1AppendCheckDigit("061414199999");  // 13 dígitos
 const GLN_ZERO   = "0000000000000";                      // todos ceros = check 0
 
-// UUID_B: usado en parentGlnId del test createChild (input aceptado, no aplicado en DDL actual).
+const UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+const UUID_NF = "00000000-0000-0000-0000-000000000001";
 
 let prisma: DeepMockProxy<PrismaClient>;
 
@@ -52,42 +53,56 @@ beforeEach(() => {
 
 // ---------------------------------------------------------------------------
 // tree
-// NOTA: gs1_gln no tiene id/parent_id en DDL — tree devuelve lista plana.
-// La jerarquía es BLOQUEANTE hasta que @DBA agregue esas columnas.
 // ---------------------------------------------------------------------------
 
 describe("glnHierarchy.tree", () => {
-  it("sin rootCodigo retorna lista plana (depth=0, sin children)", async () => {
-    const rows = [
-      { codigo: VALID_GLN, descripcion: "Almacén Central", tipo: "deposito", activo: true },
-      { codigo: GLN_ZERO,  descripcion: "Farmacia Piso 1", tipo: "farmacia", activo: true },
-    ];
-    prisma.$queryRawUnsafe = mockQuery(rows);
-    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
-    const result = await caller.tree({});
-
-    expect(result).toHaveLength(2);
-    // Lista plana: todos depth=0, sin children
-    expect(result[0]!.depth).toBe(0);
-    expect(result[0]!.children).toEqual([]);
-    // Retorna codigo, no id
-    expect(result[0]!.codigo).toBe(VALID_GLN);
-  });
-
-  it("con rootCodigo usa LIKE $1 para filtrar por prefijo", async () => {
+  it("sin rootId construye query con parent_id IS NULL", async () => {
     prisma.$queryRawUnsafe = mockQuery([]);
     const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
-    await caller.tree({ rootCodigo: "061" });
+    const result = await caller.tree({ rootId: undefined });
+
+    expect(result).toEqual([]);
+    const sql = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toContain("parent_id IS NULL");
+  });
+
+  it("con rootId usa WHERE id = $1", async () => {
+    prisma.$queryRawUnsafe = mockQuery([]);
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await caller.tree({ rootId: UUID_A });
 
     const sql = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
-    expect(sql).toContain("LIKE $1");
+    expect(sql).toContain("WHERE id = $1::uuid");
   });
 
-  it("retorna array vacío si BD no devuelve filas", async () => {
-    prisma.$queryRawUnsafe = mockQuery([]);
+  it("construye árbol anidado a partir de filas planas", async () => {
+    const rows = [
+      { id: UUID_A, codigo: VALID_GLN, descripcion: "Almacén Central", tipo: "deposito", parent_id: null, depth: 0, activo: true },
+      { id: UUID_B, codigo: GLN_ZERO,  descripcion: "Farmacia Piso 1", tipo: "farmacia", parent_id: UUID_A, depth: 1, activo: true },
+    ];
+    prisma.$queryRawUnsafe = mockQuery(rows);
+
     const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
-    const result = await caller.tree({ rootCodigo: undefined });
-    expect(result).toEqual([]);
+    const tree = await caller.tree({ rootId: undefined });
+
+    expect(tree).toHaveLength(1);
+    expect(tree[0]!.id).toBe(UUID_A);
+    expect(tree[0]!.children).toHaveLength(1);
+    expect(tree[0]!.children[0]!.id).toBe(UUID_B);
+  });
+
+  it("nodo huérfano (padre fuera del resultado) aparece como raíz", async () => {
+    const rows = [
+      { id: UUID_B, codigo: GLN_ZERO, descripcion: "Huérfano", tipo: "servicio", parent_id: UUID_NF, depth: 1, activo: true },
+    ];
+    prisma.$queryRawUnsafe = mockQuery(rows);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    const tree = await caller.tree({});
+
+    // El nodo sin padre en el mapa se eleva a raíz.
+    expect(tree).toHaveLength(1);
+    expect(tree[0]!.id).toBe(UUID_B);
   });
 });
 
@@ -121,12 +136,12 @@ describe("glnHierarchy.createChild", () => {
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
-  it("inserta correctamente cuando el código no existe y retorna codigo", async () => {
-    // 1er call = COUNT = 0, 2do call = INSERT RETURNING codigo.
+  it("inserta correctamente cuando el código no existe", async () => {
+    // 1er call = COUNT = 0, 2do call = INSERT RETURNING id.
     let callCount = 0;
     prisma.$queryRawUnsafe = vi.fn().mockImplementation(async () => {
       callCount++;
-      return callCount === 1 ? [{ count: "0" }] : [{ codigo: GLN_ZERO }];
+      return callCount === 1 ? [{ count: "0" }] : [{ id: UUID_A }];
     });
 
     const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
@@ -134,12 +149,10 @@ describe("glnHierarchy.createChild", () => {
       codigo: GLN_ZERO,
       descripcion: "Farmacia Nueva",
       tipo: "farmacia",
-      // parentGlnId aceptado en input pero ignorado hasta que DDL tenga parent_id
       parentGlnId: UUID_B,
     });
 
-    // Router retorna { codigo } — no { id }
-    expect(result.codigo).toBe(GLN_ZERO);
+    expect(result.id).toBe(UUID_A);
     expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
   });
 

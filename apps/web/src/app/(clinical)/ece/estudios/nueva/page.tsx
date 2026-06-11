@@ -30,7 +30,7 @@ import {
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
 
-type TipoEstudio = "laboratorio" | "imagenologia" | "otro";
+type TipoEstudio = "laboratorio" | "imagenologia" | "gabinete";
 type Prioridad = "rutina" | "urgente" | "stat";
 
 interface FieldErrors {
@@ -137,7 +137,7 @@ export default function NuevaSolicitudEstudioPage() {
                 <SelectContent>
                   <SelectItem value="laboratorio">Laboratorio</SelectItem>
                   <SelectItem value="imagenologia">Imagenología</SelectItem>
-                  <SelectItem value="otro">Otro</SelectItem>
+                  <SelectItem value="gabinete">Gabinete</SelectItem>
                 </SelectContent>
               </Select>
             </div>

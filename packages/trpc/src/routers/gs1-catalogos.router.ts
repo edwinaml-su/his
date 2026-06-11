@@ -202,12 +202,11 @@ const gtinRouter = router({
 
 const tipoGlnEnum = z.enum(["proveedor", "deposito", "farmacia", "servicio", "cama"]);
 
-// NOTA: gs1_gln PK real es `codigo` (text). No tiene id, parent_id ni establecimiento_id.
-// Bloqueante de jerarquía documentado en gln-hierarchy.router.ts.
 const glnCreateInput = z.object({
-  codigo:      glnSchema,
-  descripcion: z.string().min(1).max(500),
-  tipo:        tipoGlnEnum,
+  codigo:             glnSchema,
+  descripcion:        z.string().min(1).max(500),
+  tipo:               tipoGlnEnum,
+  establecimientoId:  z.string().uuid().optional(),
 });
 
 const glnRouter = router({
@@ -215,7 +214,8 @@ const glnRouter = router({
     .input(paginationSchema.extend({ tipo: tipoGlnEnum.optional() }))
     .query(async ({ ctx, input }) => {
       type GlnRow = {
-        codigo: string; descripcion: string; tipo: string; activo: boolean; creado_en: Date;
+        id: string; codigo: string; descripcion: string; tipo: string;
+        establecimiento_id: string | null; activo: boolean;
       };
       const conditions = ["1=1"];
       const params: unknown[] = [];
@@ -223,7 +223,7 @@ const glnRouter = router({
       if (input.tipo) { conditions.push(`tipo = $${idx++}`); params.push(input.tipo); }
       params.push(input.limit, input.offset);
       const rows = await ctx.prisma.$queryRawUnsafe<GlnRow[]>(
-        `SELECT codigo, descripcion, tipo, activo, creado_en
+        `SELECT id, codigo, descripcion, tipo, establecimiento_id, activo
            FROM ece.gs1_gln
           WHERE ${conditions.join(" AND ")}
           ORDER BY descripcion
@@ -231,46 +231,47 @@ const glnRouter = router({
         ...params,
       );
       return rows.map((r) => ({
-        codigo: r.codigo, descripcion: r.descripcion,
-        tipo: r.tipo, activo: r.activo, creadoEn: r.creado_en,
+        id: r.id, codigo: r.codigo, descripcion: r.descripcion,
+        tipo: r.tipo, establecimientoId: r.establecimiento_id, activo: r.activo,
       }));
     }),
 
   get: tenantProcedure
-    .input(z.object({ codigo: z.string().length(13) }))
+    .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
       type GlnRow = {
-        codigo: string; descripcion: string; tipo: string; activo: boolean; creado_en: Date;
+        id: string; codigo: string; descripcion: string; tipo: string;
+        establecimiento_id: string | null; activo: boolean;
       };
       const rows = await ctx.prisma.$queryRawUnsafe<GlnRow[]>(
-        `SELECT codigo, descripcion, tipo, activo, creado_en
-           FROM ece.gs1_gln WHERE codigo = $1`,
-        input.codigo,
+        `SELECT id, codigo, descripcion, tipo, establecimiento_id, activo
+           FROM ece.gs1_gln WHERE id = $1::uuid`,
+        input.id,
       );
       const row = rows[0];
       if (!row) throw new TRPCError({ code: "NOT_FOUND", message: "GLN no encontrado" });
-      return { codigo: row.codigo, descripcion: row.descripcion,
-               tipo: row.tipo, activo: row.activo, creadoEn: row.creado_en };
+      return { id: row.id, codigo: row.codigo, descripcion: row.descripcion,
+               tipo: row.tipo, establecimientoId: row.establecimiento_id, activo: row.activo };
     }),
 
   create: requireRole(["ADMIN", "LOGISTIC"])
     .input(glnCreateInput)
     .mutation(async ({ ctx, input }) => {
-      type CodigoRow = { codigo: string };
-      const rows = await ctx.prisma.$queryRawUnsafe<CodigoRow[]>(
-        `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo)
-         VALUES ($1, $2, $3) RETURNING codigo`,
-        input.codigo, input.descripcion, input.tipo,
+      type IdRow = { id: string };
+      const rows = await ctx.prisma.$queryRawUnsafe<IdRow[]>(
+        `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo, establecimiento_id)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        input.codigo, input.descripcion, input.tipo, input.establecimientoId ?? null,
       );
-      return { codigo: rows[0]!.codigo };
+      return { id: rows[0]!.id };
     }),
 
   deactivate: requireRole(["ADMIN"])
-    .input(z.object({ codigo: z.string().length(13) }))
+    .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       await ctx.prisma.$executeRawUnsafe(
-        `UPDATE ece.gs1_gln SET activo = false WHERE codigo = $1`,
-        input.codigo,
+        `UPDATE ece.gs1_gln SET activo = false, actualizado_en = now() WHERE id = $1::uuid`,
+        input.id,
       );
       return { ok: true as const };
     }),

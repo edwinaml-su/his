@@ -21,7 +21,6 @@ import { TRPCError } from "@trpc/server";
 // ──────────────────────────────────────────────────────────────────────────────
 
 const CERT_ID     = "c1000000-0000-0000-0000-000000000001";
-const INSTANCIA_ID = "d1000000-0000-0000-0000-000000000001";
 const EPI_ID      = "e1000000-0000-0000-0000-000000000001";
 const EPICRISIS_ID = "ec000000-0000-0000-0000-000000000001";
 const PAC_ID      = "p1000000-0000-0000-0000-000000000001";
@@ -59,35 +58,38 @@ vi.mock("../../../workflow/context", () => ({
 // Fixtures
 // ──────────────────────────────────────────────────────────────────────────────
 
-// Columnas reales de ece.certificado_defuncion (CertDefRow, DDL vivo 2026-06-11).
 function makeCertRow(overrides: Partial<{
   estado_workflow: string;
   firmado_en: Date | null;
   validado_en: Date | null;
   certificado_en: Date | null;
   anulado_en: Date | null;
+  motivo_anulacion: string | null;
   payload_hash: string | null;
 }> = {}) {
   return {
     id: CERT_ID,
-    instancia_id: INSTANCIA_ID,
     episodio_id: EPI_ID,
     epicrisis_id: EPICRISIS_ID,
+    paciente_id: PAC_ID,
     fecha_hora_defuncion: new Date("2026-05-17T10:00:00Z"),
+    lugar_defuncion: "intrahospitalaria",
+    causa_principal_cie10: "J18.9",
+    causas_intermedias_cie10: [],
     causa_basica_cie10: "E11.9",
-    causas_intermedias: [],
-    causas_contribuyentes: [],
-    clasificacion: "natural",
-    numero_certificado: null,
-    medico_certificante_id: PERSONAL_ID,
-    registrado_en: new Date(),
+    manera: "natural",
+    autopsia_realizada: false,
+    observaciones: null,
     estado_workflow: overrides.estado_workflow ?? "borrador",
     medico_firmante_id: null,
     firmado_en: overrides.firmado_en ?? null,
     validado_en: overrides.validado_en ?? null,
     certificado_en: overrides.certificado_en ?? null,
     anulado_en: overrides.anulado_en ?? null,
+    motivo_anulacion: overrides.motivo_anulacion ?? null,
     payload_hash: overrides.payload_hash ?? null,
+    registrado_en: new Date(),
+    establecimiento_id: ESTAB_ID,
   };
 }
 
@@ -162,17 +164,16 @@ describe("eceCertDefRouter", () => {
   // create — incluye B-04
   // ──────────────────────────────────────────────────────────────────────────
   describe("create", () => {
-    // Schema instancia-first (DDL vivo 2026-06-11): instanciaId + clasificacion
-    // (natural/violenta/accidente_transito/en_investigacion) + causaBasicaCie10.
     const createInput = {
-      instanciaId: INSTANCIA_ID,
       episodioId: EPI_ID,
       epicrisisId: EPICRISIS_ID,
       fechaHoraDefuncion: new Date("2026-05-17T10:00:00Z"),
-      clasificacion: "natural" as const,
+      lugarDefuncion: "intrahospitalaria" as const,
+      causaPrincipalCie10: "J18.9",
+      causasIntermediasCie10: ["I50.9"],
       causaBasicaCie10: "E11.9",
-      causasIntermedias: ["I50.9"],
-      causasContribuyentes: [],
+      manera: "natural" as const,
+      autopsiaRealizada: false,
     };
 
     it("crea certificado en estado borrador cuando epicrisis es fallecido", async () => {

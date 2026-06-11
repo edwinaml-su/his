@@ -74,14 +74,13 @@ function formatTime(iso: string): string {
 
 type BitacoraItem = {
   id: string;
-  firmaId: string | null;
-  userId: string;
-  pacienteId: string | null;
+  authUserId: string | null;
+  recursoId: string | null;
   accion: string;
-  exito: boolean;
-  contexto: string | null;
-  ip: string | null;
-  registradoEn: string;
+  autorizado: boolean;
+  justificacion: string | null;
+  ipOrigen: string | null;
+  ocurridoEn: string;
 };
 
 /**
@@ -91,7 +90,7 @@ type BitacoraItem = {
 function groupByDay(items: BitacoraItem[]): Map<string, BitacoraItem[]> {
   const map = new Map<string, BitacoraItem[]>();
   for (const item of items) {
-    const day = isoDay(item.registradoEn);
+    const day = isoDay(item.ocurridoEn);
     const bucket = map.get(day) ?? [];
     bucket.push(item);
     map.set(day, bucket);
@@ -130,34 +129,36 @@ function TimelineEntry({ item }: { item: BitacoraItem }) {
         <summary className="cursor-pointer list-none">
           <div className="flex flex-wrap items-center gap-2">
             <time
-              dateTime={item.registradoEn}
+              dateTime={item.ocurridoEn}
               className="font-mono text-xs text-muted-foreground"
             >
-              {formatTime(item.registradoEn)}
+              {formatTime(item.ocurridoEn)}
             </time>
             <Badge variant={isCritical ? "destructive" : "outline"} className="text-xs">
               {item.accion}
             </Badge>
             <span className="text-xs text-muted-foreground">
               Usuario:{" "}
-              <span className="font-mono">{item.userId.slice(0, 8)}…</span>
+              <span className="font-mono">
+                {item.authUserId ? `${item.authUserId.slice(0, 8)}…` : "—"}
+              </span>
             </span>
-            {item.pacienteId && (
+            {item.recursoId && (
               <span className="text-xs text-muted-foreground">
-                Paciente:{" "}
-                <span className="font-mono">{item.pacienteId.slice(0, 8)}…</span>
+                Recurso:{" "}
+                <span className="font-mono">{item.recursoId.slice(0, 8)}…</span>
               </span>
             )}
-            {item.contexto && (
+            {item.justificacion && (
               <span className="truncate text-xs text-muted-foreground">
-                {item.contexto}
+                {item.justificacion}
               </span>
             )}
             <Badge
-              variant={item.exito ? "default" : "destructive"}
+              variant={item.autorizado ? "default" : "destructive"}
               className="ml-auto text-xs"
             >
-              {item.exito ? "OK" : "FALLO"}
+              {item.autorizado ? "OK" : "FALLO"}
             </Badge>
           </div>
         </summary>
@@ -170,23 +171,17 @@ function TimelineEntry({ item }: { item: BitacoraItem }) {
           </div>
           <div>
             <dt className="font-medium text-muted-foreground">IP</dt>
-            <dd>{item.ip ?? "—"}</dd>
+            <dd>{item.ipOrigen ?? "—"}</dd>
           </div>
-          {item.firmaId && (
+          {item.recursoId && (
             <div>
-              <dt className="font-medium text-muted-foreground">Firma ID</dt>
-              <dd className="font-mono">{item.firmaId}</dd>
-            </div>
-          )}
-          {item.pacienteId && (
-            <div>
-              <dt className="font-medium text-muted-foreground">Paciente UUID</dt>
-              <dd className="font-mono">{item.pacienteId}</dd>
+              <dt className="font-medium text-muted-foreground">Recurso UUID</dt>
+              <dd className="font-mono">{item.recursoId}</dd>
             </div>
           )}
           <div className="col-span-2">
-            <dt className="font-medium text-muted-foreground">Contexto completo</dt>
-            <dd className="break-all">{item.contexto ?? "—"}</dd>
+            <dt className="font-medium text-muted-foreground">Justificación completa</dt>
+            <dd className="break-all">{item.justificacion ?? "—"}</dd>
           </div>
         </dl>
       </details>

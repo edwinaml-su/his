@@ -18,13 +18,23 @@ import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 
+// CHECK atencion_emergencia_disposicion_check: alta_ambulatoria|observacion|orden_ingreso|referencia
+type Disposicion = "alta_ambulatoria" | "observacion" | "orden_ingreso" | "referencia";
+
+const DISPOSICION_OPTIONS: { value: Disposicion; label: string }[] = [
+  { value: "alta_ambulatoria", label: "Alta ambulatoria" },
+  { value: "observacion", label: "Observación" },
+  { value: "orden_ingreso", label: "Orden de ingreso" },
+  { value: "referencia", label: "Referencia" },
+];
+
 interface AtencionForm {
   episodioId: string;
   pacienteId: string;
   circunstanciaLlegada: string;
   motivoConsulta: string;
   examenFisico: string;
-  disposicion: string;
+  disposicion: Disposicion | "";
   diagnosticos: string;
   manejoRealizado: string;
 }
@@ -70,7 +80,7 @@ export default function NuevaAtencionEmergenciaPage() {
   });
   const [clientError, setClientError] = React.useState<string | null>(null);
 
-  function update<K extends keyof AtencionForm>(key: K, value: string) {
+  function update<K extends keyof AtencionForm>(key: K, value: AtencionForm[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
@@ -92,7 +102,7 @@ export default function NuevaAtencionEmergenciaPage() {
       circunstanciaLlegada: form.circunstanciaLlegada.trim() || undefined,
       motivoConsulta:       form.motivoConsulta.trim(),
       examenFisico:         form.examenFisico.trim(),
-      disposicion:          form.disposicion.trim() || undefined,
+      disposicion:          form.disposicion || undefined,
       diagnosticos:         { texto: form.diagnosticos.trim() },
       manejoRealizado:      { texto: form.manejoRealizado.trim() },
     });
@@ -240,14 +250,19 @@ export default function NuevaAtencionEmergenciaPage() {
                 <Label htmlFor="disposicion">
                   Destino del paciente al finalizar la atención (opcional)
                 </Label>
-                <textarea
+                <select
                   id="disposicion"
                   value={form.disposicion}
-                  onChange={(e) => update("disposicion", e.target.value)}
-                  placeholder="Admisión a sala de observación, alta con cita, traslado…"
-                  className="min-h-[80px] w-full rounded-md border bg-background p-3 text-sm"
-                  maxLength={1000}
-                />
+                  onChange={(e) => update("disposicion", e.target.value as Disposicion | "")}
+                  className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                >
+                  <option value="">Seleccione disposición…</option>
+                  {DISPOSICION_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
               </FormField>
             </div>
 

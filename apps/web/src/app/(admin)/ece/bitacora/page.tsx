@@ -58,17 +58,16 @@ const ACCIONES_TODAS = [
 
 type Accion = (typeof ACCIONES_TODAS)[number];
 
-/** Forma de fila retornada por bitacora.list (espejo del router). */
+/** Forma de fila retornada por bitacora.list (espejo del router — cols DDL reales). */
 type BitacoraRow = {
   id: string;
-  firmaId: string | null;
-  userId: string;
-  pacienteId: string | null;
+  authUserId: string | null;
+  recursoId: string | null;
   accion: string;
-  exito: boolean;
-  contexto: string | null;
-  ip: string | null;
-  registradoEn: string;
+  autorizado: boolean;
+  justificacion: string | null;
+  ipOrigen: string | null;
+  ocurridoEn: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -653,11 +652,11 @@ export default function BitacoraEcePage() {
                 <TableRow>
                   <TableHead scope="col">Fecha / hora</TableHead>
                   <TableHead scope="col">Usuario</TableHead>
-                  <TableHead scope="col">Paciente</TableHead>
+                  <TableHead scope="col">Recurso</TableHead>
                   <TableHead scope="col">Accion</TableHead>
                   <TableHead scope="col">Resultado</TableHead>
                   <TableHead scope="col">IP</TableHead>
-                  <TableHead scope="col">Contexto</TableHead>
+                  <TableHead scope="col">Justificacion</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -677,30 +676,30 @@ export default function BitacoraEcePage() {
                   rows.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell className="whitespace-nowrap text-xs">
-                        <time dateTime={row.registradoEn}>
-                          {new Date(row.registradoEn).toLocaleString("es-SV")}
+                        <time dateTime={row.ocurridoEn}>
+                          {new Date(row.ocurridoEn).toLocaleString("es-SV")}
                         </time>
                       </TableCell>
                       <TableCell className="font-mono text-xs">
-                        {row.userId.slice(0, 8)}…
+                        {row.authUserId ? `${row.authUserId.slice(0, 8)}…` : "—"}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
-                        {row.pacienteId ? `${row.pacienteId.slice(0, 8)}…` : "—"}
+                        {row.recursoId ? `${row.recursoId.slice(0, 8)}…` : "—"}
                       </TableCell>
                       <TableCell>
                         <AccionBadge accion={row.accion} />
                       </TableCell>
                       <TableCell>
-                        <Badge variant={row.exito ? "default" : "destructive"}>
-                          {row.exito ? "OK" : "FALLO"}
+                        <Badge variant={row.autorizado ? "default" : "destructive"}>
+                          {row.autorizado ? "OK" : "FALLO"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-xs">{row.ip ?? "—"}</TableCell>
+                      <TableCell className="text-xs">{row.ipOrigen ?? "—"}</TableCell>
                       <TableCell
                         className="max-w-xs truncate text-xs"
-                        title={row.contexto ?? undefined}
+                        title={row.justificacion ?? undefined}
                       >
-                        {row.contexto ?? "—"}
+                        {row.justificacion ?? "—"}
                       </TableCell>
                     </TableRow>
                   ))
