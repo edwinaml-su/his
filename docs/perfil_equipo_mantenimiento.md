@@ -57,3 +57,49 @@ rol, no un extra.
 - Modelar solo con Prisma sin leer el DDL vivo (`information_schema` / `pg_constraint`).
 - Relajar/duplicar un `CHECK` o tocar RLS sin entender el contrato `withTenantContext`.
 - Resolver un conflicto de merge en un router clínico sin verificar contra el esquema.
+
+---
+
+# Estación de trabajo — especificación para adquisición de equipos
+
+> Spec lista para requisición de compra. Los números NO son genéricos: derivan de
+> lo que el stack demanda — `next build` (231 páginas, minutos), `tsc` en 7
+> workspaces, Vitest (collect ~60s, 2542 tests + integración), Turborepo (paraleliza),
+> Prisma generate, y Docker (Postgres efímero para los tests de integración).
+
+## Especificación por equipo
+| Componente | Mínimo aceptable | **Recomendado (estándar de compra)** | Justificación técnica |
+|---|---|---|---|
+| **CPU** | 6 núcleos / 12 hilos (i5-13xxx, Ryzen 5 7xxx, Apple M2) | **8 núcleos físicos** (i7/Ryzen 7, **Apple M3/M3 Pro**) | Turbo + `tsc` + Vitest paralelizan; el monorepo (96+49 routers) hace builds/typecheck pesados |
+| **RAM** | 16 GB | **32 GB** | `next build` + Docker (Postgres) + `tsc` + IDE + navegador superan 16 GB en simultáneo |
+| **Almacenamiento** | SSD NVMe 512 GB | **NVMe 1 TB** | `node_modules` del monorepo + caché `.next` + imágenes Docker = varios GB; NVMe acelera `npm ci`/build |
+| **GPU** | Integrada (no requiere dedicada) | Integrada | El stack no usa GPU |
+| **Pantalla** | Laptop 14" FHD | Laptop 14"+ **+ monitor externo 27" QHD/4K** | Densidad de código, diffs y SQL crudo lado a lado |
+| **Sistema operativo** | Win 11 Pro **+ WSL2**, macOS 14+, o Ubuntu LTS | igual | El toolchain Node/Postgres rinde mejor en WSL2/macOS/Linux que en cmd.exe nativo |
+| **Red** | 50/10 Mbps estable | ≥100 Mbps | Supabase remoto, Vercel, GitHub, `npm` |
+
+## Cantidades por rol (alinear con el perfil de equipo, arriba)
+| Rol | Estaciones | Tier sugerido |
+|---|---|---|
+| Lead full-stack senior | 1 | Recomendado-alto (8c / **32 GB** / 1 TB) |
+| Backend/DBA | 1 | Recomendado-alto (8c / **32 GB** / 1 TB) — corre el harness + Docker Postgres |
+| QA/SDET (integración) | 1 | Recomendado (8c / 32 GB / 512 GB–1 TB) |
+| Dominio clínico/regulatorio (part-time) | 1 | Estándar de oficina (no requiere tier dev) |
+
+## Software y licencias (lo que procurement debe contemplar)
+- **Node ≥ 20 + npm ≥ 10**, **Git** (gratis).
+- **IDE**: VS Code (gratis) — suficiente. JetBrains WebStorm (licencia paga) opcional.
+- **Docker Desktop**: gratis para orgs pequeñas; **requiere licencia paga si la empresa tiene >250 empleados o >US$10M de ingresos**. Alternativa gratis: **Rancher Desktop / Podman**.
+- **Playwright** + navegadores (gratis).
+- **Asientos/cuentas** (recurrentes, no hardware): GitHub (repo privado → plan de equipo), Vercel (seat por dev), Supabase (seat/acceso al proyecto).
+- Cliente Postgres (psql / DBeaver — gratis), `gh` CLI (gratis), Supabase CLI (gratis).
+
+## Modelos de referencia (ilustrativos, por tier recomendado)
+- **macOS**: MacBook Pro 14" **M3 Pro, 36 GB RAM, 1 TB SSD**.
+- **x86 portátil**: Lenovo ThinkPad T/P-series o Dell Precision/XPS — **Ryzen 7 / i7, 32 GB, NVMe 1 TB**.
+- **x86 escritorio**: Ryzen 7/9 o i7, **32 GB**, NVMe 1 TB, + monitor 27" QHD.
+
+## Regla práctica
+El punto dulce de compra es **8 núcleos / 32 GB / NVMe 1 TB**: corre build + typecheck +
+suite completa + Docker + E2E sin pelear con la máquina. **No comprar por debajo de
+16 GB** — `next build` + Docker simultáneos hacen swap y matan la productividad.
