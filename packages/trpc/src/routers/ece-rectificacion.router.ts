@@ -297,11 +297,12 @@ export const eceRectificacionRouter = router({
         ctx.prisma.$queryRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
-        ) => Promise<Array<{ id: string; paciente_id: string; estado_codigo: string }>>
+        ) => Promise<Array<{ id: string; paciente_public_id: string | null; estado_codigo: string }>>
       )`
-        SELECT di.id, di.paciente_id, fe.codigo AS estado_codigo
+        SELECT di.id, p.public_patient_id::text AS paciente_public_id, fe.codigo AS estado_codigo
         FROM ece.documento_instancia di
         JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+        LEFT JOIN ece.paciente p ON p.id = di.paciente_id
         WHERE di.id = ${input.documentoInstanciaId}::uuid
         LIMIT 1
       `;
@@ -321,7 +322,14 @@ export const eceRectificacionRouter = router({
         });
       }
 
-      const pacienteId = docRows[0].paciente_id;
+      // solicitud_arco.paciente_id es FK a public."Patient".id (NO a ece.paciente.id).
+      const pacienteId = docRows[0].paciente_public_id;
+      if (!pacienteId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "El paciente del documento no está vinculado al MPI público.",
+        });
+      }
 
       const newRows = await (
         ctx.prisma.$queryRaw as (

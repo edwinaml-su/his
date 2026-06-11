@@ -332,13 +332,13 @@ export const eceAtencionRnRouter = router({
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<Array<{ id: string }>>)`
         INSERT INTO public."Patient"
-          ("organizationId", mrn, "firstName", "lastName", "birthDate",
-           "birthDateEstimated", "biologicalSexId", "isUnknown", "motherPatientId", "createdBy")
+          (id, "organizationId", mrn, "firstName", "lastName", "birthDate",
+           "birthDateEstimated", "biologicalSexId", "isUnknown", "motherPatientId", "createdBy", "updatedAt")
         VALUES (
-          ${orgId}::uuid, ${mrnRn}, ${input.rnPrimerNombre}, ${input.rnPrimerApellido},
+          gen_random_uuid(), ${orgId}::uuid, ${mrnRn}, ${input.rnPrimerNombre}, ${input.rnPrimerApellido},
           ${input.rnBirthDate.toISOString()}::timestamptz,
           false, ${input.rnBiologicalSexId}::uuid, false,
-          ${motherPublicId}::uuid, ${ctx.user.id}::uuid
+          ${motherPublicId}::uuid, ${ctx.user.id}::uuid, now()
         )
         RETURNING id::text
       `;

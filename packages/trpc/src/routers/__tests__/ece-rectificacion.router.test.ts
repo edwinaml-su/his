@@ -143,7 +143,7 @@ describe("eceRectificacionRouter", () => {
     it("happy-path: crea solicitud en doc firmado", async () => {
       // 1ª query: documento_instancia + flujo_estado
       prisma.$queryRaw
-        .mockResolvedValueOnce([{ id: DOC_ID, paciente_id: PAC_ID, estado_codigo: "firmado" }])
+        .mockResolvedValueOnce([{ id: DOC_ID, paciente_public_id: PAC_ID, estado_codigo: "firmado" }])
         // 2ª query: INSERT solicitud_arco RETURNING id
         .mockResolvedValueOnce([{ id: RECT_ID }]);
 
@@ -162,7 +162,7 @@ describe("eceRectificacionRouter", () => {
     });
 
     it("PRECONDITION_FAILED si el documento no está firmado", async () => {
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: DOC_ID, paciente_id: PAC_ID, estado_codigo: "borrador" }]);
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: DOC_ID, paciente_public_id: PAC_ID, estado_codigo: "borrador" }]);
 
       const caller = eceRectificacionRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.solicitar(validInput)).rejects.toMatchObject({

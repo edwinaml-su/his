@@ -502,7 +502,7 @@ export const eceEpisodioRouter = router({
             ${input.episodioId}::uuid,
             ${estadoActual},
             ${input.nuevoEstado},
-            ${ece.personalId}::uuid,
+            (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
             ${input.observacion ?? null}
           )
         `;

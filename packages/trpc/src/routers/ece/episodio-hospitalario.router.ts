@@ -627,7 +627,7 @@ export const eceEpisodioHospitalarioRouter = router({
           ${input.episodioId}::uuid,
           'en_curso',
           'en_curso',
-          ${ece.personalId}::uuid,
+          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
           ${motivoAlta}
         )
       `;
@@ -719,10 +719,11 @@ export const eceEpisodioHospitalarioRouter = router({
         });
       }
 
-      // 2. Cerrar episodio + fecha_hora_egreso (columna BD real)
+      // 2. Cerrar episodio. chk_cierre_estado exige fecha_hora_cierre IS NOT NULL
+      // cuando estado='cerrado'.
       await tx.$executeRaw`
         UPDATE ece.episodio_atencion
-        SET estado = 'cerrado', actualizado_en = NOW()
+        SET estado = 'cerrado', fecha_hora_cierre = NOW(), actualizado_en = NOW()
         WHERE id = ${input.episodioId}::uuid
       `;
 
@@ -751,7 +752,7 @@ export const eceEpisodioHospitalarioRouter = router({
           ${input.episodioId}::uuid,
           'en_curso',
           'cerrado',
-          ${ece.personalId}::uuid,
+          (SELECT id FROM ece.personal_salud WHERE his_user_id = ${ece.personalId}::uuid AND activo = true LIMIT 1),
           'Alta confirmada'
         )
       `;
