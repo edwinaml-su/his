@@ -1997,10 +1997,29 @@ model Drug {
   updatedAt             DateTime           @updatedAt @db.Timestamptz()
 
   prescriptionItems PrescriptionItem[]
+  classifiers       DrugClassifier[]
 
   @@index([genericName])
   @@index([organizationId])
   @@index([alertLevel])
+  @@schema("public")
+}
+
+/// Mapeo N:M de un medicamento a vocabularios controlados externos
+/// (ATC, SNOMED CT, UNSPSC, RxNorm, ...). Guía GS1 El Salvador Nivel 1:
+/// permite múltiples clasificadores simultáneos. SQL 172.
+model DrugClassifier {
+  id        String   @id @default(uuid()) @db.Uuid
+  drugId    String   @db.Uuid
+  standard  String /// ATC | SNOMED | UNSPSC | RXNORM | CIE10 | LOINC
+  value     String
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  drug Drug @relation(fields: [drugId], references: [id], onDelete: Cascade)
+
+  @@unique([drugId, standard, value])
+  @@index([drugId])
+  @@index([standard, value])
   @@schema("public")
 }
 
