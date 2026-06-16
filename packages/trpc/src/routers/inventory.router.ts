@@ -158,6 +158,7 @@ export const inventoryRouter = router({
               establishmentId: input.establishmentId,
               itemId: input.itemId,
               lotNumber: input.lotNumber,
+              gtinFisico: input.gtinFisico ?? null,
               expiryDate: input.expiryDate ?? null,
               quantityOnHand: input.quantityOnHand,
               costPerUnit: input.costPerUnit ?? null,

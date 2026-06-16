@@ -3223,6 +3223,8 @@ model StockItem {
   category       String?  @db.VarChar(80) /// "MEDICAMENTO", "INSUMO", "REACTIVO", etc.
   trackLots      Boolean  @default(true) /// si requiere control de lote+expiry.
   reorderLevel   Decimal? @db.Decimal(18, 4)
+  /// GTIN-14 del artículo (FK a ece.gs1_gtin.codigo, SQL 170). Enlace Nivel 3→Nivel 2 GS1.
+  gtin           String?  @db.Char(14)
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @db.Timestamptz()
   createdBy      String?  @db.Uuid
@@ -3245,6 +3247,8 @@ model StockLot {
   establishmentId String    @db.Uuid /// bodega física.
   itemId          String    @db.Uuid
   lotNumber       String    @db.VarChar(80)
+  /// GTIN-14 físico escaneado del empaque (AI 01). Captura cruda GS1 DataMatrix, SQL 170.
+  gtinFisico      String?   @map("gtin_fisico") @db.Char(14)
   expiryDate      DateTime? @db.Date
   quantityOnHand  Decimal   @default(0) @db.Decimal(18, 4)
   reservedQty     Decimal   @default(0) @db.Decimal(18, 4) /// cantidad reservada (no disponible para OUT).
@@ -3277,6 +3281,8 @@ model StockMovement {
   quantity        Decimal           @db.Decimal(18, 4) /// positivo siempre; el signo lo da `type`.
   reason          String?           @db.VarChar(200)
   referenceCode   String?           @db.VarChar(80) /// nro factura, dispense, ajuste, etc.
+  /// GTIN-14 físico escaneado en el movimiento (AI 01), SQL 170.
+  gtinFisico      String?           @map("gtin_fisico") @db.Char(14)
   transferGroupId String?           @db.Uuid /// par OUT+IN del mismo TRANSFER (atomicidad).
   performedAt     DateTime          @default(now()) @db.Timestamptz()
   performedById   String?           @db.Uuid

@@ -42,6 +42,8 @@ export const stockLotCreateInput = z.object({
   establishmentId: z.string().uuid(),
   itemId: z.string().uuid(),
   lotNumber: z.string().trim().min(1).max(80),
+  /** GTIN-14 físico escaneado del empaque (AI 01 de GS1 DataMatrix). Captura cruda. */
+  gtinFisico: z.string().regex(/^\d{14}$/, "GTIN-14: 14 dígitos").optional(),
   expiryDate: z.coerce.date().optional(),
   quantityOnHand: z.number().nonnegative().default(0),
   costPerUnit: z.number().nonnegative().optional(),

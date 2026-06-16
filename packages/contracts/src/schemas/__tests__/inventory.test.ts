@@ -133,6 +133,27 @@ describe("stockLotCreateInput", () => {
         lotNumber: "",
       }).success,
     ).toBe(false));
+
+  it("acepta gtinFisico de 14 dígitos (AI 01 GS1)", () =>
+    expect(
+      stockLotCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u,
+        lotNumber: "LOT-A",
+        gtinFisico: "07411234567890",
+        quantityOnHand: 10,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza gtinFisico con longitud incorrecta", () =>
+    expect(
+      stockLotCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u,
+        lotNumber: "LOT-A",
+        gtinFisico: "123",
+      }).success,
+    ).toBe(false));
 });
 
 describe("stockLotListInput", () => {
