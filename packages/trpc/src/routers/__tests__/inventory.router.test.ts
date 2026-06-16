@@ -272,7 +272,7 @@ describe("inventoryRouter", () => {
       prisma.stockLot.findFirst
         .mockResolvedValueOnce({ id: u, lotNumber: "LOT-A", expiryDate: new Date("2027-01-01") } as never)
         // Lot ownership check: quantity < requested.
-        .mockResolvedValueOnce({ id: u, quantityOnHand: 3 } as never);
+        .mockResolvedValueOnce({ id: u, quantityOnHand: 3, qualityStatus: "AVAILABLE" } as never);
       const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
       await expect(
         caller.movement.create({
@@ -351,7 +351,7 @@ describe("inventoryRouter", () => {
       // FEFO: earliest lot IS the consumed lot.
       prisma.stockLot.findFirst
         .mockResolvedValueOnce({ id: u, lotNumber: "LOT-A", expiryDate: new Date("2027-01-01") } as never)
-        .mockResolvedValueOnce({ id: u, quantityOnHand: 50 } as never);
+        .mockResolvedValueOnce({ id: u, quantityOnHand: 50, qualityStatus: "AVAILABLE" } as never);
       prisma.stockMovement.create.mockResolvedValue({ id: u } as never);
       const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
       await caller.movement.out({
@@ -362,6 +362,28 @@ describe("inventoryRouter", () => {
         quantity: 10,
       });
       expect(prisma.stockMovement.create).toHaveBeenCalled();
+    });
+
+    it("OUT bloqueado si el lote no está AVAILABLE (recall/cuarentena)", async () => {
+      prisma.establishment.findFirst.mockResolvedValue({ id: u } as never);
+      // FEFO: el lote consumido ES el earliest (sin violación FEFO).
+      prisma.stockLot.findFirst
+        .mockResolvedValueOnce({ id: u, lotNumber: "LOT-A", expiryDate: new Date("2027-01-01") } as never)
+        // Lot ownership: estado de calidad RECALL bloquea la salida.
+        .mockResolvedValueOnce({ id: u, quantityOnHand: 50, qualityStatus: "RECALL" } as never);
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.movement.out({
+          establishmentId: u,
+          itemId: u,
+          lotId: u,
+          type: "OUT",
+          quantity: 5,
+        }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: expect.stringContaining("estado de calidad: RECALL"),
+      });
     });
 
     it("OUT FEFO violation blocks the movement", async () => {

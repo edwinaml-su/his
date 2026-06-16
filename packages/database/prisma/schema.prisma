@@ -3250,6 +3250,9 @@ model StockLot {
   /// GTIN-14 físico escaneado del empaque (AI 01). Captura cruda GS1 DataMatrix, SQL 170.
   gtinFisico      String?   @map("gtin_fisico") @db.Char(14)
   expiryDate      DateTime? @db.Date
+  /// Estado de calidad logístico-clínico (guía GS1 El Salvador Nivel 3), SQL 171.
+  /// AVAILABLE | QUARANTINE | RECALL | EXPIRED — bloquea salida si <> AVAILABLE.
+  qualityStatus   String    @default("AVAILABLE") @map("quality_status")
   quantityOnHand  Decimal   @default(0) @db.Decimal(18, 4)
   reservedQty     Decimal   @default(0) @db.Decimal(18, 4) /// cantidad reservada (no disponible para OUT).
   costPerUnit     Decimal?  @db.Decimal(18, 4)
