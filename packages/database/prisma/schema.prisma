@@ -6004,13 +6004,26 @@ model EceReanimacionNeonatal {
 
 // --- GS1 catalogos (SQL 76) ---
 
-/// Catalogo GS1 GTIN — identificador global de articulo comercial
+/// Catálogo GS1 GTIN — catálogo comercial Nivel 2 canónico (guía GS1 El Salvador).
+/// Identificador global de artículo comercial. La PK semántica es `codigo` (GTIN-14).
 model EceGs1Gtin {
-  id          String   @id @default(uuid()) @db.Uuid
-  gtin        String   @unique @db.VarChar(14)
-  descripcion String?
-  activo      Boolean  @default(true)
-  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+  id                   String    @id @default(uuid()) @db.Uuid
+  codigo               String    @unique @db.Char(14)
+  descripcion          String
+  fabricante           String
+  presentacion         String
+  contenidoUnidades    Decimal   @map("contenido_unidades") @db.Decimal(10, 3)
+  principioActivo      String?   @map("principio_activo")
+  codigoAtc            String?   @map("codigo_atc")
+  activo               Boolean   @default(true)
+  creadoEn             DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+  actualizadoEn        DateTime  @default(now()) @map("actualizado_en") @db.Timestamptz()
+  principiosActivos    String[]  @map("principios_activos")
+  excipientesAlergenos String[]  @map("excipientes_alergenos")
+  recallStatus         String?   @map("recall_status") @db.VarChar(40)
+  recallMotivo         String?   @map("recall_motivo")
+  recallIniciadoEn     DateTime? @map("recall_iniciado_en") @db.Timestamptz()
+  loteVencimiento      DateTime? @map("lote_vencimiento") @db.Date
 
   sustitutosA EceGs1GtinSustitutos[] @relation("GtinA")
   sustitutosB EceGs1GtinSustitutos[] @relation("GtinB")
@@ -6307,6 +6320,9 @@ model StaffGsrn {
 /// GS1 F2-S7 — Catálogo GTIN con metadatos extendidos para alertas bedside.
 /// Extiende el catálogo de drogas/medicamentos con campos GS1 de rastreabilidad.
 /// GTIN-14 como clave natural única. Reusable desde Drug via gtinRef.
+/// NOTA: el catálogo comercial Nivel 2 canónico (guía GS1 El Salvador) es
+/// ece.gs1_gtin (EceGs1Gtin). Esta tabla es un caché tenant-scoped para bedside;
+/// consolidar ambos en ece.gs1_gtin queda como follow-up.
 model MedicationGtin {
   id                  String   @id @default(uuid()) @db.Uuid
   organizationId      String   @db.Uuid
