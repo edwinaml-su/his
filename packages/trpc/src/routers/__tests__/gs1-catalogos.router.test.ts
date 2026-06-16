@@ -177,6 +177,52 @@ describe("gs1Catalogos.gtin", () => {
     const sql = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
     expect(sql).toContain("activo = false");
   });
+
+  it("create acepta campos de jerarquía de empaque (Nivel 2 GS1)", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ id: "id-caja" }]);
+
+    const caller = gs1CatalogosRouter.createCaller(makeCtx({ prisma }));
+    await caller.gtin.create({
+      codigo: GTIN_MUTATION,
+      descripcion: "Caja x50 blisters",
+      fabricante: "Lab",
+      presentacion: "Caja",
+      contenidoUnidades: 50,
+      nivelEmpaque: "CAJA",
+      gtinContenido: GTIN_MUTATION,
+      cantidadContenida: 50,
+    });
+
+    const sql = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toContain("nivel_empaque");
+    expect(sql).toContain("gtin_contenido");
+    expect(sql).toContain("cantidad_contenida");
+  });
+
+  it("create rechaza nivel_empaque no válido (Zod)", async () => {
+    const caller = gs1CatalogosRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.gtin.create({
+        codigo: GTIN_MUTATION,
+        descripcion: "X",
+        fabricante: "L",
+        presentacion: "P",
+        contenidoUnidades: 1,
+        nivelEmpaque: "BARRIL" as "CAJA",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("explotarJerarquia retorna el total de unidosis del helper SQL", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ unidosis: "500" }]);
+
+    const caller = gs1CatalogosRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.gtin.explotarJerarquia({ codigo: GTIN_MUTATION });
+
+    expect(result.unidosisTotales).toBe(500);
+    const sql = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toContain("fn_gs1_unidosis_por_empaque");
+  });
 });
 
 // ---------------------------------------------------------------------------

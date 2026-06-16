@@ -6024,6 +6024,12 @@ model EceGs1Gtin {
   recallMotivo         String?   @map("recall_motivo")
   recallIniciadoEn     DateTime? @map("recall_iniciado_en") @db.Timestamptz()
   loteVencimiento      DateTime? @map("lote_vencimiento") @db.Date
+  /// Jerarquía de empaque Nivel 2 (guía GS1 El Salvador): GTIN padre→hijo recursivo.
+  /// La integridad referencial vive en las FK de SQL 169 (acceso vía $queryRaw).
+  gtinContenido        String?   @map("gtin_contenido") @db.Char(14)
+  nivelEmpaque         String?   @map("nivel_empaque")
+  cantidadContenida    Decimal?  @map("cantidad_contenida") @db.Decimal(12, 3)
+  idClinicoRel         String?   @map("id_clinico_rel") @db.Uuid
 
   sustitutosA EceGs1GtinSustitutos[] @relation("GtinA")
   sustitutosB EceGs1GtinSustitutos[] @relation("GtinB")
