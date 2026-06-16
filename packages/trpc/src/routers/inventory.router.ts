@@ -158,6 +158,7 @@ export const inventoryRouter = router({
               establishmentId: input.establishmentId,
               itemId: input.itemId,
               lotNumber: input.lotNumber,
+              gtinFisico: input.gtinFisico ?? null,
               expiryDate: input.expiryDate ?? null,
               quantityOnHand: input.quantityOnHand,
               costPerUnit: input.costPerUnit ?? null,
@@ -263,12 +264,19 @@ export const inventoryRouter = router({
               organizationId: ctx.tenant.organizationId,
               itemId: input.itemId,
             },
-            select: { id: true, quantityOnHand: true },
+            select: { id: true, quantityOnHand: true, qualityStatus: true },
           });
           if (!lot) {
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Lote no pertenece al item/tenant.",
+            });
+          }
+          // GS1 Nivel 3: no se dispensa un lote en cuarentena, recall o caducado.
+          if (input.type === "OUT" && lot.qualityStatus !== "AVAILABLE") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Lote no disponible para salida (estado de calidad: ${lot.qualityStatus}).`,
             });
           }
           // Guard against negative stock at the application layer (DB trigger is the safety net).
@@ -335,12 +343,19 @@ export const inventoryRouter = router({
               organizationId: ctx.tenant.organizationId,
               itemId: input.itemId,
             },
-            select: { id: true, quantityOnHand: true },
+            select: { id: true, quantityOnHand: true, qualityStatus: true },
           });
           if (!lot) {
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Lote no pertenece al item/tenant.",
+            });
+          }
+          // GS1 Nivel 3: no se dispensa un lote en cuarentena, recall o caducado.
+          if (lot.qualityStatus !== "AVAILABLE") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Lote no disponible para salida (estado de calidad: ${lot.qualityStatus}).`,
             });
           }
           if (Number(lot.quantityOnHand) < input.quantity) {

@@ -10,6 +10,7 @@ import {
   buildBedsideEvent,
   buildDispensationEvent,
   buildSubstitutionEvent,
+  buildLogisticsEvent,
 } from "../epcis-builder";
 
 const BASE = {
@@ -166,5 +167,38 @@ describe("buildSubstitutionEvent", () => {
     const row = buildSubstitutionEvent(substInput);
     const why = row.why as Record<string, unknown>;
     expect(why.businessStep).toBe("accepting");
+  });
+});
+
+describe("buildLogisticsEvent", () => {
+  const logBase = {
+    gtin: "07501000001234",
+    lote: "L2024A",
+    glnReadPoint: "7413000000001",
+    timestamp: new Date("2026-06-16T08:00:00.000Z"),
+    establecimientoId: "00000000-0000-0000-0000-000000000002",
+  };
+
+  it("RECEPTION → ObjectEvent, businessStep=receiving", () => {
+    const row = buildLogisticsEvent({ ...logBase, type: "RECEPTION" });
+    expect(row.tipo_evento).toBe("ObjectEvent");
+    expect(row.subtipo).toBe("RECEPTION");
+    expect((row.why as Record<string, unknown>).businessStep).toBe("receiving");
+  });
+
+  it("FRACTIONATION → TransformationEvent (repackaging)", () => {
+    const row = buildLogisticsEvent({ ...logBase, type: "FRACTIONATION" });
+    expect(row.tipo_evento).toBe("TransformationEvent");
+    expect((row.why as Record<string, unknown>).businessStep).toBe("repackaging");
+  });
+
+  it("QUARANTINE refleja disposition=recall", () => {
+    const row = buildLogisticsEvent({ ...logBase, type: "QUARANTINE" });
+    expect((row.why as Record<string, unknown>).disposition).toBe("recall");
+  });
+
+  it("genera payload_hash SHA-256 de 64 hex", () => {
+    const row = buildLogisticsEvent({ ...logBase, type: "STORAGE" });
+    expect(row.payload_hash).toMatch(/^[0-9a-f]{64}$/);
   });
 });

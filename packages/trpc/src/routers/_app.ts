@@ -125,6 +125,8 @@ import { epcisQueryRouter } from "./epcis-query.router";
 import { coldChainRouter } from "./cold-chain.router";
 // GS1 Healthcare Standards
 import { gs1CatalogosRouter } from "./gs1-catalogos.router";
+// GS1 Nivel 1 — clasificadores clínicos N:M (ATC/SNOMED/UNSPSC)
+import { drugClassifierRouter } from "./drug-classifier.router";
 // Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
 import { bedsideRouter } from "./bedside.router";
 // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)
@@ -342,6 +344,7 @@ export const appRouter = router({
   coldChain: coldChainRouter,
   // GS1 Healthcare Standards
   gs1: gs1CatalogosRouter,
+  drugClassifier: drugClassifierRouter,
   // Fase 2 — S7: Algoritmo 5 Correctos bedside (US.F2.6.21-22)
   bedside: bedsideRouter,
   // ECE — Acto Quirúrgico (NTEC §3.13 / Doc 13)

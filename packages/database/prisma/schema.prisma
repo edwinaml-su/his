@@ -1984,6 +1984,9 @@ model Drug {
   pharmaceuticalForm    PharmaceuticalForm
   strengthValue         Decimal            @db.Decimal(12, 4)
   strengthUnit          String             @db.VarChar(20) /// mg, ml, mcg, UI, %.
+  /// Margen de tolerancia terapéutica para compras (guía GS1 El Salvador Nivel 1), SQL 174.
+  marginTolerance       Decimal?           @map("margin_tolerance") @db.Decimal(12, 4)
+  marginToleranceUnit   String?            @map("margin_tolerance_unit") @db.VarChar(20)
   dispensingClass       DispensingClass    @default(RX)
   requiresControlledLog Boolean            @default(false)
   active                Boolean            @default(true)
@@ -1997,10 +2000,29 @@ model Drug {
   updatedAt             DateTime           @updatedAt @db.Timestamptz()
 
   prescriptionItems PrescriptionItem[]
+  classifiers       DrugClassifier[]
 
   @@index([genericName])
   @@index([organizationId])
   @@index([alertLevel])
+  @@schema("public")
+}
+
+/// Mapeo N:M de un medicamento a vocabularios controlados externos
+/// (ATC, SNOMED CT, UNSPSC, RxNorm, ...). Guía GS1 El Salvador Nivel 1:
+/// permite múltiples clasificadores simultáneos. SQL 172.
+model DrugClassifier {
+  id        String   @id @default(uuid()) @db.Uuid
+  drugId    String   @db.Uuid
+  standard  String /// ATC | SNOMED | UNSPSC | RXNORM | CIE10 | LOINC
+  value     String
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  drug Drug @relation(fields: [drugId], references: [id], onDelete: Cascade)
+
+  @@unique([drugId, standard, value])
+  @@index([drugId])
+  @@index([standard, value])
   @@schema("public")
 }
 
@@ -3223,6 +3245,8 @@ model StockItem {
   category       String?  @db.VarChar(80) /// "MEDICAMENTO", "INSUMO", "REACTIVO", etc.
   trackLots      Boolean  @default(true) /// si requiere control de lote+expiry.
   reorderLevel   Decimal? @db.Decimal(18, 4)
+  /// GTIN-14 del artículo (FK a ece.gs1_gtin.codigo, SQL 170). Enlace Nivel 3→Nivel 2 GS1.
+  gtin           String?  @db.Char(14)
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @db.Timestamptz()
   createdBy      String?  @db.Uuid
@@ -3245,7 +3269,12 @@ model StockLot {
   establishmentId String    @db.Uuid /// bodega física.
   itemId          String    @db.Uuid
   lotNumber       String    @db.VarChar(80)
+  /// GTIN-14 físico escaneado del empaque (AI 01). Captura cruda GS1 DataMatrix, SQL 170.
+  gtinFisico      String?   @map("gtin_fisico") @db.Char(14)
   expiryDate      DateTime? @db.Date
+  /// Estado de calidad logístico-clínico (guía GS1 El Salvador Nivel 3), SQL 171.
+  /// AVAILABLE | QUARANTINE | RECALL | EXPIRED — bloquea salida si <> AVAILABLE.
+  qualityStatus   String    @default("AVAILABLE") @map("quality_status")
   quantityOnHand  Decimal   @default(0) @db.Decimal(18, 4)
   reservedQty     Decimal   @default(0) @db.Decimal(18, 4) /// cantidad reservada (no disponible para OUT).
   costPerUnit     Decimal?  @db.Decimal(18, 4)
@@ -3277,6 +3306,8 @@ model StockMovement {
   quantity        Decimal           @db.Decimal(18, 4) /// positivo siempre; el signo lo da `type`.
   reason          String?           @db.VarChar(200)
   referenceCode   String?           @db.VarChar(80) /// nro factura, dispense, ajuste, etc.
+  /// GTIN-14 físico escaneado en el movimiento (AI 01), SQL 170.
+  gtinFisico      String?           @map("gtin_fisico") @db.Char(14)
   transferGroupId String?           @db.Uuid /// par OUT+IN del mismo TRANSFER (atomicidad).
   performedAt     DateTime          @default(now()) @db.Timestamptz()
   performedById   String?           @db.Uuid
@@ -6004,13 +6035,32 @@ model EceReanimacionNeonatal {
 
 // --- GS1 catalogos (SQL 76) ---
 
-/// Catalogo GS1 GTIN — identificador global de articulo comercial
+/// Catálogo GS1 GTIN — catálogo comercial Nivel 2 canónico (guía GS1 El Salvador).
+/// Identificador global de artículo comercial. La PK semántica es `codigo` (GTIN-14).
 model EceGs1Gtin {
-  id          String   @id @default(uuid()) @db.Uuid
-  gtin        String   @unique @db.VarChar(14)
-  descripcion String?
-  activo      Boolean  @default(true)
-  creadoEn    DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+  id                   String    @id @default(uuid()) @db.Uuid
+  codigo               String    @unique @db.Char(14)
+  descripcion          String
+  fabricante           String
+  presentacion         String
+  contenidoUnidades    Decimal   @map("contenido_unidades") @db.Decimal(10, 3)
+  principioActivo      String?   @map("principio_activo")
+  codigoAtc            String?   @map("codigo_atc")
+  activo               Boolean   @default(true)
+  creadoEn             DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+  actualizadoEn        DateTime  @default(now()) @map("actualizado_en") @db.Timestamptz()
+  principiosActivos    String[]  @map("principios_activos")
+  excipientesAlergenos String[]  @map("excipientes_alergenos")
+  recallStatus         String?   @map("recall_status") @db.VarChar(40)
+  recallMotivo         String?   @map("recall_motivo")
+  recallIniciadoEn     DateTime? @map("recall_iniciado_en") @db.Timestamptz()
+  loteVencimiento      DateTime? @map("lote_vencimiento") @db.Date
+  /// Jerarquía de empaque Nivel 2 (guía GS1 El Salvador): GTIN padre→hijo recursivo.
+  /// La integridad referencial vive en las FK de SQL 169 (acceso vía $queryRaw).
+  gtinContenido        String?   @map("gtin_contenido") @db.Char(14)
+  nivelEmpaque         String?   @map("nivel_empaque")
+  cantidadContenida    Decimal?  @map("cantidad_contenida") @db.Decimal(12, 3)
+  idClinicoRel         String?   @map("id_clinico_rel") @db.Uuid
 
   sustitutosA EceGs1GtinSustitutos[] @relation("GtinA")
   sustitutosB EceGs1GtinSustitutos[] @relation("GtinB")
@@ -6307,6 +6357,9 @@ model StaffGsrn {
 /// GS1 F2-S7 — Catálogo GTIN con metadatos extendidos para alertas bedside.
 /// Extiende el catálogo de drogas/medicamentos con campos GS1 de rastreabilidad.
 /// GTIN-14 como clave natural única. Reusable desde Drug via gtinRef.
+/// NOTA: el catálogo comercial Nivel 2 canónico (guía GS1 El Salvador) es
+/// ece.gs1_gtin (EceGs1Gtin). Esta tabla es un caché tenant-scoped para bedside;
+/// consolidar ambos en ece.gs1_gtin queda como follow-up.
 model MedicationGtin {
   id                  String   @id @default(uuid()) @db.Uuid
   organizationId      String   @db.Uuid

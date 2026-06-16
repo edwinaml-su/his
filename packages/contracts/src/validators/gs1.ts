@@ -72,6 +72,56 @@ export function buildGSRN(companyPrefix: string, patientSerial: number): string 
   return body + String(check);
 }
 
+// ---------------------------------------------------------------------------
+// GTIN-14 interno para unidosis sin código de fabricante (guía GS1 El Salvador §6.2)
+// ---------------------------------------------------------------------------
+
+const GTIN_LENGTH = 14;
+
+/**
+ * Genera un GTIN-14 interno válido para una unidosis huérfana de código de origen.
+ * Estructura: prefijo institucional + serial (padded) + dígito verificador Módulo-10.
+ *
+ * @param companyPrefix - prefijo GS1 institucional (6–12 dígitos)
+ * @param serial - serial interno de la unidosis (entero no negativo)
+ */
+export function buildInternalGtin(companyPrefix: string, serial: number): string {
+  if (companyPrefix.length < 6 || companyPrefix.length > 12) {
+    throw new Error(
+      `companyPrefix debe tener entre 6 y 12 dígitos (recibido: ${companyPrefix.length})`,
+    );
+  }
+  if (!/^\d+$/.test(companyPrefix)) {
+    throw new Error("companyPrefix debe contener solo dígitos");
+  }
+  if (serial < 0 || !Number.isInteger(serial)) {
+    throw new Error("serial debe ser un entero no negativo");
+  }
+  const refLength = GTIN_LENGTH - 1 - companyPrefix.length;
+  const ref = String(serial).padStart(refLength, "0");
+  if (ref.length > refLength) {
+    throw new Error(`serial excede el espacio disponible (max ${refLength} dígitos)`);
+  }
+  const body = companyPrefix + ref;
+  return body + String(gs1Mod10CheckDigit(body));
+}
+
+/**
+ * Arma el string de elementos GS1 (GS1 DataMatrix) heredando lote/vencimiento del
+ * empaque padre: (01) GTIN + (17) vencimiento YYMMDD + (10) lote.
+ * El AI (10) lote es de longitud variable y va al final (regla GS1).
+ */
+export function buildGs1DataMatrix(
+  gtin: string,
+  lote: string,
+  vencimientoYYMMDD?: string,
+): string {
+  let s = `(01)${gtin}`;
+  if (vencimientoYYMMDD) s += `(17)${vencimientoYYMMDD}`;
+  s += `(10)${lote}`;
+  return s;
+}
+
 /**
  * Devuelve el dígito verificador GS1 módulo-10 para un string de 17 dígitos.
  * Utilidad de bajo nivel expuesta para tests y paridad SQL.

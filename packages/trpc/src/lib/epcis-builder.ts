@@ -23,6 +23,12 @@ export type BedsideEventType =
   | "SUBSTITUTION"
   | "RETURN";
 
+/** Procesos logísticos GS1 Nivel 3 (recepción, cuarentena, almacenamiento, fraccionamiento). */
+export type LogisticsSubtipo = "RECEPTION" | "QUARANTINE" | "STORAGE" | "FRACTIONATION";
+
+/** Unión de todos los subtipos EPCIS válidos (espeja el CHECK de SQL 173). */
+export type EpcisSubtipo = BedsideEventType | LogisticsSubtipo;
+
 export interface EpcisEventInput {
   type: BedsideEventType;
   gtin: string;
@@ -57,7 +63,7 @@ export interface EpcisSubstitutionInput extends EpcisEventInput {
 
 export interface EpcisEventRow {
   tipo_evento: string;
-  subtipo: BedsideEventType;
+  subtipo: EpcisSubtipo;
   what: object;
   where_data: object;
   event_time: Date;
@@ -235,6 +241,76 @@ export function buildSubstitutionEvent(input: EpcisSubstitutionInput): EpcisEven
     who,
     payload_hash: computeHash(fullPayload),
     indication_id: input.indicationId ?? null,
+    establecimiento_id: input.establecimientoId,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// buildLogisticsEvent — RECEPTION / QUARANTINE / STORAGE / FRACTIONATION
+// (Procesos logísticos A/B/C, guía GS1 El Salvador Nivel 3)
+// ---------------------------------------------------------------------------
+
+export interface EpcisLogisticsInput {
+  type: LogisticsSubtipo;
+  gtin: string;
+  lote?: string;
+  serial?: string;
+  vencimiento?: string;
+  glnReadPoint: string;
+  glnBizLocation?: string;
+  gsrnProfesional?: string;
+  timestamp: Date;
+  establecimientoId: string;
+}
+
+/** businessStep/disposition CBV por subtipo logístico. */
+const LOGISTICS_STEP: Record<LogisticsSubtipo, { businessStep: string; disposition: string }> = {
+  RECEPTION:     { businessStep: "receiving",   disposition: "in_progress" },
+  QUARANTINE:    { businessStep: "inspecting",  disposition: "recall" },
+  STORAGE:       { businessStep: "storing",     disposition: "in_progress" },
+  FRACTIONATION: { businessStep: "repackaging", disposition: "active" },
+};
+
+export function buildLogisticsEvent(input: EpcisLogisticsInput): EpcisEventRow {
+  const what = {
+    epcList: [buildSgtin(input.gtin, input.serial)],
+    gtin: input.gtin,
+    lote: input.lote ?? null,
+    serial: input.serial ?? null,
+    vencimiento: input.vencimiento ?? null,
+  };
+
+  const whereData = {
+    readPoint: glnUrn(input.glnReadPoint),
+    bizLocation: input.glnBizLocation ? glnUrn(input.glnBizLocation) : null,
+  };
+
+  const step = LOGISTICS_STEP[input.type];
+  const why = {
+    businessStep: step.businessStep,
+    disposition: step.disposition,
+    bizTransactionList: [] as { type: string; id: string }[],
+  };
+
+  const who = {
+    sourceList: input.gsrnProfesional
+      ? [{ type: "urn:epcglobal:cbv:sdt:owning_party", gsrn: input.gsrnProfesional }]
+      : [],
+  };
+
+  const fullPayload = { what, whereData, why, who };
+
+  return {
+    // El fraccionamiento transforma un empaque en unidosis → TransformationEvent.
+    tipo_evento: input.type === "FRACTIONATION" ? "TransformationEvent" : "ObjectEvent",
+    subtipo: input.type,
+    what,
+    where_data: whereData,
+    event_time: input.timestamp,
+    why,
+    who,
+    payload_hash: computeHash(fullPayload),
+    indication_id: null,
     establecimiento_id: input.establecimientoId,
   };
 }

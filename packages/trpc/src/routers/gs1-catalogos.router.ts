@@ -88,6 +88,12 @@ const gtinCreateInput = z.object({
     .string()
     .regex(/^[A-Z]\d{2}[A-Z]{2}\d{2}$/, "Código ATC inválido (ej. A02BC01)")
     .optional(),
+  // Jerarquía de empaque Nivel 2 (guía GS1 El Salvador). La coherencia
+  // (UNIDOSIS sin hijo; otros con hijo+cantidad) la valida el CHECK de SQL 169.
+  nivelEmpaque:      z.enum(["UNIDOSIS", "BLISTER", "CAJA", "PALLET"]).optional(),
+  gtinContenido:     gtinSchema.optional(),
+  cantidadContenida: z.number().positive().optional(),
+  idClinicoRel:      z.string().uuid().optional(),
 });
 
 const gtinUpdateInput = gtinCreateInput.partial().extend({
@@ -152,11 +158,14 @@ const gtinRouter = router({
       const rows = await ctx.prisma.$queryRawUnsafe<IdRow[]>(
         `INSERT INTO ece.gs1_gtin
            (codigo, descripcion, fabricante, presentacion,
-            contenido_unidades, principio_activo, codigo_atc)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+            contenido_unidades, principio_activo, codigo_atc,
+            nivel_empaque, gtin_contenido, cantidad_contenida, id_clinico_rel)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id`,
         input.codigo, input.descripcion, input.fabricante, input.presentacion,
         input.contenidoUnidades, input.principioActivo ?? null, input.codigoAtc ?? null,
+        input.nivelEmpaque ?? null, input.gtinContenido ?? null,
+        input.cantidadContenida ?? null, input.idClinicoRel ?? null,
       );
       return { id: rows[0]!.id };
     }),
@@ -178,6 +187,10 @@ const gtinRouter = router({
       if (fields.contenidoUnidades !== undefined) { sets.push(`contenido_unidades = $${idx++}`); params.push(fields.contenidoUnidades); }
       if (fields.principioActivo !== undefined)   { sets.push(`principio_activo = $${idx++}`);   params.push(fields.principioActivo); }
       if (fields.codigoAtc !== undefined)         { sets.push(`codigo_atc = $${idx++}`);         params.push(fields.codigoAtc); }
+      if (fields.nivelEmpaque !== undefined)      { sets.push(`nivel_empaque = $${idx++}`);      params.push(fields.nivelEmpaque); }
+      if (fields.gtinContenido !== undefined)     { sets.push(`gtin_contenido = $${idx++}`);     params.push(fields.gtinContenido); }
+      if (fields.cantidadContenida !== undefined) { sets.push(`cantidad_contenida = $${idx++}`); params.push(fields.cantidadContenida); }
+      if (fields.idClinicoRel !== undefined)      { sets.push(`id_clinico_rel = $${idx++}::uuid`); params.push(fields.idClinicoRel); }
       sets.push(`actualizado_en = now()`);
       params.push(id);
       await ctx.prisma.$executeRawUnsafe(
@@ -195,6 +208,19 @@ const gtinRouter = router({
         input.id,
       );
       return { ok: true as const };
+    }),
+
+  /** Explota la jerarquía de empaque: total de unidosis contenidas en un GTIN. */
+  explotarJerarquia: tenantProcedure
+    .input(z.object({ codigo: gtinSchema }))
+    .query(async ({ ctx, input }) => {
+      type Row = { unidosis: string | null };
+      const rows = await ctx.prisma.$queryRawUnsafe<Row[]>(
+        `SELECT ece.fn_gs1_unidosis_por_empaque($1) AS unidosis`,
+        input.codigo,
+      );
+      const u = rows[0]?.unidosis;
+      return { codigo: input.codigo, unidosisTotales: u != null ? parseFloat(u) : null };
     }),
 });
 
