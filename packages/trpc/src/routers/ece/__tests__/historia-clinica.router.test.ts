@@ -70,7 +70,8 @@ function baseGetRow(overrides: Record<string, unknown> = {}) {
     tipo_consulta: "subsecuente",
     motivo_consulta: "Cefalea intensa",
     enfermedad_actual: "Cefalea de 3 días de evolución",
-    disposicion: "observacion",
+    disposicion: "OBSERVACION",
+    analisis_clinico: "Cefalea tensional, sin signos de alarma.",
     plan_manejo: "Hidratación IV + analgesia",
     antecedentes: { personales: "HTA", familiares: null },
     examen_fisico: { sistemas: [{ sistema: "Neurológico", hallazgo: "Sin déficit focal" }] },
@@ -223,16 +224,18 @@ describe("eceHistoriaClinicaRouter.get", () => {
     const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
     const result = await caller.get({ id: ID1 });
 
+    // parseDiagnosticos normaliza legacy CIE-10 (code/description, tipo principal/
+    // secundario) → forma CIE-11 español (codigo/descripcion, tipo DEFINITIVO).
     expect(result.diagnosticos).toHaveLength(2);
     expect(result.diagnosticos[0]).toEqual({
-      code: "J00",
-      description: "Rinofaringitis aguda",
-      tipo: "principal",
+      codigo: "J00",
+      descripcion: "Rinofaringitis aguda",
+      tipo: "DEFINITIVO",
     });
     expect(result.diagnosticos[1]).toEqual({
-      code: "I10",
-      description: "Hipertensión esencial",
-      tipo: "secundario",
+      codigo: "I10",
+      descripcion: "Hipertensión esencial",
+      tipo: "DEFINITIVO",
     });
   });
 });
@@ -301,7 +304,14 @@ describe("eceHistoriaClinicaRouter.firmar", () => {
   it("11. happy path: borrador → firmado con firmaId", async () => {
     const ctx = buildCtx();
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce([{ estado_registro: "borrador", instancia_id: null }])
+      // RN-03: firmar exige ≥1 diagnóstico COMPLEMENTARIO en el SELECT de estado.
+      .mockResolvedValueOnce([
+        {
+          estado_registro: "borrador",
+          instancia_id: null,
+          diagnosticos: [{ codigo: "BA00", descripcion: "Hipertensión", tipo: "COMPLEMENTARIO" }],
+        },
+      ])
       .mockResolvedValueOnce([baseHistoriaRow({ estado_registro: "firmado" })]);
 
     const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
@@ -369,11 +379,12 @@ describe("historiaClinicaGetOutput (Zod schema)", () => {
       tipoConsulta: "subsecuente",
       motivoConsulta: "Dolor abdominal",
       enfermedadActual: "Gastritis aguda",
-      disposicion: "alta_ambulatoria",
+      destino: "ALTA_MEDICA",
+      analisisClinico: "Cuadro compatible con gastritis, sin signos de alarma.",
       planManejo: "Inhibidor de bomba de protones",
       antecedentes: { personales: "Sin antecedentes" },
       examenFisico: null,
-      diagnosticos: [{ code: "K29.7", description: "Gastritis", tipo: "principal" as const }],
+      diagnosticos: [{ codigo: "K29.7", descripcion: "Gastritis", tipo: "DEFINITIVO" as const }],
       registradoPor: ID1,
       registradoEn: new Date(),
       estadoRegistro: "firmado",

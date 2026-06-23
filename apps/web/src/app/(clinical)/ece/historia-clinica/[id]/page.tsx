@@ -30,6 +30,11 @@ import {
 } from "@his/ui/components/dialog";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import {
+  DESTINO_LABELS,
+  TIPO_DIAGNOSTICO_LABELS,
+  type Destino,
+} from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
 import { WorkflowBadge } from "../_components/workflow-badge";
 
@@ -39,6 +44,10 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
 });
 
 const TIPO_LABELS: Record<string, string> = {
+  // DDL CHECK historia_clinica_tipo_consulta_check (CC-0001)
+  primera_vez: "Primera vez",
+  subsecuente: "Subsecuente",
+  // Legacy — registros previos al CC-0001
   ingreso: "Ingreso hospitalario",
   control: "Control",
   urgencia: "Urgencia",
@@ -156,10 +165,12 @@ export default function EceHistoriaClinicaDetailPage() {
               <p className="font-medium text-muted-foreground">Enfermedad actual</p>
               <p className="mt-0.5 whitespace-pre-wrap">{hc.enfermedadActual ?? "—"}</p>
             </div>
-            {hc.disposicion && (
+            {hc.destino && (
               <div>
-                <p className="font-medium text-muted-foreground">Disposición</p>
-                <p className="mt-0.5">{hc.disposicion}</p>
+                <p className="font-medium text-muted-foreground">Destino</p>
+                <p className="mt-0.5">
+                  {DESTINO_LABELS[hc.destino as Destino] ?? hc.destino}
+                </p>
               </div>
             )}
           </CardContent>
@@ -171,36 +182,71 @@ export default function EceHistoriaClinicaDetailPage() {
             <CardHeader>
               <CardTitle>Antecedentes</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
+            <CardContent className="space-y-4 text-sm">
               {(() => {
-                type Ant = { personales?: string; familiares?: string; sociales?: string; alergias?: string };
+                type Ant = {
+                  alergias?: string;
+                  personales?: string;
+                  familiares?: string;
+                  ocupacion?: string;
+                  habitosPersonales?: string;
+                  obstetricos?: string;
+                  fum?: string;
+                  fpp?: string;
+                  sociales?: string;
+                };
                 const ant = hc.antecedentes as Ant;
+                const Campo = ({ label, valor }: { label: string; valor?: string }) =>
+                  valor ? (
+                    <div>
+                      <p className="font-medium text-muted-foreground">{label}</p>
+                      <p className="mt-0.5 whitespace-pre-wrap">{valor}</p>
+                    </div>
+                  ) : null;
+
+                const patologicos = ant.alergias || ant.personales || ant.familiares;
+                const noPatologicos = ant.ocupacion || ant.habitosPersonales || ant.obstetricos;
+
                 return (
                   <>
-                    {ant.personales && (
-                      <div>
-                        <p className="font-medium text-muted-foreground">Personales</p>
-                        <p className="mt-0.5 whitespace-pre-wrap">{ant.personales}</p>
+                    {patologicos && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          Patológicos
+                        </p>
+                        <Campo label="Alergias" valor={ant.alergias} />
+                        <Campo label="Personales" valor={ant.personales} />
+                        <Campo label="Familiares" valor={ant.familiares} />
                       </div>
                     )}
-                    {ant.familiares && (
-                      <div>
-                        <p className="font-medium text-muted-foreground">Familiares</p>
-                        <p className="mt-0.5 whitespace-pre-wrap">{ant.familiares}</p>
+                    {noPatologicos && (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          No patológicos
+                        </p>
+                        <Campo label="Ocupación" valor={ant.ocupacion} />
+                        <Campo label="Hábitos personales" valor={ant.habitosPersonales} />
+                        <Campo label="Obstétricos" valor={ant.obstetricos} />
                       </div>
                     )}
-                    {ant.sociales && (
-                      <div>
-                        <p className="font-medium text-muted-foreground">Sociales</p>
-                        <p className="mt-0.5 whitespace-pre-wrap">{ant.sociales}</p>
+                    {(ant.fum || ant.fpp) && (
+                      <div className="flex flex-wrap gap-6">
+                        {ant.fum && (
+                          <div>
+                            <p className="font-medium text-muted-foreground">FUM</p>
+                            <p className="mt-0.5">{ant.fum}</p>
+                          </div>
+                        )}
+                        {ant.fpp && (
+                          <div>
+                            <p className="font-medium text-muted-foreground">FPP (Naegele)</p>
+                            <p className="mt-0.5">{ant.fpp}</p>
+                          </div>
+                        )}
                       </div>
                     )}
-                    {ant.alergias && (
-                      <div>
-                        <p className="font-medium text-muted-foreground">Alergias</p>
-                        <p className="mt-0.5 whitespace-pre-wrap">{ant.alergias}</p>
-                      </div>
-                    )}
+                    {/* Legacy CC-0001: `sociales` reemplazado por ocupación/hábitos. */}
+                    <Campo label="Sociales (histórico)" valor={ant.sociales} />
                   </>
                 );
               })()}
@@ -236,19 +282,21 @@ export default function EceHistoriaClinicaDetailPage() {
           </Card>
         )}
 
-        {/* Diagnósticos CIE-10 */}
+        {/* Diagnósticos CIE-11 (CC-0001 RF-03) */}
         <Card>
           <CardHeader>
-            <CardTitle>Diagnósticos (CIE-10)</CardTitle>
+            <CardTitle>Diagnósticos (CIE-11)</CardTitle>
           </CardHeader>
           <CardContent>
             {hc.diagnosticos && hc.diagnosticos.length > 0 ? (
-              <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-10">
-                {(hc.diagnosticos as Array<{ code: string; description: string; tipo: string }>).map((dx, i) => (
+              <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-11">
+                {hc.diagnosticos.map((dx, i) => (
                   <li key={i} className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{dx.code}</span>
-                    <span>{dx.description}</span>
-                    <span className="text-xs text-muted-foreground">({dx.tipo})</span>
+                    <span className="font-mono text-xs text-muted-foreground">{dx.codigo}</span>
+                    <span>{dx.descripcion}</span>
+                    <span className="text-xs text-muted-foreground">
+                      ({TIPO_DIAGNOSTICO_LABELS[dx.tipo] ?? dx.tipo})
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -257,6 +305,18 @@ export default function EceHistoriaClinicaDetailPage() {
             )}
           </CardContent>
         </Card>
+
+        {/* Análisis clínico (CC-0001 RF-05) */}
+        {hc.analisisClinico && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Análisis clínico</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="whitespace-pre-wrap text-sm">{hc.analisisClinico}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Plan de manejo */}
         <Card>

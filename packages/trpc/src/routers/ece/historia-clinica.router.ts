@@ -10,7 +10,7 @@
  * ---------------------------------------------------------------------------
  *   id uuid PK, instancia_id uuid, episodio_id uuid NOT NULL,
  *   tipo_consulta text NOT NULL, motivo_consulta text, enfermedad_actual text,
- *   disposicion text, plan_manejo text, antecedentes jsonb,
+ *   disposicion text, analisis_clinico text, plan_manejo text, antecedentes jsonb,
  *   examen_fisico jsonb, diagnosticos jsonb,
  *   registrado_por uuid NOT NULL, registrado_en timestamptz,
  *   estado_registro text NOT NULL DEFAULT 'vigente'
@@ -39,6 +39,13 @@ import { Prisma } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
+import {
+  cie11DiagnosticoSchema,
+  destinoEnum,
+  antecedentesSchema,
+  tieneComplementario,
+  type Cie11Diagnostico,
+} from "@his/contracts";
 
 // ---------------------------------------------------------------------------
 // Enum tipo_consulta — alineado con CHECK historia_clinica_tipo_consulta_check
@@ -51,27 +58,11 @@ import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbrevia
 const TIPO_CONSULTA = ["primera_vez", "subsecuente"] as const;
 const tipoConsultaEnum = z.enum(TIPO_CONSULTA);
 
-// CHECK historia_clinica_disposicion_check: alta_ambulatoria|referencia|observacion|orden_ingreso
-// Mapeo app→DDL: ALTA→alta_ambulatoria, INTERNAMIENTO→orden_ingreso, REFERENCIA→referencia, OBSERVACION→observacion
-const DISPOSICION_OPTIONS = ["alta_ambulatoria", "referencia", "observacion", "orden_ingreso"] as const;
-
 // ---------------------------------------------------------------------------
 // Schemas de input
+//   destino / antecedentes / diagnósticos CIE-11 provienen de @his/contracts (CC-0001).
+//   tipoConsulta se mantiene local (§7 sin cambios respecto al CHECK de BD).
 // ---------------------------------------------------------------------------
-
-const icd10DiagnosticoSchema = z.object({
-  code: z.string().regex(/^[A-Z]\d{2}(\.\d+)?$/, "Código CIE-10 inválido"),
-  description: z.string().min(1).max(500),
-  tipo: z.enum(["principal", "secundario"]).default("secundario"),
-});
-type Icd10Diagnostico = z.infer<typeof icd10DiagnosticoSchema>;
-
-const antecedentesSchema = z.object({
-  personales: z.string().max(4000).optional(),
-  familiares: z.string().max(4000).optional(),
-  sociales: z.string().max(4000).optional(),
-  alergias: z.string().max(2000).optional(),
-}).optional();
 
 const examenFisicoSchema = z.object({
   sistemas: z.array(z.object({
@@ -102,12 +93,15 @@ const createInput = z.object({
   tipoConsulta: tipoConsultaEnum,
   motivoConsulta: z.string().min(1).max(2000).optional(),
   enfermedadActual: z.string().max(4000).optional(),
-  disposicion: z.enum(DISPOSICION_OPTIONS).optional(),
+  /** RF-06 — Destino (catálogo cerrado de 8). Se persiste en columna disposicion. */
+  destino: destinoEnum.optional(),
+  /** RF-05 — análisis/correlación clínica. */
+  analisisClinico: z.string().max(5000).optional(),
   planManejo: z.string().max(5000).optional(),
-  antecedentes: antecedentesSchema,
+  antecedentes: antecedentesSchema.optional(),
   examenFisico: examenFisicoSchema,
-  /** HC-004: diagnósticos CIE-10 validados en borde de aplicación */
-  diagnosticos: z.array(icd10DiagnosticoSchema).optional(),
+  /** RF-03 — diagnósticos CIE-11 validados en borde de aplicación. */
+  diagnosticos: z.array(cie11DiagnosticoSchema).optional(),
 });
 
 const updateInput = z.object({
@@ -115,12 +109,15 @@ const updateInput = z.object({
   tipoConsulta: tipoConsultaEnum.optional(),
   motivoConsulta: z.string().min(1).max(2000).optional(),
   enfermedadActual: z.string().max(4000).optional(),
-  disposicion: z.enum(DISPOSICION_OPTIONS).optional(),
+  /** RF-06 — Destino (catálogo cerrado de 8). Se persiste en columna disposicion. */
+  destino: destinoEnum.optional(),
+  /** RF-05 — análisis/correlación clínica. */
+  analisisClinico: z.string().max(5000).optional(),
   planManejo: z.string().max(5000).optional(),
-  antecedentes: antecedentesSchema,
+  antecedentes: antecedentesSchema.optional(),
   examenFisico: examenFisicoSchema,
-  /** HC-004: diagnósticos CIE-10 validados en borde de aplicación */
-  diagnosticos: z.array(icd10DiagnosticoSchema).optional(),
+  /** RF-03 — diagnósticos CIE-11 validados en borde de aplicación. */
+  diagnosticos: z.array(cie11DiagnosticoSchema).optional(),
 });
 
 const transitionInput = z.object({
@@ -141,6 +138,7 @@ export interface HistoriaClinicaRow {
   motivo_consulta: string | null;
   enfermedad_actual: string | null;
   disposicion: string | null;
+  analisis_clinico: string | null;
   plan_manejo: string | null;
   antecedentes: unknown;
   examen_fisico: unknown;
@@ -175,11 +173,14 @@ export const historiaClinicaGetOutput = z.object({
   tipoConsulta: z.string(),
   motivoConsulta: z.string().nullable(),
   enfermedadActual: z.string().nullable(),
-  disposicion: z.string().nullable(),
+  /** RF-06 — Destino (se lee desde la columna disposicion). */
+  destino: z.string().nullable(),
+  /** RF-05 — análisis clínico. */
+  analisisClinico: z.string().nullable(),
   planManejo: z.string().nullable(),
   antecedentes: z.unknown().nullable(),
   examenFisico: z.unknown().nullable(),
-  diagnosticos: z.array(icd10DiagnosticoSchema),
+  diagnosticos: z.array(cie11DiagnosticoSchema),
   registradoPor: z.string().uuid(),
   registradoEn: z.date(),
   estadoRegistro: z.string(),
@@ -221,22 +222,30 @@ function buildEceCtx(ctx: {
   };
 }
 
-/** Parsea el JSONB de diagnosticos a array tipado; degrada silenciosamente a []. */
-function parseDiagnosticos(raw: unknown): Icd10Diagnostico[] {
+/**
+ * Parsea el JSONB de diagnosticos a array tipado CIE-11; degrada a [].
+ * Acepta claves español (codigo/descripcion) y legacy inglés (code/description).
+ * Legacy tipo principal/secundario → DEFINITIVO (no rompe lecturas históricas).
+ */
+function parseDiagnosticos(raw: unknown): Cie11Diagnostico[] {
   if (!raw) return [];
   try {
     const str = typeof raw === "string" ? raw : JSON.stringify(raw);
     const parsed = JSON.parse(str) as unknown[];
     if (!Array.isArray(parsed)) return [];
-    const result: Icd10Diagnostico[] = [];
+    const result: Cie11Diagnostico[] = [];
     for (const item of parsed) {
       if (typeof item === "object" && item !== null) {
         const obj = item as Record<string, unknown>;
-        const code = String(obj.code ?? "");
-        const description = String(obj.description ?? "");
-        const tipo = (obj.tipo === "principal" ? "principal" : "secundario") as "principal" | "secundario";
-        if (code && description) {
-          result.push({ code, description, tipo });
+        const codigo = String(obj.codigo ?? obj.code ?? "").toUpperCase();
+        const descripcion = String(obj.descripcion ?? obj.description ?? "");
+        const tipoRaw = String(obj.tipo ?? "").toUpperCase();
+        const tipo: Cie11Diagnostico["tipo"] =
+          tipoRaw === "PRESUNTIVO" || tipoRaw === "COMPLEMENTARIO"
+            ? (tipoRaw as Cie11Diagnostico["tipo"])
+            : "DEFINITIVO";
+        if (codigo && descripcion) {
+          result.push({ codigo, descripcion, tipo });
         }
       }
     }
@@ -340,6 +349,7 @@ export const eceHistoriaClinicaRouter = router({
         motivo_consulta: string | null;
         enfermedad_actual: string | null;
         disposicion: string | null;
+        analisis_clinico: string | null;
         plan_manejo: string | null;
         antecedentes: unknown;
         examen_fisico: unknown;
@@ -365,6 +375,7 @@ export const eceHistoriaClinicaRouter = router({
             hc.motivo_consulta,
             hc.enfermedad_actual,
             hc.disposicion,
+            hc.analisis_clinico,
             hc.plan_manejo,
             hc.antecedentes,
             hc.examen_fisico,
@@ -410,7 +421,8 @@ export const eceHistoriaClinicaRouter = router({
         tipoConsulta: raw.tipo_consulta,
         motivoConsulta: raw.motivo_consulta,
         enfermedadActual: raw.enfermedad_actual,
-        disposicion: raw.disposicion,
+        destino: raw.disposicion,
+        analisisClinico: raw.analisis_clinico,
         planManejo: raw.plan_manejo,
         antecedentes: raw.antecedentes ?? null,
         examenFisico: raw.examen_fisico ?? null,
@@ -437,7 +449,7 @@ export const eceHistoriaClinicaRouter = router({
 
   /**
    * Crea una historia clínica en estado 'borrador'.
-   * HC-004: diagnosticos validados por icd10DiagnosticoSchema antes del INSERT.
+   * RF-03: diagnosticos validados por cie11DiagnosticoSchema antes del INSERT.
    */
   create: writeBase.input(createInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
@@ -451,7 +463,7 @@ export const eceHistoriaClinicaRouter = router({
         Prisma.sql`
           INSERT INTO ece.historia_clinica
             (instancia_id, episodio_id, tipo_consulta, motivo_consulta,
-             enfermedad_actual, disposicion, plan_manejo,
+             enfermedad_actual, disposicion, analisis_clinico, plan_manejo,
              antecedentes, examen_fisico, diagnosticos,
              registrado_por, estado_registro)
           VALUES (
@@ -460,7 +472,8 @@ export const eceHistoriaClinicaRouter = router({
             ${input.tipoConsulta}::text,
             ${input.motivoConsulta ?? null},
             ${input.enfermedadActual ?? null},
-            ${input.disposicion ?? null},
+            ${input.destino ?? null},
+            ${input.analisisClinico ?? null},
             ${input.planManejo ?? null},
             ${antecedentesJson ?? null}::jsonb,
             ${examenFisicoJson ?? null}::jsonb,
@@ -471,7 +484,7 @@ export const eceHistoriaClinicaRouter = router({
           RETURNING
             id::text, instancia_id::text, episodio_id::text,
             tipo_consulta, motivo_consulta, enfermedad_actual,
-            disposicion, plan_manejo,
+            disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
             registrado_por::text, registrado_en, estado_registro
         `,
@@ -513,8 +526,10 @@ export const eceHistoriaClinicaRouter = router({
         sets.push(Prisma.sql`motivo_consulta = ${input.motivoConsulta}`);
       if (input.enfermedadActual !== undefined)
         sets.push(Prisma.sql`enfermedad_actual = ${input.enfermedadActual}`);
-      if (input.disposicion !== undefined)
-        sets.push(Prisma.sql`disposicion = ${input.disposicion}`);
+      if (input.destino !== undefined)
+        sets.push(Prisma.sql`disposicion = ${input.destino}`);
+      if (input.analisisClinico !== undefined)
+        sets.push(Prisma.sql`analisis_clinico = ${input.analisisClinico}`);
       if (input.planManejo !== undefined)
         sets.push(Prisma.sql`plan_manejo = ${input.planManejo}`);
       if (input.antecedentes !== undefined)
@@ -529,7 +544,7 @@ export const eceHistoriaClinicaRouter = router({
           Prisma.sql`
             SELECT id::text, instancia_id::text, episodio_id::text,
               tipo_consulta, motivo_consulta, enfermedad_actual,
-              disposicion, plan_manejo,
+              disposicion, analisis_clinico, plan_manejo,
               antecedentes, examen_fisico, diagnosticos,
               registrado_por::text, registrado_en, estado_registro
             FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
@@ -547,7 +562,7 @@ export const eceHistoriaClinicaRouter = router({
           RETURNING
             id::text, instancia_id::text, episodio_id::text,
             tipo_consulta, motivo_consulta, enfermedad_actual,
-            disposicion, plan_manejo,
+            disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
             registrado_por::text, registrado_en, estado_registro
         `,
@@ -578,12 +593,13 @@ export const eceHistoriaClinicaRouter = router({
         motivo_consulta: string | null;
         enfermedad_actual: string | null;
         plan_manejo: string | null;
+        diagnosticos: unknown;
       };
 
       const current = await tx.$queryRaw<FirmarFetchRow[]>(
         Prisma.sql`
           SELECT estado_registro, instancia_id::text,
-                 motivo_consulta, enfermedad_actual, plan_manejo
+                 motivo_consulta, enfermedad_actual, plan_manejo, diagnosticos
           FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
         `,
       );
@@ -593,6 +609,15 @@ export const eceHistoriaClinicaRouter = router({
         throw new TRPCError({
           code: "CONFLICT",
           message: `Estado '${cur.estado_registro}' no permite firma. Se esperaba 'borrador'.`,
+        });
+      }
+
+      // RN-03 (CC-0001) — al firmar debe existir ≥1 diagnóstico Complementario.
+      if (!tieneComplementario(parseDiagnosticos(cur.diagnosticos))) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "RN-03: se requiere al menos un diagnóstico de tipo Complementario antes de firmar.",
         });
       }
 
@@ -618,7 +643,7 @@ export const eceHistoriaClinicaRouter = router({
           RETURNING
             id::text, instancia_id::text, episodio_id::text,
             tipo_consulta, motivo_consulta, enfermedad_actual,
-            disposicion, plan_manejo,
+            disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
             registrado_por::text, registrado_en, estado_registro
         `,
@@ -686,7 +711,7 @@ export const eceHistoriaClinicaRouter = router({
           RETURNING
             id::text, instancia_id::text, episodio_id::text,
             tipo_consulta, motivo_consulta, enfermedad_actual,
-            disposicion, plan_manejo,
+            disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
             registrado_por::text, registrado_en, estado_registro
         `,

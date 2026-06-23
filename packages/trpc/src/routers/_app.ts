@@ -212,6 +212,8 @@ import { servicePriceListRouter } from "./service-price-list.router";
 import { financeOverviewRouter } from "./finance-overview.router";
 // Integración SRS — registro sanitario El Salvador (read + import a Drug)
 import { srsRegistroRouter } from "./srs-registro.router";
+// Integración WHO ICD-11 (CIE-11) — proxy de búsqueda de diagnósticos (CC-0001 RF-03)
+import { cie11Router } from "./cie11.router";
 // Workflow Inbox — bandeja BPM centralizada con routing RBAC (Ola 1: 29 fuentes)
 import { workflowInboxRouter } from "./workflow-inbox.router";
 
@@ -426,6 +428,8 @@ export const appRouter = router({
   financeOverview: financeOverviewRouter,
   // Integración SRS — registro sanitario El Salvador
   srsRegistro: srsRegistroRouter,
+  // Integración WHO ICD-11 (CIE-11) — búsqueda de diagnósticos
+  cie11: cie11Router,
   // Workflow Inbox — bandeja BPM con routing RBAC (Ola 1: 29 fuentes)
   workflowInbox: workflowInboxRouter,
 });

@@ -45,7 +45,7 @@
  * ROLES tRPC
  * ---------------------------------------------------------------------------
  *   list, get      → requireRole(["NURSE","PHYSICIAN"])
- *   create, update → requireRole(["NURSE"])
+ *   create, update → requireRole(["NURSE","PHYSICIAN","MC","MT"])  (CC-0001 RF-04)
  *   firmar         → requireRole(["NURSE"])
  *   validar        → requireRole(["NURSE"])
  *   anular         → requireRole(["NURSE","PHYSICIAN"])
@@ -86,6 +86,7 @@ export interface SignosVitalesRow {
   talla_cm: number | null;
   imc: number | null;
   glucometria_mgdl: number | null;
+  observaciones: string | null;
   fecha_hora_toma: Date;
   estado_registro: string;
   registrado_en: Date;
@@ -229,8 +230,13 @@ async function insertHistorial(
 
 // ─── Base procedure ──────────────────────────────────────────────────────────
 
-const base = requireRole(["NURSE", "PHYSICIAN"]);
+// CC-0001 RF-04 — lectura abierta a roles clínicos (incluye MC/MT) para que la
+// tabla de tomas sea visible desde la pantalla de HC a quien también las registra.
+const base = requireRole(["NURSE", "PHYSICIAN", "MC", "MT"]);
 const nurseOnly = requireRole(["NURSE"]);
+// CC-0001 RF-04 — el médico también registra tomas desde la pantalla de HC.
+// La firma/validación de la toma sigue siendo gobernanza de enfermería (nurseOnly).
+const tomaWrite = requireRole(["NURSE", "PHYSICIAN", "MC", "MT"]);
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 
@@ -277,6 +283,7 @@ export const eceSignosVitalesRouter = router({
             sv.talla_cm,
             sv.imc,
             sv.glucometria_mgdl,
+            sv.observaciones,
             sv.fecha_hora_toma,
             sv.estado_registro,
             sv.registrado_en
@@ -324,6 +331,7 @@ export const eceSignosVitalesRouter = router({
             sv.talla_cm,
             sv.imc,
             sv.glucometria_mgdl,
+            sv.observaciones,
             sv.fecha_hora_toma,
             sv.estado_registro,
             sv.registrado_en
@@ -348,7 +356,7 @@ export const eceSignosVitalesRouter = router({
    * Valida rangos plausibles vía Zod antes de llegar a la BD.
    * IMC se calcula automáticamente si peso y talla están provistos.
    */
-  create: nurseOnly
+  create: tomaWrite
     .input(eceSignosVitalesCreateSchema)
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = resolveEceIds(ctx);
@@ -361,7 +369,7 @@ export const eceSignosVitalesRouter = router({
             presion_sistolica, presion_diastolica,
             frecuencia_cardiaca, frecuencia_respiratoria,
             temperatura, saturacion_o2, escala_dolor,
-            peso_kg, talla_cm, imc, glucometria_mgdl,
+            peso_kg, talla_cm, imc, glucometria_mgdl, observaciones,
             fecha_hora_toma, estado_registro
           ) VALUES (
             ${input.episodioId ?? null}::uuid,
@@ -377,6 +385,7 @@ export const eceSignosVitalesRouter = router({
             ${input.tallaCm ?? null},
             ${imc},
             ${input.glucometriaMgdl ?? null},
+            ${input.observaciones ?? null},
             ${input.fechaHoraToma ? new Date(input.fechaHoraToma) : new Date()},
             'borrador'
           )
@@ -390,7 +399,7 @@ export const eceSignosVitalesRouter = router({
   /**
    * Actualiza una toma SOLO si está en estado "borrador".
    */
-  update: nurseOnly
+  update: tomaWrite
     .input(
       z.object({
         id: z.string().uuid(),
@@ -438,6 +447,7 @@ export const eceSignosVitalesRouter = router({
             talla_cm                = COALESCE(${d.tallaCm ?? null}, talla_cm),
             imc                     = COALESCE(${imc}, imc),
             glucometria_mgdl        = COALESCE(${d.glucometriaMgdl ?? null}, glucometria_mgdl),
+            observaciones           = COALESCE(${d.observaciones ?? null}, observaciones),
             fecha_hora_toma         = COALESCE(${d.fechaHoraToma ? new Date(d.fechaHoraToma) : null}::timestamptz, fecha_hora_toma),
             registrado_en           = now()
           WHERE id = ${input.id}::uuid

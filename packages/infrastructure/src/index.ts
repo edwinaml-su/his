@@ -26,3 +26,6 @@ export type {
   SrsFabricante,
   SrsPresentacion,
 } from './srs/client';
+// Cliente WHO ICD-11 (CIE-11) — búsqueda de diagnósticos (CC-0001 RF-03).
+export { buscarCie11, isWhoIcdConfigured, WhoIcdNotConfiguredError } from './who-icd/client';
+export type { WhoIcdSearchItem, WhoIcdSearchResult } from './who-icd/client';
