@@ -16,8 +16,9 @@
  *   peso_kg / talla_cm / imc / glucometria_mgdl  (HD-18)
  *
  * Campos eliminados del contrato (no existen en BD):
- *   observaciones     — columna ausente en ece.signos_vitales
  *   establecimiento_id — RLS aplica vía episodio.establecimiento_id
+ *
+ * CC-0001 RF-04: `observaciones` se reintrodujo (col. añadida en SQL 175).
  */
 import { z } from "zod";
 
@@ -33,7 +34,9 @@ function numRange(min: number, max: number, label: string) {
 // ─── Schema de creación ──────────────────────────────────────────────────────
 
 export const eceSignosVitalesCreateSchema = z.object({
-  pacienteId: z.string().uuid(),
+  // CC-0001 RF-04: la toma se ancla al episodio (no a la HC ni al paciente).
+  // El INSERT no persiste pacienteId; se acepta opcional por compat legacy.
+  pacienteId: z.string().uuid().optional(),
   episodioId: z.string().uuid().optional(),
 
   // Campos clínicos — todos opcionales (no siempre se toman todos en una toma)
@@ -49,6 +52,9 @@ export const eceSignosVitalesCreateSchema = z.object({
   pesoKg: numRange(0.5, 300, "Peso").optional(),
   tallaCm: numRange(30, 250, "Talla").optional(),
   glucometriaMgdl: numRange(20, 600, "Glucometría").optional(),
+
+  /** RF-04 CC-0001 — nota opcional por toma. */
+  observaciones: z.string().max(2000).optional(),
 
   /** Fecha-hora de la toma. Si no se envía, la BD usa now(). */
   fechaHoraToma: z.string().datetime({ offset: true }).optional(),
@@ -70,6 +76,7 @@ export const eceSignosVitalesUpdateSchema = eceSignosVitalesCreateSchema
     pesoKg: true,
     tallaCm: true,
     glucometriaMgdl: true,
+    observaciones: true,
     fechaHoraToma: true,
   })
   .partial();

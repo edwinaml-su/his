@@ -39,7 +39,8 @@ const EPISODIO_ID = "cccccccc-0000-0000-0000-000000000003";
 const FIRMA_ID = "dddddddd-0000-0000-0000-000000000004";
 const INSTANCIA_ID = "eeeeeeee-0000-0000-0000-000000000005";
 
-// Row shape returned by get procedure (HistoriaClinicaGetOutput)
+// Row shape returned by get procedure (HistoriaClinicaGetOutput) — CC-0001:
+// `disposicion` se proyecta como `destino`; se añadió `analisisClinico`.
 const SAMPLE_HC_GET = {
   id: HC_ID,
   instanciaId: INSTANCIA_ID,
@@ -47,7 +48,8 @@ const SAMPLE_HC_GET = {
   tipoConsulta: "primera_vez",
   motivoConsulta: "Dolor abdominal severo",
   enfermedadActual: null,
-  disposicion: null,
+  destino: null,
+  analisisClinico: null,
   planManejo: null,
   antecedentes: null,
   examenFisico: null,
@@ -70,6 +72,7 @@ const SAMPLE_HC_RAW = {
   motivo_consulta: "Dolor abdominal severo",
   enfermedad_actual: null,
   disposicion: null,
+  analisis_clinico: null,
   plan_manejo: null,
   antecedentes: null,
   examen_fisico: null,
@@ -85,6 +88,11 @@ const SAMPLE_HC_RAW = {
   patient_last_name: null,
   patient_mrn: null,
 };
+
+// Diagnóstico CIE-11 con tipo Complementario — requerido por RN-03 para firmar.
+const DIAGNOSTICOS_RN03 = [
+  { codigo: "BA00", descripcion: "Hipertensión esencial", tipo: "COMPLEMENTARIO" },
+];
 
 const TENANT_MC = {
   userId: MOCK_USER_ADMIN.id,
@@ -207,6 +215,24 @@ describe("eceHistoriaClinicaRouter", () => {
       expect(result.estadoRegistro).toBe("borrador");
     });
 
+    it("proyecta disposicion→destino y expone analisisClinico (CC-0001)", async () => {
+      const raw = {
+        ...SAMPLE_HC_RAW,
+        disposicion: "ALTA_MEDICA",
+        analisis_clinico: "Cuadro compatible con resolución.",
+        diagnosticos: [{ codigo: "BA00", descripcion: "HTA", tipo: "COMPLEMENTARIO" }],
+      };
+      const ctx = makeCtx(["MC"], [[raw]]);
+      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
+
+      const result = await caller.get({ id: HC_ID });
+
+      expect(result.destino).toBe("ALTA_MEDICA");
+      expect(result.analisisClinico).toBe("Cuadro compatible con resolución.");
+      expect(result.diagnosticos).toHaveLength(1);
+      expect(result.diagnosticos[0]).toMatchObject({ codigo: "BA00", tipo: "COMPLEMENTARIO" });
+    });
+
     it("lanza NOT_FOUND cuando no existe", async () => {
       const ctx = makeCtx(["PHYSICIAN"], [[/*vacío*/]]);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
@@ -230,6 +256,35 @@ describe("eceHistoriaClinicaRouter", () => {
 
       expect(result.id).toBe(HC_ID);
       expect(result.estado_registro).toBe("borrador");
+    });
+
+    it("acepta destino, analisisClinico y diagnósticos CIE-11 (CC-0001)", async () => {
+      const ctx = makeCtx(["MC"], [[SAMPLE_HC_RAW]]);
+      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
+
+      const result = await caller.create({
+        episodioId: EPISODIO_ID,
+        tipoConsulta: "primera_vez",
+        motivoConsulta: "Control prenatal",
+        destino: "SEGUIMIENTO",
+        analisisClinico: "Embarazo de curso normal.",
+        antecedentes: { obstetricos: "G2P1A0", fum: "2026-04-01" },
+        diagnosticos: [
+          { codigo: "QA40", descripcion: "Embarazo", tipo: "COMPLEMENTARIO" },
+        ],
+      });
+
+      expect(result.id).toBe(HC_ID);
+    });
+
+    it("rechaza destino fuera del catálogo cerrado (RN-08)", async () => {
+      const ctx = makeCtx(["MC"], []);
+      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
+
+      await expect(
+        // @ts-expect-error destino inválido — el enum cerrado lo rechaza
+        caller.create({ episodioId: EPISODIO_ID, tipoConsulta: "primera_vez", destino: "ALTA" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("lanza FORBIDDEN si el rol es NURSE (no puede crear)", async () => {
@@ -280,10 +335,22 @@ describe("eceHistoriaClinicaRouter", () => {
 
     it("avanza de borrador a firmado con firmaId", async () => {
       const firmadoRaw = { ...SAMPLE_HC_RAW, estado_registro: "firmado" };
-      // 1ra: SELECT estado_registro; 2da: UPDATE RETURNING
+      // 1ra: SELECT estado+diagnosticos (RN-03); 2da: UPDATE RETURNING
       const ctx = makeCtx(
         ["MC"],
-        [[{ estado_registro: "borrador", instancia_id: INSTANCIA_ID }], [firmadoRaw]],
+        [
+          [
+            {
+              estado_registro: "borrador",
+              instancia_id: INSTANCIA_ID,
+              motivo_consulta: null,
+              enfermedad_actual: null,
+              plan_manejo: null,
+              diagnosticos: DIAGNOSTICOS_RN03,
+            },
+          ],
+          [firmadoRaw],
+        ],
         makeExecuteRaw(),
       );
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
@@ -291,6 +358,32 @@ describe("eceHistoriaClinicaRouter", () => {
       const result = await caller.firmar({ id: HC_ID, firmaId: FIRMA_ID });
 
       expect(result.estado_registro).toBe("firmado");
+    });
+
+    it("lanza PRECONDITION_FAILED (RN-03) si no hay diagnóstico Complementario", async () => {
+      const ctx = makeCtx(
+        ["MC"],
+        [
+          [
+            {
+              estado_registro: "borrador",
+              instancia_id: INSTANCIA_ID,
+              motivo_consulta: null,
+              enfermedad_actual: null,
+              plan_manejo: null,
+              diagnosticos: [
+                { codigo: "BA00", descripcion: "Dx", tipo: "DEFINITIVO" },
+              ],
+            },
+          ],
+        ],
+        makeExecuteRaw(),
+      );
+      const caller = eceHistoriaClinicaRouter.createCaller(ctx);
+
+      await expect(caller.firmar({ id: HC_ID, firmaId: FIRMA_ID })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
     });
 
     it("lanza FORBIDDEN si el rol es MT (solo MC puede firmar)", async () => {

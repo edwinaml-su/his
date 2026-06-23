@@ -33,6 +33,9 @@ export const eceSignosVitalesCreateSchema = z.object({
   tallaCm: numRange(30, 250, "Talla").optional(),
   glucometriaMgdl: numRange(20, 600, "Glucometría").optional(),
 
+  /** RF-04 CC-0001 — nota opcional por toma. */
+  observaciones: z.string().max(2000).optional(),
+
   fechaHoraToma: z.string().datetime({ offset: true }).optional(),
 });
 
@@ -50,6 +53,7 @@ export const eceSignosVitalesUpdateSchema = eceSignosVitalesCreateSchema
     pesoKg: true,
     tallaCm: true,
     glucometriaMgdl: true,
+    observaciones: true,
     fechaHoraToma: true,
   })
   .partial();
