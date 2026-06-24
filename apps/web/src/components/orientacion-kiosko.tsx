@@ -22,7 +22,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   Building2, Footprints, Siren, CalendarCheck, Stethoscope, Scissors, Droplet,
   FlaskConical, ScanLine, Activity, ClipboardList, ArrowRight, ArrowUpRight,
-  ChevronRight, ChevronLeft, Home, Check, Clock, type LucideIcon,
+  ChevronRight, ChevronLeft, Home, Check, Clock, Menu, type LucideIcon,
 } from "lucide-react";
 
 /* ────────────────────────────── Tipos ────────────────────────────── */
@@ -341,9 +341,12 @@ export function OrientacionKiosko(props: OrientacionKioskoProps) {
     return <div style={{ position: "relative", display: "flex", flexDirection: "column", minHeight: 0, height: "100%", background: t.panelBg, color: t.text, borderRadius: 14, overflow: "hidden", border: `1px solid ${t.cardBorder}` }}>{Body}</div>;
   }
 
-  /* ── Modo kiosko (pantalla completa, sin AppShell) ── */
+  /* ── Modo kiosko (pantalla completa) ──
+     zIndex alto: la ruta /orientacion vive en el grupo (clinical), que monta el
+     AppShell; este overlay cubre ese chrome (sidebar, header y el ChatWidget
+     flotante z-50). Follow-up: mover a un route group sin AppShell. */
   return (
-    <div style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: 18, background: t.backdrop, fontFamily: fontStack }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 18, background: t.backdrop, fontFamily: fontStack }}>
       <div style={{ position: "relative", display: "flex", flexDirection: "column", overflow: "hidden", background: t.panelBg, color: t.text, borderRadius: 20, boxShadow: "0 24px 80px -24px rgba(10,14,40,.55)", width: device === "kiosk" ? "min(880px,96vw)" : "min(1320px,97vw)", height: device === "kiosk" ? "min(1480px,96vh)" : "min(880px,95vh)", maxWidth: "98vw", maxHeight: "97vh" }}>
         <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 14, padding: device === "kiosk" ? "22px 26px" : "20px 30px", background: t.headerBg, color: t.headerText, borderBottom: `1px solid ${t.headerBorder}` }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 46, height: 46, borderRadius: 12, background: t.markBg }}><Activity size={26} color={t.markStroke} /></div>
@@ -351,7 +354,12 @@ export function OrientacionKiosko(props: OrientacionKioskoProps) {
             <div style={{ fontWeight: 800, letterSpacing: ".16em", fontSize: 18 }}>AVANTE</div>
             <div style={{ fontSize: 11, letterSpacing: ".04em", opacity: 0.72, textTransform: "uppercase" }}>Complejo Hospitalario · Orientación</div>
           </div>
-          <button onClick={() => go(0)} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 7, padding: "9px 15px", border: "none", cursor: "pointer", borderRadius: 11, background: t.headBtn, color: t.headerText, font: `600 13px ${fontStack}` }}><Home size={16} /> Inicio</button>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <button onClick={() => go(0)} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 15px", border: "none", cursor: "pointer", borderRadius: 11, background: t.headBtn, color: t.headerText, font: `600 13px ${fontStack}` }}><Home size={16} /> Inicio</button>
+            {/* Escape del kiosko → HIS normal. ?vista=completa evita que el landing
+                de tablets vuelva a forzar kiosko (ver kiosk-auto-redirect.tsx). */}
+            <button onClick={() => router.push("/dashboard?vista=completa")} style={{ display: "flex", alignItems: "center", gap: 7, padding: "9px 15px", border: "none", cursor: "pointer", borderRadius: 11, background: t.headBtn, color: t.headerText, font: `600 13px ${fontStack}` }}><Menu size={16} /> Menú normal</button>
+          </div>
         </div>
         {Body}
       </div>

@@ -36,7 +36,7 @@ import {
   useSidebar,
 } from "@his/ui/components/sidebar";
 import { isItemVisible } from "./nav-visibility";
-import { SECTIONS } from "./nav-sections";
+import { SECTIONS, TOP_PINNED } from "./nav-sections";
 import { CommandPaletteButton } from "./command-palette";
 
 interface AppSidebarProps {
@@ -52,6 +52,7 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const pathname = usePathname();
   const { open: sidebarExpanded } = useSidebar();
+  const PinnedIcon = TOP_PINNED.icon;
 
   const isItemActive = React.useCallback(
     (href: string) => pathname === href || pathname.startsWith(href + "/"),
@@ -115,6 +116,36 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
+        {/* Ítem fijado arriba de todo (Orientación táctil) — fuera del acordeón,
+            siempre visible. En tablets/kioskos el landing ya arranca en kiosko. */}
+        {isItemVisible(TOP_PINNED, roleCodes, assignedServiceUnitCodes, isCrossServiceRole) && (
+          <>
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isItemActive(TOP_PINNED.href)}
+                      tooltip={TOP_PINNED.label}
+                    >
+                      <Link
+                        href={TOP_PINNED.href}
+                        aria-label={`${TOP_PINNED.label} — ${TOP_PINNED.description}`}
+                      >
+                        <PinnedIcon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        <span className="truncate group-data-[state=collapsed]:hidden">
+                          {TOP_PINNED.label}
+                        </span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+            <SidebarSeparator />
+          </>
+        )}
         {sections.map((section, idx) => {
           const menu = (
             <SidebarMenu>
