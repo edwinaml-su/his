@@ -114,8 +114,6 @@ export const SECTIONS: NavSection[] = [
         description: "Registro maestro de pacientes (MPI). Búsqueda, alta, edición y deduplicación." },
       { href: "/admission", label: "Admisión", icon: ClipboardList,
         description: "Proceso de admisión: registra el ingreso del paciente al hospital." },
-      { href: "/orientacion", label: "Orientación táctil", icon: Footprints,
-        description: "Menú táctil de orientación (kioskos/tablets de admisión): deriva al paciente a la pantalla correcta según su necesidad." },
       { href: "/beds", label: "Camas", icon: Bed,
         description: "Mapa de camas por servicio. Asignación, libre/ocupado, limpieza." },
       { href: "/census", label: "Censo", icon: Activity,
@@ -405,3 +403,19 @@ export const SECTIONS: NavSection[] = [
     ],
   },
 ];
+
+/**
+ * Ítem fijado en el tope del sidebar (por encima de la sección "Visión").
+ *
+ * Es la orientación táctil. En workstations (desktop con mouse) queda como
+ * atajo destacado siempre visible. En tablets/kioskos la app arranca
+ * directamente en el modo kiosko full-screen (ver `kiosk-auto-redirect.tsx`),
+ * por lo que este ítem es el acceso para equipos NO táctiles.
+ */
+export const TOP_PINNED: NavItem = {
+  href: "/orientacion",
+  label: "Orientación táctil",
+  icon: Footprints,
+  description:
+    "Menú táctil de orientación (kioskos/tablets de admisión): deriva al paciente a la pantalla correcta según su necesidad.",
+};

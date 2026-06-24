@@ -1,11 +1,14 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
+import { KioskAutoRedirect } from "@/components/kiosk-auto-redirect";
 
 export default async function DashboardPage() {
   const user = await getCurrentUser();
   const tenant = await getTenantContext();
   return (
     <div className="space-y-6">
+      {/* En tablets/kioskos redirige al modo kiosko full-screen (no-op en desktop). */}
+      <KioskAutoRedirect />
       <div>
         <h1 className="text-2xl font-bold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">
