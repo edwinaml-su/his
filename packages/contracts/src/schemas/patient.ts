@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { validateIdentifier } from "../validators";
+import { validateIdentifier, validateDUI } from "../validators";
 
 export const patientIdentifierKindEnum = z.enum([
   "DUI",
@@ -28,6 +28,32 @@ export const patientIdentifierSchema = z
     path: ["value"],
   });
 
+// =============================================================================
+// CC-0002 §3/§5/§10 — Documento de registro + deduplicación + responsable.
+// =============================================================================
+
+export const documentTypeEnum = z.enum(["DUI", "DNI", "PASAPORTE", "DUI_RESP"]);
+
+export const responsableSchema = z
+  .object({
+    nombre: z.string().min(1).max(200),
+    parentesco: z.string().min(1).max(50),
+    dui: z.string().min(1).max(40),
+  })
+  .refine((r) => validateDUI(r.dui), {
+    message: "DUI de responsable inválido.",
+    path: ["dui"],
+  });
+
+/** Calcula la edad en años completos a la fecha actual (UTC). */
+const calcEdad = (bd: Date): number => {
+  const h = new Date();
+  let a = h.getUTCFullYear() - bd.getUTCFullYear();
+  const m = h.getUTCMonth() - bd.getUTCMonth();
+  if (m < 0 || (m === 0 && h.getUTCDate() < bd.getUTCDate())) a--;
+  return a;
+};
+
 export const patientAllergySchema = z.object({
   substanceConceptId: z.string().uuid().nullable().optional(),
   substanceText: z.string().min(1).max(200),
@@ -45,14 +71,17 @@ export const patientAddressSchema = z.object({
   isPrimary: z.boolean().default(false),
 });
 
-export const patientCreateSchema = z.object({
+// Objeto base sin superRefine: permite .partial() en update sin perder tipado.
+// El superRefine cross-field solo aplica en create (donde todos los campos están presentes).
+// Ref: Zod no propaga superRefine tras .partial() de forma segura en v3 — Plan B aplicado.
+const patientBaseObject = z.object({
   mrn: z.string().min(1).max(40),
   firstName: z.string().min(1).max(120),
   middleName: z.string().max(120).nullable().optional(),
   lastName: z.string().min(1).max(120),
   secondLastName: z.string().max(120).nullable().optional(),
   preferredName: z.string().max(120).nullable().optional(),
-  birthDate: z.coerce.date().nullable().optional(),
+  birthDate: z.coerce.date(), // CC-0002: requerida para generar expediente.
   birthDateEstimated: z.boolean().default(false),
   biologicalSexId: z.string().uuid(),
   genderId: z.string().uuid().nullable().optional(),
@@ -62,9 +91,54 @@ export const patientCreateSchema = z.object({
   bloodTypeAbo: z.enum(["A", "B", "AB", "O"]).nullable().optional(),
   bloodRh: z.enum(["+", "-"]).nullable().optional(),
   isUnknown: z.boolean().default(false),
+  // CC-0002 §3/§5: documento de registro (opcional, tolera pacientes existentes sin doc).
+  documentType: documentTypeEnum.optional(),
+  documentNumber: z.string().min(1).max(40).optional(),
+  responsable: responsableSchema.optional(),
 });
 
-export const patientUpdateSchema = patientCreateSchema.partial().extend({
+export const patientCreateSchema = patientBaseObject.superRefine((val, ctx) => {
+  const { documentType, documentNumber, responsable, birthDate } = val;
+
+  if (
+    documentType &&
+    ["DUI", "DNI", "PASAPORTE"].includes(documentType) &&
+    !documentNumber
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Número de documento requerido para documento propio.",
+      path: ["documentNumber"],
+    });
+  }
+
+  if (documentType === "DUI" && documentNumber && !validateDUI(documentNumber)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "DUI inválido (dígito verificador).",
+      path: ["documentNumber"],
+    });
+  }
+
+  if (documentType === "DUI_RESP") {
+    if (!responsable) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Datos del responsable requeridos para DUI_RESP.",
+        path: ["responsable"],
+      });
+    }
+    if (birthDate && calcEdad(birthDate) >= 18) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "DUI_RESP solo aplica a menores de 18 años.",
+        path: ["documentType"],
+      });
+    }
+  }
+});
+
+export const patientUpdateSchema = patientBaseObject.partial().extend({
   id: z.string().uuid(),
 });
 

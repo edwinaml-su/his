@@ -90,6 +90,24 @@ enum AdmissionType {
   @@schema("public")
 }
 
+/// CC-0002 §3 — tipo de documento de registro del paciente.
+enum DocumentType {
+  DUI
+  DNI
+  PASAPORTE
+  DUI_RESP
+
+  @@schema("public")
+}
+
+/// CC-0002 §7 — tipo de servicio en cuenta de paciente.
+enum TipoServicio {
+  HOSPITALARIO
+  NO_HOSPITALARIO
+
+  @@schema("public")
+}
+
 /// TDR §8.1 — clase de identificador del paciente en MPI.
 enum PatientIdentifierKind {
   DUI
@@ -239,6 +257,7 @@ enum HisCostCategory {
 model Country {
   id            String   @id @default(uuid()) @db.Uuid
   isoAlpha3     String   @unique @db.Char(3) /// ISO 3166-1 alfa-3 (SLV).
+  isoAlpha2     String?  @unique @db.Char(2) /// ISO 3166-1 alfa-2 (SV). Nullable; se seedea por SQL 176.
   isoNumeric    Int      @unique
   name          String   @db.VarChar(120)
   defaultLocale String   @db.VarChar(20) /// es-SV, es-GT, etc.
@@ -456,6 +475,8 @@ model Organization {
   invoices                  Invoice[]                  @relation("InvoiceOrganization")
   hisOperatingCosts         HisOperatingCost[]         @relation("HisOperatingCostOrganization")
   allocationRules           CostCenterAllocationRule[] @relation("AllocationRuleOrganization")
+  // CC-0002 §7 — cuentas de paciente por organización
+  patientAccounts           PatientAccount[]           @relation("PatientAccountOrg")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -1121,6 +1142,9 @@ model Patient {
   id                 String    @id @default(uuid()) @db.Uuid
   organizationId     String    @db.Uuid /// organización propietaria del registro maestro.
   mrn                String    @db.VarChar(40) /// medical record number interno.
+  expediente         String?   @unique @db.VarChar(20) /// CC-0002 §6: {PAIS}{AA}{NNNNN}. Inmutable tras asignarse. Server-generated.
+  documentType       DocumentType?            /// CC-0002 §3: documento de registro. DUI_RESP = doc del responsable (menores).
+  documentNumber     String?   @db.VarChar(40) /// CC-0002 §5: dedup 1:1 para docs propios; DUI_RESP es compartible.
   firstName          String    @db.VarChar(120)
   middleName         String?   @db.VarChar(120)
   lastName           String    @db.VarChar(120)
@@ -1208,6 +1232,8 @@ model Patient {
   solicitudesArco        SolicitudArco[]    @relation("PatientSolicitudesArco")
   // Finance — sql/127
   invoices               Invoice[]          @relation("InvoicePatient")
+  // CC-0002 §7 — cuentas de paciente
+  patientAccounts        PatientAccount[]   @relation("PatientAccounts")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1605,6 +1631,9 @@ model Encounter {
   pharmacyOrders         PharmacyOrder[]         @relation("EncPharmacyOrders")
   // Finance — sql/127
   invoices               Invoice[]               @relation("InvoiceEncounter")
+  // CC-0002 §7 — cuentas y servicios vinculados al encuentro
+  accounts               PatientAccount[]        @relation("EncounterAccounts")
+  accountServices        PatientAccountService[] @relation("EncounterAccountServices")
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -7131,5 +7160,50 @@ model CostCenterAllocationTarget {
   targetCostCenter CostCenter               @relation("AllocationRuleTarget", fields: [targetCostCenterId], references: [id], onDelete: Restrict)
 
   @@index([ruleId])
+  @@schema("public")
+}
+
+// =============================================================================
+// CC-0002 §7 — Cuentas y Servicios de Paciente
+// =============================================================================
+
+/// Cuenta administrativa del paciente (CTA00001…). Correlativo por expediente.
+/// encounterId es opcional: se genera con o sin admisión (ambulatorio incluido).
+model PatientAccount {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  patientId      String   @db.Uuid
+  numeroCuenta   String   @db.VarChar(20) /// CTA00001 — correlativo por expediente (CC-0002 §7).
+  encounterId    String?  @db.Uuid       /// opcional: cuenta con o sin admisión.
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  createdBy      String?  @db.Uuid
+
+  organization Organization          @relation("PatientAccountOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  patient      Patient               @relation("PatientAccounts", fields: [patientId], references: [id], onDelete: Restrict)
+  encounter    Encounter?            @relation("EncounterAccounts", fields: [encounterId], references: [id], onDelete: SetNull)
+  servicios    PatientAccountService[]
+
+  @@unique([patientId, numeroCuenta])
+  @@index([organizationId])
+  @@index([patientId])
+  @@index([encounterId])
+  @@schema("public")
+}
+
+/// Servicio registrado dentro de una cuenta de paciente (HOSPITALARIO | NO_HOSPITALARIO).
+model PatientAccountService {
+  id          String       @id @default(uuid()) @db.Uuid
+  accountId   String       @db.Uuid
+  tipo        TipoServicio
+  descripcion String?      @db.VarChar(300)
+  encounterId String?      @db.Uuid
+  createdAt   DateTime     @default(now()) @db.Timestamptz()
+  createdBy   String?      @db.Uuid
+
+  account   PatientAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  encounter Encounter?     @relation("EncounterAccountServices", fields: [encounterId], references: [id], onDelete: SetNull)
+
+  @@index([accountId])
+  @@index([encounterId])
   @@schema("public")
 }
