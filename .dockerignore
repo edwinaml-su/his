@@ -14,9 +14,12 @@
 .vscode
 .idea
 
-.env
-.env.local
-.env.*.local
+# Patrones **/ para alcanzar también los .env anidados de workspaces
+# (apps/web/.env.local NO lo matchea un patrón raíz). Sin esto, el env de dev
+# se filtraba al contexto de build y la imagen "compilaba" con config local.
+**/.env
+**/.env.local
+**/.env.*.local
 *.log
 
 docs

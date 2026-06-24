@@ -1,0 +1,87 @@
+name: Release Image
+
+# Construye y publica la imagen de contenedor en GitHub Container Registry (GHCR).
+# Cubre el requisito cloud-agnostic (@AT): los manifiestos K8s en infra/k8s/
+# referencian ghcr.io/<owner>/his-web — sin este workflow esa imagen no existe.
+#
+# Deploy primario sigue siendo Vercel; esto habilita correr en K8s/ECS/on-prem.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# packages: write para publicar en GHCR; contents: read para checkout.
+# Scope mínimo (mismo criterio que ci.yml [infra-P1-3]).
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # github.repository_owner = edwinaml-su → ghcr.io/edwinaml-su/his-web
+  IMAGE_NAME: ${{ github.repository_owner }}/his-web
+
+jobs:
+  build-push:
+    name: Build & push (GHCR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # En pull_request solo se construye (validación del Dockerfile), no se publica.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # sha-<commit> para rollback/pin; latest en main (lo usa base/deployment-web.yaml);
+          # semver en tags v*; pr-<n> para builds de PR.
+          tags: |
+            type=sha
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build & push
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # arm64 diferido hasta decidir cluster (Blocker 3). amd64 cubre EKS/GKE/on-prem x86.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # NEXT_PUBLIC_* son públicos por diseño (se inlinean en el bundle cliente):
+          # van en repo Variables, NO en secrets. Si faltan, el build truena por diseño
+          # (apps/web/src/lib/supabase/env.ts) — config explícita, sin fallback silencioso.
+          build-args: |
+            NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+            NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+            APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # provenance/SBOM attestation genera un manifest-list que algunos runtimes
+          # (y el HEALTHCHECK simple) no esperan; se omite por compatibilidad.
+          provenance: false
