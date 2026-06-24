@@ -71,6 +71,7 @@ import {
   Inbox,
   BriefcaseMedical,
   UserCog,
+  Footprints,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -113,6 +114,8 @@ export const SECTIONS: NavSection[] = [
         description: "Registro maestro de pacientes (MPI). Búsqueda, alta, edición y deduplicación." },
       { href: "/admission", label: "Admisión", icon: ClipboardList,
         description: "Proceso de admisión: registra el ingreso del paciente al hospital." },
+      { href: "/orientacion", label: "Orientación táctil", icon: Footprints,
+        description: "Menú táctil de orientación (kioskos/tablets de admisión): deriva al paciente a la pantalla correcta según su necesidad." },
       { href: "/beds", label: "Camas", icon: Bed,
         description: "Mapa de camas por servicio. Asignación, libre/ocupado, limpieza." },
       { href: "/census", label: "Censo", icon: Activity,
