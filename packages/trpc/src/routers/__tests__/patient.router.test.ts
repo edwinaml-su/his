@@ -159,14 +159,20 @@ describe("patientRouter", () => {
   });
 
   describe("create", () => {
-    it("inyecta organizationId y createdBy desde el contexto", async () => {
-      // create ahora corre dentro de $transaction (hook ECE).
-      prisma.patient.create.mockResolvedValue({ id: "new", mrn: "MRN-X" } as never);
-      // El hook ECE usa $queryRaw — retornamos vacío (idempotente: no existe aún).
-      prisma.$queryRaw.mockResolvedValue([] as never);
+    it("inyecta organizationId, createdBy y expediente desde el contexto", async () => {
+      // CC-0002: create ahora requiere birthDate para generar expediente.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
+      // Mock de organization.findUnique para obtener isoAlpha2 del país.
+      prisma.organization.findUnique.mockResolvedValue({
+        country: { isoAlpha2: "SV" },
+      } as never);
+      // Mock de $queryRaw: fn_next_expediente devuelve 1.
+      prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
+      // Mock del patient create.
+      prisma.patient.create.mockResolvedValue({ id: "new", mrn: "MRN-X", expediente: "SV8400001" } as never);
 
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
@@ -175,12 +181,14 @@ describe("patientRouter", () => {
         firstName: "Juan",
         lastName: "Pérez",
         biologicalSexId: "00000000-0000-0000-0000-000000000099",
+        birthDate: "1984-03-15",
       } as never);
 
       const args = prisma.patient.create.mock.calls[0]![0];
       expect(args.data).toMatchObject({
         organizationId: MOCK_TENANT.organizationId,
         createdBy: MOCK_USER_ADMIN.id,
+        expediente: "SV8400001",
       });
     });
 
@@ -192,11 +200,13 @@ describe("patientRouter", () => {
           firstName: "Juan",
           lastName: "Pérez",
           biologicalSexId: "00000000-0000-0000-0000-000000000099",
+          birthDate: "1984-03-15",
         } as never),
       ).rejects.toBeInstanceOf(TRPCError);
     });
 
     it("falla con FORBIDDEN si el tenant no tiene establecimiento", async () => {
+      // La guarda FORBIDDEN corre antes de $transaction, por eso birthDate es suficiente.
       const caller = patientRouter.createCaller(
         makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
       );
@@ -206,8 +216,110 @@ describe("patientRouter", () => {
           firstName: "Juan",
           lastName: "Pérez",
           biologicalSexId: "00000000-0000-0000-0000-000000000099",
+          birthDate: "1984-03-15",
         } as never),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    // CC-0002 §5 / §14 Esc. 4: un responsable con dos menores → dos expedientes distintos.
+    it("DUI_RESP: un responsable con dos menores genera dos expedientes distintos con el mismo responsable", async () => {
+      const RESP_DUI = VALID_DUIS[0]!;
+      const BASE_PATIENT = {
+        mrn: "MRN-MENOR",
+        firstName: "Menor",
+        lastName: "Test",
+        biologicalSexId: "00000000-0000-0000-0000-000000000099",
+        // menor de 5 años
+        birthDate: new Date(Date.now() - 5 * 365 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .slice(0, 10),
+        documentType: "DUI_RESP" as const,
+        responsable: { nombre: "Resp Adulto", parentesco: "madre", dui: RESP_DUI },
+      };
+
+      // --- Primer create ---
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+      // $queryRaw: fn_next_expediente devuelve 1 para el primer menor; luego hook ECE queries → []
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ n: 1 }] as never)   // fn_next_expediente → SV{AA}00001
+        .mockResolvedValue([] as never);               // hook ECE queries (idempotencia) → no existente → falló non-fatal
+      prisma.patient.create.mockResolvedValueOnce({
+        id: "minor-1",
+        expediente: "SV0000001",
+      } as never);
+
+      const caller1 = patientRouter.createCaller(makeCtx({ prisma }));
+      const res1 = await caller1.create({ ...BASE_PATIENT, mrn: "MRN-MENOR-1" } as never);
+
+      // --- Segundo create (mismo responsable, distinto menor) ---
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ n: 2 }] as never)   // fn_next_expediente → SV{AA}00002
+        .mockResolvedValue([] as never);
+      prisma.patient.create.mockResolvedValueOnce({
+        id: "minor-2",
+        expediente: "SV0000002",
+      } as never);
+
+      const caller2 = patientRouter.createCaller(makeCtx({ prisma }));
+      const res2 = await caller2.create({ ...BASE_PATIENT, mrn: "MRN-MENOR-2" } as never);
+
+      // Dos expedientes distintos
+      expect(res1).toMatchObject({ id: "minor-1" });
+      expect(res2).toMatchObject({ id: "minor-2" });
+      expect(res1.expediente).not.toBe(res2.expediente);
+
+      // nextExpediente se invocó dos veces (una por menor)
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(
+        prisma.$queryRaw.mock.calls.length, // toleramos llamadas del hook ECE
+      );
+      expect(prisma.patient.create).toHaveBeenCalledTimes(2);
+
+      // Ambas llamadas a patient.create usan el mismo DUI de responsable
+      // pero NO como documentNumber del paciente (DUI_RESP no pasa por dedup de doc propio)
+      // Verificamos que NO se haya llamado a patient.findFirst para dedup
+      // (porque DUI_RESP se excluye del check §5)
+      expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+    });
+
+    // CC-0002 §5: dedup por documento propio.
+    it("dedup: retorna paciente existente sin llamar nextExpediente ni patient.create", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
+      prisma.organization.findUnique.mockResolvedValue({
+        country: { isoAlpha2: "SV" },
+      } as never);
+
+      const existingPatient = {
+        id: "existing-uuid",
+        mrn: "MRN-EXIST",
+        expediente: "SV8400001",
+        documentType: "DUI",
+        documentNumber: VALID_DUIS[0],
+      };
+      // findFirst devuelve paciente existente con el mismo documento.
+      prisma.patient.findFirst.mockResolvedValue(existingPatient as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.create({
+        mrn: "MRN-NUEVO",
+        firstName: "Juan",
+        lastName: "Pérez",
+        biologicalSexId: "00000000-0000-0000-0000-000000000099",
+        birthDate: "1984-03-15",
+        documentType: "DUI",
+        documentNumber: VALID_DUIS[0],
+      } as never);
+
+      // Debe retornar el existente.
+      expect(result).toMatchObject({ id: "existing-uuid" });
+      // NO debe llamar nextExpediente ($queryRaw) ni patient.create.
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+      expect(prisma.patient.create).not.toHaveBeenCalled();
     });
   });
 

@@ -16,6 +16,7 @@ import {
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
+import { nextExpediente } from "../lib/expediente-numbering";
 
 // =============================================================================
 // US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
@@ -331,27 +332,83 @@ export const patientRouter = router({
     const establishmentId = ctx.tenant.establishmentId;
 
     return ctx.prisma.$transaction(async (tx) => {
+      // CC-0002 §6: el expediente requiere birthDate y que el país tenga isoAlpha2.
+      if (!input.birthDate) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "La fecha de nacimiento es requerida para generar el expediente del paciente (CC-0002).",
+        });
+      }
+
+      const org = await tx.organization.findUnique({
+        where: { id: ctx.tenant.organizationId },
+        select: { country: { select: { isoAlpha2: true } } },
+      });
+
+      const alpha2 = org?.country?.isoAlpha2;
+      if (!alpha2) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "El país de la organización no tiene código ISO alfa-2 configurado (CC-0002). Contacta al administrador.",
+        });
+      }
+
+      // CC-0002 §5: dedup por documento propio antes de crear.
+      if (
+        input.documentType &&
+        ["DUI", "DNI", "PASAPORTE"].includes(input.documentType) &&
+        input.documentNumber
+      ) {
+        const existing = await tx.patient.findFirst({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            documentType: input.documentType,
+            documentNumber: input.documentNumber,
+            deletedAt: null,
+          },
+        });
+        if (existing) return existing; // recuperar expediente existente, NO crear uno nuevo.
+      }
+
+      const expediente = await nextExpediente(tx, alpha2, input.birthDate);
+
+      // responsable no es columna de Patient — excluirlo del data.
+      const { responsable, ...patientData } = input;
+
       const patient = await tx.patient.create({
         data: {
-          ...input,
+          ...patientData,
           organizationId: ctx.tenant.organizationId,
           createdBy: ctx.user.id,
+          expediente,
         },
       });
 
       // Hook automático: crear ece.paciente para habilitar documentos clínicos ECE.
+      // Pasa el expediente nuevo (CC-0002) como numero_expediente en ECE.
       // Non-fatal: si falla, el Patient ya se creó y se puede backfillear luego.
-      await hookEcePacienteAfterCreate(
+      const pacienteEceId = await hookEcePacienteAfterCreate(
         tx,
         patient.id,
         establishmentId,
-        patient.mrn,
+        patient.expediente ?? patient.mrn,
       ).catch((err: unknown) => {
         console.error(
           `[patient.create] hook ECE falló para patient=${patient.id}:`,
           err,
         );
+        return null;
       });
+
+      // CC-0002: persistir responsable del menor (best-effort, espejo ECE).
+      if (input.documentType === "DUI_RESP" && responsable && pacienteEceId) {
+        await tx.$executeRaw`
+          INSERT INTO ece.responsable_paciente (id, paciente_id, nombre, parentesco, documento, vigente)
+          VALUES (gen_random_uuid(), ${pacienteEceId}::uuid, ${responsable.nombre}, ${responsable.parentesco}, ${responsable.dui}, true)
+        `.catch((err: unknown) => {
+          console.error(`[patient.create] responsable ECE falló:`, err);
+        });
+      }
 
       return patient;
     });

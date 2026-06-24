@@ -214,6 +214,8 @@ import { financeOverviewRouter } from "./finance-overview.router";
 import { srsRegistroRouter } from "./srs-registro.router";
 // Integración WHO ICD-11 (CIE-11) — proxy de búsqueda de diagnósticos (CC-0001 RF-03)
 import { cie11Router } from "./cie11.router";
+// CC-0002 §7 — Cuentas y Servicios de Paciente
+import { patientAccountRouter } from "./patient-account.router";
 // Workflow Inbox — bandeja BPM centralizada con routing RBAC (Ola 1: 29 fuentes)
 import { workflowInboxRouter } from "./workflow-inbox.router";
 
@@ -432,6 +434,8 @@ export const appRouter = router({
   cie11: cie11Router,
   // Workflow Inbox — bandeja BPM con routing RBAC (Ola 1: 29 fuentes)
   workflowInbox: workflowInboxRouter,
+  // CC-0002 §7 — Cuentas y Servicios de Paciente
+  patientAccount: patientAccountRouter,
 });
 
 export type AppRouter = typeof appRouter;
