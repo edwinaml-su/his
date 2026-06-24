@@ -35,12 +35,17 @@ services:
       retries: 5
 
   # --------------------------------------------------------------------------
-  # Aplicación Next.js (imagen construida con Dockerfile.web)
+  # Aplicación Next.js (imagen construida con el Dockerfile raíz — canónico)
   # --------------------------------------------------------------------------
   web:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.web
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_* se inlinean en BUILD time; placeholders para el stack local.
+        NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: local-anon-key-placeholder
+        APP_VERSION: local
     container_name: his-web-local
     restart: unless-stopped
     ports:
