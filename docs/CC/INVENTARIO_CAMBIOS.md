@@ -11,7 +11,7 @@
 | Numeración de PRs | hasta **#481** (todos mergeados); 368 merges en el historial git local (desde #54), los #1–#53 registrados en bitácora de sesiones |
 | Stack | Turborepo + npm workspaces · Next.js 14 (App Router) · tRPC v11 · Prisma 5 · PostgreSQL 17 (Supabase) · Tailwind/Shadcn |
 | Despliegue | Vercel (auto-deploy a merge en `main`) + Supabase · imagen Docker/GHCR + spec K8s nube privada |
-| Tamaño actual | ~291 rutas de página · 99 routers tRPC raíz + 44 routers ECE · 206 archivos SQL (numerados hasta 180) |
+| Tamaño actual | ~291 rutas de página · 99 routers tRPC raíz + 44 routers ECE · 207 archivos SQL (numerados hasta 181) |
 
 ---
 
@@ -53,6 +53,7 @@ El HIS pasó de esqueleto a un sistema hospitalario **técnicamente listo para G
 | 2026-06-24 | **CC-0004** — Evolución médica SOAP a flujo vertical orientado a problemas | #479 |
 | 2026-06-24 | **CC-0005** — Orden de ingreso por documento + diagnóstico CIE-11 | #480 |
 | 2026-06-25 | Cierre de deuda de accesibilidad de Orden de Ingreso (labels, combobox CIE-11, dead code) | #481 |
+| 2026-06-25 | **CC-0006** — Evolución médica SOAP: rebuild dirigido por modales + autosave Supabase + inmutabilidad post-firma (SQL 181) | — |
 
 ---
 
@@ -70,7 +71,7 @@ El HIS pasó de esqueleto a un sistema hospitalario **técnicamente listo para G
 - **Triage Manchester** (legacy extendido, con puente a `ece.hoja_triaje`).
 - **Encuentros y episodios** hospitalarios y ambulatorios; landing de admisiones por área.
 - **Historia clínica** rediseñada al modelo Avante: diagnósticos **CIE-11**, sección de Destino, análisis clínico, antecedentes y signos vitales (CC-0001).
-- **Evolución médica (SOAP)**: flujo vertical orientado a problemas, con modal de problemas y captura de signos vitales reutilizable (CC-0004).
+- **Evolución médica (SOAP)**: flujo vertical orientado a problemas (CC-0004), reconstruido a un modelo **dirigido por modales** con autosave a Supabase (sin localStorage), captura de signos vitales en el Objetivo con alertas críticas, Plan ítem a ítem e inmutabilidad post-firma (CC-0006).
 - **Orden de ingreso**: identificación por documento + diagnósticos CIE-11 (1 principal obligatorio + secundarios), firma electrónica (CC-0005).
 - **Consentimientos informados NTEC** (hospitalización, quirúrgico; doble firma, inmutables post-firma).
 - **Defunción** (CIE estructurada), **epicrisis**, **URPA**, **indicaciones médicas**, **bitácora ECE**, ficha de identificación, rectificación.
@@ -140,13 +141,14 @@ Proceso formal de cambios bajo `docs/CC/NNNN/`. Estado:
 | **CC-0004** | Evolución médica SOAP — flujo vertical orientado a problemas | #479 | Mergeado |
 | **CC-0005** | Orden de ingreso por documento + diagnóstico CIE-11 | #480 | Mergeado (SQL 179–180 en prod) |
 | CC-0005 (deuda) | Accesibilidad de Orden de Ingreso (labels, combobox CIE-11, limpieza) | #481 | Mergeado |
+| **CC-0006** | Evolución médica SOAP — rebuild dirigido por modales (S/O/A + signos en Objetivo, Plan ítem a ítem), autosave a Supabase (sin localStorage), inmutabilidad post-firma; corrige el `create` roto de #479 | — | Listo — SQL 181 en prod; pendiente de PR |
 
 ---
 
 ## 7. Estado actual
 
 - **Técnicamente Go-Live ready.** De los 18 módulos originalmente fuera del MVP, 16 quedaron implementados; 2 diferidos (DTE Hacienda §23, HL7/FHIR/DICOM §28).
-- **Producción**: aplicación en Vercel + Supabase (`ejacvsgbewcerxtjtwto`); migraciones SQL aplicadas hasta la 180.
+- **Producción**: aplicación en Vercel + Supabase (`ejacvsgbewcerxtjtwto`); migraciones SQL aplicadas hasta la 181.
 - **Pendiente operativo**: UAT, capacitación, carga de catálogos productivos, cierre de pentest/JCI.
 
 ---
