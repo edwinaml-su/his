@@ -36,16 +36,37 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-      "@his/ui/lib/utils": path.resolve(
-        __dirname,
-        "../../packages/ui/src/lib/utils.ts",
-      ),
-      "@his/contracts": path.resolve(
-        __dirname,
-        "../../packages/contracts/src/index.ts",
-      ),
-    },
+    // Array form required so longer/more-specific paths are matched first.
+    // Vite resolves aliases top-to-bottom and stops on first match.
+    alias: [
+      // Subpath overrides — must precede the bare "@his/contracts" entry.
+      // The package.json exports map is NOT used by Vite's alias resolver.
+      {
+        find: "@his/contracts/schemas/inpatient",
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/contracts/src/schemas/inpatient.ts",
+        ),
+      },
+      // Bare package alias (catches all other @his/contracts imports).
+      {
+        find: "@his/contracts",
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/contracts/src/index.ts",
+        ),
+      },
+      {
+        find: "@his/ui/lib/utils",
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/ui/src/lib/utils.ts",
+        ),
+      },
+      {
+        find: "@",
+        replacement: path.resolve(__dirname, "src"),
+      },
+    ],
   },
 });
