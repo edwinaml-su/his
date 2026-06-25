@@ -53,7 +53,7 @@ El HIS pasó de esqueleto a un sistema hospitalario **técnicamente listo para G
 | 2026-06-24 | **CC-0004** — Evolución médica SOAP a flujo vertical orientado a problemas | #479 |
 | 2026-06-24 | **CC-0005** — Orden de ingreso por documento + diagnóstico CIE-11 | #480 |
 | 2026-06-25 | Cierre de deuda de accesibilidad de Orden de Ingreso (labels, combobox CIE-11, dead code) | #481 |
-| 2026-06-25 | **CC-0006** — Evolución médica SOAP: rebuild dirigido por modales + autosave Supabase + inmutabilidad post-firma (SQL 181) | — |
+| 2026-06-25 | **CC-0006** — Evolución médica SOAP: rebuild dirigido por modales + autosave Supabase + inmutabilidad post-firma (SQL 181) | #484 |
 
 ---
 
@@ -141,7 +141,7 @@ Proceso formal de cambios bajo `docs/CC/NNNN/`. Estado:
 | **CC-0004** | Evolución médica SOAP — flujo vertical orientado a problemas | #479 | Mergeado |
 | **CC-0005** | Orden de ingreso por documento + diagnóstico CIE-11 | #480 | Mergeado (SQL 179–180 en prod) |
 | CC-0005 (deuda) | Accesibilidad de Orden de Ingreso (labels, combobox CIE-11, limpieza) | #481 | Mergeado |
-| **CC-0006** | Evolución médica SOAP — rebuild dirigido por modales (S/O/A + signos en Objetivo, Plan ítem a ítem), autosave a Supabase (sin localStorage), inmutabilidad post-firma; corrige el `create` roto de #479 | — | Listo — SQL 181 en prod; pendiente de PR |
+| **CC-0006** | Evolución médica SOAP — rebuild dirigido por modales (S/O/A + signos en Objetivo, Plan ítem a ítem), autosave a Supabase (sin localStorage), inmutabilidad post-firma; corrige el `create` roto de #479; **supersede la UI grid POMR de #482** | #484 | PR abierto — SQL 181 en prod |
 
 ---
 
