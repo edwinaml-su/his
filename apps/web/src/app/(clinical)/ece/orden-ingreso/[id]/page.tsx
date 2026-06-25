@@ -149,19 +149,31 @@ export default function OrdenIngresoDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Diagnósticos */}
+      {/* Diagnósticos — back-compat: shape legacy { cie10, descripcion, principal }
+           y nuevo shape CIE-11 { cie11Codigo, cie11Titulo, tipo } (CC-0005). */}
       {Array.isArray(orden.diagnostico_ingreso) && orden.diagnostico_ingreso.length > 0 && (
         <Card>
           <CardHeader><CardTitle>Diagnósticos de ingreso</CardTitle></CardHeader>
           <CardContent>
             <ul className="space-y-1 text-sm">
-              {(orden.diagnostico_ingreso as Array<{ cie10: string; descripcion: string; principal: boolean }>).map((d, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span className="font-mono text-xs bg-muted px-1 py-0.5 rounded">{d.cie10}</span>
-                  <span>{d.descripcion}</span>
-                  {d.principal && <Badge variant="outline" className="ml-auto text-xs">Principal</Badge>}
-                </li>
-              ))}
+              {(
+                orden.diagnostico_ingreso as Array<
+                  | { cie11Codigo: string; cie11Titulo: string; tipo: string }
+                  | { cie10: string; descripcion: string; principal: boolean }
+                >
+              ).map((d, i) => {
+                const esCie11 = "cie11Codigo" in d;
+                const codigo   = esCie11 ? d.cie11Codigo : d.cie10;
+                const titulo   = esCie11 ? d.cie11Titulo : d.descripcion;
+                const esPpal   = esCie11 ? d.tipo === "PRINCIPAL" : d.principal;
+                return (
+                  <li key={i} className="flex items-start gap-2">
+                    <span className="font-mono text-xs bg-muted px-1 py-0.5 rounded">{codigo}</span>
+                    <span>{titulo}</span>
+                    {esPpal && <Badge variant="outline" className="ml-auto text-xs">Principal</Badge>}
+                  </li>
+                );
+              })}
             </ul>
           </CardContent>
         </Card>

@@ -376,4 +376,64 @@ describe("patientRouter", () => {
       expect(args.data).toMatchObject({ createdBy: MOCK_USER_ADMIN.id });
     });
   });
+
+  // CC-0005 RF-1 — findByDocument
+  describe("findByDocument", () => {
+    function setupTxFindByDoc() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void }).mockImplementation(
+        async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma),
+      );
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
+    it("retorna displayName y expediente cuando el paciente existe", async () => {
+      setupTxFindByDoc();
+      prisma.patient.findFirst.mockResolvedValue({
+        id: "00000000-0000-0000-0000-000000000099",
+        firstName: "Juan",
+        lastName: "Pérez",
+        secondLastName: "García",
+        expediente: "SV2600001",
+      } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      // PASAPORTE omite la validación de dígito verificador DUI → llega hasta la BD
+      const result = await caller.findByDocument({
+        documentType: "PASAPORTE",
+        documentNumber: "A12345678",
+      });
+
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe("00000000-0000-0000-0000-000000000099");
+      expect(result?.displayName).toContain("Juan");
+      expect(result?.expediente).toBe("SV2600001");
+    });
+
+    it("devuelve null cuando el paciente no existe", async () => {
+      setupTxFindByDoc();
+      prisma.patient.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.findByDocument({
+        documentType: "PASAPORTE",
+        documentNumber: "AB123456",
+      });
+
+      expect(result).toBeNull();
+    });
+
+    it("devuelve null sin consultar BD si el DUI tiene dígito verificador inválido", async () => {
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      // 12345678-9: sum=156, calc=4, check=9 → DUI inválido
+      const result = await caller.findByDocument({
+        documentType: "DUI",
+        documentNumber: "12345678-9",
+      });
+
+      // tRPC puede serializar el early-return null como null o undefined
+      expect(result ?? null).toBeNull();
+      expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+    });
+  });
 });

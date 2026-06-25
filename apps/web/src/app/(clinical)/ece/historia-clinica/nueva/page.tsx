@@ -47,6 +47,7 @@ import {
   type TipoDiagnostico,
 } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
+import { BuscadorCie11 } from "@/components/cie11/BuscadorCie11";
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -103,15 +104,6 @@ function calcImc(pesoRaw: string, tallaRaw: string): string | null {
   if (!peso || !talla) return null;
   const m = talla / 100;
   return String(Math.round((peso / (m * m)) * 10) / 10);
-}
-
-function useDebounced<T>(value: T, ms = 300): T {
-  const [debounced, setDebounced] = React.useState(value);
-  React.useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return debounced;
 }
 
 const fmt = (v: unknown): string => (v === null || v === undefined ? "—" : String(v));
@@ -462,78 +454,7 @@ function TablaSignosVitales({ episodioId }: { episodioId: string }) {
   );
 }
 
-// ── Buscador CIE-11 (RF-03 + §8.5) ─────────────────────────────────────────────
-
-function BuscadorCIE11({
-  onSelect,
-  disabled,
-}: {
-  onSelect: (d: { codigo: string; descripcion: string }) => void;
-  disabled?: boolean;
-}) {
-  const [term, setTerm] = React.useState("");
-  const dterm = useDebounced(term, 300);
-
-  const estadoQ = trpc.cie11.estado.useQuery(undefined, { staleTime: 300_000 });
-  const buscarQ = trpc.cie11.buscar.useQuery(
-    { q: dterm.trim(), limit: 10 },
-    { enabled: dterm.trim().length >= 2, staleTime: 60_000 },
-  );
-
-  const items = buscarQ.data?.items ?? [];
-  const configured = estadoQ.data?.configured ?? true;
-
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor="cie11-buscar">Buscar diagnóstico CIE-11</Label>
-      <div className="relative">
-        <Input
-          id="cie11-buscar"
-          placeholder="Escriba ≥2 caracteres (ej. neumonía, diabetes)…"
-          value={term}
-          onChange={(e) => setTerm(e.target.value)}
-          disabled={disabled || !configured}
-          autoComplete="off"
-        />
-        {dterm.trim().length >= 2 && (items.length > 0 || buscarQ.isFetching) && (
-          <ul
-            className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border bg-popover shadow-md"
-            aria-label="Resultados CIE-11"
-          >
-            {buscarQ.isFetching && (
-              <li className="px-3 py-2 text-sm text-muted-foreground">Buscando…</li>
-            )}
-            {items.map((it) => (
-              <li key={it.uri || it.codigo}>
-                <button
-                  type="button"
-                  className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
-                  onClick={() => {
-                    onSelect({ codigo: it.codigo, descripcion: it.titulo });
-                    setTerm("");
-                  }}
-                >
-                  {it.codigo && (
-                    <span className="font-mono text-xs text-muted-foreground">{it.codigo}</span>
-                  )}
-                  <span>{it.titulo}</span>
-                </button>
-              </li>
-            ))}
-            {!buscarQ.isFetching && items.length === 0 && (
-              <li className="px-3 py-2 text-sm text-muted-foreground">Sin resultados.</li>
-            )}
-          </ul>
-        )}
-      </div>
-      {!configured && (
-        <FormHint>
-          Catálogo CIE-11 en línea no configurado — ingrese el código y descripción manualmente.
-        </FormHint>
-      )}
-    </div>
-  );
-}
+// BuscadorCIE11 extraído a @/components/cie11/BuscadorCie11 (CC-0005).
 
 // ── Lista de diagnósticos CIE-11 (RF-03) ───────────────────────────────────────
 
@@ -572,11 +493,11 @@ function ListaDiagnosticosCIE11({
 
   return (
     <div className="space-y-4">
-      <BuscadorCIE11
+      <BuscadorCie11
         disabled={disabled}
         onSelect={(d) => {
           setCodigo(d.codigo);
-          setDescripcion(d.descripcion);
+          setDescripcion(d.titulo);
         }}
       />
 

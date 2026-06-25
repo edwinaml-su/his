@@ -14,6 +14,8 @@
  *   El estado del workflow vive en ece.documento_instancia.estado_actual_id.
  */
 import { z } from "zod";
+import { CIE11_CODE_REGEX } from "./ece-historia-clinica";
+import { documentTypeEnum } from "./patient";
 
 // ---------------------------------------------------------------------------
 // Enumeraciones — alineadas con CHECK constraints de BD
@@ -46,35 +48,61 @@ export type MotivoIngresoTipo  = (typeof MOTIVO_INGRESO_TIPO)[number];
 export type Procedencia        = (typeof PROCEDENCIA)[number];
 
 // ---------------------------------------------------------------------------
-// Schema de item diagnóstico (array JSONB)
+// Tipos de diagnóstico para Orden de Ingreso (principal obligatorio único)
+// ---------------------------------------------------------------------------
+
+export const TIPO_DX_INGRESO = ["PRINCIPAL", "SECUNDARIO"] as const;
+export const tipoDxIngresoEnum = z.enum(TIPO_DX_INGRESO);
+export type TipoDxIngreso = (typeof TIPO_DX_INGRESO)[number];
+
+// ---------------------------------------------------------------------------
+// Schema de item diagnóstico CIE-11 (array JSONB)
+// CC-0005 RF-2: reemplaza el shape CIE-10 anterior.
+// El campo `diagnosticoIngreso` en BD es jsonb nullable — se persiste con el nuevo shape.
+// Registros legacy con shape { cie10, descripcion, principal } se leen en la vista de detalle
+// con back-compat (ver [id]/page.tsx).
 // ---------------------------------------------------------------------------
 
 export const diagnosticoIngresoItemSchema = z.object({
-  cie10:       z.string().regex(/^[A-Z]\d{2}(\.\d{1,4})?$/, "Código CIE-10 inválido"),
-  descripcion: z.string().min(3).max(500),
-  principal:   z.boolean(),
+  cie11Codigo:  z.string().regex(CIE11_CODE_REGEX, "Código CIE-11 inválido"),
+  cie11Titulo:  z.string().min(1).max(500),
+  cie11Uri:     z.string().optional(),
+  version:      z.string().optional(),
+  tipo:         tipoDxIngresoEnum,
 });
 
 export type DiagnosticoIngresoItem = z.infer<typeof diagnosticoIngresoItemSchema>;
 
 // ---------------------------------------------------------------------------
 // Create — campos editables al crear la orden (sin firmaPin)
+// CC-0005: agrega documentoTipo/documentoNumero; diagnosticoIngreso CIE-11 obligatorio
+// con exactamente un PRINCIPAL; elimina procedimientoCie10.
 // ---------------------------------------------------------------------------
 
 export const ordenIngresoCreateInput = z.object({
-  pacienteId:          z.string().uuid(),
-  episodioOrigenId:    z.string().uuid().optional(), // episodio previo que origina el ingreso (urgencias, CX)
-  modalidad:           z.enum(MODALIDAD_ING),
-  motivoIngreso:       z.string().min(10).max(2_000),
-  motivoIngresoTipo:   z.enum(MOTIVO_INGRESO_TIPO),
-  procedencia:         z.enum(PROCEDENCIA),
-  servicioIngresoId:   z.string().uuid().optional(),
-  procedimientoCie10:  z.string().regex(/^[A-Z]\d{2}(\.\d{1,4})?$/, "Código CIE-10 inválido").optional(),
-  diagnosticoIngreso:  z.array(diagnosticoIngresoItemSchema).min(1).max(20).optional(),
-  medicoOrdena:        z.string().uuid(),
-  fechaHoraOrden:      z.coerce.date(),
+  pacienteId:           z.string().uuid(),
+  // CC-0005 RF-1: denormalización de documento para auditoría (resuelto client-side).
+  documentoTipo:        documentTypeEnum,
+  documentoNumero:      z.string().min(1).max(40),
+  episodioOrigenId:     z.string().uuid().optional(), // episodio previo que origina el ingreso
+  modalidad:            z.enum(MODALIDAD_ING),
+  motivoIngreso:        z.string().min(10).max(2_000),
+  motivoIngresoTipo:    z.enum(MOTIVO_INGRESO_TIPO),
+  procedencia:          z.enum(PROCEDENCIA),
+  servicioIngresoId:    z.string().uuid().optional(),
+  // CC-0005 RF-2: diagnósticos CIE-11. Exactamente un PRINCIPAL requerido.
+  diagnosticoIngreso:   z
+    .array(diagnosticoIngresoItemSchema)
+    .min(1)
+    .max(20)
+    .refine(
+      (arr) => arr.filter((d) => d.tipo === "PRINCIPAL").length === 1,
+      "Debe haber exactamente un diagnóstico principal.",
+    ),
+  medicoOrdena:         z.string().uuid(),
+  fechaHoraOrden:       z.coerce.date(),
   circunstanciaIngreso: z.string().min(5).max(2_000),
-  reservaSalaQxId:     z.string().uuid().optional(), // solo cuando motivoIngresoTipo = 'cirugia'
+  reservaSalaQxId:      z.string().uuid().optional(), // solo cuando motivoIngresoTipo = 'cirugia'
 });
 
 export type OrdenIngresoCreateInput = z.infer<typeof ordenIngresoCreateInput>;

@@ -11,12 +11,14 @@ import {
   mergePatientsInput,
   unmergeInput,
   mergeFieldKeys,
+  documentTypeEnum,
   type PatientMergeFieldKey,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
 import { nextExpediente } from "../lib/expediente-numbering";
+import { validateDUI } from "@his/contracts";
 
 // =============================================================================
 // US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
@@ -165,6 +167,58 @@ const FK_REASSIGN_TABLES = [
 
 
 export const patientRouter = router({
+  /**
+   * CC-0005 RF-1 — Resuelve paciente por tipo + número de documento.
+   * Devuelve { id, displayName, expediente } o null si no existe.
+   * Usado por el formulario de Orden de Ingreso para resolver el UUID del paciente.
+   */
+  findByDocument: tenantProcedure
+    .input(
+      z.object({
+        documentType: documentTypeEnum,
+        documentNumber: z.string().min(1).max(40),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      // Validación client-side del DUI para evitar queries innecesarias.
+      if (
+        (input.documentType === "DUI" || input.documentType === "DUI_RESP") &&
+        !validateDUI(input.documentNumber)
+      ) {
+        return null;
+      }
+
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            documentType: input.documentType,
+            documentNumber: input.documentNumber,
+            deletedAt: null,
+          },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            secondLastName: true,
+            expediente: true,
+          },
+        });
+
+        if (!patient) return null;
+
+        const displayName = [patient.firstName, patient.lastName, patient.secondLastName]
+          .filter(Boolean)
+          .join(" ");
+
+        return {
+          id: patient.id,
+          displayName,
+          expediente: patient.expediente,
+        };
+      });
+    }),
+
   search: tenantProcedure.input(patientSearchSchema).query(async ({ ctx, input }) => {
     const q = input.query.trim();
     // H1-06 — envuelto en withTenantContext: el rol Supabase original tiene
@@ -353,10 +407,10 @@ export const patientRouter = router({
         });
       }
 
-      // CC-0002 §5: dedup por documento propio antes de crear.
+      // CC-0002 §5 / CC-0005: dedup por documento propio antes de crear.
       if (
         input.documentType &&
-        ["DUI", "DNI", "PASAPORTE"].includes(input.documentType) &&
+        ["DUI", "DNI", "PASAPORTE", "CARNET_RESIDENCIA"].includes(input.documentType) &&
         input.documentNumber
       ) {
         const existing = await tx.patient.findFirst({
