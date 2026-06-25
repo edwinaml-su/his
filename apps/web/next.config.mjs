@@ -1,8 +1,19 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Salida standalone para contenedores (Docker/K8s): genera
+  // apps/web/.next/standalone/apps/web/server.js con deps mínimas.
+  output: "standalone",
   experimental: {
     typedRoutes: true,
+    // Monorepo: el trace de standalone debe arrancar en la raíz del repo
+    // para incluir los workspaces @his/* (sin esto server.js queda incompleto).
+    outputFileTracingRoot: path.join(__dirname, "../../"),
     optimizePackageImports: ["lucide-react", "@his/ui"],
     // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
     serverComponentsExternalPackages: ["@node-rs/argon2"],

@@ -361,4 +361,4 @@ Medir mensualmente. Referencia: `infra/observability/README.md`.
 | `infra/terraform/README.md` | IaC Terraform — init/plan/apply |
 | `infra/k8s/README.md` | K8s manifests — prerequisitos y comandos |
 | `infra/observability/README.md` | Grafana + Prometheus — importar y configurar |
-| `infra/docker/Dockerfile.web` | Imagen multi-stage Next.js |
+| `Dockerfile` (raíz) + `.github/workflows/release-image.yml` | Imagen multi-stage Next.js + build/push a GHCR |

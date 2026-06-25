@@ -96,10 +96,18 @@ Opciones recomendadas (en orden de preferencia):
 
 ## Imagen Docker
 
-La imagen se construye desde `infra/docker/Dockerfile.web`:
+La imagen se construye y publica automáticamente vía
+`.github/workflows/release-image.yml` (push a `main` → `:latest` + `:sha-…`;
+tags `v*` → semver) en GHCR usando `GITHUB_TOKEN` (sin PAT).
+
+Build manual desde la raíz del monorepo (los `NEXT_PUBLIC_*` se inlinean en build):
 
 ```bash
-docker build -f infra/docker/Dockerfile.web -t ghcr.io/edwinaml-su/his-web:$(git rev-parse --short HEAD) .
+docker build -f Dockerfile \
+  --build-arg NEXT_PUBLIC_SUPABASE_URL=https://<proj>.supabase.co \
+  --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key-publico> \
+  --build-arg APP_VERSION=$(git rev-parse --short HEAD) \
+  -t ghcr.io/edwinaml-su/his-web:$(git rev-parse --short HEAD) .
 docker push ghcr.io/edwinaml-su/his-web:$(git rev-parse --short HEAD)
 ```
 

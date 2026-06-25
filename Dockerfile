@@ -15,17 +15,21 @@ WORKDIR /repo
 RUN apk add --no-cache libc6-compat openssl
 
 COPY package.json package-lock.json turbo.json ./
+# La lista debe espejar TODOS los workspaces de package.json:workspaces
+# (npm ci con workspaces exige cada package.json del lockfile presente).
 COPY apps/web/package.json ./apps/web/
 COPY packages/database/package.json ./packages/database/
-COPY packages/domain/package.json ./packages/domain/
-COPY packages/application/package.json ./packages/application/
-COPY packages/infrastructure/package.json ./packages/infrastructure/
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/trpc/package.json ./packages/trpc/
+COPY packages/infrastructure/package.json ./packages/infrastructure/
 COPY packages/ui/package.json ./packages/ui/
-COPY packages/config/package.json ./packages/config/
+COPY packages/bi/package.json ./packages/bi/
+COPY packages/test-utils/package.json ./packages/test-utils/
+COPY packages/config/eslint/package.json ./packages/config/eslint/
 
-RUN npm ci
+# --ignore-scripts: evita que el postinstall de @his/database (prisma generate)
+# corra aquí sin el schema. El builder lo genera explícitamente más abajo.
+RUN npm ci --ignore-scripts
 
 # -----------------------------------------------------------------------------
 # Stage 2: builder — Prisma generate + Next.js build
@@ -40,6 +44,14 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV TURBO_TELEMETRY_DISABLED=1
+
+# NEXT_PUBLIC_* se inlinean en el bundle en BUILD time. apps/web/src/lib/supabase/env.ts
+# lanza error si faltan → el build truena sin estos. Son públicos por diseño (van al
+# cliente), así que se pasan como build-args desde el workflow (repo Variables), no secrets.
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 
 RUN npx prisma generate --schema=packages/database/prisma/schema.prisma
 RUN npm run build
@@ -58,6 +70,11 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+
+# APP_VERSION lo lee /api/health para reportar la build desplegada.
+# El workflow lo setea = github.sha; default 'dev' para builds locales.
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
 
 # Next.js standalone output (apps/web/next.config.mjs debe tener output: 'standalone')
 COPY --from=builder --chown=nextjs:nodejs /repo/apps/web/.next/standalone ./
