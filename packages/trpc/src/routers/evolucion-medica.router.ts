@@ -44,6 +44,7 @@ interface EvolucionRow {
   estado_registro: string;
   /** estado_codigo resuelto desde la instancia (join en query). */
   estado_codigo: string;
+  data: unknown | null;
 }
 
 // ─── Helper: EceContext ──────────────────────────────────────────────────────
@@ -172,6 +173,7 @@ export const evolucionMedicaRouter = router({
           em.objetivo,
           em.analisis,
           em.plan,
+          em.data,
           em.registrado_por::text,
           em.registrado_en,
           em.estado_registro,
@@ -202,6 +204,7 @@ export const evolucionMedicaRouter = router({
           em.objetivo,
           em.analisis,
           em.plan,
+          em.data,
           em.registrado_por::text,
           em.registrado_en,
           em.estado_registro,
@@ -350,13 +353,15 @@ export const evolucionMedicaRouter = router({
       }
 
       // COALESCE preserva el valor actual cuando el campo no se provee en el input.
+      const dataJson = input.data !== undefined ? JSON.stringify(input.data) : null;
       await tx.$executeRaw`
         UPDATE ece.evolucion_medica
         SET
           subjetivo = COALESCE(${input.soapSubjetivo ?? null}, subjetivo),
           objetivo  = COALESCE(${input.soapObjetivo ?? null}, objetivo),
           analisis  = COALESCE(${input.soapAnalisis ?? null}, analisis),
-          plan      = COALESCE(${input.soapPlan ?? null}, plan)
+          plan      = COALESCE(${input.soapPlan ?? null}, plan),
+          data      = COALESCE(${dataJson}::jsonb, data)
         WHERE id = ${input.id}::uuid
       `;
 
@@ -378,6 +383,7 @@ export const evolucionMedicaRouter = router({
           objetivo: string | null;
           analisis: string | null;
           plan: string | null;
+          data_text: string | null;
         }[]>`
           SELECT
             em.instancia_id::text,
@@ -387,7 +393,8 @@ export const evolucionMedicaRouter = router({
             em.subjetivo,
             em.objetivo,
             em.analisis,
-            em.plan
+            em.plan,
+            em.data::text AS data_text
           FROM ece.evolucion_medica em
           JOIN ece.documento_instancia di ON di.id = em.instancia_id
           JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
@@ -423,8 +430,9 @@ export const evolucionMedicaRouter = router({
         // Avanzar estado → firmado
         await avanzarEstado(tx, evol.instancia_id, "firmado", personalId, "firmar");
 
-        // Calcular hash del contenido SOAP para el evento outbox
-        const soapContent = [evol.subjetivo, evol.objetivo, evol.analisis, evol.plan]
+        // Calcular hash del contenido SOAP+data para el evento outbox.
+        // data_text cubre problemas[]/plan[] estructurados del CC-0006.
+        const soapContent = [evol.subjetivo, evol.objetivo, evol.analisis, evol.plan, evol.data_text]
           .map((v) => v ?? "")
           .join("|");
         const contentHash = createHash("sha256").update(soapContent, "utf8").digest("hex");
