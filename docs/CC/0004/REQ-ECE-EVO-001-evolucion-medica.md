@@ -61,8 +61,8 @@ Reorganizar la captura SOAP de la nueva evolución médica desde el actual **gri
 |----|---------------|
 | **RF-1** | Mostrar **fecha de creación** en el encabezado. Para una nota nueva = timestamp actual (read‑only), formato `es-SV` (`dd/MM/yyyy HH:mm`). Persistir como `createdAt` al guardar. |
 | **RF-2** | Reemplazar el grid 2×2 por **una sola columna** con navegación de arriba hacia abajo. Layout responsive en columna única. |
-| **RF-3** | Agregar un agrupador **"Problemas"** en la página principal. **No** muestra S/O en línea; al activarlo (botón/click) abre un **modal** que contiene los campos **Subjetivo (S)** y **Objetivo (O)**. Al cerrar, la tarjeta muestra un estado/resumen (completado + preview truncado). |
-| **RF-4** | Dentro de **Objetivo** (en el modal) incluir una **toma de signos vitales**, reutilizando el módulo existente *Signos Vitales* (TA sistólica/diastólica, FC, FR, T°, SatO2, Peso, Talla; IMC calculado). Los signos capturados se asocian a la evolución y se registran en el historial de signos vitales del paciente. |
+| **RF-3** | **"Problemas"** es una **lista/grid de múltiples problemas** (POMR). La tarjeta muestra una tabla con columnas #, Problema, S (preview), O (preview), Acciones. Cada problema tiene descripción (requerida), Subjetivo (S) y Objetivo (O), capturados en un modal "Agregar/Editar problema". El botón "Agregar problema" en el header de la tarjeta abre el modal en modo agregar. |
+| **RF-4** | Los **signos vitales** se capturan a nivel de evolución (una sola toma por registro, fuera del modal de problema), reutilizando `SignosVitalesCapture`. Se muestran en una tarjeta propia (`SignosVitalesCard`) entre Problemas y Análisis. Los signos capturados se asocian a la evolución y se registran en el historial de signos vitales del paciente. |
 | **RF-5** | Orden final en la página principal (top‑down): **Encabezado/fecha → Problemas (modal) → Análisis (A) → Plan (P)** → acciones. |
 
 ## 5. Persistencia / modelo de datos
@@ -71,7 +71,7 @@ Reorganizar la captura SOAP de la nueva evolución médica desde el actual **gri
 
 - `EvolucionMedica`: `id`, `episodioId?`, `pacienteId`, `autorId`, `createdAt`, `subjetivo`, `objetivo`, `analisis`, `plan`, `estado` (`BORRADOR` | `FIRMADA`).
 - **Signos vitales:** relación a `SignosVitales` (reutilizar modelo/tRPC del módulo existente). La captura del modal crea/asocia un registro de `SignosVitales` ligado a la evolución → aparece en la línea de tiempo de signos vitales.
-- **Problemas (esta iteración):** S/O viven en el registro `EvolucionMedica`; **no** requiere tabla `Problema` separada todavía (ver §8 extensión futura).
+- **Problemas (esta iteración):** el array de problemas se persiste en el campo JSONB `data.problemas` del registro `EvolucionMedica`. Para retro-compatibilidad, los campos `subjetivo` y `objetivo` se populan concatenando las secciones S y O de cada problema (`"<descripcion>:\n<s/o>"`). No se requiere tabla `Problema` separada (CIE-10 sigue fuera de alcance). Los signos vitales se persisten en `data.signosVitalesId` (un registro por evolución).
 - **Borrador local (`Ctrl+S`):** el estado serializado debe incluir el contenido del modal (S, O, signos) + análisis + plan.
 
 ## 6. Implementación sugerida
@@ -101,12 +101,11 @@ Reorganizar la captura SOAP de la nueva evolución médica desde el actual **gri
 
 - Flujo de firma/cierre de la nota (si no existe ya).
 - Codificación CIE‑10 de problemas.
-- Lista de problemas múltiples con SOAP por problema (POMR completo).
 - Cambios en la lógica de selección de episodio.
 
 ## 9. Supuestos y decisiones
 
-- **"Problemas" = contenedor de S + O en esta iteración** (lectura literal del requerimiento). El nombre se elige pensando en evolucionar hacia un **registro orientado a problemas**: a futuro `Problema[]` con descripción, código CIE‑10 y su propio S/O. *(Si la intención es ya una lista de problemas, ajustar §4 RF‑3 y §5.)*
+- **"Problemas" = lista/grid POMR** — cada fila es un problema clínico con descripción, S y O propios. El array se persiste en JSONB; la vista de listado/detalle sigue funcionando vía las columnas concatenadas `subjetivo`/`objetivo`. Extensión futura: CIE-10 por problema.
 - "Análisis" mapea al campo **Evaluación (A)** del SOAP actual.
 - La captura de signos vitales **reutiliza** el módulo *Signos Vitales* existente (no se crea uno nuevo).
 - Modal implementado con el componente Dialog del sistema de diseño actual.
