@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * ECE — Form de nueva evolución médica SOAP (CC-0004 RF-1..5).
+ * ECE — Form de nueva evolución médica SOAP orientada a problemas (CC-0004 RF-1..5, POMR).
  *
  * Layout columna única (top-down):
- *   Encabezado (fecha creación) → ProblemasCard+Modal (S/O/signos) → Análisis → Plan → footer.
+ *   Encabezado (fecha creación) → ProblemasCard (grid) → SignosVitalesCard → Análisis → Plan → footer.
  *
  * Patrón: React.useState (D-2 — sin react-hook-form, consistente con el resto del repo).
- * D-3: S/O opcionales en schema; "Guardar borrador" habilitado si hay cualquier contenido;
- *      "Firmar" exige S + O + A + P completos.
+ * D-3: borrador permite 0 problemas; "Firmar" exige ≥1 problema con S+O + A + P.
  * D-1: si hay signos → eceSignosVitales.create primero → signosVitalesId en data JSONB.
- * R-5: orquestación cliente (signos primero, luego evolución); si signos falla no crea evolución.
+ * D-C: array `problemas` se persiste en data.problemas (JSONB) y se concatena en
+ *       soapSubjetivo/soapObjetivo para retro-compatibilidad con listado/detalle.
  */
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -31,25 +31,29 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
-import {
-  ProblemasCard,
-} from "./_components/ProblemasCard";
+import { ProblemasCard } from "./_components/ProblemasCard";
 import {
   ProblemasModal,
-  PROBLEMAS_INITIAL,
-  type ProblemasValue,
+  type ProblemaItem,
 } from "./_components/ProblemasModal";
+import { SignosVitalesCard } from "./_components/SignosVitalesCard";
+import {
+  SIGNOS_INITIAL,
+  type SignosState,
+} from "./_components/SignosVitalesCapture";
 
 // ─── Estado del formulario ───────────────────────────────────────────────────
 
 interface FormState {
-  problemas: ProblemasValue;
+  problemas: ProblemaItem[];
+  signos: SignosState;
   analisis: string;
   plan: string;
 }
 
 const FORM_INITIAL: FormState = {
-  problemas: PROBLEMAS_INITIAL,
+  problemas: [],
+  signos: SIGNOS_INITIAL,
   analisis: "",
   plan: "",
 };
@@ -69,21 +73,30 @@ function loadDraft(episodeId: string | undefined): FormState {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<FormState>;
       return {
-        problemas: parsed.problemas ?? PROBLEMAS_INITIAL,
+        problemas: Array.isArray(parsed.problemas) ? parsed.problemas : [],
+        signos: parsed.signos ?? SIGNOS_INITIAL,
         analisis: parsed.analisis ?? "",
         plan: parsed.plan ?? "",
       };
     }
   } catch {
-    // corrupted draft — ignore
+    // borrador corrupto — ignorar
   }
   return FORM_INITIAL;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** ID único para un problema nuevo (RFC-4122 cuando disponible, fallback determinístico). */
+function newId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `p-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 /** Retorna true si algún signo vital tiene valor ingresado. */
-function hasSignosData(signos: ProblemasValue["signos"]): boolean {
+function hasSignosData(signos: SignosState): boolean {
   return (
     signos.presionSistolica !== "" ||
     signos.presionDiastolica !== "" ||
@@ -122,7 +135,11 @@ export default function NuevaEvolucionPage() {
   });
 
   const [form, setForm] = React.useState<FormState>(() => loadDraft(episodeId));
+
+  // Estado del modal de problema
   const [modalOpen, setModalOpen] = React.useState(false);
+  const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
+
   const [confirmSignOpen, setConfirmSignOpen] = React.useState(false);
   const [pageError, setPageError] = React.useState<string | null>(null);
   const [autosaveMsg, setAutosaveMsg] = React.useState<string | null>(null);
@@ -134,22 +151,53 @@ export default function NuevaEvolucionPage() {
 
   const isPending = createEvolucion.isPending || createSignos.isPending || sign.isPending;
 
-  const problemasCompleted =
-    form.problemas.subjetivo.trim() !== "" || form.problemas.objetivo.trim() !== "";
-
   // D-3: borrador habilitado con cualquier contenido
   const hasContent =
-    problemasCompleted ||
+    form.problemas.length > 0 ||
     form.analisis.trim() !== "" ||
     form.plan.trim() !== "" ||
-    hasSignosData(form.problemas.signos);
+    hasSignosData(form.signos);
 
-  // D-3: firmar exige SOAP completo (S + O en modal + A + P en página)
+  // D-3: firmar exige ≥1 problema con S+O + Análisis + Plan
   const canSign =
-    form.problemas.subjetivo.trim() !== "" &&
-    form.problemas.objetivo.trim() !== "" &&
+    form.problemas.length > 0 &&
+    form.problemas.every((p) => p.subjetivo.trim() !== "" && p.objetivo.trim() !== "") &&
     form.analisis.trim() !== "" &&
     form.plan.trim() !== "";
+
+  // ─── Handlers del modal de problema ──────────────────────────────────────
+
+  function openAdd() {
+    setEditingIndex(null);
+    setModalOpen(true);
+  }
+
+  function openEdit(i: number) {
+    setEditingIndex(i);
+    setModalOpen(true);
+  }
+
+  function onSaveProblema(data: { descripcion: string; subjetivo: string; objetivo: string }) {
+    if (editingIndex === null) {
+      // Agregar nuevo
+      setForm((f) => ({
+        ...f,
+        problemas: [...f.problemas, { id: newId(), ...data }],
+      }));
+    } else {
+      // Editar en índice, conservando el id original
+      setForm((f) => {
+        if (editingIndex < 0 || editingIndex >= f.problemas.length) return f;
+        const updated = [...f.problemas];
+        updated[editingIndex] = { ...updated[editingIndex]!, ...data };
+        return { ...f, problemas: updated };
+      });
+    }
+  }
+
+  function onDeleteProblema(i: number) {
+    setForm((f) => ({ ...f, problemas: f.problemas.filter((_, idx) => idx !== i) }));
+  }
 
   // ─── Autosave ─────────────────────────────────────────────────────────────
 
@@ -198,15 +246,18 @@ export default function NuevaEvolucionPage() {
     try { localStorage.removeItem(draftKey(episodeId)); } catch { /* ignore */ }
   }
 
-  /** R-5: signos primero (si hay), luego evolución. Ambos en try/catch. */
+  /**
+   * R-5: signos primero (si hay), luego evolución.
+   * D-C: problemas → data.problemas (JSONB) + concatenados en soapSubjetivo/soapObjetivo.
+   */
   async function persistCreate(): Promise<{ id: string } | null> {
     setPageError(null);
     let signosVitalesId: string | undefined;
 
     // D-1: crear signos si hay algún campo con valor
-    if (hasSignosData(form.problemas.signos)) {
+    if (hasSignosData(form.signos)) {
       try {
-        const sv = form.problemas.signos;
+        const sv = form.signos;
         const { id } = await createSignos.mutateAsync({
           episodioId: episodeId,
           presionSistolica: parseOpt(sv.presionSistolica),
@@ -229,15 +280,30 @@ export default function NuevaEvolucionPage() {
       }
     }
 
+    // D-C: concatenar S y O por problema para retro-compatibilidad con listado/detalle.
+    // Si el problema no tiene S (u O), se omite el cuerpo para no dejar "Problema:\n" colgando.
+    const soapSubjetivo = form.problemas
+      .map((p) => (p.subjetivo.trim() ? `${p.descripcion}:\n${p.subjetivo.trim()}` : p.descripcion))
+      .join("\n\n");
+    const soapObjetivo = form.problemas
+      .map((p) => (p.objetivo.trim() ? `${p.descripcion}:\n${p.objetivo.trim()}` : p.descripcion))
+      .join("\n\n");
+
+    const data = {
+      ...(signosVitalesId ? { signosVitalesId } : {}),
+      // Persistir el array estructurado para uso futuro; omitir ids de cliente
+      problemas: form.problemas.map(({ id: _id, ...rest }) => rest),
+    };
+
     try {
       const r = await createEvolucion.mutateAsync({
         episodioId: episodeId ?? "",
         fecha: createdAt.current,
-        soapSubjetivo: form.problemas.subjetivo.trim(),
-        soapObjetivo: form.problemas.objetivo.trim(),
+        soapSubjetivo,
+        soapObjetivo,
         soapAnalisis: form.analisis.trim(),
         soapPlan: form.plan.trim(),
-        ...(signosVitalesId ? { data: { signosVitalesId } } : {}),
+        data,
       });
       return r as { id: string };
     } catch (e) {
@@ -312,13 +378,20 @@ export default function NuevaEvolucionPage() {
       </div>
 
       <form onSubmit={onSaveDraft} noValidate>
-        {/* RF-2/RF-5: una sola columna, orden top-down */}
+        {/* RF-5: orden top-down: Problemas → SignosVitales → Análisis → Plan */}
         <div className="space-y-4">
-          {/* RF-3: Problemas (S+O en modal) */}
+          {/* RF-3: grid de problemas (POMR) */}
           <ProblemasCard
-            value={form.problemas}
-            isCompleted={problemasCompleted}
-            onEdit={() => setModalOpen(true)}
+            problemas={form.problemas}
+            onAdd={openAdd}
+            onEdit={openEdit}
+            onDelete={onDeleteProblema}
+          />
+
+          {/* D-B: signos vitales a nivel de evolución (fuera del modal de problema) */}
+          <SignosVitalesCard
+            value={form.signos}
+            onChange={(signos) => setForm((f) => ({ ...f, signos }))}
           />
 
           {/* Análisis (A) */}
@@ -401,7 +474,7 @@ export default function NuevaEvolucionPage() {
               type="button"
               onClick={() => setConfirmSignOpen(true)}
               disabled={isPending || !canSign}
-              title={!canSign ? "Complete S, O, Análisis y Plan para firmar" : undefined}
+              title={!canSign ? "Complete problemas (con S y O), Análisis y Plan para firmar" : undefined}
             >
               Firmar
             </Button>
@@ -409,12 +482,12 @@ export default function NuevaEvolucionPage() {
         </div>
       </form>
 
-      {/* Modal Problemas (RF-3, RF-4) */}
+      {/* Modal Agregar/Editar problema (RF-3) */}
       <ProblemasModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        value={form.problemas}
-        onChange={(problemas) => setForm((prev) => ({ ...prev, problemas }))}
+        value={editingIndex !== null ? (form.problemas[editingIndex] ?? null) : null}
+        onSave={onSaveProblema}
       />
 
       {/* Dialog confirmación firma (D-4: conservado) */}
