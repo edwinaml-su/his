@@ -10,7 +10,7 @@
  *
  * Flujo: formulario → "Crear y firmar" → PinDialog → create + firmar.
  */
-import { useState, type FormEvent } from "react";
+import { useState, useId, type FormEvent } from "react";
 import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
@@ -288,97 +288,120 @@ export default function OrdenIngresoNuevoPage() {
 
             {/* Episodio origen (opcional) */}
             <FieldGroup label="ID Episodio origen (opcional)" error={errors.episodioOrigenId?.message}>
-              <Input
-                {...register("episodioOrigenId")}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              />
+              {(id) => (
+                <Input
+                  id={id}
+                  {...register("episodioOrigenId")}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                />
+              )}
             </FieldGroup>
 
             {/* Médico que ordena */}
             <FieldGroup label="ID Médico que ordena (UUID)" error={errors.medicoOrdena?.message}>
-              <Input
-                {...register("medicoOrdena")}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                aria-invalid={!!errors.medicoOrdena}
-              />
+              {(id) => (
+                <Input
+                  id={id}
+                  {...register("medicoOrdena")}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  aria-invalid={!!errors.medicoOrdena}
+                />
+              )}
             </FieldGroup>
 
             {/* Fecha/hora orden */}
             <FieldGroup label="Fecha y hora de la orden" error={errors.fechaHoraOrden?.message}>
-              <Input
-                type="datetime-local"
-                {...register("fechaHoraOrden")}
-                aria-invalid={!!errors.fechaHoraOrden}
-              />
+              {(id) => (
+                <Input
+                  id={id}
+                  type="datetime-local"
+                  {...register("fechaHoraOrden")}
+                  aria-invalid={!!errors.fechaHoraOrden}
+                />
+              )}
             </FieldGroup>
 
             {/* Modalidad */}
             <FieldGroup label="Modalidad" error={errors.modalidad?.message}>
-              <Select onValueChange={(v) => setValue("modalidad", v as (typeof MODALIDAD_ING)[number])}>
-                <SelectTrigger aria-invalid={!!errors.modalidad}>
-                  <SelectValue placeholder="Seleccione..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {MODALIDAD_ING.map((m) => (
-                    <SelectItem key={m} value={m}>{MODALIDAD_LABELS[m]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {(id) => (
+                <Select onValueChange={(v) => setValue("modalidad", v as (typeof MODALIDAD_ING)[number])}>
+                  <SelectTrigger id={id} aria-invalid={!!errors.modalidad}>
+                    <SelectValue placeholder="Seleccione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MODALIDAD_ING.map((m) => (
+                      <SelectItem key={m} value={m}>{MODALIDAD_LABELS[m]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FieldGroup>
 
             {/* Motivo tipo */}
             <FieldGroup label="Tipo de motivo" error={errors.motivoIngresoTipo?.message}>
-              <Select onValueChange={(v) => setValue("motivoIngresoTipo", v as (typeof MOTIVO_INGRESO_TIPO)[number])}>
-                <SelectTrigger aria-invalid={!!errors.motivoIngresoTipo}>
-                  <SelectValue placeholder="Seleccione..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {MOTIVO_INGRESO_TIPO.map((t) => (
-                    <SelectItem key={t} value={t}>{MOTIVO_TIPO_LABELS[t]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {(id) => (
+                <Select onValueChange={(v) => setValue("motivoIngresoTipo", v as (typeof MOTIVO_INGRESO_TIPO)[number])}>
+                  <SelectTrigger id={id} aria-invalid={!!errors.motivoIngresoTipo}>
+                    <SelectValue placeholder="Seleccione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MOTIVO_INGRESO_TIPO.map((t) => (
+                      <SelectItem key={t} value={t}>{MOTIVO_TIPO_LABELS[t]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FieldGroup>
 
             {/* Procedencia */}
             <FieldGroup label="Procedencia" error={errors.procedencia?.message}>
-              <Select onValueChange={(v) => setValue("procedencia", v as (typeof PROCEDENCIA)[number])}>
-                <SelectTrigger aria-invalid={!!errors.procedencia}>
-                  <SelectValue placeholder="Seleccione..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {PROCEDENCIA.map((p) => (
-                    <SelectItem key={p} value={p}>{PROCEDENCIA_LABELS[p]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {(id) => (
+                <Select onValueChange={(v) => setValue("procedencia", v as (typeof PROCEDENCIA)[number])}>
+                  <SelectTrigger id={id} aria-invalid={!!errors.procedencia}>
+                    <SelectValue placeholder="Seleccione..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROCEDENCIA.map((p) => (
+                      <SelectItem key={p} value={p}>{PROCEDENCIA_LABELS[p]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FieldGroup>
 
             {/* Servicio de ingreso */}
             <FieldGroup label="ID Servicio de ingreso (opcional)" error={errors.servicioIngresoId?.message}>
-              <Input {...register("servicioIngresoId")} placeholder="UUID del servicio" />
+              {(id) => (
+                <Input id={id} {...register("servicioIngresoId")} placeholder="UUID del servicio" />
+              )}
             </FieldGroup>
 
             {/* Motivo de ingreso */}
             <FieldGroup label="Motivo de ingreso" error={errors.motivoIngreso?.message}>
-              <textarea
-                {...register("motivoIngreso")}
-                rows={3}
-                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Descripción clínica del motivo de ingreso (mín. 10 caracteres)..."
-                aria-invalid={!!errors.motivoIngreso}
-              />
+              {(id) => (
+                <textarea
+                  id={id}
+                  {...register("motivoIngreso")}
+                  rows={3}
+                  className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Descripción clínica del motivo de ingreso (mín. 10 caracteres)..."
+                  aria-invalid={!!errors.motivoIngreso}
+                />
+              )}
             </FieldGroup>
 
             {/* Circunstancia de ingreso */}
             <FieldGroup label="Circunstancia del ingreso" error={errors.circunstanciaIngreso?.message}>
-              <textarea
-                {...register("circunstanciaIngreso")}
-                rows={3}
-                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Contexto clínico del ingreso..."
-                aria-invalid={!!errors.circunstanciaIngreso}
-              />
+              {(id) => (
+                <textarea
+                  id={id}
+                  {...register("circunstanciaIngreso")}
+                  rows={3}
+                  className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Contexto clínico del ingreso..."
+                  aria-invalid={!!errors.circunstanciaIngreso}
+                />
+              )}
             </FieldGroup>
 
             {/* ── CC-0005 RF-2: Diagnósticos CIE-11 ────────────────────────────── */}
@@ -480,10 +503,13 @@ export default function OrdenIngresoNuevoPage() {
             {/* Reserva sala quirúrgica — solo visible si cirugia */}
             {watchedMotivoTipo === "cirugia" && (
               <FieldGroup label="ID Reserva sala quirúrgica (UUID)" error={errors.reservaSalaQxId?.message}>
-                <Input
-                  {...register("reservaSalaQxId")}
-                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                />
+                {(id) => (
+                  <Input
+                    id={id}
+                    {...register("reservaSalaQxId")}
+                    placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  />
+                )}
               </FieldGroup>
             )}
 
@@ -519,12 +545,13 @@ function FieldGroup({
 }: {
   label: string;
   error?: string;
-  children: React.ReactNode;
+  children: (id: string) => React.ReactNode;
 }) {
+  const fieldId = useId();
   return (
     <div className="space-y-1">
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={fieldId}>{label}</Label>
+      {children(fieldId)}
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
     </div>
   );

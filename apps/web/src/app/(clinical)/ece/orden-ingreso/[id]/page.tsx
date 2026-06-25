@@ -75,14 +75,6 @@ export default function OrdenIngresoDetailPage() {
     setPinMode(null);
   }
 
-  async function handleAnularPin(pin: string) {
-    if (motivoAnulacion.trim().length < 10) {
-      throw new Error("El motivo debe tener al menos 10 caracteres.");
-    }
-    await anularMutation.mutateAsync({ id, motivoAnulacion: motivoAnulacion.trim() });
-    void pin; // anular no usa PIN en esta versión — la confirmación es el motivo + botón DIR
-  }
-
   if (query.isLoading) return <p className="p-4 text-sm text-muted-foreground">Cargando…</p>;
   if (query.error) return <p role="alert" className="p-4 text-sm text-destructive">{query.error.message}</p>;
   if (!orden) return <p className="p-4 text-sm text-muted-foreground">Orden no encontrada.</p>;
