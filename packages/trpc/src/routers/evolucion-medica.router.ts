@@ -284,19 +284,23 @@ export const evolucionMedicaRouter = router({
       }
       const instanciaId = instanciaRows[0]!.id;
 
+      // Serializar data JSONB (signosVitalesId si viene de D-1)
+      const dataJson = input.data ? JSON.stringify(input.data) : null;
+
       // Crear la evolución médica
       const evolucionRows = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO ece.evolucion_medica
-          (instancia_id, episodio_id, fecha_hora, subjetivo, objetivo, analisis, plan, registrado_por)
+          (instancia_id, episodio_id, fecha_hora, subjetivo, objetivo, analisis, plan, registrado_por, data)
         VALUES (
           ${instanciaId}::uuid,
           ${input.episodioId}::uuid,
           ${input.fecha}::timestamptz,
-          ${input.soapSubjetivo},
-          ${input.soapObjetivo},
-          ${input.soapAnalisis},
-          ${input.soapPlan},
-          ${personalId}::uuid
+          ${input.soapSubjetivo ?? null},
+          ${input.soapObjetivo ?? null},
+          ${input.soapAnalisis ?? null},
+          ${input.soapPlan ?? null},
+          ${personalId}::uuid,
+          ${dataJson}::jsonb
         )
         RETURNING id::text
       `;

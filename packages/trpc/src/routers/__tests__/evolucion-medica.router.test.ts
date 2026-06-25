@@ -100,18 +100,45 @@ describe("evolucionMedicaRouter", () => {
       expect(result.instanciaId).toBe(INSTANCIA_ID);
     });
 
-    it("rechaza si un campo SOAP está vacío (validación Zod)", async () => {
+    it("D-3: acepta crear borrador con soapSubjetivo vacío (campos opcionales)", async () => {
+      prisma.$executeRawUnsafe.mockResolvedValue(0);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+        .mockResolvedValueOnce([{ id: TIPO_DOC_ID }])
+        .mockResolvedValueOnce([{ id: ESTADO_ID }])
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }])
+        .mockResolvedValueOnce([{ id: EVOLUCION_ID }]);
+
       const caller = evolucionMedicaRouter.createCaller(makeCtx({ prisma }));
-      await expect(
-        caller.create({
-          episodioId: EPISODIO_ID,
-          fecha: new Date(),
-          soapSubjetivo: "", // vacío — min(1)
-          soapObjetivo: VALID_SOAP.soapObjetivo,
-          soapAnalisis: VALID_SOAP.soapAnalisis,
-          soapPlan: VALID_SOAP.soapPlan,
-        }),
-      ).rejects.toThrow();
+      const result = await caller.create({
+        episodioId: EPISODIO_ID,
+        fecha: new Date(),
+        soapSubjetivo: "", // borrador — D-3 permite vacío
+        soapObjetivo: "",
+        soapAnalisis: VALID_SOAP.soapAnalisis,
+        soapPlan: VALID_SOAP.soapPlan,
+      });
+      expect(result.id).toBe(EVOLUCION_ID);
+    });
+
+    it("D-1: acepta data.signosVitalesId al crear evolución", async () => {
+      const SIGNOS_ID = "eeee0000-eeee-eeee-eeee-eeeeeeeeeeee";
+      prisma.$executeRawUnsafe.mockResolvedValue(0);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+        .mockResolvedValueOnce([{ id: TIPO_DOC_ID }])
+        .mockResolvedValueOnce([{ id: ESTADO_ID }])
+        .mockResolvedValueOnce([{ id: INSTANCIA_ID }])
+        .mockResolvedValueOnce([{ id: EVOLUCION_ID }]);
+
+      const caller = evolucionMedicaRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.create({
+        episodioId: EPISODIO_ID,
+        fecha: new Date(),
+        ...VALID_SOAP,
+        data: { signosVitalesId: SIGNOS_ID },
+      });
+      expect(result.id).toBe(EVOLUCION_ID);
     });
 
     it("retorna NOT_FOUND si el episodio no existe (INSERT instancia devuelve vacío)", async () => {

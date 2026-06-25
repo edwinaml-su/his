@@ -3,10 +3,15 @@ import { z } from "zod";
 export const eceEvolucionCreateSchema = z.object({
   episodioId: z.string().uuid(),
   fecha: z.coerce.date(),
-  soapSubjetivo: z.string().trim().min(1).max(8000),
-  soapObjetivo: z.string().trim().min(1).max(8000),
-  soapAnalisis: z.string().trim().min(1).max(8000),
-  soapPlan: z.string().trim().min(1).max(8000),
+  // D-3: S/O opcionales — gating en UI (borrador permite vacíos; firmar exige S+O+A+P)
+  soapSubjetivo: z.string().trim().max(8000).default(""),
+  soapObjetivo: z.string().trim().max(8000).default(""),
+  soapAnalisis: z.string().trim().max(8000).default(""),
+  soapPlan: z.string().trim().max(8000).default(""),
+  // D-1: signosVitalesId en data JSONB (cero SQL)
+  data: z
+    .object({ signosVitalesId: z.string().uuid().optional() })
+    .optional(),
 });
 
 export type EceEvolucionCreateInput = z.infer<typeof eceEvolucionCreateSchema>;
