@@ -1,49 +1,42 @@
 "use client";
 
 /**
- * Tarjeta trigger del agrupador "Problemas".
+ * Tarjeta de lista de problemas (POMR, CC-0004).
  *
- * Cuando isCompleted=false: CTA "Completar problemas".
- * Cuando isCompleted=true : muestra preview truncado (S / O / signos) + botón Editar.
+ * Muestra un grid/tabla de problemas con columnas: #, Problema, S (preview), O (preview),
+ * Acciones (Editar / Eliminar). El botón "Agregar problema" abre el modal de captura.
  */
 
 import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
-import { Badge } from "@his/ui/components/badge";
-import type { ProblemasValue } from "./ProblemasModal";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@his/ui/components/table";
+import type { ProblemaItem } from "./ProblemasModal";
 
-// ─── Helper preview ──────────────────────────────────────────────────────────
+// ─── Helper ──────────────────────────────────────────────────────────────────
 
-function truncate(text: string, max = 80): string {
+function truncate(text: string, max = 60): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}…`;
-}
-
-/** Genera una línea de resumen de signos vitales ingresados (no vacíos). */
-function signosResumen(signos: ProblemasValue["signos"]): string {
-  const parts: string[] = [];
-  if (signos.presionSistolica && signos.presionDiastolica) {
-    parts.push(`TA ${signos.presionSistolica}/${signos.presionDiastolica}`);
-  }
-  if (signos.frecuenciaCardiaca) parts.push(`FC ${signos.frecuenciaCardiaca}`);
-  if (signos.frecuenciaRespiratoria) parts.push(`FR ${signos.frecuenciaRespiratoria}`);
-  if (signos.temperatura) parts.push(`T° ${signos.temperatura}`);
-  if (signos.saturacionO2) parts.push(`SpO₂ ${signos.saturacionO2}%`);
-  return parts.join(" · ");
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
 
 interface ProblemasCardProps {
-  value: ProblemasValue;
-  isCompleted: boolean;
-  onEdit: () => void;
+  problemas: ProblemaItem[];
+  onAdd: () => void;
+  onEdit: (index: number) => void;
+  onDelete: (index: number) => void;
 }
 
-export function ProblemasCard({ value, isCompleted, onEdit }: ProblemasCardProps) {
-  const signosLine = signosResumen(value.signos);
-
+export function ProblemasCard({ problemas, onAdd, onEdit, onDelete }: ProblemasCardProps) {
   return (
     <Card className="border-l-4 border-blue-300 dark:border-blue-700">
       <CardHeader className="pb-2">
@@ -51,54 +44,73 @@ export function ProblemasCard({ value, isCompleted, onEdit }: ProblemasCardProps
           <CardTitle className="text-sm font-semibold uppercase tracking-wide">
             Problemas
           </CardTitle>
-          {isCompleted && (
-            <Badge variant="secondary" className="text-xs">Completado</Badge>
-          )}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onAdd}
+            aria-label="Agregar problema"
+          >
+            Agregar problema
+          </Button>
         </div>
       </CardHeader>
       <CardContent>
-        {isCompleted ? (
-          <div className="space-y-2">
-            {value.subjetivo && (
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">S:</span>{" "}
-                {truncate(value.subjetivo)}
-              </p>
-            )}
-            {value.objetivo && (
-              <p className="text-sm text-muted-foreground">
-                <span className="font-medium text-foreground">O:</span>{" "}
-                {truncate(value.objetivo)}
-              </p>
-            )}
-            {signosLine && (
-              <p className="text-xs text-muted-foreground">Signos: {signosLine}</p>
-            )}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onEdit}
-              aria-label="Editar problemas"
-            >
-              Editar
-            </Button>
-          </div>
+        {problemas.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Aún no hay problemas registrados. Agregue el primero.
+          </p>
         ) : (
-          <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              Ingrese subjetivo (S), objetivo (O) y signos vitales.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={onEdit}
-              aria-label="Completar sección Problemas"
-            >
-              Completar problemas
-            </Button>
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col" className="w-8">#</TableHead>
+                <TableHead scope="col">Problema</TableHead>
+                <TableHead scope="col">S</TableHead>
+                <TableHead scope="col">O</TableHead>
+                <TableHead scope="col" className="w-32">
+                  <span className="sr-only">Acciones</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {problemas.map((p, i) => (
+                <TableRow key={p.id}>
+                  <TableCell className="font-medium text-muted-foreground">{i + 1}</TableCell>
+                  <TableCell className="font-medium">{p.descripcion}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {p.subjetivo ? truncate(p.subjetivo) : <span className="italic">—</span>}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {p.objetivo ? truncate(p.objetivo) : <span className="italic">—</span>}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => onEdit(i)}
+                        aria-label={`Editar problema ${i + 1}`}
+                      >
+                        Editar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onDelete(i)}
+                        aria-label={`Eliminar problema ${i + 1}`}
+                        className="text-destructive hover:text-destructive"
+                      >
+                        Eliminar
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>

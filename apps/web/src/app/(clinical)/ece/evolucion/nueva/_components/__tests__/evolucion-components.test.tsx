@@ -4,8 +4,9 @@
  *
  * Cubre:
  *   SignosVitalesCapture: render smoke + onChange al editar un campo.
- *   ProblemasCard: render sin completar + render completado con preview.
- *   ProblemasModal: render smoke + descarta buffer al cancelar + persiste al guardar.
+ *   ProblemasModal: render + guardar + cancelar + buffer re-sync + validación descripcion.
+ *   ProblemasCard: estado vacío + con datos + handlers.
+ *   SignosVitalesCard: smoke.
  */
 
 import * as React from "react";
@@ -15,12 +16,11 @@ import "@testing-library/jest-dom/vitest";
 
 import { SignosVitalesCapture, SIGNOS_INITIAL } from "../SignosVitalesCapture";
 import { ProblemasCard } from "../ProblemasCard";
-import { ProblemasModal, PROBLEMAS_INITIAL } from "../ProblemasModal";
+import { ProblemasModal, type ProblemaItem } from "../ProblemasModal";
+import { SignosVitalesCard } from "../SignosVitalesCard";
 
 // ─── Mocks externos ──────────────────────────────────────────────────────────
 
-// evaluateVitalAlerts puede lanzar si el contrato no se importa correctamente
-// en jsdom. Lo stubeamos para mantener los tests enfocados en la UI.
 vi.mock("@his/contracts/schemas/inpatient", () => ({
   evaluateVitalAlerts: vi.fn().mockReturnValue([]),
   VITAL_THRESHOLDS_ADULT: {},
@@ -79,165 +79,210 @@ describe("SignosVitalesCapture", () => {
 // ─── ProblemasCard ───────────────────────────────────────────────────────────
 
 describe("ProblemasCard", () => {
-  it("muestra CTA 'Completar problemas' cuando isCompleted=false", () => {
-    const onEdit = vi.fn();
+  it("muestra estado vacío y botón 'Agregar problema' cuando no hay problemas", () => {
     render(
       <ProblemasCard
-        value={PROBLEMAS_INITIAL}
-        isCompleted={false}
-        onEdit={onEdit}
+        problemas={[]}
+        onAdd={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: /completar sección problemas/i })).toBeInTheDocument();
+    expect(screen.getByText(/Aún no hay problemas registrados/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /agregar problema/i })).toBeInTheDocument();
   });
 
-  it("muestra badge 'Completado' y preview cuando isCompleted=true", () => {
-    const onEdit = vi.fn();
-    const value = {
-      ...PROBLEMAS_INITIAL,
-      subjetivo: "Dolor abdominal fuerte que inició ayer.",
-      objetivo: "Abdomen blando sin rigidez.",
-    };
-    render(
-      <ProblemasCard value={value} isCompleted={true} onEdit={onEdit} />,
-    );
-    expect(screen.getByText(/Completado/i)).toBeInTheDocument();
-    expect(screen.getByText(/Dolor abdominal/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /editar/i })).toBeInTheDocument();
-  });
-
-  it("llama onEdit al hacer click en el botón Editar", () => {
-    const onEdit = vi.fn();
+  it("muestra las descripciones de los problemas en la tabla", () => {
+    const problemas: ProblemaItem[] = [
+      { id: "1", descripcion: "Cefalea tensional", subjetivo: "S1", objetivo: "O1" },
+      { id: "2", descripcion: "HTA grado 2", subjetivo: "S2", objetivo: "" },
+    ];
     render(
       <ProblemasCard
-        value={{ ...PROBLEMAS_INITIAL, subjetivo: "Algo" }}
-        isCompleted={true}
-        onEdit={onEdit}
+        problemas={problemas}
+        onAdd={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /editar/i }));
-    expect(onEdit).toHaveBeenCalledOnce();
+    expect(screen.getByText("Cefalea tensional")).toBeInTheDocument();
+    expect(screen.getByText("HTA grado 2")).toBeInTheDocument();
+  });
+
+  it("click en 'Agregar problema' llama onAdd", () => {
+    const onAdd = vi.fn();
+    render(
+      <ProblemasCard
+        problemas={[]}
+        onAdd={onAdd}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /agregar problema/i }));
+    expect(onAdd).toHaveBeenCalledOnce();
+  });
+
+  it("click en Editar llama onEdit con el índice correcto", () => {
+    const onEdit = vi.fn();
+    const problemas: ProblemaItem[] = [
+      { id: "1", descripcion: "Problema A", subjetivo: "", objetivo: "" },
+      { id: "2", descripcion: "Problema B", subjetivo: "", objetivo: "" },
+    ];
+    render(
+      <ProblemasCard
+        problemas={problemas}
+        onAdd={vi.fn()}
+        onEdit={onEdit}
+        onDelete={vi.fn()}
+      />,
+    );
+    const editButtons = screen.getAllByRole("button", { name: /editar problema/i });
+    fireEvent.click(editButtons[1]!);
+    expect(onEdit).toHaveBeenCalledWith(1);
+  });
+
+  it("click en Eliminar llama onDelete con el índice correcto", () => {
+    const onDelete = vi.fn();
+    const problemas: ProblemaItem[] = [
+      { id: "1", descripcion: "Problema A", subjetivo: "", objetivo: "" },
+      { id: "2", descripcion: "Problema B", subjetivo: "", objetivo: "" },
+    ];
+    render(
+      <ProblemasCard
+        problemas={problemas}
+        onAdd={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    const deleteButtons = screen.getAllByRole("button", { name: /eliminar problema/i });
+    fireEvent.click(deleteButtons[0]!);
+    expect(onDelete).toHaveBeenCalledWith(0);
   });
 });
 
 // ─── ProblemasModal ──────────────────────────────────────────────────────────
 
 describe("ProblemasModal", () => {
-  it("renderiza el modal cuando open=true", () => {
+  it("renderiza el modal con campos Problema/Subjetivo/Objetivo (sin signos)", () => {
     render(
       <ProblemasModal
         open={true}
         onClose={vi.fn()}
-        value={PROBLEMAS_INITIAL}
-        onChange={vi.fn()}
+        value={null}
+        onSave={vi.fn()}
       />,
     );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Problema$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Subjetivo/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Objetivo/i)).toBeInTheDocument();
+    // No debe mostrar signos vitales
+    expect(screen.queryByTestId("signos-vitales-capture")).not.toBeInTheDocument();
   });
 
-  it("llama onChange con los datos actualizados al guardar", () => {
-    const onChange = vi.fn();
+  it("muestra título 'Agregar problema' cuando value=null", () => {
+    render(
+      <ProblemasModal open={true} onClose={vi.fn()} value={null} onSave={vi.fn()} />,
+    );
+    expect(screen.getByText("Agregar problema")).toBeInTheDocument();
+  });
+
+  it("muestra título 'Editar problema' cuando value tiene datos", () => {
+    const item: ProblemaItem = { id: "1", descripcion: "Cefalea", subjetivo: "S", objetivo: "O" };
+    render(
+      <ProblemasModal open={true} onClose={vi.fn()} value={item} onSave={vi.fn()} />,
+    );
+    expect(screen.getByText("Editar problema")).toBeInTheDocument();
+  });
+
+  it("llama onSave con los datos y luego onClose al guardar", () => {
+    const onSave = vi.fn();
     const onClose = vi.fn();
     render(
       <ProblemasModal
         open={true}
         onClose={onClose}
-        value={PROBLEMAS_INITIAL}
-        onChange={onChange}
+        value={null}
+        onSave={onSave}
       />,
     );
+    fireEvent.change(screen.getByLabelText(/^Problema$/i), {
+      target: { value: "Cefalea tensional" },
+    });
     fireEvent.change(screen.getByLabelText(/Subjetivo/i), {
       target: { value: "Dolor de cabeza" },
     });
     fireEvent.click(screen.getByRole("button", { name: /^Guardar$/i }));
-    expect(onChange).toHaveBeenCalledOnce();
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ subjetivo: "Dolor de cabeza" }),
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ descripcion: "Cefalea tensional", subjetivo: "Dolor de cabeza" }),
     );
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("llama onClose pero NO onChange al cancelar", () => {
-    const onChange = vi.fn();
+  it("llama onClose pero NO onSave al cancelar", () => {
+    const onSave = vi.fn();
     const onClose = vi.fn();
     render(
       <ProblemasModal
         open={true}
         onClose={onClose}
-        value={PROBLEMAS_INITIAL}
-        onChange={onChange}
+        value={null}
+        onSave={onSave}
       />,
     );
-    fireEvent.change(screen.getByLabelText(/Subjetivo/i), {
-      target: { value: "Texto descartado" },
+    fireEvent.change(screen.getByLabelText(/^Problema$/i), {
+      target: { value: "Algo" },
     });
     fireEvent.click(screen.getByRole("button", { name: /Cancelar/i }));
     expect(onClose).toHaveBeenCalledOnce();
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
   });
 
-  // AC-5: signos vitales guardados junto con S/O al confirmar
-  it("AC-5: onChange incluye signos vitales capturados al guardar", () => {
-    const onChange = vi.fn();
+  it("botón Guardar deshabilitado si descripcion está vacía", () => {
     render(
-      <ProblemasModal
-        open={true}
-        onClose={vi.fn()}
-        value={PROBLEMAS_INITIAL}
-        onChange={onChange}
-      />,
+      <ProblemasModal open={true} onClose={vi.fn()} value={null} onSave={vi.fn()} />,
     );
-    // Editar subjetivo
-    fireEvent.change(screen.getByLabelText(/Subjetivo/i), {
-      target: { value: "Cefalea intensa" },
-    });
-    // Editar un signo vital (TA Sistólica — idPrefix="modal-sv")
-    const taSist = screen.getByLabelText(/TA Sistólica/i);
-    fireEvent.change(taSist, { target: { value: "140" } });
-    // Guardar
-    fireEvent.click(screen.getByRole("button", { name: /^Guardar$/i }));
-    expect(onChange).toHaveBeenCalledOnce();
-    const payload = onChange.mock.calls[0]![0] as { subjetivo: string; signos: { presionSistolica: string } };
-    expect(payload.subjetivo).toBe("Cefalea intensa");
-    expect(payload.signos.presionSistolica).toBe("140");
+    // descripcion vacía al abrir en modo Agregar
+    const guardar = screen.getByRole("button", { name: /^Guardar$/i });
+    expect(guardar).toBeDisabled();
   });
 
-  // AC-6: buffer re-sincroniza con value externo al re-abrir (no conserva edición
-  // del intento cancelado anterior).
   it("AC-6: al re-abrir el modal el buffer muestra el valor externo (no la edición cancelada)", () => {
-    const externalValue = { ...PROBLEMAS_INITIAL, subjetivo: "Valor guardado previamente" };
+    const item: ProblemaItem = {
+      id: "1",
+      descripcion: "Valor guardado previamente",
+      subjetivo: "S previo",
+      objetivo: "",
+    };
     const { rerender } = render(
-      <ProblemasModal
-        open={true}
-        onClose={vi.fn()}
-        value={externalValue}
-        onChange={vi.fn()}
-      />,
+      <ProblemasModal open={true} onClose={vi.fn()} value={item} onSave={vi.fn()} />,
     );
     // Editar en el buffer sin guardar
-    fireEvent.change(screen.getByLabelText(/Subjetivo/i), {
+    fireEvent.change(screen.getByLabelText(/^Problema$/i), {
       target: { value: "Edición descartada" },
     });
-    // Cerrar (simula que el padre pone open=false luego open=true otra vez)
+    // Cerrar y re-abrir
     rerender(
-      <ProblemasModal
-        open={false}
-        onClose={vi.fn()}
-        value={externalValue}
-        onChange={vi.fn()}
-      />,
+      <ProblemasModal open={false} onClose={vi.fn()} value={item} onSave={vi.fn()} />,
     );
     rerender(
-      <ProblemasModal
-        open={true}
-        onClose={vi.fn()}
-        value={externalValue}
-        onChange={vi.fn()}
-      />,
+      <ProblemasModal open={true} onClose={vi.fn()} value={item} onSave={vi.fn()} />,
     );
-    // Al re-abrir, el subjetivo debe mostrar el valor externo
-    expect(screen.getByLabelText(/Subjetivo/i)).toHaveValue("Valor guardado previamente");
+    expect(screen.getByLabelText(/^Problema$/i)).toHaveValue("Valor guardado previamente");
+  });
+});
+
+// ─── SignosVitalesCard ───────────────────────────────────────────────────────
+
+describe("SignosVitalesCard", () => {
+  it("renderiza sin errores y muestra título 'Signos vitales'", () => {
+    render(
+      <SignosVitalesCard value={SIGNOS_INITIAL} onChange={vi.fn()} />,
+    );
+    expect(screen.getByText(/Signos vitales/i)).toBeInTheDocument();
+    expect(screen.getByTestId("signos-vitales-capture")).toBeInTheDocument();
   });
 });

@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+// Schema de un problema individual (POMR — registro orientado a problemas, CC-0004)
+export const evolucionProblemaSchema = z.object({
+  descripcion: z.string().trim().min(1).max(500),
+  subjetivo: z.string().trim().max(8000).default(""),
+  objetivo: z.string().trim().max(8000).default(""),
+});
+
+export type EvolucionProblema = z.infer<typeof evolucionProblemaSchema>;
+
 export const eceEvolucionCreateSchema = z.object({
   episodioId: z.string().uuid(),
   fecha: z.coerce.date(),
@@ -8,9 +17,12 @@ export const eceEvolucionCreateSchema = z.object({
   soapObjetivo: z.string().trim().max(8000).default(""),
   soapAnalisis: z.string().trim().max(8000).default(""),
   soapPlan: z.string().trim().max(8000).default(""),
-  // D-1: signosVitalesId en data JSONB (cero SQL)
+  // D-1: signosVitalesId en data JSONB (cero SQL); D-A: array de problemas POMR
   data: z
-    .object({ signosVitalesId: z.string().uuid().optional() })
+    .object({
+      signosVitalesId: z.string().uuid().optional(),
+      problemas: z.array(evolucionProblemaSchema).optional(),
+    })
     .optional(),
 });
 
