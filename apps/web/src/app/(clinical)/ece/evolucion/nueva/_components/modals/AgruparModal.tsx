@@ -51,14 +51,14 @@ export function AgruparModal({ open, onClose, selectedIds, onDone }: Props) {
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Nuevo problema padre</DialogTitle>
+          <DialogTitle>Nuevo problema sindrómico</DialogTitle>
           <DialogDescription>
-            Agrupará {selectedIds.length} problema{selectedIds.length > 1 ? "s" : ""} seleccionado{selectedIds.length > 1 ? "s" : ""} bajo un problema padre.
+            Agrupará {selectedIds.length} problema{selectedIds.length > 1 ? "s" : ""} seleccionado{selectedIds.length > 1 ? "s" : ""} bajo un problema sindrómico.
           </DialogDescription>
         </DialogHeader>
 
         <div className="py-2 space-y-1.5">
-          <Label htmlFor="modal-agrupar-nombre">Nombre del problema padre</Label>
+          <Label htmlFor="modal-agrupar-nombre">Nombre del problema sindrómico</Label>
           <textarea
             id="modal-agrupar-nombre"
             ref={inputRef}
@@ -72,7 +72,7 @@ export function AgruparModal({ open, onClose, selectedIds, onDone }: Props) {
           />
           {err && (
             <p id="modal-agrupar-err" role="alert" className="text-xs text-destructive">
-              Escriba el nombre del problema padre.
+              Escriba el nombre del problema sindrómico.
             </p>
           )}
         </div>

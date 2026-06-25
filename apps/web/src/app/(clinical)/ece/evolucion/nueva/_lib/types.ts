@@ -130,15 +130,47 @@ export function tieneSignos(s: SignosState): boolean {
   );
 }
 
+// ─── Helper: signos vitales núcleo completos ──────────────────────────────────
+
+/**
+ * Campos de signos vitales exigidos para firmar. Peso, talla y glucometría
+ * quedan opcionales (no se re-miden en cada nota; la UI ya los marca opcionales).
+ */
+export const SIGNOS_NUCLEO = [
+  "presionSistolica",
+  "presionDiastolica",
+  "frecuenciaCardiaca",
+  "frecuenciaRespiratoria",
+  "temperatura",
+  "saturacionO2",
+] as const;
+
+export function signosNucleoCompletos(s: SignosState): boolean {
+  return SIGNOS_NUCLEO.every((k) => s[k].trim() !== "");
+}
+
+// ─── Helper: campos obligatorios faltantes ────────────────────────────────────
+
+/**
+ * Lista (en orden de pantalla) de campos obligatorios aún sin llenar.
+ * Ajuste Avante CC-0006: TODOS los campos son obligatorios para firmar.
+ */
+export function camposFaltantes(draft: DraftState): string[] {
+  const faltan: string[] = [];
+  if (draft.problemas.length === 0) faltan.push("problema");
+  if (draft.subjetivo.trim() === "") faltan.push("subjetivo");
+  if (!signosNucleoCompletos(draft.signos)) faltan.push("signos vitales");
+  if (draft.objetivo.trim() === "") faltan.push("objetivo");
+  if (draft.analisis.trim() === "") faltan.push("análisis");
+  if (draft.plan.length === 0) faltan.push("plan");
+  return faltan;
+}
+
 // ─── Helper: puede firmar ─────────────────────────────────────────────────────
 
-/** §7 del brief: problemas>0 && analisis !vacío && plan>0 (S y O opcionales). */
+/** Todos los campos obligatorios completos (ver camposFaltantes). */
 export function puedeFirmar(draft: DraftState): boolean {
-  return (
-    draft.problemas.length > 0 &&
-    draft.analisis.trim() !== "" &&
-    draft.plan.length > 0
-  );
+  return camposFaltantes(draft).length === 0;
 }
 
 // ─── Reducer ─────────────────────────────────────────────────────────────────

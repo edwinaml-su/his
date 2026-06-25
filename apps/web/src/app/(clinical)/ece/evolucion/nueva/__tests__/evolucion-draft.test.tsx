@@ -10,11 +10,23 @@ import {
   DRAFT_EMPTY,
   calcNumero,
   puedeFirmar,
+  signosNucleoCompletos,
   tieneSignos,
   SIGNOS_EMPTY,
   type DraftState,
   type EvolucionProblema,
 } from "../_lib/types";
+
+// Núcleo de signos vitales válido reutilizable en varios tests.
+const SIGNOS_NUCLEO_OK: typeof SIGNOS_EMPTY = {
+  ...SIGNOS_EMPTY,
+  presionSistolica: "120",
+  presionDiastolica: "80",
+  frecuenciaCardiaca: "72",
+  frecuenciaRespiratoria: "16",
+  temperatura: "36.6",
+  saturacionO2: "98",
+};
 
 // ─── calcNumero ──────────────────────────────────────────────────────────────
 
@@ -61,32 +73,72 @@ describe("tieneSignos", () => {
   });
 });
 
-// ─── puedeFirmar ─────────────────────────────────────────────────────────────
+// ─── signosNucleoCompletos ───────────────────────────────────────────────────
+
+describe("signosNucleoCompletos", () => {
+  it("núcleo completo → true", () => {
+    expect(signosNucleoCompletos(SIGNOS_NUCLEO_OK)).toBe(true);
+  });
+
+  it("falta saturación → false", () => {
+    expect(signosNucleoCompletos({ ...SIGNOS_NUCLEO_OK, saturacionO2: "" })).toBe(false);
+  });
+
+  it("peso/talla/glucometría vacíos no afectan el núcleo (opcionales)", () => {
+    expect(
+      signosNucleoCompletos({ ...SIGNOS_NUCLEO_OK, pesoKg: "", tallaCm: "", glucometriaMgdl: "" }),
+    ).toBe(true);
+  });
+});
+
+// ─── puedeFirmar (ajuste Avante: todos los campos obligatorios) ───────────────
 
 describe("puedeFirmar", () => {
+  /** Draft con TODOS los campos obligatorios completos. */
+  function draftCompleto(): DraftState {
+    let s = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
+    s = draftReducer(s, { type: "SET_SUBJETIVO", texto: "refiere dolor" });
+    s = draftReducer(s, { type: "SET_OBJETIVO", texto: "examen físico" });
+    s = draftReducer(s, { type: "SET_ANALISIS", texto: "diagnóstico" });
+    s = draftReducer(s, { type: "ADD_PLAN", texto: "acción 1" });
+    s = draftReducer(s, { type: "SET_SIGNOS", signos: SIGNOS_NUCLEO_OK });
+    return s;
+  }
+
   it("draft vacío → false", () => {
     expect(puedeFirmar(DRAFT_EMPTY)).toBe(false);
   });
 
-  it("solo problemas → false (falta analisis y plan)", () => {
+  it("todos los campos obligatorios completos → true", () => {
+    expect(puedeFirmar(draftCompleto())).toBe(true);
+  });
+
+  it("solo problemas → false", () => {
     const s = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
     expect(puedeFirmar(s)).toBe(false);
   });
 
-  it("problemas + analisis + plan → true", () => {
-    let s = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
-    s = draftReducer(s, { type: "SET_ANALISIS", texto: "diagnóstico" });
-    s = draftReducer(s, { type: "ADD_PLAN", texto: "acción 1" });
-    expect(puedeFirmar(s)).toBe(true);
-  });
-
-  it("sin problemas aunque haya analisis y plan → false", () => {
-    let s = draftReducer(DRAFT_EMPTY, { type: "SET_ANALISIS", texto: "dx" });
-    s = draftReducer(s, { type: "ADD_PLAN", texto: "acción" });
+  it("falta subjetivo → false", () => {
+    const s = draftReducer(draftCompleto(), { type: "SET_SUBJETIVO", texto: "" });
     expect(puedeFirmar(s)).toBe(false);
   });
 
-  it("subjetivo y objetivo solos no habilitan firma (opcionales)", () => {
+  it("falta núcleo de signos vitales → false", () => {
+    const s = draftReducer(draftCompleto(), { type: "SET_SIGNOS", signos: SIGNOS_EMPTY });
+    expect(puedeFirmar(s)).toBe(false);
+  });
+
+  it("falta objetivo → false", () => {
+    const s = draftReducer(draftCompleto(), { type: "SET_OBJETIVO", texto: "" });
+    expect(puedeFirmar(s)).toBe(false);
+  });
+
+  it("sin problemas aunque el resto esté completo → false", () => {
+    const s: DraftState = { ...draftCompleto(), problemas: [] };
+    expect(puedeFirmar(s)).toBe(false);
+  });
+
+  it("subjetivo y objetivo solos no habilitan firma", () => {
     let s = draftReducer(DRAFT_EMPTY, { type: "SET_SUBJETIVO", texto: "me duele" });
     s = draftReducer(s, { type: "SET_OBJETIVO", texto: "examen normal" });
     expect(puedeFirmar(s)).toBe(false);

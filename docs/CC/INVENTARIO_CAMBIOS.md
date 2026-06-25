@@ -53,7 +53,7 @@ El HIS pasó de esqueleto a un sistema hospitalario **técnicamente listo para G
 | 2026-06-24 | **CC-0004** — Evolución médica SOAP a flujo vertical orientado a problemas | #479 |
 | 2026-06-24 | **CC-0005** — Orden de ingreso por documento + diagnóstico CIE-11 | #480 |
 | 2026-06-25 | Cierre de deuda de accesibilidad de Orden de Ingreso (labels, combobox CIE-11, dead code) | #481 |
-| 2026-06-25 | **CC-0006** — Evolución médica SOAP: rebuild dirigido por modales + autosave Supabase + inmutabilidad post-firma (SQL 181) | #484 |
+| 2026-06-25 | **CC-0006** — Evolución médica SOAP: rebuild dirigido por modales + autosave Supabase + inmutabilidad post-firma (SQL 181); ajustes Avante: "problema sindrómico", signos en sección propia sobre Objetivo, todos los campos obligatorios para firmar | #484 |
 
 ---
 
@@ -71,7 +71,7 @@ El HIS pasó de esqueleto a un sistema hospitalario **técnicamente listo para G
 - **Triage Manchester** (legacy extendido, con puente a `ece.hoja_triaje`).
 - **Encuentros y episodios** hospitalarios y ambulatorios; landing de admisiones por área.
 - **Historia clínica** rediseñada al modelo Avante: diagnósticos **CIE-11**, sección de Destino, análisis clínico, antecedentes y signos vitales (CC-0001).
-- **Evolución médica (SOAP)**: flujo vertical orientado a problemas (CC-0004), reconstruido a un modelo **dirigido por modales** con autosave a Supabase (sin localStorage), captura de signos vitales en el Objetivo con alertas críticas, Plan ítem a ítem e inmutabilidad post-firma (CC-0006).
+- **Evolución médica (SOAP)**: flujo vertical orientado a problemas (CC-0004), reconstruido a un modelo **dirigido por modales** con autosave a Supabase (sin localStorage), agrupación de problemas bajo un "problema sindrómico", **signos vitales en sección propia (sobre Objetivo)** con alertas críticas, Plan ítem a ítem, **todos los campos obligatorios para firmar** e inmutabilidad post-firma (CC-0006).
 - **Orden de ingreso**: identificación por documento + diagnósticos CIE-11 (1 principal obligatorio + secundarios), firma electrónica (CC-0005).
 - **Consentimientos informados NTEC** (hospitalización, quirúrgico; doble firma, inmutables post-firma).
 - **Defunción** (CIE estructurada), **epicrisis**, **URPA**, **indicaciones médicas**, **bitácora ECE**, ficha de identificación, rectificación.
@@ -141,7 +141,7 @@ Proceso formal de cambios bajo `docs/CC/NNNN/`. Estado:
 | **CC-0004** | Evolución médica SOAP — flujo vertical orientado a problemas | #479 | Mergeado |
 | **CC-0005** | Orden de ingreso por documento + diagnóstico CIE-11 | #480 | Mergeado (SQL 179–180 en prod) |
 | CC-0005 (deuda) | Accesibilidad de Orden de Ingreso (labels, combobox CIE-11, limpieza) | #481 | Mergeado |
-| **CC-0006** | Evolución médica SOAP — rebuild dirigido por modales (S/O/A + signos en Objetivo, Plan ítem a ítem), autosave a Supabase (sin localStorage), inmutabilidad post-firma; corrige el `create` roto de #479; **supersede la UI grid POMR de #482** | #484 | PR abierto — SQL 181 en prod |
+| **CC-0006** | Evolución médica SOAP — rebuild dirigido por modales (S + signos en sección propia + O/A, Plan ítem a ítem), agrupación bajo "problema sindrómico", todos los campos obligatorios para firmar, autosave a Supabase (sin localStorage), inmutabilidad post-firma; corrige el `create` roto de #479; **supersede la UI grid POMR de #482** | #484 | PR abierto — SQL 181 en prod |
 
 ---
 

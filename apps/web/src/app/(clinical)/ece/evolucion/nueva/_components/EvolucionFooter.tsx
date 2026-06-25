@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
+import { camposFaltantes } from "../_lib/types";
 
 interface Props {
   onCancelar: () => void;
@@ -11,7 +12,8 @@ interface Props {
 }
 
 export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
-  const { canSign, status, episodeId } = useEvolucionDraft();
+  const { canSign, status, episodeId, draft } = useEvolucionDraft();
+  const faltantes = camposFaltantes(draft);
 
   const statusText: string = (() => {
     if (!episodeId) return "Sin episodio: no se puede autoguardar";
@@ -33,7 +35,7 @@ export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
 
   const firmarTooltip = canSign
     ? undefined
-    : "Se requiere: al menos un problema, análisis y plan para firmar";
+    : `Faltan campos obligatorios: ${faltantes.join(", ")}`;
 
   return (
     <div className="sticky bottom-0 z-10 flex items-center gap-3 border-t bg-background px-6 py-3 shadow-[0_-4px_20px_rgba(15,23,42,.05)]">
@@ -51,6 +53,15 @@ export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
           data-testid="autosave-status"
         >
           {statusText}
+        </p>
+      )}
+
+      {!canSign && faltantes.length > 0 && (
+        <p
+          className="text-xs font-medium text-amber-600 dark:text-amber-400"
+          data-testid="firmar-faltantes"
+        >
+          Faltan: {faltantes.join(", ")}
         </p>
       )}
 

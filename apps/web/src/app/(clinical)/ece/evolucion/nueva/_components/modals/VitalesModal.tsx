@@ -17,11 +17,9 @@ import type { SignosState } from "../../_lib/types";
 interface Props {
   open: boolean;
   onClose: () => void;
-  /** Callback invocado tras guardar (encadenado Objetivo⇄Vitales). */
-  alGuardar?: () => void;
 }
 
-export function VitalesModal({ open, onClose, alGuardar }: Props) {
+export function VitalesModal({ open, onClose }: Props) {
   const { draft, dispatch } = useEvolucionDraft();
   const [buffer, setBuffer] = React.useState<SignosState>(draft.signos);
 
@@ -31,11 +29,7 @@ export function VitalesModal({ open, onClose, alGuardar }: Props) {
 
   function handleGuardar() {
     dispatch({ type: "SET_SIGNOS", signos: buffer });
-    if (alGuardar) {
-      alGuardar();
-    } else {
-      onClose();
-    }
+    onClose();
   }
 
   return (

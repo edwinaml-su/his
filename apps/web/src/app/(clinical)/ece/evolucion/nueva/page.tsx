@@ -7,7 +7,8 @@
  * Todo ingreso de texto va en modal; las secciones muestran resumen.
  *
  * Autosave: lazy-create en Supabase al primer cambio con contenido (sin localStorage).
- * Firmar: inmutable tras firma (trigger DB). Gating: problemas>0 && analisis && plan.
+ * Firmar: inmutable tras firma (trigger DB). Gating Avante: todos los campos
+ * obligatorios (problemas, S, signos núcleo, O, análisis, plan) — ver camposFaltantes.
  */
 
 import * as React from "react";
@@ -24,10 +25,10 @@ import { Button } from "@his/ui/components/button";
 
 import { EvolucionDraftProvider, useEvolucionDraft } from "./_hooks/useEvolucionDraft";
 import { useModalController } from "./_hooks/useModalController";
-import { tieneSignos } from "./_lib/types";
 
 import { ProblemasSection } from "./_components/ProblemasSection";
 import { SubjetivoCard } from "./_components/SubjetivoCard";
+import { SignosSection } from "./_components/SignosSection";
 import { ObjetivoCard } from "./_components/ObjetivoCard";
 import { AnalisisCard } from "./_components/AnalisisCard";
 import { PlanSection } from "./_components/PlanSection";
@@ -45,7 +46,7 @@ import { PlanItemModal } from "./_components/modals/PlanItemModal";
 
 function NuevaEvolucionBody() {
   const router = useRouter();
-  const { draft, sign, fecha } = useEvolucionDraft();
+  const { sign, fecha } = useEvolucionDraft();
 
   const mc = useModalController();
   const [confirmSignOpen, setConfirmSignOpen] = React.useState(false);
@@ -55,9 +56,6 @@ function NuevaEvolucionBody() {
   const [problemaEditId, setProblemaEditId] = React.useState<string | undefined>();
   const [gruparIds, setGruparIds] = React.useState<string[]>([]);
   const [planEditId, setPlanEditId] = React.useState<string | undefined>();
-
-  // Borrador temporal del objetivo cuando el usuario va a vitales y vuelve
-  const objTmpRef = React.useRef<string>("");
 
   const fechaDisplay = fecha.toLocaleString("es-SV", {
     day: "2-digit",
@@ -83,19 +81,6 @@ function NuevaEvolucionBody() {
     setPlanEditId(id);
     mc.abrir({ tipo: "plan", indicacionId: id });
   }
-
-  function abrirObjetivoFlow() {
-    mc.abrirObjetivo(tieneSignos(draft.signos));
-  }
-
-  function handleModVitalsDesdeObjetivo(objTmp: string) {
-    objTmpRef.current = objTmp;
-    mc.modVitals(objTmp, () => {
-      /* noop: useModalController ya encadena al objetivo */
-    });
-  }
-
-  // Cuando ObjetivoModal se abre, si hay tmp restauramos (el modal lo lee del draft — no es necesario: el modal lee del draft al abrir)
 
   // ── Firma ─────────────────────────────────────────────────────────────────
 
@@ -149,7 +134,9 @@ function NuevaEvolucionBody() {
 
         <SubjetivoCard onAbrir={() => mc.abrir({ tipo: "subjetivo" })} />
 
-        <ObjetivoCard onAbrir={abrirObjetivoFlow} />
+        <SignosSection onAbrir={() => mc.abrir({ tipo: "vitales" })} />
+
+        <ObjetivoCard onAbrir={() => mc.abrir({ tipo: "objetivo" })} />
 
         <AnalisisCard onAbrir={() => mc.abrir({ tipo: "analisis" })} />
 
@@ -189,13 +176,11 @@ function NuevaEvolucionBody() {
       <VitalesModal
         open={mc.modal.tipo === "vitales"}
         onClose={mc.cerrar}
-        alGuardar={mc.modal.tipo === "vitales" ? mc.modal.alGuardar : undefined}
       />
 
       <ObjetivoModal
         open={mc.modal.tipo === "objetivo"}
         onClose={mc.cerrar}
-        onModVitals={handleModVitalsDesdeObjetivo}
       />
 
       <AnalisisModal

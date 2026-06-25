@@ -90,7 +90,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
     const hijos = problemas.filter((x) => x.parentId === p.id);
     const msg =
       hijos.length > 0
-        ? `¿Eliminar el problema padre "${p.texto}"? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`
+        ? `¿Eliminar el problema sindrómico "${p.texto}"? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`
         : `¿Eliminar el problema "${p.texto}"?`;
     if (!window.confirm(msg)) return;
     dispatch({ type: "DELETE_PROBLEMA", id: p.id });
@@ -99,7 +99,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
 
   function handleUngroup(p: EvolucionProblema) {
     const hijos = problemas.filter((x) => x.parentId === p.id);
-    if (!window.confirm(`¿Desagrupar este problema padre? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`)) return;
+    if (!window.confirm(`¿Desagrupar este problema sindrómico? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`)) return;
     dispatch({ type: "UNGROUP_PROBLEMA", parentId: p.id });
   }
 
@@ -125,7 +125,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
               </Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Lista de problemas. Marca dos o más para agruparlos bajo un problema padre (opcional).
+              Lista de problemas. Marca dos o más para agruparlos bajo un problema sindrómico (opcional).
             </p>
           </div>
           <Button type="button" size="sm" onClick={onAgregarProblema} className="shrink-0">
@@ -154,7 +154,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
               onClick={handleAgrupar}
             >
               <IcoLayers />
-              Agrupar como problema padre
+              Agrupar como problema sindrómico
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={clearSelection}>
               Limpiar
@@ -225,7 +225,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
                       {padre.texto}
                       {esPadre && (
                         <span className="ml-2 inline-block rounded-full border border-blue-200 bg-background px-2 py-0.5 text-[10px] font-bold text-blue-500">
-                          Problema padre · {hijos.length}
+                          Problema sindrómico · {hijos.length}
                         </span>
                       )}
                     </div>

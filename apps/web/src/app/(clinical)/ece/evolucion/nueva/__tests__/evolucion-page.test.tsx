@@ -33,7 +33,7 @@ vi.mock("next/navigation", () => ({
 // transitivamente desde subdirectorios profundos (limitación del config de Vitest).
 // Mockeamos el hook directamente para evitar que Vite transforme useEvolucionDraft.tsx
 // y su cadena de imports tRPC.
-import { draftReducer, DRAFT_EMPTY } from "../_lib/types";
+import { draftReducer, DRAFT_EMPTY, puedeFirmar, SIGNOS_EMPTY } from "../_lib/types";
 
 const mockSign = vi.fn();
 const mockDispatch = vi.fn();
@@ -61,10 +61,7 @@ vi.mock("../_hooks/useEvolucionDraft", () => {
       },
       status: "idle" as const,
       borradorId: undefined,
-      canSign:
-        draftState.problemas.length > 0 &&
-        draftState.analisis.trim() !== "" &&
-        draftState.plan.length > 0,
+      canSign: puedeFirmar(draftState),
       sign: mockSign,
       episodeId: "test-episode-uuid",
       fecha: new Date("2026-06-25T10:00:00"),
@@ -107,6 +104,7 @@ describe("NuevaEvolucionPage", () => {
     // Todos los badges de sección
     expect(screen.getAllByText(/problemas/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/subjetivo/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/signos vitales/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/objetivo/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/análisis/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/plan/i).length).toBeGreaterThan(0);
@@ -187,11 +185,25 @@ describe("NuevaEvolucionPage", () => {
     );
   });
 
-  it("Firmar se habilita cuando canSign=true (mock devuelve true con estado completo)", async () => {
+  it("Firmar se habilita solo con TODOS los campos obligatorios completos", async () => {
     // Precargar el draft ANTES de renderizar (setup() resetea draftState, por eso se usa render directo)
     draftState = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
+    draftState = draftReducer(draftState, { type: "SET_SUBJETIVO", texto: "refiere dolor" });
+    draftState = draftReducer(draftState, { type: "SET_OBJETIVO", texto: "examen físico" });
     draftState = draftReducer(draftState, { type: "SET_ANALISIS", texto: "dx" });
     draftState = draftReducer(draftState, { type: "ADD_PLAN", texto: "plan1" });
+    draftState = draftReducer(draftState, {
+      type: "SET_SIGNOS",
+      signos: {
+        ...SIGNOS_EMPTY,
+        presionSistolica: "120",
+        presionDiastolica: "80",
+        frecuenciaCardiaca: "72",
+        frecuenciaRespiratoria: "16",
+        temperatura: "36.6",
+        saturacionO2: "98",
+      },
+    });
     render(<NuevaEvolucionPage />);
 
     await waitFor(() => {
