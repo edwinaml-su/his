@@ -3,7 +3,10 @@
 /**
  * §12 Emergency — Crear visita a urgencias.
  *
- * Form skeleton MVP. Triage formal queda en §9; aquí sólo registramos la visita.
+ * Flujo paciente-first:
+ *   1. Buscador de paciente (BuscadorPaciente).
+ *   2. Encuentros abiertos del paciente (carga tras selección, auto-selección si hay 1).
+ *   3. Establecimiento de la org (auto-selección si hay 1).
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -20,6 +23,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { BuscadorPaciente, type PacienteSeleccion } from "@/components/pacientes/BuscadorPaciente";
 
 type ArrivalMode =
   | "WALK_IN"
@@ -66,6 +70,35 @@ export default function NewEmergencyVisitPage() {
   const router = useRouter();
   const [form, setForm] = React.useState<FormState>(INITIAL);
   const [clientError, setClientError] = React.useState<string | null>(null);
+  const [pacienteLabel, setPacienteLabel] = React.useState<string | null>(null);
+
+  // Encuentros abiertos del paciente seleccionado.
+  const encountersQ = trpc.encounter.list.useQuery(
+    { patientId: form.patientId, status: "OPEN", page: 1, pageSize: 50 },
+    { enabled: !!form.patientId },
+  );
+
+  // Establecimientos activos de la org.
+  const orgQ = trpc.organization.current.useQuery();
+  const establishments = orgQ.data?.establishments ?? [];
+
+  // Auto-seleccionar establecimiento cuando se carga y hay exactamente 1.
+  React.useEffect(() => {
+    const estabs = orgQ.data?.establishments ?? [];
+    if (estabs.length === 1 && !form.establishmentId) {
+      setForm((f) => ({ ...f, establishmentId: estabs[0]!.id }));
+    }
+  }, [orgQ.data, form.establishmentId]);
+
+  // Auto-seleccionar encuentro cuando se carga y hay exactamente 1.
+  const encounters = encountersQ.data?.items ?? [];
+  React.useEffect(() => {
+    const encs = encountersQ.data?.items ?? [];
+    if (!form.patientId) return;
+    if (encs.length === 1 && !form.encounterId) {
+      setForm((f) => ({ ...f, encounterId: encs[0]!.id }));
+    }
+  }, [encountersQ.data, form.patientId, form.encounterId]);
 
   const create = trpc.emergency.visit.create.useMutation({
     onSuccess: () => router.push("/emergency"),
@@ -73,6 +106,18 @@ export default function NewEmergencyVisitPage() {
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function handlePacienteSelect(p: PacienteSeleccion) {
+    // Al elegir un paciente nuevo se resetea el encuentro.
+    setForm((f) => ({ ...f, patientId: p.id, encounterId: "" }));
+    setPacienteLabel(p.nombre + (p.mrn ? ` · ${p.mrn}` : ""));
+    setClientError(null);
+  }
+
+  function handleCambiarPaciente() {
+    setForm((f) => ({ ...f, patientId: "", encounterId: "" }));
+    setPacienteLabel(null);
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -107,33 +152,102 @@ export default function NewEmergencyVisitPage() {
         </CardHeader>
         <CardContent>
           <Form onSubmit={onSubmit} noValidate>
+            {/* ── Paciente ─────────────────────────────────────── */}
             <FormField>
-              <Label htmlFor="encounterId">Encuentro (UUID)</Label>
-              <Input
-                id="encounterId"
-                required
-                value={form.encounterId}
-                onChange={(e) => update("encounterId", e.target.value)}
-              />
+              {form.patientId && pacienteLabel ? (
+                <div className="space-y-1.5">
+                  <Label>Paciente</Label>
+                  <div className="flex items-center gap-2 rounded-md border bg-muted/50 px-3 py-2 text-sm">
+                    <span className="flex-1">{pacienteLabel}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleCambiarPaciente}
+                      disabled={isSubmitting}
+                    >
+                      Cambiar
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <BuscadorPaciente
+                  id="patientId"
+                  onSelect={handlePacienteSelect}
+                  disabled={isSubmitting}
+                />
+              )}
             </FormField>
+
+            {/* ── Encuentro ────────────────────────────────────── */}
             <FormField>
-              <Label htmlFor="establishmentId">Establecimiento (UUID)</Label>
-              <Input
-                id="establishmentId"
-                required
-                value={form.establishmentId}
-                onChange={(e) => update("establishmentId", e.target.value)}
-              />
+              <Label htmlFor={encounters.length > 1 ? "encounterId" : undefined}>Encuentro</Label>
+              {!form.patientId ? (
+                <p className="text-sm text-muted-foreground">
+                  Seleccione un paciente primero.
+                </p>
+              ) : encountersQ.isLoading ? (
+                <p className="text-sm text-muted-foreground">Cargando encuentros…</p>
+              ) : encounters.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Este paciente no tiene encuentros abiertos. Admítalo primero en Admisión.
+                </p>
+              ) : encounters.length === 1 ? (
+                <div className="rounded-md border bg-muted/50 px-3 py-2 text-sm">
+                  {encounters[0]!.serviceUnit?.name ?? "Sin servicio"} &mdash;{" "}
+                  {new Date(encounters[0]!.admittedAt).toLocaleDateString("es-SV")}
+                </div>
+              ) : (
+                <Select
+                  value={form.encounterId}
+                  onValueChange={(v) => update("encounterId", v)}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger id="encounterId">
+                    <SelectValue placeholder="Seleccione un encuentro…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {encounters.map((enc) => (
+                      <SelectItem key={enc.id} value={enc.id}>
+                        {enc.serviceUnit?.name ?? "Sin servicio"} &mdash;{" "}
+                        {new Date(enc.admittedAt).toLocaleDateString("es-SV")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FormField>
+
+            {/* ── Establecimiento ──────────────────────────────── */}
             <FormField>
-              <Label htmlFor="patientId">Paciente (UUID)</Label>
-              <Input
-                id="patientId"
-                required
-                value={form.patientId}
-                onChange={(e) => update("patientId", e.target.value)}
-              />
+              <Label htmlFor={establishments.length > 1 ? "establishmentId" : undefined}>Establecimiento</Label>
+              {orgQ.isLoading ? (
+                <p className="text-sm text-muted-foreground">Cargando establecimientos…</p>
+              ) : establishments.length === 1 ? (
+                <div className="rounded-md border bg-muted/50 px-3 py-2 text-sm">
+                  {establishments[0]!.name}
+                </div>
+              ) : (
+                <Select
+                  value={form.establishmentId}
+                  onValueChange={(v) => update("establishmentId", v)}
+                  disabled={isSubmitting}
+                >
+                  <SelectTrigger id="establishmentId">
+                    <SelectValue placeholder="Seleccione un establecimiento…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {establishments.map((est) => (
+                      <SelectItem key={est.id} value={est.id}>
+                        {est.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </FormField>
+
+            {/* ── Modo de llegada ──────────────────────────────── */}
             <FormField>
               <Label htmlFor="arrivalMode">Modo de llegada</Label>
               <Select
@@ -152,6 +266,8 @@ export default function NewEmergencyVisitPage() {
                 </SelectContent>
               </Select>
             </FormField>
+
+            {/* ── Motivo principal ─────────────────────────────── */}
             <FormField>
               <Label htmlFor="chiefComplaint">Motivo principal</Label>
               <Input
@@ -161,6 +277,7 @@ export default function NewEmergencyVisitPage() {
                 onChange={(e) => update("chiefComplaint", e.target.value)}
               />
             </FormField>
+
             {errorMessage && (
               <p role="alert" aria-live="polite" className="text-sm font-medium text-destructive">
                 {errorMessage}
