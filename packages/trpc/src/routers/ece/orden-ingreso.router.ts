@@ -80,6 +80,9 @@ export interface OrdenIngresoRow {
   estado_registro: string;
   motivo_ingreso_tipo: string | null;
   procedimiento_cie10: string | null;
+  // CC-0005: columnas de identificación (nullable — back-compat con órdenes previas)
+  documento_tipo: string | null;
+  documento_numero: string | null;
   establecimiento_id: string | null;
   reserva_sala_qx_id: string | null;
   // virtual — JOIN con documento_instancia → flujo_estado
@@ -151,6 +154,8 @@ async function findOrdenIngreso(tx: RawTx, id: string): Promise<OrdenIngresoRow 
       oi.estado_registro,
       oi.motivo_ingreso_tipo,
       oi.procedimiento_cie10,
+      oi.documento_tipo,
+      oi.documento_numero,
       oi.establecimiento_id::text,
       oi.reserva_sala_qx_id::text,
       fe.codigo AS estado_documento,
@@ -369,6 +374,7 @@ export const eceOrdenIngresoRouter = router({
             oi.diagnostico_ingreso, oi.medico_ordena::text,
             oi.registrado_en, oi.estado_registro,
             oi.motivo_ingreso_tipo, oi.procedimiento_cie10,
+            oi.documento_tipo, oi.documento_numero,
             oi.establecimiento_id::text, oi.reserva_sala_qx_id::text,
             fe.codigo AS estado_documento,
             fe.es_final AS estado_es_final
@@ -482,6 +488,8 @@ export const eceOrdenIngresoRouter = router({
       const instanciaId = instanciaRows[0]!.id;
 
       // 5. INSERT ece.orden_ingreso
+      // CC-0005: documento_tipo/documento_numero denormalizados para auditoría;
+      // procedimiento_cie10 ya no se escribe (set NULL).
       const ordenRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray, ...args: unknown[]
       ) => Promise<Array<{ id: string }>>)`
@@ -499,6 +507,8 @@ export const eceOrdenIngresoRouter = router({
           medico_ordena,
           motivo_ingreso_tipo,
           procedimiento_cie10,
+          documento_tipo,
+          documento_numero,
           establecimiento_id,
           reserva_sala_qx_id
         ) VALUES (
@@ -511,10 +521,12 @@ export const eceOrdenIngresoRouter = router({
           ${input.servicioIngresoId ?? null}::uuid,
           ${input.procedencia},
           ${input.modalidad},
-          ${input.diagnosticoIngreso ? JSON.stringify(input.diagnosticoIngreso) : null}::jsonb,
+          ${JSON.stringify(input.diagnosticoIngreso)}::jsonb,
           ${medicoPersonalId}::uuid,
           ${input.motivoIngresoTipo},
-          ${input.procedimientoCie10 ?? null},
+          NULL,
+          ${input.documentoTipo},
+          ${input.documentoNumero},
           ${eceCtx.establecimientoId}::uuid,
           ${input.reservaSalaQxId ?? null}::uuid
         )

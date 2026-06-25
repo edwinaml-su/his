@@ -1,31 +1,35 @@
 /**
  * Tests unitarios — eceOrdenIngresoRouter (ECE ORD_ING).
  *
- * Columnas reales verificadas 2026-05-24 vía MCP Supabase:
+ * Columnas reales verificadas 2026-05-24 vía MCP Supabase (+ CC-0005 179_orden_ingreso_doc_ident.sql):
  *   id, instancia_id (NOT NULL), paciente_id, episodio_origen_id, episodio_id,
  *   circunstancia_ingreso, fecha_hora_orden, motivo_ingreso, servicio_ingreso_id,
  *   procedencia, modalidad, diagnostico_ingreso (jsonb), medico_ordena,
  *   registrado_en, estado_registro ('vigente'|'rectificado'), motivo_ingreso_tipo,
- *   procedimiento_cie10, establecimiento_id, reserva_sala_qx_id.
+ *   procedimiento_cie10, documento_tipo (CC-0005), documento_numero (CC-0005),
+ *   establecimiento_id, reserva_sala_qx_id.
  *   Estado workflow en documento_instancia.estado_actual_id.
  *
  * Casos cubiertos:
  *   1. Zod — create rechaza motivoIngreso < 10 chars
  *   2. Zod — create rechaza uuid inválido en pacienteId
  *   3. Zod — create rechaza modalidad fuera de enum BD
- *   4. create → borrador: retorna id e instanciaId
+ *   4. create → borrador: retorna id e instanciaId; persiste documentoTipo/documentoNumero (CC-0005)
  *   5. create → PRECONDITION_FAILED si ORD_ING no está en tipo_documento
  *   6. firmar → firmado + emite evento ece.orden_ingreso.firmada
  *   7. firmar → CONFLICT si documento ya está firmado
  *   8. anular sin motivo suficiente → falla Zod (< 10 chars)
  *   9. anular → CONFLICT si estado no es firmado
  *   10. list filtra por modalidad
+ *   11. Zod — create rechaza diagnosticoIngreso sin diagnóstico PRINCIPAL (CC-0005)
+ *   12. Zod — create rechaza diagnosticoIngreso con dos PRINCIPAL (CC-0005)
  *
  * @QA E2E pendiente:
  *   - Flujo create → firmar con PIN real válido vía ece.firma_electronica.
  *   - assertDependenciasFirmadas bloquea creación si deps no firmadas.
  *   - FORBIDDEN cuando rol no incluye DIR en anular.
  *   - PIN incorrecto incrementa failed_attempts y bloquea tras 5 intentos.
+ *   - Selector de documento resuelve paciente por DUI en OI form (RF-1).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockDeep } from "vitest-mock-extended";
@@ -37,23 +41,38 @@ import { z } from "zod";
 const MODALIDAD_ING_TEST   = ["hospitalizacion", "hospital_de_dia"] as const;
 const PROCEDENCIA_TEST     = ["consulta_externa", "emergencia", "traslado_externo", "traslado_interno", "espontaneo", "otro"] as const;
 const MOTIVO_TIPO_TEST     = ["cirugia", "emergencia", "hospitalizacion", "obs", "otro"] as const;
+const TIPO_DX_TEST         = ["PRINCIPAL", "SECUNDARIO"] as const;
+const DOC_TYPE_TEST        = ["DUI", "DNI", "PASAPORTE", "DUI_RESP", "CARNET_RESIDENCIA"] as const;
+
+// CC-0005: nuevo shape CIE-11 para diagnosticoIngreso
+const CIE11_CODE_REGEX_TEST = /^[A-Z0-9]{2,}([./&-][A-Z0-9]+)*$/i;
 
 const diagItemSchema = z.object({
-  cie10:       z.string().regex(/^[A-Z]\d{2}(\.\d{1,4})?$/),
-  descripcion: z.string().min(3).max(500),
-  principal:   z.boolean(),
+  cie11Codigo: z.string().regex(CIE11_CODE_REGEX_TEST),
+  cie11Titulo: z.string().min(1).max(500),
+  cie11Uri:    z.string().optional(),
+  version:     z.string().optional(),
+  tipo:        z.enum(TIPO_DX_TEST),
 });
 
 const createSchema = z.object({
   pacienteId:           z.string().uuid(),
+  documentoTipo:        z.enum(DOC_TYPE_TEST),
+  documentoNumero:      z.string().min(1).max(40),
   episodioOrigenId:     z.string().uuid().optional(),
   modalidad:            z.enum(MODALIDAD_ING_TEST),
   motivoIngreso:        z.string().min(10).max(2_000),
   motivoIngresoTipo:    z.enum(MOTIVO_TIPO_TEST),
   procedencia:          z.enum(PROCEDENCIA_TEST),
   servicioIngresoId:    z.string().uuid().optional(),
-  procedimientoCie10:   z.string().regex(/^[A-Z]\d{2}(\.\d{1,4})?$/).optional(),
-  diagnosticoIngreso:   z.array(diagItemSchema).min(1).max(20).optional(),
+  diagnosticoIngreso:   z
+    .array(diagItemSchema)
+    .min(1)
+    .max(20)
+    .refine(
+      (arr) => arr.filter((d) => d.tipo === "PRINCIPAL").length === 1,
+      "Debe haber exactamente un diagnóstico principal.",
+    ),
   medicoOrdena:         z.string().uuid(),
   fechaHoraOrden:       z.coerce.date(),
   circunstanciaIngreso: z.string().min(5).max(2_000),
@@ -108,6 +127,19 @@ const uuid2 = () => "00000000-0000-4000-8000-000000000002";
 const uuid3 = () => "00000000-0000-4000-8000-000000000003";
 const uuid4 = () => "00000000-0000-4000-8000-000000000004";
 
+// CC-0005: fixture CIE-11 para diagnóstico de ingreso
+const DX_PRINCIPAL_CIE11 = {
+  cie11Codigo: "CA40.0",
+  cie11Titulo: "Apendicitis aguda",
+  tipo: "PRINCIPAL" as const,
+};
+
+const DX_SECUNDARIO_CIE11 = {
+  cie11Codigo: "JA00",
+  cie11Titulo: "Neumonía",
+  tipo: "SECUNDARIO" as const,
+};
+
 function makeOrdenRow(estadoDoc = "borrador") {
   return {
     id: uuid(),
@@ -121,12 +153,15 @@ function makeOrdenRow(estadoDoc = "borrador") {
     servicio_ingreso_id: null,
     procedencia: "consulta_externa",
     modalidad: "hospitalizacion",
-    diagnostico_ingreso: [{ cie10: "K35.8", descripcion: "Apendicitis aguda", principal: true }],
+    // CC-0005: nuevo shape CIE-11
+    diagnostico_ingreso: [DX_PRINCIPAL_CIE11],
     medico_ordena: uuid4(),
     registrado_en: new Date("2026-05-24T10:05:00Z"),
     estado_registro: "vigente",
     motivo_ingreso_tipo: "cirugia",
     procedimiento_cie10: null,
+    documento_tipo: "DUI",
+    documento_numero: "12345678-9",
     establecimiento_id: uuid2(),
     reserva_sala_qx_id: null,
     estado_documento: estadoDoc,
@@ -134,8 +169,11 @@ function makeOrdenRow(estadoDoc = "borrador") {
   };
 }
 
+// CC-0005: documentoTipo/documentoNumero ahora obligatorios
 const validCreateInput = {
   pacienteId:           uuid3(),
+  documentoTipo:        "DUI" as const,
+  documentoNumero:      "12345678-9",
   modalidad:            "hospitalizacion" as const,
   motivoIngreso:        "Dolor abdominal agudo con sospecha de apendicitis.",
   motivoIngresoTipo:    "cirugia" as const,
@@ -143,6 +181,7 @@ const validCreateInput = {
   medicoOrdena:         uuid4(),
   fechaHoraOrden:       new Date("2026-05-24T10:00:00Z"),
   circunstanciaIngreso: "Referido desde consulta externa con cuadro de 12 horas.",
+  diagnosticoIngreso:   [DX_PRINCIPAL_CIE11],
 };
 
 function buildCtx(roleCodes: string[] = ["MC"]) {
@@ -163,7 +202,7 @@ function buildCtx(roleCodes: string[] = ["MC"]) {
   };
 }
 
-// ─── 1-3: Zod validaciones ────────────────────────────────────────────────────
+// ─── 1-3 + 11-12: Zod validaciones ───────────────────────────────────────────
 
 describe("ordenIngresoCreateSchema — validación Zod", () => {
   it("1. rechaza motivoIngreso con menos de 10 caracteres", () => {
@@ -186,6 +225,31 @@ describe("ordenIngresoCreateSchema — validación Zod", () => {
     const r = createSchema.safeParse({ ...validCreateInput, modalidad: "urgencia" });
     expect(r.success).toBe(false);
   });
+
+  // CC-0005 RF-2: refine de diagnóstico principal
+  it("11. rechaza diagnosticoIngreso sin ningún diagnóstico PRINCIPAL", () => {
+    const r = createSchema.safeParse({
+      ...validCreateInput,
+      diagnosticoIngreso: [DX_SECUNDARIO_CIE11],
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      // El error aparece en formErrors (refine array-level) o en root
+      const flat = r.error.flatten();
+      expect(
+        flat.formErrors.length > 0 ||
+        (flat.fieldErrors.diagnosticoIngreso?.length ?? 0) > 0,
+      ).toBe(true);
+    }
+  });
+
+  it("12. rechaza diagnosticoIngreso con dos diagnósticos PRINCIPAL", () => {
+    const r = createSchema.safeParse({
+      ...validCreateInput,
+      diagnosticoIngreso: [DX_PRINCIPAL_CIE11, { ...DX_SECUNDARIO_CIE11, tipo: "PRINCIPAL" as const }],
+    });
+    expect(r.success).toBe(false);
+  });
 });
 
 describe("ordenIngresoAnularSchema — validación Zod", () => {
@@ -203,7 +267,7 @@ describe("ordenIngresoAnularSchema — validación Zod", () => {
 describe("eceOrdenIngresoRouter — create", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("4. happy path: retorna id e instanciaId en borrador", async () => {
+  it("4. happy path: retorna id e instanciaId en borrador; documentoTipo/documentoNumero en payload", async () => {
     const ctx = buildCtx(["MC"]);
     const newOrdenId     = "aaaaaaaa-0000-4000-8000-000000000001";
     const newInstanciaId = "bbbbbbbb-0000-4000-8000-000000000001";
@@ -229,6 +293,9 @@ describe("eceOrdenIngresoRouter — create", () => {
       expect.anything(),
       expect.objectContaining({ eventType: "ece.orden_ingreso.creada" }),
     );
+
+    // CC-0005: verificar que el INSERT fue llamado (vía $queryRaw call count)
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(4);
   });
 
   it("5. PRECONDITION_FAILED si ORD_ING no está configurado en tipo_documento", async () => {

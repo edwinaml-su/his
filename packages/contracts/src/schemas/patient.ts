@@ -32,7 +32,9 @@ export const patientIdentifierSchema = z
 // CC-0002 §3/§5/§10 — Documento de registro + deduplicación + responsable.
 // =============================================================================
 
-export const documentTypeEnum = z.enum(["DUI", "DNI", "PASAPORTE", "DUI_RESP"]);
+// CC-0005: CARNET_RESIDENCIA agregado para resolver pacientes por documento en OI.
+// DNI conservado — otros módulos lo usan (no remover).
+export const documentTypeEnum = z.enum(["DUI", "DNI", "PASAPORTE", "DUI_RESP", "CARNET_RESIDENCIA"]);
 
 export const responsableSchema = z
   .object({
@@ -102,7 +104,7 @@ export const patientCreateSchema = patientBaseObject.superRefine((val, ctx) => {
 
   if (
     documentType &&
-    ["DUI", "DNI", "PASAPORTE"].includes(documentType) &&
+    ["DUI", "DNI", "PASAPORTE", "CARNET_RESIDENCIA"].includes(documentType) &&
     !documentNumber
   ) {
     ctx.addIssue({

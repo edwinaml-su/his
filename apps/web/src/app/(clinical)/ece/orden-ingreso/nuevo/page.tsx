@@ -3,13 +3,15 @@
 /**
  * ECE — Nueva Orden de Ingreso (ORD_ING, NTEC Art. 33).
  *
- * El médico (MC/ESP) ordena el internamiento del paciente completando
- * todos los campos clínicos requeridos y firmando con PIN electrónico.
+ * CC-0005 RF-1: identificación de paciente por tipo+número de documento
+ *   (resuelve al paciente/expediente en tiempo real; no UUID manual).
+ * CC-0005 RF-2: diagnósticos CIE-11 con buscador compartido;
+ *   exactamente un diagnóstico PRINCIPAL requerido.
  *
  * Flujo: formulario → "Crear y firmar" → PinDialog → create + firmar.
  */
 import { useState, type FormEvent } from "react";
-import { useForm, useFieldArray } from "react-hook-form";
+import { useForm, useFieldArray, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
@@ -25,12 +27,15 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { BuscadorCie11 } from "@/components/cie11/BuscadorCie11";
 import {
   ordenIngresoCreateInput,
   MODALIDAD_ING,
   MOTIVO_INGRESO_TIPO,
   PROCEDENCIA,
+  TIPO_DX_INGRESO,
 } from "@his/contracts/schemas/orden-ingreso";
+import { validateDUI } from "@his/contracts";
 
 // ─── Schema form (sin firmaPin — lo captura el modal) ─────────────────────────
 
@@ -39,27 +44,54 @@ type FormValues = z.infer<typeof formSchema>;
 
 // ─── Labels en español ────────────────────────────────────────────────────────
 
-const MODALIDAD_LABELS: Record<typeof MODALIDAD_ING[number], string> = {
+const MODALIDAD_LABELS: Record<(typeof MODALIDAD_ING)[number], string> = {
   hospitalizacion: "Hospitalización",
   hospital_de_dia: "Hospital de día",
 };
 
-const MOTIVO_TIPO_LABELS: Record<typeof MOTIVO_INGRESO_TIPO[number], string> = {
-  cirugia:          "Cirugía",
-  emergencia:       "Emergencia",
-  hospitalizacion:  "Hospitalización médica",
-  obs:              "Obstetricia",
-  otro:             "Otro",
+const MOTIVO_TIPO_LABELS: Record<(typeof MOTIVO_INGRESO_TIPO)[number], string> = {
+  cirugia:         "Cirugía",
+  emergencia:      "Emergencia",
+  hospitalizacion: "Hospitalización médica",
+  obs:             "Obstetricia",
+  otro:            "Otro",
 };
 
-const PROCEDENCIA_LABELS: Record<typeof PROCEDENCIA[number], string> = {
-  consulta_externa:   "Consulta externa",
-  emergencia:         "Emergencia",
-  traslado_externo:   "Traslado externo",
-  traslado_interno:   "Traslado interno",
-  espontaneo:         "Espontáneo",
-  otro:               "Otro",
+const PROCEDENCIA_LABELS: Record<(typeof PROCEDENCIA)[number], string> = {
+  consulta_externa:  "Consulta externa",
+  emergencia:        "Emergencia",
+  traslado_externo:  "Traslado externo",
+  traslado_interno:  "Traslado interno",
+  espontaneo:        "Espontáneo",
+  otro:              "Otro",
 };
+
+const TIPO_DX_LABELS: Record<(typeof TIPO_DX_INGRESO)[number], string> = {
+  PRINCIPAL:   "Principal",
+  SECUNDARIO:  "Secundario",
+};
+
+// CC-0005: tipos de documento disponibles para resolver paciente en OI.
+const DOCUMENTO_TIPO_OPTIONS = [
+  { value: "DUI",               label: "DUI" },
+  { value: "CARNET_RESIDENCIA", label: "Carnet de residencia" },
+  { value: "PASAPORTE",         label: "Pasaporte" },
+  { value: "DUI_RESP",          label: "DUI responsable (menor)" },
+] as const;
+
+// Regex de validación por tipo de documento (lado cliente, UI-only).
+function validarDocumentoNumero(tipo: string, numero: string): string | null {
+  if (!numero.trim()) return "Número de documento requerido.";
+  if (tipo === "DUI" || tipo === "DUI_RESP") {
+    if (!validateDUI(numero)) return "DUI inválido (dígito verificador).";
+  } else {
+    // CARNET_RESIDENCIA / PASAPORTE: alfanumérico 6-20
+    if (!/^[A-Z0-9]{6,20}$/i.test(numero.trim())) {
+      return "Número inválido (6-20 caracteres alfanuméricos).";
+    }
+  }
+  return null;
+}
 
 // ─── Componente principal ─────────────────────────────────────────────────────
 
@@ -67,6 +99,13 @@ export default function OrdenIngresoNuevoPage() {
   const router = useRouter();
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [pendingValues, setPendingValues] = useState<FormValues | null>(null);
+  const [pacienteResuelto, setPacienteResuelto] = useState<{
+    displayName: string;
+    expediente: string | null;
+  } | null>(null);
+  const [docTipoLocal, setDocTipoLocal] = useState<string>("");
+  const [docNumeroLocal, setDocNumeroLocal] = useState<string>("");
+  const [docError, setDocError] = useState<string | null>(null);
 
   const createMutation = trpc.eceOrdenIngreso.create.useMutation();
   const firmarMutation = trpc.eceOrdenIngreso.firmar.useMutation({
@@ -74,6 +113,13 @@ export default function OrdenIngresoNuevoPage() {
       router.push(`/ece/orden-ingreso/${vars.id}`);
     },
   });
+
+  const findByDocMutation = trpc.patient.findByDocument.useQuery(
+    // Cast necesario: el tipo de docTipoLocal es string en estado local; el enum
+    // es validado en server-side. El refetch solo ocurre tras validación UI.
+    { documentType: docTipoLocal as "DUI", documentNumber: docNumeroLocal },
+    { enabled: false },
+  );
 
   const {
     register,
@@ -97,6 +143,32 @@ export default function OrdenIngresoNuevoPage() {
 
   const watchedMotivoTipo = watch("motivoIngresoTipo");
 
+  // ─── Resolver paciente por documento ─────────────────────────────────────────
+
+  async function handleBuscarPaciente() {
+    if (!docTipoLocal) { setDocError("Seleccione un tipo de documento."); return; }
+    const err = validarDocumentoNumero(docTipoLocal, docNumeroLocal);
+    if (err) { setDocError(err); return; }
+    setDocError(null);
+
+    const result = await findByDocMutation.refetch();
+    const data = result.data;
+
+    setValue("documentoTipo", docTipoLocal as FormValues["documentoTipo"]);
+    setValue("documentoNumero", docNumeroLocal);
+
+    if (data) {
+      setValue("pacienteId", data.id);
+      setPacienteResuelto({ displayName: data.displayName, expediente: data.expediente ?? null });
+    } else {
+      // No encontrado — limpiar pacienteId para que Zod falle si se intenta enviar
+      setValue("pacienteId", "");
+      setPacienteResuelto(null);
+    }
+  }
+
+  // ─── Submit ──────────────────────────────────────────────────────────────────
+
   function onValidSubmit(values: FormValues) {
     setPendingValues(values);
     setPinModalOpen(true);
@@ -111,6 +183,11 @@ export default function OrdenIngresoNuevoPage() {
 
   const isSubmitting = createMutation.isPending || firmarMutation.isPending;
   const submitError  = createMutation.error ?? firmarMutation.error;
+
+  // Diagnósticos: error global de refine (array-level)
+  const diagError =
+    errors.diagnosticoIngreso?.root?.message ??
+    (errors.diagnosticoIngreso as { message?: string } | undefined)?.message;
 
   return (
     <main className="mx-auto max-w-2xl space-y-6 p-4">
@@ -127,14 +204,87 @@ export default function OrdenIngresoNuevoPage() {
             className="space-y-4"
             noValidate
           >
-            {/* Paciente ID */}
-            <FieldGroup label="ID Paciente (UUID)" error={errors.pacienteId?.message}>
-              <Input
-                {...register("pacienteId")}
-                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-                aria-invalid={!!errors.pacienteId}
-              />
-            </FieldGroup>
+            {/* ── CC-0005 RF-1: Selector de documento ─────────────────────────── */}
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="text-sm font-medium">Identificación del paciente</p>
+              <div className="flex gap-2">
+                <div className="w-52">
+                  <Label htmlFor="doc-tipo">Tipo de documento</Label>
+                  <Select
+                    onValueChange={(v) => {
+                      setDocTipoLocal(v);
+                      setDocError(null);
+                      setPacienteResuelto(null);
+                    }}
+                  >
+                    <SelectTrigger id="doc-tipo">
+                      <SelectValue placeholder="Tipo..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DOCUMENTO_TIPO_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex-1">
+                  <Label htmlFor="doc-numero">Número de documento</Label>
+                  <Input
+                    id="doc-numero"
+                    value={docNumeroLocal}
+                    onChange={(e) => {
+                      setDocNumeroLocal(e.target.value);
+                      setDocError(null);
+                      setPacienteResuelto(null);
+                    }}
+                    placeholder={
+                      docTipoLocal === "DUI" || docTipoLocal === "DUI_RESP"
+                        ? "########-#"
+                        : "Alfanumérico 6-20"
+                    }
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleBuscarPaciente}
+                    disabled={findByDocMutation.isFetching}
+                  >
+                    {findByDocMutation.isFetching ? "Buscando…" : "Buscar"}
+                  </Button>
+                </div>
+              </div>
+
+              {docError && <p role="alert" className="text-sm text-red-600">{docError}</p>}
+
+              {pacienteResuelto && (
+                <p className="text-sm text-green-700">
+                  Paciente: <strong>{pacienteResuelto.displayName}</strong>
+                  {pacienteResuelto.expediente && (
+                    <span className="ml-1 text-muted-foreground">
+                      · Exp: {pacienteResuelto.expediente}
+                    </span>
+                  )}
+                </p>
+              )}
+
+              {findByDocMutation.data === null && !docError && !pacienteResuelto && !findByDocMutation.isFetching && (
+                <p className="text-sm text-yellow-700">
+                  Paciente no encontrado con ese documento. Verifique los datos.
+                </p>
+              )}
+
+              {/* pacienteId oculto — gestionado por el resolver */}
+              <input type="hidden" {...register("pacienteId")} />
+              <input type="hidden" {...register("documentoTipo")} />
+              <input type="hidden" {...register("documentoNumero")} />
+              {errors.pacienteId && (
+                <p role="alert" className="text-sm text-red-600">
+                  Debe buscar y resolver un paciente antes de continuar.
+                </p>
+              )}
+            </div>
 
             {/* Episodio origen (opcional) */}
             <FieldGroup label="ID Episodio origen (opcional)" error={errors.episodioOrigenId?.message}>
@@ -164,7 +314,7 @@ export default function OrdenIngresoNuevoPage() {
 
             {/* Modalidad */}
             <FieldGroup label="Modalidad" error={errors.modalidad?.message}>
-              <Select onValueChange={(v) => setValue("modalidad", v as typeof MODALIDAD_ING[number])}>
+              <Select onValueChange={(v) => setValue("modalidad", v as (typeof MODALIDAD_ING)[number])}>
                 <SelectTrigger aria-invalid={!!errors.modalidad}>
                   <SelectValue placeholder="Seleccione..." />
                 </SelectTrigger>
@@ -178,7 +328,7 @@ export default function OrdenIngresoNuevoPage() {
 
             {/* Motivo tipo */}
             <FieldGroup label="Tipo de motivo" error={errors.motivoIngresoTipo?.message}>
-              <Select onValueChange={(v) => setValue("motivoIngresoTipo", v as typeof MOTIVO_INGRESO_TIPO[number])}>
+              <Select onValueChange={(v) => setValue("motivoIngresoTipo", v as (typeof MOTIVO_INGRESO_TIPO)[number])}>
                 <SelectTrigger aria-invalid={!!errors.motivoIngresoTipo}>
                   <SelectValue placeholder="Seleccione..." />
                 </SelectTrigger>
@@ -192,7 +342,7 @@ export default function OrdenIngresoNuevoPage() {
 
             {/* Procedencia */}
             <FieldGroup label="Procedencia" error={errors.procedencia?.message}>
-              <Select onValueChange={(v) => setValue("procedencia", v as typeof PROCEDENCIA[number])}>
+              <Select onValueChange={(v) => setValue("procedencia", v as (typeof PROCEDENCIA)[number])}>
                 <SelectTrigger aria-invalid={!!errors.procedencia}>
                   <SelectValue placeholder="Seleccione..." />
                 </SelectTrigger>
@@ -231,58 +381,98 @@ export default function OrdenIngresoNuevoPage() {
               />
             </FieldGroup>
 
-            {/* Procedimiento CIE-10 (opcional) */}
-            <FieldGroup label="Código procedimiento CIE-10 (opcional)" error={errors.procedimientoCie10?.message}>
-              <Input
-                {...register("procedimientoCie10")}
-                placeholder="Ej: Z03.8"
-                aria-invalid={!!errors.procedimientoCie10}
-              />
-            </FieldGroup>
-
-            {/* Diagnósticos de ingreso */}
+            {/* ── CC-0005 RF-2: Diagnósticos CIE-11 ────────────────────────────── */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Diagnósticos de ingreso</Label>
+                <Label>
+                  Diagnósticos de ingreso{" "}
+                  <span className="text-xs text-muted-foreground">(exactamente 1 principal)</span>
+                </Label>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => appendDiag({ cie10: "", descripcion: "", principal: diagFields.length === 0 })}
+                  onClick={() =>
+                    appendDiag({
+                      cie11Codigo: "",
+                      cie11Titulo: "",
+                      cie11Uri: undefined,
+                      version: undefined,
+                      tipo: diagFields.length === 0 ? "PRINCIPAL" : "SECUNDARIO",
+                    })
+                  }
                 >
                   Agregar diagnóstico
                 </Button>
               </div>
+
+              {diagError && (
+                <p role="alert" className="text-sm text-red-600">{diagError}</p>
+              )}
+
               {diagFields.map((field, index) => (
                 <div key={field.id} className="rounded border p-3 space-y-2">
-                  <div className="flex gap-2">
+                  <BuscadorCie11
+                    id={`cie11-${index}`}
+                    onSelect={(item) => {
+                      setValue(`diagnosticoIngreso.${index}.cie11Codigo`, item.codigo);
+                      setValue(`diagnosticoIngreso.${index}.cie11Titulo`, item.titulo);
+                      if (item.uri) setValue(`diagnosticoIngreso.${index}.cie11Uri`, item.uri);
+                    }}
+                  />
+                  <div className="flex gap-2 items-end">
                     <div className="w-28">
+                      <Label htmlFor={`dx-codigo-${index}`} className="text-xs">Código CIE-11</Label>
                       <Input
-                        {...register(`diagnosticoIngreso.${index}.cie10`)}
-                        placeholder="CIE-10"
+                        id={`dx-codigo-${index}`}
+                        {...register(`diagnosticoIngreso.${index}.cie11Codigo`)}
+                        placeholder="Ej. CA40.0"
+                        className="font-mono text-xs"
                       />
                     </div>
                     <div className="flex-1">
+                      <Label htmlFor={`dx-titulo-${index}`} className="text-xs">Título</Label>
                       <Input
-                        {...register(`diagnosticoIngreso.${index}.descripcion`)}
-                        placeholder="Descripción del diagnóstico"
+                        id={`dx-titulo-${index}`}
+                        {...register(`diagnosticoIngreso.${index}.cie11Titulo`)}
+                        placeholder="Título del diagnóstico"
                       />
                     </div>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => removeDiag(index)}>
+                    <div className="w-36">
+                      <Label className="text-xs">Tipo</Label>
+                      <Controller
+                        control={control}
+                        name={`diagnosticoIngreso.${index}.tipo`}
+                        render={({ field: f }) => (
+                          <Select value={f.value} onValueChange={f.onChange}>
+                            <SelectTrigger className="h-9 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TIPO_DX_INGRESO.map((t) => (
+                                <SelectItem key={t} value={t} className="text-xs">
+                                  {TIPO_DX_LABELS[t]}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeDiag(index)}
+                    >
                       Quitar
                     </Button>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id={`diag-principal-${index}`}
-                      {...register(`diagnosticoIngreso.${index}.principal`)}
-                      className="h-4 w-4"
-                    />
-                    <Label htmlFor={`diag-principal-${index}`} className="text-sm">
-                      Diagnóstico principal
-                    </Label>
-                  </div>
+                  {errors.diagnosticoIngreso?.[index]?.cie11Codigo && (
+                    <p role="alert" className="text-xs text-red-600">
+                      {errors.diagnosticoIngreso[index]!.cie11Codigo!.message}
+                    </p>
+                  )}
                 </div>
               ))}
             </div>

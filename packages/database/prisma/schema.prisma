@@ -91,11 +91,13 @@ enum AdmissionType {
 }
 
 /// CC-0002 §3 — tipo de documento de registro del paciente.
+/// CC-0005: CARNET_RESIDENCIA agregado para resolver pacientes por documento en OI.
 enum DocumentType {
   DUI
   DNI
   PASAPORTE
   DUI_RESP
+  CARNET_RESIDENCIA
 
   @@schema("public")
 }
