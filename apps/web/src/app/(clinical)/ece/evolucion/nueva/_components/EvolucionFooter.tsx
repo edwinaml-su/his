@@ -12,14 +12,20 @@ interface Props {
 }
 
 export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
-  const { canSign, status, episodeId, draft } = useEvolucionDraft();
+  const { canSign, status, episodeId, draft, savedAt } = useEvolucionDraft();
   const faltantes = camposFaltantes(draft);
 
   const statusText: string = (() => {
     if (!episodeId) return "Sin episodio: no se puede autoguardar";
     if (status === "idle") return "";
     if (status === "guardando") return "Guardando…";
-    if (status === "guardado") return "Guardado";
+    if (status === "guardado") {
+      // R4.4: marca de tiempo del último guardado (guard si el hook no la provee).
+      const hora = savedAt
+        ? savedAt.toLocaleTimeString("es-SV", { hour: "2-digit", minute: "2-digit" })
+        : null;
+      return hora ? `Guardado ${hora}` : "Guardado";
+    }
     if (typeof status === "object") return `Error: ${status.error}`;
     return "";
   })();

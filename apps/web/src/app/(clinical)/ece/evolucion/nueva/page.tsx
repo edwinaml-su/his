@@ -26,6 +26,8 @@ import { Button } from "@his/ui/components/button";
 import { EvolucionDraftProvider, useEvolucionDraft } from "./_hooks/useEvolucionDraft";
 import { useModalController } from "./_hooks/useModalController";
 
+import { PacienteContextoBar } from "./_components/PacienteContextoBar";
+import { EspecialidadCard } from "./_components/EspecialidadCard";
 import { ProblemasSection } from "./_components/ProblemasSection";
 import { SubjetivoCard } from "./_components/SubjetivoCard";
 import { SignosSection } from "./_components/SignosSection";
@@ -124,8 +126,15 @@ function NuevaEvolucionBody() {
         </p>
       </div>
 
+      {/* Contexto del paciente (R3) */}
+      <div className="mb-4">
+        <PacienteContextoBar />
+      </div>
+
       {/* Secciones */}
       <div className="space-y-4">
+        <EspecialidadCard />
+
         <ProblemasSection
           onAgregarProblema={() => abrirProblema()}
           onEditarProblema={(id) => abrirProblema(id)}

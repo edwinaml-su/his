@@ -20,21 +20,54 @@ export interface IndicacionPlan {
   orden: number;
 }
 
+/** R3: especialidad médica (catálogo MedicalSpecialty; id null = texto libre). */
+export interface EspecialidadState {
+  id: string | null;
+  nombre: string;
+}
+
+export const ESPECIALIDAD_EMPTY: EspecialidadState = { id: null, nombre: "" };
+
 /**
  * Estado de los signos vitales como strings (facilita inputs controlados).
  * `escalaDolor` es number (slider, no puede quedar vacío).
+ *
+ * CC-0006 R1: ampliado a FiO₂, Glasgow (3 componentes), glucometría,
+ * antropometría (kg/lb, m/ft, cintura), balance hídrico, diuresis y
+ * gineco-obstétrico (FUR + fórmula GPPAV).
  */
 export interface SignosState {
+  // Núcleo (R4) — obligatorio para firmar
   presionSistolica: string;
   presionDiastolica: string;
   frecuenciaCardiaca: string;
   frecuenciaRespiratoria: string;
   temperatura: string;
   saturacionO2: string;
-  escalaDolor: number;
-  pesoKg: string;
-  tallaCm: string;
+  fio2: string;
+  // Estado neurológico y metabólico (R1.2)
+  glasgowOcular: string;
+  glasgowVerbal: string;
+  glasgowMotora: string;
   glucometriaMgdl: string;
+  // Antropometría (R1.3)
+  pesoKg: string;
+  pesoLb: string;
+  tallaM: string;
+  tallaFt: string;
+  perimetroCintura: string;
+  // Balance hídrico (R1.4)
+  balanceHidrico: string;
+  diuresisHoraria: string;
+  // Gineco-obstétrico (R1.5)
+  fechaUltimaRegla: string;
+  gestaG: string;
+  partoTermino: string;
+  partoPretermino: string;
+  abortos: string;
+  vivos: string;
+  // Dolor (EVA)
+  escalaDolor: number;
 }
 
 export const SIGNOS_EMPTY: SignosState = {
@@ -44,13 +77,29 @@ export const SIGNOS_EMPTY: SignosState = {
   frecuenciaRespiratoria: "",
   temperatura: "",
   saturacionO2: "",
-  escalaDolor: 0,
-  pesoKg: "",
-  tallaCm: "",
+  fio2: "",
+  glasgowOcular: "",
+  glasgowVerbal: "",
+  glasgowMotora: "",
   glucometriaMgdl: "",
+  pesoKg: "",
+  pesoLb: "",
+  tallaM: "",
+  tallaFt: "",
+  perimetroCintura: "",
+  balanceHidrico: "",
+  diuresisHoraria: "",
+  fechaUltimaRegla: "",
+  gestaG: "",
+  partoTermino: "",
+  partoPretermino: "",
+  abortos: "",
+  vivos: "",
+  escalaDolor: 0,
 };
 
 export interface DraftState {
+  especialidad: EspecialidadState;
   problemas: EvolucionProblema[];
   subjetivo: string;
   objetivo: string;
@@ -60,6 +109,7 @@ export interface DraftState {
 }
 
 export const DRAFT_EMPTY: DraftState = {
+  especialidad: ESPECIALIDAD_EMPTY,
   problemas: [],
   subjetivo: "",
   objetivo: "",
@@ -71,6 +121,7 @@ export const DRAFT_EMPTY: DraftState = {
 // ─── Acciones del reducer ────────────────────────────────────────────────────
 
 export type DraftAction =
+  | { type: "SET_ESPECIALIDAD"; especialidad: EspecialidadState }
   | { type: "SET_SUBJETIVO"; texto: string }
   | { type: "SET_OBJETIVO"; texto: string }
   | { type: "SET_ANALISIS"; texto: string }
@@ -116,25 +167,16 @@ export function calcNumero(
 // ─── Helper: tiene signos ─────────────────────────────────────────────────────
 
 export function tieneSignos(s: SignosState): boolean {
-  return (
-    s.presionSistolica !== "" ||
-    s.presionDiastolica !== "" ||
-    s.frecuenciaCardiaca !== "" ||
-    s.frecuenciaRespiratoria !== "" ||
-    s.temperatura !== "" ||
-    s.saturacionO2 !== "" ||
-    s.escalaDolor > 0 ||
-    s.pesoKg !== "" ||
-    s.tallaCm !== "" ||
-    s.glucometriaMgdl !== ""
-  );
+  const { escalaDolor, ...campos } = s;
+  return escalaDolor > 0 || Object.values(campos).some((v) => v.trim() !== "");
 }
 
 // ─── Helper: signos vitales núcleo completos ──────────────────────────────────
 
 /**
- * Campos de signos vitales exigidos para firmar. Peso, talla y glucometría
- * quedan opcionales (no se re-miden en cada nota; la UI ya los marca opcionales).
+ * Núcleo de signos vitales obligatorio para firmar (R4): Presión arterial
+ * (sistólica + diastólica) y Oxigenación/signos cardiorrespiratorios
+ * (FC, FR, Temperatura, SpO₂, FiO₂) = 7 campos. El resto es opcional.
  */
 export const SIGNOS_NUCLEO = [
   "presionSistolica",
@@ -143,6 +185,7 @@ export const SIGNOS_NUCLEO = [
   "frecuenciaRespiratoria",
   "temperatura",
   "saturacionO2",
+  "fio2",
 ] as const;
 
 export function signosNucleoCompletos(s: SignosState): boolean {
@@ -152,11 +195,13 @@ export function signosNucleoCompletos(s: SignosState): boolean {
 // ─── Helper: campos obligatorios faltantes ────────────────────────────────────
 
 /**
- * Lista (en orden de pantalla) de campos obligatorios aún sin llenar.
- * Ajuste Avante CC-0006: TODOS los campos son obligatorios para firmar.
+ * Lista (en orden de pantalla) de campos obligatorios aún sin llenar (R4.2):
+ * especialidad + ≥1 problema + signos núcleo (7) + subjetivo + objetivo +
+ * análisis + ≥1 indicación de plan.
  */
 export function camposFaltantes(draft: DraftState): string[] {
   const faltan: string[] = [];
+  if (draft.especialidad.nombre.trim() === "") faltan.push("especialidad");
   if (draft.problemas.length === 0) faltan.push("problema");
   if (draft.subjetivo.trim() === "") faltan.push("subjetivo");
   if (!signosNucleoCompletos(draft.signos)) faltan.push("signos vitales");
@@ -181,6 +226,8 @@ function nextOrden(arr: { orden: number }[]): number {
 
 export function draftReducer(state: DraftState, action: DraftAction): DraftState {
   switch (action.type) {
+    case "SET_ESPECIALIDAD":
+      return { ...state, especialidad: action.especialidad };
     case "SET_SUBJETIVO":
       return { ...state, subjetivo: action.texto };
     case "SET_OBJETIVO":

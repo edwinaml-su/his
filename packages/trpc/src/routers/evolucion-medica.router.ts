@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../trpc";
 import { withWorkflowContext, type EceContext } from "../workflow/context";
+import { withTenantContext } from "../rls-context";
 import { emitDomainEvent } from "@his/database";
 import {
   eceEvolucionCreateSchema,
@@ -221,6 +222,104 @@ export const evolucionMedicaRouter = router({
       return rows[0]!;
     });
   }),
+
+  /**
+   * CC-0006 R3: datos del paciente desde el expediente para alimentar las reglas
+   * condicionales por sexo/edad (gineco-obstétrico, FPP). NO los digita el médico.
+   *
+   * Lectura en dos contextos por la divisoria de esquemas/RLS:
+   *   1. ECE (withEceContext) → episodio + ece.paciente (numero_expediente, estado).
+   *   2. HIS (withTenantContext) → public.Patient (demografía: nombre, sexo, fecha
+   *      de nacimiento) bajo RLS tenant; ece.paciente NO almacena demográficos.
+   * Si el expediente ECE no está vinculado a un Patient HIS, degrada a los campos
+   * (posiblemente nulos) de ece.paciente.
+   */
+  contextoPaciente: physicianProc
+    .input(z.object({ episodioId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      interface EceCtxRow {
+        public_patient_id: string | null;
+        numero_expediente: string;
+        estado_expediente: string;
+        episodio_estado: string;
+        ece_sexo: string | null;
+        ece_fecha_nacimiento: Date | null;
+        ece_primer_nombre: string | null;
+        ece_primer_apellido: string | null;
+      }
+
+      const eceRow = await withEceContext<EceCtxRow | null>(ctx.prisma, ctx, async (tx) => {
+        const rows = await tx.$queryRaw<EceCtxRow[]>`
+          SELECT
+            p.public_patient_id::text AS public_patient_id,
+            p.numero_expediente,
+            p.estado_expediente,
+            ea.estado AS episodio_estado,
+            p.sexo AS ece_sexo,
+            p.fecha_nacimiento AS ece_fecha_nacimiento,
+            p.primer_nombre AS ece_primer_nombre,
+            p.primer_apellido AS ece_primer_apellido
+          FROM ece.episodio_atencion ea
+          JOIN ece.paciente p ON p.id = ea.paciente_id
+          WHERE ea.id = ${input.episodioId}::uuid
+          LIMIT 1
+        `;
+        return rows[0] ?? null;
+      });
+
+      if (!eceRow) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Episodio de atención no encontrado." });
+      }
+
+      // Demografía canónica desde public.Patient (RLS tenant) si hay vínculo.
+      let demo:
+        | { nombre: string; sexCode: string | null; birthDate: Date | null }
+        | null = null;
+      if (eceRow.public_patient_id) {
+        const publicId = eceRow.public_patient_id;
+        const patient = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.patient.findFirst({
+            where: { id: publicId, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: {
+              firstName: true,
+              middleName: true,
+              lastName: true,
+              secondLastName: true,
+              birthDate: true,
+              biologicalSex: { select: { code: true } },
+            },
+          });
+        });
+        if (patient) {
+          demo = {
+            nombre: [patient.firstName, patient.middleName, patient.lastName, patient.secondLastName]
+              .filter((s) => s && s.trim() !== "")
+              .join(" "),
+            sexCode: patient.biologicalSex?.code ?? null,
+            birthDate: patient.birthDate,
+          };
+        }
+      }
+
+      // Merge: preferir demografía HIS; fallback a columnas ece.paciente.
+      const sexoRaw = demo?.sexCode ?? eceRow.ece_sexo ?? null;
+      const sexo = sexoRaw ? sexoRaw.trim().toUpperCase().charAt(0) || null : null;
+      const fechaNacimiento = demo?.birthDate ?? eceRow.ece_fecha_nacimiento ?? null;
+      const nombreEce = [eceRow.ece_primer_nombre, eceRow.ece_primer_apellido]
+        .filter((s) => s && s.trim() !== "")
+        .join(" ");
+      const nombre = demo?.nombre || nombreEce || null;
+
+      return {
+        episodioId: input.episodioId,
+        numeroExpediente: eceRow.numero_expediente,
+        estadoExpediente: eceRow.estado_expediente,
+        cuentaActiva: eceRow.episodio_estado === "abierto",
+        nombre,
+        sexo, // 'M' | 'F' | 'I' | 'U' | null
+        fechaNacimiento: fechaNacimiento ? fechaNacimiento.toISOString() : null,
+      };
+    }),
 
   create: physicianProc.input(eceEvolucionCreateSchema).mutation(async ({ ctx, input }) => {
     return withEceContext(ctx.prisma, ctx, async (tx) => {

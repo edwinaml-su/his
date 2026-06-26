@@ -194,14 +194,14 @@ export default function AltaMedicaWizardPage() {
       <Button asChild variant="ghost" size="sm" className="-ml-2">
         <a href={`/ece/episodio-hospitalario/${episodioId}`}>
           <ChevronLeft className="h-4 w-4" aria-hidden />
-          Volver al episodio
+          Volver a la cuenta
         </a>
       </Button>
 
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">Alta médica</h1>
         <p className="text-sm text-muted-foreground">
-          Episodio: <span className="font-mono">{episodioId.slice(0, 8)}…</span>
+          Cuenta hospitalaria N.°: <span className="font-mono">{episodioId.slice(0, 8)}…</span>
         </p>
       </div>
 
@@ -400,7 +400,7 @@ export default function AltaMedicaWizardPage() {
               </div>
 
               <p className="text-sm">
-                Al confirmar se cerrará el episodio, se registrará la fecha de egreso y se
+                Al confirmar se cerrará la cuenta hospitalaria, se registrará la fecha de egreso y se
                 liberará la cama. Esta acción no puede revertirse.
               </p>
 

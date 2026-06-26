@@ -1,73 +1,55 @@
 "use client";
 
 /**
- * Captura de signos vitales reutilizable (controlled).
+ * Captura de signos vitales (CC-0006 R1/R2/R4.1) — controlled, SIN tRPC.
  *
- * SIN llamadas tRPC — solo UI. El padre (ProblemasModal) decide cuándo y
- * cómo persistir los valores vía eceSignosVitales.create.
+ *   - Núcleo SIEMPRE visible: Presión arterial (TA sist/diast) + Oxigenación
+ *     y signos cardiorrespiratorios (FC, FR, Temperatura, SpO₂, FiO₂). Los 7
+ *     son obligatorios (R4.1); `showErrors` los resalta al intentar guardar.
+ *   - Bloque colapsable ("+ Ver más / − Ver menos", inicia plegado) desde
+ *     Estado neurológico/metabólico hasta Dolor: Glasgow (3 selectores + total
+ *     + severidad), glucometría, antropometría (peso kg↔lb, talla m↔ft, IMC,
+ *     cintura), balance hídrico, gineco-obstétrico y EVA.
+ *   - Gineco-obstétrico solo si sexo femenino (R2); FPP solo si además está en
+ *     edad fértil (puedeEmbarazo).
  *
- * Lógica extraída de apps/web/src/app/(clinical)/ece/signos-vitales/nueva/page.tsx.
+ * SignosState y los rangos/factores/cálculos viven en módulos centralizados
+ * (`_lib/types`, `lib/evolucion/signos-vitales`) para tropicalizar sin tocar UI.
  */
 
 import * as React from "react";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Badge } from "@his/ui/components/badge";
+import { SIGNOS_EMPTY, type SignosState } from "../_lib/types";
 import {
-  evaluateVitalAlerts,
-  type InpatientVitalAlert,
-} from "@his/contracts/schemas/inpatient";
+  validarRango,
+  computeAlertasVitales,
+  kgALb,
+  lbAKg,
+  mAFt,
+  ftAM,
+  imcFrom,
+  imcClasificacion,
+  glasgowTotal,
+  glasgowSeveridad,
+  fppNaegele,
+  gestacionDesdeFur,
+  esFemenino,
+  puedeEmbarazo,
+  evaLabel,
+  GLASGOW_OCULAR,
+  GLASGOW_VERBAL,
+  GLASGOW_MOTORA,
+  type VitalRangeKey,
+  type ImcClaseKey,
+} from "../../../../../../lib/evolucion/signos-vitales";
 
-// ─── Tipo público (no importar desde @his/trpc para evitar ciclo web→trpc) ──
+// Compat: el resto del flujo importa SIGNOS_INITIAL desde aquí.
+export const SIGNOS_INITIAL: SignosState = SIGNOS_EMPTY;
+export type { SignosState };
 
-export interface SignosState {
-  presionSistolica: string;
-  presionDiastolica: string;
-  frecuenciaCardiaca: string;
-  frecuenciaRespiratoria: string;
-  temperatura: string;
-  saturacionO2: string;
-  escalaDolor: number;
-  pesoKg: string;
-  tallaCm: string;
-  glucometriaMgdl: string;
-}
-
-export const SIGNOS_INITIAL: SignosState = {
-  presionSistolica: "",
-  presionDiastolica: "",
-  frecuenciaCardiaca: "",
-  frecuenciaRespiratoria: "",
-  temperatura: "",
-  saturacionO2: "",
-  escalaDolor: 0,
-  pesoKg: "",
-  tallaCm: "",
-  glucometriaMgdl: "",
-};
-
-// ─── Rangos (igual que signos-vitales/nueva) ────────────────────────────────
-
-const RANGES = {
-  presionSistolica: { min: 60, max: 260, label: "TA Sistólica", unit: "mmHg", step: "1" },
-  presionDiastolica: { min: 40, max: 160, label: "TA Diastólica", unit: "mmHg", step: "1" },
-  frecuenciaCardiaca: { min: 30, max: 220, label: "Frecuencia cardíaca", unit: "lpm", step: "1" },
-  frecuenciaRespiratoria: { min: 4, max: 60, label: "Frecuencia respiratoria", unit: "rpm", step: "1" },
-  temperatura: { min: 30, max: 43, label: "Temperatura", unit: "°C", step: "0.1" },
-  saturacionO2: { min: 50, max: 100, label: "SpO₂", unit: "%", step: "1" },
-  pesoKg: { min: 0.5, max: 300, label: "Peso", unit: "kg", step: "0.1" },
-  tallaCm: { min: 30, max: 250, label: "Talla", unit: "cm", step: "1" },
-  glucometriaMgdl: { min: 20, max: 600, label: "Glucometría", unit: "mg/dL", step: "1" },
-} as const;
-
-type RangeField = keyof typeof RANGES;
-
-const PAIN_LABELS = [
-  "Sin dolor", "Muy leve", "Leve", "Leve-mod.", "Moderado",
-  "Moderado", "Moderado-int.", "Intenso", "Muy intenso", "Severo", "Máximo",
-] as const;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseOpt(raw: string): number | null {
   if (raw.trim() === "") return null;
@@ -75,49 +57,93 @@ function parseOpt(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function validateField(field: RangeField, raw: string): string | null {
-  if (raw.trim() === "") return null;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return "Debe ser un número válido";
-  const { min, max } = RANGES[field];
-  if (n < min || n > max) return `Fuera del rango aceptado (${min}–${max})`;
-  return null;
-}
+const inputClass =
+  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2";
 
-function calcImcDisplay(pesoKgRaw: string, tallaCmRaw: string): string | null {
-  const peso = parseOpt(pesoKgRaw);
-  const talla = parseOpt(tallaCmRaw);
-  if (!peso || !talla || talla === 0) return null;
-  const tallaM = talla / 100;
-  return String(Math.round((peso / (tallaM * tallaM)) * 10) / 10);
-}
+const IMC_COLOR: Record<ImcClaseKey, string> = {
+  bajo: "text-amber-600 dark:text-amber-400",
+  normal: "text-green-700 dark:text-green-400",
+  sobrepeso: "text-amber-600 dark:text-amber-400",
+  obesidad: "text-destructive",
+};
 
 // ─── Subcomponentes ─────────────────────────────────────────────────────────
 
-function FieldError({ id, message }: { id: string; message: string | null }) {
-  if (!message) return null;
+function CalcBox({ children }: { children: React.ReactNode }) {
   return (
-    <p id={id} role="alert" className="mt-1 text-xs text-destructive">
-      {message}
-    </p>
+    <div className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-sm" aria-live="polite">
+      {children}
+    </div>
   );
 }
 
-function AlertaBanner({ alerts }: { alerts: InpatientVitalAlert[] }) {
-  const criticos = alerts.filter((a) => a.severity === "critical");
-  if (criticos.length === 0) return null;
+interface VitalFieldProps {
+  field: VitalRangeKey;
+  inputId: string;
+  label: string;
+  unit: string;
+  step?: string;
+  placeholder?: string;
+  required?: boolean;
+  value: string;
+  onChange: (val: string) => void;
+  showErrors: boolean;
+  critico?: boolean;
+}
+
+/** Input numérico de signo vital con validación de rango (y obligatorio si aplica). */
+function VitalField({
+  field,
+  inputId,
+  label,
+  unit,
+  step = "1",
+  placeholder,
+  required = false,
+  value,
+  onChange,
+  showErrors,
+  critico = false,
+}: VitalFieldProps) {
+  const [touched, setTouched] = React.useState(false);
+  const rangeErr = validarRango(field, value);
+  const emptyReq = required && value.trim() === "";
+  const show = showErrors || touched;
+  const errMsg = show ? (emptyReq ? "Obligatorio" : rangeErr) : null;
+  const invalid = !!errMsg || critico;
+
   return (
-    <div
-      role="alert"
-      className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-      data-testid="signos-alerta-critica"
-    >
-      <Badge variant="destructive">Alerta crítica</Badge>
-      {criticos.map((a) => (
-        <span key={a.field} className="font-medium">
-          {a.reason}
-        </span>
-      ))}
+    <div className="space-y-1">
+      <Label htmlFor={inputId}>
+        {label}
+        {required && <span className="ml-0.5 text-destructive">*</span>}
+        <span className="ml-1 text-xs text-muted-foreground">({unit})</span>
+      </Label>
+      <div className="relative">
+        <Input
+          id={inputId}
+          inputMode="decimal"
+          type="number"
+          step={step}
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => setTouched(true)}
+          aria-describedby={errMsg ? `${inputId}-err` : undefined}
+          aria-invalid={invalid || undefined}
+          className={invalid ? "border-destructive focus-visible:ring-destructive" : undefined}
+        />
+        {critico && (
+          <Badge variant="destructive" className="absolute -right-1 -top-2.5 px-1 py-0 text-[10px]">
+            !
+          </Badge>
+        )}
+      </div>
+      {errMsg && (
+        <p id={`${inputId}-err`} role="alert" className="text-xs text-destructive">
+          {errMsg}
+        </p>
+      )}
     </div>
   );
 }
@@ -125,229 +151,503 @@ function AlertaBanner({ alerts }: { alerts: InpatientVitalAlert[] }) {
 // ─── Componente principal ────────────────────────────────────────────────────
 
 interface SignosVitalesCaptureProps {
-  /** ID único para evitar colisión de htmlFor cuando hay múltiples instancias en la misma página. */
   idPrefix?: string;
   value: SignosState;
   onChange: (next: SignosState) => void;
+  /** Sexo biológico del paciente ('F' habilita gineco-obstétrico, R2). */
+  sexo?: string | null;
+  /** Edad en años (alimenta FPP "puede estar embarazada", R2). */
+  edad?: number | null;
+  /** Fuerza el resaltado de errores (al intentar guardar el modal, R4.1). */
+  showErrors?: boolean;
 }
 
 export function SignosVitalesCapture({
   idPrefix = "sv",
   value,
   onChange,
+  sexo = null,
+  edad = null,
+  showErrors = false,
 }: SignosVitalesCaptureProps) {
-  const [touched, setTouched] = React.useState<Partial<Record<RangeField, boolean>>>({});
+  const [expanded, setExpanded] = React.useState(false);
 
-  const alerts: InpatientVitalAlert[] = evaluateVitalAlerts({
-    systolicBp: parseOpt(value.presionSistolica),
-    diastolicBp: parseOpt(value.presionDiastolica),
-    heartRate: parseOpt(value.frecuenciaCardiaca),
-    respiratoryRate: parseOpt(value.frecuenciaRespiratoria),
-    temperatureC: parseOpt(value.temperatura),
-    spo2: parseOpt(value.saturacionO2),
-    painScale: value.escalaDolor,
-  });
-
-  const fieldErrors: Partial<Record<RangeField, string | null>> = {};
-  for (const k of Object.keys(RANGES) as RangeField[]) {
-    fieldErrors[k] = touched[k] ? validateField(k, value[k] as string) : null;
-  }
-
-  const imcDisplay = calcImcDisplay(value.pesoKg, value.tallaCm);
-
-  function setField(field: RangeField, val: string) {
+  function setField(field: keyof SignosState, val: string | number) {
     onChange({ ...value, [field]: val });
   }
 
-  function markTouched(field: RangeField) {
-    setTouched((prev) => ({ ...prev, [field]: true }));
+  // Conversión bidireccional peso/talla.
+  function onPesoKg(raw: string) {
+    const n = parseOpt(raw);
+    onChange({ ...value, pesoKg: raw, pesoLb: n != null ? kgALb(n) : "" });
+  }
+  function onPesoLb(raw: string) {
+    const n = parseOpt(raw);
+    onChange({ ...value, pesoLb: raw, pesoKg: n != null ? lbAKg(n) : "" });
+  }
+  function onTallaM(raw: string) {
+    const n = parseOpt(raw);
+    onChange({ ...value, tallaM: raw, tallaFt: n != null ? mAFt(n) : "" });
+  }
+  function onTallaFt(raw: string) {
+    const n = parseOpt(raw);
+    onChange({ ...value, tallaFt: raw, tallaM: n != null ? ftAM(n) : "" });
   }
 
-  const painColor =
-    value.escalaDolor >= 8
-      ? "text-destructive font-semibold"
-      : value.escalaDolor >= 5
-        ? "text-amber-600 dark:text-amber-400"
-        : "text-green-700 dark:text-green-400";
+  // Alertas clínicas en vivo (R1.6).
+  const alertas = computeAlertasVitales({
+    presionSistolica: parseOpt(value.presionSistolica),
+    presionDiastolica: parseOpt(value.presionDiastolica),
+    frecuenciaCardiaca: parseOpt(value.frecuenciaCardiaca),
+    frecuenciaRespiratoria: parseOpt(value.frecuenciaRespiratoria),
+    temperatura: parseOpt(value.temperatura),
+    saturacionO2: parseOpt(value.saturacionO2),
+    dolorEva: value.escalaDolor,
+    glucometriaMgdl: parseOpt(value.glucometriaMgdl),
+    glasgowOcular: parseOpt(value.glasgowOcular),
+    glasgowVerbal: parseOpt(value.glasgowVerbal),
+    glasgowMotora: parseOpt(value.glasgowMotora),
+    diuresisHoraria: parseOpt(value.diuresisHoraria),
+    pesoKg: parseOpt(value.pesoKg),
+  });
+
+  // Glasgow total + severidad.
+  const gTotal = glasgowTotal(
+    parseOpt(value.glasgowOcular),
+    parseOpt(value.glasgowVerbal),
+    parseOpt(value.glasgowMotora),
+  );
+
+  // IMC.
+  const pesoKgN = parseOpt(value.pesoKg);
+  const tallaMN = parseOpt(value.tallaM);
+  const imc = pesoKgN != null && tallaMN != null && tallaMN > 0 ? imcFrom(pesoKgN, tallaMN) : null;
+  const imcClase = imc != null ? imcClasificacion(imc) : null;
+
+  // FPP / gestación (solo si puede embarazo).
+  const mostrarFpp = puedeEmbarazo(sexo, edad);
+  const fpp = mostrarFpp ? fppNaegele(value.fechaUltimaRegla) : null;
+  const gestacion = mostrarFpp ? gestacionDesdeFur(value.fechaUltimaRegla) : null;
+
+  const mostrarGineco = esFemenino(sexo);
 
   return (
     <div className="space-y-4" data-testid="signos-vitales-capture">
-      <AlertaBanner alerts={alerts} />
+      {/* Alertas en vivo */}
+      {alertas.length > 0 && (
+        <div
+          role="alert"
+          data-testid="signos-alertas"
+          className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
+          <Badge variant="destructive">Alertas</Badge>
+          {alertas.map((a) => (
+            <span key={a} className="font-medium">
+              {a}
+            </span>
+          ))}
+        </div>
+      )}
 
-      {/* Presión arterial */}
-      <fieldset className="rounded-lg border p-3 space-y-3">
+      {/* ── Núcleo (siempre visible) ──────────────────────────────────────── */}
+      <fieldset className="space-y-3 rounded-lg border p-3">
         <legend className="px-1 text-sm font-semibold text-foreground">Presión arterial</legend>
         <div className="grid grid-cols-2 gap-3">
-          {(["presionSistolica", "presionDiastolica"] as const).map((field) => {
-            const r = RANGES[field];
-            const err = fieldErrors[field];
-            const isCrit = alerts.some((a) => a.field === field && a.severity === "critical");
-            const inputId = `${idPrefix}-${field}`;
-            return (
-              <div key={field} className="space-y-1">
-                <Label htmlFor={inputId}>
-                  {r.label}
-                  <span className="ml-1 text-xs text-muted-foreground">({r.unit})</span>
-                </Label>
-                <div className="relative">
-                  <Input
-                    id={inputId}
-                    inputMode="decimal"
-                    type="number"
-                    step={r.step}
-                    placeholder={`${r.min}–${r.max}`}
-                    value={value[field]}
-                    onChange={(e) => setField(field, e.target.value)}
-                    onBlur={() => markTouched(field)}
-                    aria-describedby={err ? `${inputId}-err` : undefined}
-                    aria-invalid={!!err}
-                    className={isCrit ? "border-destructive focus-visible:ring-destructive" : undefined}
-                  />
-                  {isCrit && (
-                    <Badge variant="destructive" className="absolute -right-1 -top-2.5 text-[10px] px-1 py-0">!</Badge>
-                  )}
-                </div>
-                <FieldError id={`${inputId}-err`} message={err ?? null} />
-              </div>
-            );
-          })}
-        </div>
-      </fieldset>
-
-      {/* Signos cardiorrespiratorios */}
-      <fieldset className="rounded-lg border p-3 space-y-3">
-        <legend className="px-1 text-sm font-semibold text-foreground">Signos cardiorrespiratorios</legend>
-        <div className="grid grid-cols-2 gap-3">
-          {(["frecuenciaCardiaca", "frecuenciaRespiratoria", "temperatura", "saturacionO2"] as const).map((field) => {
-            const r = RANGES[field];
-            const err = fieldErrors[field];
-            const isCrit = alerts.some((a) => a.field === field && a.severity === "critical");
-            const inputId = `${idPrefix}-${field}`;
-            return (
-              <div key={field} className="space-y-1">
-                <Label htmlFor={inputId}>
-                  {r.label}
-                  <span className="ml-1 text-xs text-muted-foreground">({r.unit})</span>
-                </Label>
-                <div className="relative">
-                  <Input
-                    id={inputId}
-                    inputMode="decimal"
-                    type="number"
-                    step={r.step}
-                    placeholder={`${r.min}–${r.max}`}
-                    value={value[field]}
-                    onChange={(e) => setField(field, e.target.value)}
-                    onBlur={() => markTouched(field)}
-                    aria-describedby={err ? `${inputId}-err` : undefined}
-                    aria-invalid={!!err}
-                    className={isCrit ? "border-destructive focus-visible:ring-destructive" : undefined}
-                  />
-                  {isCrit && (
-                    <Badge variant="destructive" className="absolute -right-1 -top-2.5 text-[10px] px-1 py-0">!</Badge>
-                  )}
-                </div>
-                <FieldError id={`${inputId}-err`} message={err ?? null} />
-              </div>
-            );
-          })}
-        </div>
-      </fieldset>
-
-      {/* Escala de dolor */}
-      <fieldset className="rounded-lg border p-3">
-        <legend className="sr-only">Escala de dolor</legend>
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <Label htmlFor={`${idPrefix}-dolor`}>
-              Dolor (escala EVA 0–10)
-            </Label>
-            <span className={`text-sm font-semibold tabular-nums ${painColor}`} aria-live="polite">
-              {value.escalaDolor} — {PAIN_LABELS[value.escalaDolor]}
-            </span>
-          </div>
-          <input
-            id={`${idPrefix}-dolor`}
-            type="range"
-            min={0}
-            max={10}
-            step={1}
-            value={value.escalaDolor}
-            onChange={(e) => onChange({ ...value, escalaDolor: Number(e.target.value) })}
-            className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gradient-to-r from-green-400 via-amber-400 to-red-500 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-            aria-label="Escala de dolor 0 a 10"
-            aria-valuemin={0}
-            aria-valuemax={10}
-            aria-valuenow={value.escalaDolor}
-            aria-valuetext={`${value.escalaDolor} — ${PAIN_LABELS[value.escalaDolor]}`}
+          <VitalField
+            field="presionSistolica"
+            inputId={`${idPrefix}-presionSistolica`}
+            label="TA Sistólica"
+            unit="mmHg"
+            placeholder="60–260"
+            required
+            value={value.presionSistolica}
+            onChange={(v) => setField("presionSistolica", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("Crisis hipertensiva") || alertas.includes("Hipotensión")}
           />
-          <div className="flex justify-between text-[10px] text-muted-foreground">
-            <span>0</span>
-            <span>5</span>
-            <span>10</span>
-          </div>
+          <VitalField
+            field="presionDiastolica"
+            inputId={`${idPrefix}-presionDiastolica`}
+            label="TA Diastólica"
+            unit="mmHg"
+            placeholder="40–160"
+            required
+            value={value.presionDiastolica}
+            onChange={(v) => setField("presionDiastolica", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("Crisis hipertensiva")}
+          />
         </div>
       </fieldset>
 
-      {/* Datos antropométricos */}
-      <fieldset className="rounded-lg border p-3 space-y-3">
+      <fieldset className="space-y-3 rounded-lg border p-3">
         <legend className="px-1 text-sm font-semibold text-foreground">
-          Datos antropométricos <span className="font-normal text-muted-foreground">(opcional)</span>
+          Oxigenación y signos cardiorrespiratorios
         </legend>
         <div className="grid grid-cols-2 gap-3">
-          {(["pesoKg", "tallaCm"] as const).map((field) => {
-            const r = RANGES[field];
-            const err = fieldErrors[field];
-            const inputId = `${idPrefix}-${field}`;
-            return (
-              <div key={field} className="space-y-1">
-                <Label htmlFor={inputId}>
-                  {r.label}
-                  <span className="ml-1 text-xs text-muted-foreground">({r.unit})</span>
-                </Label>
-                <Input
-                  id={inputId}
-                  inputMode="decimal"
-                  type="number"
-                  step={r.step}
-                  placeholder={`${r.min}–${r.max}`}
-                  value={value[field]}
-                  onChange={(e) => setField(field, e.target.value)}
-                  onBlur={() => markTouched(field)}
-                  aria-describedby={err ? `${inputId}-err` : undefined}
-                  aria-invalid={!!err}
-                />
-                <FieldError id={`${inputId}-err`} message={err ?? null} />
-              </div>
-            );
-          })}
-        </div>
-        {imcDisplay && (
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            IMC calculado: <span className="font-semibold text-foreground">{imcDisplay} kg/m²</span>
-          </p>
-        )}
-        <div className="space-y-1">
-          <Label htmlFor={`${idPrefix}-glucometriaMgdl`}>
-            {RANGES.glucometriaMgdl.label}
-            <span className="ml-1 text-xs text-muted-foreground">({RANGES.glucometriaMgdl.unit})</span>
-          </Label>
-          <Input
-            id={`${idPrefix}-glucometriaMgdl`}
-            inputMode="decimal"
-            type="number"
-            step="1"
-            placeholder={`${RANGES.glucometriaMgdl.min}–${RANGES.glucometriaMgdl.max}`}
-            value={value.glucometriaMgdl}
-            onChange={(e) => setField("glucometriaMgdl", e.target.value)}
-            onBlur={() => markTouched("glucometriaMgdl")}
-            aria-describedby={fieldErrors.glucometriaMgdl ? `${idPrefix}-glucometriaMgdl-err` : undefined}
-            aria-invalid={!!fieldErrors.glucometriaMgdl}
-            className="max-w-[200px]"
+          <VitalField
+            field="frecuenciaCardiaca"
+            inputId={`${idPrefix}-frecuenciaCardiaca`}
+            label="Frecuencia cardíaca"
+            unit="lpm"
+            placeholder="30–220"
+            required
+            value={value.frecuenciaCardiaca}
+            onChange={(v) => setField("frecuenciaCardiaca", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("Taquicardia") || alertas.includes("Bradicardia")}
           />
-          <FieldError id={`${idPrefix}-glucometriaMgdl-err`} message={fieldErrors.glucometriaMgdl ?? null} />
+          <VitalField
+            field="frecuenciaRespiratoria"
+            inputId={`${idPrefix}-frecuenciaRespiratoria`}
+            label="Frecuencia respiratoria"
+            unit="rpm"
+            placeholder="4–60"
+            required
+            value={value.frecuenciaRespiratoria}
+            onChange={(v) => setField("frecuenciaRespiratoria", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("Taquipnea") || alertas.includes("Bradipnea")}
+          />
+          <VitalField
+            field="temperatura"
+            inputId={`${idPrefix}-temperatura`}
+            label="Temperatura"
+            unit="°C"
+            step="0.1"
+            placeholder="30–43"
+            required
+            value={value.temperatura}
+            onChange={(v) => setField("temperatura", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("Fiebre alta") || alertas.includes("Hipotermia")}
+          />
+          <VitalField
+            field="saturacionO2"
+            inputId={`${idPrefix}-saturacionO2`}
+            label="SpO₂"
+            unit="%"
+            placeholder="50–100"
+            required
+            value={value.saturacionO2}
+            onChange={(v) => setField("saturacionO2", v)}
+            showErrors={showErrors}
+            critico={alertas.includes("SpO₂ baja")}
+          />
+          <VitalField
+            field="fio2"
+            inputId={`${idPrefix}-fio2`}
+            label="FiO₂"
+            unit="%"
+            placeholder="21–100"
+            required
+            value={value.fio2}
+            onChange={(v) => setField("fio2", v)}
+            showErrors={showErrors}
+          />
         </div>
       </fieldset>
+
+      {/* ── Toggle Ver más / Ver menos ────────────────────────────────────── */}
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-controls={`${idPrefix}-vmore`}
+        className="text-sm font-medium text-primary hover:underline"
+      >
+        {expanded ? "− Ver menos" : "+ Ver más"}
+      </button>
+
+      {/* ── Bloque colapsable (inicia plegado) ────────────────────────────── */}
+      <div id={`${idPrefix}-vmore`} className={expanded ? "space-y-4" : "hidden"}>
+        {/* Estado neurológico y metabólico */}
+        <fieldset className="space-y-3 rounded-lg border p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">
+            Estado neurológico y metabólico
+          </legend>
+          <Label>Escala de Glasgow</Label>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {(
+              [
+                { key: "glasgowOcular", label: "Apertura ocular", opts: GLASGOW_OCULAR },
+                { key: "glasgowVerbal", label: "Respuesta verbal", opts: GLASGOW_VERBAL },
+                { key: "glasgowMotora", label: "Respuesta motora", opts: GLASGOW_MOTORA },
+              ] as const
+            ).map(({ key, label, opts }) => {
+              const selId = `${idPrefix}-${key}`;
+              return (
+                <div key={key} className="space-y-1">
+                  <Label htmlFor={selId} className="text-xs text-muted-foreground">
+                    {label}
+                  </Label>
+                  <select
+                    id={selId}
+                    value={value[key]}
+                    onChange={(e) => setField(key, e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">—</option>
+                    {opts.map((o) => (
+                      <option key={o.valor} value={String(o.valor)}>
+                        {o.valor} · {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          <div className="space-y-1">
+            <Label>Total Glasgow</Label>
+            <CalcBox>
+              {gTotal != null ? (
+                <span className="font-semibold">
+                  {gTotal}/15 —{" "}
+                  <span
+                    className={
+                      gTotal >= 13
+                        ? "text-green-700 dark:text-green-400"
+                        : gTotal >= 9
+                          ? "text-amber-600 dark:text-amber-400"
+                          : "text-destructive"
+                    }
+                  >
+                    {glasgowSeveridad(gTotal)}
+                  </span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Apertura ocular + verbal + motora.</span>
+              )}
+            </CalcBox>
+          </div>
+          <div className="max-w-[220px]">
+            <VitalField
+              field="glucometriaMgdl"
+              inputId={`${idPrefix}-glucometriaMgdl`}
+              label="Glucometría capilar"
+              unit="mg/dL"
+              placeholder="10–900"
+              value={value.glucometriaMgdl}
+              onChange={(v) => setField("glucometriaMgdl", v)}
+              showErrors={showErrors}
+              critico={alertas.includes("Hipoglucemia") || alertas.includes("Hiperglucemia")}
+            />
+          </div>
+        </fieldset>
+
+        {/* Antropometría */}
+        <fieldset className="space-y-3 rounded-lg border p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">Antropometría</legend>
+          <div className="grid grid-cols-2 gap-3">
+            <VitalField
+              field="pesoKg"
+              inputId={`${idPrefix}-pesoKg`}
+              label="Peso"
+              unit="kg"
+              step="0.1"
+              placeholder="kg"
+              value={value.pesoKg}
+              onChange={onPesoKg}
+              showErrors={showErrors}
+            />
+            <VitalField
+              field="pesoLb"
+              inputId={`${idPrefix}-pesoLb`}
+              label="Peso"
+              unit="lb"
+              step="0.1"
+              placeholder="lb"
+              value={value.pesoLb}
+              onChange={onPesoLb}
+              showErrors={showErrors}
+            />
+            <VitalField
+              field="tallaM"
+              inputId={`${idPrefix}-tallaM`}
+              label="Talla"
+              unit="m"
+              step="0.01"
+              placeholder="m"
+              value={value.tallaM}
+              onChange={onTallaM}
+              showErrors={showErrors}
+            />
+            <VitalField
+              field="tallaFt"
+              inputId={`${idPrefix}-tallaFt`}
+              label="Talla"
+              unit="ft"
+              step="0.01"
+              placeholder="ft"
+              value={value.tallaFt}
+              onChange={onTallaFt}
+              showErrors={showErrors}
+            />
+          </div>
+          <div className="space-y-1">
+            <Label>IMC (calculado)</Label>
+            <CalcBox>
+              {imc != null && imcClase ? (
+                <span className="font-semibold">
+                  {imc.toFixed(1)} kg/m² —{" "}
+                  <span className={IMC_COLOR[imcClase.key]}>{imcClase.label}</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Se calcula con peso (kg) y talla (m).</span>
+              )}
+            </CalcBox>
+          </div>
+          <div className="max-w-[220px]">
+            <VitalField
+              field="perimetroCintura"
+              inputId={`${idPrefix}-perimetroCintura`}
+              label="Perímetro de cintura"
+              unit="cm"
+              placeholder="30–250"
+              value={value.perimetroCintura}
+              onChange={(v) => setField("perimetroCintura", v)}
+              showErrors={showErrors}
+            />
+          </div>
+        </fieldset>
+
+        {/* Balance hídrico */}
+        <fieldset className="space-y-3 rounded-lg border p-3">
+          <legend className="px-1 text-sm font-semibold text-foreground">Balance hídrico</legend>
+          <div className="grid grid-cols-2 gap-3">
+            <VitalField
+              field="balanceHidrico"
+              inputId={`${idPrefix}-balanceHidrico`}
+              label="Balance hídrico"
+              unit="mL"
+              placeholder="± mL"
+              value={value.balanceHidrico}
+              onChange={(v) => setField("balanceHidrico", v)}
+              showErrors={showErrors}
+            />
+            <VitalField
+              field="diuresisHoraria"
+              inputId={`${idPrefix}-diuresisHoraria`}
+              label="Diuresis horaria"
+              unit="mL/h"
+              placeholder="0–2000"
+              value={value.diuresisHoraria}
+              onChange={(v) => setField("diuresisHoraria", v)}
+              showErrors={showErrors}
+              critico={alertas.includes("Oliguria")}
+            />
+          </div>
+        </fieldset>
+
+        {/* Gineco-obstétrico (solo femenino) */}
+        {mostrarGineco && (
+          <fieldset className="space-y-3 rounded-lg border p-3">
+            <legend className="px-1 text-sm font-semibold text-foreground">Gineco-obstétrico</legend>
+            <div className={`grid gap-3 ${mostrarFpp ? "grid-cols-2" : "grid-cols-1"}`}>
+              <div className="space-y-1">
+                <Label htmlFor={`${idPrefix}-fechaUltimaRegla`}>Fecha de última regla (FUR)</Label>
+                <Input
+                  id={`${idPrefix}-fechaUltimaRegla`}
+                  type="date"
+                  value={value.fechaUltimaRegla}
+                  onChange={(e) => setField("fechaUltimaRegla", e.target.value)}
+                />
+              </div>
+              {mostrarFpp && (
+                <div className="space-y-1">
+                  <Label>Fecha probable de parto (calculada)</Label>
+                  <CalcBox>
+                    {fpp ? (
+                      <span className="font-semibold">
+                        {fpp.toLocaleDateString("es-SV", { day: "2-digit", month: "2-digit", year: "numeric" })}
+                        {gestacion && (
+                          <span className="ml-2 font-normal text-muted-foreground">· {gestacion.label}</span>
+                        )}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">Se calcula con la FUR (Naegele).</span>
+                    )}
+                  </CalcBox>
+                </div>
+              )}
+            </div>
+            <Label>Fórmula obstétrica (G · P · P · A · V)</Label>
+            <div className="grid grid-cols-5 gap-2">
+              {(
+                [
+                  { key: "gestaG", letra: "G", desc: "Gestas" },
+                  { key: "partoTermino", letra: "P", desc: "Término" },
+                  { key: "partoPretermino", letra: "P", desc: "Pretérm." },
+                  { key: "abortos", letra: "A", desc: "Abortos" },
+                  { key: "vivos", letra: "V", desc: "Vivos" },
+                ] as const
+              ).map(({ key, letra, desc }) => {
+                const gid = `${idPrefix}-${key}`;
+                return (
+                  <div key={key} className="space-y-1">
+                    <Label htmlFor={gid} className="text-xs">
+                      <span className="font-bold">{letra}</span>{" "}
+                      <span className="text-muted-foreground">{desc}</span>
+                    </Label>
+                    <Input
+                      id={gid}
+                      inputMode="numeric"
+                      type="number"
+                      step="1"
+                      placeholder="0"
+                      value={value[key]}
+                      onChange={(e) => setField(key, e.target.value)}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </fieldset>
+        )}
+
+        {/* Dolor (EVA) */}
+        <fieldset className="rounded-lg border p-3">
+          <legend className="sr-only">Escala de dolor</legend>
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between">
+              <Label htmlFor={`${idPrefix}-dolor`}>Dolor (escala EVA 0–10)</Label>
+              <span
+                className={`text-sm font-semibold tabular-nums ${
+                  value.escalaDolor >= 7
+                    ? "text-destructive"
+                    : value.escalaDolor >= 4
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-green-700 dark:text-green-400"
+                }`}
+                aria-live="polite"
+              >
+                {value.escalaDolor} — {evaLabel(value.escalaDolor)}
+              </span>
+            </div>
+            <input
+              id={`${idPrefix}-dolor`}
+              type="range"
+              min={0}
+              max={10}
+              step={1}
+              value={value.escalaDolor}
+              onChange={(e) => setField("escalaDolor", Number(e.target.value))}
+              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-gradient-to-r from-green-400 via-amber-400 to-red-500 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              aria-label="Escala de dolor 0 a 10"
+              aria-valuemin={0}
+              aria-valuemax={10}
+              aria-valuenow={value.escalaDolor}
+              aria-valuetext={`${value.escalaDolor} — ${evaLabel(value.escalaDolor)}`}
+            />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>0</span>
+              <span>5</span>
+              <span>10</span>
+            </div>
+          </div>
+        </fieldset>
+      </div>
     </div>
   );
 }

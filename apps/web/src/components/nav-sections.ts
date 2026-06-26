@@ -214,8 +214,8 @@ export const SECTIONS: NavSection[] = [
     items: [
       { href: "/ece/hoja-ingreso", label: "Hoja de Ingreso", icon: ClipboardList,
         description: "Documento NTEC de ingreso hospitalario con motivo, antecedentes y plan." },
-      { href: "/ece/episodio-hospitalario", label: "Episodio Hospitalario", icon: BedDouble,
-        description: "Vista unificada del episodio: documentos, órdenes, evolución y dependencias." },
+      { href: "/ece/episodio-hospitalario", label: "Cuenta Hospitalaria", icon: BedDouble,
+        description: "Vista unificada de la cuenta hospitalaria: documentos, órdenes, evolución y dependencias." },
     ],
   },
   {

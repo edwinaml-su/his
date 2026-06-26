@@ -157,7 +157,7 @@ export function WizardProximosDocumentos({
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm">
-              Próximos documentos del episodio
+              Próximos documentos de la cuenta
               <span className="ml-2 font-normal text-muted-foreground">
                 ({data.modalidad})
               </span>
@@ -185,7 +185,7 @@ export function WizardProximosDocumentos({
       </Card>
 
       {/* Items activos (LISTO + EN_PROGRESO + BLOQUEADO) */}
-      <ul className="space-y-2" aria-label="Documentos activos del episodio">
+      <ul className="space-y-2" aria-label="Documentos activos de la cuenta">
         {activos.map((item) => (
           <ItemCard key={item.tipoId} item={item} episodioId={episodioAtencionId} />
         ))}
