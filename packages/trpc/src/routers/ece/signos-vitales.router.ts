@@ -90,6 +90,18 @@ export interface SignosVitalesRow {
   fecha_hora_toma: Date;
   estado_registro: string;
   registrado_en: Date;
+  // CC-0007 — campos nuevos (migración 182)
+  glasgow_ocular: number | null;
+  glasgow_verbal: number | null;
+  glasgow_motor: number | null;
+  glasgow_total: number | null;
+  fio2: number | null;
+  perimetro_cintura: number | null;
+  ict: number | null;
+  balance_hidrico: number | null;
+  diuresis: number | null;
+  fur: string | null;
+  fpp: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -109,6 +121,29 @@ function calcularImc(pesoKg: number | null | undefined, tallaCm: number | null |
   if (!pesoKg || !tallaCm || tallaCm === 0) return null;
   const tallaM = tallaCm / 100;
   return Math.round((pesoKg / (tallaM * tallaM)) * 10) / 10;
+}
+
+/**
+ * Calcula Glasgow Total si los 3 componentes están presentes.
+ * El cliente puede enviar glasgowTotal explícito; esta función lo deriva
+ * desde los componentes — la app es fuente de verdad.
+ */
+function calcularGlasgowTotal(
+  ocular: number | null | undefined,
+  verbal: number | null | undefined,
+  motor: number | null | undefined,
+): number | null {
+  if (ocular == null || verbal == null || motor == null) return null;
+  return ocular + verbal + motor;
+}
+
+/**
+ * Calcula ICT (índice cintura-talla) si ambos insumos están presentes.
+ * Retorna null si alguno falta o talla es cero.
+ */
+function calcularIct(perimetroCintura: number | null | undefined, tallaCm: number | null | undefined): number | null {
+  if (!perimetroCintura || !tallaCm || tallaCm === 0) return null;
+  return Math.round((perimetroCintura / tallaCm) * 1000) / 1000;
 }
 
 /**
@@ -286,7 +321,18 @@ export const eceSignosVitalesRouter = router({
             sv.observaciones,
             sv.fecha_hora_toma,
             sv.estado_registro,
-            sv.registrado_en
+            sv.registrado_en,
+            sv.glasgow_ocular,
+            sv.glasgow_verbal,
+            sv.glasgow_motor,
+            sv.glasgow_total,
+            sv.fio2,
+            sv.perimetro_cintura,
+            sv.ict,
+            sv.balance_hidrico,
+            sv.diuresis,
+            sv.fur::text,
+            sv.fpp::text
           FROM ece.signos_vitales sv
           WHERE sv.episodio_id = ${input.episodioId}::uuid
             AND (${input.desde ?? null}::timestamptz IS NULL
@@ -334,7 +380,18 @@ export const eceSignosVitalesRouter = router({
             sv.observaciones,
             sv.fecha_hora_toma,
             sv.estado_registro,
-            sv.registrado_en
+            sv.registrado_en,
+            sv.glasgow_ocular,
+            sv.glasgow_verbal,
+            sv.glasgow_motor,
+            sv.glasgow_total,
+            sv.fio2,
+            sv.perimetro_cintura,
+            sv.ict,
+            sv.balance_hidrico,
+            sv.diuresis,
+            sv.fur::text,
+            sv.fpp::text
           FROM ece.signos_vitales sv
           WHERE sv.id = ${input.id}::uuid
           LIMIT 1
@@ -361,6 +418,8 @@ export const eceSignosVitalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = resolveEceIds(ctx);
       const imc = calcularImc(input.pesoKg, input.tallaCm);
+      const glasgowTotal = calcularGlasgowTotal(input.glasgowOcular, input.glasgowVerbal, input.glasgowMotor);
+      const ict = calcularIct(input.perimetroCintura, input.tallaCm);
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
         const rows = await tx.$queryRaw<{ id: string }[]>`
@@ -370,7 +429,10 @@ export const eceSignosVitalesRouter = router({
             frecuencia_cardiaca, frecuencia_respiratoria,
             temperatura, saturacion_o2, escala_dolor,
             peso_kg, talla_cm, imc, glucometria_mgdl, observaciones,
-            fecha_hora_toma, estado_registro
+            fecha_hora_toma, estado_registro,
+            glasgow_ocular, glasgow_verbal, glasgow_motor, glasgow_total,
+            fio2, perimetro_cintura, ict, balance_hidrico, diuresis,
+            fur, fpp
           ) VALUES (
             ${input.episodioId ?? null}::uuid,
             ${personalId}::uuid,
@@ -387,7 +449,18 @@ export const eceSignosVitalesRouter = router({
             ${input.glucometriaMgdl ?? null},
             ${input.observaciones ?? null},
             ${input.fechaHoraToma ? new Date(input.fechaHoraToma) : new Date()},
-            'borrador'
+            'borrador',
+            ${input.glasgowOcular ?? null},
+            ${input.glasgowVerbal ?? null},
+            ${input.glasgowMotor ?? null},
+            ${glasgowTotal},
+            ${input.fio2 ?? null},
+            ${input.perimetroCintura ?? null},
+            ${ict},
+            ${input.balanceHidrico ?? null},
+            ${input.diuresis ?? null},
+            ${input.fur ?? null}::date,
+            ${input.fpp ?? null}::date
           )
           RETURNING id::text
         `;
@@ -411,8 +484,17 @@ export const eceSignosVitalesRouter = router({
 
       return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
         // Verificar que existe y está en borrador
-        const rows = await tx.$queryRaw<{ estado_registro: string; peso_kg: number | null; talla_cm: number | null }[]>`
-          SELECT estado_registro, peso_kg, talla_cm
+        const rows = await tx.$queryRaw<{
+          estado_registro: string;
+          peso_kg: number | null;
+          talla_cm: number | null;
+          perimetro_cintura: number | null;
+          glasgow_ocular: number | null;
+          glasgow_verbal: number | null;
+          glasgow_motor: number | null;
+        }[]>`
+          SELECT estado_registro, peso_kg, talla_cm, perimetro_cintura,
+                 glasgow_ocular, glasgow_verbal, glasgow_motor
           FROM ece.signos_vitales WHERE id = ${input.id}::uuid LIMIT 1
         `;
 
@@ -434,6 +516,16 @@ export const eceSignosVitalesRouter = router({
         const newTalla = d.tallaCm ?? rows[0].talla_cm;
         const imc = calcularImc(newPeso, newTalla);
 
+        // Recalcular Glasgow Total si algún componente cambia
+        const newGlasgowOcular = d.glasgowOcular ?? rows[0].glasgow_ocular;
+        const newGlasgowVerbal = d.glasgowVerbal ?? rows[0].glasgow_verbal;
+        const newGlasgowMotor = d.glasgowMotor ?? rows[0].glasgow_motor;
+        const glasgowTotal = calcularGlasgowTotal(newGlasgowOcular, newGlasgowVerbal, newGlasgowMotor);
+
+        // Recalcular ICT si cintura o talla cambian
+        const newCintura = d.perimetroCintura ?? rows[0].perimetro_cintura;
+        const ict = calcularIct(newCintura, newTalla);
+
         await tx.$executeRaw`
           UPDATE ece.signos_vitales SET
             presion_sistolica       = COALESCE(${d.presionSistolica ?? null}, presion_sistolica),
@@ -449,6 +541,17 @@ export const eceSignosVitalesRouter = router({
             glucometria_mgdl        = COALESCE(${d.glucometriaMgdl ?? null}, glucometria_mgdl),
             observaciones           = COALESCE(${d.observaciones ?? null}, observaciones),
             fecha_hora_toma         = COALESCE(${d.fechaHoraToma ? new Date(d.fechaHoraToma) : null}::timestamptz, fecha_hora_toma),
+            glasgow_ocular          = COALESCE(${d.glasgowOcular ?? null}, glasgow_ocular),
+            glasgow_verbal          = COALESCE(${d.glasgowVerbal ?? null}, glasgow_verbal),
+            glasgow_motor           = COALESCE(${d.glasgowMotor ?? null}, glasgow_motor),
+            glasgow_total           = COALESCE(${glasgowTotal}, glasgow_total),
+            fio2                    = COALESCE(${d.fio2 ?? null}, fio2),
+            perimetro_cintura       = COALESCE(${d.perimetroCintura ?? null}, perimetro_cintura),
+            ict                     = COALESCE(${ict}, ict),
+            balance_hidrico         = COALESCE(${d.balanceHidrico ?? null}, balance_hidrico),
+            diuresis                = COALESCE(${d.diuresis ?? null}, diuresis),
+            fur                     = COALESCE(${d.fur ?? null}::date, fur),
+            fpp                     = COALESCE(${d.fpp ?? null}::date, fpp),
             registrado_en           = now()
           WHERE id = ${input.id}::uuid
         `;

@@ -63,7 +63,16 @@ export const TIPO_DIAGNOSTICO_LABELS: Record<TipoDiagnostico, string> = {
   COMPLEMENTARIO: "Complementario",
 };
 
-/** RF-06 — Destino del paciente (catálogo cerrado de 8 valores). */
+/**
+ * RF-06 / CC-0007 RF-12 — Destino del paciente.
+ * CC-0001 definió 8 valores. CC-0007 agrega FALLECIDO (spec §5, RF-12).
+ * Reconciliación mockup vs spec:
+ *   Mockup L971-977 lista 7: Alta médica, Alta voluntaria, Ingreso hospitalario,
+ *   Observación, Seguimiento, Remisión a otro centro, Fallecido.
+ *   La spec §5 alinea los valores internos con ese set.
+ *   PROCEDIMIENTO_AMBULATORIO e INGRESO (legacy CC-0001) se conservan para no
+ *   romper registros existentes; la UI CC-0007 muestra solo los 7 del mockup.
+ */
 export const DESTINO_OPTIONS = [
   "INGRESO",
   "ALTA_MEDICA",
@@ -73,19 +82,21 @@ export const DESTINO_OPTIONS = [
   "PROCEDIMIENTO_AMBULATORIO",
   "REFERENCIA",
   "REMISION",
+  "FALLECIDO",
 ] as const;
 export const destinoEnum = z.enum(DESTINO_OPTIONS);
 export type Destino = z.infer<typeof destinoEnum>;
 
 export const DESTINO_LABELS: Record<Destino, string> = {
-  INGRESO: "Ingreso",
+  INGRESO: "Ingreso hospitalario",
   ALTA_MEDICA: "Alta médica",
   ALTA_VOLUNTARIA: "Alta voluntaria",
   SEGUIMIENTO: "Seguimiento",
   OBSERVACION: "Observación",
   PROCEDIMIENTO_AMBULATORIO: "Procedimiento ambulatorio",
   REFERENCIA: "Referencia",
-  REMISION: "Remisión",
+  REMISION: "Remisión a otro centro",
+  FALLECIDO: "Fallecido",
 };
 
 // ─── Sub-schemas JSONB ────────────────────────────────────────────────────────
@@ -109,6 +120,8 @@ export const cie11DiagnosticoSchema = z.object({
   codigo: z.string().regex(CIE11_CODE_REGEX, "Código CIE-11 inválido"),
   descripcion: z.string().min(1).max(500),
   tipo: tipoDiagnosticoEnum,
+  /** CC-0007 RF-08 — complemento por diagnóstico (texto libre, almacenado en mayúsculas). */
+  complemento: z.string().max(500).optional(),
 });
 export type Cie11Diagnostico = z.infer<typeof cie11DiagnosticoSchema>;
 
@@ -183,6 +196,73 @@ export const examenFisicoSchema = z.object({
 });
 export type ExamenFisico = z.infer<typeof examenFisicoSchema>;
 
+// ─── Sub-schemas JSONB CC-0007 ────────────────────────────────────────────────
+
+/**
+ * CC-0007 RF-05 — antecedentes estructurados por subsección.
+ * Cinco subsecciones exactas leídas del mockup (data-antecedente):
+ *   alergias | personales | familiares | ocupacion | habitos
+ * (obstétricos removido de antecedentes; FUR/FPP van en EceSignosVitales).
+ * estado: "TIENE" | "NINGUNO" | "NO_APLICA"
+ *   Ninguno → alergias/personales/familiares usan "NINGUNO"
+ *   No aplica → ocupacion/habitos usan "NO_APLICA"
+ */
+const antecedenteSubseccionSchema = z.object({
+  estado: z.enum(["TIENE", "NINGUNO", "NO_APLICA"]),
+  items: z.array(z.string().min(1).max(500)).optional(),
+});
+
+export const antecedentesEstructuradosSchema = z.object({
+  alergias:   antecedenteSubseccionSchema,
+  personales: antecedenteSubseccionSchema,
+  familiares: antecedenteSubseccionSchema,
+  ocupacion:  antecedenteSubseccionSchema,
+  habitos:    antecedenteSubseccionSchema,
+});
+export type AntecedentesEstructurados = z.infer<typeof antecedentesEstructuradosSchema>;
+
+/** CC-0007 RF-12 — item del plan de manejo (grid de indicaciones). */
+export const planItemSchema = z.object({
+  orden: z.number().int().min(1),
+  texto: z.string().min(1).max(2000),
+});
+export type PlanItem = z.infer<typeof planItemSchema>;
+
+/** CC-0007 RF-09 — procedimiento CPT con complemento por fila. */
+export const procedimientoCptSchema = z.object({
+  codigo:      z.string().min(1).max(20),
+  descripcion: z.string().min(1).max(500),
+  complemento: z.string().max(500).optional(),
+});
+export type ProcedimientoCpt = z.infer<typeof procedimientoCptSchema>;
+
+/** CC-0007 RF-10 — terapia respiratoria estructurada. */
+export const terapiaRespiratoriaSchema = z.object({
+  gasometria: z.object({
+    tipo:   z.enum(["BASAL", "O2"]),
+    fio2:   z.number().min(21).max(100).optional(),  // % solo con O2
+    flujo:  z.number().min(0).max(60).optional(),    // L/min solo con O2
+  }),
+  nebulizaciones:   z.string().max(1000).optional(),
+  vibroterapia:     z.string().max(1000).optional(),
+  palmopercusion:   z.string().max(1000).optional(),
+});
+export type TerapiaRespiratoria = z.infer<typeof terapiaRespiratoriaSchema>;
+
+/** CC-0007 RF-10 — orden de examen (lab/gabinete). */
+export const ordenExamenSchema = z.object({
+  seccion:  z.string().min(1).max(100),
+  examen:   z.string().min(1).max(200),
+  cantidad: z.number().int().min(1).max(99).default(1),
+});
+export type OrdenExamen = z.infer<typeof ordenExamenSchema>;
+
+/** CC-0007 RF-10 — orden de inyección (texto libre). */
+export const ordenInyeccionSchema = z.object({
+  texto: z.string().min(1).max(1000),
+});
+export type OrdenInyeccion = z.infer<typeof ordenInyeccionSchema>;
+
 // ─── Input schemas ────────────────────────────────────────────────────────────
 
 export const historiaClinicaListInput = z.object({
@@ -213,6 +293,19 @@ export const historiaClinicaCreateInput = z.object({
   examenFisico: examenFisicoSchema.optional(),
   /** RF-03 — diagnósticos CIE-11 validados en borde de aplicación. */
   diagnosticos: z.array(cie11DiagnosticoSchema).optional(),
+  // ─── CC-0007 — campos estructurados nuevos (jsonb) ───
+  /** RF-05 — antecedentes por subsección (sustituye texto libre en UI CC-0007). */
+  antecedentesEstructurados: antecedentesEstructuradosSchema.optional(),
+  /** RF-12 — plan de manejo como grid ordenado. */
+  planItems: z.array(planItemSchema).optional(),
+  /** RF-09 — procedimientos CPT. */
+  procedimientosCpt: z.array(procedimientoCptSchema).optional(),
+  /** RF-10 — terapia respiratoria estructurada. */
+  terapiaRespiratoria: terapiaRespiratoriaSchema.optional(),
+  /** RF-10 — órdenes de exámenes lab/gabinete. */
+  ordenesExamenes: z.array(ordenExamenSchema).optional(),
+  /** RF-10 — órdenes de inyecciones. */
+  ordenesInyecciones: z.array(ordenInyeccionSchema).optional(),
 });
 export type HistoriaClinicaCreateInput = z.infer<typeof historiaClinicaCreateInput>;
 

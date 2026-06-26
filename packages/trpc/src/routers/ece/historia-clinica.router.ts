@@ -44,6 +44,12 @@ import {
   destinoEnum,
   antecedentesSchema,
   tieneComplementario,
+  antecedentesEstructuradosSchema,
+  planItemSchema,
+  procedimientoCptSchema,
+  terapiaRespiratoriaSchema,
+  ordenExamenSchema,
+  ordenInyeccionSchema,
   type Cie11Diagnostico,
 } from "@his/contracts";
 
@@ -102,6 +108,13 @@ const createInput = z.object({
   examenFisico: examenFisicoSchema,
   /** RF-03 — diagnósticos CIE-11 validados en borde de aplicación. */
   diagnosticos: z.array(cie11DiagnosticoSchema).optional(),
+  // CC-0007 — campos estructurados nuevos (jsonb)
+  antecedentesEstructurados: antecedentesEstructuradosSchema.optional(),
+  planItems: z.array(planItemSchema).optional(),
+  procedimientosCpt: z.array(procedimientoCptSchema).optional(),
+  terapiaRespiratoria: terapiaRespiratoriaSchema.optional(),
+  ordenesExamenes: z.array(ordenExamenSchema).optional(),
+  ordenesInyecciones: z.array(ordenInyeccionSchema).optional(),
 });
 
 const updateInput = z.object({
@@ -118,6 +131,13 @@ const updateInput = z.object({
   examenFisico: examenFisicoSchema,
   /** RF-03 — diagnósticos CIE-11 validados en borde de aplicación. */
   diagnosticos: z.array(cie11DiagnosticoSchema).optional(),
+  // CC-0007 — campos estructurados nuevos (jsonb)
+  antecedentesEstructurados: antecedentesEstructuradosSchema.optional(),
+  planItems: z.array(planItemSchema).optional(),
+  procedimientosCpt: z.array(procedimientoCptSchema).optional(),
+  terapiaRespiratoria: terapiaRespiratoriaSchema.optional(),
+  ordenesExamenes: z.array(ordenExamenSchema).optional(),
+  ordenesInyecciones: z.array(ordenInyeccionSchema).optional(),
 });
 
 const transitionInput = z.object({
@@ -143,6 +163,12 @@ export interface HistoriaClinicaRow {
   antecedentes: unknown;
   examen_fisico: unknown;
   diagnosticos: unknown;
+  antecedentes_estructurados: unknown;
+  plan_items: unknown;
+  procedimientos_cpt: unknown;
+  terapia_respiratoria: unknown;
+  ordenes_examenes: unknown;
+  ordenes_inyecciones: unknown;
   registrado_por: string;
   registrado_en: Date;
   estado_registro: string;
@@ -181,6 +207,13 @@ export const historiaClinicaGetOutput = z.object({
   antecedentes: z.unknown().nullable(),
   examenFisico: z.unknown().nullable(),
   diagnosticos: z.array(cie11DiagnosticoSchema),
+  // CC-0007
+  antecedentesEstructurados: antecedentesEstructuradosSchema.nullable(),
+  planItems: z.array(planItemSchema).nullable(),
+  procedimientosCpt: z.array(procedimientoCptSchema).nullable(),
+  terapiaRespiratoria: terapiaRespiratoriaSchema.nullable(),
+  ordenesExamenes: z.array(ordenExamenSchema).nullable(),
+  ordenesInyecciones: z.array(ordenInyeccionSchema).nullable(),
   registradoPor: z.string().uuid(),
   registradoEn: z.date(),
   estadoRegistro: z.string(),
@@ -354,6 +387,12 @@ export const eceHistoriaClinicaRouter = router({
         antecedentes: unknown;
         examen_fisico: unknown;
         diagnosticos: unknown;
+        antecedentes_estructurados: unknown;
+        plan_items: unknown;
+        procedimientos_cpt: unknown;
+        terapia_respiratoria: unknown;
+        ordenes_examenes: unknown;
+        ordenes_inyecciones: unknown;
         registrado_por: string;
         registrado_en: Date;
         estado_registro: string;
@@ -380,6 +419,12 @@ export const eceHistoriaClinicaRouter = router({
             hc.antecedentes,
             hc.examen_fisico,
             hc.diagnosticos,
+            hc.antecedentes_estructurados,
+            hc.plan_items,
+            hc.procedimientos_cpt,
+            hc.terapia_respiratoria,
+            hc.ordenes_examenes,
+            hc.ordenes_inyecciones,
             hc.registrado_por::text,
             hc.registrado_en,
             hc.estado_registro,
@@ -427,6 +472,24 @@ export const eceHistoriaClinicaRouter = router({
         antecedentes: raw.antecedentes ?? null,
         examenFisico: raw.examen_fisico ?? null,
         diagnosticos: parseDiagnosticos(raw.diagnosticos),
+        antecedentesEstructurados: raw.antecedentes_estructurados
+          ? antecedentesEstructuradosSchema.nullable().parse(raw.antecedentes_estructurados)
+          : null,
+        planItems: raw.plan_items
+          ? z.array(planItemSchema).nullable().parse(raw.plan_items)
+          : null,
+        procedimientosCpt: raw.procedimientos_cpt
+          ? z.array(procedimientoCptSchema).nullable().parse(raw.procedimientos_cpt)
+          : null,
+        terapiaRespiratoria: raw.terapia_respiratoria
+          ? terapiaRespiratoriaSchema.nullable().parse(raw.terapia_respiratoria)
+          : null,
+        ordenesExamenes: raw.ordenes_examenes
+          ? z.array(ordenExamenSchema).nullable().parse(raw.ordenes_examenes)
+          : null,
+        ordenesInyecciones: raw.ordenes_inyecciones
+          ? z.array(ordenInyeccionSchema).nullable().parse(raw.ordenes_inyecciones)
+          : null,
         registradoPor: raw.registrado_por,
         registradoEn: raw.registrado_en,
         estadoRegistro: raw.estado_registro,
@@ -458,6 +521,12 @@ export const eceHistoriaClinicaRouter = router({
       const diagnosticosJson = input.diagnosticos ? JSON.stringify(input.diagnosticos) : null;
       const antecedentesJson = input.antecedentes ? JSON.stringify(input.antecedentes) : null;
       const examenFisicoJson = input.examenFisico ? JSON.stringify(input.examenFisico) : null;
+      const antecedentesEstructuradosJson = input.antecedentesEstructurados ? JSON.stringify(input.antecedentesEstructurados) : null;
+      const planItemsJson = input.planItems ? JSON.stringify(input.planItems) : null;
+      const procedimientosCptJson = input.procedimientosCpt ? JSON.stringify(input.procedimientosCpt) : null;
+      const terapiaRespiratoriaJson = input.terapiaRespiratoria ? JSON.stringify(input.terapiaRespiratoria) : null;
+      const ordenesExamenesJson = input.ordenesExamenes ? JSON.stringify(input.ordenesExamenes) : null;
+      const ordenesInyeccionesJson = input.ordenesInyecciones ? JSON.stringify(input.ordenesInyecciones) : null;
 
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
@@ -465,6 +534,8 @@ export const eceHistoriaClinicaRouter = router({
             (instancia_id, episodio_id, tipo_consulta, motivo_consulta,
              enfermedad_actual, disposicion, analisis_clinico, plan_manejo,
              antecedentes, examen_fisico, diagnosticos,
+             antecedentes_estructurados, plan_items, procedimientos_cpt,
+             terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
              registrado_por, estado_registro)
           VALUES (
             ${input.instanciaId ?? null}::uuid,
@@ -478,6 +549,12 @@ export const eceHistoriaClinicaRouter = router({
             ${antecedentesJson ?? null}::jsonb,
             ${examenFisicoJson ?? null}::jsonb,
             ${diagnosticosJson ?? null}::jsonb,
+            ${antecedentesEstructuradosJson ?? null}::jsonb,
+            ${planItemsJson ?? null}::jsonb,
+            ${procedimientosCptJson ?? null}::jsonb,
+            ${terapiaRespiratoriaJson ?? null}::jsonb,
+            ${ordenesExamenesJson ?? null}::jsonb,
+            ${ordenesInyeccionesJson ?? null}::jsonb,
             ${eceCtx.personalId}::uuid,
             'borrador'
           )
@@ -486,6 +563,8 @@ export const eceHistoriaClinicaRouter = router({
             tipo_consulta, motivo_consulta, enfermedad_actual,
             disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
+            antecedentes_estructurados, plan_items, procedimientos_cpt,
+            terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
             registrado_por::text, registrado_en, estado_registro
         `,
       );
@@ -538,6 +617,18 @@ export const eceHistoriaClinicaRouter = router({
         sets.push(Prisma.sql`examen_fisico = ${JSON.stringify(input.examenFisico)}::jsonb`);
       if (input.diagnosticos !== undefined)
         sets.push(Prisma.sql`diagnosticos = ${JSON.stringify(input.diagnosticos)}::jsonb`);
+      if (input.antecedentesEstructurados !== undefined)
+        sets.push(Prisma.sql`antecedentes_estructurados = ${JSON.stringify(input.antecedentesEstructurados)}::jsonb`);
+      if (input.planItems !== undefined)
+        sets.push(Prisma.sql`plan_items = ${JSON.stringify(input.planItems)}::jsonb`);
+      if (input.procedimientosCpt !== undefined)
+        sets.push(Prisma.sql`procedimientos_cpt = ${JSON.stringify(input.procedimientosCpt)}::jsonb`);
+      if (input.terapiaRespiratoria !== undefined)
+        sets.push(Prisma.sql`terapia_respiratoria = ${JSON.stringify(input.terapiaRespiratoria)}::jsonb`);
+      if (input.ordenesExamenes !== undefined)
+        sets.push(Prisma.sql`ordenes_examenes = ${JSON.stringify(input.ordenesExamenes)}::jsonb`);
+      if (input.ordenesInyecciones !== undefined)
+        sets.push(Prisma.sql`ordenes_inyecciones = ${JSON.stringify(input.ordenesInyecciones)}::jsonb`);
 
       if (sets.length === 0) {
         const noop = await tx.$queryRaw<HistoriaClinicaRow[]>(
@@ -546,6 +637,8 @@ export const eceHistoriaClinicaRouter = router({
               tipo_consulta, motivo_consulta, enfermedad_actual,
               disposicion, analisis_clinico, plan_manejo,
               antecedentes, examen_fisico, diagnosticos,
+              antecedentes_estructurados, plan_items, procedimientos_cpt,
+              terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
               registrado_por::text, registrado_en, estado_registro
             FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
           `,
@@ -564,6 +657,8 @@ export const eceHistoriaClinicaRouter = router({
             tipo_consulta, motivo_consulta, enfermedad_actual,
             disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
+            antecedentes_estructurados, plan_items, procedimientos_cpt,
+            terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
             registrado_por::text, registrado_en, estado_registro
         `,
       );
@@ -645,6 +740,8 @@ export const eceHistoriaClinicaRouter = router({
             tipo_consulta, motivo_consulta, enfermedad_actual,
             disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
+            antecedentes_estructurados, plan_items, procedimientos_cpt,
+            terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
             registrado_por::text, registrado_en, estado_registro
         `,
       );
@@ -713,6 +810,8 @@ export const eceHistoriaClinicaRouter = router({
             tipo_consulta, motivo_consulta, enfermedad_actual,
             disposicion, analisis_clinico, plan_manejo,
             antecedentes, examen_fisico, diagnosticos,
+            antecedentes_estructurados, plan_items, procedimientos_cpt,
+            terapia_respiratoria, ordenes_examenes, ordenes_inyecciones,
             registrado_por::text, registrado_en, estado_registro
         `,
       );

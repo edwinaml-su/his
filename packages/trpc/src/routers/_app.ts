@@ -58,6 +58,9 @@ import { workflowInstanceRouter } from "./workflow-instance.router";
 import { workflowValidatorRouter } from "./workflow-validator.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
 import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
+// CC-0007 — catálogo CPT y plantillas de texto
+import { cptRouter } from "./ece/cpt.router";
+import { plantillaTextoRouter } from "./ece/plantilla-texto.router";
 // Fase 2 — ECE Triaje NTEC (Stream 02)
 import { triajeEceRouter } from "./ece/triaje-ece.router";
 import { indicacionesMedicasRouter } from "./ece/indicaciones-medicas.router";
@@ -281,6 +284,9 @@ export const appRouter = router({
   workflowValidatorVisual: workflowValidatorVisualRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
+  // CC-0007 — catálogo CPT y plantillas de texto
+  eceCatalogoCpt: cptRouter,
+  ecePlantillaTexto: plantillaTextoRouter,
   // Fase 2 — ECE Triaje NTEC (Stream 02)
   eceTriaje: triajeEceRouter,
   eceIndicaciones: indicacionesMedicasRouter,

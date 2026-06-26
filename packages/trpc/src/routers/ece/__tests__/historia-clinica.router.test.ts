@@ -61,7 +61,7 @@ function buildCtx(roleCodes: string[] = ["PHYSICIAN"]) {
   };
 }
 
-/** Fila raw alineada con columnas reales de ece.historia_clinica */
+/** Fila raw alineada con columnas reales de ece.historia_clinica (incluye CC-0007) */
 function baseGetRow(overrides: Record<string, unknown> = {}) {
   return {
     id: ID1,
@@ -76,6 +76,13 @@ function baseGetRow(overrides: Record<string, unknown> = {}) {
     antecedentes: { personales: "HTA", familiares: null },
     examen_fisico: { sistemas: [{ sistema: "Neurológico", hallazgo: "Sin déficit focal" }] },
     diagnosticos: null,
+    // CC-0007 — campos jsonb nuevos (null por defecto para HCs antiguas)
+    antecedentes_estructurados: null,
+    plan_items: null,
+    procedimientos_cpt: null,
+    terapia_respiratoria: null,
+    ordenes_examenes: null,
+    ordenes_inyecciones: null,
     registrado_por: ID1,
     registrado_en: new Date("2026-05-19T10:00:00Z"),
     estado_registro: "borrador",
@@ -112,10 +119,18 @@ function baseHistoriaRow(overrides: Record<string, unknown> = {}) {
     motivo_consulta: "Fiebre",
     enfermedad_actual: null,
     disposicion: null,
+    analisis_clinico: null,
     plan_manejo: null,
     antecedentes: null,
     examen_fisico: null,
     diagnosticos: null,
+    // CC-0007 — campos jsonb nuevos (null por defecto)
+    antecedentes_estructurados: null,
+    plan_items: null,
+    procedimientos_cpt: null,
+    terapia_respiratoria: null,
+    ordenes_examenes: null,
+    ordenes_inyecciones: null,
     registrado_por: ID1,
     registrado_en: new Date("2026-05-19T09:00:00Z"),
     estado_registro: "borrador",
@@ -371,7 +386,7 @@ describe("HC-004 — icd10DiagnosticoSchema valida códigos CIE-10", () => {
 // ─── Zod output schema ────────────────────────────────────────────────────────
 
 describe("historiaClinicaGetOutput (Zod schema)", () => {
-  it("valida shape completo con columnas reales de BD", () => {
+  it("valida shape completo con columnas reales de BD (incluye campos CC-0007)", () => {
     const data = {
       id: ID1,
       instanciaId: ID3,
@@ -385,6 +400,13 @@ describe("historiaClinicaGetOutput (Zod schema)", () => {
       antecedentes: { personales: "Sin antecedentes" },
       examenFisico: null,
       diagnosticos: [{ codigo: "K29.7", descripcion: "Gastritis", tipo: "DEFINITIVO" as const }],
+      // CC-0007 — campos jsonb nuevos (null cuando no se usan)
+      antecedentesEstructurados: null,
+      planItems: null,
+      procedimientosCpt: null,
+      terapiaRespiratoria: null,
+      ordenesExamenes: null,
+      ordenesInyecciones: null,
       registradoPor: ID1,
       registradoEn: new Date(),
       estadoRegistro: "firmado",
@@ -395,5 +417,143 @@ describe("historiaClinicaGetOutput (Zod schema)", () => {
 
     const result = historiaClinicaGetOutput.safeParse(data);
     expect(result.success).toBe(true);
+  });
+});
+
+// ─── CC-0007 — campos jsonb nuevos ───────────────────────────────────────────
+
+describe("eceHistoriaClinicaRouter.create — CC-0007 campos jsonb round-trip", () => {
+  it("13. create con antecedentesEstructurados ejecuta el INSERT y retorna la fila", async () => {
+    const ctx = buildCtx();
+
+    const antecedentesEstructurados = {
+      alergias:   { estado: "TIENE" as const, items: ["Penicilina"] },
+      personales: { estado: "NINGUNO" as const },
+      familiares: { estado: "NINGUNO" as const },
+      ocupacion:  { estado: "NO_APLICA" as const },
+      habitos:    { estado: "NO_APLICA" as const },
+    };
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({
+        antecedentes_estructurados: antecedentesEstructurados,
+      }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      episodioId: ID2,
+      tipoConsulta: "primera_vez",
+      antecedentesEstructurados,
+    });
+
+    // El INSERT se ejecutó (router llama $queryRaw para INSERT...RETURNING)
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    // La fila retornada incluye el campo CC-0007
+    expect(result.antecedentes_estructurados).toEqual(antecedentesEstructurados);
+  });
+
+  it("14. create con planItems ejecuta el INSERT y retorna la fila", async () => {
+    const ctx = buildCtx();
+    const planItems = [
+      { orden: 1, texto: "Hidratación IV" },
+      { orden: 2, texto: "Analgesia" },
+    ];
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ plan_items: planItems }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      episodioId: ID2,
+      tipoConsulta: "primera_vez",
+      planItems,
+    });
+
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    expect(result.plan_items).toEqual(planItems);
+  });
+
+  it("15. create con procedimientosCpt ejecuta el INSERT y retorna la fila", async () => {
+    const ctx = buildCtx();
+    const procedimientosCpt = [
+      { codigo: "99213", descripcion: "Consulta de seguimiento" },
+    ];
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ procedimientos_cpt: procedimientosCpt }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      episodioId: ID2,
+      tipoConsulta: "primera_vez",
+      procedimientosCpt,
+    });
+
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    expect(result.procedimientos_cpt).toEqual(procedimientosCpt);
+  });
+
+  it("16. get parsea antecedentesEstructurados desde JSONB cuando existe", async () => {
+    const ctx = buildCtx();
+    const antecedentesEstructurados = {
+      alergias:   { estado: "TIENE" as const, items: ["Amoxicilina"] },
+      personales: { estado: "NINGUNO" as const },
+      familiares: { estado: "NINGUNO" as const },
+      ocupacion:  { estado: "NO_APLICA" as const },
+      habitos:    { estado: "NO_APLICA" as const },
+    };
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseGetRow({ antecedentes_estructurados: antecedentesEstructurados }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.get({ id: ID1 });
+
+    expect(result.antecedentesEstructurados).not.toBeNull();
+    expect(result.antecedentesEstructurados?.alergias.estado).toBe("TIENE");
+    expect(result.antecedentesEstructurados?.alergias.items).toEqual(["Amoxicilina"]);
+  });
+
+  it("17. get retorna planItems parseados desde JSONB", async () => {
+    const ctx = buildCtx();
+    const planItems = [{ orden: 1, texto: "Reposo" }];
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseGetRow({ plan_items: planItems }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.get({ id: ID1 });
+
+    expect(result.planItems).toEqual(planItems);
+  });
+
+  it("18. get retorna null en campos jsonb CC-0007 cuando la HC es antigua (null en BD)", async () => {
+    const ctx = buildCtx();
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseGetRow({
+        antecedentes_estructurados: null,
+        plan_items: null,
+        procedimientos_cpt: null,
+        terapia_respiratoria: null,
+        ordenes_examenes: null,
+        ordenes_inyecciones: null,
+      }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.get({ id: ID1 });
+
+    expect(result.antecedentesEstructurados).toBeNull();
+    expect(result.planItems).toBeNull();
+    expect(result.procedimientosCpt).toBeNull();
+    expect(result.terapiaRespiratoria).toBeNull();
+    expect(result.ordenesExamenes).toBeNull();
+    expect(result.ordenesInyecciones).toBeNull();
   });
 });

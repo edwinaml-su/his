@@ -98,6 +98,10 @@ const config: Config = {
           DEFAULT: "var(--allergy)",
           foreground: "var(--allergy-foreground)",
         },
+        lila: {
+          DEFAULT: "var(--lila)",
+          foreground: "var(--lila-fg)",
+        },
         // Sidebar — branding Avante navy. Sin este mapeo, las clases
         // bg-sidebar-background etc. no se generan y el sidebar pierde fondo.
         // DEFAULT y primary/ring añadidos en Tarea 2b para primitivos Shadcn sidebar.
