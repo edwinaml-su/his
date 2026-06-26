@@ -62,7 +62,7 @@ export default function EpisodioHospitalarioListPage() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold">
             <BedDouble className="h-6 w-6" aria-hidden />
-            Episodios Hospitalarios
+            Cuentas Hospitalarias
           </h1>
           <p className="text-sm text-muted-foreground">
             ECE — Hospitalario: pacientes activos agrupados por servicio.
@@ -95,7 +95,7 @@ export default function EpisodioHospitalarioListPage() {
 
       {/* Estados de carga / error */}
       {query.isLoading && (
-        <p className="text-sm text-muted-foreground">Cargando episodios…</p>
+        <p className="text-sm text-muted-foreground">Cargando cuentas…</p>
       )}
       {query.error && (
         <div role="alert" className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -107,7 +107,7 @@ export default function EpisodioHospitalarioListPage() {
       {/* Grupos por sala */}
       {grupos.length === 0 && !query.isLoading && (
         <p className="text-sm text-muted-foreground">
-          Sin episodios activos con los filtros aplicados.
+          Sin cuentas hospitalarias activas con los filtros aplicados.
         </p>
       )}
 
@@ -140,7 +140,7 @@ export default function EpisodioHospitalarioListPage() {
                     </div>
                     <Button asChild size="sm" className="w-full" variant="outline">
                       <Link href={`/ece/episodio-hospitalario/${ep.id}`}>
-                        Ver episodio
+                        Ver cuenta
                       </Link>
                     </Button>
                   </div>

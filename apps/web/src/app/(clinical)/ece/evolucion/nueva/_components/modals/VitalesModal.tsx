@@ -12,22 +12,66 @@ import {
 import { Button } from "@his/ui/components/button";
 import { useEvolucionDraft } from "../../_hooks/useEvolucionDraft";
 import { SignosVitalesCapture } from "../SignosVitalesCapture";
-import type { SignosState } from "../../_lib/types";
+import { signosNucleoCompletos, type SignosState } from "../../_lib/types";
+import {
+  validarRango,
+  type VitalRangeKey,
+} from "../../../../../../../lib/evolucion/signos-vitales";
 
 interface Props {
   open: boolean;
   onClose: () => void;
 }
 
+/**
+ * Campos de SignosState (string) con rango validable. Excluye `dolorEva`
+ * (es `escalaDolor: number`, ya acotado 0–10 por el slider).
+ */
+const RANGE_FIELDS: readonly VitalRangeKey[] = [
+  "presionSistolica",
+  "presionDiastolica",
+  "frecuenciaCardiaca",
+  "frecuenciaRespiratoria",
+  "temperatura",
+  "saturacionO2",
+  "fio2",
+  "glucometriaMgdl",
+  "pesoKg",
+  "pesoLb",
+  "tallaM",
+  "tallaFt",
+  "perimetroCintura",
+  "balanceHidrico",
+  "diuresisHoraria",
+];
+
 export function VitalesModal({ open, onClose }: Props) {
-  const { draft, dispatch } = useEvolucionDraft();
+  const { draft, dispatch, pacienteSexo, pacienteEdad } = useEvolucionDraft();
   const [buffer, setBuffer] = React.useState<SignosState>(draft.signos);
+  const [showErrors, setShowErrors] = React.useState(false);
 
   React.useEffect(() => {
-    if (open) setBuffer(draft.signos);
+    if (!open) return;
+    // R1: FiO₂ por defecto 21 % (aire ambiente) si aún no se ha capturado.
+    setBuffer({
+      ...draft.signos,
+      fio2: draft.signos.fio2.trim() === "" ? "21" : draft.signos.fio2,
+    });
+    setShowErrors(false);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // R4.1: bloquea el guardado si falta núcleo o hay un valor fuera de rango.
+  const nucleoIncompleto = !signosNucleoCompletos(buffer);
+  const hayFueraDeRango = RANGE_FIELDS.some(
+    (f) => validarRango(f, buffer[f as keyof SignosState] as string) !== null,
+  );
+  const bloqueado = nucleoIncompleto || hayFueraDeRango;
+
   function handleGuardar() {
+    if (bloqueado) {
+      setShowErrors(true);
+      return;
+    }
     dispatch({ type: "SET_SIGNOS", signos: buffer });
     onClose();
   }
@@ -38,7 +82,8 @@ export function VitalesModal({ open, onClose }: Props) {
         <DialogHeader>
           <DialogTitle>Signos vitales</DialogTitle>
           <DialogDescription>
-            Registre los signos tomados en esta evaluación.
+            Registre los signos tomados en esta evaluación. Los campos del núcleo
+            (presión arterial y oxigenación) son obligatorios.
           </DialogDescription>
         </DialogHeader>
 
@@ -47,14 +92,24 @@ export function VitalesModal({ open, onClose }: Props) {
             idPrefix="vitales-modal"
             value={buffer}
             onChange={setBuffer}
+            sexo={pacienteSexo}
+            edad={pacienteEdad}
+            showErrors={showErrors}
           />
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-end">
+          {showErrors && bloqueado && (
+            <p role="alert" className="mr-auto text-sm text-destructive">
+              {nucleoIncompleto
+                ? "Complete los signos vitales obligatorios."
+                : "Corrija los valores fuera de rango."}
+            </p>
+          )}
           <Button type="button" variant="outline" onClick={onClose}>
             Cancelar
           </Button>
-          <Button type="button" onClick={handleGuardar}>
+          <Button type="button" onClick={handleGuardar} aria-disabled={bloqueado}>
             Guardar signos
           </Button>
         </DialogFooter>

@@ -12,6 +12,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Label } from "@his/ui/components/label";
 import { useEvolucionDraft } from "../../_hooks/useEvolucionDraft";
+import { MedicalTextarea } from "../MedicalTextarea";
 
 interface Props {
   open: boolean;
@@ -63,16 +64,15 @@ export function ProblemaModal({ open, onClose, problemaId }: Props) {
 
         <div className="py-2 space-y-1.5">
           <Label htmlFor="modal-problema-texto">Problema</Label>
-          <textarea
+          <MedicalTextarea
             id="modal-problema-texto"
             ref={textareaRef}
             rows={4}
             value={texto}
-            onChange={(e) => { setTexto(e.target.value); setErr(false); }}
+            onChange={(v) => { setTexto(v); setErr(false); }}
             placeholder="Describa el problema (p. ej. Cefalea tensional)…"
-            className={`flex w-full resize-y rounded-md border bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${err ? "border-destructive focus-visible:ring-destructive" : "border-input"}`}
-            aria-invalid={err}
-            aria-describedby={err ? "modal-problema-err" : undefined}
+            invalid={err}
+            describedBy={err ? "modal-problema-err" : undefined}
           />
           {err && (
             <p id="modal-problema-err" role="alert" className="text-xs text-destructive">

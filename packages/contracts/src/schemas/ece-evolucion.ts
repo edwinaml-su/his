@@ -25,22 +25,54 @@ export type IndicacionPlan = z.infer<typeof indicacionPlanSchema>;
  * cubierto por el audit hash-chain y el trigger de inmutabilidad post-firma.
  */
 export const evolucionSignosSchema = z.object({
+  // Núcleo (R4): obligatorio para firmar en la UI
   presionSistolica: z.string().default(""),
   presionDiastolica: z.string().default(""),
   frecuenciaCardiaca: z.string().default(""),
   frecuenciaRespiratoria: z.string().default(""),
   temperatura: z.string().default(""),
   saturacionO2: z.string().default(""),
-  escalaDolor: z.number().int().min(0).max(10).default(0),
-  pesoKg: z.string().default(""),
-  tallaCm: z.string().default(""),
+  fio2: z.string().default(""),
+  // Estado neurológico y metabólico (R1.2)
+  glasgowOcular: z.string().default(""),
+  glasgowVerbal: z.string().default(""),
+  glasgowMotora: z.string().default(""),
   glucometriaMgdl: z.string().default(""),
+  // Antropometría (R1.3)
+  pesoKg: z.string().default(""),
+  pesoLb: z.string().default(""),
+  tallaM: z.string().default(""),
+  tallaFt: z.string().default(""),
+  /** @deprecated CC-0006 R1 migró talla a m/ft; conservado para round-trip de borradores previos. */
+  tallaCm: z.string().default(""),
+  perimetroCintura: z.string().default(""),
+  // Balance hídrico (R1.4)
+  balanceHidrico: z.string().default(""),
+  diuresisHoraria: z.string().default(""),
+  // Gineco-obstétrico (R1.5) — solo se llenan si la paciente es femenina
+  fechaUltimaRegla: z.string().default(""),
+  gestaG: z.string().default(""),
+  partoTermino: z.string().default(""),
+  partoPretermino: z.string().default(""),
+  abortos: z.string().default(""),
+  vivos: z.string().default(""),
+  // Dolor (EVA)
+  escalaDolor: z.number().int().min(0).max(10).default(0),
 });
 export type EvolucionSignos = z.infer<typeof evolucionSignosSchema>;
+
+/** CC-0006 R3: especialidad médica (catálogo MedicalSpecialty; permite texto libre). */
+export const evolucionEspecialidadSchema = z.object({
+  id: z.string().uuid().nullable().default(null),
+  nombre: z.string().trim().min(1).max(120),
+});
+export type EvolucionEspecialidad = z.infer<typeof evolucionEspecialidadSchema>;
 
 /** CC-0006: payload estructurado en la columna data jsonb. */
 export const evolucionDataSchema = z.object({
   signosVitalesId: z.string().uuid().optional(),
+  /** R3: especialidad médica (persistida en data jsonb, sin columna nueva). */
+  especialidad: evolucionEspecialidadSchema.optional(),
   problemas: z.array(evolucionProblemaSchema).default([]),
   plan: z.array(indicacionPlanSchema).default([]),
   signos: evolucionSignosSchema.optional(),

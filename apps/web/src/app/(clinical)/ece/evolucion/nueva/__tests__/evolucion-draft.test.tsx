@@ -26,6 +26,7 @@ const SIGNOS_NUCLEO_OK: typeof SIGNOS_EMPTY = {
   frecuenciaRespiratoria: "16",
   temperatura: "36.6",
   saturacionO2: "98",
+  fio2: "21",
 };
 
 // ─── calcNumero ──────────────────────────────────────────────────────────────
@@ -86,7 +87,7 @@ describe("signosNucleoCompletos", () => {
 
   it("peso/talla/glucometría vacíos no afectan el núcleo (opcionales)", () => {
     expect(
-      signosNucleoCompletos({ ...SIGNOS_NUCLEO_OK, pesoKg: "", tallaCm: "", glucometriaMgdl: "" }),
+      signosNucleoCompletos({ ...SIGNOS_NUCLEO_OK, pesoKg: "", tallaM: "", glucometriaMgdl: "" }),
     ).toBe(true);
   });
 });
@@ -96,7 +97,11 @@ describe("signosNucleoCompletos", () => {
 describe("puedeFirmar", () => {
   /** Draft con TODOS los campos obligatorios completos. */
   function draftCompleto(): DraftState {
-    let s = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
+    let s = draftReducer(DRAFT_EMPTY, {
+      type: "SET_ESPECIALIDAD",
+      especialidad: { id: null, nombre: "Medicina Interna" },
+    });
+    s = draftReducer(s, { type: "ADD_PROBLEMA", texto: "p1" });
     s = draftReducer(s, { type: "SET_SUBJETIVO", texto: "refiere dolor" });
     s = draftReducer(s, { type: "SET_OBJETIVO", texto: "examen físico" });
     s = draftReducer(s, { type: "SET_ANALISIS", texto: "diagnóstico" });

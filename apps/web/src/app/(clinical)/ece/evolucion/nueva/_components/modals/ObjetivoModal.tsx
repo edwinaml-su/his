@@ -12,6 +12,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Label } from "@his/ui/components/label";
 import { useEvolucionDraft } from "../../_hooks/useEvolucionDraft";
+import { MedicalTextarea } from "../MedicalTextarea";
 
 interface Props {
   open: boolean;
@@ -21,7 +22,6 @@ interface Props {
 export function ObjetivoModal({ open, onClose }: Props) {
   const { draft, dispatch } = useEvolucionDraft();
   const [texto, setTexto] = React.useState("");
-  const taRef = React.useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
     if (open) setTexto(draft.objetivo);
@@ -45,14 +45,12 @@ export function ObjetivoModal({ open, onClose }: Props) {
         <div className="py-2 space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="modal-objetivo-texto">Objetivo</Label>
-            <textarea
+            <MedicalTextarea
               id="modal-objetivo-texto"
-              ref={taRef}
               rows={7}
               value={texto}
-              onChange={(e) => setTexto(e.target.value)}
+              onChange={setTexto}
               placeholder="Redactar objetivo…"
-              className="flex w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             />
           </div>
         </div>
