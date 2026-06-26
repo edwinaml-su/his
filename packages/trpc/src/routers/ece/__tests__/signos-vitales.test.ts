@@ -38,7 +38,7 @@ function numRange(min: number, max: number, label: string) {
   return z.number().min(min, `${label} mínimo ${min}.`).max(max, `${label} máximo ${max}.`);
 }
 
-// Schema alineado con ece.signos_vitales post-HD-16 (nombres reales de columnas)
+// Schema alineado con ece.signos_vitales post-HD-16 + CC-0007 migración 182
 const eceSignosVitalesCreateSchema = z.object({
   pacienteId: z.string().uuid(),
   episodioId: z.string().uuid().optional(),
@@ -54,6 +54,19 @@ const eceSignosVitalesCreateSchema = z.object({
   tallaCm: numRange(30, 250, "Talla").optional(),
   glucometriaMgdl: numRange(20, 600, "Glucometría").optional(),
   fechaHoraToma: z.string().datetime({ offset: true }).optional(),
+  // CC-0007 — Glasgow (int, derivados server-side)
+  glasgowOcular:    numRange(1, 4,  "Glasgow ocular").int().optional(),
+  glasgowVerbal:    numRange(1, 5,  "Glasgow verbal").int().optional(),
+  glasgowMotor:     numRange(1, 6,  "Glasgow motor").int().optional(),
+  glasgowTotal:     numRange(3, 15, "Glasgow total").int().optional(),
+  // CC-0007 — otros campos
+  fio2:             numRange(21, 100, "FiO2").optional(),
+  perimetroCintura: z.number().positive("Perímetro cintura debe ser positivo.").optional(),
+  ict:              z.number().positive("ICT debe ser positivo.").optional(),
+  balanceHidrico:   z.number().optional(),
+  diuresis:         z.number().min(0, "Diuresis no puede ser negativa.").optional(),
+  fur:              z.string().date().optional(),
+  fpp:              z.string().date().optional(),
 });
 
 // ─── Mock de withEceContext ──────────────────────────────────────────────────
@@ -240,5 +253,122 @@ describe("calcularImc — cálculo automático", () => {
       const imc = result.data.pesoKg! / Math.pow(result.data.tallaCm! / 100, 2);
       expect(Math.round(imc * 10) / 10).toBe(24.2);
     }
+  });
+});
+
+// ─── CC-0007 — Glasgow + ICT ─────────────────────────────────────────────────
+
+describe("eceSignosVitalesCreateSchema — CC-0007 campos nuevos (migración 182)", () => {
+  const base = { pacienteId: uuid() };
+
+  it("11. acepta Glasgow components dentro de rango (O:1-4, V:1-5, M:1-6)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      ...base,
+      glasgowOcular: 3,
+      glasgowVerbal: 4,
+      glasgowMotor: 5,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("12. rechaza glasgowOcular fuera de rango (0 y 5)", () => {
+    const low = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowOcular: 0 });
+    const high = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowOcular: 5 });
+    expect(low.success).toBe(false);
+    expect(high.success).toBe(false);
+  });
+
+  it("13. rechaza glasgowVerbal fuera de rango (0 y 6)", () => {
+    const low = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowVerbal: 0 });
+    const high = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowVerbal: 6 });
+    expect(low.success).toBe(false);
+    expect(high.success).toBe(false);
+  });
+
+  it("14. rechaza glasgowMotor fuera de rango (0 y 7)", () => {
+    const low = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowMotor: 0 });
+    const high = eceSignosVitalesCreateSchema.safeParse({ ...base, glasgowMotor: 7 });
+    expect(low.success).toBe(false);
+    expect(high.success).toBe(false);
+  });
+
+  it("15. acepta balanceHidrico negativo (puede ser negativo por definición)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      ...base,
+      balanceHidrico: -500,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("16. rechaza diuresis negativa", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({ ...base, diuresis: -1 });
+    expect(result.success).toBe(false);
+  });
+
+  it("17. acepta fur y fpp como fechas ISO (date)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      ...base,
+      fur: "2026-05-01",
+      fpp: "2026-11-15",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("18. rechaza fur como datetime (debe ser solo date)", () => {
+    const result = eceSignosVitalesCreateSchema.safeParse({
+      ...base,
+      fur: "2026-05-01T10:00:00Z",
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("eceSignosVitalesRouter.create — CC-0007 derivados server-side", () => {
+  it("19. glasgowTotal se deriva como O+V+M en el INSERT ($queryRaw)", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const newId = uuid();
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: newId }]);
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      pacienteId: uuid(),
+      glasgowOcular: 3,
+      glasgowVerbal: 4,
+      glasgowMotor: 5,
+    });
+
+    expect(result.id).toBe(newId);
+
+    // Verificar que el $queryRaw fue llamado con el glasgow_total derivado = 3+4+5=12.
+    // El tagged template literal de Prisma hace que los args lleguen como array de valores.
+    // Inspeccionamos el string de la llamada para confirmar que 12 aparece en los valores.
+    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    // El template literal incluye los valores como argumentos posicionales.
+    // Buscamos el valor 12 (glasgowTotal) entre los args del tag template.
+    const values = rawCall!.slice(1); // el primer arg es el TemplateStringsArray
+    expect(values).toContain(12);
+  });
+
+  it("20. ict se deriva como perimetroCintura/tallaCm en el INSERT", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const newId = uuid2();
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: newId }]);
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      pacienteId: uuid(),
+      perimetroCintura: 90,
+      tallaCm: 170,
+    });
+
+    expect(result.id).toBe(newId);
+
+    // ict = round(90/170 * 1000) / 1000 = 0.529
+    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    const values = rawCall!.slice(1);
+    const ict = Math.round((90 / 170) * 1000) / 1000;
+    expect(values).toContain(ict);
   });
 });

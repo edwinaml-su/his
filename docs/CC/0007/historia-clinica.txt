@@ -1,0 +1,72 @@
+https://his-avante.vercel.app/ece/historia-clinica/nueva
+- Siempre debe de estar visible el nombre del paciente, edad, sexo, numero de expediente, 
+  para registrar una nueva historia clinica.
+- El ingreso de texto se hace con modales para cada campo de texto
+- despues de habitos debe de decir ver mas, y ahi que habra nombre de pila , y flag de paciente de comunidad lgbtiq+
+- Siempre que se navegue dentro del paciente y si tiene asociada alergias,
+  esta debe de aparecer como un banner inamobible.
+- Siempre que se navegue dentro del paciente y si tiene asociada nombre de pila para comunidad lgbtiq+,
+  esta debe de aparecer como un banner inamobible.  
+- Episodio deberia de decir la cuenta en lugar de episodio
+- quitar tipo de consulta
+- Motivo de consulta debe de llenarse en modal
+- Enfermedad actual debe llenarse en modal
+- Eliminar el area de obstetricos de su lugar actual.
+- Los signos vitales se debe de tomar en cuenta de acuerdo a mouck up Evolucion Medica Avante.
+- El area de examenfisico no debe de llevar el label de "hallazgos por aparato"
+- Abajo del area de diagnostico CIE-11 debe de aparecer un campo de texto denominado complemento de diagnostico
+- Poder agragarse varios diagnosticos, en la misma area de CIE-11 y quedar registrados como grid
+- Agregar un area llamada procedimientos segun cpt, con busqueda auto complementaria (terminologia de procedimientos actuales) 
+  en codigos, estos pueden ser varios y deben de agregarse en un grid. 
+- Agregar complemento de nombre de procedimiento que complemente al area de procedeimientos
+- Agregar el area de Miscelaneos de consulta. 
+      - Laboratorio clinico
+	        - Secciones: Hematologia y coagulacion; quimica sanguinea; hormonas y pruebas especiales; 
+			  microbiologia; urianalisis; coprologia; banco de sangre; pruebas moleculares, inmunologia, gasometría venosa.
+ 			  (Agrupadores de tipo de examenes) Radio button
+			- Examenes que seran un grid tipo lista donde se podra seleccionar por fila
+			  por medio de un checkbox que examen elegir y un campo para el ingreso de un 
+			  numero entero positivo con el numero de examenes a realizarse Estos examenes depende 
+			  del area de seccion elgida. , debd e validarse que los examenes agregados al grid 
+			  donde se presenta la informacion no se puedan repetir
+			- Grid donde se presenten los examenes elegidos, con su respectiva cantidad y la posibilidad 
+			  de editar el conjunto  o eliminar examenes en las filas.
+      - Examenes de gabinete (Agrupador)
+            - Radiologia e imagenes
+                - Secciones: Rayos X; Ultrasonografía; Tomografia, Resonancia Magnetica; Estudios Especiales
+ 				  (Agrupadores de tipo de examenes) Radio button
+				- Examenes que seran un grid tipo lista donde se podra seleccionar por fila
+				  por medio de un checkbox que examen elegir y un campo para el ingreso de un 
+				  numero entero positivo con el numero de examenes a realizarse Estos examenes depende 
+				  del area de seccion elgida. , debd e validarse que los examenes agregados al grid 
+				  donde se presenta la informacion no se puedan repetir
+				- Grid donde se presenten los examenes elegidos, con su respectiva cantidad y la posibilidad 
+				  de editar el conjunto  o eliminar examenes en las filas.
+            - Estudios de cardiologia
+				- Secciones: Electrocardiograma; Ecocardiograma; Monitoreo Holter, Prueba de esfuerzo; Estudios Especiales
+ 				  (Agrupadores de tipo de examenes) Radio button
+				- Examenes que seran un grid tipo lista donde se podra seleccionar por fila
+				  por medio de un checkbox que examen elegir y un campo para el ingreso de un 
+				  numero entero positivo con el numero de examenes a realizarse Estos examenes depende 
+				  del area de seccion elgida. , debd e validarse que los examenes agregados al grid 
+				  donde se presenta la informacion no se puedan repetir
+				- Grid donde se presenten los examenes elegidos, con su respectiva cantidad y la posibilidad 
+				  de editar el conjunto  o eliminar examenes en las filas.
+      - Terapia Respiratoria
+			- Secciones: Gasometria Arterial; Nebulizaciones ; vibroterapia, palmo percusion.
+			  (Agrupadores de tipo de examenes) Radio button
+			- Examenes que seran un grid tipo lista donde se podra seleccionar por fila
+			  por medio de un checkbox que examen elegir y un campo para el ingreso de un 
+			  numero entero positivo con el numero de examenes a realizarse Estos examenes depende 
+			  del area de seccion elgida. , debd e validarse que los examenes agregados al grid 
+			  donde se presenta la informacion no se puedan repetir
+			- Grid donde se presenten los examenes elegidos, con su respectiva cantidad y la posibilidad 
+			  de editar el conjunto  o eliminar examenes en las filas.
+      - Orden de Inyecciones
+			- text box para escribir, que pueda irse agregando a un grid y el ingreso debe de se de tipo modal.
+      - Orden de Ingreso hospitalario (boton)
+			- Aqui manda a llamar a la ordend e ingreso hospitalario
+      - Orden de interconsulta medica.
+	  - Hoja de Remision.
+	  - Incapacidad medica
+	  - Prescripciones. (Boton)

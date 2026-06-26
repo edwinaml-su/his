@@ -1152,6 +1152,8 @@ model Patient {
   lastName           String    @db.VarChar(120)
   secondLastName     String?   @db.VarChar(120)
   preferredName      String?   @db.VarChar(120)
+  /// CC-0007 RF-01.3 — paciente de la comunidad LGBTIQ+ (activa banner de nombre de pila)
+  esLgbtiq           Boolean?  @map("es_lgbtiq")
   birthDate          DateTime? @db.Date
   birthDateEstimated Boolean   @default(false)
   birthPlaceGeoId    String?   @db.Uuid
@@ -5277,6 +5279,19 @@ model EceHistoriaClinica {
   registradoPorId  String   @map("registrado_por") @db.Uuid
   registradoEn     DateTime @default(now()) @map("registrado_en") @db.Timestamptz()
   estadoRegistro   String   @default("vigente") @map("estado_registro") @db.VarChar(20)
+  /// CC-0007 RF-05 — antecedentes estructurados por subsección {estado,items[]}
+  /// Subsecciones: alergias | personales | familiares | ocupacion | habitos
+  antecedentesEstructurados Json?  @map("antecedentes_estructurados")
+  /// CC-0007 RF-12 — plan de manejo como grid de indicaciones [{orden,texto}]
+  planItems         Json?  @map("plan_items")
+  /// CC-0007 RF-09 — procedimientos CPT [{codigo,descripcion,complemento?}]
+  procedimientosCpt Json?  @map("procedimientos_cpt")
+  /// CC-0007 RF-10 — terapia respiratoria estructurada
+  terapiaRespiratoria Json? @map("terapia_respiratoria")
+  /// CC-0007 RF-10 — órdenes de exámenes lab/gabinete [{seccion,examen,cantidad}]
+  ordenesExamenes   Json?  @map("ordenes_examenes")
+  /// CC-0007 RF-10 — órdenes de inyecciones [{texto}]
+  ordenesInyecciones Json? @map("ordenes_inyecciones")
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("HCRegistradoPor", fields: [registradoPorId], references: [id])
@@ -5312,6 +5327,22 @@ model EceSignosVitales {
   digitadoRetroactivamente Boolean  @default(false) @map("digitado_retroactivamente")
   timestampRealPapel       DateTime? @map("timestamp_real_papel") @db.Timestamptz()
   contingenciaEventoId     String?  @map("contingencia_evento_id") @db.Uuid
+  /// CC-0007 RF-06 — neurológico (Glasgow por componente). La glucometría usa
+  /// la columna existente glucometria_mgdl (operada vía raw SQL en el router).
+  glasgowOcular            Int?     @map("glasgow_ocular")
+  glasgowVerbal            Int?     @map("glasgow_verbal")
+  glasgowMotor             Int?     @map("glasgow_motor")
+  glasgowTotal             Int?     @map("glasgow_total")
+  /// CC-0007 RF-06 — FiO2 obligatorio junto con PA+cardiorrespiratorios
+  fio2                     Decimal? @db.Decimal(5, 2)
+  /// CC-0007 RF-06 — antropometría extendida (ICT, cintura, balance, diuresis)
+  ict                      Decimal? @db.Decimal(5, 3)
+  perimetroCintura         Decimal? @map("perimetro_cintura") @db.Decimal(5, 1)
+  balanceHidrico           Decimal? @map("balance_hidrico") @db.Decimal(7, 1)
+  diuresis                 Decimal? @db.Decimal(7, 1)
+  /// CC-0007 RF-06 — gineco-obstétrico (solo paciente femenina en edad fértil)
+  fur                      DateTime? @db.Date
+  fpp                      DateTime? @db.Date
 
   episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("SVRegistradoPor", fields: [registradoPorId], references: [id])
@@ -6964,6 +6995,38 @@ model EceReservaSalaQx {
   @@index([salaQxId, fechaInicio, fechaFin], name: "idx_reserva_sala_qx_overlap")
   @@index([episodioId], name: "idx_reserva_sala_qx_episodio")
   @@map("reserva_sala_qx")
+  @@schema("ece")
+}
+
+/// CC-0007 RF-09 — catálogo CPT global (sin tenant). Lectura por rol authenticated.
+/// Sembrado con los 12 procedimientos del mockup (sql/182_cc0007_hc_schema.sql).
+model EceCatalogoCpt {
+  id          String   @id @default(uuid()) @db.Uuid
+  codigo      String   @unique @db.VarChar(20)
+  descripcion String   @db.VarChar(500)
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([activo])
+  @@map("catalogo_cpt")
+  @@schema("ece")
+}
+
+/// CC-0007 RF-04/RF-07 — plantillas de texto por médico/organización.
+/// Tenant-scoped: organizationId + RLS policy. Campo: ENFERMEDAD_ACTUAL | EXAMEN_FISICO.
+model EcePlantillaTexto {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @map("organization_id") @db.Uuid
+  campo          String   @db.VarChar(40)
+  titulo         String   @db.VarChar(200)
+  contenido      String
+  activo         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz()
+
+  @@index([organizationId, campo])
+  @@map("plantilla_texto")
   @@schema("ece")
 }
 

@@ -16,6 +16,7 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { withEceContext } from "../ece/rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
 import { nextExpediente } from "../lib/expediente-numbering";
 import { validateDUI } from "@his/contracts";
@@ -727,6 +728,162 @@ export const patientRouter = router({
       });
 
       return { mergeId: result.id, toPatientId: to.id };
+    }),
+
+  // ===========================================================================
+  // CC-0007 — Contexto de cuenta de paciente para header pegajoso de HC.
+  // Resuelve episodioId automáticamente (elimina input manual de UUID en UI).
+  // ===========================================================================
+  contextoCuenta: tenantProcedure
+    .input(z.object({ cuentaId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      // Bloque 1: cargar PatientAccount + datos base del paciente
+      const account = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.patientAccount.findFirst({
+          where: {
+            id: input.cuentaId,
+            organizationId: ctx.tenant.organizationId,
+          },
+        });
+      });
+
+      if (!account) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Cuenta de paciente no encontrada.",
+        });
+      }
+
+      const safe = async <T>(label: string, p: Promise<T>, fallback: T): Promise<T> => {
+        try {
+          return await p;
+        } catch (err) {
+          console.error(`[patient.contextoCuenta] "${label}" failed:`, err);
+          return fallback;
+        }
+      };
+
+      const patientId = account.patientId;
+      const organizationId = ctx.tenant.organizationId;
+
+      const [patient, alergias, contactosEmergencia] = await Promise.all([
+        safe(
+          "patient",
+          withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+            tx.patient.findFirst({
+              where: { id: patientId, organizationId, deletedAt: null },
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+                preferredName: true,
+                esLgbtiq: true,
+                birthDate: true,
+                biologicalSexId: true,
+              },
+            }),
+          ),
+          null,
+        ),
+        safe(
+          "alergias",
+          withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+            tx.patientAllergy.findMany({
+              where: { patientId, active: true },
+              select: { id: true, substanceText: true, reaction: true, severity: true },
+            }),
+          ),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientAllergy.findMany<{
+            where: { patientId: string; active: boolean };
+            select: { id: true; substanceText: true; reaction: true; severity: true };
+          }>>>,
+        ),
+        safe(
+          "contactosEmergencia",
+          withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+            tx.patientEmergencyContact.findMany({
+              where: { patientId },
+              select: { id: true, fullName: true, relationship: true, phone: true },
+            }),
+          ),
+          [] as Awaited<ReturnType<typeof ctx.prisma.patientEmergencyContact.findMany<{
+            where: { patientId: string };
+            select: { id: true; fullName: true; relationship: true; phone: true };
+          }>>>,
+        ),
+      ]);
+
+      // Bloque 2: resolver episodioId desde ece.episodio_atencion
+      // Usa withEceContext (GUC ece_establecimiento_id) porque episodio_atencion
+      // tiene RLS por ece.current_establecimiento_id().
+      // Si no hay establishmentId en el tenant, devuelve null sin error.
+      let episodioId: string | null = null;
+
+      if (ctx.tenant.establishmentId) {
+        try {
+          type EpisodioRow = { id: string };
+
+          episodioId = await withEceContext(
+            ctx.prisma,
+            ctx.user.id,
+            ctx.tenant.establishmentId,
+            async (tx) => {
+              // Paso 1: si la cuenta tiene encounterId, buscar episodio por public_encounter_id
+              if (account.encounterId) {
+                const rows = await tx.$queryRaw<EpisodioRow[]>`
+                  SELECT ea.id::text AS id
+                  FROM ece.episodio_atencion ea
+                  WHERE ea.public_encounter_id = ${account.encounterId}::uuid
+                    AND ea.estado IN ('abierto', 'en_curso')
+                  ORDER BY ea.creado_en DESC
+                  LIMIT 1
+                `;
+                if (rows[0]) return rows[0].id;
+              }
+
+              // Paso 2: fallback — episodio más reciente del paciente por public_patient_id
+              const rows = await tx.$queryRaw<EpisodioRow[]>`
+                SELECT ea.id::text AS id
+                FROM ece.episodio_atencion ea
+                JOIN ece.paciente ep ON ep.id = ea.paciente_id
+                WHERE ep.public_patient_id = ${patientId}::uuid
+                  AND ea.estado IN ('abierto', 'en_curso')
+                ORDER BY ea.creado_en DESC
+                LIMIT 1
+              `;
+              return rows[0]?.id ?? null;
+            },
+          );
+        } catch (err) {
+          // No lanzar — la UI maneja episodioId: null
+          console.error("[patient.contextoCuenta] resolución de episodioId falló:", err);
+          episodioId = null;
+        }
+      }
+
+      return {
+        cuenta: {
+          id: account.id,
+          numeroCuenta: account.numeroCuenta,
+          encounterId: account.encounterId ?? null,
+        },
+        episodioId,
+        paciente: patient
+          ? {
+              id: patient.id,
+              firstName: patient.firstName,
+              lastName: patient.lastName,
+              mrn: patient.mrn ?? null,
+              preferredName: patient.preferredName ?? null,
+              esLgbtiq: patient.esLgbtiq ?? null,
+              birthDate: patient.birthDate ?? null,
+              biologicalSexId: patient.biologicalSexId,
+            }
+          : null,
+        alergias,
+        contactosEmergencia,
+      };
     }),
 
   // ===========================================================================

@@ -37,6 +37,19 @@ export const eceSignosVitalesCreateSchema = z.object({
   observaciones: z.string().max(2000).optional(),
 
   fechaHoraToma: z.string().datetime({ offset: true }).optional(),
+
+  // CC-0007 — campos nuevos (migración 182)
+  glasgowOcular:      numRange(1, 4,  "Glasgow ocular").int().optional(),
+  glasgowVerbal:      numRange(1, 5,  "Glasgow verbal").int().optional(),
+  glasgowMotor:       numRange(1, 6,  "Glasgow motor").int().optional(),
+  glasgowTotal:       numRange(3, 15, "Glasgow total").int().optional(),
+  fio2:               numRange(21, 100, "FiO2").optional(),
+  perimetroCintura:   z.number().positive("Perímetro cintura debe ser positivo.").optional(),
+  ict:                z.number().positive("ICT debe ser positivo.").optional(),
+  balanceHidrico:     z.number().optional(),
+  diuresis:           z.number().min(0, "Diuresis no puede ser negativa.").optional(),
+  fur:                z.string().date().optional(),
+  fpp:                z.string().date().optional(),
 });
 
 export type EceSignosVitalesCreateInput = z.infer<typeof eceSignosVitalesCreateSchema>;
@@ -55,6 +68,17 @@ export const eceSignosVitalesUpdateSchema = eceSignosVitalesCreateSchema
     glucometriaMgdl: true,
     observaciones: true,
     fechaHoraToma: true,
+    glasgowOcular: true,
+    glasgowVerbal: true,
+    glasgowMotor: true,
+    glasgowTotal: true,
+    fio2: true,
+    perimetroCintura: true,
+    ict: true,
+    balanceHidrico: true,
+    diuresis: true,
+    fur: true,
+    fpp: true,
   })
   .partial();
 
