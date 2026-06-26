@@ -187,7 +187,11 @@ describe("NuevaEvolucionPage", () => {
 
   it("Firmar se habilita solo con TODOS los campos obligatorios completos", async () => {
     // Precargar el draft ANTES de renderizar (setup() resetea draftState, por eso se usa render directo)
-    draftState = draftReducer(DRAFT_EMPTY, { type: "ADD_PROBLEMA", texto: "p1" });
+    draftState = draftReducer(DRAFT_EMPTY, {
+      type: "SET_ESPECIALIDAD",
+      especialidad: { id: null, nombre: "Medicina Interna" },
+    });
+    draftState = draftReducer(draftState, { type: "ADD_PROBLEMA", texto: "p1" });
     draftState = draftReducer(draftState, { type: "SET_SUBJETIVO", texto: "refiere dolor" });
     draftState = draftReducer(draftState, { type: "SET_OBJETIVO", texto: "examen físico" });
     draftState = draftReducer(draftState, { type: "SET_ANALISIS", texto: "dx" });
@@ -202,6 +206,7 @@ describe("NuevaEvolucionPage", () => {
         frecuenciaRespiratoria: "16",
         temperatura: "36.6",
         saturacionO2: "98",
+        fio2: "21",
       },
     });
     render(<NuevaEvolucionPage />);

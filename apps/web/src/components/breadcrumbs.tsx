@@ -38,7 +38,7 @@ const SLUG_LABELS: Record<string, string> = {
   "atencion-rn":            "Atención RN",
   "certificado-incapacidad":"Cert. Incapacidad",
   "documento-asociado":     "Doc. Asociados",
-  "episodio-hospitalario":  "Episodio Hospitalario",
+  "episodio-hospitalario":  "Cuenta Hospitalaria",
   "evolucion":              "Evolución Médica",
   "fall-event":             "Reporte de Caídas",
   "historia-clinica":       "Historia Clínica",

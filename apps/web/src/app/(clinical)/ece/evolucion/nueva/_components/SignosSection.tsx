@@ -13,11 +13,24 @@ import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
-import { computeAlertasVitales } from "../../../../../../lib/evolucion/signos-vitales";
+import {
+  computeAlertasVitales,
+  glasgowTotal,
+  glasgowSeveridad,
+  imcFrom,
+  imcClasificacion,
+} from "../../../../../../lib/evolucion/signos-vitales";
 import { tieneSignos } from "../_lib/types";
 
 interface Props {
   onAbrir: () => void;
+}
+
+/** Parsea string de signo → number | null (vacío = sin valor). */
+function num(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 export function SignosSection({ onAbrir }: Props) {
@@ -27,15 +40,31 @@ export function SignosSection({ onAbrir }: Props) {
 
   const alertas = haySignos
     ? computeAlertasVitales({
-        presionSistolica: signos.presionSistolica !== "" ? Number(signos.presionSistolica) : null,
-        presionDiastolica: signos.presionDiastolica !== "" ? Number(signos.presionDiastolica) : null,
-        frecuenciaCardiaca: signos.frecuenciaCardiaca !== "" ? Number(signos.frecuenciaCardiaca) : null,
-        frecuenciaRespiratoria: signos.frecuenciaRespiratoria !== "" ? Number(signos.frecuenciaRespiratoria) : null,
-        temperatura: signos.temperatura !== "" ? Number(signos.temperatura) : null,
-        saturacionO2: signos.saturacionO2 !== "" ? Number(signos.saturacionO2) : null,
+        presionSistolica: num(signos.presionSistolica),
+        presionDiastolica: num(signos.presionDiastolica),
+        frecuenciaCardiaca: num(signos.frecuenciaCardiaca),
+        frecuenciaRespiratoria: num(signos.frecuenciaRespiratoria),
+        temperatura: num(signos.temperatura),
+        saturacionO2: num(signos.saturacionO2),
         dolorEva: signos.escalaDolor,
+        glucometriaMgdl: num(signos.glucometriaMgdl),
+        glasgowOcular: num(signos.glasgowOcular),
+        glasgowVerbal: num(signos.glasgowVerbal),
+        glasgowMotora: num(signos.glasgowMotora),
+        diuresisHoraria: num(signos.diuresisHoraria),
+        pesoKg: num(signos.pesoKg),
       })
     : [];
+
+  // Cálculos derivados para chips (R1.2/R1.3).
+  const gTotal = glasgowTotal(
+    num(signos.glasgowOcular),
+    num(signos.glasgowVerbal),
+    num(signos.glasgowMotora),
+  );
+  const pesoKgN = num(signos.pesoKg);
+  const tallaMN = num(signos.tallaM);
+  const imc = pesoKgN != null && tallaMN != null && tallaMN > 0 ? imcFrom(pesoKgN, tallaMN) : null;
 
   return (
     <Card className="border-l-4 border-rose-300 dark:border-rose-700">
@@ -82,6 +111,26 @@ export function SignosSection({ onAbrir }: Props) {
               {signos.saturacionO2 && (
                 <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
                   SpO₂ {signos.saturacionO2}%
+                </span>
+              )}
+              {signos.fio2 && (
+                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                  FiO₂ {signos.fio2}%
+                </span>
+              )}
+              {gTotal != null && (
+                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                  Glasgow {gTotal}/15 · {glasgowSeveridad(gTotal)}
+                </span>
+              )}
+              {signos.glucometriaMgdl && (
+                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                  Gluc {signos.glucometriaMgdl} mg/dL
+                </span>
+              )}
+              {imc != null && (
+                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                  IMC {imc.toFixed(1)} · {imcClasificacion(imc).label}
                 </span>
               )}
               {signos.escalaDolor > 0 && (

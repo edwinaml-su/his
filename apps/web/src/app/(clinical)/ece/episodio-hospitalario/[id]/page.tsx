@@ -105,7 +105,7 @@ export default function EpisodioHospitalarioDetallePage() {
   );
 
   if (query.isLoading) {
-    return <p className="text-sm text-muted-foreground p-6">Cargando episodio…</p>;
+    return <p className="text-sm text-muted-foreground p-6">Cargando cuenta…</p>;
   }
 
   if (query.error) {
@@ -241,7 +241,7 @@ export default function EpisodioHospitalarioDetallePage() {
                 <Badge variant={ESTADO_VARIANT[estado] ?? "outline"}>{estado.replace("_", " ")}</Badge>
               </div>
               <p className="text-sm text-muted-foreground font-mono">
-                ID episodio: {ep.id.slice(0, 8)}…
+                Cuenta hospitalaria N.°: {ep.id.slice(0, 8)}…
               </p>
             </div>
             {puedeIniciarAlta && (
@@ -296,7 +296,7 @@ export default function EpisodioHospitalarioDetallePage() {
 
       {/* Tabs */}
       <Tabs defaultValue="resumen">
-        <TabsList aria-label="Secciones del episodio">
+        <TabsList aria-label="Secciones de la cuenta hospitalaria">
           <TabsTrigger value="resumen" className="flex items-center gap-1.5">
             <FileText className="h-3.5 w-3.5" aria-hidden />
             Resumen
