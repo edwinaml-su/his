@@ -4840,6 +4840,7 @@ model EcePersonalSalud {
   supresiones                 EceSupresion[]                 @relation("AutorizadaPor")
   historiasClinicas           EceHistoriaClinica[]           @relation("HCRegistradoPor")
   signosVitales               EceSignosVitales[]             @relation("SVRegistradoPor")
+  lesionesCausaExterna        EceLesionCausaExterna[]        @relation("LCERegistradoPor")
   triajes                     EceTriaje[]                    @relation("TRRegistradoPor")
   atencionesEmergencia        EceAtencionEmergencia[]        @relation("AERegistradoPor")
   indicacionesMedPrescriptor  EceIndicacionesMedicas[]       @relation("IMPrescriptor")
@@ -5061,6 +5062,7 @@ model EceEpisodioAtencion {
   documentosInstancia     EceDocumentoInstancia[]
   historiasClinicas       EceHistoriaClinica[]
   signosVitales           EceSignosVitales[]
+  lesionesCausaExterna    EceLesionCausaExterna[]
   triajes                 EceTriaje[]
   atencionesEmergencia    EceAtencionEmergencia[]
   indicacionesMedicas     EceIndicacionesMedicas[]
@@ -5354,6 +5356,75 @@ model EceSignosVitales {
 
   @@index([episodioId, fechaHoraToma])
   @@map("signos_vitales")
+  @@schema("ece")
+}
+
+/// CC-0007 LCE — Formulario de Lesión de Causa Externa (REQ-ECE-LCE-001).
+/// Registro epidemiológico MINSAL ligado al episodio. Multi-selects como text[]
+/// de etiquetas canónicas; mapa corporal como JSON [{key,label}].
+model EceLesionCausaExterna {
+  id          String  @id @default(uuid()) @db.Uuid
+  instanciaId String? @map("instancia_id") @db.Uuid
+  episodioId  String  @map("episodio_id") @db.Uuid
+  pacienteId  String? @map("paciente_id") @db.Uuid
+
+  // II — Datos generales
+  eventoFechaHora     DateTime? @map("evento_fecha_hora") @db.Timestamptz()
+  discapacidad        Boolean?
+  tipoEvento          String[]  @map("tipo_evento")
+  tipoEventoOtro      String?   @map("tipo_evento_otro")
+  lugarDepartamento   String?   @map("lugar_departamento")
+  lugarMunicipio      String?   @map("lugar_municipio")
+  lugarDireccion      String?   @map("lugar_direccion")
+  mecanismo           String[]
+  mecanismoOtro       String?   @map("mecanismo_otro")
+  mecExplosion        String[]  @map("mec_explosion")
+  mecFuego            String[]  @map("mec_fuego")
+  mecIntoxicacion     String[]  @map("mec_intoxicacion")
+  mecIntoxicacionOtro String?   @map("mec_intoxicacion_otro")
+  mecMordedura        String[]  @map("mec_mordedura")
+  mecMordeduraOtro    String?   @map("mec_mordedura_otro")
+  intencionalidad     String[]
+  intencionalidadOtro String?   @map("intencionalidad_otro")
+  lugar               String[]
+  lugarOtro           String?   @map("lugar_otro")
+  actividad           String[]
+  actividadOtro       String?   @map("actividad_otro")
+
+  // III — Datos específicos
+  transporteVictima          String[] @map("transporte_victima")
+  transporteVictimaOtro      String?  @map("transporte_victima_otro")
+  contraparte                String[]
+  contraparteOtro            String?  @map("contraparte_otro")
+  usuarioVia                 String[] @map("usuario_via")
+  tipoAccidente              String[] @map("tipo_accidente")
+  tipoAccidenteOtro          String?  @map("tipo_accidente_otro")
+  violenciaRelacion          String[] @map("violencia_relacion")
+  violenciaRelacionOtro      String?  @map("violencia_relacion_otro")
+  violenciaContexto          String[] @map("violencia_contexto")
+  violenciaContextoOtro      String?  @map("violencia_contexto_otro")
+  violenciaAutoinfligida     String[] @map("violencia_autoinfligida")
+  violenciaAutoinfligidaOtro String?  @map("violencia_autoinfligida_otro")
+
+  // IV — Datos clínicos
+  severidad             String[]
+  glasgowTotal          Int?    @map("glasgow_total")
+  glasgowCategoria      String? @map("glasgow_categoria") @db.VarChar(20)
+  mapaCorporalSitios    Json?   @map("mapa_corporal_sitios")
+  diagnosticoNaturaleza String? @map("diagnostico_naturaleza")
+  sitioAnatomico        String? @map("sitio_anatomico")
+  destino               String[]
+
+  registradoPorId String    @map("registrado_por") @db.Uuid
+  registradoEn    DateTime  @default(now()) @map("registrado_en") @db.Timestamptz()
+  estadoRegistro  String    @default("borrador") @map("estado_registro") @db.VarChar(20)
+  firmadoEn       DateTime? @map("firmado_en") @db.Timestamptz()
+
+  episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
+  registradoPor EcePersonalSalud    @relation("LCERegistradoPor", fields: [registradoPorId], references: [id])
+
+  @@index([episodioId])
+  @@map("lesion_causa_externa")
   @@schema("ece")
 }
 

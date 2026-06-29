@@ -61,6 +61,7 @@ import {
   VITALES_INITIAL,
   type VitalesState,
 } from "./_components/signos-vitales-modal";
+import { LesionCausaExternaModalButton } from "./_components/lce/lesion-causa-externa-modal-button";
 import { DiagnosticosGrid } from "./_components/diagnosticos-grid";
 import { ProcedimientosGrid } from "./_components/procedimientos-grid";
 import { PlanGrid } from "./_components/plan-grid";
@@ -1044,6 +1045,30 @@ export default function NuevaHistoriaClinicaPage() {
             />
           </fieldset>
         </CardNumerada>
+
+        {/* ── Lesión de causa externa (formulario epidemiológico MINSAL, opcional) ── */}
+        <div className="rounded-lg border border-border bg-card p-4">
+          <LesionCausaExternaModalButton
+            episodioId={episodioId}
+            paciente={
+              paciente
+                ? {
+                    nombre: paciente.firstName,
+                    apellidos: paciente.lastName,
+                    documento: paciente.mrn,
+                    edad: paciente.birthDate ? calcEdad(paciente.birthDate) : null,
+                    sexo: paciente.biologicalSexId
+                      ? isFemeninoSexo(paciente.biologicalSexId)
+                        ? "Femenino"
+                        : "Masculino"
+                      : null,
+                  }
+                : null
+            }
+            medicoNombre={usuarioActual}
+            disabled={isSubmitting}
+          />
+        </div>
 
         {/* ── 5. Diagnósticos CIE-11 ── */}
         <CardNumerada

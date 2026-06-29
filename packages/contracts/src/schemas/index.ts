@@ -32,6 +32,7 @@ export * from "./ece-evolucion";
 export * from "./ece-historia-clinica";
 export * from "./ece-hoja-ingreso";
 export * from "./ece-indicaciones";
+export * from "./ece-lesion-causa-externa";
 export * from "./ece-partograma";
 export * from "./ece-permissions";
 export * from "./ece-rectificacion";

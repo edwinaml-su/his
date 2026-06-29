@@ -58,6 +58,7 @@ import { workflowInstanceRouter } from "./workflow-instance.router";
 import { workflowValidatorRouter } from "./workflow-validator.router";
 import { eceHistoriaClinicaRouter } from "./ece/historia-clinica.router";
 import { eceSignosVitalesRouter } from "./ece/signos-vitales.router";
+import { eceLesionCausaExternaRouter } from "./ece/lesion-causa-externa.router";
 // CC-0007 — catálogo CPT y plantillas de texto
 import { cptRouter } from "./ece/cpt.router";
 import { plantillaTextoRouter } from "./ece/plantilla-texto.router";
@@ -284,6 +285,7 @@ export const appRouter = router({
   workflowValidatorVisual: workflowValidatorVisualRouter,
   eceHistoriaClinica: eceHistoriaClinicaRouter,
   eceSignosVitales: eceSignosVitalesRouter,
+  eceLesionCausaExterna: eceLesionCausaExternaRouter,
   // CC-0007 — catálogo CPT y plantillas de texto
   eceCatalogoCpt: cptRouter,
   ecePlantillaTexto: plantillaTextoRouter,
