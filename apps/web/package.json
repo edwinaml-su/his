@@ -43,7 +43,7 @@
     "@trpc/react-query": "^11.0.0-rc.660",
     "@trpc/server": "^11.0.0-rc.660",
     "@zxing/browser": "^0.2.0",
-    "ai": "^6.0.197",
+    "ai": "^6.0.214",
     "bwip-js": "^4.11.1",
     "cmdk": "^1.0.4",
     "html-to-image": "^1.11.13",
