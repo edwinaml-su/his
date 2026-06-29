@@ -3,7 +3,7 @@
  *
  * Cubre los catálogos y reglas de negocio nuevas:
  *   RF-03 / RN-02  diagnósticos CIE-11 + CIE11_CODE_REGEX
- *   RF-06 / RN-08  Destino (catálogo cerrado de 8)
+ *   RF-06 / RN-08  Destino (catálogo cerrado de 9; CC-0007 RF-12 sumó FALLECIDO)
  *   RN-03          ≥1 diagnóstico Complementario (tieneComplementario)
  *   RF-02 / RN-05  antecedentes + bloque obstétrico (FUM ∈ [hoy−300, hoy])
  *   createInput    episodioId + tipoConsulta obligatorios (RN-01)
@@ -54,12 +54,13 @@ describe("TIPO_DIAGNOSTICO", () => {
 });
 
 // ---------------------------------------------------------------------------
-// RF-06 / RN-08 — Destino (catálogo cerrado de 8)
+// RF-06 / RN-08 — Destino (catálogo cerrado de 9; CC-0007 RF-12 sumó FALLECIDO)
 // ---------------------------------------------------------------------------
 
 describe("DESTINO_OPTIONS", () => {
-  it("define exactamente 8 destinos", () => {
-    expect(DESTINO_OPTIONS).toHaveLength(8);
+  it("define exactamente 9 destinos", () => {
+    // CC-0001 definió 8; CC-0007 RF-12 (#486) agregó FALLECIDO → 9.
+    expect(DESTINO_OPTIONS).toHaveLength(9);
   });
 
   it("tiene etiqueta para cada destino", () => {

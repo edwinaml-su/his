@@ -9,11 +9,20 @@ interface PatientShellBarProps {
 }
 
 /**
- * Wrapper que fetchea el paciente y alimenta PatientContextBar.
+ * Wrapper que fetchea el paciente y alimenta PatientContextBar — el "segundo
+ * header" persistente del paciente activo (clase distinta al header de sesión).
  *
  * Estrategia: client-only con useQuery (enabled: !!patientId) — más simple
  * que RSC fetch y compatible con la arquitectura de trpc.patient.get existente.
  * Si el paciente no se encuentra o hay error, no renderiza nada.
+ *
+ * Contrato de visibilidad (CC-0008 §B):
+ *   - SOLO montar en páginas donde se CONSULTA a un paciente: vista 360°/
+ *     históricos del expediente y cuentas/episodios con servicio activo
+ *     (ambulatorio u hospitalario).
+ *   - NUNCA montar en flujos de captura de identidad (pre-registro `/patients/new`,
+ *     admisión) — ahí el paciente aún se está dando de alta, no se "consulta".
+ *   - Si no hay paciente cargado, no se muestra (guard `!patient → null`).
  */
 export function PatientShellBar({ patientId }: PatientShellBarProps) {
   const { data: patient, isLoading } = trpc.patient.get.useQuery(
@@ -45,6 +54,9 @@ export function PatientShellBar({ patientId }: PatientShellBarProps) {
       }}
       alerts={{
         allergies: allergiesForBar,
+        // CC-0008 §B — alerta LGBTIQ+ (nombre de pila); se captura en admisión.
+        lgbtiq: patient.esLgbtiq ?? false,
+        preferredName: patient.preferredName ?? null,
         // isolation, fallRisk, lasa: datos de futuras relaciones (follow-up)
       }}
     />

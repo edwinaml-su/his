@@ -80,6 +80,16 @@ const SLUG_LABELS: Record<string, string> = {
   "editar":                 "Editar",
 };
 
+/**
+ * Overrides por ruta completa (href acumulado), no por slug.
+ * Necesario cuando un mismo slug ("new") aparece en muchas rutas pero solo
+ * en una debe rotularse distinto (p. ej. /patients/new = "Pre-registro", CC-0008).
+ */
+const PATH_LABELS: Record<string, string> = {
+  "/patients": "Pacientes",
+  "/patients/new": "Pre-registro",
+};
+
 function labelFor(slug: string): string {
   if (UUID_RE.test(slug)) return "…";
   if (/^\d+$/.test(slug)) return "…";
@@ -101,7 +111,7 @@ export function Breadcrumbs({ pathname }: { pathname: string | null }) {
   // Reconstruye href acumulado por nivel.
   const items = segments.map((slug, idx) => {
     const href = "/" + segments.slice(0, idx + 1).join("/");
-    return { href, label: labelFor(slug) };
+    return { href, label: PATH_LABELS[href] ?? labelFor(slug) };
   });
 
   return (

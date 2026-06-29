@@ -64,6 +64,36 @@ describe("patientCreateSchema", () => {
     expect(r.success).toBe(false);
   });
 
+  // CC-0008 §6: mrn ya no se captura en pre-registro (se autogenera server-side).
+  it("acepta input sin mrn (autogenerado server-side)", () => {
+    const { mrn: _mrn, ...sinMrn } = valid;
+    const r = patientCreateSchema.safeParse(sinMrn);
+    expect(r.success).toBe(true);
+  });
+
+  // CC-0008 §6: nombres/apellidos extendidos + switch trae documento.
+  it("acepta tercer nombre y apellido de casada", () => {
+    const r = patientCreateSchema.safeParse({
+      ...valid,
+      thirdName: "Lucía",
+      marriedLastName: "de Pérez",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("traeDocumento aplica default true cuando se omite", () => {
+    const r = patientCreateSchema.safeParse(valid);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.traeDocumento).toBe(true);
+  });
+
+  it("acepta traeDocumento=false (paciente sin documento)", () => {
+    const { mrn: _mrn, ...sinMrn } = valid;
+    const r = patientCreateSchema.safeParse({ ...sinMrn, traeDocumento: false });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.traeDocumento).toBe(false);
+  });
+
   it("documentType ausente → pasa (opcional)", () => {
     const r = patientCreateSchema.safeParse(valid);
     expect(r.success).toBe(true);

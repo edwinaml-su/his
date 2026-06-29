@@ -1147,10 +1147,14 @@ model Patient {
   expediente         String?   @unique @db.VarChar(20) /// CC-0002 §6: {PAIS}{AA}{NNNNN}. Inmutable tras asignarse. Server-generated.
   documentType       DocumentType?            /// CC-0002 §3: documento de registro. DUI_RESP = doc del responsable (menores).
   documentNumber     String?   @db.VarChar(40) /// CC-0002 §5: dedup 1:1 para docs propios; DUI_RESP es compartible.
-  firstName          String    @db.VarChar(120)
-  middleName         String?   @db.VarChar(120)
-  lastName           String    @db.VarChar(120)
-  secondLastName     String?   @db.VarChar(120)
+  /// CC-0008 §6 — switch "el paciente trae documento de identidad" (default ON). OFF habilita registro sin documento + responsable.
+  traeDocumento      Boolean   @default(true)
+  firstName          String    @db.VarChar(120) /// primer nombre.
+  middleName         String?   @db.VarChar(120) /// segundo nombre.
+  thirdName          String?   @db.VarChar(120) /// CC-0008 §6 — tercer nombre.
+  lastName           String    @db.VarChar(120) /// primer apellido.
+  secondLastName     String?   @db.VarChar(120) /// segundo apellido.
+  marriedLastName    String?   @db.VarChar(120) /// CC-0008 §6 — apellido de casada.
   preferredName      String?   @db.VarChar(120)
   /// CC-0007 RF-01.3 — paciente de la comunidad LGBTIQ+ (activa banner de nombre de pila)
   esLgbtiq           Boolean?  @map("es_lgbtiq")

@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="es-SV">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-Registro · HIS Multipaís — AVANTE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0B3D5C;
+    --navy-deep:#082E45;
+    --navy-700:#0E4A6E;
+    --teal:#00A8B5;
+    --teal-dark:#018592;
+    --blue-active:#1C6CE0;
+    --bg:#F4F7FA;
+    --card:#FFFFFF;
+    --field-bg:#F8FAFC;
+    --border:#DDE3EA;
+    --border-strong:#C6D0DB;
+    --text:#15212E;
+    --text-muted:#5B6B7B;
+    --required:#DC2626;
+    --captured-bg:#E6F7F8;
+    --captured-border:#00A8B5;
+    --radius:8px;
+    --shadow:0 1px 2px rgba(16,40,64,.06), 0 1px 3px rgba(16,40,64,.04);
+    --sidebar-w:248px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    font-size:14px;
+    line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .app{display:flex;min-height:100vh;}
+
+  /* ── Sidebar ─────────────────────────────── */
+  .sidebar{
+    width:var(--sidebar-w);
+    flex:0 0 var(--sidebar-w);
+    background:var(--navy);
+    color:#CFE0EC;
+    display:flex;flex-direction:column;
+    padding:0 0 24px;
+    position:sticky;top:0;height:100vh;overflow-y:auto;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px;}
+  .brand .cross{
+    width:30px;height:30px;border-radius:6px;
+    background:linear-gradient(135deg,var(--teal),#16C2CF);
+    display:grid;place-items:center;color:#fff;font-weight:700;flex:0 0 auto;
+  }
+  .brand .cross svg{width:18px;height:18px;}
+  .brand .name{font-weight:700;color:#fff;font-size:16px;letter-spacing:.3px;line-height:1;}
+  .brand .sub{font-size:10px;color:#9FBBD0;letter-spacing:.5px;}
+
+  .side-search{margin:4px 14px 16px;}
+  .side-search input{
+    width:100%;border:none;border-radius:6px;background:rgba(255,255,255,.10);
+    color:#DCEAF3;padding:9px 12px;font-size:13px;font-family:inherit;
+  }
+  .side-search input::placeholder{color:#8FAEC6;}
+
+  .nav-link{
+    display:flex;align-items:center;gap:12px;padding:9px 18px;margin:1px 10px;
+    border-radius:7px;color:#C2D6E6;text-decoration:none;font-size:13.5px;font-weight:500;
+  }
+  .nav-link svg{width:17px;height:17px;flex:0 0 auto;opacity:.85;}
+  .nav-link:hover{background:rgba(255,255,255,.07);color:#fff;}
+  .nav-link.active{background:var(--blue-active);color:#fff;box-shadow:0 1px 6px rgba(28,108,224,.4);}
+  .nav-link.active svg{opacity:1;}
+
+  .nav-section{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 22px 6px;font-size:11px;font-weight:700;letter-spacing:1px;color:#7FA0BC;
+  }
+
+  /* ── Main ────────────────────────────────── */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;}
+
+  .topbar{
+    height:56px;background:#fff;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:14px;padding:0 22px;position:sticky;top:0;z-index:5;
+  }
+  .topbar .tsearch{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--border);
+    border-radius:7px;padding:7px 12px;color:var(--text-muted);font-size:13px;min-width:230px;
+  }
+  .kbd{margin-left:auto;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:11px;color:var(--text-muted);}
+  .topbar .spacer{flex:1;}
+  .pill{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--border);
+    border-radius:7px;padding:7px 12px;font-size:13px;color:var(--text);font-weight:500;background:#fff;
+  }
+  .pill svg{width:15px;height:15px;color:var(--text-muted);}
+  .icon-btn{width:34px;height:34px;border:1px solid var(--border);border-radius:7px;display:grid;place-items:center;color:var(--text-muted);background:#fff;}
+  .icon-btn svg{width:16px;height:16px;}
+
+  .breadcrumb{display:flex;align-items:center;gap:8px;padding:14px 28px 0;color:var(--text-muted);font-size:13px;}
+  .breadcrumb a{color:var(--text-muted);text-decoration:none;}
+  .breadcrumb .sep{opacity:.5;}
+  .breadcrumb .current{color:var(--text);font-weight:600;}
+
+  .page{padding:6px 28px 60px;max-width:920px;}
+  h1.page-title{font-size:26px;font-weight:700;color:var(--navy);margin:14px 0 18px;}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:26px 28px 30px;}
+  .card-title{font-size:17px;font-weight:700;color:var(--text);margin:0 0 6px;}
+  .card-legend{font-size:12.5px;color:var(--text-muted);margin:0 0 22px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .legend-req{color:var(--required);font-weight:700;}
+
+  /* ── Toggle (trae documento) ─────────────── */
+  .doc-toggle{
+    display:flex;align-items:flex-start;gap:14px;
+    border:1px solid var(--border);background:var(--field-bg);border-radius:var(--radius);
+    padding:16px 18px;margin-bottom:24px;
+  }
+  .switch{position:relative;flex:0 0 auto;width:44px;height:26px;margin-top:1px;}
+  .switch input{opacity:0;width:0;height:0;position:absolute;}
+  .slider{
+    position:absolute;inset:0;background:#C6D0DB;border-radius:999px;transition:.18s;cursor:pointer;
+  }
+  .slider::before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.25);}
+  .switch input:checked + .slider{background:var(--teal);}
+  .switch input:checked + .slider::before{transform:translateX(18px);}
+  .switch input:focus-visible + .slider{outline:2px solid var(--navy);outline-offset:2px;}
+  .toggle-text strong{display:block;font-size:14px;color:var(--text);font-weight:600;}
+  .toggle-text span{display:block;font-size:12.5px;color:var(--text-muted);margin-top:2px;}
+
+  /* ── Scan affordance ─────────────────────── */
+  .scan-row{display:flex;flex-direction:column;gap:10px;margin:4px 0 26px;}
+  .scan-btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    border:1.5px dashed var(--teal);background:var(--captured-bg);color:var(--teal-dark);
+    border-radius:var(--radius);padding:14px 18px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
+    transition:.15s;
+  }
+  .scan-btn:hover{background:#D6F2F4;border-style:solid;}
+  .scan-btn:focus-visible{outline:2px solid var(--navy);outline-offset:2px;}
+  .scan-btn svg{width:20px;height:20px;}
+  .scan-status{
+    display:none;align-items:center;gap:8px;font-size:12.5px;color:var(--teal-dark);
+    background:var(--captured-bg);border:1px solid var(--captured-border);border-radius:6px;padding:9px 12px;font-weight:500;
+  }
+  .scan-status.show{display:flex;}
+  .scan-status svg{width:15px;height:15px;flex:0 0 auto;}
+
+  /* ── Form ────────────────────────────────── */
+  .section-head{
+    font-size:11.5px;font-weight:700;letter-spacing:1px;color:var(--text-muted);
+    text-transform:uppercase;padding:6px 0 0;margin:6px 0 14px;
+    border-top:1px solid var(--border);padding-top:20px;
+  }
+  .section-head:first-of-type{border-top:none;padding-top:0;}
+
+  .field{margin-bottom:18px;}
+  .field > label,.group-label{display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;}
+  .req{color:var(--required);margin-left:2px;}
+  .opt{color:var(--text-muted);font-weight:500;font-size:12px;margin-left:4px;}
+
+  .input{
+    width:100%;border:1px solid var(--border-strong);background:var(--field-bg);
+    border-radius:var(--radius);padding:11px 13px;font-size:14px;color:var(--text);font-family:inherit;
+  }
+  .input::placeholder{color:#9AA8B6;}
+  .input:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(0,168,181,.16);background:#fff;}
+  .input.captured{background:var(--captured-bg);border-color:var(--captured-border);}
+
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .sub-label{display:block;font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:6px;}
+
+  /* radios as chips */
+  .radio-group{display:flex;flex-wrap:wrap;gap:10px;}
+  .chip{
+    display:inline-flex;align-items:center;gap:9px;border:1px solid var(--border-strong);
+    background:#fff;border-radius:var(--radius);padding:11px 16px;cursor:pointer;font-size:14px;font-weight:500;color:var(--text);
+    transition:.12s;user-select:none;
+  }
+  .chip input{position:absolute;opacity:0;width:0;height:0;}
+  .chip .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--border-strong);flex:0 0 auto;display:grid;place-items:center;transition:.12s;}
+  .chip:hover{border-color:var(--teal);}
+  .chip:has(input:checked){border-color:var(--navy);background:#EEF5FA;color:var(--navy);font-weight:600;}
+  .chip:has(input:checked) .dot{border-color:var(--navy);}
+  .chip:has(input:checked) .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--navy);}
+  .chip:has(input:focus-visible){outline:2px solid var(--navy);outline-offset:2px;}
+
+  .hint{font-size:12px;color:var(--text-muted);margin-top:6px;display:flex;align-items:center;gap:6px;}
+  .hint svg{width:13px;height:13px;flex:0 0 auto;}
+
+  .fnac-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .edad-box{display:none;align-items:center;gap:10px;background:var(--captured-bg);border:1px solid var(--captured-border);border-radius:var(--radius);padding:9px 16px;}
+  .edad-label{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--teal-dark);}
+  .edad-box strong{font-size:18px;font-weight:700;color:var(--navy);line-height:1;}
+
+  .manual-note{
+    display:none;align-items:center;gap:9px;font-size:13px;color:#92520E;
+    background:#FEF6E7;border:1px solid #F4D9A6;border-radius:var(--radius);padding:12px 14px;margin-bottom:22px;
+  }
+  .manual-note.show{display:flex;}
+  .manual-note svg{width:16px;height:16px;flex:0 0 auto;}
+
+  #docBlock{transition:opacity .15s;}
+  #docBlock.hidden{display:none;}
+
+  .actions{display:flex;gap:12px;align-items:center;margin-top:26px;border-top:1px solid var(--border);padding-top:22px;}
+  .btn-primary{
+    background:var(--navy);color:#fff;border:none;border-radius:var(--radius);
+    padding:12px 26px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;transition:.15s;
+  }
+  .btn-primary:hover{background:var(--navy-700);}
+  .btn-primary:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+  .btn-ghost{background:transparent;border:1px solid var(--border-strong);color:var(--text);border-radius:var(--radius);padding:12px 20px;font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;}
+  .btn-ghost:hover{background:var(--field-bg);}
+
+  /* ── Responsive ──────────────────────────── */
+  @media (max-width:860px){
+    .sidebar{display:none;}
+    .grid-3{grid-template-columns:1fr;}
+    .topbar .tsearch{display:none;}
+    .page{padding:6px 16px 50px;}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="cross">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 3h4v7h7v4h-7v7h-4v-7H3v-4h7z"/></svg>
+      </div>
+      <div>
+        <div class="name">AVANTE</div>
+        <div class="sub">Complejo Hospitalario</div>
+      </div>
+    </div>
+    <div class="side-search"><input placeholder="Buscar..."></div>
+
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M3 12h3M18 12h3M12 3v3M12 18v3"/></svg> Orientación táctil</a>
+
+    <div class="nav-section">VISIÓN <span>›</span></div>
+
+    <div class="nav-section">CLÍNICO <span>⌄</span></div>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M21 21v-2a4 4 0 0 0-3-3.87"/></svg> Pacientes</a>
+    <a class="nav-link active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg> Pre-Registro</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg> Admisión</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 9h20M4 9V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v3M4 9v9M20 9v9"/></svg> Camas</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg> Censo</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg> Traslados</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> Triage</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2 6 4-12 2 6h6"/></svg> Monitor Triage</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Emergencias</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg> Consulta externa</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> ECE Rectificaciones</a>
+
+    <div class="nav-section">ECE — ATENCIÓN <span>⌄</span></div>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> Signos Vitales</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 8-8"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> Indicaciones Médicas</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> Valoración Inicial ENF</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> Registro Enfermería</a>
+    <a class="nav-link"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg> Evolución Médica</a>
+
+    <div class="nav-section">DIAGNÓSTICO <span>⌄</span></div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="tsearch">🔍 Buscar... <span class="kbd">Ctrl+K</span></div>
+      <div class="spacer"></div>
+      <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/></svg> Avante Holding ⌄</div>
+      <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 17l-6.5 5 2-7L2 9h7z"/></svg> Todos los roles (12) ⌄</div>
+      <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg></div>
+      <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4 4l1 1M19 19l1 1M1 12h2M21 12h2"/></svg></div>
+    </div>
+
+    <div class="breadcrumb">
+      <a>🏠</a><span class="sep">›</span>
+      <a>Patients</a><span class="sep">›</span>
+      <span class="current">Pre-Registro</span>
+    </div>
+
+    <div class="page">
+      <h1 class="page-title">Pre-Registro</h1>
+
+      <div class="card">
+        <h2 class="card-title">Datos básicos</h2>
+        <p class="card-legend">
+          Todos los campos son obligatorios.
+          <span class="legend-req">*</span> obligatorio · los campos sin marca aplican solo cuando corresponde.
+        </p>
+
+        <!-- Trae documento -->
+        <div class="doc-toggle">
+          <label class="switch">
+            <input type="checkbox" id="trae" checked onchange="toggleDoc()">
+            <span class="slider"></span>
+          </label>
+          <div class="toggle-text">
+            <strong>El paciente trae documento de identidad</strong>
+            <span>Si está activo, escanea el QR o código de barras del documento para llenar el preregistro automáticamente.</span>
+          </div>
+        </div>
+
+        <!-- Captura manual -->
+        <div class="manual-note" id="manualNote">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          Captura manual — el paciente no presenta documento. Ingrese los datos de identificación a mano.
+        </div>
+
+        <!-- DOCUMENTO -->
+        <div id="docBlock">
+          <div class="section-head">Documento</div>
+
+          <div class="field">
+            <label>Tipo de documento <span class="req">*</span></label>
+            <div class="radio-group" id="tipoDoc">
+              <label class="chip"><input type="radio" name="tipoDoc" value="DUI" checked><span class="dot"></span> DUI</label>
+              <label class="chip"><input type="radio" name="tipoDoc" value="PAS"><span class="dot"></span> Pasaporte</label>
+              <label class="chip"><input type="radio" name="tipoDoc" value="RES"><span class="dot"></span> Carnet de Residente</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="numDoc">Número de Documento <span class="req">*</span></label>
+            <input class="input" id="numDoc" placeholder="Escanee o ingrese el número del documento">
+          </div>
+
+          <div class="scan-row">
+            <button type="button" class="scan-btn" onclick="simularEscaneo()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10M12 7v10"/></svg>
+              Escanear documento (QR / código de barras)
+            </button>
+            <div class="scan-status" id="scanStatus">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+              Datos obtenidos del documento. Verifique antes de continuar.
+            </div>
+          </div>
+        </div>
+
+        <!-- IDENTIFICACIÓN -->
+        <div class="section-head">Identificación del paciente</div>
+
+        <div class="field">
+          <span class="group-label">Nombres</span>
+          <div class="grid-3">
+            <div>
+              <span class="sub-label">Primer nombre <span class="req">*</span></span>
+              <input class="input" id="nom1" placeholder="Primer nombre">
+            </div>
+            <div>
+              <span class="sub-label">Segundo nombre <span class="opt">(opcional)</span></span>
+              <input class="input" id="nom2" placeholder="Segundo nombre">
+            </div>
+            <div>
+              <span class="sub-label">Tercer nombre <span class="opt">(opcional)</span></span>
+              <input class="input" id="nom3" placeholder="Tercer nombre">
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="group-label">Apellidos</span>
+          <div class="grid-3">
+            <div>
+              <span class="sub-label">Primer apellido <span class="req">*</span></span>
+              <input class="input" id="ape1" placeholder="Primer apellido">
+            </div>
+            <div>
+              <span class="sub-label">Segundo apellido <span class="opt">(opcional)</span></span>
+              <input class="input" id="ape2" placeholder="Segundo apellido">
+            </div>
+            <div>
+              <span class="sub-label">Apellido de casada <span class="opt">(si aplica)</span></span>
+              <input class="input" id="apeC" placeholder="de…">
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Sexo biológico <span class="req">*</span></label>
+          <div class="radio-group" id="sexo">
+            <label class="chip"><input type="radio" name="sexo" value="M"><span class="dot"></span> Masculino</label>
+            <label class="chip"><input type="radio" name="sexo" value="F"><span class="dot"></span> Femenino</label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="fnac">Fecha de nacimiento <span class="req">*</span></label>
+          <div class="fnac-row">
+            <input class="input" type="date" id="fnac" style="max-width:240px;" oninput="calcularEdad()">
+            <div class="edad-box" id="edadBox">
+              <span class="edad-label">Edad</span>
+              <strong id="edadVal">—</strong>
+            </div>
+          </div>
+          <div class="hint" id="fnacHint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            Se obtiene del documento al escanear; la edad se calcula automáticamente con la fecha actual.
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn-primary" type="button">Crear preregistro</button>
+          <button class="btn-ghost" type="button">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  function toggleDoc(){
+    const on = document.getElementById('trae').checked;
+    document.getElementById('docBlock').classList.toggle('hidden', !on);
+    document.getElementById('manualNote').classList.toggle('show', !on);
+    document.getElementById('fnacHint').style.display = on ? 'flex' : 'none';
+    if(!on){ limpiarCaptura(); }
+  }
+
+  function setCaptured(id, val){
+    const el = document.getElementById(id);
+    el.value = val;
+    el.classList.add('captured');
+  }
+
+  function simularEscaneo(){
+    // Demostración: datos leídos del QR/código de barras del documento
+    setCaptured('numDoc','04829175-3');
+    setCaptured('nom1','María');
+    setCaptured('nom2','Fernanda');
+    setCaptured('ape1','Hernández');
+    setCaptured('ape2','Portillo');
+    setCaptured('apeC','de Castellanos');
+    setCaptured('fnac','1990-07-14');
+    document.querySelector('input[name="sexo"][value="F"]').checked = true;
+    document.querySelector('input[name="tipoDoc"][value="DUI"]').checked = true;
+    document.getElementById('scanStatus').classList.add('show');
+    calcularEdad();
+  }
+
+  function limpiarCaptura(){
+    ['numDoc','nom1','nom2','nom3','ape1','ape2','apeC','fnac'].forEach(id=>{
+      const el=document.getElementById(id); el.value=''; el.classList.remove('captured');
+    });
+    document.getElementById('scanStatus').classList.remove('show');
+    calcularEdad();
+  }
+
+  // Edad calculada a partir de la fecha de nacimiento y la fecha actual
+  function calcularEdad(){
+    const box = document.getElementById('edadBox');
+    const v = document.getElementById('fnac').value;
+    if(!v){ box.style.display='none'; return; }
+    const nac = new Date(v + 'T00:00:00');
+    const hoy = new Date();
+    if(isNaN(nac) || nac > hoy){ box.style.display='none'; return; }
+
+    let anios = hoy.getFullYear() - nac.getFullYear();
+    let meses = hoy.getMonth() - nac.getMonth();
+    let dias  = hoy.getDate()  - nac.getDate();
+    if(dias < 0){ meses--; dias += new Date(hoy.getFullYear(), hoy.getMonth(), 0).getDate(); }
+    if(meses < 0){ anios--; meses += 12; }
+
+    let texto;
+    if(anios >= 1)      texto = anios + (anios===1 ? ' año'  : ' años');
+    else if(meses >= 1) texto = meses + (meses===1 ? ' mes'  : ' meses');
+    else                texto = dias  + (dias===1  ? ' día'  : ' días');
+
+    document.getElementById('edadVal').textContent = texto;
+    box.style.display = 'flex';
+  }
+</script>
+</body>
+</html>

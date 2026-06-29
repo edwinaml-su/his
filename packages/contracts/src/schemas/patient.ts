@@ -77,12 +77,18 @@ export const patientAddressSchema = z.object({
 // El superRefine cross-field solo aplica en create (donde todos los campos están presentes).
 // Ref: Zod no propaga superRefine tras .partial() de forma segura en v3 — Plan B aplicado.
 const patientBaseObject = z.object({
-  mrn: z.string().min(1).max(40),
+  // CC-0008 §6: mrn ya no se captura en pre-registro; se autogenera server-side (= expediente).
+  // Permanece opcional para tolerar update y compatibilidad con módulos que aún lo envían.
+  mrn: z.string().max(40).optional(),
   firstName: z.string().min(1).max(120),
   middleName: z.string().max(120).nullable().optional(),
+  thirdName: z.string().max(120).nullable().optional(), // CC-0008 §6: tercer nombre.
   lastName: z.string().min(1).max(120),
   secondLastName: z.string().max(120).nullable().optional(),
+  marriedLastName: z.string().max(120).nullable().optional(), // CC-0008 §6: apellido de casada.
   preferredName: z.string().max(120).nullable().optional(),
+  // CC-0008 §6: switch "el paciente trae documento de identidad" (default ON).
+  traeDocumento: z.boolean().default(true),
   birthDate: z.coerce.date(), // CC-0002: requerida para generar expediente.
   birthDateEstimated: z.boolean().default(false),
   biologicalSexId: z.string().uuid(),
