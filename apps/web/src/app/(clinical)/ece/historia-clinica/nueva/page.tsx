@@ -66,6 +66,7 @@ import { ProcedimientosGrid } from "./_components/procedimientos-grid";
 import { PlanGrid } from "./_components/plan-grid";
 import { MiscelaneosConsulta } from "./_components/miscelaneos";
 import { parseNum, calcularFppEg } from "./_components/utils";
+import { SelectorCuenta } from "./_components/selector-cuenta";
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -704,10 +705,11 @@ export default function NuevaHistoriaClinicaPage() {
 
   if (!cuentaId) {
     return (
-      <div className="px-6 py-10 text-sm text-muted-foreground">
-        No se especificó <code>cuentaId</code> en la URL. Use{" "}
-        <code>/ece/historia-clinica/nueva?cuentaId=&lt;uuid&gt;</code>.
-      </div>
+      <SelectorCuenta
+        onSelect={(id) =>
+          router.replace(`/ece/historia-clinica/nueva?cuentaId=${id}`)
+        }
+      />
     );
   }
 
