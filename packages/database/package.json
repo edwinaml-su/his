@@ -19,7 +19,7 @@
     "generate": "prisma generate",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
-    "seed": "tsx --env-file=.env prisma/seed.ts",
+    "seed": "tsx --env-file-if-exists=.env prisma/seed.ts",
     "seed:sv-extra": "tsx --env-file=.env seed-sv-extra.ts",
     "seed:manchester": "tsx --env-file=.env seed-manchester.ts",
     "seed:vaccines": "tsx --env-file=.env seed-vaccines-sv.ts",
@@ -43,7 +43,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "prisma": {
-    "seed": "tsx --env-file=.env prisma/seed.ts"
+    "seed": "tsx --env-file-if-exists=.env prisma/seed.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
