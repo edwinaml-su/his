@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { AlertTriangle, Shield, PersonStanding } from "lucide-react";
+import { AlertTriangle, Shield, PersonStanding, UserCheck } from "lucide-react";
 import { Badge } from "@his/ui/components/badge";
 import { Separator } from "@his/ui/components/separator";
 import { Sparkline } from "@his/ui/components/sparkline";
@@ -45,6 +45,15 @@ export interface PatientContextBarProps {
     isolation?: string; // ej. "Contacto", "Gotitas"
     fallRisk?: "LOW" | "MEDIUM" | "HIGH";
     lasa?: boolean;
+    /**
+     * CC-0008 §B / CC-0007 RF-01.3 — persona de la comunidad LGBTIQ+.
+     * Reserva el espacio de alerta de identidad: cuando es `true` se muestra el
+     * chip "nombre de pila" (dirigirse al paciente por `preferredName`). Las
+     * alertas LGBTIQ+ se capturan en la admisión; aquí solo se visualizan.
+     */
+    lgbtiq?: boolean;
+    /** Nombre de pila (preferredName) — se muestra junto a la alerta LGBTIQ+. */
+    preferredName?: string | null;
   };
   /**
    * Sparklines opcionales de signos vitales recientes.
@@ -102,7 +111,8 @@ export function PatientContextBar({
     (alerts?.allergies?.length ?? 0) > 0 ||
     !!alerts?.isolation ||
     !!alerts?.fallRisk ||
-    !!alerts?.lasa;
+    !!alerts?.lasa ||
+    !!alerts?.lgbtiq;
 
   const hasVitals = !!(vitals?.systolic ?? vitals?.heartRate ?? vitals?.spo2);
   const hasRight = hasAlerts || hasVitals;
@@ -251,6 +261,26 @@ export function PatientContextBar({
             >
               <AlertTriangle className="h-3 w-3" aria-hidden="true" />
               <span>LASA</span>
+            </Badge>
+          )}
+
+          {/* LGBTIQ+ — nombre de pila (bg-lila distintivo, CC-0007 RF-01.3) */}
+          {alerts?.lgbtiq && (
+            <Badge
+              variant="secondary"
+              className="min-h-[28px] gap-1 bg-lila text-lila-foreground hover:bg-lila/90"
+              aria-label={
+                alerts.preferredName
+                  ? `Persona de la comunidad LGBTIQ+. Nombre de pila: ${alerts.preferredName}`
+                  : "Persona de la comunidad LGBTIQ+"
+              }
+            >
+              <UserCheck className="h-3 w-3" aria-hidden="true" />
+              <span>
+                {alerts.preferredName
+                  ? `Nombre de pila: ${alerts.preferredName}`
+                  : "LGBTIQ+"}
+              </span>
             </Badge>
           )}
         </div>

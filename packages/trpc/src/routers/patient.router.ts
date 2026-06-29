@@ -428,11 +428,15 @@ export const patientRouter = router({
       const expediente = await nextExpediente(tx, alpha2, input.birthDate);
 
       // responsable no es columna de Patient — excluirlo del data.
-      const { responsable, ...patientData } = input;
+      // CC-0008 §6: el mrn ya no se captura en pre-registro; se autogenera = expediente.
+      // Se respeta un mrn provisto (otros módulos lo envían) por compatibilidad.
+      const { responsable, mrn: inputMrn, ...patientData } = input;
+      const mrn = inputMrn?.trim() ? inputMrn.trim() : expediente;
 
       const patient = await tx.patient.create({
         data: {
           ...patientData,
+          mrn,
           organizationId: ctx.tenant.organizationId,
           createdBy: ctx.user.id,
           expediente,

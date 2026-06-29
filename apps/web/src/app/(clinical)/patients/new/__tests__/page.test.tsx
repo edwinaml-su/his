@@ -1,24 +1,17 @@
 // @vitest-environment jsdom
 /**
- * Tests de NewPatientPage — registro de paciente con expediente (CC-0002 §13.5).
+ * Tests de PreRegistroPage (CC-0008 / REQ-ECE-PRE-001).
  *
- * Estrategia: mock de @/lib/trpc/react + next/navigation.
- * No necesita DB — verifica comportamiento de UI con datos simulados.
+ * Estrategia: mock de @/lib/trpc/react + next/navigation. Sin DB — verifica el
+ * comportamiento de UI (switch, radios, escaneo, edad derivada, panel de éxito).
  *
- * Casos:
- *   1. Renderiza los campos básicos y el Select de tipo de documento.
- *   2. Al elegir DUI_RESP aparece la sección "Datos del responsable".
- *   3. Tras create exitoso se muestra el expediente en el panel de éxito.
- *
- * @QA — E2E (Playwright): crear paciente con DUI real muestra expediente SV{AA}{NNNNN};
- *   reutilizar el mismo DUI recupera el expediente existente sin crear duplicado.
+ * @QA — E2E (Playwright): pre-registrar con DUI real muestra expediente
+ *   SV{AA}{NNNNN}; reutilizar el mismo DUI recupera el expediente existente.
  */
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
-
-// ─── Mocks de infraestructura Next.js ─────────────────────────────────────────
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
@@ -26,8 +19,6 @@ const mockReplace = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush, replace: mockReplace }),
 }));
-
-// ─── Mock tRPC ─────────────────────────────────────────────────────────────────
 
 const mockUseMutation = vi.fn();
 const mockUseQuery = vi.fn();
@@ -43,105 +34,108 @@ vi.mock("@/lib/trpc/react", () => ({
   },
 }));
 
-import NewPatientPage from "../page";
+import PreRegistroPage from "../page";
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Estado base de useMutation — sin pending ni error. */
 function makeMutationState(overrides: Record<string, unknown> = {}) {
-  return {
-    mutate: vi.fn(),
-    isPending: false,
-    error: null,
-    ...overrides,
-  };
+  return { mutate: vi.fn(), isPending: false, error: null, ...overrides };
 }
 
-/** Catálogo de sexo biológico mínimo para que el Select se renderice. */
+// Catálogo de sexo biológico con códigos M/F (el form filtra por code).
 const catalogState = {
-  data: [{ id: "sex-m", name: "Masculino" }],
+  data: [
+    { id: "sex-m", code: "M", name: "Masculino" },
+    { id: "sex-f", code: "F", name: "Femenino" },
+  ],
 };
 
-// ─── Tests ────────────────────────────────────────────────────────────────────
-
-describe("NewPatientPage", () => {
+describe("PreRegistroPage", () => {
   beforeEach(() => {
-    mockUseMutation.mockReturnValue(makeMutationState());
-    mockUseQuery.mockReturnValue(catalogState);
     vi.clearAllMocks();
     mockUseMutation.mockReturnValue(makeMutationState());
     mockUseQuery.mockReturnValue(catalogState);
   });
 
-  afterEach(() => {
-    cleanup();
+  afterEach(() => cleanup());
+
+  // ── AC1/AC2/AC4 — título, sin MRN, tipo como radios, "Número de Documento" ──
+  it("renderiza Pre-registro: sin MRN, tipo de documento como radios, número de documento", () => {
+    render(<PreRegistroPage />);
+
+    expect(screen.getByRole("heading", { name: "Pre-registro" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("MRN")).not.toBeInTheDocument();
+
+    // Tipo de documento como radios: DUI, Pasaporte, Carnet de Residente (sin DNI).
+    expect(screen.getByRole("radio", { name: "DUI" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Pasaporte" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Carnet de Residente" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "DNI" })).not.toBeInTheDocument();
+
+    expect(screen.getByLabelText(/Número de Documento/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pre-registrar paciente/ })).toBeInTheDocument();
   });
 
-  // ── 1. Renderiza campos básicos + Select de tipo de documento ─────────────
-
-  it("renderiza los campos básicos y el Select de tipo de documento", () => {
-    render(<NewPatientPage />);
-
-    expect(screen.getByLabelText("MRN")).toBeInTheDocument();
-    expect(screen.getByLabelText("Nombre")).toBeInTheDocument();
-    expect(screen.getByLabelText("Apellido")).toBeInTheDocument();
-    expect(screen.getByText("Tipo de documento")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Crear paciente" })).toBeInTheDocument();
+  // ── AC3 — sexo biológico como radios (Masculino/Femenino) ──────────────────
+  it("renderiza sexo biológico como radios Masculino/Femenino", () => {
+    render(<PreRegistroPage />);
+    expect(screen.getByRole("radio", { name: "Masculino" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Femenino" })).toBeInTheDocument();
   });
 
-  // ── 2. Al elegir DUI_RESP aparece sección "Datos del responsable" ─────────
-  //
-  // jsdom no implementa scrollIntoView (usado por @radix-ui/react-select al
-  // abrir el listbox), por lo que no es posible interactuar con el dropdown
-  // real. En su lugar se dispara el evento interno que Radix emite al
-  // seleccionar un valor, usando fireEvent.change sobre el elemento nativo
-  // oculto (<select>) que Radix renderiza para accesibilidad.
+  // ── AC5 — switch OFF oculta documento y muestra aviso manual ───────────────
+  it("al apagar el switch oculta el bloque de documento y muestra aviso de captura manual", async () => {
+    render(<PreRegistroPage />);
 
-  it("al seleccionar DUI_RESP muestra la sección Datos del responsable", async () => {
-    render(<NewPatientPage />);
+    expect(screen.getByLabelText(/Número de Documento/)).toBeInTheDocument();
 
-    // Antes de elegir DUI_RESP, la sección no debe existir.
-    expect(screen.queryByText("Datos del responsable")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("switch"));
 
-    // Radix Select renderiza un <select> nativo oculto para accesibilidad.
-    // Disparar change sobre él actualiza el estado del componente igual que
-    // elegir la opción en la UI real (comportamiento documentado por Radix).
-    const nativeSelect = document.querySelector("select[name='documentType']")
-      ?? document.querySelectorAll("select")[1]; // fallback: segundo select de la página
-
-    if (nativeSelect) {
-      fireEvent.change(nativeSelect, { target: { value: "DUI_RESP" } });
-    } else {
-      // Si Radix no renderiza <select> nativo, forzamos el cambio de estado
-      // disparando el evento personalizado que el componente expone.
-      const trigger = document.querySelector("[data-testid='documentType-trigger']")
-        ?? document.querySelectorAll("[role='combobox']")[1];
-      if (trigger) fireEvent.click(trigger);
-    }
-
-    // El estado condicional del form debe mostrar la sección.
     await waitFor(() => {
-      expect(screen.getByText("Datos del responsable")).toBeInTheDocument();
-      expect(screen.getByLabelText("Nombre del responsable")).toBeInTheDocument();
-      expect(screen.getByLabelText("Parentesco")).toBeInTheDocument();
-      expect(screen.getByLabelText("DUI del responsable")).toBeInTheDocument();
+      expect(screen.queryByLabelText(/Número de Documento/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Captura manual — el paciente no presenta documento/)).toBeInTheDocument();
     });
   });
 
-  // ── 3. Tras create exitoso se muestra el expediente ───────────────────────
+  // ── AC6 — escaneo puebla campos y muestra aviso de verificación ────────────
+  it("escanear puebla nombres/apellidos/fecha y muestra el aviso de datos del documento", async () => {
+    render(<PreRegistroPage />);
 
+    fireEvent.click(
+      screen.getByRole("button", { name: /Escanear documento/ }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Datos obtenidos del documento/)).toBeInTheDocument();
+      expect(screen.getByLabelText(/Primer nombre/)).toHaveValue("María");
+      expect(screen.getByLabelText(/Primer apellido/)).toHaveValue("Hernández");
+      expect(screen.getByLabelText(/Apellido de casada/)).toHaveValue("de Castellanos");
+    });
+  });
+
+  // ── AC7 — edad derivada visible tras fijar fecha de nacimiento ─────────────
+  it("muestra la edad derivada al ingresar la fecha de nacimiento", async () => {
+    render(<PreRegistroPage />);
+
+    fireEvent.change(screen.getByLabelText(/Fecha de nacimiento/), {
+      target: { value: "1990-01-01" },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("edad-derivada")).toHaveTextContent(/años/);
+    });
+  });
+
+  // ── AC10 — panel de éxito muestra el expediente ────────────────────────────
   it("muestra el expediente en el panel de éxito tras create exitoso", async () => {
-    // Interceptar el argumento de useMutation para capturar onSuccess.
     let capturedOnSuccess: ((p: { id: string; expediente: string }) => void) | undefined;
 
-    mockUseMutation.mockImplementation((opts: { onSuccess?: (p: { id: string; expediente: string }) => void }) => {
-      capturedOnSuccess = opts?.onSuccess;
-      return makeMutationState({ mutate: vi.fn() });
-    });
+    mockUseMutation.mockImplementation(
+      (opts: { onSuccess?: (p: { id: string; expediente: string }) => void }) => {
+        capturedOnSuccess = opts?.onSuccess;
+        return makeMutationState();
+      },
+    );
 
-    render(<NewPatientPage />);
-
-    // Invocar onSuccess simulando la respuesta del servidor.
+    render(<PreRegistroPage />);
     capturedOnSuccess?.({ id: "patient-1", expediente: "SV8400001" });
 
     await waitFor(() => {

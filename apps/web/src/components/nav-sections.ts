@@ -57,6 +57,7 @@ import {
   ArrowLeftRight,
   CheckSquare,
   UserCheck,
+  UserPlus,
   Baby,
   Package,
   Truck,
@@ -112,6 +113,8 @@ export const SECTIONS: NavSection[] = [
     items: [
       { href: "/patients", label: "Pacientes", icon: Users,
         description: "Registro maestro de pacientes (MPI). Búsqueda, alta, edición y deduplicación." },
+      { href: "/patients/new", label: "Pre-registro", icon: UserPlus,
+        description: "Pre-registro de paciente: alta inicial asistida por escaneo de documento (CC-0008)." },
       { href: "/admission", label: "Admisión", icon: ClipboardList,
         description: "Proceso de admisión: registra el ingreso del paciente al hospital." },
       { href: "/beds", label: "Camas", icon: Bed,

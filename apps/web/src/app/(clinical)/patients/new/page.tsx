@@ -7,138 +7,229 @@ import { Form, FormField, FormError } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Button } from "@his/ui/components/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@his/ui/components/select";
+import { Switch } from "@his/ui/components/switch";
+import { cn } from "@his/ui/lib/utils";
+import { ScanLine, TriangleAlert, Sparkles } from "lucide-react";
 import { trpc } from "@/lib/trpc/react";
 import { parseDateOnly } from "@/lib/date-only";
+import { calcularEdad } from "@/lib/edad";
+import { parseDocumento, type TipoDocumento } from "@/lib/parse-documento";
 
-// Etiqueta del número de documento según el tipo seleccionado.
-function documentNumberLabel(documentType: string): string {
-  if (documentType === "DUI" || documentType === "DUI_RESP") return "Número de DUI";
-  if (documentType === "DNI") return "Número de DNI";
-  if (documentType === "PASAPORTE") return "Número de pasaporte";
-  return "Número de documento";
-}
+// CC-0008 §5/§9 — tipos de documento del pre-registro. Se mapea al enum del
+// modelo Patient existente (CARNET_RESIDENCIA), no al greenfield del spec.
+type DocTipoUI = "DUI" | "PASAPORTE" | "CARNET_RESIDENCIA";
+
+const TIPO_LABEL: Record<DocTipoUI, string> = {
+  DUI: "DUI",
+  PASAPORTE: "Pasaporte",
+  CARNET_RESIDENCIA: "Carnet de Residente",
+};
+
+// El contrato del parser usa CARNET_RESIDENTE; el modelo/BD usa CARNET_RESIDENCIA.
+const PARSER_TIPO: Record<DocTipoUI, TipoDocumento> = {
+  DUI: "DUI",
+  PASAPORTE: "PASAPORTE",
+  CARNET_RESIDENCIA: "CARNET_RESIDENTE",
+};
+
+// Sexo del documento (enum del parser) → código del catálogo BiologicalSex.
+const SEXO_CODE: Record<"MASCULINO" | "FEMENINO", "M" | "F"> = {
+  MASCULINO: "M",
+  FEMENINO: "F",
+};
+
+type CampoCapturable =
+  | "numeroDocumento"
+  | "primerNombre"
+  | "segundoNombre"
+  | "tercerNombre"
+  | "primerApellido"
+  | "segundoApellido"
+  | "apellidoCasada"
+  | "biologicalSexId"
+  | "fechaNacimiento";
+
+const hoyISO = () => new Date().toISOString().slice(0, 10);
 
 /**
- * Registro nuevo paciente (TDR §8.1 + CC-0002 §13.5).
- * Genera un expediente único {PAIS}{AA}{NNNNN} al crear, o recupera el existente
- * si el documento de identidad ya estaba registrado.
- * TODO(Sprint 2): wizard completo con direcciones, alergias, identificadores en el mismo flujo.
+ * Pre-registro de paciente (CC-0008 / REQ-ECE-PRE-001).
+ *
+ * Alta inicial asistida por escaneo de documento: tipo de documento primero,
+ * switch "¿trae documento?", nombres/apellidos extendidos, sexo biológico por
+ * radio y edad derivada (no persistida). El expediente {PAIS}{AA}{NNNNN} se
+ * genera en servidor (CC-0002); el MRN ya no se captura (autogenerado).
  */
-export default function NewPatientPage() {
+export default function PreRegistroPage() {
   const router = useRouter();
-  const sexes = trpc.catalog.list.useQuery({ catalog: "biologicalSex", activeOnly: true });
 
-  // Paciente creado/recuperado — cuando existe, se muestra el panel de éxito.
-  const [created, setCreated] = React.useState<{ id: string; expediente: string | null } | null>(null);
+  React.useEffect(() => {
+    document.title = "Pre-registro · HIS Avante";
+  }, []);
+
+  const sexes = trpc.catalog.list.useQuery({ catalog: "biologicalSex", activeOnly: true });
+  // §10/AC3 — radios solo Masculino/Femenino (códigos M/F del catálogo).
+  const sexOptions = React.useMemo(
+    () =>
+      (sexes.data ?? []).filter(
+        (s: { code: string }) => s.code === "M" || s.code === "F",
+      ) as Array<{ id: string; code: string; name: string }>,
+    [sexes.data],
+  );
+
+  const [created, setCreated] = React.useState<{ id: string; expediente: string | null } | null>(
+    null,
+  );
 
   const create = trpc.patient.create.useMutation({
     onSuccess: (p) => setCreated({ id: p.id, expediente: p.expediente ?? null }),
   });
 
   const [form, setForm] = React.useState({
-    mrn: "",
-    firstName: "",
-    lastName: "",
+    traeDocumento: true,
+    tipoDocumento: "DUI" as DocTipoUI,
+    numeroDocumento: "",
+    primerNombre: "",
+    segundoNombre: "",
+    tercerNombre: "",
+    primerApellido: "",
+    segundoApellido: "",
+    apellidoCasada: "",
     biologicalSexId: "",
-    birthDate: "",
-    // CC-0002 §13.5 — campos de documento e identificación del responsable.
-    documentType: "",
-    documentNumber: "",
-    responsableNombre: "",
-    responsableParentesco: "",
-    responsableDui: "",
+    fechaNacimiento: "",
   });
 
-  // H1-02 (audit Stream A): validación client-side previa al submit — el Select
-  // de Shadcn no acepta `required` HTML, así que se enmascara como UUID inválido
-  // en el servidor sin feedback visual. Aquí marcamos los campos obligatorios
-  // antes de invocar la mutación.
+  // Campos poblados por escaneo (resaltado teal + aviso de verificación).
+  const [captured, setCaptured] = React.useState<Set<CampoCapturable>>(new Set());
+
   const [validationError, setValidationError] = React.useState<{
     field: string | null;
     message: string;
   }>({ field: null, message: "" });
 
+  // Edad derivada (§8) — recalcula en cada render según fechaNacimiento.
+  const nacimiento = parseDateOnly(form.fechaNacimiento);
+  const edad = nacimiento ? calcularEdad(nacimiento) : null;
+
+  const setField = (key: keyof typeof form, value: string) => {
+    setForm((f) => ({ ...f, [key]: value }));
+    setCaptured((c) => {
+      if (!c.has(key as CampoCapturable)) return c;
+      const next = new Set(c);
+      next.delete(key as CampoCapturable);
+      return next;
+    });
+    if (validationError.field === key) setValidationError({ field: null, message: "" });
+  };
+
+  const capCls = (key: CampoCapturable) =>
+    captured.has(key) ? "border-primary ring-1 ring-primary/50 bg-primary/5" : "";
+
+  // §7 — escaneo simulado: puebla campos y los marca como capturados.
+  const onScan = () => {
+    const d = parseDocumento("", PARSER_TIPO[form.tipoDocumento]);
+    const sexId =
+      sexOptions.find((s) => s.code === SEXO_CODE[d.sexoBiologico])?.id ?? form.biologicalSexId;
+
+    setForm((f) => ({
+      ...f,
+      numeroDocumento: d.numeroDocumento,
+      primerNombre: d.primerNombre,
+      segundoNombre: d.segundoNombre ?? "",
+      tercerNombre: d.tercerNombre ?? "",
+      primerApellido: d.primerApellido,
+      segundoApellido: d.segundoApellido ?? "",
+      apellidoCasada: d.apellidoCasada ?? "",
+      biologicalSexId: sexId,
+      fechaNacimiento: d.fechaNacimiento,
+    }));
+
+    const marcados = new Set<CampoCapturable>(["numeroDocumento", "primerNombre", "primerApellido"]);
+    if (d.segundoNombre) marcados.add("segundoNombre");
+    if (d.tercerNombre) marcados.add("tercerNombre");
+    if (d.segundoApellido) marcados.add("segundoApellido");
+    if (d.apellidoCasada) marcados.add("apellidoCasada");
+    if (sexId) marcados.add("biologicalSexId");
+    marcados.add("fechaNacimiento");
+    setCaptured(marcados);
+    setValidationError({ field: null, message: "" });
+  };
+
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!form.primerNombre.trim()) {
+      return setValidationError({ field: "primerNombre", message: "Ingresa el primer nombre." });
+    }
+    if (!form.primerApellido.trim()) {
+      return setValidationError({ field: "primerApellido", message: "Ingresa el primer apellido." });
+    }
     if (!form.biologicalSexId) {
-      setValidationError({
-        field: "biologicalSexId",
+      return setValidationError({
+        field: "sexoBiologico",
         message: "Selecciona el sexo biológico — campo obligatorio para protocolos clínicos.",
       });
-      return;
     }
-    if (!form.birthDate) {
-      setValidationError({
-        field: "birthDate",
-        message: "Ingresa la fecha de nacimiento — requerida para cálculo de edad y rangos pediátricos.",
+    if (!form.fechaNacimiento) {
+      return setValidationError({
+        field: "fechaNacimiento",
+        message: "Ingresa la fecha de nacimiento — requerida para generar el expediente.",
       });
-      return;
+    }
+    if (form.fechaNacimiento > hoyISO()) {
+      return setValidationError({
+        field: "fechaNacimiento",
+        message: "La fecha de nacimiento no puede ser futura.",
+      });
     }
 
-    // CC-0002 §13.5 — validaciones de documento e identificación del responsable.
-    if (form.documentType && !form.documentNumber) {
-      setValidationError({ field: "documentNumber", message: "Ingresa el número de documento." });
-      return;
-    }
-    if (form.documentType === "DUI_RESP") {
-      if (!form.responsableNombre) {
-        setValidationError({ field: "responsableNombre", message: "Ingresa el nombre del responsable." });
-        return;
+    // §6 — documento obligatorio solo cuando el paciente lo trae.
+    if (form.traeDocumento) {
+      if (!form.numeroDocumento.trim()) {
+        return setValidationError({
+          field: "numeroDocumento",
+          message: "Ingresa el número de documento.",
+        });
       }
-      if (!form.responsableParentesco) {
-        setValidationError({ field: "responsableParentesco", message: "Ingresa el parentesco del responsable." });
-        return;
-      }
-      if (!form.responsableDui) {
-        setValidationError({ field: "responsableDui", message: "Ingresa el DUI del responsable." });
-        return;
+      if (form.tipoDocumento === "DUI" && !/^\d{8}-\d$/.test(form.numeroDocumento.trim())) {
+        return setValidationError({
+          field: "numeroDocumento",
+          message: "Formato DUI inválido (########-#).",
+        });
       }
     }
 
     setValidationError({ field: null, message: "" });
 
     create.mutate({
-      mrn: form.mrn,
-      firstName: form.firstName,
-      lastName: form.lastName,
+      firstName: form.primerNombre.trim(),
+      middleName: form.segundoNombre.trim() || undefined,
+      thirdName: form.tercerNombre.trim() || undefined,
+      lastName: form.primerApellido.trim(),
+      secondLastName: form.segundoApellido.trim() || undefined,
+      marriedLastName: form.apellidoCasada.trim() || undefined,
       biologicalSexId: form.biologicalSexId,
-      // La validación previa `if (!form.birthDate)` garantiza que el string
-      // no está vacío y parseDateOnly siempre retorna Date (no null) aquí.
+      // La validación previa garantiza fechaNacimiento no vacía → Date no-null.
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-      birthDate: parseDateOnly(form.birthDate)!,
+      birthDate: parseDateOnly(form.fechaNacimiento)!,
       birthDateEstimated: false,
       isUnknown: false,
-      documentType: form.documentType
-        ? (form.documentType as "DUI" | "DNI" | "PASAPORTE" | "DUI_RESP")
-        : undefined,
-      documentNumber: form.documentType ? form.documentNumber : undefined,
-      responsable:
-        form.documentType === "DUI_RESP"
-          ? {
-              nombre: form.responsableNombre,
-              parentesco: form.responsableParentesco,
-              dui: form.responsableDui,
-            }
-          : undefined,
+      traeDocumento: form.traeDocumento,
+      documentType: form.traeDocumento ? form.tipoDocumento : undefined,
+      documentNumber: form.traeDocumento ? form.numeroDocumento.trim() : undefined,
     });
   };
 
-  // Panel de éxito: se muestra tras una creación o recuperación exitosa.
   if (created) {
     return (
       <div className="space-y-4">
-        <h1 className="text-2xl font-bold">Nuevo paciente</h1>
+        <h1 className="text-2xl font-bold">Pre-registro</h1>
         <Card>
           <CardContent className="pt-6">
             <div role="status" className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Paciente registrado.{" "}
                 {created.expediente ? (
-                  <>
-                    <span className="font-semibold">Expediente: {created.expediente}</span>
-                  </>
+                  <span className="font-semibold">Expediente: {created.expediente}</span>
                 ) : null}
               </p>
               <Button onClick={() => router.push(`/patients/${created.id}`)}>
@@ -151,244 +242,273 @@ export default function NewPatientPage() {
     );
   }
 
+  const scanned = captured.size > 0;
+
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Nuevo paciente</h1>
+      <h1 className="text-2xl font-bold">Pre-registro</h1>
       <Card>
         <CardHeader>
-          <CardTitle>Datos básicos</CardTitle>
+          <CardTitle>Datos de identificación</CardTitle>
         </CardHeader>
         <CardContent>
           <Form onSubmit={onSubmit}>
+            {/* §6 — switch ¿trae documento? (default ON) */}
             <FormField>
-              <Label htmlFor="mrn">MRN</Label>
-              <Input
-                id="mrn"
-                required
-                value={form.mrn}
-                onChange={(e) => setForm({ ...form, mrn: e.target.value })}
-              />
+              <div className="flex items-center justify-between gap-4">
+                <Label htmlFor="traeDocumento" className="font-normal">
+                  El paciente trae documento de identidad
+                </Label>
+                <Switch
+                  id="traeDocumento"
+                  checked={form.traeDocumento}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, traeDocumento: v }))}
+                />
+              </div>
             </FormField>
+
+            {/* Aviso de captura manual cuando NO trae documento */}
+            {!form.traeDocumento && (
+              <p
+                role="note"
+                className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground"
+              >
+                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+                Captura manual — el paciente no presenta documento. Ingrese los datos de
+                identificación a mano.
+              </p>
+            )}
+
+            {/* §4/§5 — bloque de documento (tipo primero), solo si trae documento */}
+            {form.traeDocumento && (
+              <fieldset className="space-y-4 rounded-lg border p-4">
+                <legend className="px-1 text-sm font-semibold">Documento</legend>
+
+                <FormField>
+                  <Label>
+                    Tipo de documento <span aria-hidden className="text-destructive">*</span>
+                    <span className="sr-only"> (obligatorio)</span>
+                  </Label>
+                  <div role="radiogroup" aria-label="Tipo de documento" className="flex flex-wrap gap-2">
+                    {(Object.keys(TIPO_LABEL) as DocTipoUI[]).map((t) => (
+                      <label
+                        key={t}
+                        className={cn(
+                          "cursor-pointer rounded-lg border px-4 py-2 text-sm transition-colors",
+                          form.tipoDocumento === t
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-input hover:bg-accent",
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="tipoDocumento"
+                          value={t}
+                          checked={form.tipoDocumento === t}
+                          onChange={() => setForm((f) => ({ ...f, tipoDocumento: t }))}
+                          className="sr-only"
+                        />
+                        {TIPO_LABEL[t]}
+                      </label>
+                    ))}
+                  </div>
+                </FormField>
+
+                <FormField>
+                  <Label htmlFor="numeroDocumento">
+                    Número de Documento <span aria-hidden className="text-destructive">*</span>
+                    <span className="sr-only"> (obligatorio)</span>
+                  </Label>
+                  <Input
+                    id="numeroDocumento"
+                    value={form.numeroDocumento}
+                    onChange={(e) => setField("numeroDocumento", e.target.value)}
+                    className={capCls("numeroDocumento")}
+                    aria-invalid={validationError.field === "numeroDocumento"}
+                    aria-describedby={
+                      validationError.field === "numeroDocumento" ? "numeroDocumento-error" : undefined
+                    }
+                  />
+                  {validationError.field === "numeroDocumento" && (
+                    <p id="numeroDocumento-error" role="alert" className="text-sm text-destructive">
+                      {validationError.message}
+                    </p>
+                  )}
+                </FormField>
+
+                <Button type="button" variant="secondary" onClick={onScan} className="gap-2">
+                  <ScanLine className="h-4 w-4" aria-hidden />
+                  Escanear documento (QR / código de barras)
+                </Button>
+
+                {scanned && (
+                  <p
+                    role="status"
+                    className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground"
+                  >
+                    <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+                    Datos obtenidos del documento. Verifique antes de continuar.
+                  </p>
+                )}
+              </fieldset>
+            )}
+
+            {/* §5/§9 — Nombres (hasta 3) */}
             <FormField>
-              <Label htmlFor="firstName">Nombre</Label>
-              <Input
-                id="firstName"
-                required
-                value={form.firstName}
-                onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-              />
-            </FormField>
-            <FormField>
-              <Label htmlFor="lastName">Apellido</Label>
-              <Input
-                id="lastName"
-                required
-                value={form.lastName}
-                onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-              />
-            </FormField>
-            <FormField>
-              <Label htmlFor="biologicalSexId">
-                Sexo biológico <span aria-hidden className="text-destructive">*</span>
+              <Label htmlFor="primerNombre">
+                Primer nombre <span aria-hidden className="text-destructive">*</span>
                 <span className="sr-only"> (obligatorio)</span>
               </Label>
-              <Select
-                value={form.biologicalSexId}
-                onValueChange={(v) => {
-                  setForm({ ...form, biologicalSexId: v });
-                  if (validationError.field === "biologicalSexId") {
-                    setValidationError({ field: null, message: "" });
-                  }
-                }}
-              >
-                <SelectTrigger
-                  id="biologicalSexId"
-                  aria-required="true"
-                  aria-invalid={validationError.field === "biologicalSexId"}
-                  aria-describedby={validationError.field === "biologicalSexId" ? "biologicalSexId-error" : undefined}
-                >
-                  <SelectValue placeholder="Selecciona…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {sexes.data?.map((s: { id: string; name: string }) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {validationError.field === "biologicalSexId" && (
-                <p id="biologicalSexId-error" role="alert" className="text-sm text-destructive">
+              <Input
+                id="primerNombre"
+                value={form.primerNombre}
+                onChange={(e) => setField("primerNombre", e.target.value)}
+                className={capCls("primerNombre")}
+                aria-invalid={validationError.field === "primerNombre"}
+                aria-describedby={validationError.field === "primerNombre" ? "primerNombre-error" : undefined}
+              />
+              {validationError.field === "primerNombre" && (
+                <p id="primerNombre-error" role="alert" className="text-sm text-destructive">
                   {validationError.message}
                 </p>
               )}
             </FormField>
             <FormField>
-              <Label htmlFor="birthDate">
+              <Label htmlFor="segundoNombre">Segundo nombre</Label>
+              <Input
+                id="segundoNombre"
+                value={form.segundoNombre}
+                onChange={(e) => setField("segundoNombre", e.target.value)}
+                className={capCls("segundoNombre")}
+              />
+            </FormField>
+            <FormField>
+              <Label htmlFor="tercerNombre">Tercer nombre</Label>
+              <Input
+                id="tercerNombre"
+                value={form.tercerNombre}
+                onChange={(e) => setField("tercerNombre", e.target.value)}
+                className={capCls("tercerNombre")}
+              />
+            </FormField>
+
+            {/* §5/§9 — Apellidos (hasta 3, incluye apellido de casada) */}
+            <FormField>
+              <Label htmlFor="primerApellido">
+                Primer apellido <span aria-hidden className="text-destructive">*</span>
+                <span className="sr-only"> (obligatorio)</span>
+              </Label>
+              <Input
+                id="primerApellido"
+                value={form.primerApellido}
+                onChange={(e) => setField("primerApellido", e.target.value)}
+                className={capCls("primerApellido")}
+                aria-invalid={validationError.field === "primerApellido"}
+                aria-describedby={
+                  validationError.field === "primerApellido" ? "primerApellido-error" : undefined
+                }
+              />
+              {validationError.field === "primerApellido" && (
+                <p id="primerApellido-error" role="alert" className="text-sm text-destructive">
+                  {validationError.message}
+                </p>
+              )}
+            </FormField>
+            <FormField>
+              <Label htmlFor="segundoApellido">Segundo apellido</Label>
+              <Input
+                id="segundoApellido"
+                value={form.segundoApellido}
+                onChange={(e) => setField("segundoApellido", e.target.value)}
+                className={capCls("segundoApellido")}
+              />
+            </FormField>
+            <FormField>
+              <Label htmlFor="apellidoCasada">Apellido de casada (si aplica)</Label>
+              <Input
+                id="apellidoCasada"
+                value={form.apellidoCasada}
+                onChange={(e) => setField("apellidoCasada", e.target.value)}
+                className={capCls("apellidoCasada")}
+              />
+            </FormField>
+
+            {/* §10/AC3 — sexo biológico como radio */}
+            <FormField>
+              <Label>
+                Sexo biológico <span aria-hidden className="text-destructive">*</span>
+                <span className="sr-only"> (obligatorio)</span>
+              </Label>
+              <div role="radiogroup" aria-label="Sexo biológico" className="flex flex-wrap gap-2">
+                {sexOptions.map((s) => (
+                  <label
+                    key={s.id}
+                    className={cn(
+                      "cursor-pointer rounded-lg border px-4 py-2 text-sm transition-colors",
+                      form.biologicalSexId === s.id
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : cn("border-input hover:bg-accent", capCls("biologicalSexId")),
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="sexoBiologico"
+                      value={s.id}
+                      checked={form.biologicalSexId === s.id}
+                      onChange={() => setField("biologicalSexId", s.id)}
+                      className="sr-only"
+                    />
+                    {s.name}
+                  </label>
+                ))}
+              </div>
+              {validationError.field === "sexoBiologico" && (
+                <p role="alert" className="text-sm text-destructive">
+                  {validationError.message}
+                </p>
+              )}
+            </FormField>
+
+            {/* §5 — fecha de nacimiento + §8 edad derivada */}
+            <FormField>
+              <Label htmlFor="fechaNacimiento">
                 Fecha de nacimiento <span aria-hidden className="text-destructive">*</span>
                 <span className="sr-only"> (obligatorio)</span>
               </Label>
               <Input
-                id="birthDate"
+                id="fechaNacimiento"
                 type="date"
-                required
-                value={form.birthDate}
-                onChange={(e) => {
-                  setForm({ ...form, birthDate: e.target.value });
-                  if (validationError.field === "birthDate") {
-                    setValidationError({ field: null, message: "" });
-                  }
-                }}
-                aria-invalid={validationError.field === "birthDate"}
-                aria-describedby={validationError.field === "birthDate" ? "birthDate-error" : undefined}
+                max={hoyISO()}
+                value={form.fechaNacimiento}
+                onChange={(e) => setField("fechaNacimiento", e.target.value)}
+                className={capCls("fechaNacimiento")}
+                aria-invalid={validationError.field === "fechaNacimiento"}
+                aria-describedby={
+                  validationError.field === "fechaNacimiento" ? "fechaNacimiento-error" : undefined
+                }
               />
-              {validationError.field === "birthDate" && (
-                <p id="birthDate-error" role="alert" className="text-sm text-destructive">
+              {validationError.field === "fechaNacimiento" && (
+                <p id="fechaNacimiento-error" role="alert" className="text-sm text-destructive">
                   {validationError.message}
                 </p>
               )}
             </FormField>
 
-            {/* CC-0002 §13.5 — Tipo de documento (opcional) */}
-            <FormField>
-              <Label htmlFor="documentType">Tipo de documento</Label>
-              <Select
-                value={form.documentType}
-                onValueChange={(v) => {
-                  // Al cambiar a un tipo que no es DUI_RESP, limpiar datos del responsable.
-                  const responsableClear =
-                    v !== "DUI_RESP"
-                      ? { responsableNombre: "", responsableParentesco: "", responsableDui: "" }
-                      : {};
-                  setForm({ ...form, documentType: v, documentNumber: "", ...responsableClear });
-                  if (validationError.field === "documentType") {
-                    setValidationError({ field: null, message: "" });
-                  }
-                }}
-              >
-                <SelectTrigger id="documentType">
-                  <SelectValue placeholder="Selecciona (opcional)…" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="DUI">DUI (Documento Único de Identidad)</SelectItem>
-                  <SelectItem value="DNI">DNI (extranjero)</SelectItem>
-                  <SelectItem value="PASAPORTE">Pasaporte</SelectItem>
-                  <SelectItem value="DUI_RESP">DUI de Responsable (menor de edad)</SelectItem>
-                </SelectContent>
-              </Select>
-            </FormField>
-
-            {/* Número de documento: visible solo cuando hay tipo seleccionado */}
-            {form.documentType && (
+            {edad && (
               <FormField>
-                <Label htmlFor="documentNumber">{documentNumberLabel(form.documentType)}</Label>
-                <Input
-                  id="documentNumber"
-                  value={form.documentNumber}
-                  onChange={(e) => {
-                    setForm({ ...form, documentNumber: e.target.value });
-                    if (validationError.field === "documentNumber") {
-                      setValidationError({ field: null, message: "" });
-                    }
-                  }}
-                  aria-invalid={validationError.field === "documentNumber"}
-                  aria-describedby={
-                    validationError.field === "documentNumber" ? "documentNumber-error" : undefined
-                  }
-                />
-                {validationError.field === "documentNumber" && (
-                  <p id="documentNumber-error" role="alert" className="text-sm text-destructive">
-                    {validationError.message}
-                  </p>
-                )}
+                <Label>Edad</Label>
+                <p
+                  data-testid="edad-derivada"
+                  className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium text-foreground"
+                >
+                  {edad.label}
+                </p>
               </FormField>
-            )}
-
-            {/* Datos del responsable: visible solo para DUI_RESP */}
-            {form.documentType === "DUI_RESP" && (
-              <fieldset className="space-y-4 rounded-md border p-4">
-                <legend className="px-1 text-sm font-semibold">Datos del responsable</legend>
-                <FormField>
-                  <Label htmlFor="responsableNombre">Nombre del responsable</Label>
-                  <Input
-                    id="responsableNombre"
-                    value={form.responsableNombre}
-                    onChange={(e) => {
-                      setForm({ ...form, responsableNombre: e.target.value });
-                      if (validationError.field === "responsableNombre") {
-                        setValidationError({ field: null, message: "" });
-                      }
-                    }}
-                    aria-invalid={validationError.field === "responsableNombre"}
-                    aria-describedby={
-                      validationError.field === "responsableNombre"
-                        ? "responsableNombre-error"
-                        : undefined
-                    }
-                  />
-                  {validationError.field === "responsableNombre" && (
-                    <p id="responsableNombre-error" role="alert" className="text-sm text-destructive">
-                      {validationError.message}
-                    </p>
-                  )}
-                </FormField>
-                <FormField>
-                  <Label htmlFor="responsableParentesco">Parentesco</Label>
-                  <Input
-                    id="responsableParentesco"
-                    value={form.responsableParentesco}
-                    placeholder="Ej. Madre, Padre, Tutor"
-                    onChange={(e) => {
-                      setForm({ ...form, responsableParentesco: e.target.value });
-                      if (validationError.field === "responsableParentesco") {
-                        setValidationError({ field: null, message: "" });
-                      }
-                    }}
-                    aria-invalid={validationError.field === "responsableParentesco"}
-                    aria-describedby={
-                      validationError.field === "responsableParentesco"
-                        ? "responsableParentesco-error"
-                        : undefined
-                    }
-                  />
-                  {validationError.field === "responsableParentesco" && (
-                    <p
-                      id="responsableParentesco-error"
-                      role="alert"
-                      className="text-sm text-destructive"
-                    >
-                      {validationError.message}
-                    </p>
-                  )}
-                </FormField>
-                <FormField>
-                  <Label htmlFor="responsableDui">DUI del responsable</Label>
-                  <Input
-                    id="responsableDui"
-                    value={form.responsableDui}
-                    onChange={(e) => {
-                      setForm({ ...form, responsableDui: e.target.value });
-                      if (validationError.field === "responsableDui") {
-                        setValidationError({ field: null, message: "" });
-                      }
-                    }}
-                    aria-invalid={validationError.field === "responsableDui"}
-                    aria-describedby={
-                      validationError.field === "responsableDui" ? "responsableDui-error" : undefined
-                    }
-                  />
-                  {validationError.field === "responsableDui" && (
-                    <p id="responsableDui-error" role="alert" className="text-sm text-destructive">
-                      {validationError.message}
-                    </p>
-                  )}
-                </FormField>
-              </fieldset>
             )}
 
             <FormError>{create.error?.message}</FormError>
             <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? "Guardando…" : "Crear paciente"}
+              {create.isPending ? "Guardando…" : "Pre-registrar paciente"}
             </Button>
           </Form>
         </CardContent>
