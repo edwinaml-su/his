@@ -887,6 +887,7 @@ export const patientRouter = router({
           : null,
         alergias,
         contactosEmergencia,
+        usuarioActual: { id: ctx.user.id, nombre: ctx.user.fullName },
       };
     }),
 

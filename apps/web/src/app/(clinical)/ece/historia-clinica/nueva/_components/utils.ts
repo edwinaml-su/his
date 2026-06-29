@@ -7,6 +7,13 @@ export function toUpper(v: string): string {
   return v.toUpperCase();
 }
 
+/** Sello de tiempo legible dd/mm/aaaa hh:mm:ss para auditoría G-09. */
+export function ahoraTS(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 /** Parsea a número o undefined si está vacío / no es número. */
 export function parseNum(raw: string): number | undefined {
   if (raw.trim() === "") return undefined;

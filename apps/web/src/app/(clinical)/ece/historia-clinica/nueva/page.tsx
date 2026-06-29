@@ -6,10 +6,11 @@
  * Ruta: /ece/historia-clinica/nueva?cuentaId=<uuid>
  * Fuente de verdad: docs/CC/0007/REQ-ECE-HC-001-historia-clinica.md
  *
- * 11 bloques clínicos, cabecera sticky, banners de alergias y nombre de pila,
- * campos narrativos por modal (G-04), antecedentes estructurados (G-05),
- * signos vitales con calculadoras, diagnósticos CIE-11 con complemento por fila,
- * procedimientos CPT, misceláneos, plan en grid + destino, firma del médico.
+ * 10 bloques clínicos, cabecera sticky, banners de alergias y nombre de pila,
+ * campos narrativos por modal (G-04), antecedentes estructurados (G-05) con
+ * confirmación + auditoría en negativos (G-09), examen físico con signos vitales
+ * embebidos, diagnósticos CIE-11 con complemento por fila, procedimientos CPT,
+ * misceláneos, plan en grid + destino, firma del médico.
  *
  * G-01: texto del usuario → MAYÚSCULAS al guardar.
  * G-06: sin localStorage/sessionStorage.
@@ -89,9 +90,11 @@ const STEP_LABEL: Record<string, string> = {
 
 // ── Estado de antecedentes estructurados (inicial) ─────────────────────────────
 
-const initSubseccion = (
-  estadoDefault: SubseccionState["estado"],
-): SubseccionState => ({ estado: estadoDefault, items: [] });
+const initSubseccion = (): SubseccionState => ({
+  estado: "TIENE",
+  items: [],
+  auditoria: null,
+});
 
 interface AntState {
   alergias: SubseccionState;
@@ -101,12 +104,13 @@ interface AntState {
   habitos: SubseccionState;
 }
 
+// Default "TIENE": el médico captura o confirma explícitamente el negativo (G-09).
 const INIT_ANT: AntState = {
-  alergias: initSubseccion("NINGUNO"),
-  personales: initSubseccion("NINGUNO"),
-  familiares: initSubseccion("NINGUNO"),
-  ocupacion: initSubseccion("NO_APLICA"),
-  habitos: initSubseccion("NO_APLICA"),
+  alergias: initSubseccion(),
+  personales: initSubseccion(),
+  familiares: initSubseccion(),
+  ocupacion: initSubseccion(),
+  habitos: initSubseccion(),
 };
 
 // ── Helpers de edad ────────────────────────────────────────────────────────────
@@ -120,6 +124,10 @@ function calcEdad(birthDate: Date | string | null): string {
   const monthDiff = now.getMonth() - d.getMonth();
   if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < d.getDate())) age--;
   return `${age} años`;
+}
+
+function isFemeninoSexo(sexo: string | null): boolean {
+  return !!sexo && sexo.trim().toLowerCase().charAt(0) === "f";
 }
 
 function fmtFecha(d: Date | string | null): string {
@@ -148,6 +156,47 @@ function PeanutIcon({ className }: { className?: string }) {
       <path d="M12 2C8.7 2 7 4.3 7 6.5c0 1.5.8 2.8 2 3.6C7.3 11 6 12.8 6 15c0 3.3 2.7 6 6 6s6-2.7 6-6c0-2.2-1.3-4-3-4.9 1.2-.8 2-2.1 2-3.6C17 4.3 15.3 2 12 2z" />
       <path d="M12 10v4" />
     </svg>
+  );
+}
+
+// ── Ícono de sexo (Venus rosa / Marte azul) ────────────────────────────────────
+
+function IconoSexo({ sexo }: { sexo: string | null }) {
+  const esFemenino = !!sexo && sexo.trim().toLowerCase().charAt(0) === "f";
+  return (
+    <span
+      className={[
+        "inline-flex h-6 w-6 flex-none items-center justify-center rounded-full",
+        esFemenino
+          ? "bg-pink-100 text-pink-600 dark:bg-pink-950 dark:text-pink-400"
+          : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400",
+      ].join(" ")}
+      title={esFemenino ? "Femenino" : "Masculino"}
+      aria-label={esFemenino ? "Sexo femenino" : "Sexo masculino"}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="h-3.5 w-3.5"
+        aria-hidden="true"
+      >
+        {esFemenino ? (
+          <>
+            <circle cx="12" cy="8" r="5" />
+            <path d="M12 13v8M9 18h6" />
+          </>
+        ) : (
+          <>
+            <circle cx="10" cy="14" r="5" />
+            <path d="M14 10l6-6M15 4h5v5" />
+          </>
+        )}
+      </svg>
+    </span>
   );
 }
 
@@ -229,8 +278,11 @@ function PacienteHeader({
               </span>
             )}
             {paciente?.biologicalSexId && (
-              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
-                Sexo: <strong className="text-foreground">{paciente.biologicalSexId}</strong>
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
+                <IconoSexo sexo={paciente.biologicalSexId} />
+                <strong className="text-foreground">
+                  {isFemeninoSexo(paciente.biologicalSexId) ? "Femenino" : "Masculino"}
+                </strong>
               </span>
             )}
             {paciente?.birthDate && (
@@ -433,6 +485,8 @@ export default function NuevaHistoriaClinicaPage() {
   const ctx = contextoCuentaQ.data;
   const paciente = ctx?.paciente ?? null;
   const episodioId = ctx?.episodioId ?? null;
+  // G-09: nombre del usuario autenticado para el sello de auditoría de antecedentes.
+  const usuarioActual = ctx?.usuarioActual?.nombre ?? "USUARIO ACTUAL";
 
   // Inicializar contacto de emergencia desde el contexto
   React.useEffect(() => {
@@ -490,12 +544,17 @@ export default function NuevaHistoriaClinicaPage() {
   // ── Helpers de validación ──────────────────────────────────────────────────────
 
   function buildAntecedentesEstructurados(): AntecedentesEstructurados {
+    const sub = (s: SubseccionState) => ({
+      estado: s.estado,
+      items: s.items,
+      ...(s.auditoria ? { auditoria: s.auditoria } : {}),
+    });
     return {
-      alergias: { estado: antecedentes.alergias.estado, items: antecedentes.alergias.items },
-      personales: { estado: antecedentes.personales.estado, items: antecedentes.personales.items },
-      familiares: { estado: antecedentes.familiares.estado, items: antecedentes.familiares.items },
-      ocupacion: { estado: antecedentes.ocupacion.estado, items: antecedentes.ocupacion.items },
-      habitos: { estado: antecedentes.habitos.estado, items: antecedentes.habitos.items },
+      alergias: sub(antecedentes.alergias),
+      personales: sub(antecedentes.personales),
+      familiares: sub(antecedentes.familiares),
+      ocupacion: sub(antecedentes.ocupacion),
+      habitos: sub(antecedentes.habitos),
     };
   }
 
@@ -511,7 +570,7 @@ export default function NuevaHistoriaClinicaPage() {
     const fields = new Set<string>();
 
     if (!motivoConsulta.trim()) { errs.push("Motivo de consulta es obligatorio."); fields.add("motivo"); }
-    if (!presentaEnfermedad.trim()) { errs.push("Presenta Enfermedad es obligatorio."); fields.add("enfermedad"); }
+    if (!presentaEnfermedad.trim()) { errs.push("Presente Enfermedad es obligatorio."); fields.add("enfermedad"); }
     if (!antecedentesValid()) { errs.push("Antecedentes: complete todas las subsecciones."); fields.add("antecedentes"); }
     if (!examenFisico.trim()) { errs.push("Examen físico es obligatorio."); fields.add("examen"); }
     if (diagnosticos.length === 0) { errs.push("Diagnósticos (CIE-11): agregue al menos uno."); fields.add("diagnosticos"); }
@@ -751,13 +810,14 @@ export default function NuevaHistoriaClinicaPage() {
             onChange={setMotivoConsulta}
             disabled={isSubmitting}
             invalid={invalidFields.has("motivo")}
+            wrapQuotes
           />
         </CardNumerada>
 
-        {/* ── 2. Presenta Enfermedad ── */}
+        {/* ── 2. Presente Enfermedad ── */}
         <CardNumerada
           numero={2}
-          titulo="Presenta Enfermedad"
+          titulo="Presente Enfermedad"
           id="card-enfermedad"
           invalid={invalidFields.has("enfermedad")}
         >
@@ -765,7 +825,7 @@ export default function NuevaHistoriaClinicaPage() {
             Puede guardar y aplicar plantillas para agilizar este apartado.
           </p>
           <CampoModal
-            titulo="Presenta Enfermedad"
+            titulo="Presente Enfermedad"
             placeholder="Descripción cronológica de la enfermedad…"
             value={presentaEnfermedad}
             onChange={setPresentaEnfermedad}
@@ -798,6 +858,7 @@ export default function NuevaHistoriaClinicaPage() {
               labelNegativo="Ninguna"
               value={antecedentes.alergias}
               onChange={(v) => setAntecedentes((a) => ({ ...a, alergias: v }))}
+              usuarioActual={usuarioActual}
               disabled={isSubmitting}
             />
             <AntecedenteSubseccion
@@ -806,6 +867,7 @@ export default function NuevaHistoriaClinicaPage() {
               labelNegativo="Ninguno"
               value={antecedentes.personales}
               onChange={(v) => setAntecedentes((a) => ({ ...a, personales: v }))}
+              usuarioActual={usuarioActual}
               disabled={isSubmitting}
             />
             <AntecedenteSubseccion
@@ -814,6 +876,7 @@ export default function NuevaHistoriaClinicaPage() {
               labelNegativo="Ninguno"
               value={antecedentes.familiares}
               onChange={(v) => setAntecedentes((a) => ({ ...a, familiares: v }))}
+              usuarioActual={usuarioActual}
               disabled={isSubmitting}
             />
           </fieldset>
@@ -827,6 +890,7 @@ export default function NuevaHistoriaClinicaPage() {
               labelNegativo="No aplica"
               value={antecedentes.ocupacion}
               onChange={(v) => setAntecedentes((a) => ({ ...a, ocupacion: v }))}
+              usuarioActual={usuarioActual}
               disabled={isSubmitting}
             />
             <AntecedenteSubseccion
@@ -835,6 +899,7 @@ export default function NuevaHistoriaClinicaPage() {
               labelNegativo="No aplica"
               value={antecedentes.habitos}
               onChange={(v) => setAntecedentes((a) => ({ ...a, habitos: v }))}
+              usuarioActual={usuarioActual}
               disabled={isSubmitting}
             />
 
@@ -908,76 +973,81 @@ export default function NuevaHistoriaClinicaPage() {
           </fieldset>
         </CardNumerada>
 
-        {/* ── 4. Signos vitales ── */}
+        {/* ── 4. Examen físico (signos vitales + narrativa) ── */}
         <CardNumerada
           numero={4}
-          titulo="Signos vitales"
-          id="card-vitales"
-        >
-          <p className="mb-3 text-xs text-muted-foreground">
-            La presión arterial y los signos cardiorrespiratorios son obligatorios; el resto es opcional.
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            {hayVitales ? (
-              <div className="flex flex-1 flex-wrap gap-1.5">
-                {vitalesChips.map((chip, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs font-medium"
-                  >
-                    {chip}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <span className="flex-1 text-sm text-muted-foreground">
-                Signos vitales sin registrar.
-              </span>
-            )}
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => setVitalesOpen(true)}
-              disabled={isSubmitting}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-4 w-4">
-                <path d="M3 12h4l2 5 4-12 2 7h6" />
-              </svg>
-              {hayVitales ? "Modificar signos vitales" : "Registrar signos vitales"}
-            </Button>
-          </div>
-        </CardNumerada>
-
-        {/* ── 5. Examen físico ── */}
-        <CardNumerada
-          numero={5}
           titulo="Examen físico"
           id="card-examen"
           invalid={invalidFields.has("examen")}
         >
-          <p className="mb-2 text-xs text-muted-foreground">
-            Puede guardar y aplicar plantillas para agilizar este apartado.
-          </p>
-          <CampoModal
-            titulo="Examen físico"
-            placeholder="Descripción del examen físico…"
-            value={examenFisico}
-            onChange={setExamenFisico}
-            disabled={isSubmitting}
-            invalid={invalidFields.has("examen")}
-            modalHeader={
-              <PlantillasBar
-                campo="EXAMEN_FISICO"
-                onApply={setExamenFisico}
-                currentText={examenFisico}
-              />
-            }
-          />
+          {/* Subsección A — Signos vitales (toma separada en ece.signos_vitales) */}
+          <fieldset className="mb-5">
+            <legend className="mb-2 border-b border-border pb-1 text-sm font-bold">
+              Signos vitales
+            </legend>
+            <p className="mb-3 text-xs text-muted-foreground">
+              La presión arterial y los signos cardiorrespiratorios son obligatorios; el resto es opcional.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {hayVitales ? (
+                <div className="flex flex-1 flex-wrap gap-1.5">
+                  {vitalesChips.map((chip, i) => (
+                    <span
+                      key={i}
+                      className="inline-flex items-center rounded-md border border-border bg-surface-2 px-2.5 py-1 text-xs font-medium"
+                    >
+                      {chip}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="flex-1 text-sm text-muted-foreground">
+                  Signos vitales sin registrar.
+                </span>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => setVitalesOpen(true)}
+                disabled={isSubmitting}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-4 w-4">
+                  <path d="M3 12h4l2 5 4-12 2 7h6" />
+                </svg>
+                {hayVitales ? "Modificar signos vitales" : "Registrar signos vitales"}
+              </Button>
+            </div>
+          </fieldset>
+
+          {/* Subsección B — Hallazgos del examen físico */}
+          <fieldset>
+            <legend className="mb-2 border-b border-border pb-1 text-sm font-bold">
+              Hallazgos
+            </legend>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Puede guardar y aplicar plantillas para agilizar este apartado.
+            </p>
+            <CampoModal
+              titulo="Examen físico"
+              placeholder="Descripción del examen físico…"
+              value={examenFisico}
+              onChange={setExamenFisico}
+              disabled={isSubmitting}
+              invalid={invalidFields.has("examen")}
+              modalHeader={
+                <PlantillasBar
+                  campo="EXAMEN_FISICO"
+                  onApply={setExamenFisico}
+                  currentText={examenFisico}
+                />
+              }
+            />
+          </fieldset>
         </CardNumerada>
 
-        {/* ── 6. Diagnósticos CIE-11 ── */}
+        {/* ── 5. Diagnósticos CIE-11 ── */}
         <CardNumerada
-          numero={6}
+          numero={5}
           titulo="Diagnósticos (CIE-11)"
           id="card-diagnosticos"
           invalid={invalidFields.has("diagnosticos")}
@@ -990,9 +1060,9 @@ export default function NuevaHistoriaClinicaPage() {
           />
         </CardNumerada>
 
-        {/* ── 7. Procedimientos CPT ── */}
+        {/* ── 6. Procedimientos CPT ── */}
         <CardNumerada
-          numero={7}
+          numero={6}
           titulo="Procedimientos (CPT)"
           obligatorio={false}
           id="card-procedimientos"
@@ -1007,9 +1077,9 @@ export default function NuevaHistoriaClinicaPage() {
           />
         </CardNumerada>
 
-        {/* ── 8. Misceláneos ── */}
+        {/* ── 7. Misceláneos ── */}
         <CardNumerada
-          numero={8}
+          numero={7}
           titulo="Misceláneos de consulta"
           obligatorio={false}
           id="card-miscelaneos"
@@ -1025,9 +1095,9 @@ export default function NuevaHistoriaClinicaPage() {
           />
         </CardNumerada>
 
-        {/* ── 9. Análisis clínico ── */}
+        {/* ── 8. Análisis clínico ── */}
         <CardNumerada
-          numero={9}
+          numero={8}
           titulo="Análisis clínico"
           id="card-analisis"
           invalid={invalidFields.has("analisis")}
@@ -1045,9 +1115,9 @@ export default function NuevaHistoriaClinicaPage() {
           />
         </CardNumerada>
 
-        {/* ── 10. Plan + Destino ── */}
+        {/* ── 9. Plan + Destino ── */}
         <CardNumerada
-          numero={10}
+          numero={9}
           titulo="Plan"
           id="card-plan"
           invalid={invalidFields.has("plan") || invalidFields.has("destino")}
@@ -1083,9 +1153,9 @@ export default function NuevaHistoriaClinicaPage() {
           </div>
         </CardNumerada>
 
-        {/* ── 11. Firma del médico ── */}
+        {/* ── 10. Firma del médico ── */}
         <CardNumerada
-          numero={11}
+          numero={10}
           titulo="Firma del médico"
           id="card-firma"
         >
