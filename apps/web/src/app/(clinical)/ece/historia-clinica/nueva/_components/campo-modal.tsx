@@ -30,6 +30,8 @@ interface CampoModalProps {
   className?: string;
   required?: boolean;
   invalid?: boolean;
+  /** G-08: muestra el valor entre comillas angulares «…». El valor se almacena sin comillas. */
+  wrapQuotes?: boolean;
 }
 
 export function CampoModal({
@@ -41,6 +43,7 @@ export function CampoModal({
   modalHeader,
   className,
   invalid,
+  wrapQuotes,
 }: CampoModalProps) {
   const [open, setOpen] = React.useState(false);
   const [draft, setDraft] = React.useState("");
@@ -74,7 +77,9 @@ export function CampoModal({
         ].join(" ")}
       >
         <span className="flex-1 whitespace-pre-wrap text-sm uppercase leading-snug">
-          {value || (
+          {value ? (
+            wrapQuotes ? `«${value}»` : value
+          ) : (
             <span className="normal-case text-muted-foreground">
               {placeholder}
             </span>

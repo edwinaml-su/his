@@ -7,15 +7,30 @@
  */
 
 import * as React from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@his/ui/components/dialog";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
-import { toUpper } from "./utils";
+import { ahoraTS, toUpper } from "./utils";
 
 export type EstadoAnt = "TIENE" | "NINGUNO" | "NO_APLICA";
+
+/** G-09: sello de auditoría al confirmar un antecedente negativo. */
+export interface SubseccionAuditoria {
+  registradoPor: string;
+  registradoEn: string;
+}
 
 export interface SubseccionState {
   estado: EstadoAnt;
   items: string[];
+  auditoria?: SubseccionAuditoria | null;
 }
 
 interface AntecedenteSubseccionProps {
@@ -24,6 +39,8 @@ interface AntecedenteSubseccionProps {
   labelNegativo: string;
   value: SubseccionState;
   onChange: (v: SubseccionState) => void;
+  /** Usuario autenticado, para el sello de auditoría G-09. */
+  usuarioActual: string;
   disabled?: boolean;
   invalid?: boolean;
 }
@@ -34,14 +51,30 @@ export function AntecedenteSubseccion({
   labelNegativo,
   value,
   onChange,
+  usuarioActual,
   disabled,
   invalid,
 }: AntecedenteSubseccionProps) {
   const [draft, setDraft] = React.useState("");
   const [draftError, setDraftError] = React.useState("");
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
 
-  function setEstado(e: EstadoAnt) {
-    onChange({ ...value, estado: e, items: e !== "TIENE" ? [] : value.items });
+  function seleccionarTiene() {
+    onChange({ ...value, estado: "TIENE", auditoria: null });
+  }
+
+  /** Pide confirmación antes de marcar negativo (G-09). */
+  function pedirNegativo() {
+    setConfirmOpen(true);
+  }
+
+  function confirmarNegativo() {
+    onChange({
+      estado: estadoNegativo,
+      items: [],
+      auditoria: { registradoPor: usuarioActual, registradoEn: ahoraTS() },
+    });
+    setConfirmOpen(false);
   }
 
   function agregar() {
@@ -77,7 +110,7 @@ export function AntecedenteSubseccion({
         <div className="inline-flex overflow-hidden rounded-full border border-input text-xs font-semibold">
           <button
             type="button"
-            onClick={() => setEstado("TIENE")}
+            onClick={seleccionarTiene}
             disabled={disabled}
             className={[
               "border-r border-input px-3 py-1 transition-colors",
@@ -90,7 +123,7 @@ export function AntecedenteSubseccion({
           </button>
           <button
             type="button"
-            onClick={() => setEstado(estadoNegativo)}
+            onClick={pedirNegativo}
             disabled={disabled}
             className={[
               "px-3 py-1 transition-colors",
@@ -173,6 +206,57 @@ export function AntecedenteSubseccion({
           )}
         </div>
       )}
+
+      {/* G-09: sello de auditoría cuando se confirmó un negativo */}
+      {value.estado !== "TIENE" && value.auditoria && (
+        <div className="flex items-center gap-2 rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-3.5 w-3.5 shrink-0"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+          <span>
+            <b>{labelNegativo.toUpperCase()}</b> · registrado por{" "}
+            <b>{value.auditoria.registradoPor}</b> el{" "}
+            <b>{value.auditoria.registradoEn}</b>
+          </span>
+        </div>
+      )}
+
+      {/* G-09: confirmación antes de marcar negativo */}
+      <Dialog open={confirmOpen} onOpenChange={(o) => !o && setConfirmOpen(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Confirmar «{labelNegativo}» — {titulo}
+            </DialogTitle>
+            <DialogDescription>
+              ¿Confirma que en {titulo.toLowerCase()} corresponde «{labelNegativo}
+              »?
+              {value.items.length > 0 &&
+                ` Hay ${value.items.length} registro(s) capturado(s) que quedarán sin efecto.`}{" "}
+              Se registrará la acción con su usuario y la fecha/hora.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              type="button"
+              onClick={() => setConfirmOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button type="button" onClick={confirmarNegativo}>
+              Confirmar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

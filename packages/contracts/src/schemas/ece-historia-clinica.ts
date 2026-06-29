@@ -207,9 +207,21 @@ export type ExamenFisico = z.infer<typeof examenFisicoSchema>;
  *   Ninguno → alergias/personales/familiares usan "NINGUNO"
  *   No aplica → ocupacion/habitos usan "NO_APLICA"
  */
+/**
+ * RF-05 / G-09 — auditoría del estado negativo (Ninguno/No aplica).
+ * Se sella cuando el médico confirma el estado negativo en modal:
+ * usuario que ejecutó la acción + fecha-hora. `registradoEn` es ISO-8601.
+ */
+const antecedenteAuditoriaSchema = z.object({
+  registradoPor: z.string().min(1).max(200),
+  registradoEn: z.string().min(1).max(40),
+});
+export type AntecedenteAuditoria = z.infer<typeof antecedenteAuditoriaSchema>;
+
 const antecedenteSubseccionSchema = z.object({
   estado: z.enum(["TIENE", "NINGUNO", "NO_APLICA"]),
   items: z.array(z.string().min(1).max(500)).optional(),
+  auditoria: antecedenteAuditoriaSchema.optional(),
 });
 
 export const antecedentesEstructuradosSchema = z.object({
