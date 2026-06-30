@@ -130,7 +130,7 @@ export const patientAccountRouter = router({
 
       return withTenantContext(prisma, tenant, async (tx) => {
         const conditions: string[] = [
-          `i."organizationId" = $1`,
+          `i."organizationId" = $1::uuid`,
           `i.status NOT IN ('VOIDED', 'DRAFT')`,
         ];
         const params: unknown[] = [orgId];
@@ -188,7 +188,7 @@ export const patientAccountRouter = router({
               area.unidad       AS "areaUnidad",
               area.cama         AS "areaCama"
            FROM "Invoice" i
-           JOIN "Patient" p ON p.id = i."patientId" AND p."organizationId" = $1
+           JOIN "Patient" p ON p.id = i."patientId" AND p."organizationId" = $1::uuid
            LEFT JOIN "BiologicalSex" bs ON bs.id = p."biologicalSexId"
            LEFT JOIN LATERAL (
              SELECT su.name AS unidad, bdsel.cama AS cama
