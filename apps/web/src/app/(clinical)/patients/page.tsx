@@ -123,7 +123,7 @@ export default function PatientsPage() {
                 className="flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 <option value="">Todos</option>
-                {sexes.data?.map((s) => (
+                {sexes.data?.map((s: { id: string; name: string }) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
