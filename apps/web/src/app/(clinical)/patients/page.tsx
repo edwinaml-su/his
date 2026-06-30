@@ -49,6 +49,10 @@ export default function PatientsPage() {
   }, [vista, nombreD, documentoD, expedienteD, biologicalSexId, edadMin, edadMax]);
 
   const sexes = trpc.catalog.list.useQuery({ catalog: "biologicalSex", activeOnly: true });
+  const sexOptions = React.useMemo(
+    () => (sexes.data ?? []) as Array<{ id: string; name: string }>,
+    [sexes.data],
+  );
 
   const worklist = trpc.patientAccount.listarWorklist.useQuery({
     vista,
@@ -123,7 +127,7 @@ export default function PatientsPage() {
                 className="flex h-10 w-full items-center rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 <option value="">Todos</option>
-                {sexes.data?.map((s) => (
+                {sexOptions.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>
