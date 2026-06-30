@@ -4,6 +4,11 @@
  * Sin dependencias de React ni de tRPC — facilita tests unitarios del reducer.
  */
 
+import type {
+  AntecedentesEstructurados,
+  EvolucionMiscelaneos,
+} from "@his/contracts";
+
 // ─── Tipos de dominio ────────────────────────────────────────────────────────
 
 export interface EvolucionProblema {
@@ -98,6 +103,13 @@ export const SIGNOS_EMPTY: SignosState = {
   escalaDolor: 0,
 };
 
+/**
+ * CC-0006 §11.2 — misceláneos de consulta (inline híbrido). Solo persiste lo que
+ * no tiene módulo legacy: terapia respiratoria + inyecciones. `inyecciones`
+ * arranca como arreglo vacío; `terapiaRespiratoria` es opcional.
+ */
+export const MISC_EMPTY: EvolucionMiscelaneos = { inyecciones: [] };
+
 export interface DraftState {
   especialidad: EspecialidadState;
   problemas: EvolucionProblema[];
@@ -106,6 +118,14 @@ export interface DraftState {
   analisis: string;
   plan: IndicacionPlan[];
   signos: SignosState;
+  /**
+   * CC-0006 §10.3 — snapshot de antecedentes confirmados en esta evolución
+   * (prefill desde la HC canónica CC-0007). `undefined` = aún no registrados;
+   * NO entra en el gating de firma (§12).
+   */
+  antecedentes?: AntecedentesEstructurados;
+  /** CC-0006 §11.2 — misceláneos inline (terapia respiratoria + inyecciones). */
+  misc: EvolucionMiscelaneos;
 }
 
 export const DRAFT_EMPTY: DraftState = {
@@ -116,6 +136,7 @@ export const DRAFT_EMPTY: DraftState = {
   analisis: "",
   plan: [],
   signos: SIGNOS_EMPTY,
+  misc: MISC_EMPTY,
 };
 
 // ─── Acciones del reducer ────────────────────────────────────────────────────
@@ -133,7 +154,9 @@ export type DraftAction =
   | { type: "UNGROUP_PROBLEMA"; parentId: string }
   | { type: "ADD_PLAN"; texto: string }
   | { type: "EDIT_PLAN"; id: string; texto: string }
-  | { type: "DELETE_PLAN"; id: string };
+  | { type: "DELETE_PLAN"; id: string }
+  | { type: "SET_ANTECEDENTES"; antecedentes: AntecedentesEstructurados }
+  | { type: "SET_MISC"; misc: EvolucionMiscelaneos };
 
 // ─── Helpers de numeración (presentación) ────────────────────────────────────
 
@@ -171,6 +194,13 @@ export function tieneSignos(s: SignosState): boolean {
   return escalaDolor > 0 || Object.values(campos).some((v) => v.trim() !== "");
 }
 
+// ─── Helper: misceláneos con contenido ────────────────────────────────────────
+
+/** §11.2 — true si hay terapia respiratoria capturada o al menos una inyección. */
+export function tieneMisc(m: EvolucionMiscelaneos): boolean {
+  return m.inyecciones.length > 0 || m.terapiaRespiratoria !== undefined;
+}
+
 // ─── Helper: signos vitales núcleo completos ──────────────────────────────────
 
 /**
@@ -190,6 +220,21 @@ export const SIGNOS_NUCLEO = [
 
 export function signosNucleoCompletos(s: SignosState): boolean {
   return SIGNOS_NUCLEO.every((k) => s[k].trim() !== "");
+}
+
+// ─── Helper: fórmula obstétrica (§10.4 — obligatoria para sexo femenino) ───────
+
+/** Los 5 campos G·P·P·A·V exigidos al guardar signos de una paciente femenina. */
+export const FORMULA_OBSTETRICA = [
+  "gestaG",
+  "partoTermino",
+  "partoPretermino",
+  "abortos",
+  "vivos",
+] as const;
+
+export function formulaObstetricaCompleta(s: SignosState): boolean {
+  return FORMULA_OBSTETRICA.every((k) => s[k].trim() !== "");
 }
 
 // ─── Helper: campos obligatorios faltantes ────────────────────────────────────
@@ -236,6 +281,10 @@ export function draftReducer(state: DraftState, action: DraftAction): DraftState
       return { ...state, analisis: action.texto };
     case "SET_SIGNOS":
       return { ...state, signos: action.signos };
+    case "SET_ANTECEDENTES":
+      return { ...state, antecedentes: action.antecedentes };
+    case "SET_MISC":
+      return { ...state, misc: action.misc };
 
     case "ADD_PROBLEMA": {
       const nuevo: EvolucionProblema = {

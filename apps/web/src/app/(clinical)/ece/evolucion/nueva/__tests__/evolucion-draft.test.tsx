@@ -5,13 +5,20 @@
  * @QA E2E: agregar problema → firmar → verificar inmutabilidad en BD.
  */
 import { describe, it, expect } from "vitest";
+import type {
+  AntecedentesEstructurados,
+  EvolucionMiscelaneos,
+} from "@his/contracts";
 import {
   draftReducer,
   DRAFT_EMPTY,
   calcNumero,
   puedeFirmar,
   signosNucleoCompletos,
+  formulaObstetricaCompleta,
   tieneSignos,
+  tieneMisc,
+  MISC_EMPTY,
   SIGNOS_EMPTY,
   type DraftState,
   type EvolucionProblema,
@@ -89,6 +96,44 @@ describe("signosNucleoCompletos", () => {
     expect(
       signosNucleoCompletos({ ...SIGNOS_NUCLEO_OK, pesoKg: "", tallaM: "", glucometriaMgdl: "" }),
     ).toBe(true);
+  });
+});
+
+// ─── formulaObstetricaCompleta (§10.4 — obligatoria para sexo femenino) ────────
+
+describe("formulaObstetricaCompleta", () => {
+  const FORMULA_OK: typeof SIGNOS_EMPTY = {
+    ...SIGNOS_EMPTY,
+    gestaG: "2",
+    partoTermino: "1",
+    partoPretermino: "0",
+    abortos: "0",
+    vivos: "1",
+  };
+
+  it("los 5 campos G·P·P·A·V completos → true", () => {
+    expect(formulaObstetricaCompleta(FORMULA_OK)).toBe(true);
+  });
+
+  it("acepta ceros: '0' no cuenta como vacío (nuligesta G0 P0 A0)", () => {
+    expect(
+      formulaObstetricaCompleta({
+        ...SIGNOS_EMPTY,
+        gestaG: "0",
+        partoTermino: "0",
+        partoPretermino: "0",
+        abortos: "0",
+        vivos: "0",
+      }),
+    ).toBe(true);
+  });
+
+  it("SIGNOS_EMPTY → false", () => {
+    expect(formulaObstetricaCompleta(SIGNOS_EMPTY)).toBe(false);
+  });
+
+  it("falta un solo campo (vivos) → false", () => {
+    expect(formulaObstetricaCompleta({ ...FORMULA_OK, vivos: "" })).toBe(false);
   });
 });
 
@@ -311,5 +356,82 @@ describe("draftReducer textos", () => {
     const s = draftReducer(DRAFT_EMPTY, { type: "SET_SIGNOS", signos });
     expect(s.signos.presionSistolica).toBe("120");
     expect(s.signos.escalaDolor).toBe(3);
+  });
+});
+
+// ─── Antecedentes (§10.3) — snapshot, NO entra en gating (§12) ────────────────
+
+const ANTECEDENTES_OK: AntecedentesEstructurados = {
+  alergias: { estado: "NINGUNO" },
+  personales: { estado: "TIENE", items: ["Hipertensión arterial"] },
+  familiares: { estado: "NINGUNO" },
+  ocupacion: { estado: "NO_APLICA" },
+  habitos: { estado: "NO_APLICA" },
+};
+
+describe("draftReducer SET_ANTECEDENTES", () => {
+  it("guarda el snapshot de antecedentes", () => {
+    const s = draftReducer(DRAFT_EMPTY, {
+      type: "SET_ANTECEDENTES",
+      antecedentes: ANTECEDENTES_OK,
+    });
+    expect(s.antecedentes).toEqual(ANTECEDENTES_OK);
+  });
+
+  it("DRAFT_EMPTY no trae antecedentes (undefined)", () => {
+    expect(DRAFT_EMPTY.antecedentes).toBeUndefined();
+  });
+
+  it("antecedentes NO bloquea ni habilita la firma (§12)", () => {
+    // Draft completo en lo obligatorio…
+    let completo = draftReducer(DRAFT_EMPTY, {
+      type: "SET_ESPECIALIDAD",
+      especialidad: { id: null, nombre: "Medicina Interna" },
+    });
+    completo = draftReducer(completo, { type: "ADD_PROBLEMA", texto: "p1" });
+    completo = draftReducer(completo, { type: "SET_SUBJETIVO", texto: "s" });
+    completo = draftReducer(completo, { type: "SET_OBJETIVO", texto: "o" });
+    completo = draftReducer(completo, { type: "SET_ANALISIS", texto: "a" });
+    completo = draftReducer(completo, { type: "ADD_PLAN", texto: "plan" });
+    completo = draftReducer(completo, { type: "SET_SIGNOS", signos: SIGNOS_NUCLEO_OK });
+    // …firmable SIN antecedentes…
+    expect(puedeFirmar(completo)).toBe(true);
+    // …y sigue firmable CON antecedentes (no cambia el gating).
+    const conAnt = draftReducer(completo, {
+      type: "SET_ANTECEDENTES",
+      antecedentes: ANTECEDENTES_OK,
+    });
+    expect(puedeFirmar(conAnt)).toBe(true);
+  });
+});
+
+// ─── Misceláneos (§11.2) — inline híbrido ─────────────────────────────────────
+
+describe("draftReducer SET_MISC / tieneMisc", () => {
+  it("SET_MISC reemplaza misceláneos", () => {
+    const misc: EvolucionMiscelaneos = {
+      inyecciones: [{ texto: "Diclofenaco 75 mg IM" }],
+    };
+    const s = draftReducer(DRAFT_EMPTY, { type: "SET_MISC", misc });
+    expect(s.misc).toEqual(misc);
+  });
+
+  it("DRAFT_EMPTY trae misc vacío con inyecciones []", () => {
+    expect(DRAFT_EMPTY.misc).toEqual(MISC_EMPTY);
+    expect(DRAFT_EMPTY.misc.inyecciones).toHaveLength(0);
+  });
+
+  it("tieneMisc: vacío → false", () => {
+    expect(tieneMisc(MISC_EMPTY)).toBe(false);
+  });
+
+  it("tieneMisc: con inyección → true", () => {
+    expect(tieneMisc({ inyecciones: [{ texto: "Ketorolaco IM" }] })).toBe(true);
+  });
+
+  it("tieneMisc: con terapia respiratoria → true", () => {
+    expect(
+      tieneMisc({ inyecciones: [], terapiaRespiratoria: { gasometria: { tipo: "BASAL" } } }),
+    ).toBe(true);
   });
 });

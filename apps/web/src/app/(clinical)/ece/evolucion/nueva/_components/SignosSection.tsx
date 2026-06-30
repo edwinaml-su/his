@@ -1,17 +1,16 @@
 "use client";
 
 /**
- * Sección de Signos vitales (CC-0006, ajuste Avante).
+ * §10.1 — Signos vitales como sub-bloque de Objetivo (CC-0006 avante4).
  *
- * Tarjeta-resumen ubicada ARRIBA de Objetivo. Muestra chips + alertas críticas;
- * la captura/edición vive en VitalesModal. Núcleo (TA, FC, FR, T°, SpO₂) es
+ * Título teal + píldora Obligatorio; muestra chips-resumen + alertas críticas.
+ * La captura/edición vive en VitalesModal. El núcleo (TA, FC, FR, T°, SpO₂) es
  * obligatorio para firmar (ver puedeFirmar en _lib/types).
  */
 
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
 import {
   computeAlertasVitales,
@@ -21,6 +20,7 @@ import {
   imcClasificacion,
 } from "../../../../../../lib/evolucion/signos-vitales";
 import { tieneSignos } from "../_lib/types";
+import { SubBloque } from "./SubBloque";
 
 interface Props {
   onAbrir: () => void;
@@ -67,97 +67,94 @@ export function SignosSection({ onAbrir }: Props) {
   const imc = pesoKgN != null && tallaMN != null && tallaMN > 0 ? imcFrom(pesoKgN, tallaMN) : null;
 
   return (
-    <Card className="border-l-4 border-rose-300 dark:border-rose-700">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-rose-500 text-xs font-bold text-white">V</span>
-            <CardTitle className="text-sm font-bold uppercase tracking-wide">Signos vitales</CardTitle>
+    <SubBloque
+      titulo="Signos vitales"
+      pill="obligatorio"
+      accion={
+        haySignos ? (
+          <Button type="button" variant="outline" size="sm" onClick={onAbrir}>
+            Editar
+          </Button>
+        ) : null
+      }
+    >
+      {haySignos ? (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {signos.presionSistolica && signos.presionDiastolica && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                TA {signos.presionSistolica}/{signos.presionDiastolica} mmHg
+              </span>
+            )}
+            {signos.frecuenciaCardiaca && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                FC {signos.frecuenciaCardiaca} lpm
+              </span>
+            )}
+            {signos.frecuenciaRespiratoria && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                FR {signos.frecuenciaRespiratoria} rpm
+              </span>
+            )}
+            {signos.temperatura && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                T° {signos.temperatura} °C
+              </span>
+            )}
+            {signos.saturacionO2 && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                SpO₂ {signos.saturacionO2}%
+              </span>
+            )}
+            {signos.fio2 && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                FiO₂ {signos.fio2}%
+              </span>
+            )}
+            {gTotal != null && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                Glasgow {gTotal}/15 · {glasgowSeveridad(gTotal)}
+              </span>
+            )}
+            {signos.glucometriaMgdl && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                Gluc {signos.glucometriaMgdl} mg/dL
+              </span>
+            )}
+            {imc != null && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                IMC {imc.toFixed(1)} · {imcClasificacion(imc).label}
+              </span>
+            )}
+            {signos.escalaDolor > 0 && (
+              <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
+                Dolor {signos.escalaDolor}/10
+              </span>
+            )}
           </div>
-          {haySignos && (
-            <Button type="button" variant="outline" size="sm" onClick={onAbrir}>
-              Editar
-            </Button>
+          {alertas.length > 0 && (
+            <div className="flex flex-wrap gap-1" role="alert">
+              {alertas.map((a) => (
+                <Badge key={a} variant="destructive" className="text-xs">
+                  {a}
+                </Badge>
+              ))}
+            </div>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">
-          TA, FC, FR, temperatura y SpO₂ son obligatorios para firmar.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {haySignos ? (
-          <>
-            <div className="flex flex-wrap gap-1.5">
-              {signos.presionSistolica && signos.presionDiastolica && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  TA {signos.presionSistolica}/{signos.presionDiastolica} mmHg
-                </span>
-              )}
-              {signos.frecuenciaCardiaca && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  FC {signos.frecuenciaCardiaca} lpm
-                </span>
-              )}
-              {signos.frecuenciaRespiratoria && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  FR {signos.frecuenciaRespiratoria} rpm
-                </span>
-              )}
-              {signos.temperatura && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  T° {signos.temperatura} °C
-                </span>
-              )}
-              {signos.saturacionO2 && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  SpO₂ {signos.saturacionO2}%
-                </span>
-              )}
-              {signos.fio2 && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  FiO₂ {signos.fio2}%
-                </span>
-              )}
-              {gTotal != null && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  Glasgow {gTotal}/15 · {glasgowSeveridad(gTotal)}
-                </span>
-              )}
-              {signos.glucometriaMgdl && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  Gluc {signos.glucometriaMgdl} mg/dL
-                </span>
-              )}
-              {imc != null && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  IMC {imc.toFixed(1)} · {imcClasificacion(imc).label}
-                </span>
-              )}
-              {signos.escalaDolor > 0 && (
-                <span className="rounded-md border bg-muted/40 px-2 py-0.5 text-xs font-medium">
-                  Dolor {signos.escalaDolor}/10
-                </span>
-              )}
-            </div>
-            {alertas.length > 0 && (
-              <div className="flex flex-wrap gap-1" role="alert">
-                {alertas.map((a) => (
-                  <Badge key={a} variant="destructive" className="text-xs">
-                    {a}
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Sin registrar.</span>
-            <Button type="button" size="sm" onClick={onAbrir}>
-              Registrar signos vitales
-            </Button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-sm text-muted-foreground">Sin registrar.</span>
+          <Button
+            type="button"
+            size="sm"
+            onClick={onAbrir}
+            className="bg-rose-500 text-white hover:bg-rose-600"
+          >
+            Registrar signos vitales
+          </Button>
+        </div>
+      )}
+    </SubBloque>
   );
 }

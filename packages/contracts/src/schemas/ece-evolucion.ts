@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  antecedentesEstructuradosSchema,
+  terapiaRespiratoriaSchema,
+  ordenInyeccionSchema,
+} from "./ece-historia-clinica";
 
 /** CC-0006: un problema POMR. parentId=null → raíz; si apunta a otro problema → hijo (1 solo nivel). */
 export const evolucionProblemaSchema = z.object({
@@ -68,6 +73,20 @@ export const evolucionEspecialidadSchema = z.object({
 });
 export type EvolucionEspecialidad = z.infer<typeof evolucionEspecialidadSchema>;
 
+/**
+ * CC-0006 §11.2 — Misceláneos de consulta (modelo híbrido).
+ * Solo se persiste inline lo que NO tiene módulo legacy propio: terapia
+ * respiratoria (gasometría / nebulizaciones / vibroterapia / palmo percusión)
+ * e inyecciones. Laboratorio, imágenes, receta, ingreso, interconsulta e
+ * incapacidad se delegan a sus módulos vía action-cards (no se almacenan aquí).
+ * Reutiliza los schemas CC-0007 (adecuar-no-duplicar).
+ */
+export const evolucionMiscelaneosSchema = z.object({
+  terapiaRespiratoria: terapiaRespiratoriaSchema.optional(),
+  inyecciones: z.array(ordenInyeccionSchema).default([]),
+});
+export type EvolucionMiscelaneos = z.infer<typeof evolucionMiscelaneosSchema>;
+
 /** CC-0006: payload estructurado en la columna data jsonb. */
 export const evolucionDataSchema = z.object({
   signosVitalesId: z.string().uuid().optional(),
@@ -76,6 +95,14 @@ export const evolucionDataSchema = z.object({
   problemas: z.array(evolucionProblemaSchema).default([]),
   plan: z.array(indicacionPlanSchema).default([]),
   signos: evolucionSignosSchema.optional(),
+  /**
+   * CC-0006 §10.3 — antecedentes estructurados del paciente. Fuente canónica:
+   * ece.historia_clinica (CC-0007). Aquí se persiste el snapshot confirmado en
+   * esta evolución (con su sello de auditoría) para round-trip e inmutabilidad.
+   */
+  antecedentes: antecedentesEstructuradosSchema.optional(),
+  /** CC-0006 §11.2 — misceláneos de consulta (inline híbrido). */
+  misc: evolucionMiscelaneosSchema.optional(),
 });
 export type EvolucionData = z.infer<typeof evolucionDataSchema>;
 

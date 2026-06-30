@@ -27,6 +27,7 @@ import {
   eceEvolucionCreateSchema,
   eceEvolucionUpdateSchema,
   eceEvolucionListSchema,
+  antecedentesEstructuradosSchema,
 } from "@his/contracts";
 
 // ─── Tipos de fila raw ───────────────────────────────────────────────────────
@@ -239,6 +240,7 @@ export const evolucionMedicaRouter = router({
     .query(async ({ ctx, input }) => {
       interface EceCtxRow {
         public_patient_id: string | null;
+        paciente_id: string;
         numero_expediente: string;
         estado_expediente: string;
         episodio_estado: string;
@@ -248,10 +250,13 @@ export const evolucionMedicaRouter = router({
         ece_primer_apellido: string | null;
       }
 
-      const eceRow = await withEceContext<EceCtxRow | null>(ctx.prisma, ctx, async (tx) => {
+      const eceData = await withEceContext<
+        { ctxRow: EceCtxRow; antecedentesRaw: unknown } | null
+      >(ctx.prisma, ctx, async (tx) => {
         const rows = await tx.$queryRaw<EceCtxRow[]>`
           SELECT
             p.public_patient_id::text AS public_patient_id,
+            ea.paciente_id::text AS paciente_id,
             p.numero_expediente,
             p.estado_expediente,
             ea.estado AS episodio_estado,
@@ -264,17 +269,47 @@ export const evolucionMedicaRouter = router({
           WHERE ea.id = ${input.episodioId}::uuid
           LIMIT 1
         `;
-        return rows[0] ?? null;
+        const ctxRow = rows[0];
+        if (!ctxRow) return null;
+
+        // §10.3: último snapshot de antecedentes estructurados del paciente (de
+        // cualquier HC CC-0007 registrada). Sirve de prefill; el médico confirma.
+        const antRows = await tx.$queryRaw<{ antecedentes_estructurados: unknown }[]>`
+          SELECT hc.antecedentes_estructurados
+          FROM ece.historia_clinica hc
+          JOIN ece.episodio_atencion ea ON ea.id = hc.episodio_id
+          WHERE ea.paciente_id = ${ctxRow.paciente_id}::uuid
+            AND hc.antecedentes_estructurados IS NOT NULL
+          ORDER BY hc.registrado_en DESC
+          LIMIT 1
+        `;
+        return { ctxRow, antecedentesRaw: antRows[0]?.antecedentes_estructurados ?? null };
       });
 
-      if (!eceRow) {
+      if (!eceData) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Episodio de atención no encontrado." });
       }
+      const eceRow = eceData.ctxRow;
 
-      // Demografía canónica desde public.Patient (RLS tenant) si hay vínculo.
-      let demo:
-        | { nombre: string; sexCode: string | null; birthDate: Date | null }
-        | null = null;
+      // Degrada a null si el jsonb legacy no valida (no rompe la carga del header).
+      const antParsed = antecedentesEstructuradosSchema.safeParse(eceData.antecedentesRaw);
+      const antecedentes = antParsed.success ? antParsed.data : null;
+
+      // Demografía + encabezado clínico canónico desde public.Patient (RLS tenant).
+      interface DemoHeader {
+        nombre: string;
+        sexCode: string | null;
+        birthDate: Date | null;
+        dui: string | null;
+        documentoTipo: string | null;
+        numeroCuenta: string | null;
+        domicilio: string | null;
+        emergencia: { nombre: string; parentesco: string; telefono: string | null } | null;
+        alergias: { substancia: string; severidad: string }[];
+        preferredName: string | null;
+        esLgbtiq: boolean;
+      }
+      let demo: DemoHeader | null = null;
       if (eceRow.public_patient_id) {
         const publicId = eceRow.public_patient_id;
         const patient = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -286,17 +321,59 @@ export const evolucionMedicaRouter = router({
               lastName: true,
               secondLastName: true,
               birthDate: true,
+              documentType: true,
+              documentNumber: true,
+              preferredName: true,
+              esLgbtiq: true,
               biologicalSex: { select: { code: true } },
+              addresses: {
+                select: { line1: true, line2: true },
+                orderBy: { isPrimary: "desc" },
+                take: 1,
+              },
+              emergencyContacts: {
+                select: { fullName: true, relationship: true, phone: true },
+                orderBy: { priority: "asc" },
+                take: 1,
+              },
+              allergies: {
+                where: { active: true },
+                select: { substanceText: true, severity: true },
+                orderBy: { createdAt: "asc" },
+              },
+              // §5 — número de cuenta hospitalaria activa (CC-0002); la más reciente.
+              patientAccounts: {
+                select: { numeroCuenta: true },
+                orderBy: { createdAt: "desc" },
+                take: 1,
+              },
             },
           });
         });
         if (patient) {
+          const addr = patient.addresses[0];
+          const ec = patient.emergencyContacts[0];
           demo = {
             nombre: [patient.firstName, patient.middleName, patient.lastName, patient.secondLastName]
               .filter((s) => s && s.trim() !== "")
               .join(" "),
             sexCode: patient.biologicalSex?.code ?? null,
             birthDate: patient.birthDate,
+            dui: patient.documentNumber ?? null,
+            documentoTipo: patient.documentType ?? null,
+            numeroCuenta: patient.patientAccounts[0]?.numeroCuenta ?? null,
+            domicilio: addr
+              ? [addr.line1, addr.line2].filter((s) => s && s.trim() !== "").join(", ") || null
+              : null,
+            emergencia: ec
+              ? { nombre: ec.fullName, parentesco: ec.relationship, telefono: ec.phone ?? null }
+              : null,
+            alergias: patient.allergies.map((a) => ({
+              substancia: a.substanceText,
+              severidad: a.severity,
+            })),
+            preferredName: patient.preferredName ?? null,
+            esLgbtiq: patient.esLgbtiq ?? false,
           };
         }
       }
@@ -318,6 +395,20 @@ export const evolucionMedicaRouter = router({
         nombre,
         sexo, // 'M' | 'F' | 'I' | 'U' | null
         fechaNacimiento: fechaNacimiento ? fechaNacimiento.toISOString() : null,
+        // CC-0006 §5 — encabezado clínico sticky (degrada a null/[] sin vínculo HIS).
+        dui: demo?.dui ?? null,
+        documentoTipo: demo?.documentoTipo ?? null,
+        numeroCuenta: demo?.numeroCuenta ?? null,
+        domicilio: demo?.domicilio ?? null,
+        emergencia: demo?.emergencia ?? null,
+        alergias: demo?.alergias ?? [],
+        preferredName: demo?.preferredName ?? null,
+        esLgbtiq: demo?.esLgbtiq ?? false,
+        // CC-0006 §10.3 — snapshot de antecedentes del paciente para prefill (o null).
+        antecedentes,
+        // CC-0006 §10.3.2 — usuario autenticado para el sello de auditoría al
+        // confirmar un antecedente negativo (registrado por … el …).
+        usuarioActual: { id: ctx.user.id, nombre: ctx.user.fullName },
       };
     }),
 

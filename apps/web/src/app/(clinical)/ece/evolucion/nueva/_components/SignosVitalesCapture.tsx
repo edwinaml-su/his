@@ -21,7 +21,8 @@ import * as React from "react";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Badge } from "@his/ui/components/badge";
-import { SIGNOS_EMPTY, type SignosState } from "../_lib/types";
+import { Switch } from "@his/ui/components/switch";
+import { SIGNOS_EMPTY, tieneSignos, type SignosState } from "../_lib/types";
 import {
   validarRango,
   computeAlertasVitales,
@@ -31,6 +32,8 @@ import {
   ftAM,
   imcFrom,
   imcClasificacion,
+  ictFrom,
+  ictClasificacion,
   glasgowTotal,
   glasgowSeveridad,
   fppNaegele,
@@ -43,6 +46,7 @@ import {
   GLASGOW_MOTORA,
   type VitalRangeKey,
   type ImcClaseKey,
+  type IctClaseKey,
 } from "../../../../../../lib/evolucion/signos-vitales";
 
 // Compat: el resto del flujo importa SIGNOS_INITIAL desde aquí.
@@ -65,6 +69,12 @@ const IMC_COLOR: Record<ImcClaseKey, string> = {
   normal: "text-green-700 dark:text-green-400",
   sobrepeso: "text-amber-600 dark:text-amber-400",
   obesidad: "text-destructive",
+};
+
+const ICT_COLOR: Record<IctClaseKey, string> = {
+  saludable: "text-green-700 dark:text-green-400",
+  riesgoAumentado: "text-amber-600 dark:text-amber-400",
+  riesgoAlto: "text-destructive",
 };
 
 // ─── Subcomponentes ─────────────────────────────────────────────────────────
@@ -171,6 +181,9 @@ export function SignosVitalesCapture({
   showErrors = false,
 }: SignosVitalesCaptureProps) {
   const [expanded, setExpanded] = React.useState(false);
+  // §10.4 — el cálculo de FPP se activa con el interruptor (no se persiste: es
+  // un derivado de la FUR, que sí se guarda).
+  const [fppOn, setFppOn] = React.useState(false);
 
   function setField(field: keyof SignosState, val: string | number) {
     onChange({ ...value, [field]: val });
@@ -224,30 +237,55 @@ export function SignosVitalesCapture({
   const imc = pesoKgN != null && tallaMN != null && tallaMN > 0 ? imcFrom(pesoKgN, tallaMN) : null;
   const imcClase = imc != null ? imcClasificacion(imc) : null;
 
-  // FPP / gestación (solo si puede embarazo).
+  // Índice cintura-talla (§10.7).
+  const cinturaN = parseOpt(value.perimetroCintura);
+  const ict = cinturaN != null && tallaMN != null && tallaMN > 0 ? ictFrom(cinturaN, tallaMN) : null;
+  const ictClase = ict != null ? ictClasificacion(ict) : null;
+
+  // FPP / gestación (solo si puede embarazo, y con el interruptor activo).
   const mostrarFpp = puedeEmbarazo(sexo, edad);
-  const fpp = mostrarFpp ? fppNaegele(value.fechaUltimaRegla) : null;
-  const gestacion = mostrarFpp ? gestacionDesdeFur(value.fechaUltimaRegla) : null;
+  const fpp = mostrarFpp && fppOn ? fppNaegele(value.fechaUltimaRegla) : null;
+  const gestacion = mostrarFpp && fppOn ? gestacionDesdeFur(value.fechaUltimaRegla) : null;
 
   const mostrarGineco = esFemenino(sexo);
+  // §10.4 — la fila de alertas distingue "sin alertas" (verde) de "sin datos".
+  const hayDatos = tieneSignos(value);
 
   return (
     <div className="space-y-4" data-testid="signos-vitales-capture">
-      {/* Alertas en vivo */}
-      {alertas.length > 0 && (
-        <div
-          role="alert"
-          data-testid="signos-alertas"
-          className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          <Badge variant="destructive">Alertas</Badge>
-          {alertas.map((a) => (
-            <span key={a} className="font-medium">
-              {a}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* §10.4 — fila de alertas (#alertRow): 3 estados recalculados en vivo. */}
+      <div
+        role={alertas.length > 0 ? "alert" : "status"}
+        data-testid="signos-alertas"
+        className={
+          alertas.length > 0
+            ? "flex flex-wrap items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            : hayDatos
+              ? "flex items-center gap-2 rounded-md border border-green-600/40 bg-green-600/10 px-3 py-2 text-sm font-medium text-green-700 dark:text-green-400"
+              : "flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground"
+        }
+      >
+        {alertas.length > 0 ? (
+          <>
+            <Badge variant="destructive">Alertas</Badge>
+            {alertas.map((a) => (
+              <span key={a} className="font-medium">
+                {a}
+              </span>
+            ))}
+          </>
+        ) : hayDatos ? (
+          <>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} className="h-4 w-4 shrink-0">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M8.5 12.5 11 15l4.5-5" />
+            </svg>
+            Sin alertas críticas
+          </>
+        ) : (
+          "Ingrese signos para evaluar alertas críticas automáticamente."
+        )}
+      </div>
 
       {/* ── Núcleo (siempre visible) ──────────────────────────────────────── */}
       <fieldset className="space-y-3 rounded-lg border p-3">
@@ -485,18 +523,33 @@ export function SignosVitalesCapture({
               showErrors={showErrors}
             />
           </div>
-          <div className="space-y-1">
-            <Label>IMC (calculado)</Label>
-            <CalcBox>
-              {imc != null && imcClase ? (
-                <span className="font-semibold">
-                  {imc.toFixed(1)} kg/m² —{" "}
-                  <span className={IMC_COLOR[imcClase.key]}>{imcClase.label}</span>
-                </span>
-              ) : (
-                <span className="text-muted-foreground">Se calcula con peso (kg) y talla (m).</span>
-              )}
-            </CalcBox>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label>IMC (calculado)</Label>
+              <CalcBox>
+                {imc != null && imcClase ? (
+                  <span className="font-semibold">
+                    {imc.toFixed(1)} kg/m² —{" "}
+                    <span className={IMC_COLOR[imcClase.key]}>{imcClase.label}</span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Se calcula con peso (kg) y talla (m).</span>
+                )}
+              </CalcBox>
+            </div>
+            <div className="space-y-1">
+              <Label>Índice cintura-talla (calculado)</Label>
+              <CalcBox>
+                {ict != null && ictClase ? (
+                  <span className="font-semibold">
+                    {ict.toFixed(2)} —{" "}
+                    <span className={ICT_COLOR[ictClase.key]}>{ictClase.label}</span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Se calcula con cintura (cm) y talla (m).</span>
+                )}
+              </CalcBox>
+            </div>
           </div>
           <div className="max-w-[220px]">
             <VitalField
@@ -543,7 +596,12 @@ export function SignosVitalesCapture({
         {/* Gineco-obstétrico (solo femenino) */}
         {mostrarGineco && (
           <fieldset className="space-y-3 rounded-lg border p-3">
-            <legend className="px-1 text-sm font-semibold text-foreground">Gineco-obstétrico</legend>
+            <legend className="flex items-center gap-2 px-1 text-sm font-semibold text-foreground">
+              Gineco-obstétrico
+              <span className="inline-flex items-center rounded-md border border-[#fecaca] bg-[#fee2e2] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#dc2626] dark:border-[#5a2326] dark:bg-[#2a1314] dark:text-[#f87171]">
+                Obligatorio
+              </span>
+            </legend>
             <div className={`grid gap-3 ${mostrarFpp ? "grid-cols-2" : "grid-cols-1"}`}>
               <div className="space-y-1">
                 <Label htmlFor={`${idPrefix}-fechaUltimaRegla`}>Fecha de última regla (FUR)</Label>
@@ -556,9 +614,21 @@ export function SignosVitalesCapture({
               </div>
               {mostrarFpp && (
                 <div className="space-y-1">
-                  <Label>Fecha probable de parto (calculada)</Label>
+                  <div className="flex items-center justify-between gap-2">
+                    <Label className="mb-0">
+                      Fecha probable de parto{" "}
+                      <span className="text-xs font-normal text-muted-foreground">(Naegele)</span>
+                    </Label>
+                    <Switch
+                      checked={fppOn}
+                      onCheckedChange={setFppOn}
+                      aria-label="Calcular fecha probable de parto"
+                    />
+                  </div>
                   <CalcBox>
-                    {fpp ? (
+                    {!fppOn ? (
+                      <span className="text-muted-foreground">Active el interruptor para calcular la FPP.</span>
+                    ) : fpp ? (
                       <span className="font-semibold">
                         {fpp.toLocaleDateString("es-SV", { day: "2-digit", month: "2-digit", year: "numeric" })}
                         {gestacion && (
@@ -566,13 +636,16 @@ export function SignosVitalesCapture({
                         )}
                       </span>
                     ) : (
-                      <span className="text-muted-foreground">Se calcula con la FUR (Naegele).</span>
+                      <span className="text-muted-foreground">Registre la FUR para calcular (Naegele).</span>
                     )}
                   </CalcBox>
                 </div>
               )}
             </div>
-            <Label>Fórmula obstétrica (G · P · P · A · V)</Label>
+            <Label>
+              Fórmula obstétrica (G · P · P · A · V)
+              <span className="ml-0.5 text-destructive">*</span>
+            </Label>
             <div className="grid grid-cols-5 gap-2">
               {(
                 [
@@ -584,6 +657,7 @@ export function SignosVitalesCapture({
                 ] as const
               ).map(({ key, letra, desc }) => {
                 const gid = `${idPrefix}-${key}`;
+                const faltante = showErrors && value[key].trim() === "";
                 return (
                   <div key={key} className="space-y-1">
                     <Label htmlFor={gid} className="text-xs">
@@ -598,6 +672,8 @@ export function SignosVitalesCapture({
                       placeholder="0"
                       value={value[key]}
                       onChange={(e) => setField(key, e.target.value)}
+                      aria-invalid={faltante || undefined}
+                      className={faltante ? "border-destructive focus-visible:ring-destructive" : undefined}
                     />
                   </div>
                 );

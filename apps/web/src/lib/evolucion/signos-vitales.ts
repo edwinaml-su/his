@@ -96,6 +96,27 @@ export function imcClasificacion(imc: number): ImcClasificacion {
   return { key: "obesidad", label: "Obesidad" };
 }
 
+// ─── Índice cintura-talla (ICT) (R1.3 / spec §10.7) ──────────────────────────
+
+/** ICT = cintura(cm) / (talla(m) × 100). */
+export function ictFrom(cinturaCm: number, tallaM: number): number {
+  return cinturaCm / (tallaM * 100);
+}
+
+export type IctClaseKey = "saludable" | "riesgoAumentado" | "riesgoAlto";
+
+export interface IctClasificacion {
+  key: IctClaseKey;
+  label: string;
+}
+
+/** Clasificación del ICT (spec §10.7). El componente mapea `key` → color del DS. */
+export function ictClasificacion(ict: number): IctClasificacion {
+  if (ict < 0.5) return { key: "saludable", label: "Saludable" };
+  if (ict < 0.6) return { key: "riesgoAumentado", label: "Riesgo aumentado" };
+  return { key: "riesgoAlto", label: "Riesgo alto" };
+}
+
 // ─── Escala de Glasgow (R1.2) ────────────────────────────────────────────────
 
 export const GLASGOW_OCULAR = [

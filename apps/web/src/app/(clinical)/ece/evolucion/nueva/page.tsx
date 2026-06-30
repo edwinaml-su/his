@@ -30,7 +30,6 @@ import { PacienteContextoBar } from "./_components/PacienteContextoBar";
 import { EspecialidadCard } from "./_components/EspecialidadCard";
 import { ProblemasSection } from "./_components/ProblemasSection";
 import { SubjetivoCard } from "./_components/SubjetivoCard";
-import { SignosSection } from "./_components/SignosSection";
 import { ObjetivoCard } from "./_components/ObjetivoCard";
 import { AnalisisCard } from "./_components/AnalisisCard";
 import { PlanSection } from "./_components/PlanSection";
@@ -143,9 +142,10 @@ function NuevaEvolucionBody() {
 
         <SubjetivoCard onAbrir={() => mc.abrir({ tipo: "subjetivo" })} />
 
-        <SignosSection onAbrir={() => mc.abrir({ tipo: "vitales" })} />
-
-        <ObjetivoCard onAbrir={() => mc.abrir({ tipo: "objetivo" })} />
+        <ObjetivoCard
+          onAbrirVitales={() => mc.abrir({ tipo: "vitales" })}
+          onAbrirObjetivo={() => mc.abrir({ tipo: "objetivo" })}
+        />
 
         <AnalisisCard onAbrir={() => mc.abrir({ tipo: "analisis" })} />
 
