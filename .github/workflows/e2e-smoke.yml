@@ -1,7 +1,7 @@
 name: E2E Smoke (PR)
 
 # Corre en cada PR a main o develop. Solo los ~15-20 tests marcados @smoke.
-# Objetivo: fallar rápido (<10 min) si un cambio rompe un camino crítico.
+# Objetivo: fallar rápido (<20 min) si un cambio rompe un camino crítico.
 # La suite completa sigue corriéndose nightly via e2e.yml.
 on:
   pull_request:
@@ -25,7 +25,10 @@ jobs:
   smoke:
     name: Playwright Smoke (@smoke)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # setup (~1.7m) + build (~2.5m) + e2e (boot webServer ≤2m + specs + retry)
+    # superaba los 10m → timeout determinista. 20m da headroom y deja que el
+    # webServer-timeout propio de Playwright (120s) vuelque el error real si cuelga.
+    timeout-minutes: 20
 
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
