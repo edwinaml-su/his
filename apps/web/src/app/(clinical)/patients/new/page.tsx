@@ -2,14 +2,9 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
-import { Form, FormField, FormError } from "@his/ui/components/form";
-import { Input } from "@his/ui/components/input";
-import { Label } from "@his/ui/components/label";
-import { Button } from "@his/ui/components/button";
 import { Switch } from "@his/ui/components/switch";
 import { cn } from "@his/ui/lib/utils";
-import { ScanLine, TriangleAlert, Sparkles } from "lucide-react";
+import { ScanLine, TriangleAlert, Check, Info } from "lucide-react";
 import { trpc } from "@/lib/trpc/react";
 import { parseDateOnly } from "@/lib/date-only";
 import { calcularEdad } from "@/lib/edad";
@@ -51,6 +46,55 @@ type CampoCapturable =
 
 const hoyISO = () => new Date().toISOString().slice(0, 10);
 
+// Chip de radio con indicador de punto, fiel a la paleta del mockup CC-0008.
+function Chip({
+  name,
+  value,
+  checked,
+  captured,
+  onChange,
+  children,
+}: {
+  name: string;
+  value: string;
+  checked: boolean;
+  captured?: boolean;
+  onChange: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <label
+      className={cn(
+        "inline-flex cursor-pointer select-none items-center gap-[9px] rounded-lg border px-4 py-[11px] text-sm transition-colors",
+        checked
+          ? "border-[#0B3D5C] bg-[#EEF5FA] font-semibold text-[#0B3D5C]"
+          : cn(
+              "bg-white font-medium text-[#15212E] hover:border-[#00A8B5]",
+              captured ? "border-[#00A8B5] bg-[#E6F7F8]" : "border-[#C6D0DB]",
+            ),
+      )}
+    >
+      <input
+        type="radio"
+        name={name}
+        value={value}
+        checked={checked}
+        onChange={onChange}
+        className="sr-only"
+      />
+      <span
+        className={cn(
+          "grid h-4 w-4 flex-none place-items-center rounded-full border-2",
+          checked ? "border-[#0B3D5C]" : "border-[#C6D0DB]",
+        )}
+      >
+        {checked && <span className="h-2 w-2 rounded-full bg-[#0B3D5C]" />}
+      </span>
+      {children}
+    </label>
+  );
+}
+
 /**
  * Pre-registro de paciente (CC-0008 / REQ-ECE-PRE-001).
  *
@@ -58,6 +102,8 @@ const hoyISO = () => new Date().toISOString().slice(0, 10);
  * switch "¿trae documento?", nombres/apellidos extendidos, sexo biológico por
  * radio y edad derivada (no persistida). El expediente {PAIS}{AA}{NNNNN} se
  * genera en servidor (CC-0002); el MRN ya no se captura (autogenerado).
+ *
+ * Paleta y layout fieles al mockup docs/CC/0008/preregistro.html (navy/teal).
  */
 export default function PreRegistroPage() {
   const router = useRouter();
@@ -121,8 +167,14 @@ export default function PreRegistroPage() {
     if (validationError.field === key) setValidationError({ field: null, message: "" });
   };
 
-  const capCls = (key: CampoCapturable) =>
-    captured.has(key) ? "border-primary ring-1 ring-primary/50 bg-primary/5" : "";
+  // Clase de input fiel al mockup: borde fuerte sobre field-bg, foco teal,
+  // captura teal y error rojo.
+  const fieldCls = (key: CampoCapturable, invalid?: boolean) =>
+    cn(
+      "w-full rounded-lg border bg-[#F8FAFC] px-[13px] py-[11px] text-sm text-[#15212E] outline-none transition-colors placeholder:text-[#9AA8B6] focus:border-[#00A8B5] focus:bg-white focus:ring-[3px] focus:ring-[#00A8B5]/20",
+      captured.has(key) ? "border-[#00A8B5] bg-[#E6F7F8]" : "border-[#C6D0DB]",
+      invalid && "border-[#DC2626] focus:border-[#DC2626]",
+    );
 
   // §7 — escaneo simulado: puebla campos y los marca como capturados.
   const onScan = () => {
@@ -221,23 +273,27 @@ export default function PreRegistroPage() {
 
   if (created) {
     return (
-      <div className="space-y-4">
-        <h1 className="text-2xl font-bold">Pre-registro</h1>
-        <Card>
-          <CardContent className="pt-6">
-            <div role="status" className="space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Paciente registrado.{" "}
-                {created.expediente ? (
-                  <span className="font-semibold">Expediente: {created.expediente}</span>
-                ) : null}
-              </p>
-              <Button onClick={() => router.push(`/patients/${created.id}`)}>
-                Ver expediente del paciente
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <div className="mx-auto max-w-[920px] px-7 pb-14 pt-1.5">
+        <h1 className="my-[18px] text-[26px] font-bold text-[#0B3D5C]">Pre-registro</h1>
+        <div className="rounded-xl border border-[#DDE3EA] bg-white px-7 pb-[30px] pt-[26px] shadow-[0_1px_2px_rgba(16,40,64,.06),0_1px_3px_rgba(16,40,64,.04)]">
+          <div role="status" className="space-y-4">
+            <p className="text-sm text-[#5B6B7B]">
+              Paciente registrado.{" "}
+              {created.expediente ? (
+                <span className="font-semibold text-[#15212E]">
+                  Expediente: {created.expediente}
+                </span>
+              ) : null}
+            </p>
+            <button
+              type="button"
+              onClick={() => router.push(`/patients/${created.id}`)}
+              className="rounded-lg bg-[#0B3D5C] px-[26px] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0E4A6E]"
+            >
+              Ver expediente del paciente
+            </button>
+          </div>
+        </div>
       </div>
     );
   }
@@ -245,274 +301,332 @@ export default function PreRegistroPage() {
   const scanned = captured.size > 0;
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Pre-registro</h1>
-      <Card>
-        <CardHeader>
-          <CardTitle>Datos de identificación</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Form onSubmit={onSubmit}>
-            {/* §6 — switch ¿trae documento? (default ON) */}
-            <FormField>
-              <div className="flex items-center justify-between gap-4">
-                <Label htmlFor="traeDocumento" className="font-normal">
-                  El paciente trae documento de identidad
-                </Label>
-                <Switch
-                  id="traeDocumento"
-                  checked={form.traeDocumento}
-                  onCheckedChange={(v) => setForm((f) => ({ ...f, traeDocumento: v }))}
-                />
-              </div>
-            </FormField>
+    <div className="mx-auto max-w-[920px] px-7 pb-14 pt-1.5">
+      <h1 className="my-[18px] text-[26px] font-bold text-[#0B3D5C]">Pre-registro</h1>
 
-            {/* Aviso de captura manual cuando NO trae documento */}
-            {!form.traeDocumento && (
-              <p
-                role="note"
-                className="flex items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-warning-foreground"
+      <div className="rounded-xl border border-[#DDE3EA] bg-white px-7 pb-[30px] pt-[26px] shadow-[0_1px_2px_rgba(16,40,64,.06),0_1px_3px_rgba(16,40,64,.04)]">
+        <h2 className="mb-1.5 text-[17px] font-bold text-[#15212E]">Datos básicos</h2>
+        <p className="mb-[22px] flex flex-wrap items-center gap-1.5 text-[12.5px] text-[#5B6B7B]">
+          Todos los campos son obligatorios.
+          <span className="font-bold text-[#DC2626]">*</span> obligatorio · los campos sin marca
+          aplican solo cuando corresponde.
+        </p>
+
+        <form onSubmit={onSubmit}>
+          {/* §6 — switch ¿trae documento? (default ON) */}
+          <div className="mb-6 flex items-start gap-[14px] rounded-lg border border-[#DDE3EA] bg-[#F8FAFC] px-[18px] py-4">
+            <Switch
+              id="traeDocumento"
+              checked={form.traeDocumento}
+              onCheckedChange={(v) => setForm((f) => ({ ...f, traeDocumento: v }))}
+              className="mt-0.5 data-[state=checked]:bg-[#00A8B5]"
+            />
+            <div>
+              <label
+                htmlFor="traeDocumento"
+                className="block text-sm font-semibold text-[#15212E]"
               >
-                <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
-                Captura manual — el paciente no presenta documento. Ingrese los datos de
-                identificación a mano.
-              </p>
-            )}
+                El paciente trae documento de identidad
+              </label>
+              <span className="mt-0.5 block text-[12.5px] text-[#5B6B7B]">
+                Si está activo, escanea el QR o código de barras del documento para llenar el
+                preregistro automáticamente.
+              </span>
+            </div>
+          </div>
 
-            {/* §4/§5 — bloque de documento (tipo primero), solo si trae documento */}
-            {form.traeDocumento && (
-              <fieldset className="space-y-4 rounded-lg border p-4">
-                <legend className="px-1 text-sm font-semibold">Documento</legend>
+          {/* Aviso de captura manual cuando NO trae documento */}
+          {!form.traeDocumento && (
+            <div
+              role="note"
+              className="mb-[22px] flex items-center gap-[9px] rounded-lg border border-[#F4D9A6] bg-[#FEF6E7] px-[14px] py-3 text-[13px] text-[#92520E]"
+            >
+              <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden />
+              Captura manual — el paciente no presenta documento. Ingrese los datos de
+              identificación a mano.
+            </div>
+          )}
 
-                <FormField>
-                  <Label>
-                    Tipo de documento <span aria-hidden className="text-destructive">*</span>
-                    <span className="sr-only"> (obligatorio)</span>
-                  </Label>
-                  <div role="radiogroup" aria-label="Tipo de documento" className="flex flex-wrap gap-2">
-                    {(Object.keys(TIPO_LABEL) as DocTipoUI[]).map((t) => (
-                      <label
-                        key={t}
-                        className={cn(
-                          "cursor-pointer rounded-lg border px-4 py-2 text-sm transition-colors",
-                          form.tipoDocumento === t
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-input hover:bg-accent",
-                        )}
-                      >
-                        <input
-                          type="radio"
-                          name="tipoDocumento"
-                          value={t}
-                          checked={form.tipoDocumento === t}
-                          onChange={() => setForm((f) => ({ ...f, tipoDocumento: t }))}
-                          className="sr-only"
-                        />
-                        {TIPO_LABEL[t]}
-                      </label>
-                    ))}
-                  </div>
-                </FormField>
+          {/* §4/§5 — bloque de documento (tipo primero), solo si trae documento */}
+          {form.traeDocumento && (
+            <div>
+              <div className="mb-3.5 text-[11.5px] font-bold uppercase tracking-[1px] text-[#5B6B7B]">
+                Documento
+              </div>
 
-                <FormField>
-                  <Label htmlFor="numeroDocumento">
-                    Número de Documento <span aria-hidden className="text-destructive">*</span>
-                    <span className="sr-only"> (obligatorio)</span>
-                  </Label>
-                  <Input
-                    id="numeroDocumento"
-                    value={form.numeroDocumento}
-                    onChange={(e) => setField("numeroDocumento", e.target.value)}
-                    className={capCls("numeroDocumento")}
-                    aria-invalid={validationError.field === "numeroDocumento"}
-                    aria-describedby={
-                      validationError.field === "numeroDocumento" ? "numeroDocumento-error" : undefined
-                    }
-                  />
-                  {validationError.field === "numeroDocumento" && (
-                    <p id="numeroDocumento-error" role="alert" className="text-sm text-destructive">
-                      {validationError.message}
-                    </p>
-                  )}
-                </FormField>
+              <div className="mb-[18px]">
+                <span className="mb-2 block text-[13px] font-semibold text-[#15212E]">
+                  Tipo de documento <span className="ml-0.5 text-[#DC2626]">*</span>
+                </span>
+                <div role="radiogroup" aria-label="Tipo de documento" className="flex flex-wrap gap-[10px]">
+                  {(Object.keys(TIPO_LABEL) as DocTipoUI[]).map((t) => (
+                    <Chip
+                      key={t}
+                      name="tipoDocumento"
+                      value={t}
+                      checked={form.tipoDocumento === t}
+                      onChange={() => setForm((f) => ({ ...f, tipoDocumento: t }))}
+                    >
+                      {TIPO_LABEL[t]}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
 
-                <Button type="button" variant="secondary" onClick={onScan} className="gap-2">
-                  <ScanLine className="h-4 w-4" aria-hidden />
-                  Escanear documento (QR / código de barras)
-                </Button>
-
-                {scanned && (
-                  <p
-                    role="status"
-                    className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-sm text-foreground"
-                  >
-                    <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-                    Datos obtenidos del documento. Verifique antes de continuar.
+              <div className="mb-[18px]">
+                <label
+                  htmlFor="numeroDocumento"
+                  className="mb-2 block text-[13px] font-semibold text-[#15212E]"
+                >
+                  Número de Documento <span className="ml-0.5 text-[#DC2626]">*</span>
+                </label>
+                <input
+                  id="numeroDocumento"
+                  value={form.numeroDocumento}
+                  onChange={(e) => setField("numeroDocumento", e.target.value)}
+                  placeholder="Escanee o ingrese el número del documento"
+                  className={fieldCls("numeroDocumento", validationError.field === "numeroDocumento")}
+                  aria-invalid={validationError.field === "numeroDocumento"}
+                  aria-describedby={
+                    validationError.field === "numeroDocumento" ? "numeroDocumento-error" : undefined
+                  }
+                />
+                {validationError.field === "numeroDocumento" && (
+                  <p id="numeroDocumento-error" role="alert" className="mt-1.5 text-sm text-[#DC2626]">
+                    {validationError.message}
                   </p>
                 )}
-              </fieldset>
-            )}
-
-            {/* §5/§9 — Nombres (hasta 3) */}
-            <FormField>
-              <Label htmlFor="primerNombre">
-                Primer nombre <span aria-hidden className="text-destructive">*</span>
-                <span className="sr-only"> (obligatorio)</span>
-              </Label>
-              <Input
-                id="primerNombre"
-                value={form.primerNombre}
-                onChange={(e) => setField("primerNombre", e.target.value)}
-                className={capCls("primerNombre")}
-                aria-invalid={validationError.field === "primerNombre"}
-                aria-describedby={validationError.field === "primerNombre" ? "primerNombre-error" : undefined}
-              />
-              {validationError.field === "primerNombre" && (
-                <p id="primerNombre-error" role="alert" className="text-sm text-destructive">
-                  {validationError.message}
-                </p>
-              )}
-            </FormField>
-            <FormField>
-              <Label htmlFor="segundoNombre">Segundo nombre</Label>
-              <Input
-                id="segundoNombre"
-                value={form.segundoNombre}
-                onChange={(e) => setField("segundoNombre", e.target.value)}
-                className={capCls("segundoNombre")}
-              />
-            </FormField>
-            <FormField>
-              <Label htmlFor="tercerNombre">Tercer nombre</Label>
-              <Input
-                id="tercerNombre"
-                value={form.tercerNombre}
-                onChange={(e) => setField("tercerNombre", e.target.value)}
-                className={capCls("tercerNombre")}
-              />
-            </FormField>
-
-            {/* §5/§9 — Apellidos (hasta 3, incluye apellido de casada) */}
-            <FormField>
-              <Label htmlFor="primerApellido">
-                Primer apellido <span aria-hidden className="text-destructive">*</span>
-                <span className="sr-only"> (obligatorio)</span>
-              </Label>
-              <Input
-                id="primerApellido"
-                value={form.primerApellido}
-                onChange={(e) => setField("primerApellido", e.target.value)}
-                className={capCls("primerApellido")}
-                aria-invalid={validationError.field === "primerApellido"}
-                aria-describedby={
-                  validationError.field === "primerApellido" ? "primerApellido-error" : undefined
-                }
-              />
-              {validationError.field === "primerApellido" && (
-                <p id="primerApellido-error" role="alert" className="text-sm text-destructive">
-                  {validationError.message}
-                </p>
-              )}
-            </FormField>
-            <FormField>
-              <Label htmlFor="segundoApellido">Segundo apellido</Label>
-              <Input
-                id="segundoApellido"
-                value={form.segundoApellido}
-                onChange={(e) => setField("segundoApellido", e.target.value)}
-                className={capCls("segundoApellido")}
-              />
-            </FormField>
-            <FormField>
-              <Label htmlFor="apellidoCasada">Apellido de casada (si aplica)</Label>
-              <Input
-                id="apellidoCasada"
-                value={form.apellidoCasada}
-                onChange={(e) => setField("apellidoCasada", e.target.value)}
-                className={capCls("apellidoCasada")}
-              />
-            </FormField>
-
-            {/* §10/AC3 — sexo biológico como radio */}
-            <FormField>
-              <Label>
-                Sexo biológico <span aria-hidden className="text-destructive">*</span>
-                <span className="sr-only"> (obligatorio)</span>
-              </Label>
-              <div role="radiogroup" aria-label="Sexo biológico" className="flex flex-wrap gap-2">
-                {sexOptions.map((s) => (
-                  <label
-                    key={s.id}
-                    className={cn(
-                      "cursor-pointer rounded-lg border px-4 py-2 text-sm transition-colors",
-                      form.biologicalSexId === s.id
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : cn("border-input hover:bg-accent", capCls("biologicalSexId")),
-                    )}
-                  >
-                    <input
-                      type="radio"
-                      name="sexoBiologico"
-                      value={s.id}
-                      checked={form.biologicalSexId === s.id}
-                      onChange={() => setField("biologicalSexId", s.id)}
-                      className="sr-only"
-                    />
-                    {s.name}
-                  </label>
-                ))}
               </div>
-              {validationError.field === "sexoBiologico" && (
-                <p role="alert" className="text-sm text-destructive">
-                  {validationError.message}
-                </p>
-              )}
-            </FormField>
 
-            {/* §5 — fecha de nacimiento + §8 edad derivada */}
-            <FormField>
-              <Label htmlFor="fechaNacimiento">
-                Fecha de nacimiento <span aria-hidden className="text-destructive">*</span>
-                <span className="sr-only"> (obligatorio)</span>
-              </Label>
-              <Input
+              <div className="mb-[26px] mt-1 flex flex-col gap-[10px]">
+                <button
+                  type="button"
+                  onClick={onScan}
+                  className="inline-flex items-center justify-center gap-[10px] rounded-lg border-[1.5px] border-dashed border-[#00A8B5] bg-[#E6F7F8] px-[18px] py-[14px] text-sm font-semibold text-[#018592] transition-colors hover:border-solid hover:bg-[#D6F2F4]"
+                >
+                  <ScanLine className="h-5 w-5" aria-hidden />
+                  Escanear documento (QR / código de barras)
+                </button>
+
+                {scanned && (
+                  <div
+                    role="status"
+                    className="flex items-center gap-2 rounded-md border border-[#00A8B5] bg-[#E6F7F8] px-3 py-[9px] text-[12.5px] font-medium text-[#018592]"
+                  >
+                    <Check className="h-4 w-4 shrink-0" aria-hidden />
+                    Datos obtenidos del documento. Verifique antes de continuar.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* §5/§9 — Identificación: nombres y apellidos (hasta 3 c/u) */}
+          <div className="mb-3.5 mt-1.5 border-t border-[#DDE3EA] pt-5 text-[11.5px] font-bold uppercase tracking-[1px] text-[#5B6B7B]">
+            Identificación del paciente
+          </div>
+
+          <div className="mb-[18px]">
+            <span className="mb-2 block text-[13px] font-semibold text-[#15212E]">Nombres</span>
+            <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
+              <div>
+                <label htmlFor="primerNombre" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Primer nombre <span className="text-[#DC2626]">*</span>
+                </label>
+                <input
+                  id="primerNombre"
+                  value={form.primerNombre}
+                  onChange={(e) => setField("primerNombre", e.target.value)}
+                  placeholder="Primer nombre"
+                  className={fieldCls("primerNombre", validationError.field === "primerNombre")}
+                  aria-invalid={validationError.field === "primerNombre"}
+                  aria-describedby={
+                    validationError.field === "primerNombre" ? "primerNombre-error" : undefined
+                  }
+                />
+                {validationError.field === "primerNombre" && (
+                  <p id="primerNombre-error" role="alert" className="mt-1.5 text-sm text-[#DC2626]">
+                    {validationError.message}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="segundoNombre" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Segundo nombre <span className="ml-1 font-normal text-[#5B6B7B]">(opcional)</span>
+                </label>
+                <input
+                  id="segundoNombre"
+                  value={form.segundoNombre}
+                  onChange={(e) => setField("segundoNombre", e.target.value)}
+                  placeholder="Segundo nombre"
+                  className={fieldCls("segundoNombre")}
+                />
+              </div>
+              <div>
+                <label htmlFor="tercerNombre" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Tercer nombre <span className="ml-1 font-normal text-[#5B6B7B]">(opcional)</span>
+                </label>
+                <input
+                  id="tercerNombre"
+                  value={form.tercerNombre}
+                  onChange={(e) => setField("tercerNombre", e.target.value)}
+                  placeholder="Tercer nombre"
+                  className={fieldCls("tercerNombre")}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-[18px]">
+            <span className="mb-2 block text-[13px] font-semibold text-[#15212E]">Apellidos</span>
+            <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-3">
+              <div>
+                <label htmlFor="primerApellido" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Primer apellido <span className="text-[#DC2626]">*</span>
+                </label>
+                <input
+                  id="primerApellido"
+                  value={form.primerApellido}
+                  onChange={(e) => setField("primerApellido", e.target.value)}
+                  placeholder="Primer apellido"
+                  className={fieldCls("primerApellido", validationError.field === "primerApellido")}
+                  aria-invalid={validationError.field === "primerApellido"}
+                  aria-describedby={
+                    validationError.field === "primerApellido" ? "primerApellido-error" : undefined
+                  }
+                />
+                {validationError.field === "primerApellido" && (
+                  <p id="primerApellido-error" role="alert" className="mt-1.5 text-sm text-[#DC2626]">
+                    {validationError.message}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="segundoApellido" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Segundo apellido <span className="ml-1 font-normal text-[#5B6B7B]">(opcional)</span>
+                </label>
+                <input
+                  id="segundoApellido"
+                  value={form.segundoApellido}
+                  onChange={(e) => setField("segundoApellido", e.target.value)}
+                  placeholder="Segundo apellido"
+                  className={fieldCls("segundoApellido")}
+                />
+              </div>
+              <div>
+                <label htmlFor="apellidoCasada" className="mb-1.5 block text-xs font-medium text-[#5B6B7B]">
+                  Apellido de casada <span className="ml-1 font-normal text-[#5B6B7B]">(si aplica)</span>
+                </label>
+                <input
+                  id="apellidoCasada"
+                  value={form.apellidoCasada}
+                  onChange={(e) => setField("apellidoCasada", e.target.value)}
+                  placeholder="de…"
+                  className={fieldCls("apellidoCasada")}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* §10/AC3 — sexo biológico como radio */}
+          <div className="mb-[18px]">
+            <span className="mb-2 block text-[13px] font-semibold text-[#15212E]">
+              Sexo biológico <span className="ml-0.5 text-[#DC2626]">*</span>
+            </span>
+            <div role="radiogroup" aria-label="Sexo biológico" className="flex flex-wrap gap-[10px]">
+              {sexOptions.map((s) => (
+                <Chip
+                  key={s.id}
+                  name="sexoBiologico"
+                  value={s.id}
+                  checked={form.biologicalSexId === s.id}
+                  captured={captured.has("biologicalSexId")}
+                  onChange={() => setField("biologicalSexId", s.id)}
+                >
+                  {s.name}
+                </Chip>
+              ))}
+            </div>
+            {validationError.field === "sexoBiologico" && (
+              <p role="alert" className="mt-1.5 text-sm text-[#DC2626]">
+                {validationError.message}
+              </p>
+            )}
+          </div>
+
+          {/* §5 — fecha de nacimiento + §8 edad derivada */}
+          <div className="mb-[18px]">
+            <label htmlFor="fechaNacimiento" className="mb-2 block text-[13px] font-semibold text-[#15212E]">
+              Fecha de nacimiento <span className="ml-0.5 text-[#DC2626]">*</span>
+            </label>
+            <div className="flex flex-wrap items-center gap-[14px]">
+              <input
                 id="fechaNacimiento"
                 type="date"
                 max={hoyISO()}
                 value={form.fechaNacimiento}
                 onChange={(e) => setField("fechaNacimiento", e.target.value)}
-                className={capCls("fechaNacimiento")}
+                className={cn(
+                  fieldCls("fechaNacimiento", validationError.field === "fechaNacimiento"),
+                  "max-w-[240px]",
+                )}
                 aria-invalid={validationError.field === "fechaNacimiento"}
                 aria-describedby={
                   validationError.field === "fechaNacimiento" ? "fechaNacimiento-error" : undefined
                 }
               />
-              {validationError.field === "fechaNacimiento" && (
-                <p id="fechaNacimiento-error" role="alert" className="text-sm text-destructive">
-                  {validationError.message}
-                </p>
+              {edad && (
+                <div className="flex items-center gap-[10px] rounded-lg border border-[#00A8B5] bg-[#E6F7F8] px-4 py-[9px]">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[#018592]">
+                    Edad
+                  </span>
+                  <strong
+                    data-testid="edad-derivada"
+                    className="text-lg font-bold leading-none text-[#0B3D5C]"
+                  >
+                    {edad.label}
+                  </strong>
+                </div>
               )}
-            </FormField>
-
-            {edad && (
-              <FormField>
-                <Label>Edad</Label>
-                <p
-                  data-testid="edad-derivada"
-                  className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium text-foreground"
-                >
-                  {edad.label}
-                </p>
-              </FormField>
+            </div>
+            {validationError.field === "fechaNacimiento" && (
+              <p id="fechaNacimiento-error" role="alert" className="mt-1.5 text-sm text-[#DC2626]">
+                {validationError.message}
+              </p>
             )}
+            {form.traeDocumento && (
+              <p className="mt-1.5 flex items-center gap-1.5 text-xs text-[#5B6B7B]">
+                <Info className="h-3 w-3 shrink-0" aria-hidden />
+                Se obtiene del documento al escanear; la edad se calcula automáticamente con la
+                fecha actual.
+              </p>
+            )}
+          </div>
 
-            <FormError>{create.error?.message}</FormError>
-            <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? "Guardando…" : "Pre-registrar paciente"}
-            </Button>
-          </Form>
-        </CardContent>
-      </Card>
+          {create.error?.message && (
+            <p role="alert" className="mt-3 text-sm text-[#DC2626]">
+              {create.error.message}
+            </p>
+          )}
+
+          <div className="mt-[26px] flex items-center gap-3 border-t border-[#DDE3EA] pt-[22px]">
+            <button
+              type="submit"
+              disabled={create.isPending}
+              className="rounded-lg bg-[#0B3D5C] px-[26px] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0E4A6E] disabled:opacity-60"
+            >
+              {create.isPending ? "Guardando…" : "Crear preregistro"}
+            </button>
+            <button
+              type="button"
+              onClick={() => router.push("/patients")}
+              className="rounded-lg border border-[#C6D0DB] px-5 py-3 text-sm font-medium text-[#15212E] transition-colors hover:bg-[#F8FAFC]"
+            >
+              Cancelar
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }

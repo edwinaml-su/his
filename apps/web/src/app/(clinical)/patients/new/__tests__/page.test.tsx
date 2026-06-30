@@ -71,7 +71,7 @@ describe("PreRegistroPage", () => {
     expect(screen.queryByRole("radio", { name: "DNI" })).not.toBeInTheDocument();
 
     expect(screen.getByLabelText(/Número de Documento/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Pre-registrar paciente/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Crear preregistro/ })).toBeInTheDocument();
   });
 
   // ── AC3 — sexo biológico como radios (Masculino/Femenino) ──────────────────
