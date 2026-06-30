@@ -16,6 +16,7 @@ import {
 } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
 import { type EvolucionProblema } from "../_lib/types";
+import { SECCION } from "../_lib/avante-palette";
 
 // Iconos inline (no importamos lucide para no sumar dep)
 const IcoPlus = () => (
@@ -90,7 +91,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
     const hijos = problemas.filter((x) => x.parentId === p.id);
     const msg =
       hijos.length > 0
-        ? `¿Eliminar el problema sindrómico "${p.texto}"? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`
+        ? `¿Eliminar el Diagnóstico Sindrómico "${p.texto}"? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`
         : `¿Eliminar el problema "${p.texto}"?`;
     if (!window.confirm(msg)) return;
     dispatch({ type: "DELETE_PROBLEMA", id: p.id });
@@ -99,7 +100,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
 
   function handleUngroup(p: EvolucionProblema) {
     const hijos = problemas.filter((x) => x.parentId === p.id);
-    if (!window.confirm(`¿Desagrupar este problema sindrómico? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`)) return;
+    if (!window.confirm(`¿Desagrupar este Diagnóstico Sindrómico? Sus ${hijos.length} sub-problema(s) pasarán a la lista principal.`)) return;
     dispatch({ type: "UNGROUP_PROBLEMA", parentId: p.id });
   }
 
@@ -113,19 +114,19 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
   }, [selected]);
 
   return (
-    <Card className="border-l-4 border-blue-300 dark:border-blue-700">
-      <CardHeader className="pb-2">
+    <Card className={`overflow-hidden ${SECCION.problemas.card}`}>
+      <CardHeader className={`border-b border-border pb-3 ${SECCION.problemas.head}`}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500 text-xs font-bold text-white">P</span>
+              <span className={`flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white ${SECCION.problemas.badge}`}>P</span>
               <CardTitle className="text-sm font-bold uppercase tracking-wide">Problemas</CardTitle>
               <Badge variant="secondary" className="text-xs">
                 {problemas.length}
               </Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
-              Lista de problemas. Marca dos o más para agruparlos bajo un problema sindrómico (opcional).
+              Lista de problemas. Marca dos o más para agruparlos bajo un Diagnóstico Sindrómico (opcional).
             </p>
           </div>
           <Button type="button" size="sm" onClick={onAgregarProblema} className="shrink-0">
@@ -154,7 +155,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
               onClick={handleAgrupar}
             >
               <IcoLayers />
-              Agrupar como problema sindrómico
+              Agrupar como Diagnóstico Sindrómico
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={clearSelection}>
               Limpiar
@@ -225,7 +226,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
                       {padre.texto}
                       {esPadre && (
                         <span className="ml-2 inline-block rounded-full border border-blue-200 bg-background px-2 py-0.5 text-[10px] font-bold text-blue-500">
-                          Problema sindrómico · {hijos.length}
+                          Diagnóstico Sindrómico · {hijos.length}
                         </span>
                       )}
                     </div>

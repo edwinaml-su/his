@@ -17,6 +17,7 @@ import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Input } from "@his/ui/components/input";
 import { useEvolucionDraft, type EspecialidadOpcion } from "../_hooks/useEvolucionDraft";
+import { SECCION } from "../_lib/avante-palette";
 
 export function EspecialidadCard() {
   const { draft, dispatch, buscarEspecialidades } = useEvolucionDraft();
@@ -90,10 +91,16 @@ export function EspecialidadCard() {
   const invalid = nombre.trim() === "";
 
   return (
-    <Card className="border-l-4 border-sky-300 dark:border-sky-700">
+    <Card className={SECCION.especialidad.card}>
       <CardHeader className="pb-2">
         <div className="flex items-center gap-2">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-sky-500 text-xs font-bold text-white">E</span>
+          <span className={`flex h-6 w-6 items-center justify-center rounded-md text-white ${SECCION.especialidad.badge}`}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+              <path d="M5 3v6a4 4 0 0 0 8 0V3" />
+              <path d="M9 15v1a5 5 0 0 0 10 0v-2" />
+              <circle cx="19" cy="12" r="2" />
+            </svg>
+          </span>
           <CardTitle className="text-sm font-bold uppercase tracking-wide">
             Especialidad médica<span className="ml-0.5 text-destructive">*</span>
           </CardTitle>

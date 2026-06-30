@@ -1,49 +1,67 @@
 "use client";
 
+/**
+ * §10 — Objetivo: tarjeta verde contenedora de sub-bloques: Signos vitales
+ * (§10.1), Registro de objetivo (§10.2) y Antecedentes (§10.3).
+ */
+
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
+import { SECCION, SECCION_ACCENT } from "../_lib/avante-palette";
+import { SignosSection } from "./SignosSection";
+import { AntecedentesSection } from "./AntecedentesSection";
+import { SubBloque } from "./SubBloque";
+import { SecEmptyBox } from "./SecEmptyBox";
 
 interface Props {
-  onAbrir: () => void;
+  onAbrirVitales: () => void;
+  onAbrirObjetivo: () => void;
 }
 
-export function ObjetivoCard({ onAbrir }: Props) {
+export function ObjetivoCard({ onAbrirVitales, onAbrirObjetivo }: Props) {
   const { draft } = useEvolucionDraft();
   const texto = draft.objetivo;
 
   return (
-    <Card className="border-l-4 border-teal-300 dark:border-teal-700">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-teal-600 text-xs font-bold text-white">O</span>
-            <CardTitle className="text-sm font-bold uppercase tracking-wide">Objetivo</CardTitle>
-          </div>
-          {texto && (
-            <Button type="button" variant="outline" size="sm" onClick={onAbrir}>
-              Editar
-            </Button>
-          )}
+    <Card className={`overflow-hidden ${SECCION.objetivo.card}`}>
+      <CardHeader className={`border-b border-border pb-3 ${SECCION.objetivo.head}`}>
+        <div className="flex items-center gap-2">
+          <span className={`flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white ${SECCION.objetivo.badge}`}>O</span>
+          <CardTitle className="text-sm font-bold uppercase tracking-wide">Objetivo</CardTitle>
         </div>
         <p className="text-xs text-muted-foreground">
-          Hallazgos al examen físico, resultados recientes.
+          Signos vitales y hallazgos al examen físico.
         </p>
       </CardHeader>
-      <CardContent>
-        {texto ? (
-          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
-            {texto}
-          </p>
-        ) : (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Sin registrar.</span>
-            <Button type="button" size="sm" onClick={onAbrir}>
-              Llenar objetivo
-            </Button>
-          </div>
-        )}
+      <CardContent className="space-y-5 pt-4">
+        {/* §10.1 Signos vitales */}
+        <SignosSection onAbrir={onAbrirVitales} />
+
+        {/* §10.2 Registro de objetivo */}
+        <SubBloque
+          titulo="Registro de objetivo"
+          pill="obligatorio"
+          accion={
+            texto ? (
+              <Button type="button" variant="outline" size="sm" onClick={onAbrirObjetivo}>
+                Editar
+              </Button>
+            ) : null
+          }
+        >
+          {texto ? (
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">
+              {texto}
+            </p>
+          ) : (
+            <SecEmptyBox cue="objetivo" color={SECCION_ACCENT.objetivo} onClick={onAbrirObjetivo} />
+          )}
+        </SubBloque>
+
+        {/* §10.3 Antecedentes (colapsable, opcional) */}
+        <AntecedentesSection />
       </CardContent>
     </Card>
   );

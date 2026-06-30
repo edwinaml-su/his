@@ -150,7 +150,7 @@ describe("NuevaEvolucionPage", () => {
 
   it("abrir modal de subjetivo y guardar envía dispatch SET_SUBJETIVO", async () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /llenar subjetivo/i }));
+    fireEvent.click(screen.getByRole("button", { name: /registrar subjetivo/i }));
     fireEvent.change(screen.getByPlaceholderText(/redactar subjetivo/i), {
       target: { value: "Dolor de cabeza" },
     });
@@ -162,7 +162,7 @@ describe("NuevaEvolucionPage", () => {
 
   it("abrir modal de análisis y guardar envía dispatch SET_ANALISIS", async () => {
     setup();
-    fireEvent.click(screen.getByRole("button", { name: /llenar análisis/i }));
+    fireEvent.click(screen.getByRole("button", { name: /registrar análisis/i }));
     fireEvent.change(screen.getByPlaceholderText(/redactar evaluación/i), {
       target: { value: "Diagnóstico test" },
     });
@@ -183,6 +183,80 @@ describe("NuevaEvolucionPage", () => {
     expect(mockDispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: "ADD_PLAN", texto: "Reposo absoluto" }),
     );
+  });
+
+  // ─── Misceláneos de consulta (§11.2, modelo híbrido) ───────────────────────
+
+  it("Misceláneos: las action-cards enlazan a sus módulos legacy", () => {
+    setup();
+    expect(screen.getByRole("link", { name: /prescripción médica/i })).toHaveAttribute(
+      "href",
+      "/ece/indicaciones/nueva",
+    );
+    expect(screen.getByRole("link", { name: /laboratorio clínico/i })).toHaveAttribute(
+      "href",
+      "/ece/estudios/nueva",
+    );
+    expect(screen.getByRole("link", { name: /orden de ingreso hospitalario/i })).toHaveAttribute(
+      "href",
+      "/ece/orden-ingreso/nuevo",
+    );
+    expect(screen.getByRole("link", { name: /constancia médica/i })).toHaveAttribute(
+      "href",
+      "/ece/documento-asociado/nuevo",
+    );
+  });
+
+  it("Misceláneos: seleccionar O₂ suplementario revela FiO₂ y despacha SET_MISC", () => {
+    setup();
+    expect(screen.queryByPlaceholderText(/FiO/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(/suplementario/i));
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "SET_MISC",
+        misc: expect.objectContaining({
+          terapiaRespiratoria: expect.objectContaining({
+            gasometria: expect.objectContaining({ tipo: "O2" }),
+          }),
+        }),
+      }),
+    );
+    expect(screen.getByPlaceholderText(/FiO/)).toBeInTheDocument();
+  });
+
+  it("Misceláneos: escribir nebulizaciones despacha SET_MISC", () => {
+    setup();
+    fireEvent.change(screen.getByPlaceholderText(/instrucciones de nebulización/i), {
+      target: { value: "Salbutamol 2 puff c/6h" },
+    });
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "SET_MISC",
+        misc: expect.objectContaining({
+          terapiaRespiratoria: expect.objectContaining({
+            nebulizaciones: "Salbutamol 2 puff c/6h",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("Misceláneos: agregar orden de inyección despacha SET_MISC y aparece en la tabla", async () => {
+    setup();
+    fireEvent.click(screen.getByRole("button", { name: /agregar orden de inyección/i }));
+    fireEvent.change(screen.getByPlaceholderText(/describa la orden de inyección/i), {
+      target: { value: "Ketorolaco 30mg IV" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^agregar inyección$/i }));
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "SET_MISC",
+        misc: expect.objectContaining({
+          inyecciones: [{ texto: "Ketorolaco 30mg IV" }],
+        }),
+      }),
+    );
+    expect(await screen.findByText("Ketorolaco 30mg IV")).toBeInTheDocument();
   });
 
   it("Firmar se habilita solo con TODOS los campos obligatorios completos", async () => {

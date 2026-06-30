@@ -12,9 +12,14 @@ import {
 import { Button } from "@his/ui/components/button";
 import { useEvolucionDraft } from "../../_hooks/useEvolucionDraft";
 import { SignosVitalesCapture } from "../SignosVitalesCapture";
-import { signosNucleoCompletos, type SignosState } from "../../_lib/types";
+import {
+  signosNucleoCompletos,
+  formulaObstetricaCompleta,
+  type SignosState,
+} from "../../_lib/types";
 import {
   validarRango,
+  esFemenino,
   type VitalRangeKey,
 } from "../../../../../../../lib/evolucion/signos-vitales";
 
@@ -60,12 +65,14 @@ export function VitalesModal({ open, onClose }: Props) {
     setShowErrors(false);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // R4.1: bloquea el guardado si falta núcleo o hay un valor fuera de rango.
+  // R4.1 / §10.4: bloquea el guardado si falta el núcleo, la fórmula obstétrica
+  // (obligatoria para pacientes femeninas) o hay un valor fuera de rango.
   const nucleoIncompleto = !signosNucleoCompletos(buffer);
+  const ginecoIncompleto = esFemenino(pacienteSexo) && !formulaObstetricaCompleta(buffer);
   const hayFueraDeRango = RANGE_FIELDS.some(
     (f) => validarRango(f, buffer[f as keyof SignosState] as string) !== null,
   );
-  const bloqueado = nucleoIncompleto || hayFueraDeRango;
+  const bloqueado = nucleoIncompleto || ginecoIncompleto || hayFueraDeRango;
 
   function handleGuardar() {
     if (bloqueado) {
@@ -103,7 +110,9 @@ export function VitalesModal({ open, onClose }: Props) {
             <p role="alert" className="mr-auto text-sm text-destructive">
               {nucleoIncompleto
                 ? "Complete los signos vitales obligatorios."
-                : "Corrija los valores fuera de rango."}
+                : ginecoIncompleto
+                  ? "Complete la fórmula obstétrica (G · P · P · A · V)."
+                  : "Corrija los valores fuera de rango."}
             </p>
           )}
           <Button type="button" variant="outline" onClick={onClose}>

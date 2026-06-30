@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="es-SV" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Evolución médica · AVANTE HIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --avante-green:#00a14b;
+    --bg-app:#eef2f7; --bg-surface:#ffffff; --bg-subtle:#f8fafc; --bg-rail:#0f172a; --bg-topbar:#ffffff;
+    --rail-hover:#1c2942; --rail-active:#0d3d3a; --rail-active-bd:#14b8a6;
+    --text-strong:#0f172a; --text-base:#1e293b; --text-muted:#64748b; --text-faint:#94a3b8;
+    --on-dark:#cbd5e1; --on-dark-muted:#7c8aa5; --on-dark-head:#64748b;
+    --border:#e5e9f0; --border-strong:#cbd5e1;
+    --blue:#3b82f6; --blue-soft:#eff6ff; --blue-bd:#bfdbfe; --blue-sel:#dbeafe;
+    --indigo:#6366f1; --teal:#0d9488; --rose:#e11d48;
+    --amber:#f59e0b; --amber-soft:#fffbeb; --amber-bd:#fde68a;
+    --green:#16a34a; --green-soft:#dcfce7; --green-bd:#bbf7d0;
+    --red:#dc2626; --red-soft:#fee2e2; --red-bd:#fecaca;
+    --warn:#b45309; --warn-soft:#fef3c7; --warn-bd:#fde68a;
+    --slate-btn:#1e293b; --slate-btn-h:#0f172a;
+    --r:14px; --r-sm:10px;
+    --sh-card:0 1px 2px rgba(15,23,42,.04),0 2px 8px rgba(15,23,42,.05);
+    --sh-pop:0 24px 60px -18px rgba(15,23,42,.45);
+    --rail-w:236px;
+    /* Offset del sticky de paciente = altura del header principal (navegación + sesión).
+       Aislado (esta pantalla) = 0px; en la app real fíjelo a la altura de ese header. */
+    --app-header-h:0px; --px-sticky-z:30;
+  }
+  [data-theme="dark"]{
+    --bg-app:#0a1120; --bg-surface:#0f1a2e; --bg-subtle:#0c1525; --bg-topbar:#0c1424;
+    --text-strong:#f1f5f9; --text-base:#dbe3ef; --text-muted:#93a3bb; --text-faint:#64748b;
+    --border:#1d2942; --border-strong:#2a3a57;
+    --blue-soft:#0f1f3a; --blue-bd:#23406e; --blue-sel:#15294a;
+    --amber-soft:#241c08; --amber-bd:#4a3a13;
+    --green-soft:#0e2a1c; --green-bd:#1e4d36;
+    --red-soft:#2a1314; --red-bd:#5a2326;
+    --warn-soft:#2a200a; --warn-bd:#4a3a13;
+    --slate-btn:#1e293b; --slate-btn-h:#334155;
+    --sh-card:0 1px 2px rgba(0,0,0,.3);
+  }
+
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg-app);color:var(--text-base);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.5}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:rgba(100,116,139,.35);border-radius:8px;border:2px solid transparent;background-clip:padding-box}
+  ::-webkit-scrollbar-thumb:hover{background:rgba(100,116,139,.55);background-clip:padding-box}
+  .app{display:flex;min-height:100vh}
+
+  /* ---------- SIDEBAR ---------- */
+  .rail{width:var(--rail-w);flex-shrink:0;background:var(--bg-rail);color:var(--on-dark);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow:hidden}
+  .rail__brand{display:flex;align-items:center;gap:10px;padding:16px 16px 12px}
+  .logo{width:34px;height:34px;border-radius:9px;background:var(--avante-green);display:grid;place-items:center;flex-shrink:0;box-shadow:0 4px 10px rgba(0,161,75,.35)}
+  .logo svg{width:20px;height:20px}
+  .brand__name{font-weight:800;letter-spacing:.06em;font-size:15px;color:#fff;line-height:1}
+  .brand__sub{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--on-dark-muted);margin-top:3px}
+  .rail__search{margin:4px 12px 8px;display:flex;align-items:center;gap:8px;background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.14);border-radius:9px;padding:8px 10px;color:var(--on-dark-muted);font-size:12.5px;cursor:text}
+  .rail__search kbd{margin-left:auto;font-size:10px;background:rgba(148,163,184,.18);border-radius:5px;padding:1px 5px;font-family:inherit}
+  .rail__scroll{flex:1;overflow-y:auto;padding:4px 8px 16px}
+  .rail__scroll::-webkit-scrollbar-thumb{background:rgba(148,163,184,.25);background-clip:padding-box}
+  .nav__head{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--on-dark-head);padding:14px 10px 6px}
+  .nav__item{display:flex;align-items:center;gap:11px;padding:8px 10px;border-radius:8px;color:var(--on-dark);font-size:13px;font-weight:500;cursor:pointer;text-decoration:none;border-left:2px solid transparent;transition:background .12s}
+  .nav__item svg{width:17px;height:17px;flex-shrink:0;opacity:.8}
+  .nav__item:hover{background:var(--rail-hover);color:#fff}
+  .nav__item--active{background:var(--rail-active);color:#fff;border-left-color:var(--rail-active-bd);font-weight:600}
+  .nav__item--active svg{opacity:1;color:#5eead4}
+
+  /* ---------- MAIN ---------- */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg-surface)}
+  .topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:12px;padding:10px 22px;background:var(--bg-topbar);border-bottom:1px solid var(--border)}
+  .icon-btn{width:34px;height:34px;border-radius:9px;border:1px solid var(--border);background:transparent;color:var(--text-muted);display:grid;place-items:center;cursor:pointer;transition:.12s}
+  .icon-btn:hover{background:var(--bg-subtle);color:var(--text-base)}
+  .icon-btn svg{width:17px;height:17px}
+  .top-search{display:flex;align-items:center;gap:8px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:9px;padding:8px 12px;color:var(--text-faint);font-size:13px;min-width:220px;cursor:text}
+  .top-search kbd{margin-left:auto;font-size:10px;background:var(--bg-app);border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-family:inherit;color:var(--text-muted)}
+  .spacer{flex:1}
+  .pill-select{display:flex;align-items:center;gap:8px;background:var(--bg-surface);border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:13px;font-weight:600;color:var(--text-base);cursor:pointer}
+  .pill-select svg{width:15px;height:15px;color:var(--text-muted)}
+  .pill-select .chev{margin-left:2px;opacity:.7}
+  .user{display:flex;align-items:center;gap:9px;font-weight:600;color:var(--text-base);font-size:13px}
+  .avatar{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700}
+
+  .crumbs{display:flex;align-items:center;gap:7px;padding:14px 30px 0;font-size:13px;color:var(--text-faint)}
+  .crumbs a{color:var(--text-faint);text-decoration:none}.crumbs a:hover{color:var(--text-base)}
+  .crumbs .sep{opacity:.5}.crumbs .now{color:var(--text-base);font-weight:600}
+
+  .content{max-width:1080px;width:100%;margin:0 auto;padding:18px 30px 120px}
+  .page-title{font-size:27px;font-weight:800;color:var(--text-strong);letter-spacing:-.02em;margin:8px 0 4px}
+  .page-meta{font-size:13px;color:var(--text-muted)}
+  .page-meta kbd{font-size:11px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-family:inherit;color:var(--text-base)}
+  .page-saved{font-size:12.5px;color:var(--text-faint);margin-top:2px;display:flex;align-items:center;gap:6px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;flex-shrink:0}
+
+  /* ---------- CARDS ---------- */
+  .card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--sh-card);margin-top:18px;overflow:hidden}
+  .card--problems{border-color:var(--blue-bd)} .card--problems .card__head{background:var(--blue-soft)}
+  .card--a{border-color:var(--amber-bd)} .card--a .card__head{background:var(--amber-soft)}
+  .card__head{display:flex;align-items:flex-start;gap:14px;padding:16px 20px;border-bottom:1px solid var(--border)}
+  .card__head-l{flex:1;min-width:0}
+  .card__eyebrow{display:flex;align-items:center;gap:8px}
+  .card__badge{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-weight:800;font-size:12px;color:#fff;flex-shrink:0}
+  .card__badge svg{width:14px;height:14px}
+  .badge-blue{background:var(--blue)} .badge-indigo{background:var(--indigo)} .badge-teal{background:var(--teal)}
+  .badge-rose{background:var(--rose)} .badge-amber{background:var(--amber)} .badge-slate{background:var(--slate-btn)}
+  .card__title{font-size:14px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--text-strong)}
+  .card__sub{font-size:12.5px;color:var(--text-muted);margin-top:3px}
+  .count-chip{font-size:11px;font-weight:700;background:var(--blue);color:#fff;border-radius:20px;padding:2px 9px;margin-left:2px}
+  .count-slate{background:var(--slate-btn)!important}
+  .card__body{padding:0}
+.field-pad{padding:18px 20px}
+
+  /* ---------- SECTION SUMMARY (S/O/A/Vitals) ---------- */
+  .sec-empty{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;flex-wrap:wrap}
+  .sec-empty__txt{font-size:13px;color:var(--text-muted)}
+  .sec-filled{padding:18px 20px}
+  .sec-text{font-size:14px;color:var(--text-base);line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  .vchips{display:flex;flex-wrap:wrap;gap:8px}
+  .vchip{font-size:12px;font-weight:500;color:var(--text-base);background:var(--bg-subtle);border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px}
+  .vchip b{font-weight:700;color:var(--text-muted)}
+
+  /* ---------- SELECTION BAR ---------- */
+  .sel-bar{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--blue-soft);border-bottom:1px solid var(--blue-bd);flex-wrap:wrap}
+  .sel-count{font-size:13px;color:var(--text-base)} .sel-hint{font-size:12px;color:var(--text-muted)} .sel-bar .spacer{flex:1}
+
+  /* ---------- LIST / TREE ---------- */
+  .prob-list{display:flex;flex-direction:column}
+  .prob-row{display:flex;align-items:center;gap:11px;padding:12px 16px;border-bottom:1px solid var(--border);transition:background .1s;position:relative}
+  .prob-row:last-child{border-bottom:none}
+  .prob-row:hover{background:var(--bg-subtle)}
+  .prob-row.selected{background:var(--blue-sel)}
+  .prob-row.is-parent{background:var(--blue-soft)} .prob-row.is-parent:hover{background:var(--blue-soft)}
+  .prob-num{width:26px;height:26px;border-radius:7px;background:var(--blue-soft);color:var(--blue);border:1px solid var(--blue-bd);display:grid;place-items:center;font-weight:700;font-size:12px;flex-shrink:0;font-variant-numeric:tabular-nums}
+  .parent-ico{background:var(--blue);color:#fff;border-color:var(--blue)} .parent-ico svg{width:15px;height:15px}
+  .child-num{background:var(--bg-surface);color:var(--text-muted);border-color:var(--border-strong);font-size:11px}
+  .plan-num{background:var(--bg-subtle);color:var(--text-base);border-color:var(--border-strong)}
+  .prob-text{flex:1;min-width:0;color:var(--text-strong);font-weight:500;word-break:break-word}
+  .padre-chip{display:inline-block;font-size:10.5px;font-weight:700;color:var(--blue);background:var(--bg-surface);border:1px solid var(--blue-bd);border-radius:20px;padding:2px 8px;margin-left:6px;vertical-align:middle}
+  .chk{width:20px;height:20px;border-radius:6px;border:1.5px solid var(--border-strong);background:var(--bg-surface);display:grid;place-items:center;cursor:pointer;flex-shrink:0;color:#fff;transition:.12s;padding:0}
+  .chk:hover{border-color:var(--blue)} .chk.on{background:var(--blue);border-color:var(--blue)} .chk svg{width:13px;height:13px}
+  .chk-spacer{width:20px;flex-shrink:0}
+  .prob-row.is-child{padding-left:48px}
+  .prob-row.is-child::before{content:'';position:absolute;left:27px;top:0;bottom:0;width:2px;background:var(--blue-bd)}
+  .prob-row.is-child::after{content:'';position:absolute;left:27px;top:50%;width:13px;height:2px;background:var(--blue-bd)}
+  .row-act{display:inline-flex;gap:4px;flex-shrink:0}
+  .mini-btn{width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:var(--bg-surface);color:var(--text-muted);display:grid;place-items:center;cursor:pointer;transition:.12s}
+  .mini-btn:hover{background:var(--bg-subtle);color:var(--text-base);border-color:var(--border-strong)}
+  .mini-btn.danger:hover{background:var(--red-soft);color:var(--red);border-color:var(--red-bd)}
+  .mini-btn svg{width:15px;height:15px}
+  .list-empty{display:flex;align-items:center;gap:10px;justify-content:center;text-align:center;padding:26px 20px;color:var(--text-muted);font-size:13px}
+  .list-empty svg{width:18px;height:18px;color:var(--text-faint);flex-shrink:0}
+
+  /* ---------- BUTTONS ---------- */
+  .btn{display:inline-flex;align-items:center;gap:8px;font-family:inherit;font-size:13px;font-weight:600;border-radius:9px;padding:9px 15px;cursor:pointer;border:1px solid transparent;transition:.14s;white-space:nowrap}
+  .btn svg{width:16px;height:16px}
+  .btn-sm{padding:7px 11px;font-size:12.5px}
+  .btn--blue{background:var(--blue);color:#fff} .btn--indigo{background:var(--indigo);color:#fff}
+  .btn--teal{background:var(--teal);color:#fff} .btn--rose{background:var(--rose);color:#fff} .btn--amber{background:var(--amber);color:#fff}
+  .btn--blue:hover,.btn--indigo:hover,.btn--teal:hover,.btn--rose:hover,.btn--amber:hover{filter:brightness(1.06)}
+  .btn--primary{background:var(--slate-btn);color:#fff} .btn--primary:hover{background:var(--slate-btn-h)}
+  .btn--ghost{background:var(--bg-surface);color:var(--text-base);border-color:var(--border-strong)} .btn--ghost:hover{background:var(--bg-subtle)}
+  .btn--green{background:var(--green);color:#fff} .btn--green:hover{background:#15803d}
+  .btn--text{background:transparent;color:var(--text-base);padding:9px 6px} .btn--text:hover{color:var(--text-strong);text-decoration:underline}
+  .btn[disabled]{opacity:.5;cursor:not-allowed;pointer-events:none}
+
+  /* ---------- FORM FIELDS ---------- */
+  textarea.area{width:100%;min-height:150px;resize:vertical;border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:13px 14px;font-family:inherit;font-size:14px;color:var(--text-base);background:var(--bg-surface);line-height:1.55}
+  textarea.area.sm{min-height:96px}
+  textarea.area::placeholder,input.inp::placeholder{color:var(--text-faint)}
+  textarea.area:focus,input.inp:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  input.inp{width:100%;border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:10px 12px;font-family:inherit;font-size:14px;color:var(--text-base);background:var(--bg-surface)}
+  input.inp.err,textarea.area.err{border-color:var(--red);box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+  .lbl{display:block;font-size:13px;font-weight:700;color:var(--text-strong);margin:14px 0 6px}
+  .lbl:first-child{margin-top:6px}
+
+  /* vitals (modal) */
+  .fieldset{border:1px solid var(--border);border-radius:12px;padding:14px;margin-top:12px;background:var(--bg-surface)}
+  .fieldset:first-of-type{margin-top:4px}
+  .fieldset > legend{font-size:12.5px;font-weight:700;color:var(--text-base);padding:0 6px}
+  .vgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .vlbl{font-size:12.5px;font-weight:700;color:var(--text-strong);margin-bottom:4px;display:block}
+  .vlbl .u{font-weight:500;color:var(--text-faint);font-size:11px}
+  .alert-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--bg-subtle);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:4px;min-height:42px}
+  .alert-badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;background:var(--red);color:#fff;border-radius:7px;padding:4px 9px;letter-spacing:.02em}
+  .alert-badge svg{width:12px;height:12px}
+  .alert-ok{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--green)} .alert-ok svg{width:14px;height:14px}
+  .alert-idle{font-size:12.5px;color:var(--text-faint)}
+  .pain-head{display:flex;align-items:center;justify-content:space-between;margin-top:16px}
+  .pain-val{font-size:13px;font-weight:700}
+  .range{-webkit-appearance:none;appearance:none;width:100%;height:10px;border-radius:20px;margin-top:10px;background:linear-gradient(90deg,#22c55e 0%,#84cc16 25%,#eab308 50%,#f97316 75%,#ef4444 100%);outline:none}
+  .range::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid var(--text-strong);cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+  .range::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;border:3px solid var(--text-strong);cursor:pointer}
+  .pain-scale{display:flex;justify-content:space-between;font-size:10px;color:var(--text-faint);margin-top:6px;padding:0 2px}
+  .vstrip{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg-subtle);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:6px}
+  .vstrip .vchips{flex:1}
+  .vgrid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  .opt-lbl{display:block;font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:4px}
+  select.inp{width:100%;border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:10px 11px;font-family:inherit;font-size:13px;color:var(--text-base);background:var(--bg-surface);cursor:pointer}
+  select.inp:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  .calc-box{background:var(--bg-subtle);border:1px solid var(--border);border-radius:10px;padding:11px 13px;font-size:14px;color:var(--text-strong);min-height:42px;display:flex;align-items:center}
+  .muted{color:var(--text-faint);font-weight:400;font-size:12.5px}
+  .go-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  .go-letter{display:flex;align-items:center;justify-content:center;gap:4px;font-size:10.5px;font-weight:600;color:var(--text-muted);margin-bottom:5px;text-align:center;white-space:nowrap}
+  .go-letter b{font-size:14px;color:var(--text-strong)}
+  .go-grid input{text-align:center;padding-left:4px;padding-right:4px}
+  .req-star{color:var(--red);font-weight:800}
+  .req-pill{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--red);background:var(--red-soft);border:1px solid var(--red-bd);border-radius:20px;padding:2px 9px}
+  .patient-bar{display:flex;align-items:center;gap:14px;margin-top:14px;padding:12px 16px;background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--sh-card)}
+  .pb-avatar{width:42px;height:42px;border-radius:11px;background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;display:grid;place-items:center;font-size:14px;font-weight:700;flex-shrink:0}
+  .pb-info{flex:1;min-width:0}
+  .pb-name{font-size:15px;font-weight:700;color:var(--text-strong)}
+  .pb-meta{font-size:12.5px;color:var(--text-muted);margin-top:2px}
+  .pb-switch{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+  .acct-label{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--green);background:var(--green-soft);border:1px solid var(--green-bd);border-radius:6px;padding:2px 8px}
+  .acct-note{font-size:10.5px;color:var(--text-faint)}
+  .acct-on{color:var(--green);font-weight:700}
+  .med-bar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+  .med-bar-lbl{font-size:11.5px;font-weight:600;color:var(--text-muted)}
+  .med-chip{font:inherit;font-size:12.5px;font-weight:600;color:var(--blue);background:var(--blue-soft);border:1px solid var(--blue-bd);border-radius:20px;padding:4px 11px;cursor:pointer}
+  .med-chip:hover{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .pb-select{width:auto;min-width:170px;font-size:12.5px;padding:7px 10px}
+
+  /* ---------- SUB-BLOQUES DENTRO DE OBJETIVO ---------- */
+  .subblock{padding:16px 20px}
+  .subblock--sep{border-top:1px solid var(--border)}
+  .subblock__head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .subblock__title{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--text-strong)}
+  .subblock__title svg{width:16px;height:16px;color:var(--teal)}
+  .subblock__act{margin-left:auto}
+  .subblock .sec-empty,.subblock .sec-filled{padding:8px 0 0;border:none;background:none}
+  .subblock #planBody{margin:6px -20px 0}
+
+  /* ---------- MISCELÁNEOS (segundo sub-bloque del Plan) ---------- */
+  .opt-tag{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);background:var(--bg-subtle);border:1px solid var(--border-strong);border-radius:999px;padding:2px 8px}
+  .misc{font-size:13px;margin-top:8px}
+  .misc .input{width:100%;border:1px solid var(--border-strong);background:var(--bg-surface);border-radius:8px;padding:8px 11px;font:inherit;font-size:13px;color:var(--text-base)}
+  .misc .input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+  .misc .tabular{font-variant-numeric:tabular-nums}
+  .misc .legend{font-size:13px;font-weight:700;color:var(--text-strong);margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  .misc .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:8px;font:inherit;font-size:13px;font-weight:600;padding:9px 14px;cursor:pointer;border:1px solid transparent;white-space:nowrap}
+  .misc .btn svg{width:15px;height:15px;flex:none}
+  .misc .btn-outline{border-color:var(--border-strong);background:var(--bg-surface);color:var(--text-base)}
+  .misc .btn-outline:hover{background:var(--blue-soft);border-color:var(--blue);color:var(--blue)}
+  .misc .btn-danger{background:transparent;color:var(--red);border-color:transparent;padding:6px 8px}
+  .misc .btn-danger:hover{background:var(--red-soft)}
+  .misc .btn-sm{padding:6px 10px;font-size:12px}
+  .misc .grid-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+  .misc .grid{width:100%;border-collapse:collapse;font-size:13px}
+  .misc .grid th{text-align:left;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--text-muted);background:var(--bg-subtle);padding:9px 12px;border-bottom:1px solid var(--border)}
+  .misc .grid td{padding:8px 12px;border-bottom:1px solid var(--border);color:var(--text-base);vertical-align:middle}
+  .misc .grid tr:last-child td{border-bottom:none}
+  .misc .grid-empty{padding:14px 12px;color:var(--text-faint);font-size:12.5px;text-align:center}
+  .misc .grid .qty,.misc .grid input[type=number]{width:74px}
+  .misc .radios{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+  .misc .radio-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-strong);border-radius:999px;padding:7px 14px;font-size:12.5px;cursor:pointer;user-select:none}
+  .misc .radio-pill input{accent-color:var(--teal)}
+  .misc .radio-pill.sel{border-color:var(--teal);background:rgba(13,148,136,.08);color:var(--teal);font-weight:600}
+  .misc .ck{width:16px;height:16px;accent-color:var(--teal);cursor:pointer}
+  .misc .exam-list{border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:12px}
+  .misc .exam-list .er{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid var(--border)}
+  .misc .exam-list .er:last-child{border-bottom:none}
+  .misc .exam-list .er .en{flex:1;font-size:13px}
+  .misc .exam-list .er .eq{width:84px}
+  .misc .exam-list .er .eq input{text-align:center}
+  .misc .group{border:1px solid var(--border);border-radius:10px;margin-bottom:14px;overflow:hidden}
+  .misc .group>summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;align-items:center;gap:10px;font-weight:700;font-size:13.5px;background:var(--bg-subtle);color:var(--text-strong)}
+  .misc .group>summary::-webkit-details-marker{display:none}
+  .misc .group>summary>svg{width:17px;height:17px;flex:none}
+  .misc .group>summary .chev{margin-left:auto;width:16px;height:16px;flex:none;transition:transform .2s}
+  .misc .group[open]>summary .chev{transform:rotate(90deg)}
+  .misc .group .group-body{padding:16px}
+  .misc .group .level{border-left:2px solid var(--border);padding-left:14px;margin-left:4px}
+  .misc .sub-title{font-size:12.5px;font-weight:700;color:var(--text-strong);margin:0 0 10px;display:flex;align-items:center;gap:8px}
+  .misc .sub-title>svg{width:16px;height:16px;flex:none;color:var(--teal)}
+  .misc .resp-block{border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+  .misc .resp-block:last-child{margin-bottom:0}
+  .misc .resp-block .legend{margin-bottom:10px}
+  .misc .resp-block .vlbl{margin-bottom:4px}
+  .misc .o2-params{display:none;gap:10px;margin-top:10px}
+  .misc .o2-params.show{display:grid;grid-template-columns:1fr 1fr}
+  .misc .unit-input{display:flex;align-items:center;gap:8px}
+  .misc .unit-input .inp{flex:1}
+  .misc .unit-input .unit{font-size:12.5px;font-weight:700;color:var(--text-muted);background:var(--bg-subtle);border-radius:6px;padding:6px 10px;white-space:nowrap}
+  .misc .actions-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+  .misc .action-card{display:flex;align-items:center;gap:12px;border:1px solid var(--border);border-radius:10px;padding:13px 14px;background:var(--bg-surface);text-align:left;cursor:pointer;font:inherit}
+  .misc .action-card:hover{border-color:var(--blue);background:var(--blue-soft)}
+  .misc .action-card .ico{width:34px;height:34px;border-radius:8px;background:rgba(13,148,136,.12);color:var(--teal);display:grid;place-items:center;flex:none}
+  .misc .action-card .ico svg{width:18px;height:18px}
+  .misc .action-card .a-t{font-weight:700;font-size:13px;color:var(--text-strong);display:block}
+  .misc .action-card .a-s{font-size:11px;color:var(--text-muted);display:block}
+  @media(max-width:560px){.misc .o2-params.show{grid-template-columns:1fr}}
+
+  /* ---------- ENCABEZADO DE EXPEDIENTE (CONTEXTUAL) ---------- */
+  .px-header{margin:8px -30px 18px;background:var(--bg-surface);border-bottom:1px solid var(--border);box-shadow:0 6px 16px -8px rgba(15,23,42,.18);overflow:hidden}
+  /* Comportamiento sticky AISLADO en su propia clase: independiente del header principal de
+     navegación/sesión. Se ancla debajo de ese header vía --app-header-h (0 en modo aislado). */
+  .px-sticky{position:sticky;top:var(--app-header-h,0px);z-index:var(--px-sticky-z,30)}
+  .px-body{display:flex;gap:16px;padding:16px 30px}
+  .px-main{flex:1;min-width:0}
+  .px-top{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .px-name{font-size:20px;font-weight:800;color:var(--text-strong);margin:0;letter-spacing:-.01em}
+  .px-tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;background:var(--bg-subtle);border:1px solid var(--border-strong);border-radius:7px;padding:3px 9px;color:var(--text-base);white-space:nowrap}
+  .px-tag-k{font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted)}
+  .px-tag b{font-weight:700;letter-spacing:.02em}
+  .px-line{font-size:12.5px;color:var(--text-base);margin-top:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .px-line b{font-weight:600;color:var(--text-muted)}
+  .px-soft{color:var(--text-muted)}
+  .px-dot{width:3px;height:3px;border-radius:50%;background:var(--text-faint);flex-shrink:0}
+  .px-conv{font-weight:700;color:var(--green);background:var(--green-soft);border:1px solid var(--green-bd);border-radius:6px;padding:1px 8px;font-size:11px}
+  .px-sex{display:inline-flex;align-items:center;gap:5px;font-weight:700}
+  .px-sex svg{width:15px;height:15px}
+  .px-sex.f{color:#ec4899}
+  .px-sex.m{color:#1e3a8a}
+  .px-edit{border:none;background:transparent;color:var(--blue);font:inherit;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+  .px-edit svg{width:13px;height:13px}
+  .px-edit:hover{text-decoration:underline}
+  .px-side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+  .px-allergy{display:flex;align-items:center;gap:8px;padding:9px 30px;font-size:12.5px;font-weight:700;letter-spacing:.03em;border-top:1px solid var(--border)}
+  .px-allergy svg{width:16px;height:16px;flex-shrink:0}
+  .px-allergy.ok{color:var(--green)}
+  .px-allergy.warn{color:var(--warn);background:var(--warn-soft)}
+  .px-prefname{display:flex;align-items:flex-start;gap:8px;padding:9px 30px;font-size:12px;color:var(--indigo);background:var(--blue-soft);border-top:1px solid var(--border)}
+  .px-prefname svg{width:15px;height:15px;flex-shrink:0;margin-top:1px}
+  .px-prefname b{color:var(--indigo);font-weight:700}
+
+  /* ---------- FIRMA DEL MÉDICO ---------- */
+  .ficha-tag{display:inline-block;font-size:10.5px;font-weight:600;color:var(--text-muted);background:var(--bg-subtle);border:1px solid var(--border-strong);border-radius:20px;padding:2px 9px;margin-left:4px}
+  .firma-grid{display:grid;grid-template-columns:1fr 220px;gap:16px}
+  .grafo-box,.sello-box{border:1px solid var(--border);border-radius:12px;background:var(--bg-subtle);padding:14px 16px;display:flex;flex-direction:column}
+  .grafo-head,.sello-head{display:flex;align-items:center;gap:7px;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-muted)}
+  .grafo-head svg,.sello-head svg{width:14px;height:14px}
+  .grafo-sign{flex:1;display:flex;align-items:center;justify-content:center;min-height:78px;border-bottom:1px solid var(--border-strong);margin:8px 0;padding-bottom:6px}
+  .sign-svg{width:100%;max-width:260px;height:60px}
+  .grafo-name{text-align:center;font-size:13px;font-weight:800;color:var(--text-strong);letter-spacing:.02em}
+  .grafo-sub{text-align:center;font-size:12px;color:var(--text-muted);margin-top:2px}
+  .sello-box{align-items:center;text-align:center}
+  .seal-svg{width:124px;height:124px;margin:8px 0}
+  .sello-sub{font-size:12px;color:var(--text-muted)}
+  .firma-ok{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--green);margin-top:12px}
+  .firma-ok svg{width:15px;height:15px}
+  .card--esp{overflow:visible}
+  .ac{position:relative}
+  .ac-list{position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--bg-surface);border:1px solid var(--border-strong);border-radius:10px;box-shadow:var(--sh-pop);max-height:248px;overflow-y:auto;z-index:30;display:none}
+  .ac-list.open{display:block}
+  .ac-item{padding:9px 13px;font-size:13.5px;cursor:pointer;color:var(--text-base);border-bottom:1px solid var(--border)}
+  .ac-item:last-child{border-bottom:none}
+  .ac-item:hover{background:var(--blue-soft);color:var(--text-strong)}
+  .ac-empty{padding:11px 13px;font-size:13px;color:var(--text-faint)}
+  .more-toggle{display:inline-flex;align-items:center;gap:6px;margin:14px 0 2px;padding:9px 14px;border:1px dashed var(--border-strong);background:var(--bg-subtle);color:var(--text-base);font:inherit;font-size:13px;font-weight:600;border-radius:9px;cursor:pointer}
+  .more-toggle:hover{background:var(--bg-app);border-color:var(--blue);color:var(--blue)}
+  @media(max-width:640px){.patient-bar{flex-wrap:wrap}.pb-switch{width:100%}.pb-select{flex:1}.px-body{flex-wrap:wrap;padding:12px 16px}.px-side{width:100%;align-items:flex-start}.px-side .pb-select{width:100%}.firma-grid{grid-template-columns:1fr}.px-name{font-size:18px}.px-header{margin:0 -16px 14px}.px-allergy,.px-prefname{padding:8px 16px}}
+  @media(max-width:640px){.vgrid3{grid-template-columns:1fr}.go-letter{font-size:8.5px}.go-grid{gap:4px}}
+
+  /* ---------- MODAL ---------- */
+  .overlay{position:fixed;inset:0;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);z-index:40;display:none;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
+  .overlay.open{display:flex}
+  .modal{background:var(--bg-surface);border-radius:18px;width:100%;max-width:600px;box-shadow:var(--sh-pop);border:1px solid var(--border);animation:rise .2s cubic-bezier(.2,.8,.25,1);overflow:hidden}
+  @keyframes rise{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+  .modal__head{display:flex;align-items:flex-start;gap:12px;padding:20px 22px 10px}
+  .modal__head-l{flex:1;min-width:0}
+  .modal__t{font-size:18px;font-weight:800;color:var(--text-strong)}
+  .modal__d{font-size:13px;color:var(--text-muted);margin-top:3px}
+  .modal__x{width:34px;height:34px;border-radius:9px;border:1px solid var(--border);background:transparent;color:var(--text-muted);display:grid;place-items:center;cursor:pointer;flex-shrink:0}
+  .modal__x:hover{background:var(--bg-subtle);color:var(--text-base)} .modal__x svg{width:18px;height:18px}
+  .modal__body{padding:6px 22px 10px;max-height:64vh;overflow-y:auto}
+  .modal__foot{display:flex;align-items:center;gap:10px;padding:14px 22px;border-top:1px solid var(--border);background:var(--bg-subtle)}
+
+  /* ---------- FOOTER ---------- */
+  .foot{position:fixed;bottom:0;left:0;right:0;z-index:15;display:flex;align-items:center;gap:12px;padding:13px 30px;background:var(--bg-surface);border-top:1px solid var(--border);box-shadow:0 -4px 20px rgba(15,23,42,.04)}
+  .foot .spacer{flex:1}
+  .firmar-hint{font-size:12px;color:var(--warn);font-weight:600;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .firmar-wrap{position:relative}
+  .firmar-wrap .dot-on{position:absolute;top:-3px;right:-3px;width:11px;height:11px;border-radius:50%;background:#22c55e;border:2px solid var(--bg-surface);box-shadow:0 0 0 0 rgba(34,197,94,.5);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}70%{box-shadow:0 0 0 7px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+
+  /* toast */
+  .toast-wrap{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);z-index:60;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+  .toast{background:var(--text-strong);color:#fff;border-radius:10px;padding:11px 16px;font-size:13px;font-weight:600;box-shadow:0 12px 30px rgba(15,23,42,.4);display:flex;align-items:center;gap:9px;animation:toastin .25s ease;max-width:90vw}
+  .toast svg{width:16px;height:16px;color:#4ade80}
+  @keyframes toastin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  @media(max-width:1080px){.rail{position:fixed;left:0;transform:translateX(-100%);z-index:50;transition:transform .2s;box-shadow:var(--sh-pop)}.rail.show{transform:none}.foot{left:0}.main{width:100%}}
+  @media(max-width:640px){.top-search,.pill-select span.lbltxt,.user span{display:none}.content{padding:14px 16px 130px}.crumbs{padding:12px 16px 0}.vgrid{grid-template-columns:1fr}.page-title{font-size:22px}}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <div class="crumbs"><a href="#">🏠</a><span class="sep">›</span><a href="#">ECE</a><span class="sep">›</span><span class="now">Evolución Médica</span></div>
+
+    <main class="content">
+      <h1 class="page-title">Evolución médica</h1>
+      <div class="page-meta">Fecha de creación: <span id="fechaCrea">—</span> · <kbd>Ctrl+S</kbd> guarda ahora.</div>
+      <div class="page-saved"><span class="dot"></span><span>Borrador guardado localmente <span id="savedTime">—</span></span></div>
+      <div class="px-header px-sticky">
+        <div class="px-body">
+          <div class="px-main">
+            <div class="px-top">
+              <h2 class="px-name" id="pxName">—</h2>
+              <span class="px-tag"><span class="px-tag-k">Expediente</span> <b id="pxExp">—</b></span>
+              <span class="px-tag"><span class="px-tag-k">Cuenta Hosp.</span> <b id="pxCuenta">—</b></span>
+            </div>
+            <div class="px-line"><span><b>Edad</b> <span id="pxAge">—</span></span><span class="px-dot"></span><span><b>DUI</b> <span id="pxDui">—</span></span><span class="px-dot"></span><span><b>Sexo</b> <span id="pxSex">—</span></span><span class="px-dot"></span><span><b>F. Nac.</b> <span id="pxNac">—</span></span><span class="px-dot"></span><span><b>Tipo de cuenta</b> <span class="px-conv" id="pxTipo">—</span></span></div>
+            <div class="px-line px-soft"><b>Domicilio:</b> <span id="pxDom">—</span></div>
+            <div class="px-line px-soft"><b>En caso de emergencia llamar a:</b> <span id="pxEmerg">—</span> <button class="px-edit" type="button" onclick="openEmerg()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>Editar</button></div>
+          </div>
+        </div>
+        <div class="px-allergy" id="pxAllergy"></div>
+        <div class="px-prefname" id="pxPref" style="display:none"></div>
+      </div>
+
+      <!-- ===== ESPECIALIDAD MÉDICA ===== -->
+      <section class="card card--esp">
+        <div class="card__head">
+          <div class="card__head-l">
+            <div class="card__eyebrow"><span class="card__badge" style="background:var(--avante-green)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3v6a4 4 0 0 0 8 0V3"/><path d="M9 15v1a5 5 0 0 0 10 0v-2"/><circle cx="19" cy="12" r="2"/></svg></span><span class="card__title">Especialidad médica</span><span class="req-pill">Obligatorio</span></div>
+            <div class="card__sub">Especialidad responsable de esta evolución.</div>
+          </div>
+        </div>
+        <div class="field-pad">
+          <div class="ac" id="acEsp">
+            <input class="inp" id="espInput" autocomplete="off" spellcheck="false" placeholder="Escriba para buscar (p. ej. Medicina Interna)…" oninput="espOnInput()" onfocus="espFilter()" onblur="setTimeout(closeEspList,150)" onkeydown="if(event.key==='Escape')closeEspList()">
+            <div class="ac-list" id="espList"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== PROBLEMAS ===== -->
+      <section class="card card--problems">
+        <div class="card__head">
+          <div class="card__head-l">
+            <div class="card__eyebrow"><span class="card__badge badge-blue">P</span><span class="card__title">Problemas</span><span class="count-chip" id="probCount">0</span><span class="req-pill">Obligatorio</span></div>
+            <div class="card__sub">Lista de problemas. Marca dos o más para agruparlos bajo un problema sindrómico (opcional).</div>
+          </div>
+          <button class="btn btn--blue" onclick="openProblema()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Agregar problema</button>
+        </div>
+        <div class="card__body" id="probBody"></div>
+      </section>
+
+      <!-- ===== SUBJETIVO ===== -->
+      <section class="card">
+        <div class="card__head">
+          <div class="card__head-l"><div class="card__eyebrow"><span class="card__badge badge-indigo">S</span><span class="card__title">Subjetivo</span><span class="req-pill">Obligatorio</span></div><div class="card__sub">Relato del paciente: motivo de consulta, síntomas, evolución.</div></div>
+          <div id="actSubj"></div>
+        </div>
+        <div class="card__body" id="bodySubj"></div>
+      </section>
+
+      <!-- ===== OBJETIVO (incluye signos vitales + registro) ===== -->
+      <section class="card">
+        <div class="card__head">
+          <div class="card__head-l"><div class="card__eyebrow"><span class="card__badge badge-teal">O</span><span class="card__title">Objetivo</span></div><div class="card__sub">Signos vitales y hallazgos del examen físico.</div></div>
+        </div>
+        <div class="card__body">
+          <div class="subblock">
+            <div class="subblock__head"><span class="subblock__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12h4l2 5 4-12 2 7h6"/></svg>Signos vitales</span><span class="req-pill">Obligatorio</span><div class="subblock__act" id="actVit"></div></div>
+            <div id="bodyVit"></div>
+          </div>
+          <div class="subblock subblock--sep">
+            <div class="subblock__head"><span class="subblock__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6M8 13h8M8 17h6"/></svg>Registro de objetivo</span><span class="req-pill">Obligatorio</span><div class="subblock__act" id="actObj"></div></div>
+            <div id="bodyObj"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== EVALUACIÓN / ANÁLISIS ===== -->
+      <section class="card card--a">
+        <div class="card__head">
+          <div class="card__head-l"><div class="card__eyebrow"><span class="card__badge badge-amber">A</span><span class="card__title">Evaluación / Análisis</span><span class="req-pill">Obligatorio</span></div><div class="card__sub">Diagnóstico o impresión diagnóstica, evolución del cuadro.</div></div>
+          <div id="actAna"></div>
+        </div>
+        <div class="card__body" id="bodyAna"></div>
+      </section>
+
+      <!-- ===== PLAN (dos secciones: Plan de manejo + Misceláneos) ===== -->
+      <section class="card">
+        <div class="card__head">
+          <div class="card__head-l"><div class="card__eyebrow"><span class="card__badge badge-slate">P</span><span class="card__title">Plan</span></div><div class="card__sub">Plan de manejo y misceláneos de la consulta.</div></div>
+        </div>
+        <div class="card__body">
+          <div class="subblock">
+            <div class="subblock__head"><span class="subblock__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3 7-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8"/></svg>Plan de manejo</span><span class="count-chip count-slate" id="planCount">0</span><span class="req-pill">Obligatorio</span><div class="subblock__act"><button class="btn btn--primary btn-sm" onclick="openPlan()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>Agregar al plan</button></div></div>
+            <div id="planBody"></div>
+          </div>
+          <div class="subblock subblock--sep">
+            <div class="subblock__head"><span class="subblock__title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>Misceláneos de consulta</span><span class="opt-tag">Opcional</span></div>
+            <div class="misc">
+              <div class="actions-grid" style="margin-bottom:14px">
+                <button class="action-card" type="button" data-route="/ece/indicaciones/nueva" data-name="Prescripción médica"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h6l4 4v3M5 3v18h7"/><path d="M14 14h7M17.5 10.5 21 14l-3.5 3.5"/></svg></span><span><span class="a-t">Prescripción médica</span><span class="a-s">Abre el recetario / indicaciones</span></span></button>
+              </div>
+              <details class="group" open>
+                <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3"/><path d="M8 3h8M8 13h8"/></svg>Laboratorio clínico<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></summary>
+                <div class="group-body"><div data-exam-order="lab"></div></div>
+              </details>
+              <details class="group">
+                <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>Exámenes de gabinete<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></summary>
+                <div class="group-body">
+                  <div class="level">
+                    <div class="sub-title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg>Radiología e imágenes</div>
+                    <div data-exam-order="radiologia"></div>
+                    <div class="sub-title" style="margin-top:18px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2 6 4-12 2 6h6"/></svg>Estudios de cardiología</div>
+                    <div data-exam-order="cardiologia"></div>
+                  </div>
+                </div>
+              </details>
+              <details class="group">
+                <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.5-7 10-7 10z"/></svg>Terapia Respiratoria<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></summary>
+                <div class="group-body">
+                  <div class="resp-block">
+                    <div class="legend">Gasometría arterial</div>
+                    <div class="radios" id="gaso-radios">
+                      <label class="radio-pill sel"><input type="radio" name="gaso-arterial" value="Basal" checked> Basal</label>
+                      <label class="radio-pill"><input type="radio" name="gaso-arterial" value="Con O₂ suplementario"> Con O₂ suplementario</label>
+                    </div>
+                    <div class="o2-params" id="o2-params">
+                      <div><label class="vlbl">FiO₂</label><div class="unit-input"><input class="inp" id="gaso-fio2" inputmode="numeric" placeholder="FiO₂"><span class="unit">%</span></div></div>
+                      <div><label class="vlbl">Flujo</label><div class="unit-input"><input class="inp" id="gaso-flujo" inputmode="decimal" placeholder="Flujo"><span class="unit">L/min</span></div></div>
+                    </div>
+                  </div>
+                  <div class="resp-block"><div class="legend">Nebulizaciones</div><textarea class="area sm" id="nebu-instr" rows="3" placeholder="Instrucciones de nebulización (medicamento, dosis, frecuencia, duración)…"></textarea></div>
+                  <div class="resp-block"><div class="legend">Vibroterapia</div><textarea class="area sm" id="vibro-instr" rows="2" placeholder="Instrucciones de vibroterapia…"></textarea></div>
+                  <div class="resp-block"><div class="legend">Palmo percusión</div><textarea class="area sm" id="palmo-instr" rows="2" placeholder="Instrucciones de palmo percusión / drenaje postural…"></textarea></div>
+                </div>
+              </details>
+              <details class="group">
+                <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m18 2 4 4M17 7l3-3M9.5 14.5 4 20l-2 2M14 6l4 4-8.5 8.5L5 19l-1-4z"/></svg>Orden de Inyecciones<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg></summary>
+                <div class="group-body">
+                  <button class="btn btn-outline btn-sm" type="button" onclick="openIny()" style="margin-bottom:12px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> Agregar orden de inyección</button>
+                  <div class="grid-wrap"><table class="grid"><thead><tr><th>Orden de inyección</th><th style="width:60px"></th></tr></thead><tbody id="grid-iny"><tr><td colspan="2" class="grid-empty">Sin órdenes agregadas.</td></tr></tbody></table></div>
+                </div>
+              </details>
+              <div class="actions-grid">
+                <button class="action-card" type="button" data-route="/ece/orden-ingreso/nuevo" data-name="Orden de Ingreso hospitalario"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M6 21V8l6-4 6 4v13"/><path d="M12 9v6M9 12h6"/></svg></span><span><span class="a-t">Orden de Ingreso hospitalario</span><span class="a-s">Abre la orden de ingreso</span></span></button>
+                <button class="action-card" type="button" data-route="/ece/rri/nueva" data-name="Orden de interconsulta médica"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 8h2a2 2 0 0 1 2 2v9l-3-2H9a2 2 0 0 1-2-2v-1"/><path d="M3 4h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2L6 16V6a2 2 0 0 1 2-2z"/></svg></span><span><span class="a-t">Orden de interconsulta médica</span><span class="a-s">Solicita interconsulta</span></span></button>
+                <button class="action-card" type="button" data-route="/ece/remision/nueva" data-name="Hoja de Remisión"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="m9 14 2 2 4-4"/></svg></span><span><span class="a-t">Hoja de Remisión</span><span class="a-s">Genera remisión del paciente</span></span></button>
+                <button class="action-card" type="button" data-route="/ece/certificado-incapacidad/nuevo" data-name="Incapacidad médica"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M12 8v6M9 11h6"/></svg></span><span><span class="a-t">Incapacidad médica</span><span class="a-s">Emite certificado de incapacidad</span></span></button>
+                <button class="action-card" type="button" data-route="/ece/constancia/nueva" data-name="Constancia médica"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 3h11l3 3v15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M8 9h8M8 13h6"/><circle cx="16.5" cy="17.5" r="2.5"/></svg></span><span><span class="a-t">Constancia médica</span><span class="a-s">Emite constancia de atención</span></span></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ===== FIRMA DEL MÉDICO ===== -->
+      <section class="card">
+        <div class="card__head">
+          <div class="card__head-l"><div class="card__eyebrow"><span class="card__badge badge-blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16M4 15l9-9 4 4-9 9H4z"/></svg></span><span class="card__title">Firma del médico</span><span class="req-star">*</span></div><div class="card__sub">El grafo y el sello se traen de la ficha médica del médico registrado. <span class="ficha-tag">datos de la ficha médica</span></div></div>
+        </div>
+        <div class="field-pad">
+          <div class="firma-grid">
+            <div class="grafo-box">
+              <div class="grafo-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17c3 0 3-8 6-8s3 6 6 6 3-4 6-4"/></svg>Grafo (firma registrada)</div>
+              <div class="grafo-sign"><svg viewBox="0 0 260 60" class="sign-svg"><path d="M14 42 C 22 18, 30 18, 34 40 C 36 50, 40 50, 44 38 C 48 22, 56 22, 60 40 C 63 52, 70 50, 76 36 C 90 8, 110 46, 132 34 C 150 24, 168 44, 196 28 C 206 22, 214 30, 222 26" fill="none" stroke="var(--text-strong)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="grafo-name">DR. EDWIN ALEXANDER MARTÍNEZ</div>
+              <div class="grafo-sub">Médico tratante · JVPM 12345</div>
+            </div>
+            <div class="sello-box">
+              <div class="sello-head"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10M7 12h10"/></svg>Sello registrado</div>
+              <svg viewBox="0 0 128 128" class="seal-svg"><circle cx="64" cy="64" r="60" fill="none" stroke="var(--blue)" stroke-width="2"/><circle cx="64" cy="64" r="51" fill="none" stroke="var(--blue)" stroke-width="1"/><text x="64" y="55" text-anchor="middle" font-size="12" font-weight="800" fill="var(--blue)" font-family="Inter,sans-serif">DR. E. MARTÍNEZ</text><text x="64" y="68" text-anchor="middle" font-size="7" font-weight="600" fill="var(--blue)" letter-spacing="1" font-family="Inter,sans-serif">MEDICINA INTERNA</text><text x="64" y="83" text-anchor="middle" font-size="10" font-weight="800" fill="var(--blue)" font-family="Inter,sans-serif">JVPM 12345</text></svg>
+              <div class="sello-sub">Sello oficial del profesional</div>
+            </div>
+          </div>
+          <div class="firma-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>Grafo y sello traídos automáticamente de la ficha médica del médico registrado.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<!-- ============ FOOTER ============ -->
+<div class="foot">
+  <button class="btn btn--text" onclick="cancelar()">Cancelar</button>
+  <div class="spacer"></div>
+  <span class="firmar-hint" id="firmarHint" style="display:none"></span>
+  <button class="btn btn--ghost" onclick="guardarBorrador()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Guardar borrador</button>
+  <div class="firmar-wrap"><span class="dot-on"></span><button class="btn btn--green" id="btnFirmar" onclick="firmar()" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19h16M4 15l9-9 4 4-9 9H4z"/></svg>Guardar y firmar</button></div>
+</div>
+
+<!-- ============ MODAL (genérico) ============ -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="modal__head">
+      <div class="modal__head-l"><div class="modal__t" id="mTitle"></div><div class="modal__d" id="mDesc"></div></div>
+      <button class="modal__x" onclick="closeModal()" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </div>
+    <div class="modal__body" id="mBody"></div>
+    <div class="modal__foot" id="mFoot"></div>
+  </div>
+</div>
+
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+/* ===================== NAV ===================== */
+const ICON = {
+  touch:'<path d="M9 11V6a2 2 0 1 1 4 0v5m0-1.5a1.8 1.8 0 0 1 3.5 0V12m0-1a1.8 1.8 0 0 1 3.5 0v4a6 6 0 0 1-6 6h-2a6 6 0 0 1-5-2.7L4 16a1.7 1.7 0 0 1 2.7-2L9 16"/>',
+  dash:'<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+  bi:'<path d="M3 3v18h18"/><path d="M7 14l3-4 3 3 5-6"/>',kpi:'<path d="M3 12a9 9 0 1 1 18 0"/><path d="M12 12l4-3"/>',
+  nps:'<path d="M21 11.5a8.4 8.4 0 0 1-9 8.4L3 21l1.1-4.5A8.4 8.4 0 1 1 21 11.5z"/><path d="M8.5 12.5s1 1.3 3.5 1.3 3.5-1.3 3.5-1.3"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5 6h14l3 6v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
+  users:'<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M16 6a3 3 0 0 1 0 6M21 20a6 6 0 0 0-3-5.2"/>',
+  admit:'<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5M15 12H3"/>',
+  bed:'<path d="M3 7v12M3 13h18v6M21 13v-2a3 3 0 0 0-3-3H9v5"/><circle cx="6.5" cy="10.5" r="1.5"/>',
+  census:'<path d="M3 12h4l2 6 4-14 2 8h6"/>',transfer:'<path d="M3 7h13l-3-3M21 17H8l3 3"/>',
+  triage:'<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 8h6M9 12l1.5 1.5L14 10M9 16h4"/>',
+  monitor:'<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M6 11h3l1.5-3 2 5 1.5-2H18"/><path d="M9 21h6M12 17v4"/>',
+  emerg:'<path d="M12 21s-7-4.3-9.2-9A5.4 5.4 0 0 1 12 6a5.4 5.4 0 0 1 9.2 6c-.5 1-1.2 2-2.2 3"/><path d="M9 12h2l1-2 1.5 3 1-1H17"/>',
+  door:'<path d="M14 3H6a2 2 0 0 0-2 2v16h10M14 3l6 3v15h-6M14 3v18M11 12h.01"/>',
+  filepen:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8M14 3l6 6M14 3v6h6"/><path d="M18 13.5 21 16.5 16.5 21H14v-2.5z"/>',
+  vitals:'<path d="M3 12h4l2 5 4-12 2 7h6"/>',
+  filetext:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6z"/><path d="M14 3v6h6M8 13h8M8 17h6"/>',
+  clipboard:'<rect x="6" y="4" width="12" height="17" rx="2"/><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 11h6M9 15h4"/>',
+  notebook:'<path d="M4 4h13a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2zM4 8h2M4 12h2M4 16h2M10 9h6M10 13h6"/>'
+};
+function ic(n){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+(ICON[n]||'')+'</svg>';}
+const NAV=[{item:'Orientación táctil',i:'touch'},{head:'Visión'},{item:'Dashboard',i:'dash'},{item:'Analítica BI',i:'bi'},{item:'Dashboard Ejecutivo KPI',i:'kpi'},{item:'Mi feedback (NPS)',i:'nps'},{item:'Mi Bandeja (BPM)',i:'inbox'},{head:'Clínico'},{item:'Pacientes',i:'users'},{item:'Admisión',i:'admit'},{item:'Camas',i:'bed'},{item:'Censo',i:'census'},{item:'Traslados',i:'transfer'},{item:'Triage',i:'triage'},{item:'Monitor Triage',i:'monitor'},{item:'Emergencias',i:'emerg'},{item:'Consulta externa',i:'door'},{item:'ECE Rectificaciones',i:'filepen'},{head:'ECE — Atención'},{item:'Signos Vitales',i:'vitals'},{item:'Indicaciones Médicas',i:'filetext'},{item:'Valoración Inicial ENF',i:'clipboard'},{item:'Registro Enfermería',i:'notebook'},{item:'Evolución Médica',i:'filepen',active:true}];
+var _navEl=document.getElementById('nav'); if(_navEl) _navEl.innerHTML=NAV.map(n=> n.head?'<div class="nav__head">'+n.head+'</div>':'<a class="nav__item'+(n.active?' nav__item--active':'')+'" href="#">'+ic(n.i)+'<span>'+n.item+'</span></a>').join('');
+
+/* ===================== ESTADO ===================== */
+let problems=[];                 // [{id,text,parentId}]
+let planItems=[];                // [{id,text}]
+let data={subjetivo:'',objetivo:'',analisis:''};
+let vitals={sis:'',dia:'',fc:'',fr:'',temp:'',spo2:'',fio2:'',gcsO:'',gcsV:'',gcsM:'',gluco:'',pesoKg:'',pesoLb:'',tallaM:'',tallaFt:'',cintura:'',balance:'',diuresis:'',fur:'',goG:'',goPt:'',goPp:'',goA:'',goV:'',dolor:'0'};
+const SAMPLE_PATIENTS=[
+  {ini:'MR',nombre:'María Elena Rodríguez García',expediente:'AVT-SV-2025-000482',cuenta:'CTA-AVT-2025-004821',sexo:'F',edad:47,dui:'01234567-8',nac:'14/03/1978',tipo:'CONVENIO',domicilio:'Col. Escalón, Av. Masferrer Nte. #123, San Salvador',emergencia:'CARLOS RODRÍGUEZ (HIJO) — 7777-8888',alergias:'',pila:'Mario',nota:'Persona de la comunidad LGBTIQ+ — diríjase al paciente por su nombre de pila.'},
+  {ini:'JP',nombre:'Juan Pérez Martínez',expediente:'AVT-SV-2025-000341',cuenta:'CTA-AVT-2025-003190',sexo:'M',edad:45,dui:'02345678-9',nac:'02/06/1980',tipo:'PRIVADO',domicilio:'Res. Las Cumbres, Calle 4 #56, Antiguo Cuscatlán',emergencia:'ANA PÉREZ (ESPOSA) — 7666-5555',alergias:'Penicilina, AINEs',pila:'',nota:''},
+  {ini:'RA',nombre:'Rosa Amaya de López',expediente:'AVT-SV-2025-000507',cuenta:'CTA-AVT-2025-005012',sexo:'F',edad:62,dui:'03456789-0',nac:'19/11/1963',tipo:'CONVENIO',domicilio:'Col. Médica, Pasaje 2 #10, San Salvador',emergencia:'LUIS LÓPEZ (HIJO) — 7555-4444',alergias:'',pila:'',nota:''}
+];
+const ESPECIALIDADES=['Medicina General','Medicina Interna','Medicina Familiar','Medicina de Emergencias','Medicina Crítica / Cuidados Intensivos','Cardiología','Neurología','Neumología','Gastroenterología','Endocrinología','Nefrología','Hematología','Infectología','Reumatología','Dermatología','Pediatría','Neonatología','Ginecología y Obstetricia','Cirugía General','Cirugía Cardiovascular','Cirugía Plástica y Reconstructiva','Neurocirugía','Ortopedia y Traumatología','Urología','Otorrinolaringología','Oftalmología','Anestesiología','Psiquiatría','Oncología Médica','Radiología e Imágenes','Patología','Geriatría','Nutrición Clínica','Fisiatría y Rehabilitación'];
+let patient=SAMPLE_PATIENTS[0];
+let vMoreOpen=false;
+let seq=100;
+let selected=new Set();
+let probEditId=null, planEditId=null, afterVitals=null, objTmp=null;
+function esc(s){return (s||'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
+function childrenOf(id){return problems.filter(p=>p.parentId===id);}
+function M(id){return document.getElementById(id);}
+
+/* ===================== ICONOS ===================== */
+const SVG_EDIT='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
+const SVG_DEL='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>';
+const SVG_CHECK='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6 9 17l-5-5"/></svg>';
+const SVG_PLUS='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>';
+const SVG_FOLDER='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/></svg>';
+const SVG_UNGROUP='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><path d="M9 13h6"/></svg>';
+const SVG_LAYERS='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/></svg>';
+const SVG_PULSE='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12h4l2 5 4-12 2 7h6"/></svg>';
+function editBtn(fn,id){return '<button class="mini-btn" title="Editar" onclick="'+fn+'('+id+')">'+SVG_EDIT+'</button>';}
+function delBtn(fn,id){return '<button class="mini-btn danger" title="Eliminar" onclick="'+fn+'('+id+')">'+SVG_DEL+'</button>';}
+function chk(id){return '<button class="chk'+(selected.has(id)?' on':'')+'" title="Seleccionar para agrupar" onclick="toggleSelect('+id+')">'+(selected.has(id)?SVG_CHECK:'')+'</button>';}
+
+/* ===================== MODAL ===================== */
+function openModal(){ M('overlay').classList.add('open'); }
+function closeModal(){ M('overlay').classList.remove('open'); afterVitals=null; objTmp=null; }
+function focusEl(id){ setTimeout(()=>{const e=M(id); if(e){e.focus(); if(e.setSelectionRange){const n=e.value.length; e.setSelectionRange(n,n);}}},60); }
+function setModal(title,desc,body,foot){ M('mTitle').textContent=title; M('mDesc').textContent=desc; M('mBody').innerHTML=body; M('mFoot').innerHTML=foot; }
+function footHTML(saveColor,saveTxt,saveFn){ return '<button class="btn btn--text" onclick="closeModal()">Cancelar</button><div class="spacer"></div><button class="btn btn--'+saveColor+'" onclick="'+saveFn+'()">'+SVG_CHECK+'<span>'+saveTxt+'</span></button>'; }
+
+/* ===================== PROBLEMAS ===================== */
+function renderProblems(){
+  const body=M('probBody'); M('probCount').textContent=problems.length;
+  if(problems.length===0){ selected.clear();
+    body.innerHTML='<div class="list-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3 7-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8"/></svg><span>Aún no hay problemas. Use "Agregar problema".</span></div>';
+    updateActions(); return; }
+  let bar='';
+  if(selected.size>0){ const can=selected.size>=2;
+    bar='<div class="sel-bar"><span class="sel-count"><b>'+selected.size+'</b> seleccionado'+(selected.size>1?'s':'')+'</span><div class="spacer"></div>'+(can?'':'<span class="sel-hint">Selecciona 2 o más para agrupar</span>')+'<button class="btn btn--blue" '+(can?'':'disabled')+' onclick="openGroupModal()">'+SVG_LAYERS+'<span>Agrupar como problema sindrómico</span></button><button class="btn btn--text" onclick="clearSelection()">Limpiar</button></div>';
+  }
+  const top=problems.filter(p=>p.parentId==null); let n=0, rows='';
+  top.forEach(p=>{ n++; const kids=childrenOf(p.id);
+    if(kids.length){
+      rows+='<div class="prob-row is-parent"><span class="chk-spacer"></span><span class="prob-num parent-ico">'+SVG_FOLDER+'</span><div class="prob-text">'+esc(p.text)+'<span class="padre-chip">Problema sindrómico · '+kids.length+'</span></div><div class="row-act">'+editBtn('openProblema',p.id)+'<button class="mini-btn" title="Desagrupar" onclick="ungroup('+p.id+')">'+SVG_UNGROUP+'</button>'+delBtn('delProblem',p.id)+'</div></div>';
+      kids.forEach((c,j)=>{ const sel=selected.has(c.id)?' selected':'';
+        rows+='<div class="prob-row is-child'+sel+'">'+chk(c.id)+'<span class="prob-num child-num">'+n+'.'+(j+1)+'</span><div class="prob-text">'+esc(c.text)+'</div><div class="row-act">'+editBtn('openProblema',c.id)+delBtn('delProblem',c.id)+'</div></div>';
+      });
+    } else { const sel=selected.has(p.id)?' selected':'';
+      rows+='<div class="prob-row'+sel+'">'+chk(p.id)+'<span class="prob-num">'+n+'</span><div class="prob-text">'+esc(p.text)+'</div><div class="row-act">'+editBtn('openProblema',p.id)+delBtn('delProblem',p.id)+'</div></div>';
+    }
+  });
+  body.innerHTML=bar+'<div class="prob-list">'+rows+'</div>'; updateActions();
+}
+function openProblema(id){
+  probEditId=id||null; const p=id?problems.find(x=>x.id===id):null;
+  setModal(id?'Editar problema':'Agregar problema','Diagnóstico, hallazgo o motivo del problema.',
+    '<label class="lbl">Problema</label><textarea class="area sm" id="mProb" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mProb\',\'barProb\')" placeholder="Describa el problema (p. ej. Cefalea tensional)...">'+esc(p?p.text:'')+'</textarea><div class="med-bar" id="barProb" style="display:none"></div>',
+    footHTML('blue', id?'Guardar cambios':'Agregar a la lista','saveProblema'));
+  openModal(); focusEl('mProb');
+}
+function saveProblema(){
+  const t=M('mProb'); const txt=t.value.trim();
+  if(!txt){ t.classList.add('err'); t.focus(); toast('Escriba el problema','warn'); return; }
+  if(probEditId){ problems.find(x=>x.id===probEditId).text=txt; toast('Problema actualizado'); }
+  else { problems.push({id:++seq,text:txt,parentId:null}); toast('Problema agregado'); }
+  closeModal(); renderProblems();
+}
+function delProblem(id){
+  const p=problems.find(x=>x.id===id); if(!p) return; const kids=childrenOf(id);
+  const msg=kids.length?'¿Eliminar el problema sindrómico "'+p.text+'"? Sus '+kids.length+' sub-problema(s) pasarán a la lista principal.':'¿Eliminar el problema "'+p.text+'"?';
+  if(!confirm(msg)) return;
+  kids.forEach(c=>c.parentId=null); problems=problems.filter(x=>x.id!==id); selected.delete(id);
+  renderProblems(); toast('Problema eliminado');
+}
+
+/* ----- Agrupación ----- */
+function toggleSelect(id){ selected.has(id)?selected.delete(id):selected.add(id); renderProblems(); }
+function clearSelection(){ selected.clear(); renderProblems(); }
+function openGroupModal(){
+  if(selected.size<2) return;
+  setModal('Nuevo problema sindrómico','Agrupará '+selected.size+' problemas seleccionados.',
+    '<label class="lbl">Nombre del problema sindrómico</label><textarea class="area sm" id="mGroup" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mGroup\',\'barGroup\')" placeholder="Nombre del síndrome (p. ej. Síndrome metabólico)..."></textarea><div class="med-bar" id="barGroup" style="display:none"></div>',
+    '<button class="btn btn--text" onclick="closeModal()">Cancelar</button><div class="spacer"></div><button class="btn btn--blue" onclick="confirmGroup()">'+SVG_LAYERS+'<span>Crear grupo</span></button>');
+  openModal(); focusEl('mGroup');
+}
+function confirmGroup(){
+  const t=M('mGroup'); const name=t.value.trim();
+  if(!name){ t.classList.add('err'); t.focus(); toast('Escriba el nombre del problema sindrómico','warn'); return; }
+  if(selected.size<2){ toast('Seleccione 2 o más problemas','warn'); return; }
+  const ids=[...selected];
+  const idxs=problems.map((p,i)=>selected.has(p.id)?i:1e9).filter(i=>i<1e9);
+  const parent={id:++seq,text:name,parentId:null};
+  problems.splice(Math.min(...idxs),0,parent);
+  ids.forEach(cid=>{ const c=problems.find(x=>x.id===cid); if(c)c.parentId=parent.id; });
+  selected.clear(); closeModal(); renderProblems(); toast('Grupo creado: '+name);
+}
+function ungroup(pid){
+  const kids=childrenOf(pid);
+  if(!confirm('¿Desagrupar este problema sindrómico? Sus '+kids.length+' sub-problema(s) pasarán a la lista principal.')) return;
+  kids.forEach(c=>c.parentId=null); renderProblems(); toast('Grupo desagrupado');
+}
+
+/* ===================== SUBJETIVO / ANÁLISIS ===================== */
+function openSubjetivo(){
+  setModal('Subjetivo (S)','Relato del paciente: motivo de consulta, síntomas, evolución.',
+    '<textarea class="area" id="mSubj" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mSubj\',\'barSubj\')" placeholder="Redactar subjetivo...">'+esc(data.subjetivo)+'</textarea><div class="med-bar" id="barSubj" style="display:none"></div>',
+    footHTML('indigo','Guardar subjetivo','saveSubjetivo'));
+  openModal(); focusEl('mSubj');
+}
+function saveSubjetivo(){ data.subjetivo=M('mSubj').value.trim(); closeModal(); renderSections(); toast('Subjetivo guardado'); }
+function openAnalisis(){
+  setModal('Evaluación / Análisis (A)','Diagnóstico o impresión diagnóstica, evolución del cuadro.',
+    '<textarea class="area" id="mAna" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mAna\',\'barAna\')" placeholder="Redactar evaluación/análisis...">'+esc(data.analisis)+'</textarea><div class="med-bar" id="barAna" style="display:none"></div>',
+    footHTML('amber','Guardar análisis','saveAnalisis'));
+  openModal(); focusEl('mAna');
+}
+function saveAnalisis(){ data.analisis=M('mAna').value.trim(); closeModal(); renderSections(); toast('Análisis guardado'); }
+
+/* ===================== SIGNOS VITALES ===================== */
+/* contexto del paciente (proviene del expediente) y especialidad */
+function puedeEmbarazo(){ return patient.sexo==='F' && patient.edad>=10 && patient.edad<=55; }
+function setPatient(idx){ patient=SAMPLE_PATIENTS[+idx]; renderPatient(); renderSections(); }
+function renderPatient(){
+  const p=patient;
+  M('pxName').textContent=p.nombre;
+  M('pxExp').textContent=p.expediente;
+  M('pxCuenta').textContent=p.cuenta;
+  M('pxAge').textContent=p.edad+' años';
+  M('pxDui').textContent=p.dui;
+  const fem=p.sexo==='F'; const sx=M('pxSex'); sx.className='px-sex '+(fem?'f':'m');
+  sx.innerHTML=(fem
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="8.5" r="5.2"/><path d="M12 13.7V21M8.5 18h7"/></svg>Femenino'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="9.5" cy="14.5" r="5.2"/><path d="M14.6 9.4 20 4M14.5 4H20v5.5"/></svg>Masculino');
+  M('pxNac').textContent=p.nac;
+  M('pxTipo').textContent=p.tipo;
+  M('pxDom').textContent=p.domicilio;
+  M('pxEmerg').textContent=p.emergencia;
+  const al=M('pxAllergy');
+  if(!p.alergias){ al.className='px-allergy ok'; al.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M8.5 12.5 11 15l4.5-5"/></svg>NINGUNA ALERGIA CONOCIDA'; }
+  else { al.className='px-allergy warn'; al.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>ALERGIAS: '+esc(p.alergias); }
+  const pr=M('pxPref');
+  if(p.pila){ pr.style.display=''; pr.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 20a5.5 5.5 0 0 1 11 0"/><path d="M16.5 4 18 5.5 21 2.5"/></svg><span><b>Nombre de pila: '+esc(p.pila)+'</b> — '+esc(p.nota)+'</span>'; }
+  else { pr.style.display='none'; pr.innerHTML=''; }
+}
+function parseEmerg(s){ s=s||''; let nombre=s,parentesco='',telefono=''; const t=s.split('—'); if(t.length>1){ telefono=t[1].trim(); s=t[0].trim(); } const m=s.match(/^(.*?)\s*\(([^)]*)\)\s*$/); if(m){ nombre=m[1].trim(); parentesco=m[2].trim(); } else nombre=s.trim(); return {nombre,parentesco,telefono}; }
+function buildEmerg(e){ const par=e.parentesco?' ('+e.parentesco+')':''; return e.nombre+par+(e.telefono?' — '+e.telefono:''); }
+function openEmerg(){
+  const e=parseEmerg(patient.emergencia);
+  setModal('En caso de emergencia llamar a','Contacto de emergencia del paciente. Editable por el médico.',
+    '<div style="display:flex;flex-direction:column;gap:14px">'+
+    '<div><label class="vlbl">Nombre del contacto</label><input class="inp" id="emNombre" placeholder="Nombre completo"></div>'+
+    '<div><label class="vlbl">Parentesco</label><input class="inp" id="emParent" placeholder="Madre, hijo, cónyuge…"></div>'+
+    '<div><label class="vlbl">Teléfono</label><input class="inp" id="emTel" placeholder="0000-0000" inputmode="tel"></div>'+
+    '</div>',
+    footHTML('blue','Guardar','saveEmerg'));
+  openModal(); M('emNombre').value=e.nombre; M('emParent').value=e.parentesco; M('emTel').value=e.telefono; focusEl('emNombre');
+}
+function saveEmerg(){
+  const e={nombre:M('emNombre').value.trim(),parentesco:M('emParent').value.trim(),telefono:M('emTel').value.trim()};
+  patient.emergencia=buildEmerg(e); M('pxEmerg').textContent=patient.emergencia;
+  closeModal(); toast('Contacto de emergencia actualizado');
+}
+function espOnInput(){ const i=M('espInput'); if(i)i.classList.remove('err'); espFilter(); updateActions(); }
+function espFilter(){
+  const inp=M('espInput'); if(!inp) return; const list=M('espList'); if(!list) return;
+  const norm=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const nq=norm(inp.value.trim());
+  const matches=ESPECIALIDADES.filter(e=>norm(e).includes(nq));
+  if(matches.length===0){ list.innerHTML='<div class="ac-empty">Sin coincidencias — puede registrar el texto tal cual.</div>'; list.classList.add('open'); return; }
+  list.innerHTML=matches.slice(0,60).map(e=>'<div class="ac-item" onmousedown="pickEsp(\''+e+'\')">'+e+'</div>').join('');
+  list.classList.add('open');
+}
+function pickEsp(e){ const i=M('espInput'); i.value=e; i.classList.remove('err'); closeEspList(); updateActions(); }
+function closeEspList(){ const l=M('espList'); if(l)l.classList.remove('open'); }
+function toggleVMore(){ vMoreOpen=!vMoreOpen; const el=M('vMore'),btn=M('moreToggle'); if(el)el.style.display=vMoreOpen?'':'none'; if(btn)btn.textContent=vMoreOpen?'− Ver menos':'+ Ver más'; }
+
+/* autocompletado de términos médicos (cualquier idioma); la corrección ortográfica en español la sugiere el navegador (spellcheck/lang=es) */
+const MED_TERMS=['cefalea','migraña','disnea','ortopnea','tos','expectoración','hemoptisis','dolor torácico','palpitaciones','síncope','mareo','vértigo','astenia','adinamia','anorexia','hiporexia','náusea','vómito','hematemesis','melena','hematoquecia','diarrea','estreñimiento','dolor abdominal','distensión abdominal','pirosis','disfagia','odinofagia','ictericia','coluria','acolia','disuria','polaquiuria','hematuria','poliuria','polidipsia','nicturia','edema','ascitis','fiebre','escalofríos','diaforesis','prurito','cianosis','palidez','parestesias','convulsiones','lumbalgia','artralgia','mialgia','taquicardia','bradicardia','taquipnea','bradipnea','hipertensión','hipotensión','hipertermia','hipotermia','hepatomegalia','esplenomegalia','adenopatía','soplo','estertores','sibilancias','roncus','crepitantes','neumonía','bronquitis','asma','insuficiencia cardíaca','infarto','angina','hipertensión arterial','diabetes mellitus','cetoacidosis','sepsis','celulitis','pielonefritis','infección urinaria','gastroenteritis','pancreatitis','colecistitis','apendicitis','anemia','dengue','dyspnea','tachycardia','status epilepticus','in situ','per os','exitus letalis'];
+function currentWord(ta){ const pos=ta.selectionStart; const upto=ta.value.slice(0,pos); const m=upto.match(/[\p{L}]+$/u); return m?{word:m[0],start:pos-m[0].length,end:pos}:{word:'',start:pos,end:pos}; }
+function medSuggest(taId,barId){
+  const ta=M(taId),bar=M(barId); if(!ta||!bar) return;
+  const cw=currentWord(ta);
+  if(cw.word.length<2){ bar.innerHTML=''; bar.style.display='none'; return; }
+  const norm=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  const q=norm(cw.word);
+  const matches=MED_TERMS.filter(t=>{const n=norm(t);return n.startsWith(q)&&n!==q;}).slice(0,8);
+  if(matches.length===0){ bar.innerHTML=''; bar.style.display='none'; return; }
+  bar.innerHTML='<span class="med-bar-lbl">Términos médicos:</span>'+matches.map(t=>'<button type="button" class="med-chip" onmousedown="event.preventDefault();medPick(\''+taId+'\',\''+barId+'\',\''+t+'\')">'+t+'</button>').join('');
+  bar.style.display='';
+}
+function medPick(taId,barId,term){
+  const ta=M(taId); if(!ta) return; const cw=currentWord(ta);
+  const before=ta.value.slice(0,cw.start), after=ta.value.slice(cw.end);
+  const ins=term+' '; ta.value=before+ins+after;
+  const pos=(before+ins).length; ta.focus(); ta.setSelectionRange(pos,pos);
+  const bar=M(barId); if(bar){ bar.innerHTML=''; bar.style.display='none'; }
+}
+
+function vitalsBodyHTML(){
+  const furFpp = puedeEmbarazo()
+    ? '<div class="vgrid"><div><label class="vlbl">Fecha de última regla (FUR)</label><input class="inp" type="date" id="fFur" oninput="calcFPP()"></div><div><label class="vlbl">Fecha probable de parto <span class="u">(calculada)</span></label><div class="calc-box" id="fppVal"><span class="muted">Se calcula con la FUR (Naegele).</span></div></div></div>'
+    : '<div><label class="vlbl">Fecha de última regla (FUR)</label><input class="inp" type="date" id="fFur" oninput="calcFPP()"></div>';
+  const gineco = patient.sexo==='F'
+    ? '<fieldset class="fieldset"><legend>Gineco-obstétrico</legend>'+furFpp+
+      '<label class="vlbl" style="margin-top:12px">Fórmula obstétrica <span class="u">(G · P · P · A · V)</span></label><div class="go-grid">'+
+      '<div><div class="go-letter"><b>G</b> Gestas</div><input class="inp" id="fGoG" placeholder="0" inputmode="numeric" oninput="validateVitals()"></div>'+
+      '<div><div class="go-letter"><b>P</b> Término</div><input class="inp" id="fGoPt" placeholder="0" inputmode="numeric" oninput="validateVitals()"></div>'+
+      '<div><div class="go-letter"><b>P</b> Pretérm.</div><input class="inp" id="fGoPp" placeholder="0" inputmode="numeric" oninput="validateVitals()"></div>'+
+      '<div><div class="go-letter"><b>A</b> Abortos</div><input class="inp" id="fGoA" placeholder="0" inputmode="numeric" oninput="validateVitals()"></div>'+
+      '<div><div class="go-letter"><b>V</b> Vivos</div><input class="inp" id="fGoV" placeholder="0" inputmode="numeric" oninput="validateVitals()"></div></div></fieldset>'
+    : '';
+  const core =
+    '<div class="alert-row" id="alertRow"><span class="alert-idle">Ingrese signos para evaluar alertas críticas automáticamente.</span></div>'+
+    '<fieldset class="fieldset"><legend>Presión arterial</legend><div class="vgrid">'+
+    '<div><label class="vlbl">TA Sistólica <span class="req-star">*</span> <span class="u">(mmHg)</span></label><input class="inp vital" id="fSis" data-min="60" data-max="260" placeholder="60–260" inputmode="numeric"></div>'+
+    '<div><label class="vlbl">TA Diastólica <span class="req-star">*</span> <span class="u">(mmHg)</span></label><input class="inp vital" id="fDia" data-min="40" data-max="160" placeholder="40–160" inputmode="numeric"></div></div></fieldset>'+
+    '<fieldset class="fieldset"><legend>Oxigenación y signos cardiorrespiratorios</legend><div class="vgrid">'+
+    '<div><label class="vlbl">Frecuencia cardíaca <span class="req-star">*</span> <span class="u">(lpm)</span></label><input class="inp vital" id="fFc" data-min="30" data-max="220" placeholder="30–220" inputmode="numeric"></div>'+
+    '<div><label class="vlbl">Frecuencia respiratoria <span class="req-star">*</span> <span class="u">(rpm)</span></label><input class="inp vital" id="fFr" data-min="4" data-max="60" placeholder="4–60" inputmode="numeric"></div>'+
+    '<div><label class="vlbl">Temperatura <span class="req-star">*</span> <span class="u">(°C)</span></label><input class="inp vital" id="fTemp" data-min="30" data-max="43" placeholder="30–43" inputmode="decimal"></div>'+
+    '<div><label class="vlbl">SpO₂ <span class="req-star">*</span> <span class="u">(%)</span></label><input class="inp vital" id="fSpo2" data-min="50" data-max="100" placeholder="50–100" inputmode="numeric"></div>'+
+    '<div><label class="vlbl">FiO₂ <span class="req-star">*</span> <span class="u">(%)</span></label><input class="inp vital" id="fFio2" data-min="21" data-max="100" placeholder="21–100" inputmode="numeric"></div></div></fieldset>';
+  const more =
+    '<fieldset class="fieldset"><legend>Estado neurológico y metabólico</legend>'+
+    '<label class="vlbl">Escala de Glasgow</label><div class="vgrid3">'+
+    '<div><span class="opt-lbl">Apertura ocular</span><select class="inp" id="fGcsO" onchange="calcGlasgow()"><option value="">—</option><option value="4">4 · Espontánea</option><option value="3">3 · A la voz</option><option value="2">2 · Al dolor</option><option value="1">1 · Ninguna</option></select></div>'+
+    '<div><span class="opt-lbl">Respuesta verbal</span><select class="inp" id="fGcsV" onchange="calcGlasgow()"><option value="">—</option><option value="5">5 · Orientada</option><option value="4">4 · Confusa</option><option value="3">3 · Palabras inapropiadas</option><option value="2">2 · Sonidos incomprensibles</option><option value="1">1 · Ninguna</option></select></div>'+
+    '<div><span class="opt-lbl">Respuesta motora</span><select class="inp" id="fGcsM" onchange="calcGlasgow()"><option value="">—</option><option value="6">6 · Obedece órdenes</option><option value="5">5 · Localiza el dolor</option><option value="4">4 · Retira al dolor</option><option value="3">3 · Flexión anormal</option><option value="2">2 · Extensión anormal</option><option value="1">1 · Ninguna</option></select></div></div>'+
+    '<label class="vlbl" style="margin-top:10px">Total Glasgow</label><div class="calc-box" id="gcsTotal"><span class="muted">Apertura ocular + verbal + motora.</span></div>'+
+    '<div style="margin-top:12px"><label class="vlbl">Glucometría capilar <span class="u">(mg/dL)</span></label><input class="inp vital" id="fGluco" data-min="10" data-max="900" placeholder="mg/dL" inputmode="numeric"></div></fieldset>'+
+    '<fieldset class="fieldset"><legend>Antropometría</legend><div class="vgrid">'+
+    '<div><label class="vlbl">Peso <span class="u">(kg)</span></label><input class="inp vital" id="fPesoKg" data-min="0.5" data-max="400" placeholder="kg" inputmode="decimal" oninput="syncPeso(\'kg\')"></div>'+
+    '<div><label class="vlbl">Peso <span class="u">(lb)</span></label><input class="inp vital" id="fPesoLb" data-min="1" data-max="880" placeholder="lb" inputmode="decimal" oninput="syncPeso(\'lb\')"></div></div>'+
+    '<div class="vgrid" style="margin-top:12px">'+
+    '<div><label class="vlbl">Talla <span class="u">(m)</span></label><input class="inp vital" id="fTallaM" data-min="0.3" data-max="2.5" placeholder="m" inputmode="decimal" oninput="syncTalla(\'m\')"></div>'+
+    '<div><label class="vlbl">Talla <span class="u">(ft)</span></label><input class="inp vital" id="fTallaFt" data-min="1" data-max="8.2" placeholder="ft" inputmode="decimal" oninput="syncTalla(\'ft\')"></div></div>'+
+    '<div class="vgrid" style="margin-top:12px">'+
+    '<div><label class="vlbl">IMC <span class="u">(calculado)</span></label><div class="calc-box" id="imcVal"><span class="muted">Se calcula con peso (kg) y talla (m).</span></div></div>'+
+    '<div><label class="vlbl">Índice cintura-talla <span class="u">(calculado)</span></label><div class="calc-box" id="ictVal"><span class="muted">Se calcula con cintura (cm) y talla (m).</span></div></div></div>'+
+    '<div style="margin-top:12px"><label class="vlbl">Perímetro de cintura <span class="u">(cm)</span></label><input class="inp vital" id="fCintura" data-min="30" data-max="250" placeholder="cm" inputmode="numeric" oninput="calcICT()"></div></fieldset>'+
+    '<fieldset class="fieldset"><legend>Balance hídrico</legend><div class="vgrid">'+
+    '<div><label class="vlbl">Balance hídrico <span class="u">(mL)</span></label><input class="inp vital" id="fBalance" data-min="-20000" data-max="20000" placeholder="± mL"></div>'+
+    '<div><label class="vlbl">Diuresis horaria <span class="u">(mL/h)</span></label><input class="inp vital" id="fDiuresis" data-min="0" data-max="2000" placeholder="mL/h" inputmode="numeric"></div></div></fieldset>'+
+    gineco+
+    '<div class="pain-head"><label class="vlbl" style="margin:0">Dolor <span class="u">(escala EVA 0–10)</span></label><span class="pain-val" id="painVal">0 — Sin dolor</span></div>'+
+    '<input type="range" class="range" id="fDolor" min="0" max="10" step="1" value="0" oninput="updatePain()">'+
+    '<div class="pain-scale"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span></div>';
+  return core+
+    '<button type="button" class="more-toggle" id="moreToggle" onclick="toggleVMore()">'+(vMoreOpen?'− Ver menos':'+ Ver más')+'</button>'+
+    '<div id="vMore"'+(vMoreOpen?'':' style="display:none"')+'>'+more+'</div>';
+}
+function openVitals(after){
+  afterVitals=(typeof after==='function')?after:null;
+  setModal('Signos vitales','Presión arterial y signos cardiorrespiratorios son obligatorios. El resto es opcional.',vitalsBodyHTML(),
+    '<button class="btn btn--text" onclick="closeModal()">Cancelar</button><div class="spacer"></div><button class="btn btn--rose" onclick="saveVitals()">'+SVG_CHECK+'<span>Guardar signos</span></button>');
+  openModal(); hydrateVitals();
+}
+function hydrateVitals(){
+  const v=vitals, set=(id,val)=>{const e=M(id); if(e)e.value=(val==null?'':val);};
+  set('fSis',v.sis);set('fDia',v.dia);set('fFc',v.fc);set('fFr',v.fr);set('fTemp',v.temp);set('fSpo2',v.spo2);
+  set('fFio2',(v.fio2!==''&&v.fio2!=null)?v.fio2:'21');
+  set('fGluco',v.gluco);set('fCintura',v.cintura);set('fBalance',v.balance);set('fDiuresis',v.diuresis);
+  set('fPesoKg',v.pesoKg);set('fPesoLb',v.pesoLb);set('fTallaM',v.tallaM);set('fTallaFt',v.tallaFt);
+  set('fFur',v.fur);set('fGoG',v.goG);set('fGoPt',v.goPt);set('fGoPp',v.goPp);set('fGoA',v.goA);set('fGoV',v.goV);
+  const so=M('fGcsO');if(so)so.value=v.gcsO||''; const sv=M('fGcsV');if(sv)sv.value=v.gcsV||''; const sm=M('fGcsM');if(sm)sm.value=v.gcsM||'';
+  const d=M('fDolor'); if(d)d.value=(v.dolor===''||v.dolor==null?0:v.dolor);
+  document.querySelectorAll('.vital').forEach(i=>i.addEventListener('input',validateVitals));
+  calcGlasgow(); calcIMC(); calcICT(); calcFPP(); updatePain(); validateVitals();
+}
+function readVitalsModal(){
+  const g=id=>{const e=M(id);return e?e.value.trim():'';};
+  const gs=id=>{const e=M(id);return e?e.value:'';};
+  return {sis:g('fSis'),dia:g('fDia'),fc:g('fFc'),fr:g('fFr'),temp:g('fTemp'),spo2:g('fSpo2'),fio2:g('fFio2'),
+    gcsO:gs('fGcsO'),gcsV:gs('fGcsV'),gcsM:gs('fGcsM'),gluco:g('fGluco'),
+    pesoKg:g('fPesoKg'),pesoLb:g('fPesoLb'),tallaM:g('fTallaM'),tallaFt:g('fTallaFt'),cintura:g('fCintura'),
+    balance:g('fBalance'),diuresis:g('fDiuresis'),fur:g('fFur'),
+    goG:g('fGoG'),goPt:g('fGoPt'),goPp:g('fGoPp'),goA:g('fGoA'),goV:g('fGoV'),
+    dolor:(M('fDolor')?M('fDolor').value:'0')};
+}
+function anyVitals(v){const k=['sis','dia','fc','fr','temp','spo2','fio2','gcsO','gcsV','gcsM','gluco','pesoKg','pesoLb','tallaM','tallaFt','cintura','balance','diuresis','fur','goG','goPt','goPp','goA','goV'];return k.some(x=>v[x]!==''&&v[x]!=null)||Number(v.dolor)>0;}
+function vitalsFilled(){return anyVitals(vitals);}
+function computeAlerts(v){
+  if(!v) return []; const n=k=>v[k]===''||v[k]==null||isNaN(v[k])?null:Number(v[k]);
+  const sis=n('sis'),dia=n('dia'),fc=n('fc'),fr=n('fr'),t=n('temp'),s=n('spo2'),d=n('dolor');
+  const gluco=n('gluco'),diur=n('diuresis'),pesoKg=n('pesoKg'),gO=n('gcsO'),gV=n('gcsV'),gM=n('gcsM'); const a=[];
+  if(s!=null&&s<90)a.push('SpO₂ baja');
+  if((sis!=null&&sis>=180)||(dia!=null&&dia>=110))a.push('Crisis hipertensiva');
+  if(sis!=null&&sis<90)a.push('Hipotensión');
+  if(t!=null&&t>=39.5)a.push('Fiebre alta'); if(t!=null&&t<=35)a.push('Hipotermia');
+  if(fc!=null&&fc>120)a.push('Taquicardia'); if(fc!=null&&fc<50)a.push('Bradicardia');
+  if(fr!=null&&fr>24)a.push('Taquipnea'); if(fr!=null&&fr<10)a.push('Bradipnea');
+  if(gluco!=null&&gluco<70)a.push('Hipoglucemia'); if(gluco!=null&&gluco>=250)a.push('Hiperglucemia');
+  if(gO!=null&&gV!=null&&gM!=null&&(gO+gV+gM)<=8)a.push('Glasgow ≤8');
+  if(diur!=null&&pesoKg!=null&&pesoKg>0&&diur<0.5*pesoKg)a.push('Oliguria');
+  if(d!=null&&d>=7)a.push('Dolor intenso'); return a;
+}
+function alertBadge(t){return '<span class="alert-badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>'+t+'</span>';}
+function updatePain(){
+  const dEl=M('fDolor'); if(!dEl) return; const v=+dEl.value;
+  const map=[[0,'Sin dolor','#16a34a'],[3,'Dolor leve','#65a30d'],[6,'Dolor moderado','#ea580c'],[9,'Dolor intenso','#dc2626'],[10,'Dolor máximo','#b91c1c']];
+  let lbl='Sin dolor',col='#16a34a'; for(const[mx,t,c] of map){ if(v<=mx){lbl=t;col=c;break;} }
+  const el=M('painVal'); if(el){el.textContent=v+' — '+lbl; el.style.color=col;} validateVitals();
+}
+function validateVitals(){
+  const row=M('alertRow'); if(!row) return; const v=readVitalsModal();
+  document.querySelectorAll('.vital').forEach(inp=>{ const val=inp.value.trim(); const mn=+inp.dataset.min,mx=+inp.dataset.max; inp.classList.toggle('err', val!=='' && (isNaN(+val)||+val<mn||+val>mx)); });
+  const al=computeAlerts(v);
+  if(al.length) row.innerHTML=al.map(alertBadge).join('');
+  else if(anyVitals(v)) row.innerHTML='<span class="alert-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z"/><path d="M8 12l2.5 2.5L16 9"/></svg>Sin alertas críticas</span>';
+  else row.innerHTML='<span class="alert-idle">Ingrese signos para evaluar alertas críticas automáticamente.</span>';
+}
+function saveVitals(){
+  const v=readVitalsModal();
+  let bad=false;
+  document.querySelectorAll('.vital').forEach(inp=>{ const val=inp.value.trim(); const mn=+inp.dataset.min,mx=+inp.dataset.max; if(val!=='' && (isNaN(+val)||+val<mn||+val>mx)){ inp.classList.add('err'); bad=true; } });
+  const req=[['fSis',v.sis],['fDia',v.dia],['fFc',v.fc],['fFr',v.fr],['fTemp',v.temp],['fSpo2',v.spo2],['fFio2',v.fio2]];
+  let firstMissing=null;
+  req.forEach(function(r){ if(r[1]===''){ const e=M(r[0]); if(e)e.classList.add('err'); if(!firstMissing)firstMissing=r[0]; } });
+  if(firstMissing){ const e=M(firstMissing); if(e){e.focus();e.scrollIntoView({block:'center',behavior:'smooth'});} toast('Complete los signos obligatorios (presión arterial y cardiorrespiratorios)','warn'); return; }
+  if(bad){ toast('Revise los valores fuera de rango','warn'); return; }
+  vitals=v; renderSections(); toast('Signos vitales guardados');
+  if(afterVitals){ const f=afterVitals; afterVitals=null; f(); } else closeModal();
+}
+/* cálculos derivados */
+function imcFrom(kg,m){ kg=parseFloat(kg); m=parseFloat(m); if(!kg||!m||m<=0||isNaN(kg)||isNaN(m)) return null; return kg/(m*m); }
+function imcClass(imc){ if(imc<18.5)return['Bajo peso','#2563eb']; if(imc<25)return['Normal','#16a34a']; if(imc<30)return['Sobrepeso','#ea580c']; return['Obesidad','#dc2626']; }
+function calcIMCValue(){ const imc=imcFrom(vitals.pesoKg,vitals.tallaM); return imc?imc.toFixed(1):null; }
+function fppFrom(fur){ if(!fur) return null; const d=new Date(fur+'T00:00:00'); if(isNaN(d.getTime())) return null; const r=new Date(d); r.setFullYear(r.getFullYear()+1); r.setMonth(r.getMonth()-3); r.setDate(r.getDate()+7); return r; }
+function fmtFecha(d){ return d.toLocaleDateString('es-SV',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+function calcFPPValue(fur){ const d=fppFrom(fur); return d?fmtFecha(d):null; }
+function gestSemanas(fur){ if(!fur) return null; const d=new Date(fur+'T00:00:00'); if(isNaN(d.getTime())) return null; const diff=Date.now()-d.getTime(); if(diff<0) return null; const days=Math.floor(diff/86400000); return Math.floor(days/7)+' sem '+(days%7)+' d'; }
+function calcIMC(){
+  const el=M('imcVal'); if(!el) return;
+  const kg=M('fPesoKg')?M('fPesoKg').value:'', m=M('fTallaM')?M('fTallaM').value:'';
+  const imc=imcFrom(kg,m);
+  if(imc){ const c=imcClass(imc); el.innerHTML='<b>'+imc.toFixed(1)+'</b>&nbsp;kg/m² · <span style="color:'+c[1]+';font-weight:700">'+c[0]+'</span>'; }
+  else el.innerHTML='<span class="muted">Se calcula con peso (kg) y talla (m).</span>';
+}
+function ictFrom(cm,m){ cm=parseFloat(cm); m=parseFloat(m); if(!cm||!m||m<=0||isNaN(cm)||isNaN(m)) return null; return cm/(m*100); }
+function ictClass(ict){ if(ict<0.5)return['Saludable','#16a34a']; if(ict<0.6)return['Riesgo aumentado','#ea580c']; return['Riesgo alto','#dc2626']; }
+function calcICT(){
+  const el=M('ictVal'); if(!el) return;
+  const cm=M('fCintura')?M('fCintura').value:'', m=M('fTallaM')?M('fTallaM').value:'';
+  const ict=ictFrom(cm,m);
+  if(ict){ const c=ictClass(ict); el.innerHTML='<b>'+ict.toFixed(2)+'</b> · <span style="color:'+c[1]+';font-weight:700">'+c[0]+'</span>'; }
+  else el.innerHTML='<span class="muted">Se calcula con cintura (cm) y talla (m).</span>';
+}
+function syncPeso(from){
+  const kgEl=M('fPesoKg'), lbEl=M('fPesoLb'); if(!kgEl||!lbEl) return;
+  if(from==='kg'){ const kg=parseFloat(kgEl.value); lbEl.value=(kgEl.value===''||isNaN(kg))?'':(kg*2.20462).toFixed(1); }
+  else { const lb=parseFloat(lbEl.value); kgEl.value=(lbEl.value===''||isNaN(lb))?'':(lb/2.20462).toFixed(1); }
+  calcIMC();
+}
+function syncTalla(from){
+  const mEl=M('fTallaM'), ftEl=M('fTallaFt'); if(!mEl||!ftEl) return;
+  if(from==='m'){ const m=parseFloat(mEl.value); ftEl.value=(mEl.value===''||isNaN(m))?'':(m*3.28084).toFixed(2); }
+  else { const ft=parseFloat(ftEl.value); mEl.value=(ftEl.value===''||isNaN(ft))?'':(ft/3.28084).toFixed(2); }
+  calcIMC(); calcICT();
+}
+function calcGlasgow(){
+  const el=M('gcsTotal'); if(!el) return;
+  const o=M('fGcsO'), vv=M('fGcsV'), m=M('fGcsM');
+  const ov=o&&o.value!==''?+o.value:null, vvv=vv&&vv.value!==''?+vv.value:null, mv=m&&m.value!==''?+m.value:null;
+  if(ov!=null&&vvv!=null&&mv!=null){ const tot=ov+vvv+mv; let lbl,col; if(tot>=13){lbl='Leve';col='#16a34a';} else if(tot>=9){lbl='Moderado';col='#ea580c';} else {lbl='Grave';col='#dc2626';} el.innerHTML='<b>'+tot+'</b>/15 · <span style="color:'+col+';font-weight:700">'+lbl+'</span>'; }
+  else if(ov!=null||vvv!=null||mv!=null) el.innerHTML='<span class="muted">Seleccione las 3 respuestas.</span>';
+  else el.innerHTML='<span class="muted">Apertura ocular + verbal + motora.</span>';
+  validateVitals();
+}
+function calcFPP(){
+  const el=M('fppVal'); if(!el) return; const fur=M('fFur')?M('fFur').value:'';
+  const d=fppFrom(fur);
+  if(d){ const g=gestSemanas(fur); el.innerHTML='<b>'+fmtFecha(d)+'</b>'+(g?' · '+g:''); }
+  else el.innerHTML='<span class="muted">Se calcula con la FUR (Naegele).</span>';
+}
+function vitalsChips(){
+  const v=vitals,out=[]; const add=(l,val,u)=>{ if(val!==''&&val!=null) out.push('<span class="vchip"><b>'+l+'</b> '+val+(u?' '+u:'')+'</span>'); };
+  if(v.sis!==''&&v.dia!=='') out.push('<span class="vchip"><b>TA</b> '+v.sis+'/'+v.dia+' mmHg</span>'); else { add('TA sist',v.sis,'mmHg'); add('TA diast',v.dia,'mmHg'); }
+  add('FC',v.fc,'lpm'); add('FR',v.fr,'rpm'); add('Temp',v.temp,'°C'); add('SpO₂',v.spo2,'%'); add('FiO₂',v.fio2,'%');
+  if(v.gcsO!==''&&v.gcsV!==''&&v.gcsM!=='') out.push('<span class="vchip"><b>Glasgow</b> '+(Number(v.gcsO)+Number(v.gcsV)+Number(v.gcsM))+'/15</span>');
+  add('Glucometría',v.gluco,'mg/dL');
+  if(v.pesoKg!=='') add('Peso',v.pesoKg,'kg'); else add('Peso',v.pesoLb,'lb');
+  if(v.tallaM!=='') add('Talla',v.tallaM,'m'); else add('Talla',v.tallaFt,'ft');
+  const imc=calcIMCValue(); if(imc) out.push('<span class="vchip"><b>IMC</b> '+imc+'</span>');
+  add('Cintura',v.cintura,'cm'); add('Balance',v.balance,'mL'); add('Diuresis',v.diuresis,'mL/h');
+  if(patient.sexo==='F'){
+    if(v.fur!==''){ out.push('<span class="vchip"><b>FUR</b> '+v.fur+'</span>'); if(puedeEmbarazo()){ const fpp=calcFPPValue(v.fur); if(fpp) out.push('<span class="vchip"><b>FPP</b> '+fpp+'</span>'); } }
+    if(v.goG!==''||v.goPt!==''||v.goPp!==''||v.goA!==''||v.goV!=='') out.push('<span class="vchip"><b>GO</b> G'+(v.goG||0)+' P'+(v.goPt||0)+' P'+(v.goPp||0)+' A'+(v.goA||0)+' V'+(v.goV||0)+'</span>');
+  }
+  if(Number(v.dolor)>0) out.push('<span class="vchip"><b>Dolor</b> '+v.dolor+'/10</span>');
+  return out.join('');
+}
+
+/* ===================== OBJETIVO (gatilla signos vitales) ===================== */
+function openObjetivo(){ if(vitalsFilled()) openObjetivoModal(); else openVitals(openObjetivoModal); }
+function vstripHTML(){
+  if(vitalsFilled()) return '<div class="vchips">'+vitalsChips()+'</div><button class="btn btn--ghost btn-sm" onclick="modVitals()">'+SVG_PULSE+'<span>Modificar signos vitales</span></button>';
+  return '<span class="sec-empty__txt" style="flex:1">Signos vitales sin registrar.</span><button class="btn btn--rose btn-sm" onclick="modVitals()">'+SVG_PULSE+'<span>Registrar signos vitales</span></button>';
+}
+function openObjetivoModal(){
+  const draft=(objTmp!=null?objTmp:data.objetivo); objTmp=null;
+  setModal('Objetivo (O)','Hallazgos al examen físico, resultados recientes.',
+    '<div class="vstrip">'+vstripHTML()+'</div><label class="lbl">Objetivo</label><textarea class="area" id="mObj" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mObj\',\'barObj\')" placeholder="Redactar objetivo...">'+esc(draft)+'</textarea><div class="med-bar" id="barObj" style="display:none"></div>',
+    footHTML('teal','Guardar objetivo','saveObjetivo'));
+  openModal(); focusEl('mObj');
+}
+function modVitals(){ const e=M('mObj'); objTmp=e?e.value:''; openVitals(openObjetivoModal); }
+function saveObjetivo(){ data.objetivo=M('mObj').value.trim(); objTmp=null; closeModal(); renderSections(); toast('Objetivo guardado'); }
+
+/* ===================== PLAN (grid uno a uno) ===================== */
+function renderPlan(){
+  const body=M('planBody'); M('planCount').textContent=planItems.length;
+  if(planItems.length===0){
+    body.innerHTML='<div class="list-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 11l3 3 7-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8"/></svg><span>Aún no hay indicaciones. Use "Agregar al plan".</span></div>';
+    updateActions(); return; }
+  body.innerHTML='<div class="prob-list">'+planItems.map((it,i)=>'<div class="prob-row"><span class="prob-num plan-num">'+(i+1)+'</span><div class="prob-text">'+esc(it.text)+'</div><div class="row-act">'+editBtn('openPlan',it.id)+delBtn('delPlan',it.id)+'</div></div>').join('')+'</div>';
+  updateActions();
+}
+function openPlan(id){
+  planEditId=id||null; const it=id?planItems.find(x=>x.id===id):null;
+  setModal(id?'Editar indicación':'Agregar al plan','Conducta terapéutica, indicación, seguimiento o interconsulta.',
+    '<label class="lbl">Indicación / acción</label><textarea class="area sm" id="mPlan" spellcheck="true" lang="es" oninput="this.classList.remove(\'err\');medSuggest(\'mPlan\',\'barPlan\')" placeholder="Describa la indicación...">'+esc(it?it.text:'')+'</textarea><div class="med-bar" id="barPlan" style="display:none"></div>',
+    footHTML('primary', id?'Guardar cambios':'Agregar al plan','savePlan'));
+  openModal(); focusEl('mPlan');
+}
+function savePlan(){
+  const t=M('mPlan'); const txt=t.value.trim();
+  if(!txt){ t.classList.add('err'); t.focus(); toast('Escriba la indicación','warn'); return; }
+  if(planEditId){ planItems.find(x=>x.id===planEditId).text=txt; toast('Indicación actualizada'); }
+  else { planItems.push({id:++seq,text:txt}); toast('Indicación agregada al plan'); }
+  closeModal(); renderPlan();
+}
+function delPlan(id){ if(confirm('¿Eliminar esta indicación del plan?')){ planItems=planItems.filter(x=>x.id!==id); renderPlan(); toast('Indicación eliminada'); } }
+
+/* ===================== SECCIONES RESUMEN ===================== */
+function setSection(key,val,noun,color,fn){
+  const act=M('act'+key), body=M('body'+key);
+  if(val){
+    act.innerHTML='<button class="btn btn--ghost btn-sm" onclick="'+fn+'()">'+SVG_EDIT+'<span>Editar</span></button>';
+    body.innerHTML='<div class="sec-filled"><div class="sec-text">'+esc(val)+'</div></div>';
+  } else {
+    act.innerHTML='';
+    body.innerHTML='<div class="sec-empty"><span class="sec-empty__txt">Sin registrar.</span><button class="btn btn--'+color+'" onclick="'+fn+'()">'+SVG_PLUS+'<span>Llenar '+noun+'</span></button></div>';
+  }
+}
+function renderVitalsSection(){
+  const act=M('actVit'), body=M('bodyVit');
+  if(vitalsFilled()){
+    act.innerHTML='<button class="btn btn--ghost btn-sm" onclick="openVitals()">'+SVG_PULSE+'<span>Modificar signos</span></button>';
+    const al=computeAlerts(vitals);
+    body.innerHTML='<div class="sec-filled"><div class="vchips">'+vitalsChips()+'</div>'+(al.length?'<div class="alert-row" style="margin-top:12px">'+al.map(alertBadge).join('')+'</div>':'')+'</div>';
+  } else {
+    act.innerHTML='';
+    body.innerHTML='<div class="sec-empty"><span class="sec-empty__txt">Sin registrar.</span><button class="btn btn--rose" onclick="openVitals()">'+SVG_PULSE+'<span>Registrar signos vitales</span></button></div>';
+  }
+}
+function renderSections(){
+  setSection('Subj',data.subjetivo,'subjetivo','indigo','openSubjetivo');
+  setSection('Obj',data.objetivo,'objetivo','teal','openObjetivo');
+  setSection('Ana',data.analisis,'análisis','amber','openAnalisis');
+  renderVitalsSection();
+  updateActions();
+}
+
+/* ===================== FOOTER ===================== */
+function vitalsCoreComplete(){ const v=vitals; return ['sis','dia','fc','fr','temp','spo2','fio2'].every(k=>v[k]!==''&&v[k]!=null); }
+function pendientes(){
+  const p=[];
+  if((M('espInput')?M('espInput').value.trim():'')==='')p.push('especialidad');
+  if(problems.length===0)p.push('problema');
+  if(!vitalsCoreComplete())p.push('signos vitales');
+  if(data.subjetivo.trim()==='')p.push('subjetivo');
+  if(data.objetivo.trim()==='')p.push('objetivo');
+  if(data.analisis.trim()==='')p.push('análisis');
+  if(planItems.length===0)p.push('plan');
+  return p;
+}
+function updateActions(){
+  const pend=pendientes();
+  M('btnFirmar').disabled=pend.length>0;
+  const hint=M('firmarHint');
+  if(hint){ if(pend.length){ hint.textContent='Falta: '+pend.join(', '); hint.style.display=''; } else { hint.textContent=''; hint.style.display='none'; } }
+}
+function nowTime(){return new Date().toLocaleTimeString('es-SV',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true});}
+function guardarBorrador(){ M('savedTime').textContent=nowTime(); toast('Borrador guardado localmente'); }
+function autoSave(){ const s=M('savedTime'); if(!s) return; s.textContent='guardando…'; setTimeout(()=>{ s.textContent=nowTime()+' · autoguardado'; },350); }
+function firmar(){ if(M('btnFirmar').disabled) return; if(confirm('¿Guardar y firmar la evolución? Quedará registrada de forma definitiva y no editable.')) toast('Evolución guardada y firmada correctamente'); }
+function cancelar(){ if(confirm('¿Descartar esta evolución? Se perderán los cambios no guardados.')) location.reload(); }
+
+/* ===================== TOAST ===================== */
+function toast(msg,type){
+  const w=M('toastWrap'); const el=document.createElement('div'); el.className='toast';
+  const icon=type==='warn'?'<svg viewBox="0 0 24 24" fill="none" stroke="#fbbf24" stroke-width="2.2"><path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>':'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>';
+  el.innerHTML=icon+'<span>'+msg+'</span>'; w.appendChild(el);
+  setTimeout(()=>{el.style.transition='opacity .3s,transform .3s';el.style.opacity='0';el.style.transform='translateY(8px)';setTimeout(()=>el.remove(),300);},2400);
+}
+
+/* ===================== INIT ===================== */
+var _tb=M('themeBtn'); if(_tb)_tb.addEventListener('click',()=>{const h=document.documentElement;h.setAttribute('data-theme',h.getAttribute('data-theme')==='dark'?'light':'dark');});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ if(M('overlay').classList.contains('open')) closeModal(); else if(selected.size) clearSelection(); }
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'){e.preventDefault();guardarBorrador();}
+  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){var _ts=M('topSearch');if(_ts){e.preventDefault();_ts.focus();}}
+});
+M('fechaCrea').textContent=new Date().toLocaleString('es-SV',{day:'2-digit',month:'2-digit',year:'numeric',hour:'numeric',minute:'2-digit',hour12:true});
+M('savedTime').textContent=nowTime();
+setInterval(autoSave,30000);
+var _ps=M('pbSelect'); if(_ps)_ps.innerHTML=SAMPLE_PATIENTS.map((p,i)=>'<option value="'+i+'">'+p.nombre+' ('+(p.sexo==='F'?'F':'M')+', '+p.edad+')</option>').join('');
+renderPatient(); renderProblems(); renderPlan(); renderSections();
+
+/* ===================== MISCELÁNEOS (Plan) ===================== */
+const EXAM_CATALOGS = {
+  lab: {
+    'Hematología y coagulación': ['Hemograma completo','Velocidad de sedimentación','Tiempo de protrombina (TP)','Tiempo de tromboplastina (TTP)','INR','Recuento de plaquetas','Fibrinógeno'],
+    'Química sanguínea': ['Glucosa','Creatinina','Nitrógeno ureico (BUN)','Ácido úrico','Colesterol total','Triglicéridos','HDL','LDL','AST (TGO)','ALT (TGP)','Bilirrubinas','Electrolitos (Na/K/Cl)'],
+    'Hormonas y pruebas especiales': ['TSH','T4 libre','T3','Cortisol','Insulina','PSA','Beta-hCG cuantitativa','Vitamina D'],
+    'Microbiología': ['Hemocultivo','Urocultivo','Coprocultivo','Cultivo de secreción','Tinción de Gram','Baciloscopía (BAAR)'],
+    'Urianálisis': ['Examen general de orina','Microalbuminuria','Relación albúmina/creatinina'],
+    'Coprología': ['Examen general de heces','Sangre oculta en heces','Coproparasitológico seriado'],
+    'Banco de sangre': ['Tipeo ABO/Rh','Prueba cruzada','Coombs directo','Coombs indirecto'],
+    'Pruebas moleculares': ['PCR SARS-CoV-2','Carga viral VIH','Genotipo VHC','PCR Influenza A/B'],
+    'Inmunología': ['Proteína C reactiva (PCR)','Factor reumatoide','Anticuerpos antinucleares (ANA)','VIH (ELISA)','VDRL/RPR','Antígeno de superficie VHB'],
+    'Gasometría venosa': ['pH venoso','pCO₂ venoso','HCO₃⁻','Exceso de base','Lactato venoso']
+  },
+  radiologia: {
+    'Rayos X': ['Tórax PA y lateral','Abdomen simple de pie','Columna lumbar','Extremidad (especificar)','Senos paranasales'],
+    'Ultrasonografía': ['Abdominal completo','Pélvico','Obstétrico','Renal y vías urinarias','Tiroideo','Doppler de miembros'],
+    'Tomografía': ['TAC de cráneo simple','TAC de tórax','TAC de abdomen y pelvis con contraste','Angio-TAC'],
+    'Resonancia Magnética': ['RM de cráneo','RM de columna lumbar','RM de rodilla','RM con contraste'],
+    'Estudios Especiales': ['Mamografía bilateral','Densitometría ósea','Fluoroscopía']
+  },
+  cardiologia: {
+    'Electrocardiograma': ['ECG de 12 derivaciones','ECG con tira de ritmo'],
+    'Ecocardiograma': ['Ecocardiograma transtorácico','Ecocardiograma transesofágico','Ecocardiograma con Doppler','Eco-estrés'],
+    'Monitoreo Holter': ['Holter de 24 horas','Holter de 48 horas','MAPA (presión 24 h)'],
+    'Prueba de esfuerzo': ['Prueba de esfuerzo en banda','Prueba de esfuerzo con consumo de O₂'],
+    'Estudios Especiales': ['Tilt test','Estudio electrofisiológico']
+  }
+};
+function crearOrdenExamenes(mount, catalog){
+  const secciones = Object.keys(catalog); let seccion = secciones[0]; const elegidos = [];
+  mount.innerHTML =
+    '<div class="radios" data-radios></div>'+
+    '<div class="exam-list" data-available></div>'+
+    '<button class="btn btn-outline btn-sm" type="button" data-add style="margin-bottom:12px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg> Agregar a la Solicitud</button>'+
+    '<div class="grid-wrap"><table class="grid"><thead><tr><th>Examen</th><th style="width:110px">Cantidad</th><th style="width:60px"></th></tr></thead><tbody data-grid><tr><td colspan="3" class="grid-empty">Sin exámenes en la solicitud.</td></tr></tbody></table></div>';
+  const radios=mount.querySelector('[data-radios]'), available=mount.querySelector('[data-available]'), gridBody=mount.querySelector('[data-grid]');
+  function renderRadios(){
+    radios.innerHTML = secciones.map(s=>'<label class="radio-pill '+(s===seccion?'sel':'')+'"><input type="radio" name="sec-'+mount.dataset.uid+'" value="'+esc(s)+'" '+(s===seccion?'checked':'')+'> '+esc(s)+'</label>').join('');
+    radios.querySelectorAll('input').forEach(r=> r.addEventListener('change', ()=>{ seccion=r.value; renderRadios(); renderAvailable(); }));
+  }
+  function renderAvailable(){
+    available.innerHTML = catalog[seccion].map((ex,i)=>'<div class="er"><input type="checkbox" class="ck" data-ex="'+i+'"><span class="en">'+esc(ex)+'</span><span class="eq"><input class="input tabular" type="number" min="1" step="1" value="1" data-qty="'+i+'"></span></div>').join('');
+  }
+  function renderGrid(){
+    if(elegidos.length===0){ gridBody.innerHTML='<tr><td colspan="3" class="grid-empty">Sin exámenes en la solicitud.</td></tr>'; return; }
+    gridBody.innerHTML = elegidos.map((e,i)=>'<tr><td>'+esc(e.examen)+'</td><td><input class="input tabular qty" type="number" min="1" step="1" value="'+e.cantidad+'" data-gqty="'+i+'"></td><td><button class="btn btn-danger btn-sm" data-gdel="'+i+'" aria-label="Eliminar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></td></tr>').join('');
+    gridBody.querySelectorAll('[data-gdel]').forEach(b=> b.addEventListener('click', ()=>{ elegidos.splice(+b.dataset.gdel,1); renderGrid(); }));
+    gridBody.querySelectorAll('[data-gqty]').forEach(inp=> inp.addEventListener('change', ()=>{ const v=Math.max(1, parseInt(inp.value||'1',10)); elegidos[+inp.dataset.gqty].cantidad=v; inp.value=v; }));
+  }
+  mount.querySelector('[data-add]').addEventListener('click', ()=>{
+    const rows=[...available.querySelectorAll('.er')]; let added=0, dup=0;
+    rows.forEach((row,i)=>{ const ck=row.querySelector('[data-ex="'+i+'"]'); if(ck && ck.checked){ const examen=catalog[seccion][i]; const cantidad=Math.max(1, parseInt(row.querySelector('[data-qty="'+i+'"]').value||'1',10)); if(elegidos.some(e=> e.examen===examen)){ dup++; } else { elegidos.push({examen, cantidad}); added++; } ck.checked=false; } });
+    renderGrid();
+    if(added && dup) toast(added+' agregado(s) · '+dup+' ya estaba(n) en la solicitud');
+    else if(added) toast(added+' examen(es) agregado(s) a la solicitud');
+    else if(dup) toast('Esos exámenes ya están en la solicitud','warn');
+    else toast('Seleccione al menos un examen','warn');
+  });
+  renderRadios(); renderAvailable(); renderGrid();
+}
+let _eoUid=0;
+document.querySelectorAll('[data-exam-order]').forEach(m=>{ m.dataset.uid='eo'+(_eoUid++); crearOrdenExamenes(m, EXAM_CATALOGS[m.dataset.examOrder]); });
+
+/* Orden de Inyecciones (modal → grid) */
+const inyList=[];
+function renderIny(){
+  const tb=M('grid-iny'); if(!tb) return;
+  if(inyList.length===0){ tb.innerHTML='<tr><td colspan="2" class="grid-empty">Sin órdenes agregadas.</td></tr>'; return; }
+  tb.innerHTML = inyList.map((t,i)=>'<tr><td>'+esc(t)+'</td><td><button class="btn btn-danger btn-sm" data-iny-del="'+i+'" aria-label="Eliminar orden"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg></button></td></tr>').join('');
+  tb.querySelectorAll('[data-iny-del]').forEach(b=> b.addEventListener('click', ()=>{ inyList.splice(+b.dataset.inyDel,1); renderIny(); }));
+}
+function openIny(){
+  setModal('Orden de inyección','Escriba la orden de inyección.',
+    '<textarea class="area sm" id="inyText" placeholder="Medicamento, dosis, vía, frecuencia…"></textarea>',
+    footHTML('blue','Agregar','saveIny'));
+  openModal(); focusEl('inyText');
+}
+function saveIny(){ const v=M('inyText').value.trim().toUpperCase(); if(v){ inyList.push(v); renderIny(); } closeModal(); }
+
+/* Terapia respiratoria: FiO₂/Flujo solo con O₂ suplementario */
+(function(){
+  const radios=document.querySelectorAll('input[name="gaso-arterial"]'); const params=M('o2-params');
+  if(!params || radios.length===0) return;
+  function sync(){ const sel=[...radios].find(r=>r.checked); const on=sel && sel.value.indexOf('suplementario')>=0; params.classList.toggle('show', !!on); radios.forEach(r=>{ const pill=r.closest('.radio-pill'); if(pill) pill.classList.toggle('sel', r.checked); }); }
+  radios.forEach(r=> r.addEventListener('change', sync)); sync();
+})();
+
+/* Botones que invocan otros módulos */
+document.querySelectorAll('.action-card[data-route]').forEach(b=>{ b.addEventListener('click', ()=> toast('Abriendo módulo: '+b.dataset.name)); });
+</script>
+</body>
+</html>

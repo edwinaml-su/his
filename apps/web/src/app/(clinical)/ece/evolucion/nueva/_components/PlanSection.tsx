@@ -5,6 +5,9 @@ import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
+import { SECCION } from "../_lib/avante-palette";
+import { SubBloque } from "./SubBloque";
+import { MiscelaneosSection } from "./MiscelaneosSection";
 
 const IcoPlus = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} className="h-4 w-4">
@@ -37,64 +40,75 @@ export function PlanSection({ onAgregar, onEditar }: Props) {
   }
 
   return (
-    <Card className="border-l-4 border-slate-300 dark:border-slate-600">
-      <CardHeader className="pb-2">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-slate-700 text-xs font-bold text-white dark:bg-slate-600">P</span>
-              <CardTitle className="text-sm font-bold uppercase tracking-wide">Plan</CardTitle>
-              <Badge variant="secondary" className="text-xs">{plan.length}</Badge>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Indicaciones, conducta, seguimiento, interconsultas. Agrega una a una.
-            </p>
-          </div>
-          <Button type="button" variant="default" size="sm" onClick={onAgregar} className="shrink-0">
-            <IcoPlus />
-            Agregar al plan
-          </Button>
+    <Card className={`overflow-hidden ${SECCION.plan.card}`}>
+      <CardHeader className={`border-b border-border pb-3 ${SECCION.plan.head}`}>
+        <div className="flex items-center gap-2">
+          <span className={`flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white ${SECCION.plan.badge}`}>P</span>
+          <CardTitle className="text-sm font-bold uppercase tracking-wide">Plan</CardTitle>
         </div>
+        <p className="text-xs text-muted-foreground">
+          Plan de manejo y misceláneos de la consulta.
+        </p>
       </CardHeader>
 
-      <CardContent className="px-0 pb-0">
-        {plan.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 py-7 text-sm text-muted-foreground">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5 text-muted-foreground/50">
-              <path d="M9 11l3 3 7-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8" />
-            </svg>
-            {'Aún no hay indicaciones. Use "Agregar al plan".'}
-          </div>
-        ) : (
-          <div className="divide-y divide-border">
-            {plan.map((it, i) => (
-              <div key={it.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-xs font-bold tabular-nums text-muted-foreground">
-                  {i + 1}
-                </span>
-                <div className="min-w-0 flex-1 text-sm text-foreground">{it.texto}</div>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onEditar(it.id)}
-                    title="Editar"
-                    className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  >
-                    <IcoEdit />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDelete(it.id)}
-                    title="Eliminar"
-                    className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <IcoDel />
-                  </button>
+      <CardContent className="space-y-6 pt-4">
+        {/* §11.1 Plan de manejo */}
+        <SubBloque
+          titulo="Plan de manejo"
+          pill="obligatorio"
+          accion={
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="text-xs">{plan.length}</Badge>
+              <Button type="button" variant="default" size="sm" onClick={onAgregar}>
+                <IcoPlus />
+                Agregar al plan
+              </Button>
+            </div>
+          }
+        >
+          {plan.length === 0 ? (
+            <div className="flex items-center justify-center gap-2 rounded-[10px] border border-border py-7 text-sm text-muted-foreground">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5 text-muted-foreground/50">
+                <path d="M9 11l3 3 7-8M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8" />
+              </svg>
+              {'Aún no hay indicaciones. Use "Agregar al plan".'}
+            </div>
+          ) : (
+            <div className="divide-y divide-border overflow-hidden rounded-[10px] border border-border">
+              {plan.map((it, i) => (
+                <div key={it.id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border bg-muted/40 text-xs font-bold tabular-nums text-muted-foreground">
+                    {i + 1}
+                  </span>
+                  <div className="min-w-0 flex-1 text-sm text-foreground">{it.texto}</div>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onEditar(it.id)}
+                      title="Editar"
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <IcoEdit />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(it.id)}
+                      title="Eliminar"
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <IcoDel />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
+        </SubBloque>
+
+        {/* §11.2 Misceláneos de consulta (modelo híbrido) */}
+        <SubBloque titulo="Misceláneos de consulta" pill="opcional">
+          <MiscelaneosSection />
+        </SubBloque>
       </CardContent>
     </Card>
   );

@@ -4,6 +4,8 @@ import * as React from "react";
 import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
+import { SECCION, SECCION_ACCENT } from "../_lib/avante-palette";
+import { SecEmptyBox } from "./SecEmptyBox";
 
 interface Props {
   onAbrir: () => void;
@@ -14,11 +16,11 @@ export function SubjetivoCard({ onAbrir }: Props) {
   const texto = draft.subjetivo;
 
   return (
-    <Card className="border-l-4 border-indigo-300 dark:border-indigo-700">
-      <CardHeader className="pb-2">
+    <Card className={`overflow-hidden ${SECCION.subjetivo.card}`}>
+      <CardHeader className={`border-b border-border pb-3 ${SECCION.subjetivo.head}`}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-indigo-500 text-xs font-bold text-white">S</span>
+            <span className={`flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white ${SECCION.subjetivo.badge}`}>S</span>
             <CardTitle className="text-sm font-bold uppercase tracking-wide">Subjetivo</CardTitle>
           </div>
           {texto && (
@@ -37,12 +39,7 @@ export function SubjetivoCard({ onAbrir }: Props) {
             {texto}
           </p>
         ) : (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-muted-foreground">Sin registrar.</span>
-            <Button type="button" size="sm" onClick={onAbrir}>
-              Llenar subjetivo
-            </Button>
-          </div>
+          <SecEmptyBox cue="subjetivo" color={SECCION_ACCENT.subjetivo} onClick={onAbrir} />
         )}
       </CardContent>
     </Card>

@@ -18,6 +18,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import type { AntecedentesEstructurados } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
 import { calcularEdad } from "../../../../../../lib/evolucion/signos-vitales";
 import {
@@ -25,6 +26,7 @@ import {
   DRAFT_EMPTY,
   puedeFirmar,
   tieneSignos,
+  tieneMisc,
   type DraftState,
   type DraftAction,
 } from "../_lib/types";
@@ -37,7 +39,20 @@ export type AutosaveStatus =
   | "guardado"
   | { error: string };
 
-/** Demografía + estado de cuenta del paciente del episodio (R3). */
+/** Contacto de emergencia (CC-0006 §5.3). */
+export interface ContactoEmergencia {
+  nombre: string;
+  parentesco: string;
+  telefono: string | null;
+}
+
+/** Alergia conocida para el banner del encabezado (CC-0006 §5.1). */
+export interface AlergiaResumen {
+  substancia: string;
+  severidad: string;
+}
+
+/** Demografía + encabezado clínico + estado de cuenta del paciente del episodio (R3 / §5). */
 export interface PacienteContexto {
   episodioId: string;
   numeroExpediente: string;
@@ -48,6 +63,20 @@ export interface PacienteContexto {
   sexo: string | null;
   /** ISO date | null */
   fechaNacimiento: string | null;
+  // §5 — encabezado clínico sticky
+  dui: string | null;
+  documentoTipo: string | null;
+  /** Nº de cuenta hospitalaria activa (CC-0002); null sin cuenta o sin vínculo HIS. */
+  numeroCuenta: string | null;
+  domicilio: string | null;
+  emergencia: ContactoEmergencia | null;
+  alergias: AlergiaResumen[];
+  preferredName: string | null;
+  esLgbtiq: boolean;
+  // §10.3 — snapshot de antecedentes para prefill (o null si el paciente no tiene HC).
+  antecedentes: AntecedentesEstructurados | null;
+  // §10.3.2 — usuario autenticado para el sello de auditoría de antecedentes negativos.
+  usuarioActual: { id: string; nombre: string };
 }
 
 interface EvolucionDraftCtx {
@@ -106,7 +135,11 @@ function tieneContenido(draft: DraftState): boolean {
     draft.objetivo.trim() !== "" ||
     draft.analisis.trim() !== "" ||
     draft.plan.length > 0 ||
-    tieneSignos(draft.signos)
+    tieneSignos(draft.signos) ||
+    // §11.2: misceláneos capturados deliberadamente también deben autosalvarse.
+    // (antecedentes se excluye a propósito: es prefill desde la HC y no debe
+    //  disparar la creación del borrador al abrir la página).
+    tieneMisc(draft.misc)
   );
 }
 
@@ -129,6 +162,10 @@ function buildSoap(draft: DraftState) {
       problemas: draft.problemas,
       plan: draft.plan,
       signos: tieneSignos(draft.signos) ? draft.signos : undefined,
+      // §10.3: snapshot de antecedentes confirmados en esta evolución (round-trip).
+      antecedentes: draft.antecedentes,
+      // §11.2: misceláneos inline solo si hay contenido (terapia resp. / inyecciones).
+      misc: tieneMisc(draft.misc) ? draft.misc : undefined,
     },
   };
 }
@@ -195,6 +232,18 @@ export function EvolucionDraftProvider({ episodeId, children }: Props) {
   const paciente: PacienteContexto | null = contextoQuery.data ?? null;
   const pacienteSexo = paciente?.sexo ?? null;
   const pacienteEdad = calcularEdad(paciente?.fechaNacimiento ?? null);
+
+  // §10.3: prefill (una sola vez) del snapshot de antecedentes desde la HC
+  // canónica. No dispara autosave porque tieneContenido excluye antecedentes.
+  const antecedentesPrefilledRef = React.useRef(false);
+  React.useEffect(() => {
+    if (antecedentesPrefilledRef.current) return;
+    const ant = contextoQuery.data?.antecedentes;
+    if (ant) {
+      antecedentesPrefilledRef.current = true;
+      dispatch({ type: "SET_ANTECEDENTES", antecedentes: ant });
+    }
+  }, [contextoQuery.data]);
 
   // Guard para StrictMode: evita doble-create en el primer cambio
   const creatingRef = React.useRef(false);
