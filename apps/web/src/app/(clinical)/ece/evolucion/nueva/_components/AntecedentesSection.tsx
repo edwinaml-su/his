@@ -219,7 +219,17 @@ export function AntecedentesSection() {
     );
 
   return (
-    <SubBloque titulo="Antecedentes" pill="opcional" accion={accion}>
+    <SubBloque
+      titulo="Antecedentes"
+      icon={
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+          <path d="M12 3 4 7v5c0 4.5 3.4 7.8 8 9 4.6-1.2 8-4.5 8-9V7l-8-4z" />
+          <path d="m9 12 2 2 4-4" />
+        </svg>
+      }
+      pill="opcional"
+      accion={accion}
+    >
       {vista === "summary" && (
         <div className="space-y-4 rounded-md border border-border bg-muted/20 p-3">
           <div className="space-y-2">

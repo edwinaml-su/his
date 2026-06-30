@@ -33,6 +33,7 @@ import { SubjetivoCard } from "./_components/SubjetivoCard";
 import { ObjetivoCard } from "./_components/ObjetivoCard";
 import { AnalisisCard } from "./_components/AnalisisCard";
 import { PlanSection } from "./_components/PlanSection";
+import { FirmaCard } from "./_components/FirmaCard";
 import { EvolucionFooter } from "./_components/EvolucionFooter";
 
 import { ProblemaModal } from "./_components/modals/ProblemaModal";
@@ -153,6 +154,8 @@ function NuevaEvolucionBody() {
           onAgregar={() => abrirPlan()}
           onEditar={(id) => abrirPlan(id)}
         />
+
+        <FirmaCard />
       </div>
 
       {/* Footer */}

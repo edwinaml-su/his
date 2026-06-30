@@ -69,6 +69,11 @@ export function SignosSection({ onAbrir }: Props) {
   return (
     <SubBloque
       titulo="Signos vitales"
+      icon={
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} className="h-4 w-4">
+          <path d="M3 12h4l2 5 4-12 2 7h6" />
+        </svg>
+      }
       pill="obligatorio"
       accion={
         haySignos ? (
@@ -149,7 +154,7 @@ export function SignosSection({ onAbrir }: Props) {
             type="button"
             size="sm"
             onClick={onAbrir}
-            className="bg-rose-500 text-white hover:bg-rose-600"
+            className="bg-[#e11d48] text-white hover:bg-[#e11d48]/90"
           >
             Registrar signos vitales
           </Button>

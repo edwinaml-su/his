@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
-import { Badge } from "@his/ui/components/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
 import { SECCION } from "../_lib/avante-palette";
@@ -55,15 +54,23 @@ export function PlanSection({ onAgregar, onEditar }: Props) {
         {/* §11.1 Plan de manejo */}
         <SubBloque
           titulo="Plan de manejo"
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+              <path d="M9 11l3 3 7-8" />
+              <path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8" />
+            </svg>
+          }
+          count={
+            <span className="rounded-full bg-[#1e293b] px-[9px] py-0.5 text-[11px] font-bold tabular-nums text-white">
+              {plan.length}
+            </span>
+          }
           pill="obligatorio"
           accion={
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="text-xs">{plan.length}</Badge>
-              <Button type="button" variant="default" size="sm" onClick={onAgregar}>
-                <IcoPlus />
-                Agregar al plan
-              </Button>
-            </div>
+            <Button type="button" variant="default" size="sm" onClick={onAgregar}>
+              <IcoPlus />
+              Agregar al plan
+            </Button>
           }
         >
           {plan.length === 0 ? (
@@ -106,7 +113,17 @@ export function PlanSection({ onAgregar, onEditar }: Props) {
         </SubBloque>
 
         {/* §11.2 Misceláneos de consulta (modelo híbrido) */}
-        <SubBloque titulo="Misceláneos de consulta" pill="opcional">
+        <SubBloque
+          titulo="Misceláneos de consulta"
+          icon={
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+              <rect x="9" y="3" width="6" height="4" rx="1" />
+              <path d="M9 12h6M9 16h4" />
+            </svg>
+          }
+          pill="opcional"
+        >
           <MiscelaneosSection />
         </SubBloque>
       </CardContent>
