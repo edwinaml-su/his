@@ -7,7 +7,6 @@
 
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
-import { Badge } from "@his/ui/components/badge";
 import {
   Card,
   CardContent,
@@ -17,6 +16,7 @@ import {
 import { useEvolucionDraft } from "../_hooks/useEvolucionDraft";
 import { type EvolucionProblema } from "../_lib/types";
 import { SECCION } from "../_lib/avante-palette";
+import { ReqPill } from "./SubBloque";
 
 // Iconos inline (no importamos lucide para no sumar dep)
 const IcoPlus = () => (
@@ -121,15 +121,16 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
             <div className="flex items-center gap-2">
               <span className={`flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white ${SECCION.problemas.badge}`}>P</span>
               <CardTitle className="text-sm font-bold uppercase tracking-wide">Problemas</CardTitle>
-              <Badge variant="secondary" className="text-xs">
+              <span className="ml-0.5 rounded-full bg-[#3b82f6] px-[9px] py-0.5 text-[11px] font-bold tabular-nums text-white">
                 {problemas.length}
-              </Badge>
+              </span>
+              <ReqPill />
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
               Lista de problemas. Marca dos o más para agruparlos bajo un Diagnóstico Sindrómico (opcional).
             </p>
           </div>
-          <Button type="button" size="sm" onClick={onAgregarProblema} className="shrink-0">
+          <Button type="button" size="sm" onClick={onAgregarProblema} className="shrink-0 bg-[#3b82f6] text-white hover:bg-[#3b82f6]/90">
             <IcoPlus />
             Agregar problema
           </Button>
@@ -153,6 +154,7 @@ export function ProblemasSection({ onAgregarProblema, onEditarProblema, onAgrupa
               variant="default"
               disabled={selected.size < 2}
               onClick={handleAgrupar}
+              className="bg-[#3b82f6] text-white hover:bg-[#3b82f6]/90"
             >
               <IcoLayers />
               Agrupar como Diagnóstico Sindrómico

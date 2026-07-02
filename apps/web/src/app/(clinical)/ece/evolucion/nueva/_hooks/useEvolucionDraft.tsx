@@ -89,6 +89,8 @@ interface EvolucionDraftCtx {
   borradorId: string | undefined;
   canSign: boolean;
   sign: () => Promise<void>;
+  /** Fuerza un guardado inmediato del borrador (footer "Guardar borrador"). */
+  guardar: () => Promise<void>;
   episodeId: string | undefined;
   fecha: Date;
   /** Datos del paciente desde el expediente (R3); null mientras carga o sin episodio. */
@@ -311,6 +313,9 @@ export function EvolucionDraftProvider({ episodeId, children }: Props) {
   const flushRef = React.useRef(flush);
   flushRef.current = flush;
 
+  // Guardado manual inmediato (footer "Guardar borrador").
+  const guardar = React.useCallback(() => flushRef.current(), []);
+
   // ── Autosave debounced (~1.5 s tras cada cambio) ───────────────────────────
 
   React.useEffect(() => {
@@ -377,6 +382,7 @@ export function EvolucionDraftProvider({ episodeId, children }: Props) {
     borradorId,
     canSign: puedeFirmar(draft),
     sign,
+    guardar,
     episodeId,
     fecha,
     paciente,

@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Input } from "@his/ui/components/input";
 import { useEvolucionDraft, type EspecialidadOpcion } from "../_hooks/useEvolucionDraft";
 import { SECCION } from "../_lib/avante-palette";
+import { ReqPill } from "./SubBloque";
 
 export function EspecialidadCard() {
   const { draft, dispatch, buscarEspecialidades } = useEvolucionDraft();
@@ -101,12 +102,11 @@ export function EspecialidadCard() {
               <circle cx="19" cy="12" r="2" />
             </svg>
           </span>
-          <CardTitle className="text-sm font-bold uppercase tracking-wide">
-            Especialidad médica<span className="ml-0.5 text-destructive">*</span>
-          </CardTitle>
+          <CardTitle className="text-sm font-bold uppercase tracking-wide">Especialidad médica</CardTitle>
+          <ReqPill />
         </div>
         <p className="text-xs text-muted-foreground">
-          Especialidad responsable de esta evolución. Obligatoria para firmar.
+          Especialidad responsable de esta evolución.
         </p>
       </CardHeader>
       <CardContent>

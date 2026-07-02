@@ -12,7 +12,7 @@ interface Props {
 }
 
 export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
-  const { canSign, status, episodeId, draft, savedAt } = useEvolucionDraft();
+  const { canSign, status, episodeId, draft, savedAt, guardar } = useEvolucionDraft();
   const faltantes = camposFaltantes(draft);
 
   const statusText: string = (() => {
@@ -73,13 +73,36 @@ export function EvolucionFooter({ onCancelar, onFirmar, isSigning }: Props) {
 
       <Button
         type="button"
-        onClick={onFirmar}
-        disabled={!canSign || isSigning}
-        title={firmarTooltip}
-        data-testid="btn-firmar"
+        variant="outline"
+        onClick={() => void guardar?.()}
+        disabled={!episodeId || isSigning}
       >
-        {isSigning ? "Firmando…" : "Firmar"}
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+          <path d="M17 21v-8H7v8M7 3v5h8" />
+        </svg>
+        Guardar borrador
       </Button>
+
+      <div className="flex items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={`h-2 w-2 rounded-full ${canSign ? "animate-pulse bg-[#16a34a]" : "bg-muted-foreground/30"}`}
+        />
+        <Button
+          type="button"
+          onClick={onFirmar}
+          disabled={!canSign || isSigning}
+          title={firmarTooltip}
+          data-testid="btn-firmar"
+          className="bg-[#16a34a] text-white hover:bg-[#15803d]"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
+            <path d="M4 19h16M4 15l9-9 4 4-9 9H4z" />
+          </svg>
+          {isSigning ? "Firmando…" : "Guardar y firmar"}
+        </Button>
+      </div>
     </div>
   );
 }
