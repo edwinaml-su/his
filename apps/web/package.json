@@ -27,6 +27,7 @@
     "@dagrejs/dagre": "^1.1.4",
     "@his/contracts": "*",
     "@his/database": "*",
+    "@his/infrastructure": "*",
     "@his/trpc": "*",
     "@his/ui": "*",
     "@hookform/resolvers": "^5.4.0",

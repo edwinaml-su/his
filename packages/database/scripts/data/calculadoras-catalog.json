@@ -1,0 +1,1709 @@
+[
+  {
+    "codigo": "CALC-NEFRO-001",
+    "nombre": "Cockcroft-Gault",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 3,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": false},
+    "paginas": "*",
+    "sub": "Depuración de creatinina",
+    "ref": "Cockcroft & Gault, Nephron 1976",
+    "def": {
+      "inputs": [
+        {"id": "edad", "label": "Edad", "u": "años", "min": 18, "max": 110, "val": 64},
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 20, "max": 300, "val": 58},
+        {"id": "crea", "label": "Creatinina sérica", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2},
+        {"id": "sexo", "type": "select", "label": "Sexo", "opts": [{"v": "Masculino", "f": 1}, {"v": "Femenino", "f": 0.85}], "sel": 1}
+      ],
+      "expr": "((140 - edad) * peso / (72 * crea)) * sexoF",
+      "out": {"label": "Depuración de creatinina", "u": "mL/min", "dec": 1},
+      "interp": [
+        {"max": 30, "n": "critico", "t": "Deterioro grave — ajuste renal de dosis"},
+        {"max": 60, "n": "alerta", "t": "Deterioro moderado"},
+        {"n": "normal", "t": "Función renal adecuada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-002",
+    "nombre": "CKD-EPI 2021 (sin raza)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Tasa de filtración glomerular",
+    "ref": "Inker et al., NEJM 2021",
+    "def": {
+      "inputs": [
+        {"id": "edad", "label": "Edad", "u": "años", "min": 18, "max": 110, "val": 64},
+        {"id": "crea", "label": "Creatinina sérica", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2},
+        {"id": "sexo", "type": "select", "label": "Sexo", "opts": [{"v": "Masculino", "k": 0.9, "a": -0.302, "mult": 1}, {"v": "Femenino", "k": 0.7, "a": -0.241, "mult": 1.012}], "sel": 1}
+      ],
+      "expr": "142 * min(crea/sexo_k,1)^(sexo_a) * max(crea/sexo_k,1)^(-1.2) * 0.9938^edad * sexo_mult",
+      "out": {"label": "TFG estimada", "u": "mL/min/1.73m²", "dec": 0},
+      "interp": [
+        {"max": 29, "n": "critico", "t": "TFG muy baja (G4–G5)"},
+        {"max": 59, "n": "alerta", "t": "TFG reducida (G3)"},
+        {"max": 89, "n": "normal", "t": "Levemente reducida (G2)"},
+        {"n": "normal", "t": "TFG normal (G1)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-003",
+    "nombre": "MDRD (4 variables, IDMS)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "TFG estimada (sin raza)",
+    "ref": "Levey et al., Ann Intern Med 2006",
+    "def": {
+      "inputs": [
+        {"id": "edad", "label": "Edad", "u": "años", "min": 18, "max": 110, "val": 64},
+        {"id": "crea", "label": "Creatinina sérica", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2},
+        {"id": "sexo", "type": "select", "label": "Sexo", "opts": [{"v": "Masculino", "f": 1}, {"v": "Femenino", "f": 0.742}], "sel": 1}
+      ],
+      "expr": "175 * crea^(-1.154) * edad^(-0.203) * sexoF",
+      "out": {"label": "TFG estimada", "u": "mL/min/1.73m²", "dec": 0},
+      "interp": [
+        {"max": 29, "n": "critico", "t": "TFG muy baja (G4–G5)"},
+        {"max": 59, "n": "alerta", "t": "TFG reducida (G3)"},
+        {"max": 89, "n": "normal", "t": "Levemente reducida (G2)"},
+        {"n": "normal", "t": "TFG normal (G1)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-004",
+    "nombre": "FENa (excreción fraccional de sodio)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Prerrenal vs. renal",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "na_p", "label": "Sodio en plasma", "u": "mEq/L", "min": 100, "max": 180, "val": 138},
+        {"id": "na_o", "label": "Sodio en orina", "u": "mEq/L", "min": 1, "max": 300, "val": 20},
+        {"id": "cr_p", "label": "Creatinina en plasma", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2},
+        {"id": "cr_o", "label": "Creatinina en orina", "u": "mg/dL", "min": 1, "max": 400, "val": 80}
+      ],
+      "expr": "100 * (na_o * cr_p) / (na_p * cr_o)",
+      "out": {"label": "FENa", "u": "%", "dec": 1},
+      "interp": [
+        {"max": 1, "n": "alerta", "t": "FENa <1%: patrón prerrenal"},
+        {"max": 2, "n": "normal", "t": "Indeterminado (1–2%)"},
+        {"n": "critico", "t": "FENa >2%: patrón renal (NTA)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ELEC-001",
+    "nombre": "Calcio corregido",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Corrección por albúmina",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "ca", "label": "Calcio sérico total", "u": "mg/dL", "min": 4, "max": 18, "val": 8.4},
+        {"id": "alb", "label": "Albúmina", "u": "g/dL", "min": 1, "max": 6, "val": 2.9}
+      ],
+      "expr": "ca + 0.8 * (4 - alb)",
+      "out": {"label": "Calcio corregido", "u": "mg/dL", "dec": 1},
+      "interp": [
+        {"max": 8.5, "n": "alerta", "t": "Hipocalcemia — evaluar reposición"},
+        {"max": 10.5, "n": "normal", "t": "Dentro de rango"},
+        {"n": "critico", "t": "Hipercalcemia"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ELEC-002",
+    "nombre": "Sodio corregido por glucosa",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Hiperglucemia",
+    "ref": "Hillier et al., Am J Med 1999",
+    "def": {
+      "inputs": [
+        {"id": "na", "label": "Sodio medido", "u": "mEq/L", "min": 100, "max": 180, "val": 130},
+        {"id": "glu", "label": "Glucosa", "u": "mg/dL", "min": 50, "max": 2000, "val": 400}
+      ],
+      "expr": "na + 0.024 * (glu - 100)",
+      "out": {"label": "Sodio corregido", "u": "mEq/L", "dec": 1},
+      "interp": [
+        {"max": 135, "n": "alerta", "t": "Hiponatremia corregida"},
+        {"max": 145, "n": "normal", "t": "Rango normal"},
+        {"n": "critico", "t": "Hipernatremia corregida"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ELEC-003",
+    "nombre": "Brecha aniónica",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Anion gap",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "na", "label": "Sodio", "u": "mEq/L", "min": 100, "max": 180, "val": 140},
+        {"id": "cl", "label": "Cloro", "u": "mEq/L", "min": 70, "max": 130, "val": 104},
+        {"id": "hco3", "label": "Bicarbonato", "u": "mEq/L", "min": 2, "max": 50, "val": 24}
+      ],
+      "expr": "na - (cl + hco3)",
+      "out": {"label": "Brecha aniónica", "u": "mEq/L", "dec": 0},
+      "interp": [
+        {"max": 12, "n": "normal", "t": "Normal (corregir por albúmina si aplica)"},
+        {"max": 20, "n": "alerta", "t": "Elevada"},
+        {"n": "critico", "t": "Muy elevada — buscar causa"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ELEC-004",
+    "nombre": "Osmolaridad sérica calculada",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Osmolaridad estimada",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "na", "label": "Sodio", "u": "mEq/L", "min": 100, "max": 180, "val": 140},
+        {"id": "glu", "label": "Glucosa", "u": "mg/dL", "min": 20, "max": 2000, "val": 90},
+        {"id": "bun", "label": "Nitrógeno ureico (BUN)", "u": "mg/dL", "min": 2, "max": 200, "val": 14}
+      ],
+      "expr": "2*na + glu/18 + bun/2.8",
+      "out": {"label": "Osmolaridad calculada", "u": "mOsm/kg", "dec": 0},
+      "interp": [
+        {"max": 275, "n": "alerta", "t": "Baja"},
+        {"max": 295, "n": "normal", "t": "Rango normal"},
+        {"n": "alerta", "t": "Elevada — calcular brecha osmolar"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ANTRO-001",
+    "nombre": "IMC",
+    "tipo": "formula",
+    "cat": "Antropometría y dosis",
+    "ver": 2,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Índice de masa corporal",
+    "ref": "OMS",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 20, "max": 300, "val": 58},
+        {"id": "talla", "label": "Talla", "u": "m", "min": 0.4, "max": 2.3, "val": 1.58}
+      ],
+      "expr": "peso / (talla*talla)",
+      "out": {"label": "IMC", "u": "kg/m²", "dec": 1},
+      "interp": [
+        {"max": 18.5, "n": "alerta", "t": "Bajo peso"},
+        {"max": 25, "n": "normal", "t": "Peso normal"},
+        {"max": 30, "n": "alerta", "t": "Sobrepeso"},
+        {"n": "critico", "t": "Obesidad"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ANTRO-002",
+    "nombre": "Superficie corporal (Mosteller)",
+    "tipo": "formula",
+    "cat": "Antropometría y dosis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "BSA para dosificación",
+    "ref": "Mosteller, NEJM 1987",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "tallac", "label": "Talla", "u": "cm", "min": 40, "max": 230, "val": 158}
+      ],
+      "expr": "sqrt(peso * tallac / 3600)",
+      "out": {"label": "Superficie corporal", "u": "m²", "dec": 2},
+      "interp": [{"n": "normal", "t": "Superficie corporal estimada"}]
+    }
+  },
+  {
+    "codigo": "CALC-ANTRO-003",
+    "nombre": "Peso corporal ideal (Devine)",
+    "tipo": "formula",
+    "cat": "Antropometría y dosis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "PCI para dosificación",
+    "ref": "Devine 1974",
+    "def": {
+      "inputs": [
+        {"id": "tallac", "label": "Talla", "u": "cm", "min": 130, "max": 230, "val": 158},
+        {"id": "sexo", "type": "select", "label": "Sexo", "opts": [{"v": "Masculino", "base": 50}, {"v": "Femenino", "base": 45.5}], "sel": 1}
+      ],
+      "expr": "sexo_base + 2.3 * ((tallac/2.54) - 60)",
+      "out": {"label": "Peso corporal ideal", "u": "kg", "dec": 1},
+      "interp": [{"n": "normal", "t": "Válido para talla >152 cm"}]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-001",
+    "nombre": "CHA₂DS₂-VASc",
+    "tipo": "score",
+    "cat": "Cardiología",
+    "ver": 2,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo tromboembólico en FA",
+    "ref": "Lip et al., Chest 2010",
+    "def": {
+      "items": [
+        {"id": "icc", "label": "Insuficiencia cardíaca / disfunción VI", "p": 1},
+        {"id": "hta", "label": "Hipertensión arterial", "p": 1},
+        {"id": "edad75", "label": "Edad ≥ 75 años", "p": 2},
+        {"id": "dm", "label": "Diabetes mellitus", "p": 1},
+        {"id": "acv", "label": "ACV / AIT / tromboembolia previa", "p": 2},
+        {"id": "vasc", "label": "Enfermedad vascular", "p": 1},
+        {"id": "edad65", "label": "Edad 65–74 años", "p": 1},
+        {"id": "sexoF", "label": "Sexo femenino", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 0, "n": "normal", "t": "Riesgo bajo — sin anticoagulación"},
+        {"max": 1, "n": "alerta", "t": "Riesgo intermedio — considerar"},
+        {"n": "critico", "t": "Riesgo alto — anticoagulación recomendada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-002",
+    "nombre": "HAS-BLED",
+    "tipo": "score",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo de sangrado en FA",
+    "ref": "Pisters et al., Chest 2010",
+    "def": {
+      "items": [
+        {"id": "hta", "label": "Hipertensión (PAS >160 mmHg)", "p": 1},
+        {"id": "renal", "label": "Función renal alterada", "p": 1},
+        {"id": "hep", "label": "Función hepática alterada", "p": 1},
+        {"id": "acv", "label": "ACV previo", "p": 1},
+        {"id": "sang", "label": "Sangrado previo o predisposición", "p": 1},
+        {"id": "inr", "label": "INR lábil", "p": 1},
+        {"id": "edad", "label": "Edad > 65 años", "p": 1},
+        {"id": "farm", "label": "Fármacos que predisponen a sangrado", "p": 1},
+        {"id": "alc", "label": "Alcohol ≥ 8 tragos/semana", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 2, "n": "normal", "t": "Riesgo bajo-moderado"},
+        {"n": "critico", "t": "Riesgo alto (≥3) — precaución y seguimiento"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-003",
+    "nombre": "Presión arterial media (PAM)",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "MAP",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "sis", "label": "Presión sistólica", "u": "mmHg", "min": 40, "max": 300, "val": 120},
+        {"id": "dia", "label": "Presión diastólica", "u": "mmHg", "min": 20, "max": 200, "val": 80}
+      ],
+      "expr": "(sis + 2*dia) / 3",
+      "out": {"label": "Presión arterial media", "u": "mmHg", "dec": 0},
+      "interp": [
+        {"max": 64, "n": "critico", "t": "PAM baja — riesgo de hipoperfusión"},
+        {"max": 100, "n": "normal", "t": "Rango normal"},
+        {"n": "alerta", "t": "PAM elevada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-004",
+    "nombre": "QTc (Bazett)",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "QT corregido",
+    "ref": "Bazett 1920",
+    "def": {
+      "inputs": [
+        {"id": "qt", "label": "Intervalo QT", "u": "ms", "min": 200, "max": 800, "val": 400},
+        {"id": "fc", "label": "Frecuencia cardíaca", "u": "lpm", "min": 20, "max": 250, "val": 60}
+      ],
+      "expr": "qt / sqrt(60/fc)",
+      "out": {"label": "QTc", "u": "ms", "dec": 0},
+      "interp": [
+        {"max": 439, "n": "normal", "t": "Normal"},
+        {"max": 460, "n": "alerta", "t": "Limítrofe"},
+        {"n": "critico", "t": "Prolongado — riesgo de torsades"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-005",
+    "nombre": "QTc (Fridericia)",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "QT corregido (cúbica)",
+    "ref": "Fridericia 1920",
+    "def": {
+      "inputs": [
+        {"id": "qt", "label": "Intervalo QT", "u": "ms", "min": 200, "max": 800, "val": 400},
+        {"id": "fc", "label": "Frecuencia cardíaca", "u": "lpm", "min": 20, "max": 250, "val": 60}
+      ],
+      "expr": "qt / (60/fc)^(1/3)",
+      "out": {"label": "QTc", "u": "ms", "dec": 0},
+      "interp": [
+        {"max": 439, "n": "normal", "t": "Normal"},
+        {"max": 460, "n": "alerta", "t": "Limítrofe"},
+        {"n": "critico", "t": "Prolongado — riesgo de torsades"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-URG-001",
+    "nombre": "Parkland (quemaduras)",
+    "tipo": "dosis",
+    "cat": "Urgencias y sepsis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Reanimación con cristaloides",
+    "ref": "Baxter (Parkland)",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "scq", "label": "Superficie corporal quemada", "u": "%", "min": 1, "max": 100, "val": 40}
+      ],
+      "expr": "4 * peso * scq",
+      "out": {"label": "Cristaloides en 24 h", "u": "mL", "dec": 0},
+      "interp": [{"n": "normal", "t": "Administrar 50% en las primeras 8 h"}]
+    }
+  },
+  {
+    "codigo": "CALC-URG-002",
+    "nombre": "qSOFA",
+    "tipo": "score",
+    "cat": "Urgencias y sepsis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": false, "HN": false},
+    "paginas": "*",
+    "sub": "Sospecha de sepsis",
+    "ref": "Sepsis-3, JAMA 2016",
+    "def": {
+      "items": [
+        {"id": "fr", "label": "Frecuencia respiratoria ≥ 22/min", "p": 1},
+        {"id": "pas", "label": "Presión sistólica ≤ 100 mmHg", "p": 1},
+        {"id": "conc", "label": "Alteración del estado mental (Glasgow < 15)", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 1, "n": "normal", "t": "Bajo riesgo de deterioro"},
+        {"n": "critico", "t": "Alto riesgo — evaluar sepsis y UCI"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-URG-003",
+    "nombre": "SIRS",
+    "tipo": "score",
+    "cat": "Urgencias y sepsis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Respuesta inflamatoria sistémica",
+    "ref": "ACCP/SCCM 1992",
+    "def": {
+      "items": [
+        {"id": "temp", "label": "Temperatura > 38 °C o < 36 °C", "p": 1},
+        {"id": "fc", "label": "Frecuencia cardíaca > 90/min", "p": 1},
+        {"id": "fr", "label": "FR > 20/min o PaCO₂ < 32 mmHg", "p": 1},
+        {"id": "leu", "label": "Leucocitos > 12k, < 4k o > 10% bandas", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 1, "n": "normal", "t": "No cumple SIRS"},
+        {"n": "alerta", "t": "Cumple SIRS (≥2) — evaluar infección"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-URG-004",
+    "nombre": "PERC (descarte de TEP)",
+    "tipo": "score",
+    "cat": "Urgencias y sepsis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Regla de bajo riesgo",
+    "ref": "Kline et al. 2004",
+    "def": {
+      "items": [
+        {"id": "edad", "label": "Edad ≥ 50 años", "p": 1},
+        {"id": "fc", "label": "FC ≥ 100/min", "p": 1},
+        {"id": "spo2", "label": "SpO₂ < 95%", "p": 1},
+        {"id": "hemo", "label": "Hemoptisis", "p": 1},
+        {"id": "estr", "label": "Uso de estrógenos", "p": 1},
+        {"id": "prev", "label": "TVP/TEP previa", "p": 1},
+        {"id": "edema", "label": "Edema unilateral de pierna", "p": 1},
+        {"id": "cir", "label": "Cirugía/trauma < 4 sem con hospitalización", "p": 1}
+      ],
+      "out": {"label": "Criterios positivos", "u": "", "dec": 0},
+      "interp": [
+        {"max": 0, "n": "normal", "t": "PERC negativo — descarta TEP en bajo riesgo"},
+        {"n": "alerta", "t": "PERC positivo — no descarta; continuar estudio"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEUM-001",
+    "nombre": "CURB-65",
+    "tipo": "score",
+    "cat": "Neumología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Gravedad de neumonía",
+    "ref": "Lim et al., Thorax 2003",
+    "def": {
+      "items": [
+        {"id": "conf", "label": "Confusión", "p": 1},
+        {"id": "urea", "label": "Urea > 7 mmol/L (BUN > 19 mg/dL)", "p": 1},
+        {"id": "fr", "label": "FR ≥ 30/min", "p": 1},
+        {"id": "pa", "label": "PAS < 90 o PAD ≤ 60 mmHg", "p": 1},
+        {"id": "edad", "label": "Edad ≥ 65 años", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 1, "n": "normal", "t": "Bajo riesgo — considerar ambulatorio"},
+        {"max": 2, "n": "alerta", "t": "Riesgo intermedio"},
+        {"n": "critico", "t": "Alto riesgo — hospitalización/UCI"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEUM-002",
+    "nombre": "Gradiente alvéolo-arterial (A-a)",
+    "tipo": "formula",
+    "cat": "Neumología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Intercambio gaseoso",
+    "ref": "Estándar (nivel del mar)",
+    "def": {
+      "inputs": [
+        {"id": "fio2", "label": "FiO₂ (fracción)", "u": "0.21–1.0", "min": 0.21, "max": 1, "val": 0.21},
+        {"id": "paco2", "label": "PaCO₂", "u": "mmHg", "min": 10, "max": 120, "val": 40},
+        {"id": "pao2", "label": "PaO₂", "u": "mmHg", "min": 20, "max": 600, "val": 90}
+      ],
+      "expr": "(fio2*(760-47) - paco2/0.8) - pao2",
+      "out": {"label": "Gradiente A-a", "u": "mmHg", "dec": 1},
+      "interp": [
+        {"max": 15, "n": "normal", "t": "Normal (ajustar por edad)"},
+        {"n": "alerta", "t": "Elevado — trastorno de intercambio"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEUM-003",
+    "nombre": "Wells (TEP)",
+    "tipo": "score",
+    "cat": "Neumología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Probabilidad de embolia pulmonar",
+    "ref": "Wells et al. 2000",
+    "def": {
+      "items": [
+        {"id": "tvp", "label": "Signos clínicos de TVP", "p": 3},
+        {"id": "alt", "label": "Dx alternativo menos probable que TEP", "p": 3},
+        {"id": "fc", "label": "FC > 100/min", "p": 1.5},
+        {"id": "inm", "label": "Inmovilización/cirugía < 4 sem", "p": 1.5},
+        {"id": "prev", "label": "TVP/TEP previa", "p": 1.5},
+        {"id": "hemo", "label": "Hemoptisis", "p": 1},
+        {"id": "ca", "label": "Cáncer activo", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 1},
+      "interp": [
+        {"max": 4, "n": "normal", "t": "TEP improbable (≤4)"},
+        {"n": "critico", "t": "TEP probable (>4)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEURO-001",
+    "nombre": "Escala de coma de Glasgow",
+    "tipo": "formula",
+    "cat": "Neurología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Nivel de conciencia",
+    "ref": "Teasdale & Jennett 1974",
+    "def": {
+      "inputs": [
+        {"id": "ocular", "type": "select", "label": "Respuesta ocular", "opts": [{"v": "Espontánea (4)", "pts": 4}, {"v": "A la voz (3)", "pts": 3}, {"v": "Al dolor (2)", "pts": 2}, {"v": "Ninguna (1)", "pts": 1}], "sel": 0},
+        {"id": "verbal", "type": "select", "label": "Respuesta verbal", "opts": [{"v": "Orientada (5)", "pts": 5}, {"v": "Confusa (4)", "pts": 4}, {"v": "Palabras inapropiadas (3)", "pts": 3}, {"v": "Sonidos incomprensibles (2)", "pts": 2}, {"v": "Ninguna (1)", "pts": 1}], "sel": 0},
+        {"id": "motora", "type": "select", "label": "Respuesta motora", "opts": [{"v": "Obedece órdenes (6)", "pts": 6}, {"v": "Localiza el dolor (5)", "pts": 5}, {"v": "Retirada al dolor (4)", "pts": 4}, {"v": "Flexión anormal (3)", "pts": 3}, {"v": "Extensión (2)", "pts": 2}, {"v": "Ninguna (1)", "pts": 1}], "sel": 0}
+      ],
+      "expr": "ocular_pts + verbal_pts + motora_pts",
+      "out": {"label": "Puntaje total", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 8, "n": "critico", "t": "Grave — proteger vía aérea"},
+        {"max": 12, "n": "alerta", "t": "Moderado"},
+        {"n": "normal", "t": "Leve (13–15)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEP-001",
+    "nombre": "Child-Pugh",
+    "tipo": "formula",
+    "cat": "Hepatología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Gravedad de cirrosis",
+    "ref": "Pugh et al. 1973",
+    "def": {
+      "inputs": [
+        {"id": "bili", "type": "select", "label": "Bilirrubina total", "opts": [{"v": "< 2 mg/dL (1)", "pts": 1}, {"v": "2–3 mg/dL (2)", "pts": 2}, {"v": "> 3 mg/dL (3)", "pts": 3}], "sel": 0},
+        {"id": "alb", "type": "select", "label": "Albúmina", "opts": [{"v": "> 3.5 g/dL (1)", "pts": 1}, {"v": "2.8–3.5 g/dL (2)", "pts": 2}, {"v": "< 2.8 g/dL (3)", "pts": 3}], "sel": 0},
+        {"id": "inr", "type": "select", "label": "INR", "opts": [{"v": "< 1.7 (1)", "pts": 1}, {"v": "1.7–2.3 (2)", "pts": 2}, {"v": "> 2.3 (3)", "pts": 3}], "sel": 0},
+        {"id": "asc", "type": "select", "label": "Ascitis", "opts": [{"v": "Ausente (1)", "pts": 1}, {"v": "Leve (2)", "pts": 2}, {"v": "Moderada-grave (3)", "pts": 3}], "sel": 0},
+        {"id": "enc", "type": "select", "label": "Encefalopatía", "opts": [{"v": "Ausente (1)", "pts": 1}, {"v": "Grado I–II (2)", "pts": 2}, {"v": "Grado III–IV (3)", "pts": 3}], "sel": 0}
+      ],
+      "expr": "bili_pts + alb_pts + inr_pts + asc_pts + enc_pts",
+      "out": {"label": "Puntaje total", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 6, "n": "normal", "t": "Clase A (5–6)"},
+        {"max": 9, "n": "alerta", "t": "Clase B (7–9)"},
+        {"n": "critico", "t": "Clase C (10–15)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEP-002",
+    "nombre": "MELD",
+    "tipo": "formula",
+    "cat": "Hepatología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Enfermedad hepática terminal",
+    "ref": "Kamath et al., Hepatology 2001",
+    "def": {
+      "inputs": [
+        {"id": "bili", "label": "Bilirrubina", "u": "mg/dL", "min": 0.1, "max": 60, "val": 2},
+        {"id": "inr", "label": "INR", "u": "", "min": 0.5, "max": 20, "val": 1.5},
+        {"id": "crea", "label": "Creatinina", "u": "mg/dL", "min": 0.1, "max": 15, "val": 1.2}
+      ],
+      "expr": "3.78*log(max(bili,1)) + 11.2*log(max(inr,1)) + 9.57*log(min(max(crea,1),4)) + 6.43",
+      "out": {"label": "MELD", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 9, "n": "normal", "t": "Bajo"},
+        {"max": 19, "n": "alerta", "t": "Intermedio"},
+        {"n": "critico", "t": "Alto — mortalidad elevada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEP-003",
+    "nombre": "FIB-4",
+    "tipo": "formula",
+    "cat": "Hepatología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Fibrosis hepática",
+    "ref": "Sterling et al. 2006",
+    "def": {
+      "inputs": [
+        {"id": "edad", "label": "Edad", "u": "años", "min": 18, "max": 110, "val": 64},
+        {"id": "ast", "label": "AST (TGO)", "u": "U/L", "min": 1, "max": 2000, "val": 40},
+        {"id": "plaq", "label": "Plaquetas", "u": "×10⁹/L", "min": 1, "max": 1000, "val": 150},
+        {"id": "alt", "label": "ALT (TGP)", "u": "U/L", "min": 1, "max": 2000, "val": 30}
+      ],
+      "expr": "(edad * ast) / (plaq * sqrt(alt))",
+      "out": {"label": "Índice FIB-4", "u": "", "dec": 2},
+      "interp": [
+        {"max": 1.3, "n": "normal", "t": "Fibrosis avanzada improbable"},
+        {"max": 2.67, "n": "alerta", "t": "Indeterminado"},
+        {"n": "critico", "t": "Sugiere fibrosis avanzada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEP-004",
+    "nombre": "APRI",
+    "tipo": "formula",
+    "cat": "Hepatología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Fibrosis por AST/plaquetas",
+    "ref": "Wai et al. 2003",
+    "def": {
+      "inputs": [
+        {"id": "ast", "label": "AST (TGO)", "u": "U/L", "min": 1, "max": 2000, "val": 60},
+        {"id": "astuln", "label": "Límite superior normal de AST", "u": "U/L", "min": 10, "max": 80, "val": 40},
+        {"id": "plaq", "label": "Plaquetas", "u": "×10⁹/L", "min": 1, "max": 1000, "val": 150}
+      ],
+      "expr": "100 * (ast/astuln) / plaq",
+      "out": {"label": "Índice APRI", "u": "", "dec": 2},
+      "interp": [
+        {"max": 0.5, "n": "normal", "t": "Fibrosis significativa improbable"},
+        {"max": 1.5, "n": "alerta", "t": "Indeterminado"},
+        {"n": "critico", "t": "Sugiere fibrosis/cirrosis"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-OBST-001",
+    "nombre": "APGAR",
+    "tipo": "formula",
+    "cat": "Obstetricia y pediatría",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Vitalidad del recién nacido",
+    "ref": "Apgar 1953",
+    "def": {
+      "inputs": [
+        {"id": "fc", "type": "select", "label": "Frecuencia cardíaca", "opts": [{"v": "Ausente (0)", "pts": 0}, {"v": "< 100/min (1)", "pts": 1}, {"v": "≥ 100/min (2)", "pts": 2}], "sel": 2},
+        {"id": "resp", "type": "select", "label": "Esfuerzo respiratorio", "opts": [{"v": "Ausente (0)", "pts": 0}, {"v": "Débil/irregular (1)", "pts": 1}, {"v": "Llanto vigoroso (2)", "pts": 2}], "sel": 2},
+        {"id": "tono", "type": "select", "label": "Tono muscular", "opts": [{"v": "Flácido (0)", "pts": 0}, {"v": "Alguna flexión (1)", "pts": 1}, {"v": "Movimiento activo (2)", "pts": 2}], "sel": 2},
+        {"id": "irrit", "type": "select", "label": "Irritabilidad refleja", "opts": [{"v": "Sin respuesta (0)", "pts": 0}, {"v": "Mueca (1)", "pts": 1}, {"v": "Llanto/tos (2)", "pts": 2}], "sel": 2},
+        {"id": "color", "type": "select", "label": "Color", "opts": [{"v": "Cianótico/pálido (0)", "pts": 0}, {"v": "Acrocianosis (1)", "pts": 1}, {"v": "Rosado (2)", "pts": 2}], "sel": 2}
+      ],
+      "expr": "fc_pts + resp_pts + tono_pts + irrit_pts + color_pts",
+      "out": {"label": "Puntaje total", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 3, "n": "critico", "t": "Depresión grave"},
+        {"max": 6, "n": "alerta", "t": "Depresión moderada"},
+        {"n": "normal", "t": "Normal (7–10)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GEN-001",
+    "nombre": "Índice paquete-año (tabaquismo)",
+    "tipo": "formula",
+    "cat": "Medicina general",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Exposición acumulada",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "cig", "label": "Cigarrillos por día", "u": "cig/día", "min": 0, "max": 120, "val": 20},
+        {"id": "anios", "label": "Años fumando", "u": "años", "min": 0, "max": 90, "val": 15}
+      ],
+      "expr": "(cig/20) * anios",
+      "out": {"label": "Paquetes-año", "u": "paq-año", "dec": 1},
+      "interp": [
+        {"max": 9, "n": "normal", "t": "Exposición baja"},
+        {"max": 20, "n": "alerta", "t": "Exposición moderada"},
+        {"n": "critico", "t": "Alta (≥20) — cribado según guía"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GEN-002",
+    "nombre": "Wells (TVP)",
+    "tipo": "score",
+    "cat": "Medicina general",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Probabilidad de trombosis venosa",
+    "ref": "Wells et al. 2003",
+    "def": {
+      "items": [
+        {"id": "ca", "label": "Cáncer activo", "p": 1},
+        {"id": "inm", "label": "Parálisis/inmovilización de MMII", "p": 1},
+        {"id": "enc", "label": "Encamado >3 días o cirugía <12 sem", "p": 1},
+        {"id": "dol", "label": "Dolor en trayecto venoso profundo", "p": 1},
+        {"id": "ede", "label": "Edema de toda la pierna", "p": 1},
+        {"id": "pant", "label": "Aumento >3 cm en pantorrilla", "p": 1},
+        {"id": "fov", "label": "Edema con fóvea unilateral", "p": 1},
+        {"id": "col", "label": "Venas colaterales superficiales", "p": 1},
+        {"id": "prev", "label": "TVP previa", "p": 1},
+        {"id": "altd", "label": "Dx alternativo tan o más probable", "p": -2}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 0, "n": "normal", "t": "Baja probabilidad"},
+        {"max": 2, "n": "alerta", "t": "Probabilidad moderada"},
+        {"n": "critico", "t": "Alta probabilidad"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GEN-003",
+    "nombre": "Centor (faringitis estreptocócica)",
+    "tipo": "score",
+    "cat": "Medicina general",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Probabilidad de estreptococo",
+    "ref": "Centor 1981 / McIsaac 1998",
+    "def": {
+      "items": [
+        {"id": "exu", "label": "Exudado amigdalino", "p": 1},
+        {"id": "aden", "label": "Adenopatías cervicales dolorosas", "p": 1},
+        {"id": "fie", "label": "Fiebre > 38 °C", "p": 1},
+        {"id": "tos", "label": "Ausencia de tos", "p": 1}
+      ],
+      "out": {"label": "Puntaje", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 1, "n": "normal", "t": "Baja probabilidad — sin prueba"},
+        {"max": 3, "n": "alerta", "t": "Considerar prueba rápida"},
+        {"n": "critico", "t": "Alta — prueba/tratamiento según guía"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-UCI-001",
+    "nombre": "Infusión de noradrenalina",
+    "tipo": "dosis",
+    "cat": "UCI · alto riesgo",
+    "ver": 2,
+    "hr": true,
+    "paises": {"SV": true, "GT": true, "HN": false},
+    "paginas": "*",
+    "sub": "mcg/kg/min → mL/h",
+    "ref": "Estándar institucional",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "dosis", "label": "Dosis objetivo", "u": "mcg/kg/min", "min": 0.01, "max": 3, "val": 0.1},
+        {"id": "conc", "label": "Concentración de la solución", "u": "mcg/mL", "min": 1, "max": 500, "val": 16}
+      ],
+      "expr": "(dosis * peso * 60) / conc",
+      "out": {"label": "Velocidad de infusión", "u": "mL/h", "dec": 1},
+      "interp": [{"n": "normal", "t": "Verificar contra bomba y prescripción"}]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-001",
+    "nombre": "PaO₂/FiO₂ (índice de Kirby)",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Oxigenación / SDRA",
+    "ref": "Berlin (SDRA), JAMA 2012",
+    "def": {
+      "inputs": [
+        {"id": "pao2", "label": "PaO₂", "u": "mmHg", "min": 20, "max": 600, "val": 90},
+        {"id": "fio2", "label": "FiO₂ (fracción)", "u": "0.21–1.0", "min": 0.21, "max": 1, "val": 0.5}
+      ],
+      "expr": "pao2 / fio2",
+      "out": {"label": "PaO₂/FiO₂", "u": "mmHg", "dec": 0},
+      "interp": [
+        {"max": 100, "n": "critico", "t": "SDRA grave (≤100)"},
+        {"max": 200, "n": "alerta", "t": "SDRA moderado"},
+        {"max": 300, "n": "alerta", "t": "SDRA leve"},
+        {"n": "normal", "t": "Normal (>300)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-002",
+    "nombre": "Índice de oxigenación (OI)",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Gravedad de hipoxemia",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "fio2", "label": "FiO₂ (fracción)", "u": "0.21–1.0", "min": 0.21, "max": 1, "val": 0.5},
+        {"id": "paw", "label": "Presión media en vía aérea", "u": "cmH₂O", "min": 2, "max": 50, "val": 12},
+        {"id": "pao2", "label": "PaO₂", "u": "mmHg", "min": 20, "max": 600, "val": 90}
+      ],
+      "expr": "(fio2*100*paw) / pao2",
+      "out": {"label": "Índice de oxigenación", "u": "", "dec": 1},
+      "interp": [
+        {"max": 4, "n": "normal", "t": "Bajo"},
+        {"max": 8, "n": "alerta", "t": "Moderado"},
+        {"max": 16, "n": "alerta", "t": "Grave"},
+        {"n": "critico", "t": "Muy grave (≥16)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-003",
+    "nombre": "Contenido arterial de O₂ (CaO₂)",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Transporte de oxígeno",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "hb", "label": "Hemoglobina", "u": "g/dL", "min": 2, "max": 25, "val": 14},
+        {"id": "sao2", "label": "Saturación arterial (SaO₂)", "u": "%", "min": 40, "max": 100, "val": 98},
+        {"id": "pao2", "label": "PaO₂", "u": "mmHg", "min": 20, "max": 600, "val": 90}
+      ],
+      "expr": "1.34*hb*(sao2/100) + 0.0031*pao2",
+      "out": {"label": "CaO₂", "u": "mL O₂/dL", "dec": 1},
+      "interp": [{"n": "normal", "t": "Contenido arterial de oxígeno"}]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-004",
+    "nombre": "Presión de conducción (driving pressure)",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Ventilación protectora",
+    "ref": "Amato et al., NEJM 2015",
+    "def": {
+      "inputs": [
+        {"id": "pplat", "label": "Presión meseta (plateau)", "u": "cmH₂O", "min": 5, "max": 60, "val": 25},
+        {"id": "peep", "label": "PEEP", "u": "cmH₂O", "min": 0, "max": 30, "val": 10}
+      ],
+      "expr": "pplat - peep",
+      "out": {"label": "Driving pressure", "u": "cmH₂O", "dec": 0},
+      "interp": [
+        {"max": 15, "n": "normal", "t": "≤15 — protectora"},
+        {"n": "alerta", "t": ">15 — mayor riesgo de mortalidad"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-005",
+    "nombre": "Compliancia estática",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Distensibilidad pulmonar",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "vt", "label": "Volumen corriente", "u": "mL", "min": 100, "max": 1200, "val": 400},
+        {"id": "pplat", "label": "Presión meseta (plateau)", "u": "cmH₂O", "min": 5, "max": 60, "val": 25},
+        {"id": "peep", "label": "PEEP", "u": "cmH₂O", "min": 0, "max": 30, "val": 10}
+      ],
+      "expr": "vt / (pplat - peep)",
+      "out": {"label": "Compliancia estática", "u": "mL/cmH₂O", "dec": 1},
+      "interp": [
+        {"max": 30, "n": "critico", "t": "Muy reducida"},
+        {"max": 50, "n": "alerta", "t": "Reducida"},
+        {"n": "normal", "t": "Normal (>50)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-001",
+    "nombre": "PaCO₂ esperada (Winters)",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Compensación en acidosis metabólica",
+    "ref": "Winters",
+    "def": {
+      "inputs": [
+        {"id": "hco3", "label": "Bicarbonato", "u": "mEq/L", "min": 2, "max": 50, "val": 12}
+      ],
+      "expr": "1.5*hco3 + 8",
+      "out": {"label": "PaCO₂ esperada", "u": "mmHg (±2)", "dec": 0},
+      "interp": [{"n": "normal", "t": "Si la PaCO₂ real difiere >2 mmHg, hay trastorno respiratorio agregado"}]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-002",
+    "nombre": "Delta-delta (relación delta)",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Trastornos ácido-base mixtos",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "ag", "label": "Brecha aniónica", "u": "mEq/L", "min": 2, "max": 50, "val": 20},
+        {"id": "hco3", "label": "Bicarbonato", "u": "mEq/L", "min": 2, "max": 50, "val": 14}
+      ],
+      "expr": "(ag - 12) / (24 - hco3)",
+      "out": {"label": "Relación delta", "u": "", "dec": 2},
+      "interp": [
+        {"max": 0.4, "n": "alerta", "t": "<0.4: acidosis metabólica sin brecha concomitante"},
+        {"max": 2, "n": "normal", "t": "0.4–2: acidosis con brecha pura"},
+        {"n": "alerta", "t": ">2: alcalosis metabólica concomitante"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-003",
+    "nombre": "Brecha aniónica corregida por albúmina",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Ajuste por hipoalbuminemia",
+    "ref": "Figge et al. 1998",
+    "def": {
+      "inputs": [
+        {"id": "ag", "label": "Brecha aniónica medida", "u": "mEq/L", "min": 2, "max": 50, "val": 12},
+        {"id": "alb", "label": "Albúmina", "u": "g/dL", "min": 1, "max": 6, "val": 2}
+      ],
+      "expr": "ag + 2.5*(4 - alb)",
+      "out": {"label": "Brecha aniónica corregida", "u": "mEq/L", "dec": 1},
+      "interp": [
+        {"max": 12, "n": "normal", "t": "Normal tras corrección"},
+        {"max": 20, "n": "alerta", "t": "Elevada"},
+        {"n": "critico", "t": "Muy elevada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-004",
+    "nombre": "Brecha osmolar",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Sospecha de tóxicos osmóticos",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "osm", "label": "Osmolalidad medida", "u": "mOsm/kg", "min": 250, "max": 400, "val": 300},
+        {"id": "na", "label": "Sodio", "u": "mEq/L", "min": 100, "max": 180, "val": 140},
+        {"id": "glu", "label": "Glucosa", "u": "mg/dL", "min": 20, "max": 2000, "val": 90},
+        {"id": "bun", "label": "Nitrógeno ureico (BUN)", "u": "mg/dL", "min": 2, "max": 200, "val": 14}
+      ],
+      "expr": "osm - (2*na + glu/18 + bun/2.8)",
+      "out": {"label": "Brecha osmolar", "u": "mOsm/kg", "dec": 0},
+      "interp": [
+        {"max": 10, "n": "normal", "t": "Normal (<10)"},
+        {"n": "alerta", "t": ">10 — sospechar metanol, etilenglicol u otros"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HIDRO-001",
+    "nombre": "Déficit de agua libre",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Hipernatremia",
+    "ref": "Estándar (objetivo Na 140)",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "na", "label": "Sodio actual", "u": "mEq/L", "min": 120, "max": 200, "val": 160},
+        {"id": "sexo", "type": "select", "label": "Agua corporal total", "opts": [{"v": "Hombre (0.6)", "factor": 0.6}, {"v": "Mujer (0.5)", "factor": 0.5}], "sel": 1}
+      ],
+      "expr": "(sexo_factor*peso) * (na/140 - 1)",
+      "out": {"label": "Déficit de agua libre", "u": "L", "dec": 2},
+      "interp": [{"n": "normal", "t": "Reponer en 24–48 h; no bajar el Na más de 10–12 mEq/L/día"}]
+    }
+  },
+  {
+    "codigo": "CALC-HIDRO-002",
+    "nombre": "Cambio de Na⁺ esperado (Adrogué-Madias)",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Por litro de solución infundida",
+    "ref": "Adrogué & Madias, NEJM 2000",
+    "def": {
+      "inputs": [
+        {"id": "na", "label": "Sodio sérico actual", "u": "mEq/L", "min": 100, "max": 180, "val": 120},
+        {"id": "na_inf", "label": "Na⁺ de la solución", "u": "mEq/L", "min": 0, "max": 513, "val": 154},
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "sexo", "type": "select", "label": "Agua corporal total", "opts": [{"v": "Hombre (0.6)", "factor": 0.6}, {"v": "Mujer (0.5)", "factor": 0.5}], "sel": 1}
+      ],
+      "expr": "(na_inf - na) / (sexo_factor*peso + 1)",
+      "out": {"label": "Δ Na⁺ por litro infundido", "u": "mEq/L", "dec": 2},
+      "interp": [{"n": "normal", "t": "No exceder 8–10 mEq/L en 24 h (riesgo de desmielinización)"}]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-005",
+    "nombre": "FEUrea (excreción fraccional de urea)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Prerrenal (útil con diuréticos)",
+    "ref": "Carvounis et al. 2002",
+    "def": {
+      "inputs": [
+        {"id": "bun_o", "label": "Urea (BUN) en orina", "u": "mg/dL", "min": 1, "max": 2000, "val": 300},
+        {"id": "bun_p", "label": "Urea (BUN) en plasma", "u": "mg/dL", "min": 2, "max": 200, "val": 20},
+        {"id": "cr_p", "label": "Creatinina en plasma", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2},
+        {"id": "cr_o", "label": "Creatinina en orina", "u": "mg/dL", "min": 1, "max": 400, "val": 80}
+      ],
+      "expr": "100 * (bun_o * cr_p) / (bun_p * cr_o)",
+      "out": {"label": "FEUrea", "u": "%", "dec": 1},
+      "interp": [
+        {"max": 35, "n": "alerta", "t": "<35%: patrón prerrenal"},
+        {"max": 50, "n": "normal", "t": "Indeterminado (35–50%)"},
+        {"n": "critico", "t": ">50%: patrón renal"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEURO-002",
+    "nombre": "Presión de perfusión cerebral (PPC)",
+    "tipo": "formula",
+    "cat": "Neurología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "MAP − PIC",
+    "ref": "Brain Trauma Foundation",
+    "def": {
+      "inputs": [
+        {"id": "pam", "label": "Presión arterial media (PAM)", "u": "mmHg", "min": 30, "max": 200, "val": 80},
+        {"id": "pic", "label": "Presión intracraneal (PIC)", "u": "mmHg", "min": 0, "max": 80, "val": 15}
+      ],
+      "expr": "pam - pic",
+      "out": {"label": "Presión de perfusión cerebral", "u": "mmHg", "dec": 0},
+      "interp": [
+        {"max": 59, "n": "critico", "t": "<60: riesgo de isquemia cerebral"},
+        {"n": "normal", "t": "≥60 (objetivo 60–70 mmHg)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEMO-001",
+    "nombre": "Índice de shock",
+    "tipo": "formula",
+    "cat": "Hemodinámica",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "FC / PAS",
+    "ref": "Allgöwer & Burri 1967",
+    "def": {
+      "inputs": [
+        {"id": "fc", "label": "Frecuencia cardíaca", "u": "lpm", "min": 20, "max": 250, "val": 110},
+        {"id": "pas", "label": "Presión sistólica", "u": "mmHg", "min": 40, "max": 300, "val": 100}
+      ],
+      "expr": "fc / pas",
+      "out": {"label": "Índice de shock", "u": "", "dec": 2},
+      "interp": [
+        {"max": 0.7, "n": "normal", "t": "Normal (<0.7)"},
+        {"max": 1, "n": "alerta", "t": "Elevado"},
+        {"n": "critico", "t": "≥1 — inestabilidad hemodinámica"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-ANTRO-004",
+    "nombre": "Peso corporal ajustado",
+    "tipo": "formula",
+    "cat": "Antropometría y dosis",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Dosificación en obesidad",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "real", "label": "Peso real", "u": "kg", "min": 20, "max": 400, "val": 58},
+        {"id": "ideal", "label": "Peso ideal (PCI)", "u": "kg", "min": 20, "max": 200, "val": 52}
+      ],
+      "expr": "ideal + 0.4*(real - ideal)",
+      "out": {"label": "Peso ajustado", "u": "kg", "dec": 1},
+      "interp": [{"n": "normal", "t": "Usar el PCI del calculador de Devine"}]
+    }
+  },
+  {
+    "codigo": "CALC-NUT-001",
+    "nombre": "Gasto energético basal (Harris-Benedict)",
+    "tipo": "formula",
+    "cat": "Nutrición",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Requerimiento calórico basal",
+    "ref": "Harris & Benedict 1919",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 20, "max": 300, "val": 58},
+        {"id": "tallac", "label": "Talla", "u": "cm", "min": 130, "max": 230, "val": 158},
+        {"id": "edad", "label": "Edad", "u": "años", "min": 1, "max": 110, "val": 64},
+        {"id": "sexo", "type": "select", "label": "Sexo", "opts": [{"v": "Masculino", "base": 66.47, "kw": 13.75, "kh": 5.003, "ka": 6.755}, {"v": "Femenino", "base": 655.1, "kw": 9.563, "kh": 1.85, "ka": 4.676}], "sel": 1}
+      ],
+      "expr": "sexo_base + sexo_kw*peso + sexo_kh*tallac - sexo_ka*edad",
+      "out": {"label": "Gasto energético basal", "u": "kcal/día", "dec": 0},
+      "interp": [{"n": "normal", "t": "Multiplicar por factor de actividad/estrés para el requerimiento total"}]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-006",
+    "nombre": "HEART (dolor torácico)",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo de eventos coronarios",
+    "ref": "Six et al. 2008",
+    "def": {
+      "inputs": [
+        {"id": "hist", "type": "select", "label": "Historia clínica", "opts": [{"v": "Poco sospechosa (0)", "pts": 0}, {"v": "Moderadamente sospechosa (1)", "pts": 1}, {"v": "Muy sospechosa (2)", "pts": 2}], "sel": 0},
+        {"id": "ecg", "type": "select", "label": "ECG", "opts": [{"v": "Normal (0)", "pts": 0}, {"v": "Alteración inespecífica (1)", "pts": 1}, {"v": "Depresión ST significativa (2)", "pts": 2}], "sel": 0},
+        {"id": "edad", "type": "select", "label": "Edad", "opts": [{"v": "< 45 años (0)", "pts": 0}, {"v": "45–64 años (1)", "pts": 1}, {"v": "≥ 65 años (2)", "pts": 2}], "sel": 0},
+        {"id": "fr", "type": "select", "label": "Factores de riesgo", "opts": [{"v": "Ninguno (0)", "pts": 0}, {"v": "1–2 (1)", "pts": 1}, {"v": "≥3 o ateroesclerosis (2)", "pts": 2}], "sel": 0},
+        {"id": "trop", "type": "select", "label": "Troponina", "opts": [{"v": "Normal (0)", "pts": 0}, {"v": "1–3× normal (1)", "pts": 1}, {"v": ">3× normal (2)", "pts": 2}], "sel": 0}
+      ],
+      "expr": "hist_pts + ecg_pts + edad_pts + fr_pts + trop_pts",
+      "out": {"label": "Puntaje HEART", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 3, "n": "normal", "t": "Bajo riesgo (0–3)"},
+        {"max": 6, "n": "alerta", "t": "Riesgo intermedio (4–6)"},
+        {"n": "critico", "t": "Alto riesgo (≥7)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-007",
+    "nombre": "TIMI (angina inestable/IAMSEST)",
+    "tipo": "score",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo a 14 días",
+    "ref": "Antman et al., JAMA 2000",
+    "def": {
+      "items": [
+        {"id": "edad", "label": "Edad ≥ 65 años", "p": 1},
+        {"id": "fr", "label": "≥3 factores de riesgo coronario", "p": 1},
+        {"id": "cad", "label": "Estenosis coronaria conocida ≥50%", "p": 1},
+        {"id": "asa", "label": "Uso de AAS en los últimos 7 días", "p": 1},
+        {"id": "angina", "label": "≥2 episodios de angina en 24 h", "p": 1},
+        {"id": "st", "label": "Desviación del ST ≥0.5 mm", "p": 1},
+        {"id": "marc", "label": "Marcadores cardíacos elevados", "p": 1}
+      ],
+      "out": {"label": "Puntaje TIMI", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 2, "n": "normal", "t": "Riesgo bajo (0–2)"},
+        {"max": 4, "n": "alerta", "t": "Riesgo intermedio (3–4)"},
+        {"n": "critico", "t": "Riesgo alto (5–7)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-008",
+    "nombre": "Índice de riesgo cardíaco revisado (RCRI)",
+    "tipo": "score",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo perioperatorio",
+    "ref": "Lee et al. 1999",
+    "def": {
+      "items": [
+        {"id": "cir", "label": "Cirugía de alto riesgo", "p": 1},
+        {"id": "cardio", "label": "Cardiopatía isquémica", "p": 1},
+        {"id": "icc", "label": "Insuficiencia cardíaca congestiva", "p": 1},
+        {"id": "acv", "label": "Enfermedad cerebrovascular", "p": 1},
+        {"id": "dm", "label": "Diabetes insulinodependiente", "p": 1},
+        {"id": "renal", "label": "Creatinina > 2 mg/dL", "p": 1}
+      ],
+      "out": {"label": "Puntaje RCRI", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 1, "n": "normal", "t": "Riesgo bajo"},
+        {"max": 2, "n": "alerta", "t": "Riesgo intermedio"},
+        {"n": "critico", "t": "Riesgo alto (≥3)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-009",
+    "nombre": "Doble producto (RPP)",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Consumo miocárdico de O₂",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "fc", "label": "Frecuencia cardíaca", "u": "lpm", "min": 20, "max": 250, "val": 70},
+        {"id": "pas", "label": "Presión sistólica", "u": "mmHg", "min": 40, "max": 300, "val": 120}
+      ],
+      "expr": "fc * pas",
+      "out": {"label": "Doble producto", "u": "mmHg·lpm", "dec": 0},
+      "interp": [{"n": "normal", "t": "Producto frecuencia-presión (índice de trabajo cardíaco)"}]
+    }
+  },
+  {
+    "codigo": "CALC-CARD-010",
+    "nombre": "Duke Treadmill Score",
+    "tipo": "formula",
+    "cat": "Cardiología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Ergometría (Bruce)",
+    "ref": "Mark et al. 1991",
+    "def": {
+      "inputs": [
+        {"id": "tej", "label": "Tiempo de ejercicio (Bruce)", "u": "min", "min": 0, "max": 30, "val": 9},
+        {"id": "st", "label": "Desviación máxima del ST", "u": "mm", "min": 0, "max": 10, "val": 0},
+        {"id": "ang", "type": "select", "label": "Angina de esfuerzo", "opts": [{"v": "Sin angina (0)", "pts": 0}, {"v": "No limitante (1)", "pts": 1}, {"v": "Limitante del ejercicio (2)", "pts": 2}], "sel": 0}
+      ],
+      "expr": "tej - 5*st - 4*ang_pts",
+      "out": {"label": "Duke Treadmill Score", "u": "", "dec": 0},
+      "interp": [
+        {"max": -11, "n": "critico", "t": "Alto riesgo (<−10)"},
+        {"max": 4, "n": "alerta", "t": "Riesgo intermedio"},
+        {"n": "normal", "t": "Bajo riesgo (≥5)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEMO-002",
+    "nombre": "Presión de pulso",
+    "tipo": "formula",
+    "cat": "Hemodinámica",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "PAS − PAD",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "pas", "label": "Presión sistólica", "u": "mmHg", "min": 40, "max": 300, "val": 120},
+        {"id": "pad", "label": "Presión diastólica", "u": "mmHg", "min": 20, "max": 200, "val": 80}
+      ],
+      "expr": "pas - pad",
+      "out": {"label": "Presión de pulso", "u": "mmHg", "dec": 0},
+      "interp": [
+        {"max": 39, "n": "alerta", "t": "Estrecha (<40) — evaluar gasto/volumen"},
+        {"max": 60, "n": "normal", "t": "Normal"},
+        {"n": "alerta", "t": "Amplia (>60)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HEMO-003",
+    "nombre": "Resistencia vascular sistémica (RVS)",
+    "tipo": "formula",
+    "cat": "Hemodinámica",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Poscarga",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "pam", "label": "Presión arterial media", "u": "mmHg", "min": 30, "max": 200, "val": 90},
+        {"id": "pvc", "label": "Presión venosa central", "u": "mmHg", "min": 0, "max": 40, "val": 8},
+        {"id": "gc", "label": "Gasto cardíaco", "u": "L/min", "min": 1, "max": 15, "val": 5}
+      ],
+      "expr": "80 * (pam - pvc) / gc",
+      "out": {"label": "RVS", "u": "dina·s·cm⁻⁵", "dec": 0},
+      "interp": [
+        {"max": 799, "n": "alerta", "t": "Baja (<800) — vasodilatación"},
+        {"max": 1200, "n": "normal", "t": "Normal (800–1200)"},
+        {"n": "alerta", "t": "Elevada (>1200)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-006",
+    "nombre": "Volumen corriente objetivo",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Ventilación protectora (mL/kg PCI)",
+    "ref": "ARDSNet 2000",
+    "def": {
+      "inputs": [
+        {"id": "pci", "label": "Peso corporal ideal", "u": "kg", "min": 20, "max": 150, "val": 52},
+        {"id": "mlkg", "type": "select", "label": "Objetivo por kg", "opts": [{"v": "6 mL/kg", "ml": 6}, {"v": "7 mL/kg", "ml": 7}, {"v": "8 mL/kg", "ml": 8}], "sel": 0}
+      ],
+      "expr": "pci * mlkg_ml",
+      "out": {"label": "Volumen corriente", "u": "mL", "dec": 0},
+      "interp": [{"n": "normal", "t": "Usar el PCI de Devine; objetivo 6 mL/kg en SDRA"}]
+    }
+  },
+  {
+    "codigo": "CALC-RESP-007",
+    "nombre": "Ventilación minuto",
+    "tipo": "formula",
+    "cat": "Respiratorio / ventilación",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Vt × FR",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "vt", "label": "Volumen corriente", "u": "mL", "min": 100, "max": 1200, "val": 450},
+        {"id": "fr", "label": "Frecuencia respiratoria", "u": "resp/min", "min": 4, "max": 60, "val": 14}
+      ],
+      "expr": "(vt/1000) * fr",
+      "out": {"label": "Ventilación minuto", "u": "L/min", "dec": 1},
+      "interp": [{"n": "normal", "t": "Ventilación minuto total"}]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-005",
+    "nombre": "PaCO₂ esperada (alcalosis metabólica)",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Compensación respiratoria",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "hco3", "label": "Bicarbonato", "u": "mEq/L", "min": 15, "max": 60, "val": 34}
+      ],
+      "expr": "0.7*hco3 + 21",
+      "out": {"label": "PaCO₂ esperada", "u": "mmHg (±2)", "dec": 0},
+      "interp": [{"n": "normal", "t": "Si la PaCO₂ real difiere >2 mmHg, hay trastorno respiratorio agregado"}]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-006",
+    "nombre": "Depuración de creatinina (orina 24 h)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Aclaramiento medido",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "ucr", "label": "Creatinina en orina", "u": "mg/dL", "min": 1, "max": 400, "val": 90},
+        {"id": "vol", "label": "Volumen urinario 24 h", "u": "mL", "min": 100, "max": 6000, "val": 1500},
+        {"id": "pcr", "label": "Creatinina en plasma", "u": "mg/dL", "min": 0.1, "max": 25, "val": 1.2}
+      ],
+      "expr": "(ucr * vol) / (pcr * 1440)",
+      "out": {"label": "Depuración de creatinina", "u": "mL/min", "dec": 1},
+      "interp": [
+        {"max": 30, "n": "critico", "t": "Deterioro grave"},
+        {"max": 60, "n": "alerta", "t": "Deterioro moderado"},
+        {"n": "normal", "t": "Adecuada"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-007",
+    "nombre": "Brecha aniónica urinaria",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Acidosis metabólica hiperclorémica",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "una", "label": "Sodio urinario", "u": "mEq/L", "min": 1, "max": 300, "val": 40},
+        {"id": "uk", "label": "Potasio urinario", "u": "mEq/L", "min": 1, "max": 200, "val": 30},
+        {"id": "ucl", "label": "Cloro urinario", "u": "mEq/L", "min": 1, "max": 300, "val": 60}
+      ],
+      "expr": "una + uk - ucl",
+      "out": {"label": "Brecha aniónica urinaria", "u": "mEq/L", "dec": 0},
+      "interp": [
+        {"max": 0, "n": "normal", "t": "Negativa: pérdida digestiva (diarrea)"},
+        {"n": "alerta", "t": "Positiva: acidosis tubular renal"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-NEFRO-008",
+    "nombre": "Gradiente transtubular de potasio (TTKG)",
+    "tipo": "formula",
+    "cat": "Nefrología",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Manejo renal de potasio",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "k_o", "label": "Potasio en orina", "u": "mEq/L", "min": 1, "max": 200, "val": 40},
+        {"id": "osm_p", "label": "Osmolalidad plasmática", "u": "mOsm/kg", "min": 250, "max": 400, "val": 290},
+        {"id": "k_p", "label": "Potasio en plasma", "u": "mEq/L", "min": 1.5, "max": 9, "val": 5},
+        {"id": "osm_o", "label": "Osmolalidad urinaria", "u": "mOsm/kg", "min": 50, "max": 1400, "val": 600}
+      ],
+      "expr": "(k_o * osm_p) / (k_p * osm_o)",
+      "out": {"label": "TTKG", "u": "", "dec": 1},
+      "interp": [
+        {"max": 3, "n": "alerta", "t": "<3 en hiperpotasemia: hipoaldosteronismo"},
+        {"n": "normal", "t": "≥7 esperado con hiperpotasemia y función normal"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-GASO-006",
+    "nombre": "Osmolalidad efectiva (tonicidad)",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Tonicidad plasmática",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "na", "label": "Sodio", "u": "mEq/L", "min": 100, "max": 180, "val": 140},
+        {"id": "glu", "label": "Glucosa", "u": "mg/dL", "min": 20, "max": 2000, "val": 90}
+      ],
+      "expr": "2*na + glu/18",
+      "out": {"label": "Osmolalidad efectiva", "u": "mOsm/kg", "dec": 0},
+      "interp": [
+        {"max": 275, "n": "alerta", "t": "Baja"},
+        {"max": 295, "n": "normal", "t": "Normal"},
+        {"n": "alerta", "t": "Elevada (hipertonicidad)"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-HIDRO-003",
+    "nombre": "Déficit de sodio",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Hiponatremia",
+    "ref": "Estándar",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 2, "max": 300, "val": 58},
+        {"id": "na", "label": "Sodio actual", "u": "mEq/L", "min": 100, "max": 160, "val": 125},
+        {"id": "na_obj", "label": "Sodio objetivo", "u": "mEq/L", "min": 120, "max": 145, "val": 140},
+        {"id": "sexo", "type": "select", "label": "Agua corporal total", "opts": [{"v": "Hombre (0.6)", "factor": 0.6}, {"v": "Mujer (0.5)", "factor": 0.5}], "sel": 1}
+      ],
+      "expr": "sexo_factor*peso*(na_obj - na)",
+      "out": {"label": "Déficit de sodio", "u": "mEq", "dec": 0},
+      "interp": [{"n": "normal", "t": "Corregir ≤8–10 mEq/L en 24 h (riesgo de desmielinización)"}]
+    }
+  },
+  {
+    "codigo": "CALC-ELEC-005",
+    "nombre": "Producto calcio-fósforo",
+    "tipo": "formula",
+    "cat": "Electrolitos y ácido-base",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Riesgo de calcificación",
+    "ref": "KDIGO",
+    "def": {
+      "inputs": [
+        {"id": "ca", "label": "Calcio sérico", "u": "mg/dL", "min": 4, "max": 18, "val": 9.2},
+        {"id": "po4", "label": "Fósforo sérico", "u": "mg/dL", "min": 1, "max": 15, "val": 4.5}
+      ],
+      "expr": "ca * po4",
+      "out": {"label": "Producto Ca × P", "u": "mg²/dL²", "dec": 0},
+      "interp": [
+        {"max": 55, "n": "normal", "t": "Normal (<55)"},
+        {"n": "alerta", "t": "Elevado (>55) — riesgo de calcificación"}
+      ]
+    }
+  },
+  {
+    "codigo": "CALC-PEDS-001",
+    "nombre": "Líquidos de mantenimiento (Holliday-Segar)",
+    "tipo": "formula",
+    "cat": "Obstetricia y pediatría",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Requerimiento basal 24 h",
+    "ref": "Holliday & Segar 1957",
+    "def": {
+      "inputs": [
+        {"id": "peso", "label": "Peso", "u": "kg", "min": 1, "max": 120, "val": 20}
+      ],
+      "expr": "min(peso,10)*100 + max(min(peso,20)-10,0)*50 + max(peso-20,0)*20",
+      "out": {"label": "Líquidos de mantenimiento", "u": "mL/día", "dec": 0},
+      "interp": [{"n": "normal", "t": "Dividir entre 24 para la velocidad horaria"}]
+    }
+  },
+  {
+    "codigo": "CALC-PEDS-002",
+    "nombre": "Peso pediátrico estimado (APLS)",
+    "tipo": "formula",
+    "cat": "Obstetricia y pediatría",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Estimación por edad",
+    "ref": "APLS",
+    "def": {
+      "inputs": [
+        {"id": "edad", "label": "Edad", "u": "años", "min": 1, "max": 12, "val": 5},
+        {"id": "met", "type": "select", "label": "Fórmula", "opts": [{"v": "(edad+4)×2  [1–5 años]", "a": 2, "b": 8}, {"v": "3×edad+7  [1–10 años]", "a": 3, "b": 7}], "sel": 0}
+      ],
+      "expr": "met_a*edad + met_b",
+      "out": {"label": "Peso estimado", "u": "kg", "dec": 1},
+      "interp": [{"n": "normal", "t": "Estimación; confirmar con peso real cuando sea posible"}]
+    }
+  },
+  {
+    "codigo": "CALC-OBST-002",
+    "nombre": "Bishop (inducción del parto)",
+    "tipo": "formula",
+    "cat": "Obstetricia y pediatría",
+    "ver": 1,
+    "hr": false,
+    "paises": {"SV": true, "GT": true, "HN": true},
+    "paginas": "*",
+    "sub": "Favorabilidad cervical",
+    "ref": "Bishop 1964",
+    "def": {
+      "inputs": [
+        {"id": "dil", "type": "select", "label": "Dilatación", "opts": [{"v": "Cerrado (0)", "pts": 0}, {"v": "1–2 cm (1)", "pts": 1}, {"v": "3–4 cm (2)", "pts": 2}, {"v": "≥5 cm (3)", "pts": 3}], "sel": 0},
+        {"id": "bor", "type": "select", "label": "Borramiento", "opts": [{"v": "0–30% (0)", "pts": 0}, {"v": "40–50% (1)", "pts": 1}, {"v": "60–70% (2)", "pts": 2}, {"v": "≥80% (3)", "pts": 3}], "sel": 0},
+        {"id": "est", "type": "select", "label": "Estación", "opts": [{"v": "−3 (0)", "pts": 0}, {"v": "−2 (1)", "pts": 1}, {"v": "−1/0 (2)", "pts": 2}, {"v": "+1/+2 (3)", "pts": 3}], "sel": 0},
+        {"id": "con", "type": "select", "label": "Consistencia", "opts": [{"v": "Firme (0)", "pts": 0}, {"v": "Media (1)", "pts": 1}, {"v": "Blanda (2)", "pts": 2}], "sel": 0},
+        {"id": "pos", "type": "select", "label": "Posición", "opts": [{"v": "Posterior (0)", "pts": 0}, {"v": "Media (1)", "pts": 1}, {"v": "Anterior (2)", "pts": 2}], "sel": 0}
+      ],
+      "expr": "dil_pts + bor_pts + est_pts + con_pts + pos_pts",
+      "out": {"label": "Puntaje Bishop", "u": "puntos", "dec": 0},
+      "interp": [
+        {"max": 5, "n": "alerta", "t": "Cérvix desfavorable — considerar maduración"},
+        {"max": 7, "n": "normal", "t": "Intermedio"},
+        {"n": "normal", "t": "Favorable (≥8)"}
+      ]
+    }
+  }
+]
