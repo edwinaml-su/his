@@ -1,0 +1,685 @@
+/*
+ * Calculadoras clínicas (CC-0009) — estilos fieles al mockup
+ * docs/CC/0009/calculadoras-clinicas.html. Tokens y medidas 1:1.
+ * Los custom properties viven en `.vars` (aplicado a cada raíz portaleada)
+ * para no filtrar al design system global.
+ */
+
+.vars {
+  --navy: #0b3d5c;
+  --navy-700: #0d4d73;
+  --teal: #00a8b5;
+  --teal-600: #008b96;
+  --teal-050: #e6f7f8;
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f8fafb;
+  --line: #e2e8ee;
+  --line-2: #cfd9e2;
+  --ink: #1a2b38;
+  --ink-2: #5a6b78;
+  --ink-3: #8a99a6;
+  --ok: #1f9d76;
+  --ok-bg: #e4f5ee;
+  --warn: #c77d10;
+  --warn-bg: #fbf0da;
+  --crit: #c0392b;
+  --crit-bg: #fbe9e7;
+  --hi: #0b3d5c;
+  --hi-bg: #eaf1f6;
+  --r: 10px;
+  --r-sm: 7px;
+  --sh: 0 1px 2px rgba(11, 61, 92, 0.06), 0 4px 16px rgba(11, 61, 92, 0.06);
+  --sh-lg: 0 8px 40px rgba(11, 61, 92, 0.16);
+  --sh-float: 0 6px 30px rgba(11, 61, 92, 0.22), 0 2px 8px rgba(11, 61, 92, 0.12);
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.vars *,
+.vars *::before,
+.vars *::after {
+  box-sizing: border-box;
+}
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* ============ BARRA FLOTANTE (widget) ============ */
+.floatWrap {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  width: 520px;
+  max-width: 92vw;
+  z-index: 30;
+}
+.fbar {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  background: var(--surface);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  padding: 13px 16px;
+  box-shadow: var(--sh-float);
+  transition: 0.16s;
+  cursor: text;
+}
+.fbar:hover {
+  border-color: var(--teal);
+}
+.fbarActive {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 4px var(--teal-050), var(--sh-float);
+}
+.grip {
+  width: 22px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 15px;
+  flex-shrink: 0;
+  cursor: grab;
+  line-height: 0;
+  touch-action: none;
+  user-select: none;
+}
+.grip:hover {
+  color: var(--ink-2);
+}
+.grabbing,
+.grabbing .grip {
+  cursor: grabbing;
+}
+.mag {
+  color: var(--ink-3);
+  font-size: 17px;
+}
+.inpWrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 15px;
+  padding: 2px 0;
+  position: relative;
+  z-index: 1;
+  color: var(--ink);
+  font-family: inherit;
+}
+.input::placeholder {
+  color: var(--ink-3);
+}
+.input:focus {
+  outline: none;
+}
+.ghost {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  white-space: pre;
+  pointer-events: none;
+  overflow: hidden;
+  max-width: 100%;
+  z-index: 0;
+}
+.gTyped {
+  color: transparent;
+}
+.gRest {
+  color: var(--ink-3);
+}
+.hint {
+  font-size: 11px;
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  padding: 3px 7px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* resultados sobre/bajo la barra */
+.results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 10px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--sh-lg);
+  overflow: hidden;
+  max-height: min(52vh, 440px);
+  overflow-y: auto;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: 0.16s;
+}
+.show {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+.below {
+  top: calc(100% + 10px);
+  bottom: auto;
+}
+.resGrp {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 11px 16px 5px;
+}
+.resItem {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: 0.1s;
+}
+.resItem.active,
+.resItem:hover {
+  background: var(--hi-bg);
+}
+.tag {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.formula {
+  background: #e7eef8;
+  color: #1f4e79;
+}
+.score {
+  background: #efe9f6;
+  color: #6a4a9c;
+}
+.dosis {
+  background: var(--teal-050);
+  color: var(--teal-600);
+}
+.nm {
+  flex: 1;
+  min-width: 0;
+}
+.nm b {
+  font-weight: 600;
+  font-size: 13.5px;
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nm span {
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.hrDot {
+  font-size: 10px;
+  color: #7a1f16;
+  background: var(--crit-bg);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-weight: 600;
+}
+.ent {
+  color: var(--ink-3);
+  font-size: 15px;
+  opacity: 0;
+  transition: 0.1s;
+}
+.resItem.active .ent {
+  opacity: 1;
+}
+.resEmpty {
+  padding: 34px 20px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.resFoot {
+  border-top: 1px solid var(--line);
+  padding: 8px 16px;
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: var(--ink-3);
+  background: var(--surface-2);
+}
+.resFoot kbd {
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: inherit;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* ============ MODAL DE CÁLCULO ============ */
+.mScrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 32, 48, 0.4);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.2s;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.mScrim.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+.modal {
+  background: var(--surface);
+  border-radius: 16px;
+  box-shadow: var(--sh-lg);
+  width: 460px;
+  max-width: 96vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(14px) scale(0.985);
+  transition: 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.mScrim.show .modal {
+  transform: none;
+}
+.mHead {
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.mHead .tag {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+.ttl h4 {
+  font-size: 16.5px;
+  font-weight: 600;
+  color: var(--navy);
+  line-height: 1.2;
+}
+.ver {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ver .pill {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-weight: 600;
+}
+.x {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: var(--ink-2);
+  display: grid;
+  place-items: center;
+  font-size: 21px;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.x:hover {
+  background: var(--surface-2);
+}
+.mBody {
+  padding: 16px 18px 6px;
+  overflow: auto;
+  flex: 1;
+}
+.field {
+  margin-bottom: 13px;
+}
+.field label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 5px;
+}
+.field .u {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.inp {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  overflow: hidden;
+  background: #fff;
+  transition: 0.15s;
+}
+.inp:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-050);
+}
+.inp input {
+  flex: 1;
+  border: none;
+  padding: 9px 11px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink);
+}
+.inp input:focus {
+  outline: none;
+}
+.suf {
+  padding: 0 11px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  border-left: 1px solid var(--line);
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+.inp2 {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--ink);
+}
+.inp2:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px var(--teal-050);
+}
+.src {
+  margin-top: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  background: var(--hi-bg);
+  color: var(--navy);
+  border: 1px solid #d3e0ea;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-weight: 500;
+}
+.src .d {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+.opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 7px;
+  padding: 8px 11px;
+  transition: 0.12s;
+  cursor: pointer;
+}
+.opt:hover {
+  background: var(--surface-2);
+}
+.opt.sel {
+  border-color: var(--teal);
+  background: var(--teal-050);
+}
+.opt .ck {
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1.5px solid var(--line-2);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: transparent;
+  flex-shrink: 0;
+}
+.opt.sel .ck {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #fff;
+}
+.opt .ol {
+  flex: 1;
+  font-size: 13px;
+}
+.opt .pts {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  font-weight: 600;
+  background: var(--surface-2);
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+.opt.sel .pts {
+  background: #fff;
+  color: var(--teal-600);
+}
+.optLbl {
+  font-size: 12.5px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+.result {
+  margin: 6px 0 4px;
+  border-radius: var(--r);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.result .val {
+  padding: 16px 18px;
+  text-align: center;
+}
+.result .val .n {
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.result .val .un {
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-top: 3px;
+}
+.result .interp {
+  padding: 10px 16px;
+  font-size: 12.5px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+}
+.interp .d {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.rNormal .val .n {
+  color: var(--ok);
+}
+.rNormal .interp {
+  background: var(--ok-bg);
+  color: #14603f;
+}
+.rNormal .d {
+  background: var(--ok);
+}
+.rAlerta .val .n {
+  color: var(--warn);
+}
+.rAlerta .interp {
+  background: var(--warn-bg);
+  color: #7a4d05;
+}
+.rAlerta .d {
+  background: var(--warn);
+}
+.rCritico .val .n {
+  color: var(--crit);
+}
+.rCritico .interp {
+  background: var(--crit-bg);
+  color: #7a1f16;
+}
+.rCritico .d {
+  background: var(--crit);
+}
+.rIdle .val .n {
+  color: var(--line-2);
+}
+.rIdle .val .un {
+  color: var(--ink-3);
+}
+.hrFlag {
+  margin-top: 10px;
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  background: var(--crit-bg);
+  border: 1px solid #f0cfca;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 11.5px;
+  color: #7a1f16;
+}
+.hrFlag .i {
+  font-size: 15px;
+  line-height: 1.2;
+}
+.hrFlag b {
+  font-weight: 600;
+}
+.mFoot {
+  border-top: 1px solid var(--line);
+  padding: 12px 18px;
+  display: flex;
+  gap: 9px;
+  background: var(--surface-2);
+}
+.mFoot .cta {
+  flex: 1;
+  justify-content: center;
+}
+.disclaimer {
+  padding: 9px 18px 12px;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-align: center;
+  line-height: 1.4;
+  background: var(--surface-2);
+}
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--teal);
+  color: #fff;
+  font-weight: 600;
+  font-size: 13.5px;
+  padding: 9px 16px;
+  border-radius: var(--r-sm);
+  transition: 0.15s;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+.cta:hover {
+  background: var(--teal-600);
+}
+.ctaGhost {
+  background: var(--surface);
+  color: var(--navy);
+  border: 1px solid var(--line-2);
+}
+.ctaGhost:hover {
+  border-color: var(--teal);
+  color: var(--teal-600);
+  background: var(--surface);
+}
+
+/* ============ TOAST ============ */
+.toast {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--navy);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 11px 18px;
+  border-radius: 9px;
+  box-shadow: var(--sh-lg);
+  opacity: 0;
+  pointer-events: none;
+  transition: 0.24s;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.toastShow {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.toast .ic {
+  color: var(--teal);
+}

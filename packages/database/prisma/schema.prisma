@@ -7276,3 +7276,124 @@ model PatientAccountService {
   @@index([encounterId])
   @@schema("public")
 }
+
+// =============================================================================
+// CC-0009 — Calculadoras clínicas (schema ece)
+// =============================================================================
+
+enum CalcTipo {
+  formula
+  score
+  dosis
+
+  @@schema("ece")
+}
+
+enum CalcEstado {
+  borrador
+  publicada
+  retirada
+
+  @@schema("ece")
+}
+
+enum CalcResultadoCasoPrueba {
+  pasa
+  falla
+
+  @@schema("ece")
+}
+
+/// Fila de catálogo global de calculadoras clínicas (CC-0009)
+model Calculadora {
+  id              String      @id @default(uuid()) @db.Uuid
+  codigo          String      @unique @db.VarChar(30)
+  nombre          String      @db.VarChar(200)
+  tipo            CalcTipo
+  categoria       String      @db.VarChar(80)
+  altoRiesgo      Boolean     @default(false) @map("alto_riesgo")
+  sub             String?     @db.VarChar(200)
+  ref             String?
+  estado          CalcEstado  @default(borrador)
+  paises          Json        @default("{}")
+  paginas         Json        @default("\"*\"")
+  versionActualId String?     @map("version_actual_id") @db.Uuid
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt       DateTime    @updatedAt @map("updated_at") @db.Timestamptz()
+
+  versionActual CalculadoraVersion?  @relation("VersionActual", fields: [versionActualId], references: [id])
+  versiones     CalculadoraVersion[] @relation("VersionesDeCalc")
+
+  @@index([codigo])
+  @@index([estado])
+  @@map("calculadora")
+  @@schema("ece")
+}
+
+/// Versión inmutable de una calculadora (contrato JSON §3)
+model CalculadoraVersion {
+  id             String    @id @default(uuid()) @db.Uuid
+  calculadoraId  String    @map("calculadora_id") @db.Uuid
+  version        Int
+  definicion     Json
+  publicadaEn    DateTime? @map("publicada_en") @db.Timestamptz()
+  publicadaPor   String?   @map("publicada_por") @db.Uuid
+  inmutable      Boolean   @default(false)
+
+  calculadora    Calculadora              @relation("VersionesDeCalc", fields: [calculadoraId], references: [id])
+  calcActual     Calculadora[]            @relation("VersionActual")
+  casosPrueba    CalculadoraCasoPrueba[]
+
+  @@unique([calculadoraId, version])
+  @@index([calculadoraId])
+  @@map("calculadora_version")
+  @@schema("ece")
+}
+
+/// Caso de prueba gate para publicar una versión
+model CalculadoraCasoPrueba {
+  id          String                   @id @default(uuid()) @db.Uuid
+  versionId   String                   @map("version_id") @db.Uuid
+  entradas    Json
+  esperado    Decimal                  @db.Decimal(18, 6)
+  tolerancia  Decimal                  @db.Decimal(18, 6)
+  resultado   CalcResultadoCasoPrueba?
+
+  version CalculadoraVersion @relation(fields: [versionId], references: [id])
+
+  @@index([versionId])
+  @@map("calculadora_caso_prueba")
+  @@schema("ece")
+}
+
+/// Catálogo de pantallas donde aparece el widget (semilla de 10 filas)
+model CalculadoraPantalla {
+  id      String  @id @db.VarChar(60)
+  etiqueta String @db.VarChar(100)
+  orden   Int
+  activo  Boolean @default(true)
+
+  @@map("calculadora_pantalla")
+  @@schema("ece")
+}
+
+/// Registro auditable de cada cálculo ejecutado — tenant-scoped
+model RegistroCalculo {
+  id              String    @id @default(uuid()) @db.Uuid
+  calculadoraId   String    @map("calculadora_id") @db.Uuid
+  versionId       String    @map("version_id") @db.Uuid
+  pacienteId      String    @map("paciente_id") @db.Uuid
+  entradas        Json
+  resultado       Decimal   @db.Decimal(18, 6)
+  interpretacion  String?
+  pantalla        String?   @db.VarChar(60)
+  usuarioId       String    @map("usuario_id") @db.Uuid
+  organizationId  String    @map("organization_id") @db.Uuid
+  creadoEn        DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@index([organizationId])
+  @@index([pacienteId])
+  @@index([calculadoraId])
+  @@map("registro_calculo")
+  @@schema("ece")
+}

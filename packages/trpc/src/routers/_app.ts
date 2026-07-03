@@ -219,6 +219,8 @@ import { srsRegistroRouter } from "./srs-registro.router";
 import { cie11Router } from "./cie11.router";
 // CC-0002 §7 — Cuentas y Servicios de Paciente
 import { patientAccountRouter } from "./patient-account.router";
+// CC-0009 — Calculadoras y Fórmulas Clínicas (ECE-CALC-001)
+import { calculadorasRouter } from "./calculadoras.router";
 // Workflow Inbox — bandeja BPM centralizada con routing RBAC (Ola 1: 29 fuentes)
 import { workflowInboxRouter } from "./workflow-inbox.router";
 
@@ -442,6 +444,8 @@ export const appRouter = router({
   workflowInbox: workflowInboxRouter,
   // CC-0002 §7 — Cuentas y Servicios de Paciente
   patientAccount: patientAccountRouter,
+  // CC-0009 — Calculadoras y Fórmulas Clínicas
+  calculadoras: calculadorasRouter,
 });
 
 export type AppRouter = typeof appRouter;

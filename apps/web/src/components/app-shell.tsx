@@ -13,6 +13,7 @@ import {
 } from "@his/ui/components/sidebar";
 import { Breadcrumbs } from "./breadcrumbs";
 import { ChatWidget } from "./chat-widget";
+import { CalcWidget } from "./calculadoras/calc-widget";
 import { AppSidebar } from "./app-sidebar";
 import { CommandPalette, CommandPaletteButton } from "./command-palette";
 
@@ -120,6 +121,8 @@ export function AppShell({
       </CommandPalette>
       {/* Asistente HIS — copiloto flotante context-aware. */}
       <ChatWidget roleCodes={roleCodes} chatAuth={chatAuth} />
+      {/* Calculadoras clínicas — barra flotante (Ctrl+Shift+K), oculta en /admin. */}
+      <CalcWidget />
     </TooltipProvider>
   );
 }

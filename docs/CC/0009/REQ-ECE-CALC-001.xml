@@ -1,0 +1,1508 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Requerimiento formal para implementación en HIS Avante Multipaís.
+  Fuente de comportamiento de referencia: mockup calculadoras-clinicas.html (Anexo B).
+  Documento estructurado en XML por solicitud. Los bloques de código, expresiones y
+  contratos JSON van en secciones CDATA para preservarlos literalmente.
+-->
+<requerimiento id="REQ-ECE-CALC-001" version="1.0" idioma="es-SV">
+
+  <control-documento>
+    <titulo>Módulo de Calculadoras y Fórmulas Clínicas (ECE)</titulo>
+    <identificador>REQ-ECE-CALC-001</identificador>
+    <version>1.0</version>
+    <fecha>2026-07-02</fecha>
+    <autor rol="Transformación Digital (TTD)">Complejo Avante</autor>
+    <sistema>HIS Avante Multipaís</sistema>
+    <modulo>Expediente Clínico Electrónico (ECE)</modulo>
+    <estado>Propuesta para implementación</estado>
+    <convencion-codigo>REQ-{MODULO}-{FUNCIONALIDAD}-NNN</convencion-codigo>
+    <destino-implementacion>Claude Code</destino-implementacion>
+    <paises-alcance>SV, GT, HN</paises-alcance>
+  </control-documento>
+
+  <resumen-ejecutivo>
+    <texto>
+      Se requiere un módulo de calculadoras y fórmulas clínicas parametrizable, consumido por el
+      personal médico mediante un widget de barra flotante que acompaña al usuario en cualquier
+      pantalla del expediente. El módulo entrega, en su biblioteca inicial, 205 calculadoras
+      implementadas desde literatura primaria, de las cuales 17 son de alto riesgo (dosificación y
+      modelos pronósticos). El módulo incluye una capa de administración (Farmacia Clínica / Calidad)
+      donde cada fórmula se versiona de forma inmutable, se activa por país, se configura su
+      visibilidad por pantalla del expediente y se bloquea su publicación hasta que sus casos de
+      prueba pasen. Toda constante clínica portada requiere validación clínica antes de habilitarse
+      en producción: las pruebas automatizadas validan el motor de evaluación, no la corrección
+      clínica de las constantes.
+    </texto>
+    <metricas-biblioteca>
+      <total-calculadoras>205</total-calculadoras>
+      <tipo-formula>174</tipo-formula>
+      <tipo-score>29</tipo-score>
+      <tipo-dosis>2</tipo-dosis>
+      <alto-riesgo>17</alto-riesgo>
+      <categorias>21</categorias>
+      <pantallas-configurables>10</pantallas-configurables>
+    </metricas-biblioteca>
+  </resumen-ejecutivo>
+
+  <glosario>
+    <termino id="ECE">Expediente Clínico Electrónico.</termino>
+    <termino id="widget">Barra flotante de búsqueda de calculadoras, arrastrable, disponible en toda pantalla del expediente.</termino>
+    <termino id="hr">Alto riesgo. Calculadora de dosificación o modelo pronóstico que exige verificación independiente antes de aplicarse.</termino>
+    <termino id="IPSG.3">International Patient Safety Goal 3 (JCI): manejo seguro de medicamentos de alto riesgo; requiere doble verificación independiente.</termino>
+    <termino id="expr-eval">Librería de evaluación segura de expresiones matemáticas (parser sin ejecución de código arbitrario). Se auto-hospeda en producción.</termino>
+    <termino id="interp">Conjunto de reglas de interpretación que mapean el resultado numérico a una banda clínica (normal / alerta / crítico) con texto.</termino>
+    <termino id="alcance-pantalla">Conjunto de pantallas del expediente en las que una calculadora es visible dentro del widget.</termino>
+  </glosario>
+
+  <objetivos>
+    <objetivo id="OBJ-1">Poner a disposición del médico una biblioteca de calculadoras clínicas accesible sin abandonar la pantalla en la que trabaja.</objetivo>
+    <objetivo id="OBJ-2">Parametrizar cada calculadora (definición, unidad, interpretación, país, pantalla, nivel de riesgo) sin desplegar código.</objetivo>
+    <objetivo id="OBJ-3">Garantizar trazabilidad y reproducibilidad: cada cálculo conserva la versión exacta con la que se realizó.</objetivo>
+    <objetivo id="OBJ-4">Imponer un control de calidad obligatorio: ninguna fórmula se publica sin casos de prueba correctos ni sin validación clínica.</objetivo>
+    <objetivo id="OBJ-5">Soportar operación multipaís (SV, GT, HN) con activación diferenciada por país.</objetivo>
+    <objetivo id="OBJ-6">Permitir configurar en qué pantallas del expediente aparece cada calculadora.</objetivo>
+  </objetivos>
+
+  <alcance>
+    <incluye>
+      <item>Widget de barra flotante con búsqueda, autocompletado, atajos de teclado y persistencia de posición por usuario.</item>
+      <item>Modal de cálculo con prellenado de datos del paciente cuando estén disponibles.</item>
+      <item>Motor de evaluación seguro (expr-eval auto-hospedado), sin eval ni new Function.</item>
+      <item>Vista de administración: catálogo, versionado inmutable, activación por país, visibilidad por pantalla, gate de casos de prueba.</item>
+      <item>Modelo de datos, contrato JSON de calculadora, y la biblioteca inicial de 205 calculadoras (Anexo A).</item>
+    </incluye>
+    <excluye>
+      <item>Motor completo de interpretación de gases arteriales (compensación Winters/Boston y delta-delta). En el widget se entrega solo el clasificador del trastorno primario.</item>
+      <item>Modelos pronósticos poblacionales de UCI (APACHE II, SAPS II) como herramienta de cabecera: se recomiendan trasladar a la analítica de UCI. Se incluyen en el widget marcados como alto riesgo de forma transitoria.</item>
+      <item>Aritmética de fechas para obstetricia: Naegele se entrega como edad gestacional en semanas a partir de días desde la FUM.</item>
+    </excluye>
+  </alcance>
+
+  <actores>
+    <actor id="ACT-MED" nombre="Médico">Consume calculadoras desde el widget en el contexto del expediente del paciente.</actor>
+    <actor id="ACT-ADM" nombre="Administrador (Farmacia Clínica / Calidad)">Crea, versiona, valida, activa por país y configura la visibilidad por pantalla de las calculadoras.</actor>
+    <actor id="ACT-SYS" nombre="Sistema HIS">Provee contexto del paciente, persiste cálculos, aplica reglas de inmutabilidad y auditoría.</actor>
+  </actores>
+
+  <arquitectura>
+    <stack>
+      <framework>Next.js (App Router)</framework>
+      <ui>React + TypeScript</ui>
+      <api>tRPC</api>
+      <orm>Prisma</orm>
+      <base-datos>PostgreSQL (Supabase)</base-datos>
+      <despliegue>Vercel</despliegue>
+    </stack>
+    <design-system nombre="Avante DS v2.0">
+      <color-primario>#0B3D5C (navy)</color-primario>
+      <color-secundario>#00A8B5 (teal)</color-secundario>
+      <tipografia>Inter</tipografia>
+      <tokens>OKLCH; modo claro/oscuro</tokens>
+    </design-system>
+    <libreria-motor>
+      <nombre>expr-eval</nombre>
+      <regla>Debe auto-hospedarse dentro del bundle de producción. No se permite carga desde CDN externo en producción (el mockup usa CDN solo para prototipado).</regla>
+      <seguridad>Prohibido el uso de eval, new Function o cualquier ejecución de código arbitrario en la evaluación de fórmulas.</seguridad>
+    </libreria-motor>
+  </arquitectura>
+
+  <modelo-datos>
+    <nota>Orientación Prisma/PostgreSQL. La definición de la calculadora se persiste como JSONB por versión.</nota>
+
+    <entidad nombre="Calculadora">
+      <campo nombre="id" tipo="uuid" clave="primaria"/>
+      <campo nombre="codigo" tipo="text" unico="true" descripcion="CALC-{AREA}-NNN"/>
+      <campo nombre="nombre" tipo="text"/>
+      <campo nombre="tipo" tipo="enum" valores="formula|score|dosis"/>
+      <campo nombre="categoria" tipo="text"/>
+      <campo nombre="alto_riesgo" tipo="boolean"/>
+      <campo nombre="estado" tipo="enum" valores="borrador|publicada|retirada"/>
+      <campo nombre="version_actual_id" tipo="uuid" descripcion="FK a VersionCalculadora"/>
+    </entidad>
+
+    <entidad nombre="VersionCalculadora">
+      <campo nombre="id" tipo="uuid" clave="primaria"/>
+      <campo nombre="calculadora_id" tipo="uuid" descripcion="FK a Calculadora"/>
+      <campo nombre="version" tipo="int"/>
+      <campo nombre="definicion" tipo="jsonb" descripcion="Contrato JSON completo (ver sección contrato-calculadora)"/>
+      <campo nombre="publicada_en" tipo="timestamptz" opcional="true"/>
+      <campo nombre="publicada_por" tipo="uuid" opcional="true"/>
+      <campo nombre="inmutable" tipo="boolean" descripcion="Una vez publicada, la versión no se modifica; editar crea una versión nueva"/>
+    </entidad>
+
+    <entidad nombre="CasoPrueba">
+      <campo nombre="id" tipo="uuid" clave="primaria"/>
+      <campo nombre="version_id" tipo="uuid" descripcion="FK a VersionCalculadora"/>
+      <campo nombre="entradas" tipo="jsonb"/>
+      <campo nombre="esperado" tipo="numeric"/>
+      <campo nombre="tolerancia" tipo="numeric"/>
+      <campo nombre="resultado" tipo="enum" valores="pasa|falla"/>
+      <regla>La publicación de una versión está bloqueada hasta que todos sus casos de prueba pasen.</regla>
+    </entidad>
+
+    <entidad nombre="AlcancePais">
+      <campo nombre="calculadora_id" tipo="uuid"/>
+      <campo nombre="pais" tipo="enum" valores="SV|GT|HN"/>
+      <campo nombre="activo" tipo="boolean"/>
+      <nota>Equivale al objeto paises del contrato. Puede modelarse como tabla o como campo jsonb en la calculadora.</nota>
+    </entidad>
+
+    <entidad nombre="CatalogoPantalla">
+      <campo nombre="id" tipo="text" clave="primaria" descripcion="ej. evolucion, historia, indicaciones"/>
+      <campo nombre="etiqueta" tipo="text"/>
+      <campo nombre="orden" tipo="int"/>
+      <campo nombre="activo" tipo="boolean"/>
+    </entidad>
+
+    <entidad nombre="AlcancePantalla">
+      <campo nombre="calculadora_id" tipo="uuid"/>
+      <campo nombre="pantalla_id" tipo="text" descripcion="FK a CatalogoPantalla"/>
+      <nota>Equivale al campo paginas del contrato. Ausencia total de filas = visible en todas las pantallas. Puede modelarse como tabla o como campo jsonb paginas.</nota>
+    </entidad>
+
+    <entidad nombre="RegistroCalculo">
+      <campo nombre="id" tipo="uuid" clave="primaria"/>
+      <campo nombre="calculadora_id" tipo="uuid"/>
+      <campo nombre="version_id" tipo="uuid" descripcion="Versión exacta usada; se conserva aunque la calculadora evolucione"/>
+      <campo nombre="paciente_id" tipo="uuid"/>
+      <campo nombre="entradas" tipo="jsonb"/>
+      <campo nombre="resultado" tipo="numeric"/>
+      <campo nombre="interpretacion" tipo="text"/>
+      <campo nombre="pantalla" tipo="text" descripcion="Pantalla desde la que se ejecutó"/>
+      <campo nombre="usuario_id" tipo="uuid"/>
+      <campo nombre="creado_en" tipo="timestamptz"/>
+      <regla>Registro inmutable de auditoría.</regla>
+    </entidad>
+  </modelo-datos>
+
+  <contrato-calculadora>
+    <descripcion>
+      Contrato JSON de una calculadora. Campos de cabecera: codigo, nombre, tipo, cat, ver, hr,
+      paises, paginas, sub, ref. El bloque def contiene la definición según el tipo.
+    </descripcion>
+    <campos>
+      <campo nombre="codigo" descripcion="Identificador único CALC-{AREA}-NNN."/>
+      <campo nombre="tipo" descripcion="formula | score | dosis."/>
+      <campo nombre="hr" descripcion="Alto riesgo. true exige verificación independiente (IPSG.3) y aviso en el modal."/>
+      <campo nombre="paises" descripcion='Objeto de activación por país, ej. {"SV":true,"GT":true,"HN":true}.'/>
+      <campo nombre="paginas" descripcion='Alcance de pantalla. "*" = todas (valor por defecto si el campo es indefinido); arreglo de ids = pantallas específicas; [] = ninguna.'/>
+      <campo nombre="def.inputs" descripcion="Entradas numéricas y selects (solo tipo formula/dosis)."/>
+      <campo nombre="def.items" descripcion="Ítems de checkbox ponderados con p (solo tipo score)."/>
+      <campo nombre="def.expr" descripcion="Expresión evaluada por expr-eval (solo tipo formula/dosis)."/>
+      <campo nombre="def.out" descripcion="Etiqueta, unidad y decimales de la salida."/>
+      <campo nombre="def.interp" descripcion="Reglas de interpretación (bandas)."/>
+    </campos>
+    <ejemplo-formula><![CDATA[
+{
+  "codigo": "CALC-NEFRO-002",
+  "nombre": "CKD-EPI 2021 (sin raza)",
+  "tipo": "formula",
+  "cat": "Nefrología",
+  "ver": 1,
+  "hr": false,
+  "paises": { "SV": true, "GT": true, "HN": true },
+  "paginas": "*",
+  "sub": "Tasa de filtración glomerular estimada",
+  "ref": "Inker LA et al. NEJM 2021;385:1737",
+  "def": {
+    "inputs": [
+      { "id": "crea", "label": "Creatinina", "u": "mg/dL", "min": 0.2, "max": 20, "val": 1 },
+      { "id": "edad", "label": "Edad", "u": "años", "min": 18, "max": 110, "val": 60 },
+      { "id": "sexo", "type": "select", "label": "Sexo",
+        "opts": [
+          { "v": "Masculino", "factor": 1,     "k": 0.9, "a": -0.302 },
+          { "v": "Femenino",  "factor": 1.012, "k": 0.7, "a": -0.241 }
+        ], "sel": 0 }
+    ],
+    "expr": "142 * min(crea/sexo_k,1)^sexo_a * max(crea/sexo_k,1)^-1.200 * 0.9938^edad * sexo_factor",
+    "out": { "label": "TFGe", "u": "mL/min/1.73m²", "dec": 0 },
+    "interp": [
+      { "max": 14, "n": "critico", "t": "G5 — falla renal" },
+      { "max": 29, "n": "critico", "t": "G4 — descenso grave" },
+      { "max": 59, "n": "alerta",  "t": "G3 — descenso moderado" },
+      { "n": "normal", "t": "G1–G2 — normal a leve" }
+    ]
+  }
+}
+    ]]></ejemplo-formula>
+    <ejemplo-score><![CDATA[
+{
+  "codigo": "CALC-NEUM-008",
+  "nombre": "SMART-COP",
+  "tipo": "score",
+  "cat": "Neumología",
+  "ver": 1,
+  "hr": false,
+  "paises": { "SV": true, "GT": true, "HN": true },
+  "paginas": ["evolucion","indicaciones","monitoreo"],
+  "sub": "Necesidad de soporte vital en NAC",
+  "ref": "Charles et al. 2008",
+  "def": {
+    "items": [
+      { "id": "pas", "label": "PAS < 90 mmHg", "p": 2 },
+      { "id": "ph",  "label": "pH < 7.35",     "p": 2 }
+    ],
+    "out": { "label": "SMART-COP", "u": "puntos", "dec": 0 },
+    "interp": [
+      { "max": 2, "n": "normal",  "t": "0–2: riesgo bajo" },
+      { "n": "critico", "t": ">2: considerar UCI" }
+    ]
+  }
+}
+    ]]></ejemplo-score>
+  </contrato-calculadora>
+
+  <catalogo-pantallas>
+    <descripcion>Pantallas del expediente sobre las que se configura la visibilidad de cada calculadora. Catálogo ajustable.</descripcion>
+    <pantalla id="admision" orden="1">Admisión</pantalla>
+    <pantalla id="triage" orden="2">Triage (Manchester)</pantalla>
+    <pantalla id="historia" orden="3">Historia clínica</pantalla>
+    <pantalla id="evolucion" orden="4">Evolución médica (SOAP)</pantalla>
+    <pantalla id="indicaciones" orden="5">Nuevas indicaciones</pantalla>
+    <pantalla id="enfermeria" orden="6">Notas de enfermería</pantalla>
+    <pantalla id="monitoreo" orden="7">Signos vitales / monitoreo</pantalla>
+    <pantalla id="interconsulta" orden="8">Interconsulta</pantalla>
+    <pantalla id="farmacia" orden="9">Farmacia clínica</pantalla>
+    <pantalla id="epicrisis" orden="10">Epicrisis / alta</pantalla>
+    <regla-resolucion><![CDATA[
+// paginas: "*" (o indefinido) = visible en todas; arreglo = pantallas específicas; [] = ninguna
+function pantallaVisible(calc, pantallaId) {
+  const scope = calc.paginas === undefined ? "*" : calc.paginas;
+  return scope === "*" || (Array.isArray(scope) && scope.includes(pantallaId));
+}
+    ]]></regla-resolucion>
+  </catalogo-pantallas>
+
+  <motor-evaluacion>
+    <descripcion>Reglas del motor. Son de cumplimiento obligatorio: definen cómo se evalúan las expresiones y cómo se inyectan los valores de los selects.</descripcion>
+    <regla id="MOTOR-1" tema="logaritmo">log es logaritmo natural. log10 se obtiene como log(x)/log(10). Disponibles: min, max, sqrt, abs, floor, round, exp y potencia con el operador ^.</regla>
+    <regla id="MOTOR-2" tema="operadores-logicos">Soporta ternario ?:, and, or, y comparaciones &gt; &gt;= == &lt; &lt;=. Una comparación desnuda devuelve booleano; toda comparación que deba producir número se envuelve como (condición) ? 1 : 0.</regla>
+    <regla id="MOTOR-3" tema="ids-reservados">and, or, not, in son operadores reservados de expr-eval. Ningún id de entrada puede llamarse así (validación al guardar). En el mockup ocurrió con CIWA e in/or, resueltos renombrando a ori e inq.</regla>
+    <regla id="MOTOR-4" tema="interpretacion">Las reglas de interp usan max inclusivo. La clasificación devuelve la primera regla cuyo valor sea menor o igual a max; la última regla es siempre abierta (sin max). Las bandas se ordenan de menor a mayor por max (cuidado con escalas negativas como RASS).</regla>
+    <regla id="MOTOR-5" tema="inyeccion-selects">Para la opción seleccionada de un select, el motor inyecta todas sus propiedades numéricas como ${id}_${clave} (por ejemplo id_pts, id_g, id_f, id_k, id_a) y además ${id}F = opt.f. La etiqueta visible v es una cadena y no debe usarse como propiedad numérica.</regla>
+    <regla id="MOTOR-6" tema="colisiones">Ningún id de entrada puede coincidir con el nombre de una función (min, max, log, exp, etc.). La propiedad v de una opción es la etiqueta (string), no un valor numérico.</regla>
+    <regla id="MOTOR-7" tema="tipos">formula/dosis evalúan def.expr sobre entradas numéricas y selects. score suma def.items[].p de los ítems marcados. Las escalas de grado se modelan como formula con un select que porta g y expr igual a id_g. No se soportan modelos mixtos checkbox+select en una misma calculadora.</regla>
+    <regla id="MOTOR-8" tema="seguridad">Prohibido eval y new Function. La librería expr-eval se auto-hospeda en producción.</regla>
+    <ejemplo-ternario><![CDATA[
+// WFNS (HSA): grado calculado desde GCS y déficit focal
+"expr": "gcs == 15 ? 1 : (gcs >= 13 ? (foc_g > 0 ? 3 : 2) : (gcs >= 7 ? 4 : 5))"
+// CAM-ICU (delirium): F1 y F2 y (F3 o F4)
+"expr": "(a_g and b_g and (c_g or d_g)) ? 1 : 0"
+    ]]></ejemplo-ternario>
+  </motor-evaluacion>
+
+  <requisitos-funcionales>
+    <rf id="RF-01" prioridad="alta" titulo="Barra flotante">El widget se presenta como una barra flotante disponible en cualquier pantalla del expediente, arrastrable mediante un asa, con persistencia de su posición por usuario.</rf>
+    <rf id="RF-02" prioridad="alta" titulo="Búsqueda con autocompletado">Búsqueda por nombre, código o categoría, con autocompletado en línea (texto fantasma) que se acepta con Tab.</rf>
+    <rf id="RF-03" prioridad="alta" titulo="Atajos de teclado">Apertura con Cmd/Ctrl+K, cierre con Esc, navegación de resultados con flechas y selección con Enter.</rf>
+    <rf id="RF-04" prioridad="alta" titulo="Modal de cálculo">Al elegir una calculadora se abre un modal con sus entradas; el resultado y su interpretación (banda normal/alerta/crítico) se muestran en vivo.</rf>
+    <rf id="RF-05" prioridad="media" titulo="Prellenado del paciente">El modal prellena datos del paciente (sexo, edad, peso, talla, creatinina, etc.) cuando están disponibles en el expediente.</rf>
+    <rf id="RF-06" prioridad="alta" titulo="Vista de administración">Catálogo tabular de fórmulas con código, nombre, tipo, versión, estado, activación por país, presencia en la barra y alcance de pantalla.</rf>
+    <rf id="RF-07" prioridad="alta" titulo="Versionado inmutable">Cada fórmula publicada es inmutable; editar crea una versión nueva. Los cálculos históricos conservan la versión con la que se realizaron.</rf>
+    <rf id="RF-08" prioridad="alta" titulo="Gate de casos de prueba">La publicación de una versión está bloqueada hasta que todos sus casos de prueba pasen.</rf>
+    <rf id="RF-09" prioridad="alta" titulo="Activación por país">Cada calculadora se activa o desactiva de forma independiente por país (SV, GT, HN).</rf>
+    <rf id="RF-10" prioridad="alta" titulo="Visibilidad por pantalla — panel">En Administración, un panel siempre visible permite seleccionar una calculadora y configurar en qué pantallas aparece, con un interruptor maestro Todas las pantallas y, al desactivarlo, un grid de pantallas específicas. Los cambios se reflejan en el catálogo.</rf>
+    <rf id="RF-11" prioridad="media" titulo="Visibilidad por pantalla — por fila">La tabla del catálogo incluye una columna Pantallas con un indicador (Todas / N pantallas / Ninguna) que abre el mismo editor de visibilidad para esa fila.</rf>
+    <rf id="RF-12" prioridad="media" titulo="Selector de pantalla del médico">La vista del médico ofrece un selector de pantalla actual que filtra la barra flotante para mostrar solo las calculadoras habilitadas en esa pantalla.</rf>
+    <rf id="RF-13" prioridad="alta" titulo="Comportamiento de alto riesgo">Las calculadoras con hr=true se etiquetan como Alto riesgo y su modal muestra el aviso de verificación independiente (IPSG.3).</rf>
+    <rf id="RF-14" prioridad="media" titulo="Importación">La administración permite importar definiciones de calculadoras desde plantilla.</rf>
+    <rf id="RF-15" prioridad="alta" titulo="Registro de cálculo">Cada cálculo ejecutado se registra de forma inmutable con paciente, versión, entradas, resultado, interpretación, pantalla y usuario.</rf>
+  </requisitos-funcionales>
+
+  <historias-usuario>
+    <historia id="US-01" actor="Médico">
+      <como>Como médico</como>
+      <quiero>quiero buscar una calculadora sin salir de la pantalla en la que estoy</quiero>
+      <para>para calcular un valor clínico en el flujo de trabajo</para>
+      <criterios>
+        <criterio>Dado que estoy en cualquier pantalla del expediente, cuando presiono Cmd/Ctrl+K, entonces se activa la barra flotante y puedo escribir.</criterio>
+        <criterio>Dado que escribo parte de un nombre, cuando aparece la sugerencia, entonces al presionar Tab se completa.</criterio>
+        <criterio>Dado que selecciono una calculadora, cuando se abre el modal, entonces se prellenan los datos del paciente disponibles.</criterio>
+      </criterios>
+    </historia>
+    <historia id="US-02" actor="Médico">
+      <como>Como médico</como>
+      <quiero>quiero ver solo las calculadoras pertinentes a la pantalla en la que trabajo</quiero>
+      <para>para reducir ruido y encontrar más rápido lo que necesito</para>
+      <criterios>
+        <criterio>Dado que selecciono una pantalla actual, cuando busco en la barra, entonces solo aparecen las calculadoras habilitadas para esa pantalla.</criterio>
+      </criterios>
+    </historia>
+    <historia id="US-03" actor="Administrador">
+      <como>Como administrador (Farmacia Clínica / Calidad)</como>
+      <quiero>quiero configurar en qué pantallas aparece cada calculadora</quiero>
+      <para>para que cada especialidad vea lo que le corresponde</para>
+      <criterios>
+        <criterio>Dado el panel de visibilidad, cuando desactivo Todas las pantallas, entonces puedo marcar pantallas específicas y el cambio se refleja en el catálogo.</criterio>
+        <criterio>Dado que dejo el alcance vacío, entonces la calculadora no aparece en ninguna pantalla del médico.</criterio>
+      </criterios>
+    </historia>
+    <historia id="US-04" actor="Administrador">
+      <como>Como administrador</como>
+      <quiero>quiero versionar una fórmula de forma inmutable con casos de prueba obligatorios</quiero>
+      <para>para garantizar reproducibilidad y calidad</para>
+      <criterios>
+        <criterio>Dado que edito una fórmula publicada, cuando guardo, entonces se crea una versión nueva y la anterior permanece intacta.</criterio>
+        <criterio>Dado que intento publicar, cuando algún caso de prueba falla, entonces la publicación queda bloqueada.</criterio>
+      </criterios>
+    </historia>
+    <historia id="US-05" actor="Administrador">
+      <como>Como administrador</como>
+      <quiero>quiero activar cada calculadora por país</quiero>
+      <para>para operar de forma diferenciada en SV, GT y HN</para>
+      <criterios>
+        <criterio>Dado el catálogo, cuando activo una calculadora en un país, entonces queda disponible en la barra de ese país y no de los demás salvo que se activen.</criterio>
+      </criterios>
+    </historia>
+    <historia id="US-06" actor="Médico">
+      <como>Como médico</como>
+      <quiero>que las calculadoras de alto riesgo me adviertan de la verificación independiente</quiero>
+      <para>para cumplir la meta de seguridad del paciente</para>
+      <criterios>
+        <criterio>Dado que abro una calculadora con hr=true, entonces el modal muestra el aviso de verificación independiente (IPSG.3).</criterio>
+      </criterios>
+    </historia>
+  </historias-usuario>
+
+  <requisitos-no-funcionales>
+    <rnf id="RNF-01" tema="rendimiento">La búsqueda y el autocompletado responden de forma percibida como instantánea sobre la biblioteca completa; el cálculo se recalcula en vivo al cambiar cualquier entrada.</rnf>
+    <rnf id="RNF-02" tema="accesibilidad">Operable por teclado (apertura, navegación, selección, cierre), foco visible y atributos ARIA en la barra y el modal.</rnf>
+    <rnf id="RNF-03" tema="seguridad">Sin eval ni new Function. Validación de ids de entrada contra palabras reservadas y contra nombres de funciones al guardar. Sin datos personales del paciente en la telemetría de expresiones.</rnf>
+    <rnf id="RNF-04" tema="auditoria">Todo cálculo y toda publicación de versión quedan registrados de forma inmutable.</rnf>
+    <rnf id="RNF-05" tema="internacionalizacion">Interfaz en español (es-SV). Operación multipaís SV, GT, HN.</rnf>
+    <rnf id="RNF-06" tema="persistencia-ui">La posición de la barra flotante se persiste por usuario.</rnf>
+    <rnf id="RNF-07" tema="portabilidad">La librería expr-eval se auto-hospeda; sin dependencias de CDN externo en producción.</rnf>
+  </requisitos-no-funcionales>
+
+  <gobernanza-clinica>
+    <principio id="GOB-1" titulo="Validación clínica obligatoria">
+      Las pruebas automatizadas validan el motor de evaluación (que la expresión se evalúa correctamente),
+      no la corrección clínica de las constantes. Toda calculadora requiere validación clínica antes de
+      habilitarse en producción; esa validación es el gate del flujo.
+    </principio>
+    <principio id="GOB-2" titulo="Fuente de constantes con revisión">
+      CalcMed Avante (aplicación propia) es la fuente de constantes para el port de producción, pero cada
+      fórmula debe revisarse contra la literatura de referencia. Precedente: la implementación de ASCVD en
+      CalcMed tenía un error de coeficientes en el varón (producía valores cercanos a 100% para perfiles
+      normales); en el módulo se usa la ecuación Pooled Cohort correcta, no la de CalcMed. Portar de forma
+      literal no es seguro por defecto.
+    </principio>
+    <principio id="GOB-3" titulo="Separación de modelos poblacionales">
+      APACHE II y SAPS II son modelos pronósticos poblacionales de UCI; se recomienda trasladarlos a la
+      analítica de UCI en lugar de la barra de cabecera. En la biblioteca inicial se incluyen marcados como
+      alto riesgo de forma transitoria y con el componente fisiológico simplificado.
+    </principio>
+    <principio id="GOB-4" titulo="Adaptaciones documentadas">
+      Estas calculadoras usan una versión adaptada en el mockup y requieren versión completa en producción:
+      Framingham entrega puntos (el mapeo puntos a porcentaje por sexo no es codificable en una sola
+      expresión sin variables intermedias); Naegele entrega edad gestacional en semanas desde días
+      transcurridos de la FUM (el motor no maneja fechas); gases arteriales entrega el clasificador del
+      trastorno primario (falta compensación Winters/Boston y delta-delta); EuroSCORE II usa la aproximación
+      aditiva de CalcMed, no el modelo logístico real.
+    </principio>
+    <principio id="GOB-5" titulo="Alto riesgo y verificación independiente">
+      Las 17 calculadoras de alto riesgo (dosificación y pronóstico) exigen verificación independiente
+      (IPSG.3) y quedan marcadas como tales en administración y en el modal del médico.
+    </principio>
+  </gobernanza-clinica>
+
+  <criterios-aceptacion-global>
+    <criterio id="CA-1">La biblioteca inicial de 205 calculadoras carga y cada una evalúa a un número finito con sus valores por defecto.</criterio>
+    <criterio id="CA-2">Ninguna fórmula puede publicarse con casos de prueba en falla.</criterio>
+    <criterio id="CA-3">El widget es operable por teclado y funciona en todas las pantallas del expediente.</criterio>
+    <criterio id="CA-4">La visibilidad por pantalla y la activación por país se configuran desde administración y se reflejan en la barra del médico.</criterio>
+    <criterio id="CA-5">Cada cálculo ejecutado queda registrado con su versión exacta.</criterio>
+    <criterio id="CA-6">Ninguna calculadora se habilita en producción sin validación clínica registrada.</criterio>
+  </criterios-aceptacion-global>
+
+  <anexos>
+    <anexo id="ANEXO-A" titulo="Catálogo completo de calculadoras (biblioteca inicial)">
+      <resumen total="205" formula="174" score="29" dosis="2" alto-riesgo="17" categorias="21"/>
+      <nota>Cada calculadora incluye su referencia bibliográfica primaria. tipo: formula|score|dosis; alto-riesgo indica hr.</nota>
+      <catalogo>
+    <categoria nombre="Nefrología" total="11">
+      <calculadora codigo="CALC-NEFRO-001" tipo="formula" version="3" alto-riesgo="false">
+        <nombre>Cockcroft-Gault</nombre>
+        <descripcion>Depuración de creatinina</descripcion>
+        <referencia>Cockcroft &amp; Gault, Nephron 1976</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CKD-EPI 2021 (sin raza)</nombre>
+        <descripcion>Tasa de filtración glomerular</descripcion>
+        <referencia>Inker et al., NEJM 2021</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MDRD (4 variables, IDMS)</nombre>
+        <descripcion>TFG estimada (sin raza)</descripcion>
+        <referencia>Levey et al., Ann Intern Med 2006</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>FENa (excreción fraccional de sodio)</nombre>
+        <descripcion>Prerrenal vs. renal</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>FEUrea (excreción fraccional de urea)</nombre>
+        <descripcion>Prerrenal (útil con diuréticos)</descripcion>
+        <referencia>Carvounis et al. 2002</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Depuración de creatinina (orina 24 h)</nombre>
+        <descripcion>Aclaramiento medido</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Brecha aniónica urinaria</nombre>
+        <descripcion>Acidosis metabólica hiperclorémica</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Gradiente transtubular de potasio (TTKG)</nombre>
+        <descripcion>Manejo renal de potasio</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Schwartz pediátrico (TFG)</nombre>
+        <descripcion>Filtrado glomerular en niños</descripcion>
+        <referencia>Schwartz et al. 2009 (bedside)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Nefropatía por contraste (Mehran)</nombre>
+        <descripcion>Riesgo de NPC tras contraste</descripcion>
+        <referencia>Mehran et al. 2004</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEFRO-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>AKIN / KDIGO (LRA)</nombre>
+        <descripcion>Estadio de lesión renal aguda</descripcion>
+        <referencia>KDIGO 2012</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Electrolitos y ácido-base" total="19">
+      <calculadora codigo="CALC-ELEC-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Calcio corregido</nombre>
+        <descripcion>Corrección por albúmina</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ELEC-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Sodio corregido por glucosa</nombre>
+        <descripcion>Hiperglucemia</descripcion>
+        <referencia>Hillier et al., Am J Med 1999</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ELEC-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Brecha aniónica</nombre>
+        <descripcion>Anion gap</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ELEC-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Osmolaridad sérica calculada</nombre>
+        <descripcion>Osmolaridad estimada</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PaCO₂ esperada (Winters)</nombre>
+        <descripcion>Compensación en acidosis metabólica</descripcion>
+        <referencia>Winters</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Delta-delta (relación delta)</nombre>
+        <descripcion>Trastornos ácido-base mixtos</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Brecha aniónica corregida por albúmina</nombre>
+        <descripcion>Ajuste por hipoalbuminemia</descripcion>
+        <referencia>Figge et al. 1998</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Brecha osmolar</nombre>
+        <descripcion>Sospecha de tóxicos osmóticos</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HIDRO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Déficit de agua libre</nombre>
+        <descripcion>Hipernatremia</descripcion>
+        <referencia>Estándar (objetivo Na 140)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HIDRO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Cambio de Na⁺ esperado (Adrogué-Madias)</nombre>
+        <descripcion>Por litro de solución infundida</descripcion>
+        <referencia>Adrogué &amp; Madias, NEJM 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PaCO₂ esperada (alcalosis metabólica)</nombre>
+        <descripcion>Compensación respiratoria</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Osmolalidad efectiva (tonicidad)</nombre>
+        <descripcion>Tonicidad plasmática</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HIDRO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Déficit de sodio</nombre>
+        <descripcion>Hiponatremia</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ELEC-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Producto calcio-fósforo</nombre>
+        <descripcion>Riesgo de calcificación</descripcion>
+        <referencia>KDIGO</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Henderson-Hasselbalch (pH)</nombre>
+        <descripcion>pH a partir de HCO₃ y PaCO₂</descripcion>
+        <referencia>Henderson-Hasselbalch</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Déficit de bicarbonato</nombre>
+        <descripcion>Reposición en acidosis metabólica</descripcion>
+        <referencia>Estándar (espacio 0.5·peso)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Potasio corregido por pH</nombre>
+        <descripcion>K estimado a pH 7.40</descripcion>
+        <referencia>Estándar (0.6 mEq/L por 0.1 pH)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>SID (Stewart simplificado)</nombre>
+        <descripcion>Diferencia de iones fuertes aparente</descripcion>
+        <referencia>Stewart</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GASO-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Interpretación de gases (trastorno primario)</nombre>
+        <descripcion>Clasificación simplificada del trastorno ácido-base</descripcion>
+        <referencia>Adrogué &amp; Madias</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Antropometría y dosis" total="7">
+      <calculadora codigo="CALC-ANTRO-001" tipo="formula" version="2" alto-riesgo="false">
+        <nombre>IMC</nombre>
+        <descripcion>Índice de masa corporal</descripcion>
+        <referencia>OMS</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Superficie corporal (Mosteller)</nombre>
+        <descripcion>BSA para dosificación</descripcion>
+        <referencia>Mosteller, NEJM 1987</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Peso corporal ideal (Devine)</nombre>
+        <descripcion>PCI para dosificación</descripcion>
+        <referencia>Devine 1974</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Peso corporal ajustado</nombre>
+        <descripcion>Dosificación en obesidad</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice cintura-cadera</nombre>
+        <descripcion>Distribución de grasa</descripcion>
+        <referencia>OMS</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice cintura/talla (ICT)</nombre>
+        <descripcion>Riesgo cardiometabólico</descripcion>
+        <referencia>Ashwell</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ANTRO-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Circunferencia de cintura (OMS)</nombre>
+        <descripcion>Riesgo por cintura aislada</descripcion>
+        <referencia>OMS 2008</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Cardiología" total="26">
+      <calculadora codigo="CALC-CARD-001" tipo="score" version="2" alto-riesgo="false">
+        <nombre>CHA₂DS₂-VASc</nombre>
+        <descripcion>Riesgo tromboembólico en FA</descripcion>
+        <referencia>Lip et al., Chest 2010</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-002" tipo="score" version="1" alto-riesgo="false">
+        <nombre>HAS-BLED</nombre>
+        <descripcion>Riesgo de sangrado en FA</descripcion>
+        <referencia>Pisters et al., Chest 2010</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Presión arterial media (PAM)</nombre>
+        <descripcion>MAP</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>QTc (Bazett)</nombre>
+        <descripcion>QT corregido</descripcion>
+        <referencia>Bazett 1920</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>QTc (Fridericia)</nombre>
+        <descripcion>QT corregido (cúbica)</descripcion>
+        <referencia>Fridericia 1920</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>HEART (dolor torácico)</nombre>
+        <descripcion>Riesgo de eventos coronarios</descripcion>
+        <referencia>Six et al. 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-007" tipo="score" version="1" alto-riesgo="false">
+        <nombre>TIMI (angina inestable/IAMSEST)</nombre>
+        <descripcion>Riesgo a 14 días</descripcion>
+        <referencia>Antman et al., JAMA 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-008" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Índice de riesgo cardíaco revisado (RCRI)</nombre>
+        <descripcion>Riesgo perioperatorio</descripcion>
+        <referencia>Lee et al. 1999</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Doble producto (RPP)</nombre>
+        <descripcion>Consumo miocárdico de O₂</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Duke Treadmill Score</nombre>
+        <descripcion>Ergometría (Bruce)</descripcion>
+        <referencia>Mark et al. 1991</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-011" tipo="score" version="1" alto-riesgo="false">
+        <nombre>sPESI (TEP)</nombre>
+        <descripcion>Riesgo en tromboembolia pulmonar</descripcion>
+        <referencia>Jiménez et al. 2010</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-012" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Criterios de Sgarbossa</nombre>
+        <descripcion>IAM con BRIHH / marcapasos</descripcion>
+        <referencia>Sgarbossa et al. 1996</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-013" tipo="score" version="1" alto-riesgo="false">
+        <nombre>ATRIA (riesgo de sangrado)</nombre>
+        <descripcion>Sangrado en anticoagulados</descripcion>
+        <referencia>Fang et al. 2011</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-014" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>TIMI (IAM CEST)</nombre>
+        <descripcion>Mortalidad a 30 días en IAMCEST</descripcion>
+        <referencia>Morrow et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-015" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Caprini VTE (completo)</nombre>
+        <descripcion>Riesgo de ETV en paciente quirúrgico</descripcion>
+        <referencia>Caprini 2005 / Bahl 2010</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-016" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>EDACS</nombre>
+        <descripcion>Dolor torácico en urgencias</descripcion>
+        <referencia>Than et al. 2014</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-017" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>NYHA (clase funcional)</nombre>
+        <descripcion>Capacidad funcional en IC</descripcion>
+        <referencia>NYHA 1994</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-018" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CCS (clase de angina)</nombre>
+        <descripcion>Severidad funcional de angina</descripcion>
+        <referencia>CCS 1976</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-019" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Killip-Kimball</nombre>
+        <descripcion>Severidad de IC post-IAM</descripcion>
+        <referencia>Killip &amp; Kimball 1967</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-020" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>GRACE (mortalidad en SCA)</nombre>
+        <descripcion>Mortalidad hospitalaria en síndrome coronario agudo</descripcion>
+        <referencia>Granger et al. 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-021" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CRUSADE (sangrado en SCASEST)</nombre>
+        <descripcion>Riesgo de sangrado mayor</descripcion>
+        <referencia>Subherwal et al. 2009</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-022" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MAGGIC (mortalidad en IC)</nombre>
+        <descripcion>Mortalidad a 3 años en IC crónica</descripcion>
+        <referencia>Pocock et al. 2013</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-023" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>ASCVD 10 años (Pooled Cohort)</nombre>
+        <descripcion>Riesgo cardiovascular a 10 años (ACC/AHA)</descripcion>
+        <referencia>Goff et al. 2014 — ecuación corregida</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-024" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Framingham 10 años (puntos)</nombre>
+        <descripcion>Puntaje de riesgo coronario</descripcion>
+        <referencia>Wilson et al. 1998</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-025" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>EuroSCORE II (aprox.)</nombre>
+        <descripcion>Mortalidad en cirugía cardiaca (aproximación simplificada)</descripcion>
+        <referencia>Nashef et al. 2012</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CARD-026" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>HEART Pathway</nombre>
+        <descripcion>Disposición en urgencias con troponinas seriadas</descripcion>
+        <referencia>Mahler et al. 2015</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Hemodinámica" total="3">
+      <calculadora codigo="CALC-HEMO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice de shock</nombre>
+        <descripcion>FC / PAS</descripcion>
+        <referencia>Allgöwer &amp; Burri 1967</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEMO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Presión de pulso</nombre>
+        <descripcion>PAS − PAD</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEMO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Resistencia vascular sistémica (RVS)</nombre>
+        <descripcion>Poscarga</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Urgencias y sepsis" total="9">
+      <calculadora codigo="CALC-URG-001" tipo="dosis" version="1" alto-riesgo="false">
+        <nombre>Parkland (quemaduras)</nombre>
+        <descripcion>Reanimación con cristaloides</descripcion>
+        <referencia>Baxter (Parkland)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-002" tipo="score" version="1" alto-riesgo="false">
+        <nombre>qSOFA</nombre>
+        <descripcion>Sospecha de sepsis</descripcion>
+        <referencia>Sepsis-3, JAMA 2016</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-003" tipo="score" version="1" alto-riesgo="false">
+        <nombre>SIRS</nombre>
+        <descripcion>Respuesta inflamatoria sistémica</descripcion>
+        <referencia>ACCP/SCCM 1992</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-004" tipo="score" version="1" alto-riesgo="false">
+        <nombre>PERC (descarte de TEP)</nombre>
+        <descripcion>Regla de bajo riesgo</descripcion>
+        <referencia>Kline et al. 2004</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>SOFA</nombre>
+        <descripcion>Disfunción orgánica</descripcion>
+        <referencia>Vincent et al. 1996</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>NEWS2</nombre>
+        <descripcion>Deterioro clínico</descripcion>
+        <referencia>RCP UK 2017</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MEWS</nombre>
+        <descripcion>Alerta temprana</descripcion>
+        <referencia>Subbe et al. 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Revised Trauma Score (RTS)</nombre>
+        <descripcion>Gravedad del trauma</descripcion>
+        <referencia>Champion et al. 1989</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-URG-009" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Superficie quemada (regla de los nueves)</nombre>
+        <descripcion>% SCT quemada (adulto)</descripcion>
+        <referencia>Wallace</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Neumología" total="10">
+      <calculadora codigo="CALC-NEUM-001" tipo="score" version="1" alto-riesgo="false">
+        <nombre>CURB-65</nombre>
+        <descripcion>Gravedad de neumonía</descripcion>
+        <referencia>Lim et al., Thorax 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Gradiente alvéolo-arterial (A-a)</nombre>
+        <descripcion>Intercambio gaseoso</descripcion>
+        <referencia>Estándar (nivel del mar)</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-003" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Wells (TEP)</nombre>
+        <descripcion>Probabilidad de embolia pulmonar</descripcion>
+        <referencia>Wells et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice BODE (EPOC)</nombre>
+        <descripcion>Pronóstico en EPOC</descripcion>
+        <referencia>Celli et al. 2004</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-005" tipo="score" version="1" alto-riesgo="false">
+        <nombre>CRB-65</nombre>
+        <descripcion>Neumonía sin urea (ambulatorio)</descripcion>
+        <referencia>Lim et al. 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CAT (EPOC)</nombre>
+        <descripcion>Impacto de la EPOC</descripcion>
+        <referencia>Jones et al. 2009</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-008" tipo="score" version="1" alto-riesgo="false">
+        <nombre>SMART-COP</nombre>
+        <descripcion>Necesidad de soporte vital en NAC</descripcion>
+        <referencia>Charles et al. 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Criterios de Light (derrame)</nombre>
+        <descripcion>Exudado vs trasudado</descripcion>
+        <referencia>Light et al. 1972</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>mMRC (disnea)</nombre>
+        <descripcion>Escala modificada de disnea</descripcion>
+        <referencia>Bestall et al. 1999</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEUM-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PSI / Fine (NAC)</nombre>
+        <descripcion>Índice de severidad de neumonía (Step 2)</descripcion>
+        <referencia>Fine et al. 1997</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Respiratorio / ventilación" total="11">
+      <calculadora codigo="CALC-RESP-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PaO₂/FiO₂ (índice de Kirby)</nombre>
+        <descripcion>Oxigenación / SDRA</descripcion>
+        <referencia>Berlin (SDRA), JAMA 2012</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice de oxigenación (OI)</nombre>
+        <descripcion>Gravedad de hipoxemia</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Contenido arterial de O₂ (CaO₂)</nombre>
+        <descripcion>Transporte de oxígeno</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Presión de conducción (driving pressure)</nombre>
+        <descripcion>Ventilación protectora</descripcion>
+        <referencia>Amato et al., NEJM 2015</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Compliancia estática</nombre>
+        <descripcion>Distensibilidad pulmonar</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Volumen corriente objetivo</nombre>
+        <descripcion>Ventilación protectora (mL/kg PCI)</descripcion>
+        <referencia>ARDSNet 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Ventilación minuto</nombre>
+        <descripcion>Vt × FR</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>SpO₂/FiO₂ (SpFi)</nombre>
+        <descripcion>Sustituto no invasivo de PaFi</descripcion>
+        <referencia>Rice et al. 2007</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice ROX</nombre>
+        <descripcion>Predicción de fracaso de CNAF</descripcion>
+        <referencia>Roca et al. 2016</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Poder mecánico (VCV)</nombre>
+        <descripcion>Energía aplicada al pulmón</descripcion>
+        <referencia>Gattinoni et al. 2016</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-RESP-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>HACOR</nombre>
+        <descripcion>Predictor de fracaso de VNI</descripcion>
+        <referencia>Duan et al. 2017</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Neurología" total="18">
+      <calculadora codigo="CALC-NEURO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Escala de coma de Glasgow</nombre>
+        <descripcion>Nivel de conciencia</descripcion>
+        <referencia>Teasdale &amp; Jennett 1974</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Presión de perfusión cerebral (PPC)</nombre>
+        <descripcion>MAP − PIC</descripcion>
+        <referencia>Brain Trauma Foundation</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>ABCD² (riesgo de ACV tras AIT)</nombre>
+        <descripcion>Riesgo a 2 días</descripcion>
+        <referencia>Johnston et al. 2007</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Escala ICH (hemorragia intracerebral)</nombre>
+        <descripcion>Mortalidad a 30 días</descripcion>
+        <referencia>Hemphill et al. 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>NIHSS (escala de ictus)</nombre>
+        <descripcion>Gravedad del ACV</descripcion>
+        <referencia>NIH Stroke Scale</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>FOUR Score</nombre>
+        <descripcion>Coma (alternativa a Glasgow)</descripcion>
+        <referencia>Wijdicks et al. 2005</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-007" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Lawton IADL</nombre>
+        <descripcion>Actividades instrumentales de la vida diaria</descripcion>
+        <referencia>Lawton &amp; Brody 1969</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Mini-Mental (MMSE)</nombre>
+        <descripcion>Cribado cognitivo (0–30)</descripcion>
+        <referencia>Folstein et al. 1975</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice de Barthel</nombre>
+        <descripcion>Actividades básicas de la vida diaria</descripcion>
+        <referencia>Mahoney &amp; Barthel 1965</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>RASS</nombre>
+        <descripcion>Escala de agitación-sedación</descripcion>
+        <referencia>Sessler et al. 2002</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>WFNS (HSA)</nombre>
+        <descripcion>Severidad de hemorragia subaracnoidea</descripcion>
+        <referencia>Drake 1988</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-012" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>mRS (Rankin modificada)</nombre>
+        <descripcion>Discapacidad post-ACV</descripcion>
+        <referencia>Rankin 1957</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-013" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Hunt-Hess</nombre>
+        <descripcion>HSA aneurismática (clínica)</descripcion>
+        <referencia>Hunt &amp; Hess 1968</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-014" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CAM-ICU (delirium)</nombre>
+        <descripcion>Detección de delirium en UCI</descripcion>
+        <referencia>Ely et al. 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-015" tipo="score" version="1" alto-riesgo="false">
+        <nombre>NEXUS (columna cervical)</nombre>
+        <descripcion>Descarte de lesión cervical sin imagen</descripcion>
+        <referencia>Hoffman et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-016" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Canadian CT Head Rule</nombre>
+        <descripcion>Indicación de TC en TCE leve</descripcion>
+        <referencia>Stiell et al. 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-017" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Glasgow Outcome Scale (GOS)</nombre>
+        <descripcion>Estado funcional a 6 meses</descripcion>
+        <referencia>Jennett &amp; Bond 1975</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NEURO-018" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>IMPACT (TCE)</nombre>
+        <descripcion>Pronóstico a 6 meses en TCE moderado-severo</descripcion>
+        <referencia>Steyerberg et al. 2008</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Hepatología" total="12">
+      <calculadora codigo="CALC-HEP-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Child-Pugh</nombre>
+        <descripcion>Gravedad de cirrosis</descripcion>
+        <referencia>Pugh et al. 1973</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MELD</nombre>
+        <descripcion>Enfermedad hepática terminal</descripcion>
+        <referencia>Kamath et al., Hepatology 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>FIB-4</nombre>
+        <descripcion>Fibrosis hepática</descripcion>
+        <referencia>Sterling et al. 2006</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>APRI</nombre>
+        <descripcion>Fibrosis por AST/plaquetas</descripcion>
+        <referencia>Wai et al. 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MELD-Na</nombre>
+        <descripcion>MELD ajustado por sodio</descripcion>
+        <referencia>Kim et al., NEJM 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Función discriminante de Maddrey</nombre>
+        <descripcion>Hepatitis alcohólica</descripcion>
+        <referencia>Maddrey et al. 1978</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Gradiente albúmina suero-ascitis (GASA)</nombre>
+        <descripcion>Etiología de la ascitis</descripcion>
+        <referencia>Runyon et al. 1992</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>NAFLD Fibrosis Score</nombre>
+        <descripcion>Fibrosis en hígado graso no alcohólico</descripcion>
+        <referencia>Angulo et al. 2007</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Glasgow Alcoholic Hepatitis (GAHS)</nombre>
+        <descripcion>Pronóstico en hepatitis alcohólica</descripcion>
+        <referencia>Forrest et al. 2005</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>King&#x27;s College (FHA)</nombre>
+        <descripcion>Indicación de trasplante en fallo hepático agudo</descripcion>
+        <referencia>O&#x27;Grady et al. 1989</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Lille Score</nombre>
+        <descripcion>Respuesta a corticoides en hepatitis alcohólica (día 7)</descripcion>
+        <referencia>Louvet et al. 2007</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEP-012" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MELD 3.0 (2022)</nombre>
+        <descripcion>Versión UNOS actual (incluye sexo y albúmina)</descripcion>
+        <referencia>Kim et al. 2021</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Gastroenterología" total="6">
+      <calculadora codigo="CALC-GI-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Glasgow-Blatchford (HDA)</nombre>
+        <descripcion>Hemorragia digestiva alta</descripcion>
+        <referencia>Blatchford et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GI-002" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Ranson (pancreatitis)</nombre>
+        <descripcion>Ingreso + 48 h (no biliar)</descripcion>
+        <referencia>Ranson 1974</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GI-003" tipo="score" version="1" alto-riesgo="false">
+        <nombre>BISAP (pancreatitis)</nombre>
+        <descripcion>Gravedad temprana</descripcion>
+        <referencia>Wu et al. 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GI-004" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Alvarado (apendicitis)</nombre>
+        <descripcion>Probabilidad de apendicitis</descripcion>
+        <referencia>Alvarado 1986</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GI-005" tipo="score" version="1" alto-riesgo="false">
+        <nombre>AIMS65 (HDA)</nombre>
+        <descripcion>Mortalidad en hemorragia digestiva alta</descripcion>
+        <referencia>Saltzman et al. 2011</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GI-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Rockall completo</nombre>
+        <descripcion>Riesgo de resangrado y muerte en HDA</descripcion>
+        <referencia>Rockall et al. 1996</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Obstetricia y pediatría" total="11">
+      <calculadora codigo="CALC-OBST-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>APGAR</nombre>
+        <descripcion>Vitalidad del recién nacido</descripcion>
+        <referencia>Apgar 1953</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Líquidos de mantenimiento (Holliday-Segar)</nombre>
+        <descripcion>Requerimiento basal 24 h</descripcion>
+        <referencia>Holliday &amp; Segar 1957</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Peso pediátrico estimado (APLS)</nombre>
+        <descripcion>Estimación por edad</descripcion>
+        <referencia>APLS</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-OBST-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Bishop (inducción del parto)</nombre>
+        <descripcion>Favorabilidad cervical</descripcion>
+        <referencia>Bishop 1964</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Tubo endotraqueal pediátrico</nombre>
+        <descripcion>Diámetro interno estimado</descripcion>
+        <referencia>APLS / Cole</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PEWS (alerta pediátrica)</nombre>
+        <descripcion>Deterioro clínico en niños</descripcion>
+        <referencia>Brighton PEWS</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Dosis pediátrica por peso</nombre>
+        <descripcion>Dosis total por toma</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>WETFAG (paro pediátrico)</nombre>
+        <descripcion>Peso estimado y valores de reanimación</descripcion>
+        <referencia>APLS</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-OBS-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Edad gestacional / FPP (Naegele)</nombre>
+        <descripcion>Semanas de gestación desde la FUM</descripcion>
+        <referencia>Regla de Naegele</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PEDS-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Deshidratación pediátrica</nombre>
+        <descripcion>Grado por pérdida de peso</descripcion>
+        <referencia>OMS / AAP 2009</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-OBS-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Riesgo de preeclampsia (factores)</nombre>
+        <descripcion>Cribado por factores clínicos (NICE/ACOG)</descripcion>
+        <referencia>NICE 2019 / ACOG 2018</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Nutrición" total="4">
+      <calculadora codigo="CALC-NUT-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Gasto energético basal (Harris-Benedict)</nombre>
+        <descripcion>Requerimiento calórico basal</descripcion>
+        <referencia>Harris &amp; Benedict 1919</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NUT-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Mifflin-St. Jeor (GEB)</nombre>
+        <descripcion>Gasto energético basal</descripcion>
+        <referencia>Mifflin et al. 1990</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NUT-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MUST</nombre>
+        <descripcion>Cribado de riesgo de desnutrición</descripcion>
+        <referencia>BAPEN 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-NUT-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>NUTRIC (sin IL-6)</nombre>
+        <descripcion>Riesgo nutricional en UCI</descripcion>
+        <referencia>Heyland et al. 2011</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Endocrinología y metabolismo" total="5">
+      <calculadora codigo="CALC-ENDO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Glucosa promedio estimada (eAG)</nombre>
+        <descripcion>A partir de HbA1c</descripcion>
+        <referencia>Nathan et al. 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ENDO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>HOMA-IR (resistencia a la insulina)</nombre>
+        <descripcion>Insulinorresistencia</descripcion>
+        <referencia>Matthews et al. 1985</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ENDO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>OST (autoevaluación de osteoporosis)</nombre>
+        <descripcion>Cribado de riesgo óseo</descripcion>
+        <referencia>OSTA</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ENDO-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>FINDRISC (DM2)</nombre>
+        <descripcion>Riesgo de diabetes tipo 2 a 10 años</descripcion>
+        <referencia>Lindström &amp; Tuomilehto 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ENDO-005" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Insulina IV (tasa de inicio)</nombre>
+        <descripcion>Tasa inicial en hiperglucemia</descripcion>
+        <referencia>ADA 2024</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Hematología" total="9">
+      <calculadora codigo="CALC-HEM-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Recuento absoluto de neutrófilos (RAN)</nombre>
+        <descripcion>Neutropenia</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEM-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Reticulocitos corregidos</nombre>
+        <descripcion>Corrección por anemia</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEM-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice de producción reticulocitaria (IPR)</nombre>
+        <descripcion>Respuesta medular</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEM-004" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Padua (riesgo de TEV)</nombre>
+        <descripcion>Profilaxis en paciente médico</descripcion>
+        <referencia>Barbar et al. 2010</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-HEM-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>4T (trombocitopenia por heparina)</nombre>
+        <descripcion>Probabilidad de HIT</descripcion>
+        <referencia>Lo et al. 2006</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ONCO-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MASCC (neutropenia febril)</nombre>
+        <descripcion>Riesgo en neutropenia febril</descripcion>
+        <referencia>Klastersky et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ONCO-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>ECOG (estado funcional)</nombre>
+        <descripcion>Performance status oncológico</descripcion>
+        <referencia>Oken et al. 1982</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ONCO-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Karnofsky</nombre>
+        <descripcion>Capacidad funcional (0–100)</descripcion>
+        <referencia>Karnofsky 1948</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-ONCO-004" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Carboplatino (Calvert)</nombre>
+        <descripcion>Dosis por AUC y TFG</descripcion>
+        <referencia>Calvert 1989</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Farmacología" total="14">
+      <calculadora codigo="CALC-FARM-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Fenitoína corregida (albúmina)</nombre>
+        <descripcion>Nivel ajustado por hipoalbuminemia</descripcion>
+        <referencia>Sheiner-Tozer</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Dilución (C₁V₁ = C₂V₂)</nombre>
+        <descripcion>Volumen de solución madre</descripcion>
+        <referencia>Ley de diluciones</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Goteo IV (gotas/min)</nombre>
+        <descripcion>Velocidad de infusión por gravedad</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-004" tipo="score" version="1" alto-riesgo="false">
+        <nombre>SCORTEN (NET/SSJ)</nombre>
+        <descripcion>Mortalidad en necrólisis epidérmica</descripcion>
+        <referencia>Bastuji-Garin et al. 2000</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-005" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Conversión de opioides</nombre>
+        <descripcion>Equianalgesia (base morfina IV)</descripcion>
+        <referencia>APA 2019</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-006" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Equivalencia de corticoides</nombre>
+        <descripcion>Conversión glucocorticoide (base hidrocortisona)</descripcion>
+        <referencia>Czock et al. 2005</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-007" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Equivalencia de benzodiacepinas</nombre>
+        <descripcion>Conversión (base diazepam 10 mg oral)</descripcion>
+        <referencia>Ashton Manual</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-008" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Perfusión µg/kg/min</nombre>
+        <descripcion>Tasa de bomba para vasoactivos</descripcion>
+        <referencia>mL/h = (dosis × peso × 60)/conc</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-009" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Vancomicina — dosis de carga</nombre>
+        <descripcion>Carga 25–30 mg/kg (peso real)</descripcion>
+        <referencia>ASHP/IDSA 2020</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-010" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Vancomicina — mantenimiento</nombre>
+        <descripcion>Dosis según aclaramiento de creatinina</descripcion>
+        <referencia>ASHP/IDSA 2020</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-011" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Aminoglucósidos (dosis única diaria)</nombre>
+        <descripcion>Gentamicina/amikacina por peso ideal</descripcion>
+        <referencia>Sanford Guide 2024</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-012" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Ajuste de warfarina (INR)</nombre>
+        <descripcion>Ajuste de dosis semanal (objetivo 2–3)</descripcion>
+        <referencia>CHEST 2018</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-013" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Naloxona (sobredosis de opioide)</nombre>
+        <descripcion>Dosis inicial por vía</descripcion>
+        <referencia>CDC / Vademécum</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-FARM-014" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>Paracetamol — Rumack-Matthew</nombre>
+        <descripcion>Riesgo de hepatotoxicidad post-ingesta aguda</descripcion>
+        <referencia>Rumack &amp; Matthew 1975</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Anestesia y perioperatorio" total="6">
+      <calculadora codigo="CALC-PERI-001" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Apfel (NVPO)</nombre>
+        <descripcion>Náusea/vómito postoperatorio</descripcion>
+        <referencia>Apfel et al. 1999</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PERI-002" tipo="score" version="1" alto-riesgo="false">
+        <nombre>STOP-BANG</nombre>
+        <descripcion>Riesgo de apnea obstructiva del sueño</descripcion>
+        <referencia>Chung et al. 2008</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PERI-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>MAC ajustada por edad</nombre>
+        <descripcion>Concentración alveolar mínima</descripcion>
+        <referencia>Mapleson 1996</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PERI-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Aldrete modificada</nombre>
+        <descripcion>Criterios de alta de recuperación</descripcion>
+        <referencia>Aldrete 1995</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PERI-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Mallampati</nombre>
+        <descripcion>Predictor de intubación difícil</descripcion>
+        <referencia>Mallampati 1985</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-PERI-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>ASA (estado físico)</nombre>
+        <descripcion>Clasificación de estado físico</descripcion>
+        <referencia>ASA 2020</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Medicina general" total="7">
+      <calculadora codigo="CALC-GEN-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Índice paquete-año (tabaquismo)</nombre>
+        <descripcion>Exposición acumulada</descripcion>
+        <referencia>Estándar</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-002" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Wells (TVP)</nombre>
+        <descripcion>Probabilidad de trombosis venosa</descripcion>
+        <referencia>Wells et al. 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-003" tipo="score" version="1" alto-riesgo="false">
+        <nombre>Centor (faringitis estreptocócica)</nombre>
+        <descripcion>Probabilidad de estreptococo</descripcion>
+        <referencia>Centor 1981 / McIsaac 1998</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-010" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Charlson (comorbilidad)</nombre>
+        <descripcion>Índice de comorbilidad</descripcion>
+        <referencia>Charlson et al. 1987</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-011" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>CIWA-Ar (abstinencia OH)</nombre>
+        <descripcion>Severidad de abstinencia alcohólica</descripcion>
+        <referencia>Sullivan et al. 1989</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-012" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>COWS (abstinencia opioides)</nombre>
+        <descripcion>Severidad de abstinencia de opioides</descripcion>
+        <referencia>Wesson &amp; Ling 2003</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-013" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>INR en fiebre (decisión warfarina)</nombre>
+        <descripcion>Vigilancia de INR en fiebre/ATB</descripcion>
+        <referencia>Holbrook et al. 2012</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Cribado y escalas" total="7">
+      <calculadora codigo="CALC-GEN-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Escala de Braden (úlceras por presión)</nombre>
+        <descripcion>Riesgo de lesión por presión</descripcion>
+        <referencia>Braden &amp; Bergstrom 1987</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Escala de caídas de Morse</nombre>
+        <descripcion>Riesgo de caídas</descripcion>
+        <referencia>Morse 1989</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-006" tipo="score" version="1" alto-riesgo="false">
+        <nombre>CAGE (cribado de alcohol)</nombre>
+        <descripcion>Consumo problemático</descripcion>
+        <referencia>Ewing 1984</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>PHQ-9 (depresión)</nombre>
+        <descripcion>Gravedad de síntomas depresivos</descripcion>
+        <referencia>Kroenke et al. 2001</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-008" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>GAD-7 (ansiedad)</nombre>
+        <descripcion>Gravedad de ansiedad</descripcion>
+        <referencia>Spitzer et al. 2006</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-GEN-009" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>AUDIT-C (alcohol)</nombre>
+        <descripcion>Consumo de riesgo de alcohol</descripcion>
+        <referencia>Bush et al. 1998</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CRIB-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Clinical Frailty Scale</nombre>
+        <descripcion>Fragilidad clínica (1–9)</descripcion>
+        <referencia>Rockwood et al. 2005</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="Conversores" total="7">
+      <calculadora codigo="CALC-CONV-001" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Temperatura (°C ↔ °F)</nombre>
+        <descripcion>Conversión de temperatura</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-002" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Peso (kg ↔ lb)</nombre>
+        <descripcion>Conversión de masa</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-003" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Altura (cm ↔ pulgadas)</nombre>
+        <descripcion>Conversión de longitud</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-004" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Glucosa (mg/dL ↔ mmol/L)</nombre>
+        <descripcion>Conversión de glucemia</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-005" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Creatinina (mg/dL ↔ µmol/L)</nombre>
+        <descripcion>Conversión de creatinina</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-006" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Urea ↔ BUN</nombre>
+        <descripcion>Conversión urea/BUN (mg/dL)</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CONV-007" tipo="formula" version="1" alto-riesgo="false">
+        <nombre>Presión (mmHg ↔ kPa)</nombre>
+        <descripcion>Conversión de presión</descripcion>
+        <referencia>—</referencia>
+      </calculadora>
+    </categoria>
+    <categoria nombre="UCI · alto riesgo" total="3">
+      <calculadora codigo="CALC-UCI-001" tipo="dosis" version="2" alto-riesgo="true">
+        <nombre>Infusión de noradrenalina</nombre>
+        <descripcion>mcg/kg/min → mL/h</descripcion>
+        <referencia>Estándar institucional</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CRIT-001" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>APACHE II</nombre>
+        <descripcion>Severidad/mortalidad en UCI (poblacional)</descripcion>
+        <referencia>Knaus et al. 1985</referencia>
+      </calculadora>
+      <calculadora codigo="CALC-CRIT-002" tipo="formula" version="1" alto-riesgo="true">
+        <nombre>SAPS II</nombre>
+        <descripcion>Mortalidad en UCI (poblacional, simplificado)</descripcion>
+        <referencia>Le Gall et al. 1993</referencia>
+      </calculadora>
+    </categoria>
+      </catalogo>
+    </anexo>
+
+    <anexo id="ANEXO-B" titulo="Archivos de referencia">
+      <archivo nombre="calculadoras-clinicas.html" rol="Fuente de comportamiento">Mockup funcional de referencia: barra flotante, modal, motor, vista de administración, visibilidad por pantalla y las 205 calculadoras. Es la especificación viva del comportamiento esperado.</archivo>
+      <archivo nombre="brechas-calcmed-his.xlsx" rol="Trazabilidad">Análisis de cobertura frente a CalcMed Avante (176 conceptos): 67 preexistentes + 109 incorporados.</archivo>
+      <archivo nombre="inventario-calculadoras.xlsx" rol="Inventario">Inventario de calculadoras del módulo.</archivo>
+    </anexo>
+
+    <anexo id="ANEXO-C" titulo="Referencias técnicas">
+      <referencia>Librería de evaluación: expr-eval (auto-hospedada en producción).</referencia>
+      <referencia>Design System Avante v2.0 (navy #0B3D5C, teal #00A8B5, Inter, OKLCH).</referencia>
+      <referencia>Metas Internacionales de Seguridad del Paciente (JCI/IPSG), en particular IPSG.3.</referencia>
+      <referencia>Literatura primaria por calculadora: ver campo referencia de cada entrada del Anexo A.</referencia>
+    </anexo>
+  </anexos>
+
+</requerimiento>
