@@ -99,6 +99,19 @@ export default function CalculadorasAdminPage() {
     if (!cfgId && first) setCfgId(first.id);
   }, [rows, cfgId]);
 
+  // Eco optimista del scope de pantallas del panel inline. Sin este estado local
+  // el toggle "revertía" visualmente (leía server state) hasta que la lista
+  // refrescaba, y las chips quedaban deshabilitadas en ese lapso: se percibía
+  // como que la asignación no guardaba. Se re-sincroniza al cambiar de
+  // calculadora o cuando el servidor confirma un valor nuevo.
+  const cfgScopeServidor: PaginasScope = cfgRow ? scopeDe(cfgRow.paginas) : "*";
+  const cfgSyncKey = `${cfgRow?.id ?? ""}|${JSON.stringify(cfgScopeServidor)}`;
+  const [cfgScope, setCfgScope] = React.useState<PaginasScope>(cfgScopeServidor);
+  React.useEffect(() => {
+    setCfgScope(cfgScopeServidor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfgSyncKey]);
+
   function togglePais(r: Row) {
     const cur = paisesDe(r.paises);
     setPaises.mutate(
@@ -115,11 +128,15 @@ export default function CalculadorasAdminPage() {
 
   function guardarCfgPantallas(scope: PaginasScope) {
     if (!cfgRow) return;
+    setCfgScope(scope); // eco optimista: refleja el cambio al instante
     setPaginas.mutate(
       { id: cfgRow.id, paginas: scope },
       {
         onSuccess: () => refetchList(),
-        onError: (e) => showToast(e.message),
+        onError: (e) => {
+          setCfgScope(cfgScopeServidor); // revertir al último valor confirmado
+          showToast(e.message);
+        },
       },
     );
   }
@@ -165,7 +182,7 @@ export default function CalculadorasAdminPage() {
           {cfgRow ? (
             <div style={{ marginTop: 16 }}>
               <PantallaGrid
-                value={scopeDe(cfgRow.paginas)}
+                value={cfgScope}
                 pantallas={pantallas}
                 onChange={guardarCfgPantallas}
               />
