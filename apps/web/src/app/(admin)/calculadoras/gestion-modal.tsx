@@ -25,11 +25,15 @@ const TIPO_LABEL: Record<string, string> = {
   formula: "FORMULA",
   score: "SCORE",
   dosis: "DOSIS",
+  nativo: "NATIVA",
 };
 
 /** Entradas por defecto para la vista previa (usa `val`/`sel` de la definición). */
 function entradasDefault(tipo: string, def: CalcDef): Record<string, string | number | boolean> {
   const out: Record<string, string | number | boolean> = {};
+  // Las nativas (p. ej. AHA PREVENT™) tienen su propio panel de cálculo — no
+  // hay entradas declarativas que rellenar para la vista previa.
+  if (tipo === "nativo") return out;
   if (tipo === "score") {
     for (const it of (def as CalcDefScore).items) out[it.id] = false;
   } else {
@@ -196,7 +200,7 @@ export function GestionModal({
         <div className={styles.edHead}>
           <h3>{calc ? calc.nombre : "Cargando…"}</h3>
           {calc ? (
-            <span className={cx(styles.chip, styles[calc.tipo as "formula" | "score" | "dosis"])}>
+            <span className={cx(styles.chip, styles[calc.tipo as "formula" | "score" | "dosis" | "nativo"])}>
               {tagGlyph(calc.tipo)} {TIPO_LABEL[calc.tipo]}
             </span>
           ) : null}
@@ -240,7 +244,16 @@ export function GestionModal({
               </div>
 
               <div className={styles.edSec}>Definición</div>
-              {calc.def && "expr" in calc.def ? (
+              {calc.def && "engine" in calc.def ? (
+                <div className={styles.fg}>
+                  <label>Motor de cálculo</label>
+                  <input value={calc.def.engine} readOnly className={styles.readonly} />
+                  <div className={styles.note} style={{ marginTop: 6 }}>
+                    Calculadora nativa: el cálculo lo realiza un motor en código con su propio
+                    panel de entrada. No tiene expresión ni ítems editables.
+                  </div>
+                </div>
+              ) : calc.def && "expr" in calc.def ? (
                 <div className={styles.fg}>
                   <label>Expresión</label>
                   <textarea value={calc.def.expr} readOnly className={styles.readonly} />

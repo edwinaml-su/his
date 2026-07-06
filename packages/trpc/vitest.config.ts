@@ -73,11 +73,16 @@ export default defineConfig({
         find: "@his/test-utils",
         replacement: path.resolve(__dirname, "../test-utils/src/index.ts"),
       },
-      // Sub-path de @his/infrastructure no cubierto por exports map del paquete.
-      // El router firma-electronica.router.ts importa directamente desde src/.
+      // Sub-paths de @his/infrastructure — el alias raíz (string) mangla los
+      // subpaths (`@his/infrastructure/formula` → `.../src/index.ts/formula`),
+      // por eso cada subpath necesita su entrada explícita ANTES del alias raíz.
       {
         find: "@his/infrastructure/src/firma/pin-hasher",
         replacement: path.resolve(__dirname, "../infrastructure/src/firma/pin-hasher.ts"),
+      },
+      {
+        find: "@his/infrastructure/formula",
+        replacement: path.resolve(__dirname, "../infrastructure/src/formula/index.ts"),
       },
       {
         find: "@his/infrastructure",

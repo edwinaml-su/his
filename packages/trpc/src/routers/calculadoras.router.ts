@@ -42,7 +42,7 @@ const adminBase = requireRole(["ADMIN", "DIR", "PHARM"]);
 // Schemas Zod
 // ---------------------------------------------------------------------------
 
-const tipoEnum = z.enum(["formula", "score", "dosis"]);
+const tipoEnum = z.enum(["formula", "score", "dosis", "nativo"]);
 const estadoEnum = z.enum(["borrador", "publicada", "retirada"]);
 const paisEnum = z.enum(["SV", "GT", "HN"]);
 
@@ -114,6 +114,13 @@ function validarDefinicion(tipo: string, def: unknown): CalcDef {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Un score requiere `items` en su definición.",
+      });
+    }
+  } else if (tipo === "nativo") {
+    if (!("engine" in value) || typeof (value as { engine?: unknown }).engine !== "string") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Una calculadora nativa requiere `engine` en su definición.",
       });
     }
   } else {

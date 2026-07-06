@@ -7285,6 +7285,7 @@ enum CalcTipo {
   formula
   score
   dosis
+  nativo
 
   @@schema("ece")
 }

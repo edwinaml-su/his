@@ -48,6 +48,13 @@ export default defineConfig({
           "../../packages/contracts/src/schemas/inpatient.ts",
         ),
       },
+      {
+        find: "@his/contracts/schemas/prevent",
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/contracts/src/schemas/prevent.ts",
+        ),
+      },
       // Bare package alias (catches all other @his/contracts imports).
       {
         find: "@his/contracts",

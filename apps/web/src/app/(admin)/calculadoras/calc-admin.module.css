@@ -207,6 +207,10 @@
   background: var(--teal-050);
   color: var(--teal-600);
 }
+.chip.nativo {
+  background: #eef0fb;
+  color: #4a44a0;
+}
 .chip.hr {
   background: var(--crit-bg);
   color: #7a1f16;

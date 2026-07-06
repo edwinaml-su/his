@@ -14,6 +14,7 @@ import { usePathname } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 import styles from "./calc-widget.module.css";
 import { CalcModal } from "./calc-modal";
+import { PreventPanel } from "./prevent-panel";
 import { CAT_ORDER, cx, pantallaDeRuta, tagGlyph, type WidgetCalc } from "./calc-shared";
 
 const RECIENTES_KEY = "his.calc.recientes";
@@ -342,13 +343,23 @@ export function CalcWidget({ pacienteId }: { pacienteId?: string }) {
       </div>
 
       {selected ? (
-        <CalcModal
-          calc={selected}
-          pacienteId={pacienteId}
-          pantalla={pantalla}
-          onClose={() => setSelected(null)}
-          onToast={showToast}
-        />
+        selected.tipo === "nativo" ? (
+          <PreventPanel
+            calc={selected}
+            pacienteId={pacienteId}
+            pantalla={pantalla}
+            onClose={() => setSelected(null)}
+            onToast={showToast}
+          />
+        ) : (
+          <CalcModal
+            calc={selected}
+            pacienteId={pacienteId}
+            pantalla={pantalla}
+            onClose={() => setSelected(null)}
+            onToast={showToast}
+          />
+        )
       ) : null}
 
       <div className={cx(styles.toast, toast.shown && styles.toastShow)}>

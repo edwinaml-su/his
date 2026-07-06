@@ -43,9 +43,11 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-// CommandPalette (renderizado dentro de AppShell desde Tarea 4 / PR #368)
-// usa `trpc.patient.search.useQuery`. En entorno de test no hay tRPC Provider
-// — stubeamos el cliente para que el hook devuelva data vacía sin throw.
+// AppShell monta dos consumidores de tRPC sin Provider en test:
+//   - CommandPalette (Tarea 4 / PR #368) usa `trpc.patient.search.useQuery`.
+//   - CalcWidget (barra flotante CC-0009) usa `trpc.calculadoras.paraWidget.useQuery`
+//     y, al insertar en nota, `trpc.calculadoras.registrar.useMutation`.
+// Stubeamos el cliente para que los hooks devuelvan data vacía sin throw.
 vi.mock("../../lib/trpc/react", () => ({
   trpc: {
     patient: {
@@ -55,6 +57,22 @@ vi.mock("../../lib/trpc/react", () => ({
           isPending: false,
           isLoading: false,
           isError: false,
+        }),
+      },
+    },
+    calculadoras: {
+      paraWidget: {
+        useQuery: () => ({
+          data: undefined,
+          isPending: false,
+          isLoading: false,
+          isError: false,
+        }),
+      },
+      registrar: {
+        useMutation: () => ({
+          mutate: () => undefined,
+          isPending: false,
         }),
       },
     },

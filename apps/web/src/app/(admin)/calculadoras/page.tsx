@@ -47,7 +47,12 @@ const ESTADO_META: Record<string, { cls: "pub" | "draft" | "retired"; label: str
 };
 const ESTADO_FALLBACK = { cls: "draft", label: "Borrador" } as const;
 
-const TIPO_LABEL: Record<string, string> = { formula: "FÓRMULA", score: "SCORE", dosis: "DOSIS" };
+const TIPO_LABEL: Record<string, string> = {
+  formula: "FÓRMULA",
+  score: "SCORE",
+  dosis: "DOSIS",
+  nativo: "NATIVA",
+};
 
 function paisesDe(v: unknown): { SV: boolean; GT: boolean; HN: boolean } {
   const p = (v ?? {}) as Record<string, boolean>;
@@ -99,6 +104,19 @@ export default function CalculadorasAdminPage() {
     if (!cfgId && first) setCfgId(first.id);
   }, [rows, cfgId]);
 
+  // Eco optimista del scope de pantallas del panel inline. Sin este estado local
+  // el toggle "revertía" visualmente (leía server state) hasta que la lista
+  // refrescaba, y las chips quedaban deshabilitadas en ese lapso: se percibía
+  // como que la asignación no guardaba. Se re-sincroniza al cambiar de
+  // calculadora o cuando el servidor confirma un valor nuevo.
+  const cfgScopeServidor: PaginasScope = cfgRow ? scopeDe(cfgRow.paginas) : "*";
+  const cfgSyncKey = `${cfgRow?.id ?? ""}|${JSON.stringify(cfgScopeServidor)}`;
+  const [cfgScope, setCfgScope] = React.useState<PaginasScope>(cfgScopeServidor);
+  React.useEffect(() => {
+    setCfgScope(cfgScopeServidor);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfgSyncKey]);
+
   function togglePais(r: Row) {
     const cur = paisesDe(r.paises);
     setPaises.mutate(
@@ -115,11 +133,15 @@ export default function CalculadorasAdminPage() {
 
   function guardarCfgPantallas(scope: PaginasScope) {
     if (!cfgRow) return;
+    setCfgScope(scope); // eco optimista: refleja el cambio al instante
     setPaginas.mutate(
       { id: cfgRow.id, paginas: scope },
       {
         onSuccess: () => refetchList(),
-        onError: (e) => showToast(e.message),
+        onError: (e) => {
+          setCfgScope(cfgScopeServidor); // revertir al último valor confirmado
+          showToast(e.message);
+        },
       },
     );
   }
@@ -165,7 +187,7 @@ export default function CalculadorasAdminPage() {
           {cfgRow ? (
             <div style={{ marginTop: 16 }}>
               <PantallaGrid
-                value={scopeDe(cfgRow.paginas)}
+                value={cfgScope}
                 pantallas={pantallas}
                 onChange={guardarCfgPantallas}
               />
@@ -247,8 +269,14 @@ export default function CalculadorasAdminPage() {
                       <span>{r.categoria}</span>
                     </td>
                     <td>
-                      <span className={cx(styles.chip, styles[r.tipo as "formula" | "score" | "dosis"])}>
-                        {tagGlyph(r.tipo as "formula" | "score" | "dosis")} {TIPO_LABEL[r.tipo]}
+                      <span
+                        className={cx(
+                          styles.chip,
+                          styles[r.tipo as "formula" | "score" | "dosis" | "nativo"],
+                        )}
+                      >
+                        {tagGlyph(r.tipo as "formula" | "score" | "dosis" | "nativo")}{" "}
+                        {TIPO_LABEL[r.tipo]}
                       </span>
                       {r.altoRiesgo ? <span className={cx(styles.chip, styles.hr)}>ALTO RIESGO</span> : null}
                     </td>
