@@ -8,7 +8,7 @@ export interface WidgetCalc {
   id: string;
   codigo: string;
   nombre: string;
-  tipo: "formula" | "score" | "dosis";
+  tipo: "formula" | "score" | "dosis" | "nativo";
   categoria: string;
   altoRiesgo: boolean;
   sub: string | null;
@@ -18,9 +18,12 @@ export interface WidgetCalc {
   def: CalcDef;
 }
 
-/** Glifo del tag por tipo — ƒ fórmula · Σ score · mL dosis (idéntico al mockup). */
+/** Glifo del tag por tipo — ƒ fórmula · Σ score · mL dosis · λ nativa. */
 export function tagGlyph(t: WidgetCalc["tipo"]): string {
-  return t === "formula" ? "ƒ" : t === "score" ? "Σ" : "mL";
+  if (t === "formula") return "ƒ";
+  if (t === "score") return "Σ";
+  if (t === "nativo") return "λ";
+  return "mL";
 }
 
 /** Une clases condicionales (ignora false/undefined). */

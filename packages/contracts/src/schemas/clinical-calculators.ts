@@ -71,12 +71,29 @@ const calcDefScoreSchema = z.object({
 });
 
 /**
- * Acepta ambas formas; en runtime valida según el tipo que acompañe.
+ * Calculadora `nativo`: el cómputo NO es una fórmula/score data-driven sino
+ * código dedicado identificado por `engine` (p. ej. "aha-prevent"), evaluado
+ * por el motor correspondiente en `@his/infrastructure/formula`. `interp` se
+ * mantiene por compatibilidad estructural (normalmente vacío: el panel nativo
+ * renderiza su propia interpretación multi-salida).
+ */
+const calcDefNativoSchema = z.object({
+  engine: z.string().min(1),
+  out: calcOutSchema,
+  interp: z.array(calcInterpSchema),
+  attribution: z.string().optional(),
+  disclaimer: z.string().optional(),
+});
+
+/**
+ * Acepta las tres formas; en runtime valida según el tipo que acompañe.
+ * Disjuntas por llave discriminante (`inputs`+`expr` / `items` / `engine`).
  * La discriminación real ocurre en la cabecera `calculadoraSchema`.
  */
 export const calcDefinicionSchema = z.union([
   calcDefFormulaSchema,
   calcDefScoreSchema,
+  calcDefNativoSchema,
 ]);
 
 export type CalcDefinicion = z.infer<typeof calcDefinicionSchema>;
@@ -86,7 +103,7 @@ export type CalcDefinicion = z.infer<typeof calcDefinicionSchema>;
 export const calculadoraSchema = z.object({
   codigo: z.string(), // CALC-{AREA}-NNN
   nombre: z.string(),
-  tipo: z.enum(["formula", "score", "dosis"]),
+  tipo: z.enum(["formula", "score", "dosis", "nativo"]),
   cat: z.string(),
   ver: z.number().int().min(1),
   hr: z.boolean(), // alto riesgo

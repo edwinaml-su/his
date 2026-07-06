@@ -65,10 +65,24 @@ export interface CalcDefScore {
   interp: Interp[];
 }
 
-export type CalcDef = CalcDefFormula | CalcDefScore;
+/**
+ * Definición de una calculadora `nativo`: el cómputo lo hace código dedicado
+ * identificado por `engine` (p. ej. "aha-prevent"), no una fórmula/score
+ * data-driven. `evaluar` no la resuelve (retorna NaN); la UI la delega a su
+ * panel específico. `interp` se conserva por compatibilidad estructural.
+ */
+export interface CalcDefNativo {
+  engine: string;
+  out: CalcOut;
+  interp: Interp[];
+  attribution?: string;
+  disclaimer?: string;
+}
+
+export type CalcDef = CalcDefFormula | CalcDefScore | CalcDefNativo;
 
 export interface Calc {
-  tipo: "formula" | "dosis" | "score";
+  tipo: "formula" | "dosis" | "score" | "nativo";
   def: CalcDef;
 }
 
@@ -149,6 +163,12 @@ export function evaluar(
   entradas: Record<string, string | number | boolean>,
 ): EvalResult {
   let resultado: number;
+
+  // Las calculadoras `nativo` (regresiones, multi-salida) no pasan por el motor
+  // de fórmulas: la UI las delega a su panel dedicado. Aquí es no-op.
+  if (calc.tipo === "nativo") {
+    return { resultado: NaN, interp: null };
+  }
 
   if (calc.tipo === "score") {
     const def = calc.def as CalcDefScore;

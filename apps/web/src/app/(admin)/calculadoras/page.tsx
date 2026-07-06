@@ -47,7 +47,12 @@ const ESTADO_META: Record<string, { cls: "pub" | "draft" | "retired"; label: str
 };
 const ESTADO_FALLBACK = { cls: "draft", label: "Borrador" } as const;
 
-const TIPO_LABEL: Record<string, string> = { formula: "FÓRMULA", score: "SCORE", dosis: "DOSIS" };
+const TIPO_LABEL: Record<string, string> = {
+  formula: "FÓRMULA",
+  score: "SCORE",
+  dosis: "DOSIS",
+  nativo: "NATIVA",
+};
 
 function paisesDe(v: unknown): { SV: boolean; GT: boolean; HN: boolean } {
   const p = (v ?? {}) as Record<string, boolean>;
@@ -264,8 +269,14 @@ export default function CalculadorasAdminPage() {
                       <span>{r.categoria}</span>
                     </td>
                     <td>
-                      <span className={cx(styles.chip, styles[r.tipo as "formula" | "score" | "dosis"])}>
-                        {tagGlyph(r.tipo as "formula" | "score" | "dosis")} {TIPO_LABEL[r.tipo]}
+                      <span
+                        className={cx(
+                          styles.chip,
+                          styles[r.tipo as "formula" | "score" | "dosis" | "nativo"],
+                        )}
+                      >
+                        {tagGlyph(r.tipo as "formula" | "score" | "dosis" | "nativo")}{" "}
+                        {TIPO_LABEL[r.tipo]}
                       </span>
                       {r.altoRiesgo ? <span className={cx(styles.chip, styles.hr)}>ALTO RIESGO</span> : null}
                     </td>

@@ -89,3 +89,4 @@ export * from "./certificado-incapacidad";
 export * from "./documento-asociado";
 export * from "./fall-event";
 export * from "./clinical-calculators";
+export * from "./prevent";
