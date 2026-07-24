@@ -261,6 +261,39 @@ Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no
 
 ---
 
+## Fidelidad de diseño (mockup) — reglas obligatorias
+
+Cuando exista un mockup HTML/CSS entregado, es la **ÚNICA fuente de verdad visual**. Ninguna instrucción posterior en la conversación autoriza a ignorarlo, salvo pedido explícito de Edwin.
+
+**Ubicaciones:**
+- `design/mockup/` — mockup HTML/CSS entregado (páginas `.html` + `.css` + `assets/`). Referencia EXACTA de colores, tipografía, espaciados, bordes, sombras, estados hover/focus y layout.
+- `docs/DESIGN-SPEC.md` — tokens extraídos del mockup, legibles por humanos (token ↔ valor ↔ origen en el mockup) + mapeo mockup→componentes + desviaciones aprobadas.
+- Tokens materializados en `apps/web/tailwind.config.ts` (`theme.extend`) y `packages/ui/src/styles/globals.css` (variables CSS). Nombres **semánticos** (`brand-primary`, `surface`, `text-muted`), no descriptivos.
+
+**Precedencia ante duda visual:** 1) mockup HTML/CSS → 2) `docs/DESIGN-SPEC.md` → 3) `tailwind.config.ts`. Si hay contradicción: DETENTE y pregunta — no decidas solo.
+
+**Flujo obligatorio antes de maquetar una pantalla/componente:**
+1. LEE el mockup con Read (el `.html` y su `.css`). No trabajes de memoria ni "aproximes".
+2. Extrae valores exactos (hex/rgb, font, line-height, padding, gap, radius, shadow, breakpoints).
+3. Compara contra tokens existentes: si existe → usa el token; si no → agrégalo con nombre semántico y documenta en `docs/DESIGN-SPEC.md` **en el mismo commit**.
+4. Implementa usando exclusivamente tokens.
+5. Verifica (abajo) antes de dar por terminado.
+
+**Prohibiciones (modo estricto):**
+- **No inventar/aproximar colores.** El valor EXACTO del mockup se registra como token y se usa por nombre (`bg-brand-primary`), nunca clases de la paleta genérica de Tailwind.
+- **No re-estilizar arbitrariamente** tipografías, pesos, tamaños, espaciados, radios o sombras "porque se ve mejor". Toda desviación requiere aprobación explícita y se registra en la tabla de desviaciones del DESIGN-SPEC.
+- **No cambiar layout**: ni reordenar secciones ni ocultar/añadir elementos. El DOM puede diferir (React), el render debe ser visualmente equivalente.
+- **No magic values**: nada de `style={{color:'#333'}}` ni `text-[#333]` repetidos. Clases arbitrarias `[...]` solo para valores que aparecen UNA vez, comentados con su origen.
+- **No librerías de UI nuevas** (MUI, Bootstrap, DaisyUI, etc.) ni fuentes nuevas sin aprobación. **Shadcn/`@his/ui` son la base permitida del proyecto** — los tokens del mockup se materializan sobre ese stack, no lo reemplazan.
+- **Responsive y estados** (hover/focus/active/disabled, transiciones) se copian de las media queries y CSS del mockup. Si el mockup no define una vista o estado → preguntar / proponer derivado de tokens marcado "PENDIENTE DE APROBACIÓN".
+- **Assets** (imágenes, íconos, logos) salen de `design/mockup/assets/` — no sustituir por "parecidos" de otra librería.
+
+**Definición de "terminado" (fidelidad):** comparación lado a lado (app en `npm run dev` vs mockup en browser, screenshots con Playwright) + checklist (colores, tipografía, espaciados, bordes/radios/sombras, estados, responsive, cero valores hardcodeados) + reportar explícitamente toda desviación no replicable (valor mockup vs implementado). Nunca silenciarlas.
+
+**Cambios de diseño:** si llega un mockup actualizado, primero `docs/DESIGN-SPEC.md` + tokens, después componentes. Nunca parchear componentes dejando tokens desactualizados.
+
+---
+
 ## Convenciones de commits / PRs
 
 - Estilo conventional commits en español: `feat(beta15): ...`, `fix(db): ...`, `chore(mcp): ...`, `docs(beta15): ...`.
@@ -281,6 +314,7 @@ Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no
 | `docs/15_production_runbook.md` | Operación: incidentes, rollback |
 | `docs/17_hipercuidado_runbook.md` | Hipercuidado post-deploy |
 | `docs/blueprints/beta15_*.md` | Spec Beta.15 alerts/notifications (current) |
+| `docs/DESIGN-SPEC.md` | Tokens de diseño del mockup (`design/mockup/`) + mapeo a componentes + desviaciones aprobadas |
 | `docs/31_flujos_operativos_consolidado.md` | Índice maestro de los 30 flujos NTEC (workflow-designer) |
 | `docs/flujos/{CODIGO}.md` | Ficha por documento NTEC: metadata, dependencias, roles, eventos, drift |
 | `docs/audit/2026-05-19_audit_stream_*.md` | Hallazgos audit A-J (271 totales, 52 P0); muchos ya remediados |
