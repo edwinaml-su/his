@@ -1167,7 +1167,9 @@ model Patient {
   educationLevelId   String?   @db.Uuid
   occupationId       String?   @db.Uuid
   bloodTypeAbo       String?   @db.VarChar(3) /// A, B, AB, O.
-  bloodRh            String?   @db.VarChar(3) /// +, -.
+  bloodRh            String?   @db.VarChar(3) /// +, -, Du.
+  /// CC-0008b — el documento de identidad no reporta tipo de sangre (≠ null = aún sin capturar).
+  bloodTypeNotReported Boolean @default(false)
   isUnknown          Boolean   @default(false) /// NN.
   unknownLabel       String?   @db.VarChar(40) /// NN-AAAAMMDD-NNN.
   motherPatientId    String?   @db.Uuid /// vínculo neonato↔madre.

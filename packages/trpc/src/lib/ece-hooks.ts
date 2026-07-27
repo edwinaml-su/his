@@ -61,6 +61,9 @@ function toModalidad(_admissionType: string): "ambulatorio" | "hospitalario" {
  * @param patientId - public."Patient".id recién creado
  * @param establishmentId - public."Establishment".id del tenant
  * @param mrn - MRN del paciente (usado como numero_expediente)
+ * @param tipoRegistroIdentidad - CC-0008b: 'sin_documento' (default, paciente sin
+ *   documento pero identificado) o 'desconocido' (paciente no identificado). Ambos
+ *   son los únicos valores que el CHECK ck_nui_requerido permite sin nui.
  * @returns id del ece.paciente creado, o null si ya existía o falló
  */
 export async function hookEcePacienteAfterCreate(
@@ -68,6 +71,7 @@ export async function hookEcePacienteAfterCreate(
   patientId: string,
   establishmentId: string,
   mrn: string,
+  tipoRegistroIdentidad: "sin_documento" | "desconocido" = "sin_documento",
 ): Promise<string | null> {
   // Idempotencia: si ya existe, no crear.
   const existing = await (tx.$queryRaw as PrismaLike["$queryRaw"])`
@@ -105,7 +109,7 @@ export async function hookEcePacienteAfterCreate(
       ${patientId}::uuid,
       ${establishmentId}::uuid,
       ${expediente},
-      'sin_documento',
+      ${tipoRegistroIdentidad},
       'activo',
       'vigente'
     )

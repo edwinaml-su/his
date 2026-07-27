@@ -14,6 +14,12 @@
 
 export type TipoDocumento = "DUI" | "PASAPORTE" | "CARNET_RESIDENTE";
 export type SexoDocumento = "MASCULINO" | "FEMENINO";
+/** CC-0008b — tipo de sangre combinado ABO+Rh tal como lo reporta el documento. */
+export type TipoSangreDocumento =
+  | "A+" | "A-" | "A Du"
+  | "B+" | "B-" | "B Du"
+  | "AB+" | "AB-" | "AB Du"
+  | "O+" | "O-" | "O Du";
 
 export interface DatosDocumento {
   tipoDocumento: TipoDocumento;
@@ -26,6 +32,8 @@ export interface DatosDocumento {
   apellidoCasada?: string;
   sexoBiologico: SexoDocumento;
   fechaNacimiento: string; // ISO yyyy-mm-dd
+  /** CC-0008b — tipo de sangre reportado en el documento (§341 mockup). */
+  tipoSangre: TipoSangreDocumento;
 }
 
 /**
@@ -62,6 +70,8 @@ const MUESTRAS: Record<TipoDocumento, DatosDocumento> = {
     apellidoCasada: "de Castellanos",
     sexoBiologico: "FEMENINO",
     fechaNacimiento: "1990-07-14",
+    // Coincide con la demo del mockup (simularEscaneo() fija sangre.value = 'O+').
+    tipoSangre: "O+",
   },
   PASAPORTE: {
     tipoDocumento: "PASAPORTE",
@@ -72,6 +82,7 @@ const MUESTRAS: Record<TipoDocumento, DatosDocumento> = {
     segundoApellido: "Rivas",
     sexoBiologico: "MASCULINO",
     fechaNacimiento: "1985-03-22",
+    tipoSangre: "A+",
   },
   CARNET_RESIDENTE: {
     tipoDocumento: "CARNET_RESIDENTE",
@@ -81,6 +92,7 @@ const MUESTRAS: Record<TipoDocumento, DatosDocumento> = {
     primerApellido: "Mendoza",
     sexoBiologico: "FEMENINO",
     fechaNacimiento: "1998-11-05",
+    tipoSangre: "AB-",
   },
 };
 
