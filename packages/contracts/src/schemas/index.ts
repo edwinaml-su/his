@@ -61,6 +61,7 @@ export * from "./respiratory";
 export * from "./services-equipment";
 export * from "./ledger";
 export * from "./lis";
+export * from "./lis-catalogo";
 export * from "./locale";
 export * from "./medication-admin";
 export * from "./mfa";

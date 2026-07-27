@@ -6,6 +6,7 @@ import {
   patientIdentifierSchema,
   patientAllergySchema,
   patientAddressSchema,
+  patientEmergencyContactUpdateSchema,
   patientSearchSchema,
   findDuplicatesInput,
   mergePatientsInput,
@@ -14,7 +15,7 @@ import {
   documentTypeEnum,
   type PatientMergeFieldKey,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { withEceContext } from "../ece/rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
@@ -509,6 +510,51 @@ export const patientRouter = router({
       });
     }),
 
+  /**
+   * CC-0011 (item e) — upsert del contacto de emergencia único del paciente
+   * (mockup avante2: modal "En caso de emergencia llamar a", editable por el
+   * médico). Actualiza el contacto de prioridad 1 si existe; si no, lo crea.
+   */
+  actualizarContactoEmergencia: requireRole(["PHYSICIAN", "NURSE", "MC", "MT", "DIR"])
+    .input(patientEmergencyContactUpdateSchema)
+    .mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+
+        const existing = await tx.patientEmergencyContact.findFirst({
+          where: { patientId: input.patientId, priority: 1 },
+          select: { id: true },
+        });
+
+        if (existing) {
+          return tx.patientEmergencyContact.update({
+            where: { id: existing.id },
+            data: {
+              fullName: input.fullName,
+              relationship: input.relationship,
+              phone: input.phone ?? null,
+            },
+          });
+        }
+
+        return tx.patientEmergencyContact.create({
+          data: {
+            patientId: input.patientId,
+            fullName: input.fullName,
+            relationship: input.relationship,
+            phone: input.phone ?? null,
+            priority: 1,
+          },
+        });
+      });
+    }),
+
   // ===========================================================================
   // US-4.3 — Buscar duplicados probables.
   // ===========================================================================
@@ -770,7 +816,7 @@ export const patientRouter = router({
       const patientId = account.patientId;
       const organizationId = ctx.tenant.organizationId;
 
-      const [patient, alergias, contactosEmergencia] = await Promise.all([
+      const [patient, alergias, contactosEmergencia, domicilioRow, servicioRow] = await Promise.all([
         safe(
           "patient",
           withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
@@ -785,6 +831,9 @@ export const patientRouter = router({
                 esLgbtiq: true,
                 birthDate: true,
                 biologicalSexId: true,
+                // CC-0011 (item f) — tipo/número de documento del paciente.
+                documentType: true,
+                documentNumber: true,
               },
             }),
           ),
@@ -816,7 +865,35 @@ export const patientRouter = router({
             select: { id: true; fullName: true; relationship: true; phone: true };
           }>>>,
         ),
+        // CC-0011 (item f) — domicilio: dirección primaria del paciente (si existe).
+        safe(
+          "domicilio",
+          withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+            tx.patientAddress.findFirst({
+              where: { patientId },
+              orderBy: [{ isPrimary: "desc" }, { createdAt: "desc" }],
+              select: { line1: true, line2: true },
+            }),
+          ),
+          null,
+        ),
+        // CC-0011 (item f) — tipo de cuenta: servicio registrado en la PatientAccount activa.
+        safe(
+          "servicioActivo",
+          withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+            tx.patientAccountService.findFirst({
+              where: { accountId: account.id },
+              orderBy: { createdAt: "asc" },
+              select: { tipo: true },
+            }),
+          ),
+          null,
+        ),
       ]);
+
+      const domicilio = domicilioRow
+        ? [domicilioRow.line1, domicilioRow.line2].filter(Boolean).join(", ")
+        : null;
 
       // Bloque 2: resolver episodioId desde ece.episodio_atencion
       // Usa withEceContext (GUC ece_establecimiento_id) porque episodio_atencion
@@ -871,6 +948,8 @@ export const patientRouter = router({
           id: account.id,
           numeroCuenta: account.numeroCuenta,
           encounterId: account.encounterId ?? null,
+          // CC-0011 (item f) — tipo de cuenta (HOSPITALARIO | NO_HOSPITALARIO) del servicio registrado.
+          tipo: servicioRow?.tipo ?? null,
         },
         episodioId,
         paciente: patient
@@ -883,6 +962,10 @@ export const patientRouter = router({
               esLgbtiq: patient.esLgbtiq ?? null,
               birthDate: patient.birthDate ?? null,
               biologicalSexId: patient.biologicalSexId,
+              // CC-0011 (item f) — documento de identidad + domicilio.
+              documentType: patient.documentType ?? null,
+              documentNumber: patient.documentNumber ?? null,
+              domicilio,
             }
           : null,
         alergias,

@@ -8,7 +8,7 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { lisRouter } from "../lis.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN } from "@his/test-utils";
+import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
@@ -586,6 +586,109 @@ describe("lisRouter", () => {
       const newNotes = (args.data as { notes: string }).notes;
       expect(newNotes).toMatch(/^\[\d{4}/);
       expect(newNotes).toContain("[VALIDATED by");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0011 — catálogo de exámenes parametrizable (panel/test CRUD + listByArea)
+  // ---------------------------------------------------------------------------
+
+  describe("test.listByArea", () => {
+    it("agrupa por panel y ordena por displayOrder", async () => {
+      prisma.labPanel.findMany.mockResolvedValue([
+        {
+          id: u,
+          name: "Hematología y coagulación",
+          tests: [
+            { id: v, name: "Recuento de plaquetas", displayOrder: 6 },
+            { id: w, name: "Hemograma completo", displayOrder: 1 },
+          ],
+        },
+      ] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.test.listByArea({ area: "LABORATORIO" });
+
+      expect(result).toEqual([
+        {
+          panelId: u,
+          nombre: "Hematología y coagulación",
+          tests: [
+            { id: v, nombre: "Recuento de plaquetas", displayOrder: 6 },
+            { id: w, nombre: "Hemograma completo", displayOrder: 1 },
+          ],
+        },
+      ]);
+      const args = prisma.labPanel.findMany.mock.calls[0]![0];
+      expect(args!.where!.area).toBe("LABORATORIO");
+      expect(args!.where!.active).toBe(true);
+      expect(args!.orderBy).toEqual({ displayOrder: "asc" });
+    });
+  });
+
+  describe("panel.create", () => {
+    it("fuerza organizationId desde ctx.tenant (ignora cualquier valor del input)", async () => {
+      prisma.labPanel.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.panel.create({
+        code: "TEN-LAB-01",
+        name: "Panel propio del tenant",
+        area: "LABORATORIO",
+        displayOrder: 1,
+      });
+      const args = prisma.labPanel.create.mock.calls[0]![0];
+      expect(args.data.organizationId).toBe(MOCK_TENANT.organizationId);
+    });
+
+    it("FORBIDDEN sin rol ADMIN/DIR", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
+      );
+      await expect(
+        caller.panel.create({ code: "X", name: "X", area: "LABORATORIO" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  describe("panel.update", () => {
+    it("FORBIDDEN al intentar editar un panel global (organizationId=null)", async () => {
+      prisma.labPanel.findFirst
+        .mockResolvedValueOnce(null as never) // no es del tenant
+        .mockResolvedValueOnce({ id: u } as never); // sí existe como global
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.panel.update({ id: u, name: "Intento de editar catálogo global" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("actualiza un panel propio del tenant", async () => {
+      prisma.labPanel.findFirst.mockResolvedValueOnce({ id: u } as never);
+      prisma.labPanel.update.mockResolvedValue({ id: u, name: "Actualizado" } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.panel.update({ id: u, name: "Actualizado" });
+      expect(result).toMatchObject({ name: "Actualizado" });
+    });
+  });
+
+  describe("test.create", () => {
+    it("fuerza organizationId desde ctx.tenant", async () => {
+      prisma.labTest.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.test.create({ panelId: u, code: "TEN-LAB-01-A", name: "Test propio" });
+      const args = prisma.labTest.create.mock.calls[0]![0];
+      expect(args.data.organizationId).toBe(MOCK_TENANT.organizationId);
+      expect(args.data.specimen).toBe("OTHER");
+    });
+  });
+
+  describe("test.update", () => {
+    it("FORBIDDEN al intentar editar un test global (organizationId=null)", async () => {
+      prisma.labTest.findFirst
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.test.update({ id: u, name: "Intento de editar catálogo global" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 });

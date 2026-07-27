@@ -36,8 +36,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";
+import { argon2 } from "@his/infrastructure";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+import { applyTenantContext } from "../../rls-context";
 import { validateClinicalText } from "@his/contracts/clinical/forbidden-abbreviations";
 import {
   cie11DiagnosticoSchema,
@@ -51,6 +53,7 @@ import {
   ordenExamenSchema,
   ordenInyeccionSchema,
   type Cie11Diagnostico,
+  type OrdenExamen,
 } from "@his/contracts";
 
 // ---------------------------------------------------------------------------
@@ -96,7 +99,12 @@ const getInput = z.object({ id: z.string().uuid() });
 const createInput = z.object({
   episodioId: z.string().uuid(),
   instanciaId: z.string().uuid().optional(),
-  tipoConsulta: tipoConsultaEnum,
+  /**
+   * CC-0011 — opcional: el mockup avante2 elimina el campo de la UI. Si se
+   * omite, el server lo deriva (ver `create`): 'subsecuente' si el paciente
+   * ya tiene una HC previa no anulada, sino 'primera_vez'.
+   */
+  tipoConsulta: tipoConsultaEnum.optional(),
   motivoConsulta: z.string().min(1).max(2000).optional(),
   enfermedadActual: z.string().max(4000).optional(),
   /** RF-06 — Destino (catálogo cerrado de 8). Se persiste en columna disposicion. */
@@ -115,6 +123,10 @@ const createInput = z.object({
   terapiaRespiratoria: terapiaRespiratoriaSchema.optional(),
   ordenesExamenes: z.array(ordenExamenSchema).optional(),
   ordenesInyecciones: z.array(ordenInyeccionSchema).optional(),
+  /** CC-0011 — RF-01.3: nombre de pila (paciente LGBTIQ+). Actualiza Patient.preferredName. */
+  nombrePila: z.string().trim().min(1).max(120).optional(),
+  /** CC-0011 — RF-01.3: actualiza Patient.esLgbtiq. */
+  esLgbtiq: z.boolean().optional(),
 });
 
 const updateInput = z.object({
@@ -143,6 +155,21 @@ const updateInput = z.object({
 const transitionInput = z.object({
   id: z.string().uuid(),
   firmaId: z.string().uuid().optional(),
+  observacion: z.string().max(1000).optional(),
+});
+
+/**
+ * CC-0011 (item g) — contrato real de `firmar`. El anterior exigía `firmaId`
+ * (un id de `ece.firma_electronica` que la UI nunca podía obtener de antemano)
+ * y por eso la UI mandaba el PIN embebido en `observacion` como workaround
+ * ("pin:1234"). Se reemplaza por el patrón usado en documentos ECE funcionales
+ * (hoja-ingreso, solicitud-estudio): la UI manda el PIN en claro sobre TLS y
+ * el server resuelve+valida el firmaId contra ece.firma_electronica (argon2id).
+ */
+const pinSchema = z.string().trim().regex(/^\d{6,8}$/, "PIN debe ser 6-8 dígitos");
+const firmarInput = z.object({
+  id: z.string().uuid(),
+  pin: pinSchema,
   observacion: z.string().max(1000).optional(),
 });
 
@@ -277,14 +304,232 @@ function parseDiagnosticos(raw: unknown): Cie11Diagnostico[] {
           tipoRaw === "PRESUNTIVO" || tipoRaw === "COMPLEMENTARIO"
             ? (tipoRaw as Cie11Diagnostico["tipo"])
             : "DEFINITIVO";
+        // CC-0011 (item a) — complemento (CC-0007 RF-08) se descartaba al leer;
+        // el round-trip create→get→update perdía el texto libre por diagnóstico.
+        const complemento =
+          typeof obj.complemento === "string" && obj.complemento.length > 0
+            ? obj.complemento
+            : undefined;
         if (codigo && descripcion) {
-          result.push({ codigo, descripcion, tipo });
+          result.push({ codigo, descripcion, tipo, ...(complemento !== undefined && { complemento }) });
         }
       }
     }
     return result;
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — firma electrónica (PIN → firmaId) + personal_salud
+//
+// Espejan el patrón de packages/trpc/src/routers/ece/solicitud-estudio.router.ts
+// y hoja-ingreso.router.ts (documentos ECE ya funcionales con PIN argon2id).
+// Se duplican localmente por la misma razón que el resto del bloque ECE:
+// evitar import cruzado entre routers hermanos (ver cabecera de esos archivos).
+//
+// NOTA (hallazgo colateral): `registrado_por`/`ejecutado_por` en las tablas
+// ECE referencian ece.personal_salud(id) — NO public."User".id. `buildEceCtx`
+// devuelve `personalId: ctx.user.id` (usado solo para el GUC de RLS
+// app.ece_personal_id, que ya se usaba así antes de este cambio). Para las
+// columnas FK reales usamos `findPersonal()` abajo, que resuelve el id
+// correcto de ece.personal_salud. `create()` insertaba antes ctx.user.id
+// directo en `registrado_por` (bug preexistente — violación de FK real contra
+// Postgres); se corrige aquí porque ya se toca esta función para RF de
+// CC-0011 y la materialización nueva depende de resolver personal_salud.id
+// correctamente. `validar()` no se tocó (fuera de alcance de este CC).
+// ---------------------------------------------------------------------------
+
+type RawTx = {
+  $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+  $executeRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
+  labTest: {
+    findFirst: (args: {
+      where: { name: string; panel: { name: string } };
+      select: { panel: { select: { area: true } } };
+    }) => Promise<{ panel: { area: string } | null } | null>;
+  };
+};
+
+interface PersonalRow {
+  id: string;
+}
+
+interface FirmaRow {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+}
+
+async function findPersonal(tx: RawTx, hisUserId: string): Promise<PersonalRow | null> {
+  const rows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<PersonalRow[]>)`
+    SELECT id::text
+    FROM ece.personal_salud
+    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+async function findFirma(tx: RawTx, personalId: string): Promise<FirmaRow | null> {
+  const rows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<FirmaRow[]>)`
+    SELECT id::text, pin_hash, failed_attempts, locked_until, revoked_at
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personalId}::uuid AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+const LOCKOUT_MAX = 5;
+
+/** Resuelve el personal_salud del firmante + valida el PIN contra argon2id. Retorna {firmaId, personalId}. */
+async function verifyPinOrThrow(
+  tx: RawTx,
+  hisUserId: string,
+  pin: string,
+): Promise<{ firmaId: string; personalId: string }> {
+  const personal = await findPersonal(tx, hisUserId);
+  if (!personal) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró un profesional de salud asociado a su cuenta.",
+    });
+  }
+  const firma = await findFirma(tx, personal.id);
+  if (!firma) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Firma electrónica no configurada. Use firma.setup para crearla.",
+    });
+  }
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+      UPDATE ece.firma_electronica
+      SET failed_attempts = failed_attempts + 1
+      WHERE id = ${firma.id}::uuid
+    `;
+    const remaining = LOCKOUT_MAX - (firma.failed_attempts + 1);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        remaining > 0
+          ? `PIN incorrecto. Intentos restantes: ${remaining}.`
+          : "PIN incorrecto. La firma quedará bloqueada.",
+    });
+  }
+  await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+    UPDATE ece.firma_electronica SET failed_attempts = 0 WHERE id = ${firma.id}::uuid
+  `;
+  return { firmaId: firma.id, personalId: personal.id };
+}
+
+// ---------------------------------------------------------------------------
+// Helper — materializa ece.solicitud_estudio al firmar (item c, CC-0011)
+//
+// Agrupa ordenesExamenes por área resuelta desde el catálogo LIS
+// (public."LabPanel"/"LabTest" — 185_cc0011_lab_catalogo_parametrizable.sql)
+// y crea UNA solicitud_estudio por tipo (laboratorio/imagenologia/gabinete),
+// espejando el patrón de ece/solicitud-estudio.router.ts `create`.
+//
+// Idempotencia: esta función solo se invoca desde `firmar` DESPUÉS de que el
+// guard `cur.estado_registro !== 'borrador'` (ver arriba) impide re-ejecutar
+// la transición borrador→firmado. Un segundo intento de `firmar` sobre la
+// misma HC ya firmada falla con CONFLICT antes de llegar aquí — no se
+// requiere columna de guard adicional en solicitud_estudio.
+// ---------------------------------------------------------------------------
+
+/** area del catálogo LIS → tipo aceptado por el CHECK de ece.solicitud_estudio. */
+const AREA_TO_TIPO_ESTUDIO: Record<string, "laboratorio" | "imagenologia" | "gabinete"> = {
+  LABORATORIO: "laboratorio",
+  RADIOLOGIA: "imagenologia",
+  CARDIOLOGIA: "gabinete",
+};
+
+async function materializarSolicitudesEstudio(
+  tx: RawTx,
+  opts: { episodioId: string; medicoSolicitanteId: string; ordenesExamenes: OrdenExamen[] },
+): Promise<void> {
+  if (opts.ordenesExamenes.length === 0) return;
+
+  // Agrupar por tipo resuelto vía catálogo (seccion=panel.name, examen=test.name).
+  // Fallback 'laboratorio' si el examen no matchea ningún panel/test del catálogo
+  // (no bloquea la firma de la HC por un catálogo incompleto — RF-10 es best-effort).
+  const grupos = new Map<"laboratorio" | "imagenologia" | "gabinete", string[]>();
+  for (const item of opts.ordenesExamenes) {
+    const match = await tx.labTest.findFirst({
+      where: { name: item.examen, panel: { name: item.seccion } },
+      select: { panel: { select: { area: true } } },
+    });
+    const area = match?.panel?.area ?? "LABORATORIO";
+    const tipo = AREA_TO_TIPO_ESTUDIO[area] ?? "laboratorio";
+    const list = grupos.get(tipo) ?? [];
+    list.push(item.examen);
+    grupos.set(tipo, list);
+  }
+
+  const tipoDocRows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<Array<{ tipo_doc_id: string; estado_inicial_id: string }>>)`
+    SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
+    FROM ece.tipo_documento td
+    JOIN ece.flujo_estado fe ON fe.tipo_documento_id = td.id AND fe.es_inicial = true
+    WHERE td.codigo = 'SOL_EST'
+    LIMIT 1
+  `;
+  if (tipoDocRows.length === 0) return; // catálogo SOL_EST no configurado — no bloquea la firma de HC.
+  const { tipo_doc_id, estado_inicial_id } = tipoDocRows[0]!;
+
+  const episodioRows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<Array<{ paciente_id: string }>>)`
+    SELECT paciente_id::text FROM ece.episodio_atencion WHERE id = ${opts.episodioId}::uuid LIMIT 1
+  `;
+  const pacienteId = episodioRows[0]?.paciente_id;
+  if (!pacienteId) return; // episodio sin paciente vinculado — no debería ocurrir; no bloquea la firma.
+
+  for (const [tipo, examenes] of grupos) {
+    const instanciaRows = await (tx.$queryRaw as (
+      q: TemplateStringsArray,
+      ...v: unknown[]
+    ) => Promise<Array<{ id: string }>>)`
+      INSERT INTO ece.documento_instancia
+        (tipo_documento_id, episodio_id, paciente_id, estado_actual_id, creado_por)
+      VALUES (
+        ${tipo_doc_id}::uuid, ${opts.episodioId}::uuid, ${pacienteId}::uuid,
+        ${estado_inicial_id}::uuid, ${opts.medicoSolicitanteId}::uuid
+      )
+      RETURNING id::text
+    `;
+    const instanciaId = instanciaRows[0]!.id;
+    const examenesJson = JSON.stringify({ examenes, prioridad: "rutina" });
+    await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+      INSERT INTO ece.solicitud_estudio
+        (instancia_id, episodio_id, tipo, examenes, medico_solicitante_id)
+      VALUES (
+        ${instanciaId}::uuid, ${opts.episodioId}::uuid, ${tipo},
+        ${examenesJson}::jsonb, ${opts.medicoSolicitanteId}::uuid
+      )
+    `;
   }
 }
 
@@ -518,6 +763,62 @@ export const eceHistoriaClinicaRouter = router({
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
+      // CC-0011 (item d) — GUCs de tenant además de los de ECE, en la MISMA tx:
+      // necesarios para el UPDATE a public."Patient" (RLS de esa tabla lee
+      // app.current_org_id, no app.ece_*). SET LOCAL acumula GUCs distintos
+      // sin pisar los que ya seteó withEceContext.
+      await applyTenantContext(tx, ctx.tenant);
+
+      // CC-0011 — resuelve el personal_salud del autor. `registrado_por` referencia
+      // ece.personal_salud(id), no public."User".id (ver nota junto a findPersonal).
+      const personal = await findPersonal(tx as unknown as RawTx, ctx.user.id);
+      if (!personal) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "No se encontró un profesional de salud asociado a su cuenta.",
+        });
+      }
+
+      // Resuelve paciente_id (ece) + public_patient_id (public."Patient") del episodio.
+      const episodioRows = await tx.$queryRaw<{ paciente_id: string; public_patient_id: string | null }[]>`
+        SELECT ea.paciente_id::text AS paciente_id, ep.public_patient_id::text AS public_patient_id
+        FROM ece.episodio_atencion ea
+        JOIN ece.paciente ep ON ep.id = ea.paciente_id
+        WHERE ea.id = ${input.episodioId}::uuid
+        LIMIT 1
+      `;
+      const episodio = episodioRows[0];
+      if (!episodio) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Episodio no encontrado." });
+      }
+
+      // RF — tipoConsulta: si no viene del cliente (mockup avante2 elimina el
+      // campo), 'subsecuente' si el paciente ya tiene una HC previa no
+      // anulada; sino 'primera_vez'.
+      let tipoConsulta = input.tipoConsulta;
+      if (!tipoConsulta) {
+        const previaRows = await tx.$queryRaw<{ id: string }[]>`
+          SELECT hc.id::text
+          FROM ece.historia_clinica hc
+          JOIN ece.episodio_atencion ea ON ea.id = hc.episodio_id
+          WHERE ea.paciente_id = ${episodio.paciente_id}::uuid
+            AND hc.estado_registro != 'anulado'
+          LIMIT 1
+        `;
+        tipoConsulta = previaRows.length > 0 ? "subsecuente" : "primera_vez";
+      }
+
+      // CC-0011 (item d) — RF-01.3: nombre de pila / LGBTIQ+ del paciente.
+      if ((input.nombrePila !== undefined || input.esLgbtiq !== undefined) && episodio.public_patient_id) {
+        await tx.patient.update({
+          where: { id: episodio.public_patient_id },
+          data: {
+            ...(input.nombrePila !== undefined && { preferredName: input.nombrePila }),
+            ...(input.esLgbtiq !== undefined && { esLgbtiq: input.esLgbtiq }),
+          },
+        });
+      }
+
       const diagnosticosJson = input.diagnosticos ? JSON.stringify(input.diagnosticos) : null;
       const antecedentesJson = input.antecedentes ? JSON.stringify(input.antecedentes) : null;
       const examenFisicoJson = input.examenFisico ? JSON.stringify(input.examenFisico) : null;
@@ -540,7 +841,7 @@ export const eceHistoriaClinicaRouter = router({
           VALUES (
             ${input.instanciaId ?? null}::uuid,
             ${input.episodioId}::uuid,
-            ${input.tipoConsulta}::text,
+            ${tipoConsulta}::text,
             ${input.motivoConsulta ?? null},
             ${input.enfermedadActual ?? null},
             ${input.destino ?? null},
@@ -555,7 +856,7 @@ export const eceHistoriaClinicaRouter = router({
             ${terapiaRespiratoriaJson ?? null}::jsonb,
             ${ordenesExamenesJson ?? null}::jsonb,
             ${ordenesInyeccionesJson ?? null}::jsonb,
-            ${eceCtx.personalId}::uuid,
+            ${personal.id}::uuid,
             'borrador'
           )
           RETURNING
@@ -671,30 +972,30 @@ export const eceHistoriaClinicaRouter = router({
    * Transición borrador → firmado.
    * HC-005: el trigger de BD impide UPDATE/DELETE post-firma.
    */
-  firmar: firmaBase.input(transitionInput).mutation(async ({ ctx, input }) => {
-    if (!input.firmaId) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "La acción 'firmar' requiere firmaId (firma electrónica).",
-      });
-    }
-
+  firmar: firmaBase.input(firmarInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
     return withEceContext(ctx.prisma, eceCtx.personalId, eceCtx.establecimientoId, async (tx) => {
+      // CC-0011 (item g/c) — GUCs de tenant en la MISMA tx: necesarios para que
+      // la resolución de área del catálogo LIS (public."LabPanel"/"LabTest")
+      // vea también paneles propios del tenant, no solo los globales.
+      await applyTenantContext(tx, ctx.tenant);
+
       type FirmarFetchRow = {
         estado_registro: string;
         instancia_id: string | null;
+        episodio_id: string;
         motivo_consulta: string | null;
         enfermedad_actual: string | null;
         plan_manejo: string | null;
         diagnosticos: unknown;
+        ordenes_examenes: unknown;
       };
 
       const current = await tx.$queryRaw<FirmarFetchRow[]>(
         Prisma.sql`
-          SELECT estado_registro, instancia_id::text,
-                 motivo_consulta, enfermedad_actual, plan_manejo, diagnosticos
+          SELECT estado_registro, instancia_id::text, episodio_id::text,
+                 motivo_consulta, enfermedad_actual, plan_manejo, diagnosticos, ordenes_examenes
           FROM ece.historia_clinica WHERE id = ${input.id}::uuid LIMIT 1
         `,
       );
@@ -730,6 +1031,10 @@ export const eceHistoriaClinicaRouter = router({
         );
       }
 
+      // CC-0011 (item g) — valida el PIN y resuelve firmaId + personal_salud.id
+      // reales (reemplaza el firmaId que la UI nunca podía obtener de antemano).
+      const { firmaId, personalId } = await verifyPinOrThrow(tx as unknown as RawTx, ctx.user.id, input.pin);
+
       const rows = await tx.$queryRaw<HistoriaClinicaRow[]>(
         Prisma.sql`
           UPDATE ece.historia_clinica
@@ -751,7 +1056,17 @@ export const eceHistoriaClinicaRouter = router({
       // JCI IPSG.2 ME 3 — adjuntar warnings a response (no bloquea)
       const ipsg2Warnings = [...ipsg2.errors, ...ipsg2.warnings];
 
-      // Registrar en historial de instancia si existe vínculo workflow
+      // Registrar en historial de instancia si existe vínculo workflow.
+      // NOTA (hallazgo colateral, no corregido): este INSERT usa el shape legacy
+      // del router (accion/ejecutado_por/firma_id/observacion/payload_hash) que
+      // no coincide con la tabla real de 60_ece_05_motor.sql (falta
+      // estado_nuevo_id/rol_ejecutor_id NOT NULL; payload_hash no existe como
+      // columna — ver 123_who_checklist_enforce.sql comentario "Modelo real
+      // verificado vía MCP"). Hoy es inerte porque nada en `create()` vincula
+      // historia_clinica a un documento_instancia real (instancia_id siempre
+      // null salvo que el cliente lo mande explícito). Si un futuro CC conecta
+      // HIST_CLIN al motor workflow-designer, reescribir con el patrón
+      // `avanzarEstado` de hoja-ingreso.router.ts/solicitud-estudio.router.ts.
       if (cur.instancia_id) {
         await tx.$executeRaw(
           Prisma.sql`
@@ -760,14 +1075,28 @@ export const eceHistoriaClinicaRouter = router({
             VALUES (
               ${cur.instancia_id}::uuid,
               'firmar',
-              ${eceCtx.personalId}::uuid,
-              ${input.firmaId}::uuid,
+              ${personalId}::uuid,
+              ${firmaId}::uuid,
               ${input.observacion ?? null},
               encode(digest(${input.id}, 'sha256'), 'hex')
             )
           `,
         );
       }
+
+      // CC-0011 (item c) — materializa ece.solicitud_estudio por cada tipo
+      // (laboratorio/imagenologia/gabinete) presente en ordenesExamenes.
+      // Idempotente porque el guard de estado (arriba) impide re-firmar.
+      let ordenesExamenesParsed: OrdenExamen[] = [];
+      if (cur.ordenes_examenes) {
+        const safeParsed = z.array(ordenExamenSchema).safeParse(cur.ordenes_examenes);
+        if (safeParsed.success) ordenesExamenesParsed = safeParsed.data;
+      }
+      await materializarSolicitudesEstudio(tx as unknown as RawTx, {
+        episodioId: cur.episodio_id,
+        medicoSolicitanteId: personalId,
+        ordenesExamenes: ordenesExamenesParsed,
+      });
 
       return { ...updated, ipsg2Warnings };
     });

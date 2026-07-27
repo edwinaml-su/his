@@ -516,5 +516,141 @@ describe("patientRouter", () => {
 
       expect(result.episodioId).toBeNull();
     });
+
+    // CC-0011 (item f) — documento + domicilio + tipo de cuenta.
+    it("CC-0011 — incluye documentType/documentNumber, domicilio y tipo de cuenta", async () => {
+      setupTxContexto();
+      prisma.patientAccount.findFirst.mockResolvedValue(fakeAccount as never);
+      prisma.patient.findFirst.mockResolvedValue({
+        ...fakePatient,
+        documentType: "DUI",
+        documentNumber: "12345678-9",
+      } as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAddress.findFirst.mockResolvedValue({
+        line1: "Calle Principal #123",
+        line2: "San Salvador",
+      } as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue({ tipo: "NO_HOSPITALARIO" } as never);
+      (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        { id: "00000000-0000-4000-8000-000000000099" },
+      ]);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.contextoCuenta({ cuentaId: CUENTA_ID });
+
+      expect(result.paciente?.documentType).toBe("DUI");
+      expect(result.paciente?.documentNumber).toBe("12345678-9");
+      expect(result.paciente?.domicilio).toBe("Calle Principal #123, San Salvador");
+      expect(result.cuenta.tipo).toBe("NO_HOSPITALARIO");
+    });
+
+    it("CC-0011 — domicilio/tipo de cuenta null cuando no hay dirección/servicio", async () => {
+      setupTxContexto();
+      prisma.patientAccount.findFirst.mockResolvedValue(fakeAccount as never);
+      prisma.patient.findFirst.mockResolvedValue(fakePatient as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAddress.findFirst.mockResolvedValue(null);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+      );
+      const result = await caller.contextoCuenta({ cuentaId: CUENTA_ID });
+
+      expect(result.paciente?.domicilio).toBeNull();
+      expect(result.cuenta.tipo).toBeNull();
+    });
+  });
+
+  // ─── CC-0011 (item e) — actualizarContactoEmergencia ───────────────────────
+
+  describe("actualizarContactoEmergencia", () => {
+    const PATIENT_ID = "00000000-0000-4000-8000-000000000020";
+
+    function setupTxEmergencia() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
+    it("lanza NOT_FOUND si el paciente no existe en el tenant", async () => {
+      setupTxEmergencia();
+      prisma.patient.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.actualizarContactoEmergencia({
+          patientId: PATIENT_ID,
+          fullName: "Carlos Rodríguez",
+          relationship: "Hijo",
+          phone: "7777-8888",
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("crea el contacto (priority=1) cuando el paciente no tiene uno previo", async () => {
+      setupTxEmergencia();
+      prisma.patient.findFirst.mockResolvedValue({ id: PATIENT_ID } as never);
+      prisma.patientEmergencyContact.findFirst.mockResolvedValue(null);
+      prisma.patientEmergencyContact.create.mockResolvedValue({ id: "x" } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.actualizarContactoEmergencia({
+        patientId: PATIENT_ID,
+        fullName: "Carlos Rodríguez",
+        relationship: "Hijo",
+        phone: "7777-8888",
+      });
+
+      expect(prisma.patientEmergencyContact.create).toHaveBeenCalledWith({
+        data: {
+          patientId: PATIENT_ID,
+          fullName: "Carlos Rodríguez",
+          relationship: "Hijo",
+          phone: "7777-8888",
+          priority: 1,
+        },
+      });
+      expect(prisma.patientEmergencyContact.update).not.toHaveBeenCalled();
+    });
+
+    it("actualiza el contacto priority=1 existente en vez de duplicar", async () => {
+      setupTxEmergencia();
+      prisma.patient.findFirst.mockResolvedValue({ id: PATIENT_ID } as never);
+      prisma.patientEmergencyContact.findFirst.mockResolvedValue({ id: "existing-id" } as never);
+      prisma.patientEmergencyContact.update.mockResolvedValue({ id: "existing-id" } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.actualizarContactoEmergencia({
+        patientId: PATIENT_ID,
+        fullName: "María López",
+        relationship: "Madre",
+        phone: null,
+      });
+
+      expect(prisma.patientEmergencyContact.update).toHaveBeenCalledWith({
+        where: { id: "existing-id" },
+        data: { fullName: "María López", relationship: "Madre", phone: null },
+      });
+      expect(prisma.patientEmergencyContact.create).not.toHaveBeenCalled();
+    });
+
+    it("FORBIDDEN sin rol clínico", async () => {
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ACCOUNTANT"] } }),
+      );
+      await expect(
+        caller.actualizarContactoEmergencia({
+          patientId: PATIENT_ID,
+          fullName: "Carlos Rodríguez",
+          relationship: "Hijo",
+          phone: "7777-8888",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
   });
 });

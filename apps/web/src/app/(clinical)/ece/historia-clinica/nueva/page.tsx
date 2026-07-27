@@ -36,9 +36,9 @@ import {
   DialogFooter,
 } from "@his/ui/components/dialog";
 import {
-  DESTINO_OPTIONS,
   DESTINO_LABELS,
   tieneComplementario,
+  type DESTINO_OPTIONS,
   type Cie11Diagnostico,
   type AntecedentesEstructurados,
   type PlanItem,
@@ -51,10 +51,7 @@ import { trpc } from "@/lib/trpc/react";
 
 import { CampoModal } from "./_components/campo-modal";
 import { PlantillasBar } from "./_components/plantillas-bar";
-import {
-  AntecedenteSubseccion,
-  type SubseccionState,
-} from "./_components/antecedente-subseccion";
+import { AntecedenteSubseccion, type SubseccionState } from "./_components/antecedente-subseccion";
 import {
   SignosVitalesModal,
   buildVitalesChips,
@@ -70,14 +67,16 @@ import { SelectorCuenta } from "./_components/selector-cuenta";
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
-const TIPO_CONSULTA_OPTIONS = [
-  { value: "primera_vez", label: "Primera vez" },
-  { value: "subsecuente", label: "Subsecuente" },
-] as const;
-
-const DESTINO_UI = DESTINO_OPTIONS.filter(
-  (d) => d !== "PROCEDIMIENTO_AMBULATORIO" && d !== "REFERENCIA",
-);
+// Orden EXACTO del mockup (docs/CC/0007/historia-clinica-avante2.html L1006-1014).
+const DESTINO_UI: (typeof DESTINO_OPTIONS)[number][] = [
+  "ALTA_MEDICA",
+  "ALTA_VOLUNTARIA",
+  "INGRESO",
+  "OBSERVACION",
+  "SEGUIMIENTO",
+  "REMISION",
+  "FALLECIDO",
+];
 
 const STEP_LABEL: Record<string, string> = {
   ALTA_MEDICA: "Alta médica",
@@ -203,6 +202,24 @@ function IconoSexo({ sexo }: { sexo: string | null }) {
 
 // ── Componente: Cabecera sticky del paciente ────────────────────────────────────
 
+// Etiqueta legible del tipo de documento (DocumentType — packages/database/prisma/schema.prisma).
+const DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  DUI: "DUI",
+  DNI: "DNI",
+  PASAPORTE: "Pasaporte",
+  DUI_RESP: "DUI Resp.",
+  CARNET_RESIDENCIA: "Carnet Residencia",
+};
+
+// Etiqueta legible del tipo de cuenta (TipoServicio — packages/database/prisma/schema.prisma).
+// Nota: el mockup usa datos demostrativos ("Convenio", categoría de aseguradora); el dato real
+// disponible en patient.contextoCuenta es el tipo de servicio de la cuenta (hospitalario/no
+// hospitalario). Se documenta como desviación en el reporte final.
+const ACCOUNT_TIPO_LABELS: Record<string, string> = {
+  HOSPITALARIO: "Hospitalario",
+  NO_HOSPITALARIO: "No hospitalario",
+};
+
 interface PacienteHeaderProps {
   paciente: {
     id: string;
@@ -213,9 +230,22 @@ interface PacienteHeaderProps {
     esLgbtiq: boolean | null;
     birthDate: Date | string | null;
     biologicalSexId: string | null;
+    documentType: string | null;
+    documentNumber: string | null;
+    domicilio: string | null;
   } | null;
-  cuenta: { id: string; numeroCuenta: string | null; encounterId: string | null } | null;
-  alergias: Array<{ id: string; substanceText: string; reaction: string | null; severity: string | null }>;
+  cuenta: {
+    id: string;
+    numeroCuenta: string | null;
+    encounterId: string | null;
+    tipo: string | null;
+  } | null;
+  alergias: Array<{
+    id: string;
+    substanceText: string;
+    reaction: string | null;
+    severity: string | null;
+  }>;
   contactoEmergencia: { fullName: string; relationship: string; phone: string } | null;
   onEditContacto: () => void;
 }
@@ -227,24 +257,19 @@ function PacienteHeader({
   contactoEmergencia,
   onEditContacto,
 }: PacienteHeaderProps) {
-  const nombre = paciente
-    ? `${paciente.firstName} ${paciente.lastName}`
-    : "Paciente no cargado";
+  const nombre = paciente ? `${paciente.firstName} ${paciente.lastName}` : "Paciente no cargado";
 
   const conAlergias = alergias.length > 0;
-  const mostrarBannerLgbtiq =
-    !!paciente?.esLgbtiq && !!paciente?.preferredName;
+  const mostrarBannerLgbtiq = !!paciente?.esLgbtiq && !!paciente?.preferredName;
 
   return (
     <div className="sticky top-[52px] z-30">
       {/* Barra de paciente */}
       <div className="flex flex-wrap items-start gap-4 border-b border-border bg-surface-1 px-6 py-3">
-        <div className="flex flex-1 flex-col gap-1.5 min-w-0">
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           {/* Nombre + badges de expediente/cuenta */}
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-[34px] font-extrabold leading-none tracking-tight">
-              {nombre}
-            </h1>
+            <h1 className="text-[34px] font-extrabold leading-none tracking-tight">{nombre}</h1>
             {cuenta?.numeroCuenta && (
               <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface-3 px-2.5 py-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -273,9 +298,10 @@ function PacienteHeader({
                 Edad: <strong className="text-foreground">{calcEdad(paciente.birthDate)}</strong>
               </span>
             )}
-            {paciente?.mrn && (
+            {paciente?.documentNumber && (
               <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
-                MRN: <strong className="text-foreground">{paciente.mrn}</strong>
+                {DOCUMENT_TYPE_LABELS[paciente.documentType ?? ""] ?? "Documento"}:{" "}
+                <strong className="text-foreground">{paciente.documentNumber}</strong>
               </span>
             )}
             {paciente?.biologicalSexId && (
@@ -291,7 +317,30 @@ function PacienteHeader({
                 F. Nac.: <strong className="text-foreground">{fmtFecha(paciente.birthDate)}</strong>
               </span>
             )}
+            {cuenta?.tipo && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
+                Tipo de cuenta:{" "}
+                <strong
+                  className="inline-flex items-center rounded-full border px-2 py-px text-[11px] font-bold uppercase tracking-wide"
+                  style={{
+                    color: "var(--primary)",
+                    background: "color-mix(in oklab, var(--primary) 10%, transparent)",
+                    borderColor: "color-mix(in oklab, var(--primary) 30%, transparent)",
+                  }}
+                >
+                  {ACCOUNT_TIPO_LABELS[cuenta.tipo] ?? cuenta.tipo}
+                </strong>
+              </span>
+            )}
           </div>
+          {/* Domicilio — segunda fila pmeta */}
+          {paciente?.domicilio && (
+            <div className="flex flex-wrap gap-1.5">
+              <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
+                Domicilio: <strong className="text-foreground">{paciente.domicilio}</strong>
+              </span>
+            </div>
+          )}
           {/* Contacto de emergencia */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-muted-foreground">En caso de emergencia llamar a:</span>
@@ -306,8 +355,15 @@ function PacienteHeader({
                   : "Sin contacto registrado"}
               </span>
               <span className="flex items-center gap-1 text-[11px] font-semibold text-accent-foreground">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3 w-3">
-                  <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="h-3 w-3"
+                >
+                  <path d="M12 20h9" />
+                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
                 </svg>
                 Editar
               </span>
@@ -322,14 +378,20 @@ function PacienteHeader({
         className={[
           "flex items-start gap-3 border-b-2 px-6 py-2.5",
           conAlergias
-            ? "border-allergy bg-allergy/10 text-allergy"
-            : "border-success bg-success/10 text-success",
+            ? "bg-allergy/10 border-allergy text-allergy"
+            : "bg-success/10 border-success text-success",
         ].join(" ")}
       >
         {conAlergias ? (
           <PeanutIcon className="mt-0.5 h-5 w-5 flex-none" />
         ) : (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mt-0.5 h-5 w-5 flex-none">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="mt-0.5 h-5 w-5 flex-none"
+          >
             <path d="M20 6 9 17l-5-5" />
           </svg>
         )}
@@ -345,9 +407,7 @@ function PacienteHeader({
                 <li key={a.id}>
                   <strong>{a.substanceText}</strong>
                   {a.severity && (
-                    <span className="ml-1 text-[10px] uppercase opacity-80">
-                      {a.severity}
-                    </span>
+                    <span className="ml-1 text-[10px] uppercase opacity-80">{a.severity}</span>
                   )}
                 </li>
               ))}
@@ -367,13 +427,20 @@ function PacienteHeader({
             color: "var(--lila-fg)",
           }}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mt-0.5 h-4 w-4 flex-none">
-            <circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0" /><path d="m16 11 2 2 4-4" />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="mt-0.5 h-4 w-4 flex-none"
+          >
+            <circle cx="9" cy="8" r="3" />
+            <path d="M3 20a6 6 0 0 1 12 0" />
+            <path d="m16 11 2 2 4-4" />
           </svg>
           <div>
             <span className="text-sm font-bold">
-              Nombre de pila:{" "}
-              <span>{paciente.preferredName}</span>
+              Nombre de pila: <span>{paciente.preferredName}</span>
             </span>
             <small className="block text-[11.5px] opacity-90">
               Persona de la comunidad LGBTIQ+ — dirigirse al paciente por su nombre de pila.
@@ -407,7 +474,7 @@ function CardNumerada({
       id={id}
       className={[
         "mb-4 overflow-hidden rounded-lg border bg-surface-1",
-        invalid ? "border-destructive ring-2 ring-destructive/15" : "border-border",
+        invalid ? "ring-destructive/15 border-destructive ring-2" : "border-border",
       ].join(" ")}
     >
       <div className="px-5 pt-4">
@@ -439,12 +506,12 @@ export default function NuevaHistoriaClinicaPage() {
 
   // ── Estado del formulario ────────────────────────────────────────────────────
 
-  const [tipoConsulta, setTipoConsulta] = React.useState("primera_vez");
   const [motivoConsulta, setMotivoConsulta] = React.useState("");
   const [presentaEnfermedad, setPresentaEnfermedad] = React.useState("");
   const [antecedentes, setAntecedentes] = React.useState<AntState>(INIT_ANT);
   const [vitales, setVitales] = React.useState<VitalesState>(VITALES_INITIAL);
   const [vitalesOpen, setVitalesOpen] = React.useState(false);
+  const [lesionOpen, setLesionOpen] = React.useState(false);
   const [examenFisico, setExamenFisico] = React.useState("");
   const [diagnosticos, setDiagnosticos] = React.useState<Cie11Diagnostico[]>([]);
   const [procedimientos, setProcedimientos] = React.useState<ProcedimientoCpt[]>([]);
@@ -465,7 +532,11 @@ export default function NuevaHistoriaClinicaPage() {
     phone: string;
   } | null>(null);
   const [contactoModalOpen, setContactoModalOpen] = React.useState(false);
-  const [contactoDraft, setContactoDraft] = React.useState({ fullName: "", relationship: "", phone: "" });
+  const [contactoDraft, setContactoDraft] = React.useState({
+    fullName: "",
+    relationship: "",
+    phone: "",
+  });
 
   // PIN firma
   const [pinOpen, setPinOpen] = React.useState(false);
@@ -493,20 +564,37 @@ export default function NuevaHistoriaClinicaPage() {
   React.useEffect(() => {
     if (ctx?.contactosEmergencia?.[0]) {
       const c = ctx.contactosEmergencia[0];
-      setContacto({ fullName: c.fullName, relationship: c.relationship ?? "", phone: c.phone ?? "" });
+      setContacto({
+        fullName: c.fullName,
+        relationship: c.relationship ?? "",
+        phone: c.phone ?? "",
+      });
     }
   }, [ctx]);
 
   // Alergias activas (unión: las cargadas del contexto + las que el médico agrega en el form)
   const alergiasContexto = ctx?.alergias ?? [];
   // Las alergias añadidas en el form se sincronizan con el banner en tiempo real
-  const alergiasFormItems = antecedentes.alergias.estado === "TIENE" ? antecedentes.alergias.items : [];
+  const alergiasFormItems =
+    antecedentes.alergias.estado === "TIENE" ? antecedentes.alergias.items : [];
   const alergiasDisplay = [
-    ...alergiasContexto.map((a) => ({ id: a.id, substanceText: a.substanceText, reaction: a.reaction, severity: a.severity })),
-    ...alergiasFormItems.map((s, i) => ({ id: `form-${i}`, substanceText: s, reaction: null, severity: null })),
+    ...alergiasContexto.map((a) => ({
+      id: a.id,
+      substanceText: a.substanceText,
+      reaction: a.reaction,
+      severity: a.severity,
+    })),
+    ...alergiasFormItems.map((s, i) => ({
+      id: `form-${i}`,
+      substanceText: s,
+      reaction: null,
+      severity: null,
+    })),
   ];
 
-  const isFemenina = !!(paciente?.biologicalSexId === "F" || paciente?.biologicalSexId?.toLowerCase().startsWith("f"));
+  const isFemenina = !!(
+    paciente?.biologicalSexId === "F" || paciente?.biologicalSexId?.toLowerCase().startsWith("f")
+  );
 
   // ── Mutaciones tRPC ────────────────────────────────────────────────────────────
 
@@ -541,6 +629,7 @@ export default function NuevaHistoriaClinicaPage() {
   });
 
   const signosM = trpc.eceSignosVitales.create.useMutation();
+  const contactoEmergenciaM = trpc.patient.actualizarContactoEmergencia.useMutation();
 
   // ── Helpers de validación ──────────────────────────────────────────────────────
 
@@ -561,8 +650,7 @@ export default function NuevaHistoriaClinicaPage() {
 
   function antecedentesValid(): boolean {
     return (["alergias", "personales", "familiares", "ocupacion", "habitos"] as const).every(
-      (k) =>
-        antecedentes[k].estado !== "TIENE" || antecedentes[k].items.length > 0,
+      (k) => antecedentes[k].estado !== "TIENE" || antecedentes[k].items.length > 0,
     );
   }
 
@@ -570,15 +658,42 @@ export default function NuevaHistoriaClinicaPage() {
     const errs: string[] = [];
     const fields = new Set<string>();
 
-    if (!motivoConsulta.trim()) { errs.push("Motivo de consulta es obligatorio."); fields.add("motivo"); }
-    if (!presentaEnfermedad.trim()) { errs.push("Presente Enfermedad es obligatorio."); fields.add("enfermedad"); }
-    if (!antecedentesValid()) { errs.push("Antecedentes: complete todas las subsecciones."); fields.add("antecedentes"); }
-    if (!examenFisico.trim()) { errs.push("Examen físico es obligatorio."); fields.add("examen"); }
-    if (diagnosticos.length === 0) { errs.push("Diagnósticos (CIE-11): agregue al menos uno."); fields.add("diagnosticos"); }
-    if (!tieneComplementario(diagnosticos)) { errs.push("RN-03: se requiere ≥1 diagnóstico de tipo Complementario."); fields.add("diagnosticos"); }
-    if (!analisisClinico.trim()) { errs.push("Análisis clínico es obligatorio."); fields.add("analisis"); }
-    if (planItems.length === 0) { errs.push("Plan de manejo: agregue al menos una indicación."); fields.add("plan"); }
-    if (!destino) { errs.push("Destino es obligatorio."); fields.add("destino"); }
+    if (!motivoConsulta.trim()) {
+      errs.push("Motivo de consulta es obligatorio.");
+      fields.add("motivo");
+    }
+    if (!presentaEnfermedad.trim()) {
+      errs.push("Presente Enfermedad es obligatorio.");
+      fields.add("enfermedad");
+    }
+    if (!antecedentesValid()) {
+      errs.push("Antecedentes: complete todas las subsecciones.");
+      fields.add("antecedentes");
+    }
+    if (!examenFisico.trim()) {
+      errs.push("Examen físico es obligatorio.");
+      fields.add("examen");
+    }
+    if (diagnosticos.length === 0) {
+      errs.push("Diagnósticos (CIE-11): agregue al menos uno.");
+      fields.add("diagnosticos");
+    }
+    if (!tieneComplementario(diagnosticos)) {
+      errs.push("RN-03: se requiere ≥1 diagnóstico de tipo Complementario.");
+      fields.add("diagnosticos");
+    }
+    if (!analisisClinico.trim()) {
+      errs.push("Análisis clínico es obligatorio.");
+      fields.add("analisis");
+    }
+    if (planItems.length === 0) {
+      errs.push("Plan de manejo: agregue al menos una indicación.");
+      fields.add("plan");
+    }
+    if (!destino) {
+      errs.push("Destino es obligatorio.");
+      fields.add("destino");
+    }
 
     return { valid: errs.length === 0, errors: errs, fields };
   }
@@ -624,10 +739,10 @@ export default function NuevaHistoriaClinicaPage() {
 
     return {
       episodioId: episodioId!,
-      tipoConsulta: tipoConsulta as "primera_vez" | "subsecuente",
+      // tipoConsulta: no enviado — el server lo deriva (mockup avante2 elimina el campo, trazabilidad 07).
       motivoConsulta: motivoConsulta.trim() || undefined,
       enfermedadActual: presentaEnfermedad.trim() || undefined,
-      destino: destino as (typeof DESTINO_OPTIONS)[number] | undefined || undefined,
+      destino: (destino as (typeof DESTINO_OPTIONS)[number] | undefined) || undefined,
       analisisClinico: analisisClinico.trim() || undefined,
       planManejo: planItems.map((p) => p.texto).join("\n") || undefined,
       antecedentesEstructurados: buildAntecedentesEstructurados(),
@@ -638,6 +753,8 @@ export default function NuevaHistoriaClinicaPage() {
       ordenesInyecciones: ordenesInyecciones.length > 0 ? ordenesInyecciones : undefined,
       examenFisico: examenFisicoPayload,
       diagnosticos: diagnosticos.length > 0 ? diagnosticos : undefined,
+      nombrePila: nombrePila.trim() || undefined,
+      esLgbtiq: esLgbtiq || undefined,
     };
   }
 
@@ -678,7 +795,9 @@ export default function NuevaHistoriaClinicaPage() {
       // Scroll al primer error
       const firstFieldId = fields.values().next().value as string | undefined;
       if (firstFieldId) {
-        document.getElementById(`card-${firstFieldId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        document
+          .getElementById(`card-${firstFieldId}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
       }
       return;
     }
@@ -691,9 +810,12 @@ export default function NuevaHistoriaClinicaPage() {
 
   function handleFirmarPin(e: React.FormEvent) {
     e.preventDefault();
-    if (!pin.trim()) { setPinError("Ingrese su PIN de firma electrónica."); return; }
+    if (!pin.trim()) {
+      setPinError("Ingrese su PIN de firma electrónica.");
+      return;
+    }
     setPinError(null);
-    firmarM.mutate({ id: pendingHcId, observacion: `pin:${pin.trim()}` });
+    firmarM.mutate({ id: pendingHcId, pin: pin.trim() });
   }
 
   const isSubmitting = createM.isPending || firmarM.isPending || signosM.isPending;
@@ -706,15 +828,15 @@ export default function NuevaHistoriaClinicaPage() {
   if (!cuentaId) {
     return (
       <SelectorCuenta
-        onSelect={(id) =>
-          router.replace(`/ece/historia-clinica/nueva?cuentaId=${id}`)
-        }
+        onSelect={(id) => router.replace(`/ece/historia-clinica/nueva?cuentaId=${id}`)}
       />
     );
   }
 
   if (contextoCuentaQ.isLoading) {
-    return <div className="px-6 py-10 text-sm text-muted-foreground">Cargando datos del paciente…</div>;
+    return (
+      <div className="px-6 py-10 text-sm text-muted-foreground">Cargando datos del paciente…</div>
+    );
   }
 
   if (contextoCuentaQ.error) {
@@ -728,9 +850,9 @@ export default function NuevaHistoriaClinicaPage() {
   if (!episodioId) {
     return (
       <div className="px-6 py-10">
-        <div className="rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm text-warning">
-          No hay episodio de atención abierto para esta cuenta. Abra un episodio
-          antes de crear la Historia Clínica.
+        <div className="border-warning/50 bg-warning/10 rounded-lg border p-4 text-sm text-warning">
+          No hay episodio de atención abierto para esta cuenta. Abra un episodio antes de crear la
+          Historia Clínica.
         </div>
       </div>
     );
@@ -754,8 +876,15 @@ export default function NuevaHistoriaClinicaPage() {
       <div className="mx-auto max-w-[1180px] px-6 pb-20 pt-5">
         {/* Migas de pan */}
         <nav className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
-            <path d="M3 11 12 3l9 8" /><path d="M5 10v10h14V10" />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-3.5 w-3.5"
+          >
+            <path d="M3 11 12 3l9 8" />
+            <path d="M5 10v10h14V10" />
           </svg>
           <span className="opacity-60">›</span> ECE
           <span className="opacity-60">›</span> Historia Clínica
@@ -763,29 +892,12 @@ export default function NuevaHistoriaClinicaPage() {
         </nav>
         <h2 className="mb-1 text-2xl font-extrabold tracking-tight">Historia Clínica</h2>
 
-        {/* Tipo de consulta — antes de los bloques */}
-        <div className="mb-4 flex items-center gap-3">
-          <Label htmlFor="tipoConsulta" className="whitespace-nowrap text-sm font-semibold">
-            Tipo de consulta
-          </Label>
-          <Select value={tipoConsulta} onValueChange={setTipoConsulta} disabled={isSubmitting}>
-            <SelectTrigger id="tipoConsulta" className="w-48">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TIPO_CONSULTA_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
         {/* Errores de validación */}
         {validationErrors.length > 0 && (
           <div
             role="alert"
             aria-live="polite"
-            className="mb-4 rounded-lg border border-destructive bg-destructive/8 p-4"
+            className="bg-destructive/8 mb-4 rounded-lg border border-destructive p-4"
           >
             <p className="mb-2 text-sm font-bold text-destructive">
               Complete los campos obligatorios antes de firmar:
@@ -826,6 +938,11 @@ export default function NuevaHistoriaClinicaPage() {
           <p className="mb-2 text-xs text-muted-foreground">
             Puede guardar y aplicar plantillas para agilizar este apartado.
           </p>
+          <PlantillasBar
+            campo="ENFERMEDAD_ACTUAL"
+            onApply={setPresentaEnfermedad}
+            currentText={presentaEnfermedad}
+          />
           <CampoModal
             titulo="Presente Enfermedad"
             placeholder="Descripción cronológica de la enfermedad…"
@@ -833,13 +950,6 @@ export default function NuevaHistoriaClinicaPage() {
             onChange={setPresentaEnfermedad}
             disabled={isSubmitting}
             invalid={invalidFields.has("enfermedad")}
-            modalHeader={
-              <PlantillasBar
-                campo="ENFERMEDAD_ACTUAL"
-                onApply={setPresentaEnfermedad}
-                currentText={presentaEnfermedad}
-              />
-            }
           />
         </CardNumerada>
 
@@ -984,11 +1094,22 @@ export default function NuevaHistoriaClinicaPage() {
         >
           {/* Subsección A — Signos vitales (toma separada en ece.signos_vitales) */}
           <fieldset className="mb-5">
-            <legend className="mb-2 border-b border-border pb-1 text-sm font-bold">
+            <legend className="mb-2 flex items-center border-b border-border pb-1 text-sm font-bold">
               Signos vitales
+              <span
+                className="ml-2 rounded-full border px-2 py-0.5 align-middle text-[9.5px] font-bold uppercase tracking-wide"
+                style={{
+                  color: "var(--destructive)",
+                  background: "color-mix(in oklab, var(--destructive) 12%, transparent)",
+                  borderColor: "color-mix(in oklab, var(--destructive) 35%, transparent)",
+                }}
+              >
+                Obligatorio
+              </span>
             </legend>
             <p className="mb-3 text-xs text-muted-foreground">
-              La presión arterial y los signos cardiorrespiratorios son obligatorios; el resto es opcional.
+              La presión arterial y los signos cardiorrespiratorios son obligatorios; el resto es
+              opcional.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               {hayVitales ? (
@@ -1013,7 +1134,13 @@ export default function NuevaHistoriaClinicaPage() {
                 onClick={() => setVitalesOpen(true)}
                 disabled={isSubmitting}
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-4 w-4">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="mr-1.5 h-4 w-4"
+                >
                   <path d="M3 12h4l2 5 4-12 2 7h6" />
                 </svg>
                 {hayVitales ? "Modificar signos vitales" : "Registrar signos vitales"}
@@ -1029,6 +1156,11 @@ export default function NuevaHistoriaClinicaPage() {
             <p className="mb-2 text-xs text-muted-foreground">
               Puede guardar y aplicar plantillas para agilizar este apartado.
             </p>
+            <PlantillasBar
+              campo="EXAMEN_FISICO"
+              onApply={setExamenFisico}
+              currentText={examenFisico}
+            />
             <CampoModal
               titulo="Examen físico"
               placeholder="Descripción del examen físico…"
@@ -1036,16 +1168,47 @@ export default function NuevaHistoriaClinicaPage() {
               onChange={setExamenFisico}
               disabled={isSubmitting}
               invalid={invalidFields.has("examen")}
-              modalHeader={
-                <PlantillasBar
-                  campo="EXAMEN_FISICO"
-                  onApply={setExamenFisico}
-                  currentText={examenFisico}
-                />
-              }
             />
           </fieldset>
         </CardNumerada>
+
+        {/* Botón ancho: Formulario de Lesión de Causa Externa (integrado a la HC) */}
+        <button
+          type="button"
+          onClick={() => setLesionOpen(true)}
+          className="mb-4 flex w-full items-center justify-center gap-3 rounded-md border-0 px-4 py-4 text-[15px] font-bold tracking-tight text-white transition-[filter] hover:brightness-[1.06] active:translate-y-px"
+          style={{
+            background: "var(--success)",
+            boxShadow: "0 2px 10px color-mix(in oklab, var(--success) 38%, transparent)",
+          }}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width={20}
+            height={20}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1z" />
+            <path d="M9 13l2 2 4-4" />
+          </svg>
+          <span>Formulario de Lesión de Causa Externa (MINSAL)</span>
+          <span className="inline-flex opacity-90">
+            <svg
+              viewBox="0 0 24 24"
+              width={18}
+              height={18}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path d="M5 12h14M13 6l6 6-6 6" />
+            </svg>
+          </span>
+        </button>
 
         {/* ── 5. Diagnósticos CIE-11 ── */}
         <CardNumerada
@@ -1094,6 +1257,8 @@ export default function NuevaHistoriaClinicaPage() {
             ordenesInyecciones={ordenesInyecciones}
             onOrdenesInyecciones={setOrdenesInyecciones}
             disabled={isSubmitting}
+            cuentaId={cuentaId}
+            episodioId={episodioId}
           />
         </CardNumerada>
 
@@ -1140,7 +1305,11 @@ export default function NuevaHistoriaClinicaPage() {
             <Select value={destino} onValueChange={setDestino} disabled={isSubmitting}>
               <SelectTrigger
                 id="destino"
-                className={invalidFields.has("destino") ? "border-destructive ring-2 ring-destructive/20" : ""}
+                className={
+                  invalidFields.has("destino")
+                    ? "ring-destructive/20 border-destructive ring-2"
+                    : ""
+                }
               >
                 <SelectValue placeholder="Seleccione destino" />
               </SelectTrigger>
@@ -1156,11 +1325,7 @@ export default function NuevaHistoriaClinicaPage() {
         </CardNumerada>
 
         {/* ── 10. Firma del médico ── */}
-        <CardNumerada
-          numero={10}
-          titulo="Firma del médico"
-          id="card-firma"
-        >
+        <CardNumerada numero={10} titulo="Firma del médico" id="card-firma">
           <p className="mb-3 text-xs text-muted-foreground">
             El grafo y el sello se traen de la ficha médica del médico registrado.
           </p>
@@ -1168,44 +1333,79 @@ export default function NuevaHistoriaClinicaPage() {
             {/* Grafo */}
             <div className="flex flex-col rounded-md border border-border bg-surface-2 p-4">
               <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
-                  <path d="M3 17c3-1 4-4 6-4s2 3 4 3 3-6 5-6" /><path d="M3 21h18" />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="h-3.5 w-3.5"
+                >
+                  <path d="M3 17c3-1 4-4 6-4s2 3 4 3 3-6 5-6" />
+                  <path d="M3 21h18" />
                 </svg>
                 Grafo (firma registrada)
               </div>
               <div className="flex flex-1 items-center justify-center py-4">
-                <svg viewBox="0 0 260 90" width={240} height={84} fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  viewBox="0 0 260 90"
+                  width={240}
+                  height={84}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.2}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <path d="M14 64c14-2 20-40 30-40s8 46 18 46 14-44 24-44 6 38 16 38 12-22 22-22" />
                   <path d="M150 60c10 4 26 2 40-2s24-10 30-6" />
                   <path d="M196 30c8 6 12 18 6 26" />
                 </svg>
               </div>
               <div className="mt-2 border-t border-foreground pt-2 text-center">
-                <div className="text-xs font-bold uppercase">Médico tratante</div>
-                <div className="text-xs text-muted-foreground">
-                  Grafo traído de ficha médica
-                </div>
+                <div className="text-xs font-bold uppercase">{usuarioActual.toUpperCase()}</div>
+                <div className="text-xs text-muted-foreground">Médico tratante</div>
               </div>
             </div>
             {/* Sello */}
             <div className="flex flex-col items-center rounded-md border border-border bg-surface-2 p-4">
               <div className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
-                  <circle cx="12" cy="12" r="9" /><path d="M12 7v10M7 12h10" />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="h-3.5 w-3.5"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v10M7 12h10" />
                 </svg>
                 Sello registrado
               </div>
               <svg viewBox="0 0 130 130" width={110} height={110} fill="none">
                 <circle cx="65" cy="65" r="58" stroke="var(--primary)" strokeWidth={3} />
                 <circle cx="65" cy="65" r="48" stroke="var(--primary)" strokeWidth={1.5} />
-                <text x="65" y="56" textAnchor="middle" fontSize="11" fontWeight="700" fill="var(--primary)">
-                  MÉDICO TRATANTE
+                <text
+                  x="65"
+                  y="56"
+                  textAnchor="middle"
+                  fontSize="9.5"
+                  fontWeight="700"
+                  fill="var(--primary)"
+                >
+                  {usuarioActual.toUpperCase()}
                 </text>
                 <text x="65" y="72" textAnchor="middle" fontSize="9" fill="var(--primary)">
                   FIRMA ELECTRÓNICA
                 </text>
-                <text x="65" y="86" textAnchor="middle" fontSize="9" fontWeight="700" fill="var(--primary)">
-                  JVPM · FICHA MÉDICA
+                <text
+                  x="65"
+                  y="86"
+                  textAnchor="middle"
+                  fontSize="9"
+                  fontWeight="700"
+                  fill="var(--primary)"
+                >
+                  MÉDICO TRATANTE
                 </text>
               </svg>
               <div className="mt-1 text-center text-xs text-muted-foreground">
@@ -1214,7 +1414,13 @@ export default function NuevaHistoriaClinicaPage() {
             </div>
           </div>
           <div className="mt-3 flex items-center gap-1.5 text-xs text-success">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              className="h-3.5 w-3.5"
+            >
               <path d="M20 6 9 17l-5-5" />
             </svg>
             Grafo y sello traídos automáticamente de la ficha médica del médico registrado.
@@ -1244,8 +1450,15 @@ export default function NuevaHistoriaClinicaPage() {
             onClick={() => void handleGuardarYFirmar()}
             disabled={isSubmitting || !episodioId}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-4 w-4">
-              <path d="M3 17c3-1 4-4 6-4s2 3 4 3 3-6 5-6" /><path d="M3 21h18" />
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              className="mr-1.5 h-4 w-4"
+            >
+              <path d="M3 17c3-1 4-4 6-4s2 3 4 3 3-6 5-6" />
+              <path d="M3 21h18" />
             </svg>
             {createM.isPending && pendingMode === "firmar" ? "Procesando…" : "Guardar y firmar"}
           </Button>
@@ -1260,6 +1473,54 @@ export default function NuevaHistoriaClinicaPage() {
         onSave={setVitales}
         isFemenina={isFemenina}
       />
+
+      {/* Modal fullscreen: Formulario de Lesión de Causa Externa (MINSAL) — solo-vista, iframe aislado */}
+      <Dialog open={lesionOpen} onOpenChange={setLesionOpen}>
+        <DialogContent className="flex h-[min(92vh,100%)] w-[min(1180px,100%)] max-w-[1180px] flex-col gap-0 overflow-hidden rounded-[14px] p-0">
+          <div className="flex flex-none items-center justify-between gap-3 border-b border-border bg-surface-1 px-4 py-3">
+            <div className="flex items-center gap-2.5 text-sm font-bold text-foreground">
+              <svg
+                viewBox="0 0 24 24"
+                width={18}
+                height={18}
+                fill="none"
+                stroke="var(--success)"
+                strokeWidth={2}
+                className="flex-none"
+              >
+                <path d="M9 2h6a1 1 0 0 1 1 1v1h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2V3a1 1 0 0 1 1-1z" />
+                <path d="M9 13l2 2 4-4" />
+              </svg>
+              <span>
+                Formulario de Lesión de Causa Externa
+                <small className="mt-0.5 block text-[11.5px] font-medium text-muted-foreground">
+                  Forma parte de la Historia Clínica · MINSAL
+                </small>
+              </span>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={() => setLesionOpen(false)}>
+              <svg
+                viewBox="0 0 24 24"
+                width={15}
+                height={15}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2}
+                className="mr-1.5"
+              >
+                <path d="M19 12H5M11 6l-6 6 6 6" />
+              </svg>
+              Volver a la historia clínica
+            </Button>
+          </div>
+          <iframe
+            src="/forms/lesion-causa-externa.html"
+            title="Formulario de Lesión de Causa Externa"
+            referrerPolicy="no-referrer"
+            className="w-full flex-1 border-0 bg-white"
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Modal de PIN de firma */}
       <Dialog open={pinOpen} onOpenChange={(o) => !o && !firmarM.isPending && setPinOpen(false)}>
@@ -1283,13 +1544,19 @@ export default function NuevaHistoriaClinicaPage() {
               />
             </div>
             {pinError && (
-              <p role="alert" className="text-xs text-destructive">{pinError}</p>
+              <p role="alert" className="text-xs text-destructive">
+                {pinError}
+              </p>
             )}
             <DialogFooter>
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => { setPinOpen(false); setPin(""); setPinError(null); }}
+                onClick={() => {
+                  setPinOpen(false);
+                  setPin("");
+                  setPinError(null);
+                }}
                 disabled={firmarM.isPending}
               >
                 Cancelar
@@ -1316,7 +1583,9 @@ export default function NuevaHistoriaClinicaPage() {
                 className="mt-1 uppercase placeholder:normal-case"
                 placeholder="Nombre completo"
                 value={contactoDraft.fullName}
-                onChange={(e) => setContactoDraft((d) => ({ ...d, fullName: e.target.value.toUpperCase() }))}
+                onChange={(e) =>
+                  setContactoDraft((d) => ({ ...d, fullName: e.target.value.toUpperCase() }))
+                }
               />
             </div>
             <div>
@@ -1326,7 +1595,9 @@ export default function NuevaHistoriaClinicaPage() {
                 className="mt-1 uppercase placeholder:normal-case"
                 placeholder="Madre, hijo, cónyuge…"
                 value={contactoDraft.relationship}
-                onChange={(e) => setContactoDraft((d) => ({ ...d, relationship: e.target.value.toUpperCase() }))}
+                onChange={(e) =>
+                  setContactoDraft((d) => ({ ...d, relationship: e.target.value.toUpperCase() }))
+                }
               />
             </div>
             <div>
@@ -1347,12 +1618,21 @@ export default function NuevaHistoriaClinicaPage() {
             </Button>
             <Button
               type="button"
+              disabled={contactoEmergenciaM.isPending}
               onClick={() => {
                 setContacto({ ...contactoDraft });
                 setContactoModalOpen(false);
+                if (paciente?.id && contactoDraft.fullName.trim()) {
+                  contactoEmergenciaM.mutate({
+                    patientId: paciente.id,
+                    fullName: contactoDraft.fullName.trim(),
+                    relationship: contactoDraft.relationship.trim() || "—",
+                    phone: contactoDraft.phone.trim() || null,
+                  });
+                }
               }}
             >
-              Guardar
+              {contactoEmergenciaM.isPending ? "Guardando…" : "Guardar"}
             </Button>
           </DialogFooter>
         </DialogContent>

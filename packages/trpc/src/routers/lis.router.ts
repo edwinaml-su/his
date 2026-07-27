@@ -22,6 +22,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { Prisma } from "@his/database";
 import {
   labPanelListInput,
   labTestListInput,
@@ -34,15 +35,37 @@ import {
   resultValidateInput,
   evaluateLabResultFlag,
   isCriticalFlag,
+  labPanelCreateInput,
+  labPanelUpdateInput,
+  labPanelToggleInput,
+  labTestCreateInput,
+  labTestUpdateInput,
+  labTestToggleInput,
+  labTestListByAreaInput,
   type LabReferenceRange,
   type LisSex,
   type LisResultFlag,
   type LabCriticalValuePayload,
   type Identifier2Kind,
+  type LabCatalogPanelGroup,
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+/** CC-0011 — CRUD del catálogo LIS (paneles/tests): solo administración. */
+const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
+
+/** Convierte P2002 (unique violation) en CONFLICT con mensaje es-SV. */
+function rethrowCatalogPrisma(err: unknown): never {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Ya existe un registro con ese código en el catálogo LIS.",
+    });
+  }
+  throw err;
+}
 
 /**
  * Beta.15 — convierte Prisma Decimal-or-null a number-or-null para el payload
@@ -78,6 +101,76 @@ export const lisRouter = router({
         take: input.limit,
       });
     }),
+
+    /**
+     * CC-0011 — crea un panel del catálogo LIS del propio tenant.
+     * organizationId siempre se fuerza desde ctx.tenant (nunca del input).
+     */
+    create: catalogAdminProc.input(labPanelCreateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        try {
+          return await tx.labPanel.create({
+            data: { ...input, organizationId: ctx.tenant.organizationId },
+          });
+        } catch (err) {
+          rethrowCatalogPrisma(err);
+        }
+      });
+    }),
+
+    /** Actualiza un panel — solo filas del propio tenant. Los globales (organizationId=null) son read-only. */
+    update: catalogAdminProc.input(labPanelUpdateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const { id, ...data } = input;
+        const current = await tx.labPanel.findFirst({
+          where: { id, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!current) {
+          const global = await tx.labPanel.findFirst({ where: { id, organizationId: null }, select: { id: true } });
+          if (global) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El catálogo global de laboratorio es de solo lectura. Cree un panel propio del tenant.",
+            });
+          }
+          throw new TRPCError({ code: "NOT_FOUND", message: "Panel no encontrado." });
+        }
+        try {
+          return await tx.labPanel.update({ where: { id }, data });
+        } catch (err) {
+          rethrowCatalogPrisma(err);
+        }
+      });
+    }),
+
+    /** Soft-disable: active=false. Solo filas del propio tenant. */
+    deactivate: catalogAdminProc.input(labPanelToggleInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const updated = await tx.labPanel.updateMany({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          data: { active: false },
+        });
+        if (updated.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Panel no encontrado en el tenant." });
+        }
+        return { ok: true as const };
+      });
+    }),
+
+    /** Re-activa un panel previamente desactivado. Solo filas del propio tenant. */
+    reactivate: catalogAdminProc.input(labPanelToggleInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const updated = await tx.labPanel.updateMany({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          data: { active: true },
+        });
+        if (updated.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Panel no encontrado en el tenant." });
+        }
+        return { ok: true as const };
+      });
+    }),
   }),
 
   test: router({
@@ -99,6 +192,107 @@ export const lisRouter = router({
         },
         orderBy: { name: "asc" },
         take: input.limit,
+      });
+    }),
+
+    /**
+     * CC-0011 — paneles activos de un área (LABORATORIO/RADIOLOGIA/CARDIOLOGIA)
+     * con sus tests activos, ordenados por displayOrder. Lectura híbrida
+     * global (organizationId=null) + tenant, igual que `panel.list`/`test.list`.
+     * Consumido por el wizard de solicitud de exámenes de historia clínica.
+     */
+    listByArea: tenantProcedure.input(labTestListByAreaInput).query(async ({ ctx, input }) => {
+      const panels = await ctx.prisma.labPanel.findMany({
+        where: {
+          area: input.area,
+          active: true,
+          OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+        },
+        orderBy: { displayOrder: "asc" },
+        include: {
+          tests: {
+            where: { active: true },
+            orderBy: { displayOrder: "asc" },
+            select: { id: true, name: true, displayOrder: true },
+          },
+        },
+      });
+
+      const result: LabCatalogPanelGroup[] = panels.map((p) => ({
+        panelId: p.id,
+        nombre: p.name,
+        tests: p.tests.map((t) => ({ id: t.id, nombre: t.name, displayOrder: t.displayOrder })),
+      }));
+      return result;
+    }),
+
+    /**
+     * CC-0011 — crea un test del catálogo LIS del propio tenant.
+     * organizationId siempre se fuerza desde ctx.tenant (nunca del input).
+     */
+    create: catalogAdminProc.input(labTestCreateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        try {
+          return await tx.labTest.create({
+            data: { ...input, organizationId: ctx.tenant.organizationId },
+          });
+        } catch (err) {
+          rethrowCatalogPrisma(err);
+        }
+      });
+    }),
+
+    /** Actualiza un test — solo filas del propio tenant. Los globales (organizationId=null) son read-only. */
+    update: catalogAdminProc.input(labTestUpdateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const { id, ...data } = input;
+        const current = await tx.labTest.findFirst({
+          where: { id, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!current) {
+          const global = await tx.labTest.findFirst({ where: { id, organizationId: null }, select: { id: true } });
+          if (global) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El catálogo global de laboratorio es de solo lectura. Cree un test propio del tenant.",
+            });
+          }
+          throw new TRPCError({ code: "NOT_FOUND", message: "Test no encontrado." });
+        }
+        try {
+          return await tx.labTest.update({ where: { id }, data });
+        } catch (err) {
+          rethrowCatalogPrisma(err);
+        }
+      });
+    }),
+
+    /** Soft-disable: active=false. Solo filas del propio tenant. */
+    deactivate: catalogAdminProc.input(labTestToggleInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const updated = await tx.labTest.updateMany({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          data: { active: false },
+        });
+        if (updated.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Test no encontrado en el tenant." });
+        }
+        return { ok: true as const };
+      });
+    }),
+
+    /** Re-activa un test previamente desactivado. Solo filas del propio tenant. */
+    reactivate: catalogAdminProc.input(labTestToggleInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const updated = await tx.labTest.updateMany({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          data: { active: true },
+        });
+        if (updated.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Test no encontrado en el tenant." });
+        }
+        return { ok: true as const };
       });
     }),
   }),

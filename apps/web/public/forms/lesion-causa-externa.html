@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="es-SV">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formulario de reporte de Lesión de Causa Externa — HIS Multipaís</title>
+<style>
+  :root{
+    --primary:#0e5f66;
+    --primary-700:#0a4a50;
+    --primary-50:#e9f3f4;
+    --primary-100:#d4e8ea;
+    --ink:#1c2733;
+    --muted:#5b6b78;
+    --faint:#8898a5;
+    --line:#dde5ea;
+    --line-strong:#c5d2da;
+    --surface:#f4f7f8;
+    --card:#ffffff;
+    --danger:#c8323a;
+    --danger-50:#fbecec;
+    --amber:#b7791f;
+    --amber-50:#fdf3e0;
+    --skin:#eef1f3;
+    --skin-stroke:#b9c5cd;
+    --radius:12px;
+    --shadow:0 1px 2px rgba(20,40,55,.05), 0 8px 24px -16px rgba(20,40,55,.28);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--surface);color:var(--ink);font-size:15px;line-height:1.45;-webkit-font-smoothing:antialiased}
+
+  /* ---------- App bar ---------- */
+  .appbar{position:sticky;top:0;z-index:40;background:var(--primary);color:#fff;
+    border-bottom:3px solid var(--primary-700)}
+  .appbar__in{max-width:1180px;margin:0 auto;padding:.7rem 1.25rem;display:flex;align-items:center;gap:1rem;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:.6rem;font-weight:700;letter-spacing:.2px}
+  .brand .glyph{width:30px;height:30px;border-radius:8px;background:rgba(255,255,255,.14);
+    display:grid;place-items:center;font-size:1rem}
+  .brand small{display:block;font-weight:500;font-size:.7rem;opacity:.82;letter-spacing:.4px;text-transform:uppercase}
+  .appbar__title{font-size:.96rem;font-weight:600;line-height:1.1;border-left:1px solid rgba(255,255,255,.25);padding-left:1rem}
+  .appbar__title span{display:block;font-size:.72rem;font-weight:400;opacity:.8}
+  .badge-epi{margin-left:auto;background:var(--amber-50);color:#7a4f10;font-size:.68rem;font-weight:700;
+    letter-spacing:.5px;text-transform:uppercase;padding:.3rem .6rem;border-radius:999px;border:1px solid #ecd9af}
+
+  /* ---------- Expediente strip ---------- */
+  .expstrip{background:var(--card);border-bottom:1px solid var(--line)}
+  .expstrip__in{max-width:1180px;margin:0 auto;padding:.65rem 1.25rem;display:flex;gap:1.1rem;flex-wrap:wrap;align-items:flex-end}
+  .exp-field{display:flex;flex-direction:column;gap:.18rem}
+  .exp-field label{font-size:.66rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  .exp-field input{border:1px solid var(--line-strong);border-radius:8px;padding:.42rem .55rem;font-size:.9rem;min-width:160px;font-family:inherit}
+  .exp-field--grow{flex:1;min-width:220px}
+  .exp-field--grow input{width:100%}
+
+  /* ---------- Layout ---------- */
+  main{max-width:1180px;margin:0 auto;padding:1.25rem 1.25rem 7rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);
+    margin-bottom:1.1rem;overflow:hidden}
+  .card__head{display:flex;align-items:center;gap:.8rem;padding:.95rem 1.15rem;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#fff, #fbfcfd)}
+  .secnum{flex:none;width:34px;height:34px;border-radius:9px;background:var(--primary);color:#fff;
+    display:grid;place-items:center;font-weight:700;font-size:.95rem}
+  .card__head h2{margin:0;font-size:1rem;font-weight:700;letter-spacing:.2px}
+  .card__head h2 small{display:block;font-size:.72rem;font-weight:400;color:var(--muted);letter-spacing:0}
+  .card__body{padding:1.1rem 1.15rem;overflow:hidden;transition:max-height .3s ease, padding .3s ease}
+  .card.is-collapsed .card__body{padding-top:0;padding-bottom:0}
+
+  /* collapsible header */
+  .card__head{cursor:pointer;user-select:none}
+  .card__head:hover{background:var(--primary-50)}
+  .card__head:focus-visible{outline:2px solid var(--primary);outline-offset:-2px}
+  .chev{margin-left:auto;display:grid;place-items:center;color:var(--muted);transition:transform .25s ease;flex:none}
+  .card.is-collapsed .chev{transform:rotate(-90deg)}
+
+  /* section toolbar */
+  .sectionbar{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;
+    background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.5rem .55rem .5rem .85rem;box-shadow:var(--shadow)}
+  .sectionbar__label{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-right:auto}
+  .sectionbar__btns{display:flex;gap:.45rem}
+  .minibtn{background:#fff;border:1px solid var(--line-strong);color:var(--primary-700);font-size:.78rem;font-weight:600;
+    border-radius:8px;padding:.38rem .7rem;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:.35rem}
+  .minibtn:hover{border-color:var(--primary);background:var(--primary-50)}
+  .minibtn:active{transform:translateY(1px)}
+
+  .group{margin-bottom:1.35rem}
+  .group:last-child{margin-bottom:0}
+  .group__title{display:flex;align-items:baseline;gap:.5rem;flex-wrap:wrap;margin:0 0 .55rem}
+  .group__title b{font-size:.84rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--primary-700)}
+  .group__title em{font-style:normal;font-size:.76rem;color:var(--muted)}
+  .subgrid{display:grid;gap:1.35rem}
+  @media(min-width:760px){ .subgrid.cols-2{grid-template-columns:1fr 1fr} .subgrid.cols-3{grid-template-columns:repeat(3,1fr)} }
+
+  /* ---------- Inputs ---------- */
+  .field{display:flex;flex-direction:column;gap:.22rem}
+  .field label{font-size:.7rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+  .field input,.field select,.field textarea{border:1px solid var(--line-strong);border-radius:8px;padding:.5rem .6rem;
+    font-size:.92rem;font-family:inherit;color:var(--ink);background:#fff;width:100%}
+  .field textarea{resize:vertical;min-height:74px;line-height:1.4}
+  .field input:focus,.field select:focus,.field textarea:focus,.exp-field input:focus{outline:2px solid var(--primary);outline-offset:1px;border-color:var(--primary)}
+  .idgrid{display:grid;gap:.85rem;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .age-row{display:flex;gap:.5rem}
+  .age-row .field{flex:1}
+  .datetime{display:grid;gap:.6rem;grid-template-columns:repeat(auto-fit,minmax(72px,1fr));align-items:end}
+  .ampm{display:flex;gap:.3rem}
+  .ampm .opt{padding:.4rem .55rem}
+
+  /* ---------- Option tiles (checkbox) ---------- */
+  .opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(185px,1fr));gap:.5rem}
+  .opts.dense{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+  .opt{position:relative;display:flex;gap:.55rem;align-items:flex-start;padding:.5rem .6rem;border:1px solid var(--line);
+    border-radius:10px;cursor:pointer;background:#fff;font-size:.85rem;line-height:1.28;transition:border-color .12s,background .12s,box-shadow .12s}
+  .opt:hover{border-color:var(--primary);background:var(--primary-50)}
+  .opt input{margin:.1rem 0 0;width:1.05rem;height:1.05rem;flex:none;accent-color:var(--primary);cursor:pointer}
+  .opt .num{font-weight:700;color:var(--faint);font-variant-numeric:tabular-nums}
+  .opt:has(input:checked){border-color:var(--primary);background:var(--primary-50);box-shadow:inset 0 0 0 1px var(--primary)}
+  .opt:has(input:checked) .num{color:var(--primary-700)}
+  .opt:focus-within{outline:2px solid var(--primary);outline-offset:1px}
+
+  .subopts{margin:.45rem 0 .2rem 1.4rem;padding-left:.85rem;border-left:2px solid var(--line);
+    display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:.4rem}
+  .opt--sub{font-size:.82rem;padding:.4rem .55rem}
+
+  /* sex / disability radios styled as tiles but single */
+  .pill-row{display:flex;gap:.5rem;flex-wrap:wrap}
+  .pill-row .opt{min-width:74px;justify-content:center}
+
+  /* ---------- Severity descriptive options ---------- */
+  .sev{display:grid;gap:.5rem}
+  .opt--block{align-items:flex-start}
+  .opt--block .txt b{display:block;font-size:.86rem;margin-bottom:.12rem}
+  .opt--block .txt span{color:var(--muted);font-size:.79rem;line-height:1.32}
+
+  /* glasgow suggested highlight */
+  .opt.suggested{border-color:var(--amber);background:var(--amber-50);box-shadow:inset 0 0 0 1px var(--amber)}
+  .glasgow-score{display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;font-size:.8rem;color:var(--muted)}
+  .glasgow-score input{width:80px;border:1px solid var(--line-strong);border-radius:8px;padding:.35rem .5rem;font-size:.9rem;font-family:inherit}
+
+  /* ---------- Body map ---------- */
+  .bodymap{display:grid;gap:1.1rem}
+  @media(min-width:860px){ .bodymap{grid-template-columns:minmax(0,1.35fr) minmax(260px,1fr)} }
+  .bodymap__figs{display:flex;gap:.5rem;justify-content:center;flex-wrap:wrap;
+    background:var(--primary-50);border:1px solid var(--primary-100);border-radius:var(--radius);padding:1rem .6rem}
+  .figwrap{display:flex;flex-direction:column;align-items:center;gap:.4rem;flex:1;min-width:230px;max-width:300px}
+  .figwrap__cap{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--primary-700)}
+  .figwrap__sides{display:flex;justify-content:space-between;width:100%;max-width:210px;font-size:.66rem;font-weight:700;color:var(--muted);letter-spacing:.3px}
+  .figure{width:100%;max-width:212px;height:auto;max-height:430px;display:block}
+  .region{fill:var(--skin);stroke:var(--skin-stroke);stroke-width:1.4;stroke-linejoin:round;
+    cursor:pointer;transition:fill .12s,stroke .12s}
+  .region:hover{fill:var(--primary-100);stroke:var(--primary)}
+  .region:focus{outline:none}
+  .region:focus-visible{stroke:var(--primary-700);stroke-width:2.4}
+  .region.is-selected{fill:var(--danger);stroke:#9c2027}
+  .region.is-selected:hover{fill:#b32d34}
+
+  .bodymap__panel{display:flex;flex-direction:column;gap:.7rem}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+  .panel-head b{font-size:.8rem;text-transform:uppercase;letter-spacing:.4px;color:var(--primary-700)}
+  .count{background:var(--danger);color:#fff;font-size:.72rem;font-weight:700;border-radius:999px;padding:.12rem .5rem;min-width:22px;text-align:center}
+  .count[data-n="0"]{background:var(--faint)}
+  .chips{display:flex;flex-wrap:wrap;gap:.35rem;min-height:34px;align-content:flex-start}
+  .chip{display:inline-flex;align-items:center;gap:.35rem;background:var(--danger-50);color:#8f242a;border:1px solid #eecccd;
+    border-radius:999px;padding:.2rem .35rem .2rem .6rem;font-size:.76rem;font-weight:600}
+  .chip button{border:none;background:#d9979b;color:#fff;width:16px;height:16px;border-radius:50%;cursor:pointer;
+    font-size:.7rem;line-height:1;display:grid;place-items:center;padding:0}
+  .chip button:hover{background:var(--danger)}
+  .chips-empty{color:var(--faint);font-size:.8rem;font-style:italic;padding:.3rem 0}
+  .map-note{font-size:.72rem;color:var(--muted);line-height:1.4;background:var(--surface);border:1px solid var(--line);
+    border-radius:8px;padding:.55rem .65rem}
+  .btn-clear{align-self:flex-start;background:#fff;border:1px solid var(--line-strong);color:var(--muted);
+    font-size:.78rem;font-weight:600;border-radius:8px;padding:.4rem .7rem;cursor:pointer}
+  .btn-clear:hover{border-color:var(--danger);color:var(--danger)}
+
+  /* signature block */
+  /* auto-filled (from registered record) */
+  .is-auto{background:var(--primary-50)!important;border-style:dashed!important;border-color:var(--primary-100)!important;cursor:not-allowed}
+  .is-auto:focus{outline:none;border-color:var(--primary)!important}
+  .is-auto-pills{pointer-events:none}
+  .auto-note{display:flex;gap:.5rem;align-items:flex-start;font-size:.78rem;color:var(--primary-700);
+    background:var(--primary-50);border:1px solid var(--primary-100);border-radius:10px;padding:.55rem .7rem;margin-bottom:1rem;line-height:1.4}
+  .auto-note::before{content:"🔒";font-size:.85rem;line-height:1.3;flex:none}
+
+  /* "Otro" auto-growing free text */
+  .other-reveal{grid-column:1 / -1;display:none;margin-top:.25rem}
+  .other-reveal.show{display:block}
+  .other-reveal__label{display:block;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:.25rem}
+  textarea.grow{width:100%;border:1px solid var(--primary);border-radius:8px;padding:.5rem .6rem;font-family:inherit;
+    font-size:.88rem;line-height:1.45;resize:none;overflow:hidden;min-height:40px;background:#fff;color:var(--ink);display:block}
+  textarea.grow:focus{outline:2px solid var(--primary);outline-offset:1px}
+
+  /* physician signature + seal */
+  .signrow{display:grid;gap:1.1rem;grid-template-columns:1fr;align-items:start}
+  @media(min-width:760px){ .signrow{grid-template-columns:minmax(240px,1fr) auto} }
+  .signrow__fields{display:grid;gap:.85rem;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-content:start}
+  .signcard{position:relative;display:flex;align-items:center;gap:1.3rem;flex-wrap:wrap;justify-content:center;
+    border:1px dashed var(--line-strong);border-radius:12px;padding:1.25rem 1.4rem .9rem;background:var(--surface);min-width:280px}
+  .signcard[data-state="signed"]{border-style:solid;border-color:#b9e2c6;background:#f3fbf6}
+  .signcard__sig{display:flex;flex-direction:column;align-items:center;min-width:150px}
+  .sig-script{font-family:"Segoe Script","Bradley Hand","Brush Script MT","Apple Chancery","Snell Roundhand",cursive;
+    font-style:italic;font-size:1.7rem;color:#16365a;line-height:1.1;padding:.15rem .7rem;border-bottom:1.5px solid var(--ink);white-space:nowrap}
+  .sig-cap{font-size:.66rem;color:var(--muted);margin-top:.3rem;text-transform:uppercase;letter-spacing:.4px}
+  .seal{width:120px;height:120px;border-radius:50%;border:3px double var(--primary);color:var(--primary);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:.1rem;
+    padding:.45rem;transform:rotate(-7deg);opacity:.82}
+  .seal__top{font-size:.46rem;font-weight:700;text-transform:uppercase;letter-spacing:.2px;line-height:1.05;max-width:98px}
+  .seal__name{font-size:.54rem;font-weight:700;line-height:1.05;max-width:104px}
+  .seal__mid{font-size:.62rem;font-weight:800;letter-spacing:1px;border-top:1px solid var(--primary);border-bottom:1px solid var(--primary);padding:.04rem .3rem;margin:.12rem 0}
+  .seal__bot{font-size:.5rem;font-weight:700;letter-spacing:.3px}
+  .signcard__stamp{position:absolute;top:.5rem;right:.7rem;font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
+    color:var(--amber);background:var(--amber-50);border:1px solid #ecd9af;border-radius:999px;padding:.15rem .55rem}
+  .signcard[data-state="signed"] .signcard__stamp{color:#1f6b3a;background:#e7f5ec;border-color:#b9e2c6}
+  .signcard[data-state="signed"] .seal{opacity:1}
+
+  /* ---------- Action bar ---------- */
+  .actionbar{position:fixed;bottom:0;left:0;right:0;z-index:45;background:rgba(255,255,255,.94);
+    backdrop-filter:saturate(140%) blur(6px);border-top:1px solid var(--line);box-shadow:0 -6px 20px -16px rgba(20,40,55,.4)}
+  .actionbar__in{max-width:1180px;margin:0 auto;padding:.7rem 1.25rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+  .actionbar__msg{font-size:.8rem;color:var(--muted);margin-right:auto}
+  .btn{border-radius:9px;padding:.6rem 1.1rem;font-size:.9rem;font-weight:600;cursor:pointer;border:1px solid transparent;font-family:inherit}
+  .btn--ghost{background:#fff;border-color:var(--line-strong);color:var(--ink)}
+  .btn--ghost:hover{border-color:var(--primary);color:var(--primary)}
+  .btn--primary{background:var(--primary);color:#fff;display:inline-flex;align-items:center;gap:.45rem}
+  .btn--primary:hover{background:var(--primary-700)}
+
+  .banner{margin:0 0 1.1rem;border-radius:var(--radius);padding:.8rem 1rem;font-size:.86rem;display:none;align-items:center;gap:.6rem}
+  .banner.show{display:flex}
+  .banner--ok{background:#e7f5ec;border:1px solid #b9e2c6;color:#1f6b3a}
+  .banner--err{background:var(--danger-50);border:1px solid #eecccd;color:#9c2027}
+
+  /* invalid */
+  .invalid input{border-color:var(--danger)!important;background:var(--danger-50)}
+
+  /* ---------- View switch ---------- */
+  .viewswitch{display:inline-flex;align-items:center;gap:.35rem;background:var(--surface);
+    border:1px solid var(--line-strong);border-radius:999px;padding:.2rem .25rem .2rem .6rem}
+  .viewswitch__label{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-right:.1rem}
+  .vsbtn{border:none;background:transparent;color:var(--muted);font-size:.78rem;font-weight:600;
+    padding:.3rem .7rem;border-radius:999px;cursor:pointer;font-family:inherit;white-space:nowrap}
+  .vsbtn.is-active{background:var(--primary);color:#fff}
+  .vsbtn:not(.is-active):hover{color:var(--primary-700)}
+
+  /* clean (embeddable) view hides app chrome */
+  body.clean-view .appbar,
+  body.clean-view .expstrip,
+  body.clean-view .sectionbar{display:none}
+  body.clean-view main{padding-top:1.1rem}
+
+  @media print{
+    .appbar,.actionbar,.viewswitch,.sectionbar,.btn-clear,.chip button,.chev{display:none!important}
+    body{background:#fff}
+    .card{box-shadow:none;break-inside:avoid;border-color:#bcc6cd}
+    .card__head{cursor:default}
+    .card__body{max-height:none!important;padding:1.1rem 1.15rem!important}
+    main{padding:.4rem 0}
+  }
+</style>
+</head>
+<body>
+
+<!-- App bar -->
+<header class="appbar">
+  <div class="appbar__in">
+    <div class="brand">
+      <span class="glyph">✚</span>
+      <span>HIS Multipaís<small>Inversiones Avante</small></span>
+    </div>
+    <div class="appbar__title">Formulario de reporte de Lesión de Causa Externa<span>Expediente Clínico Electrónico · Emergencia</span></div>
+    <span class="badge-epi">Copia · Unidad de Epidemiología</span>
+  </div>
+</header>
+
+<!-- Expediente strip -->
+<div class="expstrip">
+  <div class="expstrip__in">
+    <div class="exp-field"><label for="exp_num">N.º Expediente</label><input id="exp_num" class="is-auto" readonly value="SV-2026-00417"></div>
+    <div class="exp-field exp-field--grow"><label for="exp_estab">Establecimiento</label><input id="exp_estab" class="is-auto" readonly value="Hospital Avante · Colonia Médica"></div>
+    <div class="exp-field"><label for="exp_usuario">Creado por</label><input id="exp_usuario" class="is-auto" readonly value="Dra. María Elena Cruz · Emergencia"></div>
+  </div>
+</div>
+
+<main>
+  <div class="sectionbar">
+    <span class="sectionbar__label">Secciones del registro</span>
+    <div class="sectionbar__btns">
+      <button type="button" class="minibtn" id="expandAll">Expandir todo</button>
+      <button type="button" class="minibtn" id="collapseAll">Contraer todo</button>
+    </div>
+  </div>
+  <div id="banner" class="banner" role="status"></div>
+
+  <!-- ============ I · IDENTIFICACIÓN ============ -->
+  <section class="card">
+    <div class="card__head" role="button" tabindex="0" aria-expanded="true" aria-controls="body-1">
+      <div class="secnum">I</div>
+      <h2>Datos de identificación<small>Información demográfica del paciente</small></h2>
+      <span class="chev" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    </div>
+    <div class="card__body" id="body-1">
+      <div class="auto-note">Datos del paciente cargados automáticamente del expediente registrado. Para modificarlos, edite el expediente.</div>
+      <div class="idgrid" style="margin-bottom:.95rem">
+        <div class="field" style="grid-column:span 2"><label for="apellidos">Apellidos</label><input id="apellidos" class="is-auto" readonly value="Hernández Martínez"></div>
+        <div class="field" style="grid-column:span 2"><label for="nombres">Nombres</label><input id="nombres" class="is-auto" readonly value="José Antonio"></div>
+        <div class="field"><label for="ocupacion">Ocupación</label><input id="ocupacion" class="is-auto" readonly value="Comerciante"></div>
+      </div>
+
+      <div class="subgrid cols-2" style="align-items:end">
+        <div>
+          <div class="group__title"><b>Edad</b></div>
+          <div class="age-row">
+            <div class="field"><label for="edad_a">Años</label><input id="edad_a" type="number" class="is-auto" readonly value="34"></div>
+            <div class="field"><label for="edad_m">Meses</label><input id="edad_m" type="number" class="is-auto" readonly value="5"></div>
+            <div class="field"><label for="edad_d">Días</label><input id="edad_d" type="number" class="is-auto" readonly value="12"></div>
+          </div>
+        </div>
+        <div>
+          <div class="group__title"><b>Sexo</b></div>
+          <div class="pill-row is-auto-pills">
+            <label class="opt"><input type="checkbox" name="sexo" value="M" checked><span>Masculino</span></label>
+            <label class="opt"><input type="checkbox" name="sexo" value="F"><span>Femenino</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="group" style="margin-top:1.35rem">
+        <div class="group__title"><b>Domicilio del paciente</b></div>
+        <div class="idgrid">
+          <div class="field" style="grid-column:span 2"><label for="dom_dir">Dirección</label><input id="dom_dir" class="is-auto" readonly value="Col. Médica, Av. Dr. Max Bloch #128"></div>
+          <div class="field"><label for="dom_depto">Departamento</label><input id="dom_depto" class="is-auto" readonly value="San Salvador"></div>
+          <div class="field"><label for="dom_muni">Municipio</label><input id="dom_muni" class="is-auto" readonly value="San Salvador Centro"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ II · DATOS GENERALES DEL EVENTO ============ -->
+  <section class="card">
+    <div class="card__head" role="button" tabindex="0" aria-expanded="true" aria-controls="body-2">
+      <div class="secnum">II</div>
+      <h2>Datos generales del evento<small>Caracterización del hecho y mecanismo de la lesión</small></h2>
+      <span class="chev" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    </div>
+    <div class="card__body" id="body-2">
+
+      <div class="subgrid cols-3" style="margin-bottom:1.35rem">
+        <div>
+          <div class="group__title"><b>Fecha y hora — Historia</b><em>registro automático</em></div>
+          <div class="datetime">
+            <div class="field"><label for="h_dia">Día</label><input id="h_dia" type="number" class="is-auto" readonly></div>
+            <div class="field"><label for="h_mes">Mes</label><input id="h_mes" type="number" class="is-auto" readonly></div>
+            <div class="field"><label for="h_anio">Año</label><input id="h_anio" type="number" class="is-auto" readonly></div>
+            <div class="field"><label for="h_hora">Hora</label><input id="h_hora" type="text" class="is-auto" readonly></div>
+          </div>
+          <div class="ampm is-auto-pills" style="margin-top:.45rem">
+            <label class="opt"><input type="checkbox" name="h_ampm" value="AM"><span>AM</span></label>
+            <label class="opt"><input type="checkbox" name="h_ampm" value="PM"><span>PM</span></label>
+          </div>
+        </div>
+        <div>
+          <div class="group__title"><b>Fecha y hora — Evento</b></div>
+          <div class="datetime">
+            <div class="field"><label for="e_dia">Día</label><input id="e_dia" type="number" min="1" max="31"></div>
+            <div class="field"><label for="e_mes">Mes</label><input id="e_mes" type="number" min="1" max="12"></div>
+            <div class="field"><label for="e_anio">Año</label><input id="e_anio" type="number" min="2000"></div>
+            <div class="field"><label for="e_hora">Hora</label><input id="e_hora" type="text" placeholder="00:00"></div>
+          </div>
+          <div class="ampm" style="margin-top:.45rem">
+            <label class="opt"><input type="checkbox" name="e_ampm" value="AM"><span>AM</span></label>
+            <label class="opt"><input type="checkbox" name="e_ampm" value="PM"><span>PM</span></label>
+          </div>
+        </div>
+        <div>
+          <div class="group__title"><b>Paciente con discapacidad</b></div>
+          <div class="pill-row">
+            <label class="opt"><input type="checkbox" name="discap" value="SI"><span>Sí</span></label>
+            <label class="opt"><input type="checkbox" name="discap" value="NO"><span>No</span></label>
+          </div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group__title"><b>Tipo de evento</b></div>
+        <div class="opts">
+          <label class="opt"><input type="checkbox" name="tipo_evento"><span><span class="num">1.</span> Desastre natural</span></label>
+          <label class="opt"><input type="checkbox" name="tipo_evento"><span><span class="num">2.</span> Evento aislado</span></label>
+          <label class="opt"><input type="checkbox" name="tipo_evento"><span><span class="num">3.</span> Guerra o conflicto armado</span></label>
+          <label class="opt"><input type="checkbox" name="tipo_evento"><span><span class="num">4.</span> Terrorismo</span></label>
+          <label class="opt"><input type="checkbox" name="tipo_evento"><span><span class="num">5.</span> No especificado</span></label>
+          <label class="opt"><input type="checkbox" name="tipo_evento" data-other="other-tipoevento"><span><span class="num">6.</span> Otro</span></label>
+          <div class="other-reveal" id="other-tipoevento"><span class="other-reveal__label">Especifique “Otro”</span><textarea class="grow" rows="1" placeholder="Describa el tipo de evento…"></textarea></div>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group__title"><b>Lugar del evento</b><em>ubicación geográfica del hecho</em></div>
+        <div class="idgrid">
+          <div class="field"><label for="evt_depto">Departamento</label><input id="evt_depto"></div>
+          <div class="field"><label for="evt_muni">Municipio</label><input id="evt_muni"></div>
+          <div class="field" style="grid-column:span 3"><label for="evt_dir">Dirección exacta donde ocurrió el evento</label><input id="evt_dir"></div>
+        </div>
+      </div>
+
+      <!-- Mecanismo -->
+      <div class="group" data-required-group="mecanismo">
+        <div class="group__title"><b>Mecanismo de la lesión</b><em>¿Cómo se produjo la lesión? · selección múltiple</em></div>
+        <div class="opts">
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">1.</span> Accidente de transporte</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">2.</span> Agresión sexual</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">3.</span> Asfixia o ahogamiento por inmersión</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">4.</span> Caída</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">5.</span> Contacto con cuerpo extraño</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">6.</span> Contacto con electricidad</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">7.</span> Disparo con arma de fuego</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">8.</span> Estrangulación / ahorcamiento</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">11.</span> Golpe / fuerza contundente</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">14.</span> Puñalada, cortadura</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo"><span><span class="num">15.</span> No especificado</span></label>
+          <label class="opt"><input type="checkbox" name="mecanismo" data-other="other-mecanismo"><span><span class="num">16.</span> Otro</span></label>
+          <div class="other-reveal" id="other-mecanismo"><span class="other-reveal__label">Especifique el mecanismo</span><textarea class="grow" rows="1" placeholder="Describa el mecanismo de la lesión…"></textarea></div>
+        </div>
+
+        <!-- 9. Explosión -->
+        <div class="group__title" style="margin-top:.85rem"><b style="font-size:.78rem">9 · Explosión</b></div>
+        <div class="subopts">
+          <label class="opt opt--sub"><input type="checkbox" name="mec_explosion"><span><span class="num">a)</span> Minas</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_explosion"><span><span class="num">b)</span> Otro artefacto explosivo</span></label>
+        </div>
+
+        <!-- 10. Fuego / calor -->
+        <div class="group__title" style="margin-top:.7rem"><b style="font-size:.78rem">10 · Fuego / calor</b></div>
+        <div class="subopts">
+          <label class="opt opt--sub"><input type="checkbox" name="mec_fuego"><span><span class="num">a)</span> Fuego / humo / llama</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_fuego"><span><span class="num">b)</span> Líquidos calientes</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_fuego"><span><span class="num">c)</span> Pirotecnia</span></label>
+        </div>
+
+        <!-- 12. Intoxicación -->
+        <div class="group__title" style="margin-top:.7rem"><b style="font-size:.78rem">12 · Intoxicación</b></div>
+        <div class="subopts">
+          <label class="opt opt--sub"><input type="checkbox" name="mec_intox"><span><span class="num">a)</span> Fármaco</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_intox"><span><span class="num">b)</span> Plaguicidas</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_intox"><span><span class="num">c)</span> Hidrocarburos</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_intox" data-other="other-intox"><span><span class="num">d)</span> Otro</span></label>
+          <div class="other-reveal" id="other-intox"><span class="other-reveal__label">Especifique la sustancia</span><textarea class="grow" rows="1" placeholder="Describa el agente de intoxicación…"></textarea></div>
+        </div>
+
+        <!-- 13. Mordedura -->
+        <div class="group__title" style="margin-top:.7rem"><b style="font-size:.78rem">13 · Mordedura</b></div>
+        <div class="subopts">
+          <label class="opt opt--sub"><input type="checkbox" name="mec_mordedura"><span><span class="num">a)</span> Persona</span></label>
+          <label class="opt opt--sub"><input type="checkbox" name="mec_mordedura" data-other="other-mordedura"><span><span class="num">b)</span> Animal</span></label>
+          <div class="other-reveal" id="other-mordedura"><span class="other-reveal__label">Especifique el animal</span><textarea class="grow" rows="1" placeholder="¿Qué animal? (perro, serpiente, etc.)…"></textarea></div>
+        </div>
+      </div>
+
+      <!-- Intencionalidad / Lugar / Actividad -->
+      <div class="subgrid cols-3" style="margin-top:1.35rem">
+        <div class="group" style="margin:0">
+          <div class="group__title"><b>Intencionalidad</b></div>
+          <em style="font-size:.74rem;color:var(--muted);display:block;margin-bottom:.5rem">Función del ser humano en la ocurrencia</em>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="intencion"><span><span class="num">1.</span> No intencional (accidental)</span></label>
+            <label class="opt"><input type="checkbox" name="intencion"><span><span class="num">2.</span> Autoinfligida (suicidio / intento)</span></label>
+            <label class="opt"><input type="checkbox" name="intencion"><span><span class="num">3.</span> Intencional (agresión)</span></label>
+            <label class="opt"><input type="checkbox" name="intencion"><span><span class="num">4.</span> No especificada</span></label>
+            <label class="opt"><input type="checkbox" name="intencion" data-other="other-intencion"><span><span class="num">5.</span> Otros</span></label>
+            <div class="other-reveal" id="other-intencion"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa la intencionalidad…"></textarea></div>
+          </div>
+        </div>
+        <div class="group" style="margin:0">
+          <div class="group__title"><b>Lugar</b></div>
+          <em style="font-size:.74rem;color:var(--muted);display:block;margin-bottom:.5rem">¿Dónde ocurrió la lesión?</em>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">1.</span> Bar, cantina o similares</span></label>
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">2.</span> Calle</span></label>
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">3.</span> Casa / hogar</span></label>
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">4.</span> Escuela / lugar de estudio</span></label>
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">5.</span> Trabajo</span></label>
+            <label class="opt"><input type="checkbox" name="lugar"><span><span class="num">6.</span> No especificada</span></label>
+            <label class="opt"><input type="checkbox" name="lugar" data-other="other-lugar"><span><span class="num">7.</span> Otro</span></label>
+            <div class="other-reveal" id="other-lugar"><span class="other-reveal__label">Especifique el lugar</span><textarea class="grow" rows="1" placeholder="Describa dónde ocurrió la lesión…"></textarea></div>
+          </div>
+        </div>
+        <div class="group" style="margin:0">
+          <div class="group__title"><b>Actividad</b></div>
+          <em style="font-size:.74rem;color:var(--muted);display:block;margin-bottom:.5rem">¿Qué hacía la persona al lesionarse?</em>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">1.</span> Estudiando</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">2.</span> Practicando deporte</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">3.</span> Recreación / descanso / juego</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">4.</span> Tomando licor</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">5.</span> Trabajando</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">6.</span> Viajando (a un lugar o al trabajo)</span></label>
+            <label class="opt"><input type="checkbox" name="actividad"><span><span class="num">7.</span> No especificada</span></label>
+            <label class="opt"><input type="checkbox" name="actividad" data-other="other-actividad"><span><span class="num">8.</span> Otra</span></label>
+            <div class="other-reveal" id="other-actividad"><span class="other-reveal__label">Especifique la actividad</span><textarea class="grow" rows="1" placeholder="Describa qué hacía la persona…"></textarea></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ III · DATOS ESPECÍFICOS ============ -->
+  <section class="card">
+    <div class="card__head" role="button" tabindex="0" aria-expanded="true" aria-controls="body-3">
+      <div class="secnum">III</div>
+      <h2>Datos específicos del evento<small>Accidentes de transporte y violencia</small></h2>
+      <span class="chev" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    </div>
+    <div class="card__body" id="body-3">
+
+      <div class="group__title"><b>Accidentes de transporte</b></div>
+      <div class="subgrid cols-2" style="margin-bottom:1.5rem">
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Transporte de la víctima</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">1.</span> Automóvil</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">2.</span> Bicicleta</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">3.</span> Bus</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">4.</span> Camión / rastra</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">5.</span> Carreta / animal</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">6.</span> Microbús</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">7.</span> Motocicleta</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">8.</span> Peatón</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">9.</span> Pick up</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">10.</span> Taxi</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima"><span><span class="num">11.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="transp_victima" data-other="other-transpvic"><span><span class="num">12.</span> Otro</span></label>
+            <div class="other-reveal" id="other-transpvic"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa el transporte…"></textarea></div>
+          </div>
+        </div>
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Contraparte</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">1.</span> Automóvil</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">2.</span> Bicicleta</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">3.</span> Bus</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">4.</span> Camión / rastra</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">5.</span> Carreta / animal</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">6.</span> Microbús</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">7.</span> Motocicleta</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">8.</span> Objeto fijo</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">9.</span> Peatón</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">10.</span> Pick up</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">11.</span> Taxi</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte"><span><span class="num">12.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="contraparte" data-other="other-contraparte"><span><span class="num">13.</span> Otro</span></label>
+            <div class="other-reveal" id="other-contraparte"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa la contraparte…"></textarea></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="subgrid cols-2" style="margin-bottom:1.7rem">
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Usuario</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="usuario"><span><span class="num">1.</span> Conductor</span></label>
+            <label class="opt"><input type="checkbox" name="usuario"><span><span class="num">2.</span> Pasajero</span></label>
+            <label class="opt"><input type="checkbox" name="usuario"><span><span class="num">3.</span> Peatón</span></label>
+            <label class="opt"><input type="checkbox" name="usuario"><span><span class="num">4.</span> No especificado</span></label>
+          </div>
+        </div>
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Tipo de accidente</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="tipo_acc"><span><span class="num">1.</span> Atropello</span></label>
+            <label class="opt"><input type="checkbox" name="tipo_acc"><span><span class="num">2.</span> Colisión</span></label>
+            <label class="opt"><input type="checkbox" name="tipo_acc"><span><span class="num">3.</span> Choque</span></label>
+            <label class="opt"><input type="checkbox" name="tipo_acc"><span><span class="num">4.</span> Volcadura</span></label>
+            <label class="opt"><input type="checkbox" name="tipo_acc"><span><span class="num">5.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="tipo_acc" data-other="other-tipoacc"><span><span class="num">6.</span> Otro</span></label>
+            <div class="other-reveal" id="other-tipoacc"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa el tipo de accidente…"></textarea></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="group__title"><b>Violencia</b></div>
+      <div class="subgrid cols-3">
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Interpersonal — relación del agresor</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">1.</span> Pareja o ex pareja</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">2.</span> Padres / padrastros</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">3.</span> Otro familiar</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">4.</span> Amigos / conocidos</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">5.</span> Desconocido</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel"><span><span class="num">6.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="viol_rel" data-other="other-violrel"><span><span class="num">7.</span> Otro</span></label>
+            <div class="other-reveal" id="other-violrel"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa la relación del agresor…"></textarea></div>
+          </div>
+        </div>
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Contexto</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">1.</span> Violencia intrafamiliar</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">2.</span> Robo u otros crímenes</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">3.</span> Otras riñas / peleas (no familiares)</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">4.</span> Maras / pandillas</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">5.</span> Bala perdida</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx"><span><span class="num">6.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="viol_ctx" data-other="other-violctx"><span><span class="num">7.</span> Otro</span></label>
+            <div class="other-reveal" id="other-violctx"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa el contexto…"></textarea></div>
+          </div>
+        </div>
+        <div>
+          <div class="group__title" style="margin-bottom:.4rem"><em style="font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-size:.74rem;color:var(--ink)">Autoinfligida — factores precipitantes</em></div>
+          <div class="opts dense">
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">1.</span> Víctima de abuso sexual o físico</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">2.</span> Conflicto con la pareja o la familia</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">3.</span> Enfermedad física</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">4.</span> Desempleo</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">5.</span> Dificultades escolares</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">6.</span> Embarazo no deseado</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">7.</span> Conducta adictiva</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">8.</span> Conflicto con las amistades</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">9.</span> Problemas con la justicia</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">10.</span> Problemas financieros</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto"><span><span class="num">11.</span> No especificado</span></label>
+            <label class="opt"><input type="checkbox" name="viol_auto" data-other="other-violauto"><span><span class="num">12.</span> Otros</span></label>
+            <div class="other-reveal" id="other-violauto"><span class="other-reveal__label">Especifique</span><textarea class="grow" rows="1" placeholder="Describa el factor precipitante…"></textarea></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ IV · DATOS CLÍNICOS ============ -->
+  <section class="card">
+    <div class="card__head" role="button" tabindex="0" aria-expanded="true" aria-controls="body-4">
+      <div class="secnum">IV</div>
+      <h2>Datos clínicos del evento<small>Severidad, mapa de lesiones, diagnóstico y destino</small></h2>
+      <span class="chev" aria-hidden="true"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    </div>
+    <div class="card__body" id="body-4">
+
+      <div class="subgrid cols-2" style="margin-bottom:1.6rem">
+        <div class="group" style="margin:0">
+          <div class="group__title"><b>Severidad de la lesión</b><em>según tiempo de tratamiento</em></div>
+          <div class="sev">
+            <label class="opt opt--block"><input type="checkbox" name="severidad"><span class="txt"><b>1 · Leve o superficial</b><span>&lt; 1 hora de tratamiento. Heridas menores, erosiones.</span></span></label>
+            <label class="opt opt--block"><input type="checkbox" name="severidad"><span class="txt"><b>2 · Moderada</b><span>1–6 horas. Requiere tratamiento como lavado gástrico, observación, fractura cerrada, suturas, etc.</span></span></label>
+            <label class="opt opt--block"><input type="checkbox" name="severidad"><span class="txt"><b>3 · Severa</b><span>&gt; 6 horas. Manejo avanzado: cirugía mayor, hemorragia severa, perforación de órganos, cuidados intensivos. Incluye muerte.</span></span></label>
+          </div>
+        </div>
+        <div class="group" style="margin:0">
+          <div class="group__title"><b>Trauma craneoencefálico</b><em>Escala de Glasgow</em></div>
+          <div class="glasgow-score">
+            <label for="glasgow">Puntaje total:</label>
+            <input id="glasgow" type="number" min="3" max="15" placeholder="3–15" inputmode="numeric">
+            <span id="glasgowHint"></span>
+          </div>
+          <div class="sev">
+            <label class="opt opt--block" data-glasgow="leve"><input type="checkbox" name="glasgow_cat"><span class="txt"><b>Leve</b><span>13 – 15 puntos</span></span></label>
+            <label class="opt opt--block" data-glasgow="moderado"><input type="checkbox" name="glasgow_cat"><span class="txt"><b>Moderado</b><span>9 – 12 puntos</span></span></label>
+            <label class="opt opt--block" data-glasgow="severo"><input type="checkbox" name="glasgow_cat"><span class="txt"><b>Severo</b><span>8 o menos puntos</span></span></label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== BODY MAP (signature element) ====== -->
+      <div class="group">
+        <div class="group__title"><b>Mapa corporal de lesiones</b><em>marque uno o varios sitios anatómicos · vista anterior y posterior</em></div>
+        <div class="bodymap">
+          <div class="bodymap__figs">
+            <div class="figwrap">
+              <div class="figwrap__cap">Vista anterior</div>
+              <div class="figwrap__sides"><span>Derecho ▸ (paciente)</span><span>◂ Izquierdo</span></div>
+              <div id="figFront"></div>
+            </div>
+            <div class="figwrap">
+              <div class="figwrap__cap">Vista posterior</div>
+              <div class="figwrap__sides"><span>Izquierdo ▸ (paciente)</span><span>◂ Derecho</span></div>
+              <div id="figBack"></div>
+            </div>
+          </div>
+          <div class="bodymap__panel">
+            <div class="panel-head"><b>Sitios marcados</b><span class="count" id="siteCount" data-n="0">0</span></div>
+            <div class="chips" id="siteChips"><div class="chips-empty">Toque una región del cuerpo para marcarla.</div></div>
+            <button type="button" class="btn-clear" id="clearMap">Limpiar marcas</button>
+            <div class="map-note">Las etiquetas ya están corregidas al <b>lado anatómico del paciente</b>: en la vista anterior el lado derecho aparece a su izquierda; en la posterior, a su derecha. Toque de nuevo una región para desmarcarla.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diagnóstico -->
+      <div class="subgrid cols-2" style="margin-top:.4rem">
+        <div class="field"><label for="dx_naturaleza">Diagnóstico — naturaleza de la lesión</label>
+          <textarea id="dx_naturaleza" placeholder="Tipo y características de la lesión (p. ej. herida cortante, fractura, contusión, quemadura…)"></textarea></div>
+        <div class="field"><label for="dx_sitio">Sitio anatómico (desde el mapa)</label>
+          <textarea id="dx_sitio" placeholder="Se completa automáticamente con las regiones marcadas; editable."></textarea></div>
+      </div>
+
+      <!-- Destino -->
+      <div class="group" style="margin-top:1.4rem">
+        <div class="group__title"><b>Destino del paciente</b></div>
+        <div class="opts dense">
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">1.</span> Abandono voluntario</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">2.</span> Alta (manejo ambulatorio)</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">3.</span> Fallecido en emergencia</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">4.</span> Fuga</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">5.</span> Hospitalizado</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">6.</span> Referido a otro establecimiento</span></label>
+          <label class="opt"><input type="checkbox" name="destino"><span><span class="num">7.</span> No especificado</span></label>
+        </div>
+      </div>
+
+      <!-- Firma y sello -->
+      <div class="group" style="margin-top:1.4rem">
+        <div class="group__title"><b>Médico que registra el formulario</b><em>firma y sello tomados de su ficha</em></div>
+        <div class="signrow">
+          <div class="signrow__fields">
+            <div class="field"><label for="medico">Nombre del médico</label><input id="medico" class="is-auto" readonly value="Dra. María Elena Cruz"></div>
+            <div class="field"><label for="jvpm">N.º JVPM</label><input id="jvpm" class="is-auto" readonly value="JVPM 12345"></div>
+          </div>
+          <div class="signcard" id="signCard" data-state="pending">
+            <span class="signcard__stamp" id="signStamp">Pendiente de firma</span>
+            <div class="signcard__sig">
+              <div class="sig-script">María Elena Cruz</div>
+              <div class="sig-cap">Firma del médico</div>
+            </div>
+            <div class="seal" aria-hidden="true">
+              <div class="seal__top">Hospital Avante · Colonia Médica</div>
+              <div class="seal__name">Dra. María Elena Cruz</div>
+              <div class="seal__mid">MÉDICO</div>
+              <div class="seal__bot">JVPM 12345</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+</main>
+
+<!-- Action bar -->
+<div class="actionbar">
+  <div class="actionbar__in">
+    <div class="viewswitch" role="group" aria-label="Cambiar vista">
+      <span class="viewswitch__label">Vista</span>
+      <button type="button" class="vsbtn is-active" id="vsFull" aria-pressed="true">Completa</button>
+      <button type="button" class="vsbtn" id="vsClean" aria-pressed="false">Limpia</button>
+    </div>
+    <span class="actionbar__msg" id="barMsg">Formulario epidemiológico · borrador no guardado</span>
+    <button class="btn btn--ghost" id="btnPrint">Imprimir</button>
+    <button class="btn btn--ghost" id="btnDraft">Guardar borrador</button>
+    <button class="btn btn--primary" id="btnSign">✓ Guardar y firmar</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ============ Body map data ============ */
+  /* image-left = ladoA, image-right = ladoB. Side labels corrected to patient anatomy:
+     anterior  -> A = Derecho,  B = Izquierdo
+     posterior -> A = Izquierdo, B = Derecho                                          */
+  var REGIONS = [
+    {id:'cranio', d:'M96 68 A24 42 0 0 1 144 68 Z', front:'Cráneo (frontal)', back:'Cráneo (posterior)'},
+    {id:'cara',   d:'M96 68 A24 42 0 0 0 144 68 Z', front:'Cara', back:'Nuca'},
+    {id:'neck',   pts:[[108,108],[132,108],[132,140],[108,140]], front:'Cuello (anterior)', back:'Cuello (posterior)'},
+    {id:'shoulderA', pts:[[74,140],[120,140],[120,170],[82,170]], front:'Hombro derecho', back:'Hombro izquierdo'},
+    {id:'shoulderB', pts:[[166,140],[120,140],[120,170],[158,170]], front:'Hombro izquierdo', back:'Hombro derecho'},
+    {id:'torax',   pts:[[82,170],[158,170],[153,255],[87,255]], front:'Tórax', back:'Región dorsal (espalda alta)'},
+    {id:'abdomen', pts:[[87,255],[153,255],[156,330],[84,330]], front:'Abdomen', back:'Región lumbar (espalda baja)'},
+    {id:'pelvis',  pts:[[84,330],[156,330],[153,395],[124,395],[120,360],[116,395],[87,395]], front:'Pelvis / genitales', back:'Glúteos / región sacra'},
+    {id:'brazoA',     pts:[[60,175],[80,172],[80,285],[62,288]], front:'Brazo derecho', back:'Brazo izquierdo'},
+    {id:'antebrazoA', pts:[[62,288],[80,285],[78,400],[60,403]], front:'Antebrazo derecho', back:'Antebrazo izquierdo'},
+    {id:'manoA',      pts:[[58,403],[78,400],[80,448],[56,452]], front:'Mano derecha', back:'Mano izquierda (dorso)'},
+    {id:'brazoB',     pts:[[180,175],[160,172],[160,285],[178,288]], front:'Brazo izquierdo', back:'Brazo derecho'},
+    {id:'antebrazoB', pts:[[178,288],[160,285],[162,400],[180,403]], front:'Antebrazo izquierdo', back:'Antebrazo derecho'},
+    {id:'manoB',      pts:[[182,403],[162,400],[160,448],[184,452]], front:'Mano izquierda', back:'Mano derecha (dorso)'},
+    {id:'musloA',   pts:[[88,395],[116,395],[112,505],[92,505]], front:'Muslo derecho', back:'Muslo izquierdo (posterior)'},
+    {id:'rodillaA', pts:[[92,505],[112,505],[110,535],[94,535]], front:'Rodilla derecha', back:'Hueco poplíteo izquierdo'},
+    {id:'piernaA',  pts:[[94,535],[110,535],[106,630],[98,630]], front:'Pierna derecha', back:'Pantorrilla izquierda'},
+    {id:'pieA',     pts:[[98,630],[106,630],[116,658],[90,658]], front:'Pie derecho', back:'Talón izquierdo'},
+    {id:'musloB',   pts:[[152,395],[124,395],[128,505],[150,505]], front:'Muslo izquierdo', back:'Muslo derecho (posterior)'},
+    {id:'rodillaB', pts:[[148,505],[128,505],[130,535],[146,535]], front:'Rodilla izquierda', back:'Hueco poplíteo derecho'},
+    {id:'piernaB',  pts:[[146,535],[130,535],[134,630],[142,630]], front:'Pierna izquierda', back:'Pantorrilla derecha'},
+    {id:'pieB',     pts:[[142,630],[134,630],[124,658],[150,658]], front:'Pie izquierdo', back:'Talón derecho'}
+  ];
+
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var selected = new Map(); // key "view:id" -> label
+
+  function ptsToPath(pts){
+    return 'M ' + pts.map(function(p){return p[0]+' '+p[1];}).join(' L ') + ' Z';
+  }
+
+  function buildFigure(view){
+    var svg = document.createElementNS(SVGNS,'svg');
+    svg.setAttribute('viewBox','0 0 240 680');
+    svg.setAttribute('class','figure');
+    svg.setAttribute('role','group');
+    svg.setAttribute('aria-label', view==='front' ? 'Vista anterior del cuerpo' : 'Vista posterior del cuerpo');
+    REGIONS.forEach(function(r){
+      var el = document.createElementNS(SVGNS,'path');
+      el.setAttribute('d', r.d ? r.d : ptsToPath(r.pts));
+      el.setAttribute('class','region');
+      var key = view + ':' + r.id;
+      var label = r[view];
+      el.setAttribute('data-key', key);
+      el.setAttribute('data-label', label);
+      el.setAttribute('role','checkbox');
+      el.setAttribute('aria-checked','false');
+      el.setAttribute('aria-label', label);
+      el.setAttribute('tabindex','0');
+      var t = document.createElementNS(SVGNS,'title');
+      t.textContent = label;
+      el.appendChild(t);
+      el.addEventListener('click', function(){ toggle(el, key, label); });
+      el.addEventListener('keydown', function(e){
+        if(e.key===' ' || e.key==='Enter'){ e.preventDefault(); toggle(el, key, label); }
+      });
+      svg.appendChild(el);
+    });
+    return svg;
+  }
+
+  function toggle(el, key, label){
+    if(selected.has(key)){
+      selected.delete(key);
+      el.classList.remove('is-selected');
+      el.setAttribute('aria-checked','false');
+    } else {
+      selected.set(key, label);
+      el.classList.add('is-selected');
+      el.setAttribute('aria-checked','true');
+    }
+    renderSites();
+  }
+
+  function renderSites(){
+    var chips = document.getElementById('siteChips');
+    var count = document.getElementById('siteCount');
+    var sitio = document.getElementById('dx_sitio');
+    count.textContent = selected.size;
+    count.setAttribute('data-n', String(selected.size));
+    chips.innerHTML = '';
+    if(selected.size === 0){
+      chips.innerHTML = '<div class="chips-empty">Toque una región del cuerpo para marcarla.</div>';
+    } else {
+      selected.forEach(function(label, key){
+        var chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.appendChild(document.createTextNode(label));
+        var x = document.createElement('button');
+        x.type = 'button';
+        x.setAttribute('aria-label','Quitar ' + label);
+        x.textContent = '×';
+        x.addEventListener('click', function(){
+          selected.delete(key);
+          var node = document.querySelector('.region[data-key="'+key+'"]');
+          if(node){ node.classList.remove('is-selected'); node.setAttribute('aria-checked','false'); }
+          renderSites();
+        });
+        chip.appendChild(x);
+        chips.appendChild(chip);
+      });
+    }
+    // auto-fill anatomical site field (editable)
+    var labels = [];
+    selected.forEach(function(label){ labels.push(label); });
+    sitio.value = labels.join('; ');
+  }
+
+  document.getElementById('figFront').appendChild(buildFigure('front'));
+  document.getElementById('figBack').appendChild(buildFigure('back'));
+  document.getElementById('clearMap').addEventListener('click', function(){
+    selected.clear();
+    document.querySelectorAll('.region.is-selected').forEach(function(n){
+      n.classList.remove('is-selected'); n.setAttribute('aria-checked','false');
+    });
+    renderSites();
+  });
+
+  /* ============ Glasgow helper ============ */
+  var glasgow = document.getElementById('glasgow');
+  var glasgowHint = document.getElementById('glasgowHint');
+  glasgow.addEventListener('input', function(){
+    var v = parseInt(glasgow.value, 10);
+    document.querySelectorAll('[data-glasgow]').forEach(function(n){ n.classList.remove('suggested'); });
+    glasgowHint.textContent = '';
+    if(isNaN(v)) return;
+    var cat = v >= 13 ? 'leve' : (v >= 9 ? 'moderado' : 'severo');
+    var node = document.querySelector('[data-glasgow="'+cat+'"]');
+    if(node){
+      node.classList.add('suggested');
+      glasgowHint.textContent = '→ ' + cat.charAt(0).toUpperCase() + cat.slice(1);
+    }
+  });
+
+  /* ============ Save / sign ============ */
+  var banner = document.getElementById('banner');
+  function showBanner(type, html){
+    banner.className = 'banner show banner--' + type;
+    banner.innerHTML = html;
+    banner.scrollIntoView({behavior:'smooth', block:'center'});
+  }
+
+  document.getElementById('btnDraft').addEventListener('click', function(){
+    document.getElementById('barMsg').textContent =
+      'Borrador guardado · ' + new Date().toLocaleString('es-SV');
+    showBanner('ok', '<b>Borrador guardado.</b>&nbsp;El registro no requiere firma todavía.');
+  });
+
+  document.getElementById('btnSign').addEventListener('click', function(){
+    // light required-field validation
+    var required = [
+      {id:'apellidos', name:'Apellidos'},
+      {id:'nombres', name:'Nombres'},
+      {id:'medico', name:'Nombre del médico'}
+    ];
+    var missing = [];
+    required.forEach(function(f){
+      var el = document.getElementById(f.id);
+      var wrap = el.closest('.field');
+      if(!el.value.trim()){ missing.push(f.name); if(wrap) wrap.classList.add('invalid'); }
+      else if(wrap){ wrap.classList.remove('invalid'); }
+    });
+    var mecChecked = document.querySelector('[data-required-group="mecanismo"] input:checked, [name="mec_explosion"]:checked, [name="mec_fuego"]:checked, [name="mec_intox"]:checked, [name="mec_mordedura"]:checked');
+    if(!mecChecked) missing.push('Mecanismo de la lesión (al menos una opción)');
+
+    if(missing.length){
+      showBanner('err', '<b>Faltan datos obligatorios para firmar:</b>&nbsp;' + missing.join(' · '));
+      return;
+    }
+    var medico = document.getElementById('medico').value.trim();
+    var ts = new Date().toLocaleString('es-SV');
+    var card = document.getElementById('signCard');
+    if(card) card.setAttribute('data-state','signed');
+    var stamp = document.getElementById('signStamp');
+    if(stamp) stamp.textContent = 'Firmado · ' + ts;
+    document.getElementById('barMsg').textContent = 'Registro firmado · ' + ts;
+    showBanner('ok', '<b>Registro guardado y firmado.</b>&nbsp;' + medico + ' — ' + ts + '. Copia disponible para la Unidad de Epidemiología.');
+  });
+
+  /* ============ Secciones colapsables ============ */
+  function setOpen(card, open){
+    var body = card.querySelector('.card__body');
+    var head = card.querySelector('.card__head');
+    if(open){
+      card.classList.remove('is-collapsed');
+      head.setAttribute('aria-expanded','true');
+      body.style.maxHeight = body.scrollHeight + 'px';
+      var done = function(e){
+        if(e.propertyName === 'max-height'){ body.style.maxHeight = 'none'; body.removeEventListener('transitionend', done); }
+      };
+      body.addEventListener('transitionend', done);
+    } else {
+      head.setAttribute('aria-expanded','false');
+      body.style.maxHeight = body.scrollHeight + 'px';            // fija altura real antes de animar
+      requestAnimationFrame(function(){
+        requestAnimationFrame(function(){
+          card.classList.add('is-collapsed');
+          body.style.maxHeight = '0px';
+        });
+      });
+    }
+  }
+  function toggleCard(card){ setOpen(card, card.classList.contains('is-collapsed')); }
+
+  Array.prototype.forEach.call(document.querySelectorAll('.card'), function(card){
+    var head = card.querySelector('.card__head');
+    head.addEventListener('click', function(){ toggleCard(card); });
+    head.addEventListener('keydown', function(e){
+      if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); toggleCard(card); }
+    });
+  });
+  document.getElementById('expandAll').addEventListener('click', function(){
+    Array.prototype.forEach.call(document.querySelectorAll('.card.is-collapsed'), function(c){ setOpen(c, true); });
+  });
+  document.getElementById('collapseAll').addEventListener('click', function(){
+    Array.prototype.forEach.call(document.querySelectorAll('.card:not(.is-collapsed)'), function(c){ setOpen(c, false); });
+  });
+
+  /* ============ Campos "Otro": textarea auto-expandible ============ */
+  function autoGrow(t){ if(!t) return; t.style.height='auto'; t.style.height = t.scrollHeight + 'px'; }
+  Array.prototype.forEach.call(document.querySelectorAll('textarea.grow'), function(t){
+    t.addEventListener('input', function(){ autoGrow(t); });
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('input[data-other]'), function(cb){
+    var reveal = document.getElementById(cb.getAttribute('data-other'));
+    if(!reveal) return;
+    var ta = reveal.querySelector('textarea.grow');
+    function sync(){
+      if(cb.checked){ reveal.classList.add('show'); autoGrow(ta); }
+      else { reveal.classList.remove('show'); if(ta){ ta.value=''; ta.style.height='auto'; } }
+    }
+    cb.addEventListener('change', sync);
+    sync();
+  });
+
+  /* ============ Fecha y hora — Historia (automática) ============ */
+  (function fillHistoria(){
+    var now = new Date();
+    var h = now.getHours();
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12; if(h12 === 0) h12 = 12;
+    var mm = ('0' + now.getMinutes()).slice(-2);
+    function set(id, v){ var el = document.getElementById(id); if(el) el.value = v; }
+    set('h_dia', now.getDate());
+    set('h_mes', now.getMonth() + 1);
+    set('h_anio', now.getFullYear());
+    set('h_hora', h12 + ':' + mm);
+    var box = document.querySelector('input[name="h_ampm"][value="' + ampm + '"]');
+    if(box) box.checked = true;
+  })();
+
+  /* ============ Conmutador de vista ============ */
+  var vsFull = document.getElementById('vsFull');
+  var vsClean = document.getElementById('vsClean');
+  function setView(clean){
+    document.body.classList.toggle('clean-view', clean);
+    vsFull.classList.toggle('is-active', !clean);
+    vsClean.classList.toggle('is-active', clean);
+    vsFull.setAttribute('aria-pressed', clean ? 'false' : 'true');
+    vsClean.setAttribute('aria-pressed', clean ? 'true' : 'false');
+  }
+  vsFull.addEventListener('click', function(){ setView(false); });
+  vsClean.addEventListener('click', function(){ setView(true); });
+  document.getElementById('btnPrint').addEventListener('click', function(){ window.print(); });
+
+})();
+</script>
+</body>
+</html>

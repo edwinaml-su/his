@@ -13,12 +13,7 @@
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@his/ui/components/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import {
   Dialog,
@@ -30,11 +25,7 @@ import {
 } from "@his/ui/components/dialog";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
-import {
-  DESTINO_LABELS,
-  TIPO_DIAGNOSTICO_LABELS,
-  type Destino,
-} from "@his/contracts";
+import { DESTINO_LABELS, TIPO_DIAGNOSTICO_LABELS, type Destino } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
 import { WorkflowBadge } from "../_components/workflow-badge";
 
@@ -84,9 +75,9 @@ export default function EceHistoriaClinicaDetailPage() {
       return;
     }
     setPinError(null);
-    // firmaId se resuelve en el server contra ece.firma_electronica;
-    // por ahora se pasa el PIN como observación hasta integrar el flujo PIN→firmaId.
-    firmar.mutate({ id: params.id, observacion: `pin:${pin.trim()}` });
+    // CC-0011 (item g): el server resuelve+valida el firmaId contra
+    // ece.firma_electronica a partir del PIN — ya no se embebe en observacion.
+    firmar.mutate({ id: params.id, pin: pin.trim() });
   }
 
   function handlePinClose() {
@@ -107,9 +98,7 @@ export default function EceHistoriaClinicaDetailPage() {
     );
   }
   if (!query.data) {
-    return (
-      <p className="text-sm text-muted-foreground">Historia clínica no encontrada.</p>
-    );
+    return <p className="text-sm text-muted-foreground">Historia clínica no encontrada.</p>;
   }
 
   const hc = query.data;
@@ -168,9 +157,7 @@ export default function EceHistoriaClinicaDetailPage() {
             {hc.destino && (
               <div>
                 <p className="font-medium text-muted-foreground">Destino</p>
-                <p className="mt-0.5">
-                  {DESTINO_LABELS[hc.destino as Destino] ?? hc.destino}
-                </p>
+                <p className="mt-0.5">{DESTINO_LABELS[hc.destino as Destino] ?? hc.destino}</p>
               </div>
             )}
           </CardContent>
@@ -362,8 +349,8 @@ export default function EceHistoriaClinicaDetailPage() {
           <DialogHeader>
             <DialogTitle>Firma electrónica</DialogTitle>
             <DialogDescription id="pin-desc">
-              Ingrese su PIN de firma para suscribir esta historia clínica.
-              Esta acción no se puede deshacer (NTEC Art. 7).
+              Ingrese su PIN de firma para suscribir esta historia clínica. Esta acción no se puede
+              deshacer (NTEC Art. 7).
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleFirmar} noValidate>
