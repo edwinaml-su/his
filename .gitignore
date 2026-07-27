@@ -40,7 +40,7 @@ test-results/
 *.swo
 
 # Claude Code (local agent settings — machine/user specific, not project)
-.claude/
+.claude/settings.local.json
 
 # Archivos temporales con credenciales para configuración manual de Vercel/etc.
 # (se generan con node, se copian al dashboard, y se borran)
