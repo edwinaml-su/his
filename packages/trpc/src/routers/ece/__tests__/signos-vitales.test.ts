@@ -81,6 +81,17 @@ vi.mock("../../ece/rls-context", () => ({
   ) => fn(prisma),
 }));
 
+// CC-0012 — la resolución de cuenta (public."PatientAccount") corre en su
+// propia transacción `withTenantContext`. Mock análogo: ejecuta el callback
+// directamente con el prisma mock, sin abrir transacciones reales.
+vi.mock("../../rls-context", () => ({
+  withTenantContext: async (
+    prisma: PrismaClient,
+    _tenant: { userId: string; organizationId: string },
+    fn: (tx: PrismaClient) => Promise<unknown>,
+  ) => fn(prisma),
+}));
+
 // ─── Importar router DESPUÉS del mock ────────────────────────────────────────
 import { eceSignosVitalesRouter } from "../signos-vitales.router";
 
@@ -169,11 +180,15 @@ describe("eceSignosVitalesCreateSchema — validación de rangos", () => {
 });
 
 describe("eceSignosVitalesRouter — create", () => {
-  it("6. happy path: retorna id cuando la inserción es exitosa", async () => {
+  it("6. happy path: retorna id cuando la inserción es exitosa (anclado a episodioId)", async () => {
     const ctx = buildCtx(["NURSE"]);
     const newId = uuid();
 
-    // Mockear $queryRaw para la INSERT ... RETURNING id
+    // 1ª $queryRaw: resolveEpisodioInfo (paciente ece + ACL público del episodio).
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { paciente_id_ece: uuid2(), public_patient_id: null, public_encounter_id: null },
+    ]);
+    // 2ª $queryRaw: INSERT ... RETURNING id
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       { id: newId },
     ]);
@@ -181,7 +196,7 @@ describe("eceSignosVitalesRouter — create", () => {
     const caller = eceSignosVitalesRouter.createCaller(ctx as never);
 
     const result = await caller.create({
-      pacienteId: uuid(),
+      episodioId: uuid(),
       presionSistolica: 120,
       presionDiastolica: 80,
     });
@@ -328,11 +343,14 @@ describe("eceSignosVitalesRouter.create — CC-0007 derivados server-side", () =
     const ctx = buildCtx(["NURSE"]);
     const newId = uuid();
 
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { paciente_id_ece: uuid2(), public_patient_id: null, public_encounter_id: null },
+    ]);
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: newId }]);
 
     const caller = eceSignosVitalesRouter.createCaller(ctx as never);
     const result = await caller.create({
-      pacienteId: uuid(),
+      episodioId: uuid(),
       glasgowOcular: 3,
       glasgowVerbal: 4,
       glasgowMotor: 5,
@@ -340,12 +358,11 @@ describe("eceSignosVitalesRouter.create — CC-0007 derivados server-side", () =
 
     expect(result.id).toBe(newId);
 
-    // Verificar que el $queryRaw fue llamado con el glasgow_total derivado = 3+4+5=12.
-    // El tagged template literal de Prisma hace que los args lleguen como array de valores.
-    // Inspeccionamos el string de la llamada para confirmar que 12 aparece en los valores.
-    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0];
-    // El template literal incluye los valores como argumentos posicionales.
-    // Buscamos el valor 12 (glasgowTotal) entre los args del tag template.
+    // Verificar que el $queryRaw del INSERT (2ª llamada) fue invocado con el
+    // glasgow_total derivado = 3+4+5=12. El tagged template literal de Prisma
+    // hace que los args lleguen como array de valores; inspeccionamos el
+    // string de la llamada para confirmar que 12 aparece entre los valores.
+    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[1];
     const values = rawCall!.slice(1); // el primer arg es el TemplateStringsArray
     expect(values).toContain(12);
   });
@@ -354,11 +371,14 @@ describe("eceSignosVitalesRouter.create — CC-0007 derivados server-side", () =
     const ctx = buildCtx(["NURSE"]);
     const newId = uuid2();
 
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { paciente_id_ece: uuid2(), public_patient_id: null, public_encounter_id: null },
+    ]);
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: newId }]);
 
     const caller = eceSignosVitalesRouter.createCaller(ctx as never);
     const result = await caller.create({
-      pacienteId: uuid(),
+      episodioId: uuid(),
       perimetroCintura: 90,
       tallaCm: 170,
     });
@@ -366,9 +386,150 @@ describe("eceSignosVitalesRouter.create — CC-0007 derivados server-side", () =
     expect(result.id).toBe(newId);
 
     // ict = round(90/170 * 1000) / 1000 = 0.529
-    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0];
+    const rawCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[1];
     const values = rawCall!.slice(1);
     const ict = Math.round((90 / 170) * 1000) / 1000;
     expect(values).toContain(ict);
+  });
+});
+
+// ─── CC-0012 — módulo transversal (cuenta activa) ────────────────────────────
+
+describe("eceSignosVitalesRouter.create — CC-0012 ancla por cuentaId", () => {
+  it("21. create por cuentaId (sin episodioId) resuelve paciente/episodio y persiste cuenta_id", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const newId = uuid();
+    const cuentaId = uuid2();
+    const publicPatientId = "00000000-0000-4000-8000-000000000003";
+    const episodioResuelto = "00000000-0000-4000-8000-000000000004";
+    const pacienteEceId = "00000000-0000-4000-8000-000000000005";
+
+    // Fase 1 — withTenantContext: resolver la cuenta (patientId/encounterId).
+    (ctx.prisma.patientAccount.findFirst as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: cuentaId,
+      patientId: publicPatientId,
+      encounterId: null,
+    });
+
+    // Fase 2 — ece: 1ª $queryRaw resuelve episodio abierto por paciente;
+    // 2ª $queryRaw resuelve ece.paciente.id por ACL público;
+    // 3ª $queryRaw es el INSERT.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ id: episodioResuelto }]) // resolveEpisodioAbiertoDesdeCuenta (fallback paciente)
+      .mockResolvedValueOnce([{ id: pacienteEceId }]) // resolvePacienteEceId
+      .mockResolvedValueOnce([{ id: newId }]); // INSERT
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      cuentaId,
+      presionSistolica: 120,
+      presionDiastolica: 80,
+    });
+
+    expect(result.id).toBe(newId);
+    expect(result.episodioId).toBe(episodioResuelto);
+    expect(result.cuentaId).toBe(cuentaId);
+
+    const insertCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[2];
+    const values = insertCall!.slice(1);
+    expect(values).toContain(cuentaId);
+    expect(values).toContain(pacienteEceId);
+  });
+
+  it("22. create por cuentaId inexistente lanza NOT_FOUND", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    (ctx.prisma.patientAccount.findFirst as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null);
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    await expect(caller.create({ cuentaId: uuid2(), presionSistolica: 120 })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
+  it("23. create por episodioId (sin cuentaId) auto-vincula la cuenta activa del paciente", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const newId = uuid();
+    const episodioId = uuid();
+    const publicPatientId = "00000000-0000-4000-8000-000000000006";
+    const publicEncounterId = "00000000-0000-4000-8000-000000000007";
+    const pacienteEceId = "00000000-0000-4000-8000-000000000008";
+    const cuentaResuelta = "00000000-0000-4000-8000-000000000009";
+
+    // Fase 2 — ece: 1ª $queryRaw resuelve info del episodio (paciente + ACL);
+    // 2ª $queryRaw es el INSERT.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        {
+          paciente_id_ece: pacienteEceId,
+          public_patient_id: publicPatientId,
+          public_encounter_id: publicEncounterId,
+        },
+      ])
+      .mockResolvedValueOnce([{ id: newId }]) // INSERT
+      .mockResolvedValueOnce(0 as never); // $executeRaw del UPDATE cuenta_id (fase 3)
+
+    // Fase 3 — withTenantContext: resolver cuenta activa por encounterId.
+    (ctx.prisma.patientAccount.findFirst as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: cuentaResuelta,
+      patientId: publicPatientId,
+      encounterId: publicEncounterId,
+    });
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.create({ episodioId, presionSistolica: 120 });
+
+    expect(result.id).toBe(newId);
+    expect(result.cuentaId).toBe(cuentaResuelta);
+  });
+
+  it("24. create persiste fórmula obstétrica (G·P·P·A·V), pesoLb, tallaFt y fppActivo en el INSERT", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const newId = uuid();
+
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([
+        { paciente_id_ece: uuid2(), public_patient_id: null, public_encounter_id: null },
+      ])
+      .mockResolvedValueOnce([{ id: newId }]);
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.create({
+      episodioId: uuid(),
+      goGestas: 2,
+      goPartosTermino: 1,
+      goPartosPretermino: 0,
+      goAbortos: 1,
+      goVivos: 1,
+      pesoLb: 154,
+      tallaFt: 5.58,
+      fppActivo: true,
+    });
+
+    expect(result.id).toBe(newId);
+    const insertCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[1];
+    const values = insertCall!.slice(1);
+    expect(values).toContain(2); // goGestas
+    expect(values).toContain(154); // pesoLb
+    expect(values).toContain(5.58); // tallaFt
+    expect(values).toContain(true); // fppActivo
+  });
+});
+
+describe("eceSignosVitalesRouter — list", () => {
+  it("25. list acepta filtro solo por cuentaId (sin episodioId)", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+    const result = await caller.list({ cuentaId: uuid2() });
+
+    expect(result.items).toEqual([]);
+  });
+
+  it("26. list rechaza BAD_REQUEST si no viene episodioId ni cuentaId", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    const caller = eceSignosVitalesRouter.createCaller(ctx as never);
+
+    await expect(caller.list({})).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

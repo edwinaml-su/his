@@ -55,6 +55,13 @@ export default defineConfig({
           "../../packages/contracts/src/schemas/prevent.ts",
         ),
       },
+      {
+        find: "@his/contracts/validators",
+        replacement: path.resolve(
+          __dirname,
+          "../../packages/contracts/src/validators/index.ts",
+        ),
+      },
       // Bare package alias (catches all other @his/contracts imports).
       {
         find: "@his/contracts",

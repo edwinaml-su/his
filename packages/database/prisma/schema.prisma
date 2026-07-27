@@ -5318,7 +5318,7 @@ model EceHistoriaClinica {
 model EceSignosVitales {
   id                     String   @id @default(uuid()) @db.Uuid
   instanciaId            String?  @map("instancia_id") @db.Uuid
-  episodioId             String   @map("episodio_id") @db.Uuid
+  episodioId             String?  @map("episodio_id") @db.Uuid
   pacienteId             String?  @map("paciente_id") @db.Uuid
   fechaHoraToma          DateTime @default(now()) @map("fecha_hora_toma") @db.Timestamptz()
   presionSistolica       Int?     @map("presion_sistolica")
@@ -5356,12 +5356,29 @@ model EceSignosVitales {
   /// CC-0007 RF-06 — gineco-obstétrico (solo paciente femenina en edad fértil)
   fur                      DateTime? @db.Date
   fpp                      DateTime? @db.Date
+  /// CC-0012 — módulo transversal: ancla a la cuenta activa del paciente
+  /// (public."PatientAccount", cross-schema — sin relación Prisma, mismo
+  /// patrón que otras FK ece.* → public.* del proyecto). Toda toma queda
+  /// vinculada a la cuenta, con o sin episodio abierto.
+  cuentaId                 String?  @map("cuenta_id") @db.Uuid
+  /// CC-0012 — fórmula obstétrica (G·P·P·A·V), obligatoria si paciente femenina.
+  goGestas                 Int?     @map("go_gestas") @db.SmallInt
+  goPartosTermino          Int?     @map("go_partos_termino") @db.SmallInt
+  goPartosPretermino       Int?     @map("go_partos_pretermino") @db.SmallInt
+  goAbortos                Int?     @map("go_abortos") @db.SmallInt
+  goVivos                  Int?     @map("go_vivos") @db.SmallInt
+  /// CC-0012 — representación alterna capturada (conversión bidireccional UI).
+  pesoLb                   Decimal? @map("peso_lb") @db.Decimal(6, 2)
+  tallaFt                  Decimal? @map("talla_ft") @db.Decimal(5, 2)
+  /// CC-0012 — estado del interruptor FPP (Naegele) del mockup avante7 al guardar.
+  fppActivo                Boolean? @map("fpp_activo")
 
-  episodio      EceEpisodioAtencion @relation(fields: [episodioId], references: [id])
+  episodio      EceEpisodioAtencion? @relation(fields: [episodioId], references: [id])
   registradoPor EcePersonalSalud    @relation("SVRegistradoPor", fields: [registradoPorId], references: [id])
   triajes       EceTriaje[]
 
   @@index([episodioId, fechaHoraToma])
+  @@index([cuentaId])
   @@map("signos_vitales")
   @@schema("ece")
 }
