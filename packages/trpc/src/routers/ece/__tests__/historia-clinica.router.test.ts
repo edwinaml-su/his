@@ -3,20 +3,25 @@
  *
  * Estrategia: Vitest + vitest-mock-extended. Cero I/O real.
  * withEceContext mockeado para ejecutar el callback con el prisma mock.
+ * applyTenantContext (rls-context) NO se mockea — solo llama $executeRawUnsafe,
+ * que vitest-mock-extended automockea a undefined sin romper el await.
  *
- * Casos cubiertos (12 tests):
+ * Casos cubiertos:
  *   HC-001/002 — list happy path y nextCursor
  *   HC-001/002 — get: shape completo, NOT_FOUND, patient null, diagnosticos JSONB
  *   HC-002     — create: happy path con columnas reales de BD
  *   HC-002     — update: solo en borrador; rechaza firmado
- *   HC-002     — firmar: transición borrador→firmado; requiere firmaId
+ *   CC-0011 a  — get: complemento por diagnóstico sobrevive el round-trip
+ *   CC-0011 b  — create: deriva tipoConsulta (subsecuente si hay HC previa; sino primera_vez)
+ *   CC-0011 d  — create: nombrePila/esLgbtiq actualizan Patient cuando vienen
+ *   CC-0011 g  — firmar: contrato real con PIN (ya no exige firmaId)
+ *   CC-0011 c  — firmar: materializa solicitud_estudio agrupada por área
  *   HC-002     — validar: transición firmado→validado
  *   HC-004     — icd10DiagnosticoSchema: rechaza código inválido
  *
  * @QA E2E pendiente:
  *   - Flujo create → firmar → validar con rol PHYSICIAN real.
  *   - NURSE puede get/list pero no create/update (403).
- *   - firmar sin firmaId devuelve 400.
  *   - UPDATE post-firma rechazado por trigger BD (HC-005).
  */
 import { describe, it, expect, vi } from "vitest";
@@ -34,6 +39,15 @@ vi.mock("../../ece/rls-context", () => ({
   ) => fn(prisma),
 }));
 
+// PIN → firmaId (CC-0011 item g): argon2 real reemplazado por stub determinista,
+// mismo patrón que solicitud-estudio.router.test.ts / hoja-ingreso.router.test.ts.
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn(async () => true),
+    hash: vi.fn(async () => "$argon2id$stub"),
+  },
+}));
+
 import {
   eceHistoriaClinicaRouter,
   historiaClinicaGetOutput,
@@ -45,6 +59,20 @@ const ID1 = "00000000-0000-4000-8000-000000000001";
 const ID2 = "00000000-0000-4000-8000-000000000002";
 const ID3 = "00000000-0000-4000-8000-000000000003";
 const FIRMA_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const PERSONAL_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const PUBLIC_PATIENT_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+/** Mockea las 2 primeras $queryRaw de `create`: findPersonal + episodio (paciente_id/public_patient_id). */
+function mockCreatePreamble(
+  prisma: ReturnType<typeof mockDeep<PrismaClient>>,
+  opts: { publicPatientId?: string | null } = {},
+) {
+  (prisma.$queryRaw as ReturnType<typeof vi.fn>)
+    .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // findPersonal
+    .mockResolvedValueOnce([
+      { paciente_id: ID2, public_patient_id: opts.publicPatientId ?? PUBLIC_PATIENT_ID },
+    ]); // episodio → paciente_id + public_patient_id
+}
 
 function buildCtx(roleCodes: string[] = ["PHYSICIAN"]) {
   const prisma = mockDeep<PrismaClient>();
@@ -253,6 +281,29 @@ describe("eceHistoriaClinicaRouter.get", () => {
       tipo: "DEFINITIVO",
     });
   });
+
+  it("6b. CC-0011 (item a) — complemento por diagnóstico sobrevive el round-trip", async () => {
+    const ctx = buildCtx();
+    const diagJson = JSON.stringify([
+      { codigo: "BA00", descripcion: "Hipertensión", tipo: "COMPLEMENTARIO", complemento: "CONTROLADA" },
+      { codigo: "J00", descripcion: "Rinofaringitis", tipo: "DEFINITIVO" },
+    ]);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseGetRow({ diagnosticos: diagJson }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    const result = await caller.get({ id: ID1 });
+
+    expect(result.diagnosticos[0]).toEqual({
+      codigo: "BA00",
+      descripcion: "Hipertensión",
+      tipo: "COMPLEMENTARIO",
+      complemento: "CONTROLADA",
+    });
+    // Sin complemento en el JSONB original → no se agrega la clave (undefined).
+    expect(result.diagnosticos[1]!.complemento).toBeUndefined();
+  });
 });
 
 // ─── Tests: create ────────────────────────────────────────────────────────────
@@ -260,6 +311,7 @@ describe("eceHistoriaClinicaRouter.get", () => {
 describe("eceHistoriaClinicaRouter.create", () => {
   it("7. crea historia con columnas reales y estado borrador", async () => {
     const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
     (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
       baseHistoriaRow({ tipo_consulta: "primera_vez", motivo_consulta: "Fiebre y tos" }),
     ]);
@@ -274,6 +326,87 @@ describe("eceHistoriaClinicaRouter.create", () => {
     expect(result.estado_registro).toBe("borrador");
     expect(result.tipo_consulta).toBe("primera_vez");
     expect(result.motivo_consulta).toBe("Fiebre y tos");
+  });
+
+  it("CC-0011 (item b) — deriva 'primera_vez' cuando no hay HC previa y tipoConsulta se omite", async () => {
+    const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([]) // previaRows: sin HC previa
+      .mockResolvedValueOnce([baseHistoriaRow({ tipo_consulta: "primera_vez" })]); // INSERT ... RETURNING
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.create({ episodioId: ID2, motivoConsulta: "Primera consulta" });
+
+    const insertCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[3]![0] as {
+      values: unknown[];
+    };
+    expect(insertCall.values[2]).toBe("primera_vez");
+  });
+
+  it("CC-0011 (item b) — deriva 'subsecuente' cuando ya existe HC previa no anulada", async () => {
+    const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ id: ID3 }]) // previaRows: hay HC previa
+      .mockResolvedValueOnce([baseHistoriaRow({ tipo_consulta: "subsecuente" })]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.create({ episodioId: ID2, motivoConsulta: "Control" });
+
+    const insertCall = (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[3]![0] as {
+      values: unknown[];
+    };
+    expect(insertCall.values[2]).toBe("subsecuente");
+  });
+
+  it("CC-0011 (item b) — respeta tipoConsulta explícito sin consultar HC previas", async () => {
+    const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ tipo_consulta: "subsecuente" }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.create({ episodioId: ID2, tipoConsulta: "subsecuente", motivoConsulta: "Control" });
+
+    // Solo 3 llamadas $queryRaw: findPersonal, episodio, INSERT — sin query de HC previa.
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(3);
+  });
+
+  it("CC-0011 (item d) — nombrePila/esLgbtiq actualizan Patient cuando vienen en el input", async () => {
+    const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma, { publicPatientId: PUBLIC_PATIENT_ID });
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ tipo_consulta: "primera_vez" }),
+    ]);
+    (ctx.prisma.patient.update as ReturnType<typeof vi.fn>).mockResolvedValue({ id: PUBLIC_PATIENT_ID } as never);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.create({
+      episodioId: ID2,
+      tipoConsulta: "primera_vez",
+      nombrePila: "Alex",
+      esLgbtiq: true,
+    });
+
+    expect(ctx.prisma.patient.update).toHaveBeenCalledWith({
+      where: { id: PUBLIC_PATIENT_ID },
+      data: { preferredName: "Alex", esLgbtiq: true },
+    });
+  });
+
+  it("CC-0011 (item d) — NO toca Patient cuando nombrePila/esLgbtiq no vienen", async () => {
+    const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ tipo_consulta: "primera_vez" }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.create({ episodioId: ID2, tipoConsulta: "primera_vez" });
+
+    expect(ctx.prisma.patient.update).not.toHaveBeenCalled();
   });
 });
 
@@ -308,31 +441,125 @@ describe("eceHistoriaClinicaRouter.update", () => {
 // ─── Tests: firmar ────────────────────────────────────────────────────────────
 
 describe("eceHistoriaClinicaRouter.firmar", () => {
-  it("10. transición borrador → firmado requiere firmaId", async () => {
+  /** Fila de FirmarFetchRow — columnas leídas al inicio de `firmar`. */
+  function firmarFetchRow(overrides: Record<string, unknown> = {}) {
+    return {
+      estado_registro: "borrador",
+      instancia_id: null,
+      episodio_id: ID2,
+      motivo_consulta: null,
+      enfermedad_actual: null,
+      plan_manejo: null,
+      diagnosticos: [{ codigo: "BA00", descripcion: "Hipertensión", tipo: "COMPLEMENTARIO" }],
+      ordenes_examenes: null,
+      ...overrides,
+    };
+  }
+
+  /** Mockea findPersonal + findFirma dentro de verifyPinOrThrow (2 $queryRaw). */
+  function mockVerifyPin(prisma: ReturnType<typeof buildCtx>["prisma"]) {
+    (prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // findPersonal
+      .mockResolvedValueOnce([
+        { id: FIRMA_ID, pin_hash: "hash", failed_attempts: 0, locked_until: null, revoked_at: null },
+      ]); // findFirma
+  }
+
+  it("CC-0011 (item g) — rechaza PIN con formato inválido (Zod, sin llegar a BD)", async () => {
     const ctx = buildCtx();
     const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
     await expect(
-      caller.firmar({ id: ID1 }),
+      caller.firmar({ id: ID1, pin: "abc" }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(ctx.prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
-  it("11. happy path: borrador → firmado con firmaId", async () => {
+  it("CC-0011 (item g) — happy path: borrador → firmado con PIN (ya no exige firmaId)", async () => {
     const ctx = buildCtx();
-    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
-      // RN-03: firmar exige ≥1 diagnóstico COMPLEMENTARIO en el SELECT de estado.
-      .mockResolvedValueOnce([
-        {
-          estado_registro: "borrador",
-          instancia_id: null,
-          diagnosticos: [{ codigo: "BA00", descripcion: "Hipertensión", tipo: "COMPLEMENTARIO" }],
-        },
-      ])
-      .mockResolvedValueOnce([baseHistoriaRow({ estado_registro: "firmado" })]);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([firmarFetchRow()]);
+    mockVerifyPin(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ estado_registro: "firmado" }),
+    ]);
 
     const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
-    const result = await caller.firmar({ id: ID1, firmaId: FIRMA_ID });
+    const result = await caller.firmar({ id: ID1, pin: "123456" });
 
     expect(result.estado_registro).toBe("firmado");
+  });
+
+  it("CC-0011 (item c) — materializa una solicitud_estudio por área presente en ordenesExamenes", async () => {
+    const ctx = buildCtx();
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      firmarFetchRow({
+        ordenes_examenes: [
+          { seccion: "Hematología y coagulación", examen: "Hemograma completo", cantidad: 1 },
+          { seccion: "Rayos X", examen: "Tórax PA y lateral", cantidad: 1 },
+        ],
+      }),
+    ]);
+    mockVerifyPin(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ estado_registro: "firmado" }),
+    ]);
+
+    // Resolución de área por examen vía catálogo LIS (ORM, no $queryRaw).
+    (ctx.prisma.labTest.findFirst as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ panel: { area: "LABORATORIO" } })
+      .mockResolvedValueOnce({ panel: { area: "RADIOLOGIA" } });
+
+    // tipo_documento SOL_EST + estado inicial.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { tipo_doc_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", estado_inicial_id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+    ]);
+    // paciente_id del episodio.
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { paciente_id: "ffffffff-ffff-4fff-8fff-ffffffffffff" },
+    ]);
+    // documento_instancia INSERT — uno por grupo (laboratorio, imagenologia).
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce([{ id: "11111111-1111-4111-8111-111111111111" }])
+      .mockResolvedValueOnce([{ id: "22222222-2222-4222-8222-222222222222" }]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.firmar({ id: ID1, pin: "123456" });
+
+    // 2 solicitudes (laboratorio + imagenologia) → 2 INSERT a ece.solicitud_estudio.
+    const executeCalls = (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mock.calls;
+    const solicitudInserts = executeCalls.filter((c) =>
+      String((c[0] as { sql?: string; strings?: string[] })?.strings?.join("") ?? c[0]).includes(
+        "ece.solicitud_estudio",
+      ),
+    );
+    expect(solicitudInserts).toHaveLength(2);
+  });
+
+  it("CC-0011 (item c) — no materializa nada cuando ordenesExamenes está vacío/null", async () => {
+    const ctx = buildCtx();
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([firmarFetchRow()]);
+    mockVerifyPin(ctx.prisma);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      baseHistoriaRow({ estado_registro: "firmado" }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await caller.firmar({ id: ID1, pin: "123456" });
+
+    // Solo 4 $queryRaw: fetch, findPersonal, findFirma, UPDATE — nada de materialización.
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(4);
+    expect(ctx.prisma.labTest.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("CC-0011 (item c) — idempotencia: un segundo firmar sobre la misma HC ya firmada falla con CONFLICT antes de materializar", async () => {
+    const ctx = buildCtx();
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      firmarFetchRow({ estado_registro: "firmado" }),
+    ]);
+
+    const caller = eceHistoriaClinicaRouter.createCaller(ctx as never);
+    await expect(caller.firmar({ id: ID1, pin: "123456" })).rejects.toMatchObject({ code: "CONFLICT" });
+    // El guard de estado corta antes de llegar a verifyPinOrThrow/materialización.
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -425,6 +652,7 @@ describe("historiaClinicaGetOutput (Zod schema)", () => {
 describe("eceHistoriaClinicaRouter.create — CC-0007 campos jsonb round-trip", () => {
   it("13. create con antecedentesEstructurados ejecuta el INSERT y retorna la fila", async () => {
     const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
 
     const antecedentesEstructurados = {
       alergias:   { estado: "TIENE" as const, items: ["Penicilina"] },
@@ -447,14 +675,15 @@ describe("eceHistoriaClinicaRouter.create — CC-0007 campos jsonb round-trip", 
       antecedentesEstructurados,
     });
 
-    // El INSERT se ejecutó (router llama $queryRaw para INSERT...RETURNING)
-    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    // El INSERT se ejecutó (router llama $queryRaw para findPersonal + episodio + INSERT...RETURNING)
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(3);
     // La fila retornada incluye el campo CC-0007
     expect(result.antecedentes_estructurados).toEqual(antecedentesEstructurados);
   });
 
   it("14. create con planItems ejecuta el INSERT y retorna la fila", async () => {
     const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
     const planItems = [
       { orden: 1, texto: "Hidratación IV" },
       { orden: 2, texto: "Analgesia" },
@@ -471,12 +700,13 @@ describe("eceHistoriaClinicaRouter.create — CC-0007 campos jsonb round-trip", 
       planItems,
     });
 
-    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(3);
     expect(result.plan_items).toEqual(planItems);
   });
 
   it("15. create con procedimientosCpt ejecuta el INSERT y retorna la fila", async () => {
     const ctx = buildCtx();
+    mockCreatePreamble(ctx.prisma);
     const procedimientosCpt = [
       { codigo: "99213", descripcion: "Consulta de seguimiento" },
     ];
@@ -492,7 +722,7 @@ describe("eceHistoriaClinicaRouter.create — CC-0007 campos jsonb round-trip", 
       procedimientosCpt,
     });
 
-    expect(ctx.prisma.$queryRaw).toHaveBeenCalledOnce();
+    expect(ctx.prisma.$queryRaw).toHaveBeenCalledTimes(3);
     expect(result.procedimientos_cpt).toEqual(procedimientosCpt);
   });
 

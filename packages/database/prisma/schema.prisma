@@ -2228,12 +2228,18 @@ enum ResultFlag {
 }
 
 /// TDR §17.1 — panel de lab (agrupa tests; ej. hemograma).
+/// CC-0011 — `area` + `displayOrder` habilitan el catálogo de exámenes
+/// parametrizable (lab/radiología/cardiología) consumido por historia clínica.
 model LabPanel {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String?  @db.Uuid /// null = catálogo global.
   code           String   @db.VarChar(20) /// LOINC.
   name           String   @db.VarChar(200)
   description    String?  @db.Text
+  /// CC-0011 — sección del catálogo: LABORATORIO | RADIOLOGIA | CARDIOLOGIA.
+  area           String   @default("LABORATORIO") @db.VarChar(20)
+  /// CC-0011 — orden de aparición dentro del área (mockup avante2).
+  displayOrder   Int      @default(0)
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @db.Timestamptz()
   updatedAt      DateTime @updatedAt @db.Timestamptz()
@@ -2241,6 +2247,7 @@ model LabPanel {
   tests LabTest[]
 
   @@index([code])
+  @@index([area, active])
   @@schema("public")
 }
 
@@ -2257,6 +2264,8 @@ model LabTest {
   refRangeHigh   Decimal?     @db.Decimal(18, 6)
   refRangeText   String?      @db.VarChar(200) /// para resultados cualitativos.
   critical       Boolean      @default(false)
+  /// CC-0011 — orden de aparición dentro del panel (mockup avante2).
+  displayOrder   Int          @default(0)
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now()) @db.Timestamptz()
   updatedAt      DateTime     @updatedAt @db.Timestamptz()

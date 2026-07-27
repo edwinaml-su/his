@@ -31,6 +31,15 @@ vi.mock("../../ece/rls-context", () => ({
   ),
 }));
 
+// CC-0011 (item g) — firmar ahora valida PIN vía argon2id (findPersonal/findFirma
+// dentro de verifyPinOrThrow). Mismo stub que solicitud-estudio.router.test.ts.
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn(async () => true),
+    hash: vi.fn(async () => "$argon2id$stub"),
+  },
+}));
+
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const HC_ID = "aaaaaaaa-0000-0000-0000-000000000001";
@@ -38,6 +47,7 @@ const PACIENTE_ID = "bbbbbbbb-0000-0000-0000-000000000002";
 const EPISODIO_ID = "cccccccc-0000-0000-0000-000000000003";
 const FIRMA_ID = "dddddddd-0000-0000-0000-000000000004";
 const INSTANCIA_ID = "eeeeeeee-0000-0000-0000-000000000005";
+const PERSONAL_ID = "ffffffff-0000-0000-0000-000000000006";
 
 // Row shape returned by get procedure (HistoriaClinicaGetOutput) — CC-0001:
 // `disposicion` se proyecta como `destino`; se añadió `analisisClinico`.
@@ -324,18 +334,20 @@ describe("eceHistoriaClinicaRouter", () => {
   // ─── firmar ────────────────────────────────────────────────────────────────
 
   describe("firmar", () => {
-    it("lanza BAD_REQUEST si no se proporciona firmaId", async () => {
+    it("lanza BAD_REQUEST si no se proporciona pin (CC-0011: ya no exige firmaId)", async () => {
       const ctx = makeCtx(["MC"], []);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
+      // @ts-expect-error pin es requerido por el nuevo contrato (item g)
       await expect(caller.firmar({ id: HC_ID })).rejects.toMatchObject({
         code: "BAD_REQUEST",
       });
     });
 
-    it("avanza de borrador a firmado con firmaId", async () => {
+    it("avanza de borrador a firmado con PIN (CC-0011: firmaId se resuelve server-side)", async () => {
       const firmadoRaw = { ...SAMPLE_HC_RAW, estado_registro: "firmado" };
-      // 1ra: SELECT estado+diagnosticos (RN-03); 2da: UPDATE RETURNING
+      // 1ra: SELECT estado+diagnosticos (RN-03); 2da/3ra: verifyPinOrThrow
+      // (findPersonal/findFirma); 4ta: UPDATE RETURNING.
       const ctx = makeCtx(
         ["MC"],
         [
@@ -343,19 +355,23 @@ describe("eceHistoriaClinicaRouter", () => {
             {
               estado_registro: "borrador",
               instancia_id: INSTANCIA_ID,
+              episodio_id: EPISODIO_ID,
               motivo_consulta: null,
               enfermedad_actual: null,
               plan_manejo: null,
               diagnosticos: DIAGNOSTICOS_RN03,
+              ordenes_examenes: null,
             },
           ],
+          [{ id: PERSONAL_ID }],
+          [{ id: FIRMA_ID, pin_hash: "hash", failed_attempts: 0, locked_until: null, revoked_at: null }],
           [firmadoRaw],
         ],
         makeExecuteRaw(),
       );
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
-      const result = await caller.firmar({ id: HC_ID, firmaId: FIRMA_ID });
+      const result = await caller.firmar({ id: HC_ID, pin: "123456" });
 
       expect(result.estado_registro).toBe("firmado");
     });
@@ -368,12 +384,14 @@ describe("eceHistoriaClinicaRouter", () => {
             {
               estado_registro: "borrador",
               instancia_id: INSTANCIA_ID,
+              episodio_id: EPISODIO_ID,
               motivo_consulta: null,
               enfermedad_actual: null,
               plan_manejo: null,
               diagnosticos: [
                 { codigo: "BA00", descripcion: "Dx", tipo: "DEFINITIVO" },
               ],
+              ordenes_examenes: null,
             },
           ],
         ],
@@ -381,7 +399,7 @@ describe("eceHistoriaClinicaRouter", () => {
       );
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
-      await expect(caller.firmar({ id: HC_ID, firmaId: FIRMA_ID })).rejects.toMatchObject({
+      await expect(caller.firmar({ id: HC_ID, pin: "123456" })).rejects.toMatchObject({
         code: "PRECONDITION_FAILED",
       });
     });
@@ -390,7 +408,7 @@ describe("eceHistoriaClinicaRouter", () => {
       const ctx = makeCtx(["MT"], []);
       const caller = eceHistoriaClinicaRouter.createCaller(ctx);
 
-      await expect(caller.firmar({ id: HC_ID, firmaId: FIRMA_ID })).rejects.toMatchObject({
+      await expect(caller.firmar({ id: HC_ID, pin: "123456" })).rejects.toMatchObject({
         code: "FORBIDDEN",
       });
     });

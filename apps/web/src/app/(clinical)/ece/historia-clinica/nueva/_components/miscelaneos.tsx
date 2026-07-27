@@ -16,86 +16,91 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@his/ui/components/dialog";
+import { Toast, ToastTitle } from "@his/ui/components/toast";
 import type {
   TerapiaRespiratoria,
   OrdenExamen,
   OrdenInyeccion,
+  LabCatalogArea,
 } from "@his/contracts";
+import { trpc } from "@/lib/trpc/react";
 import { toUpper } from "./utils";
 
-// ── Catálogos de exámenes ────────────────────────────────────────────────────
-
-const EXAM_LAB: Record<string, string[]> = {
-  "Hematología y coagulación": ["Hemograma completo", "Velocidad de sedimentación", "Tiempo de protrombina (TP)", "Tiempo de tromboplastina (TTP)", "INR", "Recuento de plaquetas"],
-  "Química sanguínea": ["Glucosa", "Creatinina", "Nitrógeno ureico (BUN)", "Ácido úrico", "Colesterol total", "Triglicéridos", "HDL", "LDL", "AST (TGO)", "ALT (TGP)", "Bilirrubinas", "Electrolitos (Na/K/Cl)"],
-  "Microbiología": ["Hemocultivo", "Urocultivo", "Coprocultivo", "Cultivo de secreción", "Baciloscopía (BAAR)"],
-  "Urianálisis": ["Examen general de orina", "Microalbuminuria"],
-  "Banco de sangre": ["Tipeo ABO/Rh", "Prueba cruzada"],
-  "Inmunología": ["Proteína C reactiva (PCR)", "Factor reumatoide", "VIH (ELISA)", "VDRL/RPR"],
-};
-const EXAM_RADIOLOGIA: Record<string, string[]> = {
-  "Rayos X": ["Tórax PA y lateral", "Abdomen simple de pie", "Columna lumbar", "Extremidad (especificar)", "Senos paranasales"],
-  "Ultrasonografía": ["Abdominal completo", "Pélvico", "Obstétrico", "Renal y vías urinarias", "Tiroideo"],
-  "Tomografía": ["TAC de cráneo simple", "TAC de tórax", "TAC de abdomen y pelvis con contraste", "Angio-TAC"],
-  "Resonancia Magnética": ["RM de cráneo", "RM de columna lumbar", "RM de rodilla"],
-};
-const EXAM_CARDIO: Record<string, string[]> = {
-  "Electrocardiograma": ["ECG de 12 derivaciones", "ECG con tira de ritmo"],
-  "Ecocardiograma": ["Ecocardiograma transtorácico", "Ecocardiograma transesofágico", "Ecocardiograma con Doppler", "Eco-estrés"],
-  "Monitoreo Holter": ["Holter de 24 horas", "Holter de 48 horas", "MAPA (presión 24 h)"],
-  "Prueba de esfuerzo": ["Prueba de esfuerzo en banda"],
-};
-
 // ── Sub-componente: Orden de exámenes ────────────────────────────────────────
+// Catálogo consumido desde BD (trpc.lis.test.listByArea) — CC-0011 item 12.
+// El shape persistido {seccion, examen, cantidad} no cambia: seccion = nombre
+// del panel, examen = nombre del test (paridad con EXAM_CATALOGS del mockup).
 
 function OrdenExamenesBlock({
   catalog,
   catalogKey,
+  loading,
   value,
   onChange,
+  onToast,
 }: {
   catalog: Record<string, string[]>;
   catalogKey: string;
+  loading: boolean;
   value: OrdenExamen[];
   onChange: (v: OrdenExamen[]) => void;
+  onToast: (mensaje: string) => void;
 }) {
   const secciones = Object.keys(catalog);
   const [seccion, setSeccion] = React.useState(secciones[0] ?? "");
   const [checked, setChecked] = React.useState<Record<number, boolean>>({});
   const [cantidades, setCantidades] = React.useState<Record<number, string>>({});
-  const [duplicateError, setDuplicateError] = React.useState("");
+
+  // El catálogo llega asíncrono (trpc) — una vez cargado, selecciona la primera
+  // sección si aún no hay ninguna seleccionada.
+  React.useEffect(() => {
+    const primera = secciones[0];
+    if (!seccion && primera) setSeccion(primera);
+  }, [seccion, secciones]);
 
   const examenesSeccion = catalog[seccion] ?? [];
+  const catalogoVacio = !loading && secciones.length === 0;
 
   function handleAgregar() {
+    const checkedIdx = Object.entries(checked)
+      .filter(([, v]) => v)
+      .map(([k]) => parseInt(k, 10));
+    if (checkedIdx.length === 0) {
+      onToast("Seleccione al menos un examen");
+      return;
+    }
     const nuevos: OrdenExamen[] = [];
-    let hasDupe = false;
-    Object.entries(checked).forEach(([idxStr, chk]) => {
-      if (!chk) return;
-      const idx = parseInt(idxStr, 10);
+    let dup = 0;
+    checkedIdx.forEach((idx) => {
       const examen = examenesSeccion[idx];
       if (!examen) return;
       const cantidad = parseInt(cantidades[idx] ?? "1", 10) || 1;
       if (value.some((o) => o.seccion === seccion && o.examen === examen)) {
-        hasDupe = true;
-        return;
+        dup++;
+      } else {
+        nuevos.push({ seccion, examen, cantidad });
       }
-      nuevos.push({ seccion, examen, cantidad });
     });
-    if (hasDupe) {
-      setDuplicateError("Algunos exámenes ya están en la solicitud (G-05).");
-    } else {
-      setDuplicateError("");
-    }
-    if (nuevos.length > 0) {
-      onChange([...value, ...nuevos]);
-      setChecked({});
-      setCantidades({});
-    }
+    // Bug fix (item 13a): los checkboxes se limpian SIEMPRE, incluso si todo era duplicado.
+    setChecked({});
+    setCantidades({});
+    if (nuevos.length > 0) onChange([...value, ...nuevos]);
+    const added = nuevos.length;
+    if (added && dup) onToast(`${added} agregado(s) · ${dup} ya estaba(n) en la solicitud`);
+    else if (added) onToast(`${added} examen(es) agregado(s) a la solicitud`);
+    else if (dup) onToast("Esos exámenes ya están en la solicitud");
   }
 
   function eliminar(i: number) {
     onChange(value.filter((_, j) => j !== i));
+  }
+
+  if (catalogoVacio) {
+    return (
+      <p className="rounded-md border border-dashed border-border p-3 text-center text-xs text-muted-foreground">
+        Catálogo no disponible para esta área.
+      </p>
+    );
   }
 
   return (
@@ -108,7 +113,7 @@ function OrdenExamenesBlock({
             className={[
               "inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
               seccion === s
-                ? "border-primary bg-primary/8 font-semibold text-primary"
+                ? "bg-primary/8 border-primary font-semibold text-primary"
                 : "border-input text-muted-foreground hover:bg-muted",
             ].join(" ")}
           >
@@ -117,12 +122,20 @@ function OrdenExamenesBlock({
               name={`sec-${catalogKey}`}
               value={s}
               checked={seccion === s}
-              onChange={() => { setSeccion(s); setChecked({}); setCantidades({}); }}
+              disabled={loading}
+              onChange={() => {
+                setSeccion(s);
+                setChecked({});
+                setCantidades({});
+              }}
               className="accent-primary"
             />
             {s}
           </label>
         ))}
+        {loading && secciones.length === 0 && (
+          <span className="text-xs text-muted-foreground">Cargando catálogo…</span>
+        )}
       </div>
 
       {/* Lista de exámenes */}
@@ -136,15 +149,11 @@ function OrdenExamenesBlock({
               type="checkbox"
               id={`ex-${catalogKey}-${idx}`}
               checked={checked[idx] ?? false}
-              onChange={(e) =>
-                setChecked((c) => ({ ...c, [idx]: e.target.checked }))
-              }
+              disabled={loading}
+              onChange={(e) => setChecked((c) => ({ ...c, [idx]: e.target.checked }))}
               className="accent-primary"
             />
-            <label
-              htmlFor={`ex-${catalogKey}-${idx}`}
-              className="flex-1 cursor-pointer text-sm"
-            >
+            <label htmlFor={`ex-${catalogKey}-${idx}`} className="flex-1 cursor-pointer text-sm">
               {ex}
             </label>
             <input
@@ -152,30 +161,26 @@ function OrdenExamenesBlock({
               min={1}
               step={1}
               value={cantidades[idx] ?? "1"}
-              onChange={(e) =>
-                setCantidades((c) => ({ ...c, [idx]: e.target.value }))
-              }
+              disabled={loading}
+              onChange={(e) => setCantidades((c) => ({ ...c, [idx]: e.target.value }))}
               className="w-16 rounded border border-input bg-background px-2 py-1 text-center text-xs"
             />
           </div>
         ))}
       </div>
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={handleAgregar}
-        disabled={!Object.values(checked).some(Boolean)}
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-3.5 w-3.5">
+      <Button type="button" variant="outline" size="sm" onClick={handleAgregar} disabled={loading}>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="mr-1.5 h-3.5 w-3.5"
+        >
           <path d="M12 5v14M5 12h14" />
         </svg>
         Agregar a la Solicitud
       </Button>
-      {duplicateError && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">{duplicateError}</p>
-      )}
 
       {/* Grid de solicitud */}
       {value.filter((o) => Object.keys(catalog).includes(o.seccion)).length > 0 && (
@@ -183,8 +188,15 @@ function OrdenExamenesBlock({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-surface-2 text-xs text-muted-foreground">
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Examen</th>
-                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide" style={{ width: 100 }}>Cantidad</th>
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">
+                  Examen
+                </th>
+                <th
+                  className="px-3 py-2 text-left font-semibold uppercase tracking-wide"
+                  style={{ width: 100 }}
+                >
+                  Cantidad
+                </th>
                 <th className="px-3 py-2" style={{ width: 50 }} />
               </tr>
             </thead>
@@ -212,9 +224,15 @@ function OrdenExamenesBlock({
                         type="button"
                         onClick={() => eliminar(i)}
                         aria-label={`Eliminar ${o.examen}`}
-                        className="text-destructive hover:text-destructive/70"
+                        className="hover:text-destructive/70 text-destructive"
                       >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={2}
+                          className="h-3.5 w-3.5"
+                        >
                           <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
                         </svg>
                       </button>
@@ -239,6 +257,19 @@ interface MiscelaneosProps {
   ordenesInyecciones: OrdenInyeccion[];
   onOrdenesInyecciones: (v: OrdenInyeccion[]) => void;
   disabled?: boolean;
+  /** Propaga contexto (?cuentaId=…&episodioId=…) a las tarjetas de acción — item 15. */
+  cuentaId?: string;
+  episodioId?: string | null;
+}
+
+/** Construye un catálogo {panel: [test, …]} a partir de trpc.lis.test.listByArea (item 12). */
+function useCatalogoArea(area: LabCatalogArea) {
+  const q = trpc.lis.test.listByArea.useQuery({ area });
+  const catalog = React.useMemo<Record<string, string[]>>(() => {
+    const panels = q.data ?? [];
+    return Object.fromEntries(panels.map((p) => [p.nombre, p.tests.map((t) => t.nombre)]));
+  }, [q.data]);
+  return { catalog, loading: q.isLoading };
 }
 
 export function MiscelaneosConsulta({
@@ -249,14 +280,27 @@ export function MiscelaneosConsulta({
   ordenesInyecciones,
   onOrdenesInyecciones,
   disabled,
+  cuentaId,
+  episodioId,
 }: MiscelaneosProps) {
   const [inyModalOpen, setInyModalOpen] = React.useState(false);
   const [inyDraft, setInyDraft] = React.useState("");
+  const [toastMsg, setToastMsg] = React.useState<string | null>(null);
 
-  function setTerapia<K extends keyof TerapiaRespiratoria>(
-    k: K,
-    v: TerapiaRespiratoria[K],
-  ) {
+  // Construye la query string de contexto propagado a los módulos destino.
+  const ctxQuery = React.useMemo(() => {
+    const params = new URLSearchParams();
+    if (cuentaId) params.set("cuentaId", cuentaId);
+    if (episodioId) params.set("episodioId", episodioId);
+    const qs = params.toString();
+    return qs ? `?${qs}` : "";
+  }, [cuentaId, episodioId]);
+
+  const catalogoLab = useCatalogoArea("LABORATORIO");
+  const catalogoRad = useCatalogoArea("RADIOLOGIA");
+  const catalogoCardio = useCatalogoArea("CARDIOLOGIA");
+
+  function setTerapia<K extends keyof TerapiaRespiratoria>(k: K, v: TerapiaRespiratoria[K]) {
     const base: TerapiaRespiratoria = terapiaRespiratoria ?? {
       gasometria: { tipo: "BASAL" },
     };
@@ -284,19 +328,37 @@ export function MiscelaneosConsulta({
     setInyModalOpen(false);
   }
 
-  // Las secciones de lab se identifican por las claves de EXAM_LAB
-  const labSections = new Set(Object.keys(EXAM_LAB));
-  const labOrders = ordenesExamenes.filter((o) => labSections.has(o.seccion));
-  const radOrders = ordenesExamenes.filter((o) => Object.keys(EXAM_RADIOLOGIA).includes(o.seccion));
-  const cardOrders = ordenesExamenes.filter((o) => Object.keys(EXAM_CARDIO).includes(o.seccion));
+  const labOrders = ordenesExamenes.filter((o) => o.seccion in catalogoLab.catalog);
+  const radOrders = ordenesExamenes.filter((o) => o.seccion in catalogoRad.catalog);
+  const cardOrders = ordenesExamenes.filter((o) => o.seccion in catalogoCardio.catalog);
 
-  function updateOrders(
-    catalog: Record<string, string[]>,
-    next: OrdenExamen[],
-  ) {
+  // Bug fix (item 13b): NO reordenar el array global al actualizar una sola
+  // sección. Se reconstruye conservando la posición original de cada ítem
+  // existente (edición de cantidad in-place, eliminación in-place) y los
+  // ítems nuevos se anexan al final del array GLOBAL, no al final del
+  // subconjunto local del catálogo tocado.
+  function updateOrders(catalog: Record<string, string[]>, next: OrdenExamen[]) {
     const secs = new Set(Object.keys(catalog));
-    const others = ordenesExamenes.filter((o) => !secs.has(o.seccion));
-    onOrdenesExamenes([...others, ...next]);
+    const key = (o: OrdenExamen) => `${o.seccion} ${o.examen}`;
+    const nextByKey = new Map(next.map((o) => [key(o), o]));
+    const seen = new Set<string>();
+    const merged: OrdenExamen[] = [];
+    for (const o of ordenesExamenes) {
+      if (secs.has(o.seccion)) {
+        const updated = nextByKey.get(key(o));
+        if (updated) {
+          merged.push(updated);
+          seen.add(key(o));
+        }
+        // si no está en `next`, fue eliminado — se omite in-place.
+      } else {
+        merged.push(o);
+      }
+    }
+    for (const o of next) {
+      if (!seen.has(key(o))) merged.push(o);
+    }
+    onOrdenesExamenes(merged);
   }
 
   // Definimos las tarjetas de acción (no crean datos, navegan a otros módulos)
@@ -306,8 +368,15 @@ export function MiscelaneosConsulta({
       name: "Orden de Ingreso hospitalario",
       desc: "Abre la orden de ingreso",
       icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-          <path d="M3 21h18M6 21V8l6-4 6 4v13" /><path d="M12 9v6M9 12h6" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="h-[18px] w-[18px]"
+        >
+          <path d="M3 21h18M6 21V8l6-4 6 4v13" />
+          <path d="M12 9v6M9 12h6" />
         </svg>
       ),
     },
@@ -316,18 +385,35 @@ export function MiscelaneosConsulta({
       name: "Orden de interconsulta médica",
       desc: "Solicita interconsulta",
       icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-          <path d="M17 8h2a2 2 0 0 1 2 2v9l-3-2H9a2 2 0 0 1-2-2v-1" /><path opacity=".5" d="M3 4h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2L6 16V6a2 2 0 0 1 2-2z" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="h-[18px] w-[18px]"
+        >
+          <path d="M17 8h2a2 2 0 0 1 2 2v9l-3-2H9a2 2 0 0 1-2-2v-1" />
+          <path opacity=".5" d="M3 4h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2L6 16V6a2 2 0 0 1 2-2z" />
         </svg>
       ),
     },
     {
-      route: "/ece/remision/nueva",
+      // /ece/remision/nueva del mockup no existe — precedente CC-0006: RRI
+      // (Referencia/Retorno/Interconsulta) ya cubre "referencia" como tipo.
+      route: "/ece/rri/nueva",
       name: "Hoja de Remisión",
       desc: "Genera remisión del paciente",
       icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-          <path d="M14 3v4a1 1 0 0 0 1 1h4" /><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" /><path d="m9 14 2 2 4-4" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="h-[18px] w-[18px]"
+        >
+          <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+          <path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" />
+          <path d="m9 14 2 2 4-4" />
         </svg>
       ),
     },
@@ -336,18 +422,35 @@ export function MiscelaneosConsulta({
       name: "Incapacidad médica",
       desc: "Emite certificado de incapacidad",
       icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-          <rect x="4" y="3" width="16" height="18" rx="2" /><path d="M12 8v6M9 11h6" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="h-[18px] w-[18px]"
+        >
+          <rect x="4" y="3" width="16" height="18" rx="2" />
+          <path d="M12 8v6M9 11h6" />
         </svg>
       ),
     },
     {
-      route: "/ece/constancia/nueva",
+      // /ece/constancia/nueva del mockup no existe — precedente CC-0006: se
+      // reusa el módulo genérico de documento asociado.
+      route: "/ece/documento-asociado/nuevo",
       name: "Constancia médica",
       desc: "Emite constancia de atención",
       icon: (
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-          <path d="M5 3h11l3 3v15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" /><path d="M8 9h8M8 13h6" /><circle cx="16.5" cy="17.5" r="2.5" />
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="h-[18px] w-[18px]"
+        >
+          <path d="M5 3h11l3 3v15a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" />
+          <path d="M8 9h8M8 13h6" />
+          <circle cx="16.5" cy="17.5" r="2.5" />
         </svg>
       ),
     },
@@ -360,17 +463,26 @@ export function MiscelaneosConsulta({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => window.open("/ece/indicaciones/nueva", "_blank")}
+          onClick={() => window.open(`/ece/indicaciones/nueva${ctxQuery}`, "_blank")}
           className="flex items-center gap-3 rounded-md border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-ring hover:bg-accent"
         >
-          <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-primary/10 text-primary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[18px] w-[18px]">
-              <path d="M5 3h6l4 4v3M5 3v18h7" /><path d="M14 14h7M17.5 10.5 21 14l-3.5 3.5" />
+          <span className="bg-primary/10 grid h-9 w-9 flex-none place-items-center rounded-lg text-primary">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              className="h-[18px] w-[18px]"
+            >
+              <path d="M5 3h6l4 4v3M5 3v18h7" />
+              <path d="M14 14h7M17.5 10.5 21 14l-3.5 3.5" />
             </svg>
           </span>
           <span>
             <span className="block text-sm font-bold">Prescripción médica</span>
-            <span className="block text-xs text-muted-foreground">Abre el recetario / indicaciones</span>
+            <span className="block text-xs text-muted-foreground">
+              Abre el recetario / indicaciones
+            </span>
           </span>
         </button>
       </div>
@@ -378,63 +490,110 @@ export function MiscelaneosConsulta({
       {/* Laboratorio clínico */}
       <details className="overflow-hidden rounded-md border border-border" open>
         <summary className="flex cursor-pointer items-center gap-2.5 bg-surface-2 px-4 py-3 text-sm font-bold">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[17px] w-[17px]">
-            <path d="M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3" /><path d="M8 3h8M8 13h8" />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-[17px] w-[17px]"
+          >
+            <path d="M9 3v6l-5 9a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-9V3" />
+            <path d="M8 3h8M8 13h8" />
           </svg>
           Laboratorio clínico
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="ml-auto h-4 w-4 transition-transform">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="ml-auto h-4 w-4 transition-transform"
+          >
             <path d="m9 18 6-6-6-6" />
           </svg>
         </summary>
         <div className="p-4">
           <OrdenExamenesBlock
-            catalog={EXAM_LAB}
+            catalog={catalogoLab.catalog}
             catalogKey="lab"
+            loading={catalogoLab.loading}
             value={labOrders}
-            onChange={(v) => updateOrders(EXAM_LAB, v)}
+            onChange={(v) => updateOrders(catalogoLab.catalog, v)}
+            onToast={setToastMsg}
           />
         </div>
       </details>
 
-      {/* Exámenes de gabinete */}
+      {/* Exámenes de gabinete — nivel anidado con borde izquierdo (mockup .level) */}
       <details className="overflow-hidden rounded-md border border-border">
         <summary className="flex cursor-pointer items-center gap-2.5 bg-surface-2 px-4 py-3 text-sm font-bold">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[17px] w-[17px]">
-            <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" />
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-[17px] w-[17px]"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <path d="M3 9h18M9 21V9" />
           </svg>
           Exámenes de gabinete
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="ml-auto h-4 w-4">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="ml-auto h-4 w-4"
+          >
             <path d="m9 18 6-6-6-6" />
           </svg>
         </summary>
-        <div className="p-4 pl-8 space-y-4">
-          <div>
-            <p className="mb-3 flex items-center gap-2 text-xs font-bold text-accent-foreground">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
-                <circle cx="12" cy="12" r="9" /><path d="M12 3v18M3 12h18" />
-              </svg>
-              Radiología e imágenes
-            </p>
-            <OrdenExamenesBlock
-              catalog={EXAM_RADIOLOGIA}
-              catalogKey="radiologia"
-              value={radOrders}
-              onChange={(v) => updateOrders(EXAM_RADIOLOGIA, v)}
-            />
-          </div>
-          <div>
-            <p className="mb-3 flex items-center gap-2 text-xs font-bold text-accent-foreground">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4">
-                <path d="M3 12h4l2 6 4-12 2 6h6" />
-              </svg>
-              Estudios de cardiología
-            </p>
-            <OrdenExamenesBlock
-              catalog={EXAM_CARDIO}
-              catalogKey="cardiologia"
-              value={cardOrders}
-              onChange={(v) => updateOrders(EXAM_CARDIO, v)}
-            />
+        <div className="p-4">
+          <div className="ml-1 space-y-4 border-l-2 border-border pl-3.5">
+            <div>
+              <p className="mb-3 flex items-center gap-2 text-xs font-bold text-accent-foreground">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="h-4 w-4"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 3v18M3 12h18" />
+                </svg>
+                Radiología e imágenes
+              </p>
+              <OrdenExamenesBlock
+                catalog={catalogoRad.catalog}
+                catalogKey="radiologia"
+                loading={catalogoRad.loading}
+                value={radOrders}
+                onChange={(v) => updateOrders(catalogoRad.catalog, v)}
+                onToast={setToastMsg}
+              />
+            </div>
+            <div>
+              <p className="mb-3 flex items-center gap-2 text-xs font-bold text-accent-foreground">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                  className="h-4 w-4"
+                >
+                  <path d="M3 12h4l2 6 4-12 2 6h6" />
+                </svg>
+                Estudios de cardiología
+              </p>
+              <OrdenExamenesBlock
+                catalog={catalogoCardio.catalog}
+                catalogKey="cardiologia"
+                loading={catalogoCardio.loading}
+                value={cardOrders}
+                onChange={(v) => updateOrders(catalogoCardio.catalog, v)}
+                onToast={setToastMsg}
+              />
+            </div>
           </div>
         </div>
       </details>
@@ -442,25 +601,67 @@ export function MiscelaneosConsulta({
       {/* Terapia Respiratoria */}
       <details className="overflow-hidden rounded-md border border-border">
         <summary className="flex cursor-pointer items-center gap-2.5 bg-surface-2 px-4 py-3 text-sm font-bold">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[17px] w-[17px]">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-[17px] w-[17px]"
+          >
             <path d="M12 21s-7-4.5-7-10a4 4 0 0 1 7-2 4 4 0 0 1 7 2c0 5.5-7 10-7 10z" />
           </svg>
           Terapia Respiratoria
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="ml-auto h-4 w-4">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="ml-auto h-4 w-4"
+          >
             <path d="m9 18 6-6-6-6" />
           </svg>
         </summary>
         <div className="space-y-3 p-4">
           {/* Gasometría arterial */}
           <div className="rounded-md border border-border p-3">
-            <p className="mb-2 border-b border-border pb-1 text-sm font-bold">Gasometría arterial</p>
+            <p className="mb-2 border-b border-border pb-1 text-sm font-bold">
+              Gasometría arterial
+            </p>
             <div className="flex flex-wrap gap-2">
-              <label className={["inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs", gaso.tipo === "BASAL" ? "border-primary bg-primary/8 font-semibold text-primary" : "border-input text-muted-foreground"].join(" ")}>
-                <input type="radio" name="gaso" value="BASAL" checked={gaso.tipo === "BASAL"} onChange={() => setGaso("tipo", "BASAL")} className="accent-primary" />
+              <label
+                className={[
+                  "inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
+                  gaso.tipo === "BASAL"
+                    ? "bg-primary/8 border-primary font-semibold text-primary"
+                    : "border-input text-muted-foreground",
+                ].join(" ")}
+              >
+                <input
+                  type="radio"
+                  name="gaso"
+                  value="BASAL"
+                  checked={gaso.tipo === "BASAL"}
+                  onChange={() => setGaso("tipo", "BASAL")}
+                  className="accent-primary"
+                />
                 Basal
               </label>
-              <label className={["inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs", gaso.tipo === "O2" ? "border-primary bg-primary/8 font-semibold text-primary" : "border-input text-muted-foreground"].join(" ")}>
-                <input type="radio" name="gaso" value="O2" checked={gaso.tipo === "O2"} onChange={() => setGaso("tipo", "O2")} className="accent-primary" />
+              <label
+                className={[
+                  "inline-flex cursor-pointer items-center gap-2 rounded-full border px-3 py-1.5 text-xs",
+                  gaso.tipo === "O2"
+                    ? "bg-primary/8 border-primary font-semibold text-primary"
+                    : "border-input text-muted-foreground",
+                ].join(" ")}
+              >
+                <input
+                  type="radio"
+                  name="gaso"
+                  value="O2"
+                  checked={gaso.tipo === "O2"}
+                  onChange={() => setGaso("tipo", "O2")}
+                  className="accent-primary"
+                />
                 Con O₂ suplementario
               </label>
             </div>
@@ -476,7 +677,9 @@ export function MiscelaneosConsulta({
                       value={gaso.fio2 ?? ""}
                       onChange={(e) => setGaso("fio2", parseFloat(e.target.value) || undefined)}
                     />
-                    <span className="rounded-md bg-muted px-2 py-1.5 text-xs font-bold text-muted-foreground">%</span>
+                    <span className="rounded-md bg-muted px-2 py-1.5 text-xs font-bold text-muted-foreground">
+                      %
+                    </span>
                   </div>
                 </div>
                 <div>
@@ -489,7 +692,9 @@ export function MiscelaneosConsulta({
                       value={gaso.flujo ?? ""}
                       onChange={(e) => setGaso("flujo", parseFloat(e.target.value) || undefined)}
                     />
-                    <span className="rounded-md bg-muted px-2 py-1.5 text-xs font-bold text-muted-foreground">L/min</span>
+                    <span className="rounded-md bg-muted px-2 py-1.5 text-xs font-bold text-muted-foreground">
+                      L/min
+                    </span>
                   </div>
                 </div>
               </div>
@@ -534,11 +739,23 @@ export function MiscelaneosConsulta({
       {/* Orden de Inyecciones */}
       <details className="overflow-hidden rounded-md border border-border">
         <summary className="flex cursor-pointer items-center gap-2.5 bg-surface-2 px-4 py-3 text-sm font-bold">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-[17px] w-[17px]">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="h-[17px] w-[17px]"
+          >
             <path d="m18 2 4 4M17 7l3-3M9.5 14.5 4 20l-2 2M14 6l4 4-8.5 8.5L5 19l-1-4z" />
           </svg>
           Orden de Inyecciones
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="ml-auto h-4 w-4">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            className="ml-auto h-4 w-4"
+          >
             <path d="m9 18 6-6-6-6" />
           </svg>
         </summary>
@@ -551,7 +768,13 @@ export function MiscelaneosConsulta({
             disabled={disabled}
             className="mb-3"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="mr-1.5 h-3.5 w-3.5">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={2}
+              className="mr-1.5 h-3.5 w-3.5"
+            >
               <path d="M12 5v14M5 12h14" />
             </svg>
             Agregar orden de inyección
@@ -560,7 +783,9 @@ export function MiscelaneosConsulta({
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-surface-2 text-xs text-muted-foreground">
-                  <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Orden de inyección</th>
+                  <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">
+                    Orden de inyección
+                  </th>
                   <th className="px-3 py-2" style={{ width: 50 }} />
                 </tr>
               </thead>
@@ -578,11 +803,19 @@ export function MiscelaneosConsulta({
                       <td className="px-3 py-2 text-right">
                         <button
                           type="button"
-                          onClick={() => onOrdenesInyecciones(ordenesInyecciones.filter((_, j) => j !== i))}
+                          onClick={() =>
+                            onOrdenesInyecciones(ordenesInyecciones.filter((_, j) => j !== i))
+                          }
                           aria-label={`Eliminar inyección ${i + 1}`}
-                          className="text-destructive hover:text-destructive/70"
+                          className="hover:text-destructive/70 text-destructive"
                         >
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-3.5 w-3.5">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={2}
+                            className="h-3.5 w-3.5"
+                          >
                             <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" />
                           </svg>
                         </button>
@@ -600,13 +833,13 @@ export function MiscelaneosConsulta({
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {ACTION_CARDS.map((ac) => (
           <button
-            key={ac.route}
+            key={ac.name}
             type="button"
             disabled={disabled}
-            onClick={() => window.open(ac.route, "_blank")}
+            onClick={() => window.open(`${ac.route}${ctxQuery}`, "_blank")}
             className="flex items-center gap-3 rounded-md border border-border bg-background px-3.5 py-3 text-left transition-colors hover:border-ring hover:bg-accent"
           >
-            <span className="grid h-9 w-9 flex-none place-items-center rounded-lg bg-primary/10 text-primary">
+            <span className="bg-primary/10 grid h-9 w-9 flex-none place-items-center rounded-lg text-primary">
               {ac.icon}
             </span>
             <span>
@@ -641,6 +874,13 @@ export function MiscelaneosConsulta({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Toast — feedback de la factory de órdenes de exámenes (item 13c) */}
+      {toastMsg ? (
+        <Toast open={Boolean(toastMsg)} onOpenChange={(o) => !o && setToastMsg(null)}>
+          <ToastTitle>{toastMsg}</ToastTitle>
+        </Toast>
+      ) : null}
     </div>
   );
 }

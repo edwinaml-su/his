@@ -73,6 +73,18 @@ export const patientAddressSchema = z.object({
   isPrimary: z.boolean().default(false),
 });
 
+/**
+ * CC-0011 (item e) — contacto de emergencia. Mockup avante2 (modal "En caso de
+ * emergencia llamar a") captura un único contacto editable por el médico.
+ */
+export const patientEmergencyContactUpdateSchema = z.object({
+  patientId: z.string().uuid(),
+  fullName: z.string().trim().min(1).max(200),
+  relationship: z.string().trim().min(1).max(60),
+  phone: z.string().trim().max(40).nullable().optional(),
+});
+export type PatientEmergencyContactUpdateInput = z.infer<typeof patientEmergencyContactUpdateSchema>;
+
 // Objeto base sin superRefine: permite .partial() en update sin perder tipado.
 // El superRefine cross-field solo aplica en create (donde todos los campos están presentes).
 // Ref: Zod no propaga superRefine tras .partial() de forma segura en v3 — Plan B aplicado.

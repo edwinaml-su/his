@@ -24,8 +24,6 @@ interface CampoModalProps {
   value: string;
   onChange: (v: string) => void;
   disabled?: boolean;
-  /** Contenido adicional renderizado encima del textarea dentro del modal (ej. PlantillasBar) */
-  modalHeader?: React.ReactNode;
   /** Clases extra para el botón/display exterior */
   className?: string;
   required?: boolean;
@@ -40,7 +38,6 @@ export function CampoModal({
   value,
   onChange,
   disabled,
-  modalHeader,
   className,
   invalid,
   wrapQuotes,
@@ -68,9 +65,9 @@ export function CampoModal({
         aria-label={`Editar ${titulo}`}
         className={[
           "w-full rounded-md border bg-background px-3 py-2.5 text-left text-sm transition-colors",
-          "min-h-[46px] flex items-start gap-2",
+          "flex min-h-[46px] items-start gap-2",
           invalid
-            ? "border-destructive ring-2 ring-destructive/20"
+            ? "ring-destructive/20 border-destructive ring-2"
             : "border-input hover:border-ring",
           disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
           className ?? "",
@@ -78,11 +75,13 @@ export function CampoModal({
       >
         <span className="flex-1 whitespace-pre-wrap text-sm uppercase leading-snug">
           {value ? (
-            wrapQuotes ? `«${value}»` : value
+            wrapQuotes ? (
+              `«${value}»`
+            ) : (
+              value
+            )
           ) : (
-            <span className="normal-case text-muted-foreground">
-              {placeholder}
-            </span>
+            <span className="normal-case text-muted-foreground">{placeholder}</span>
           )}
         </span>
         <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-accent-foreground">
@@ -105,7 +104,6 @@ export function CampoModal({
           <DialogHeader>
             <DialogTitle>{titulo}</DialogTitle>
           </DialogHeader>
-          {modalHeader}
           <Textarea
             rows={8}
             value={draft}

@@ -1,0 +1,105 @@
+{
+"knowledge_node": {
+"metadata": {
+"topic": "Implementación y Despliegue de Sistema de Información Hospitalaria (HIS) y Master Data Management (MDM)",
+"committee": [
+{ "alias": "@AE", "role": "Arquitecto Empresarial" },
+{ "alias": "@AT", "role": "Arquitecto de Soluciones" },
+{ "alias": "@AS", "role": "Arquitecto de Software" }
+],
+"version": "1.0",
+"status": "Diseño y Consenso Arquitectónico"
+},
+"@AE_enterprise_architecture": {
+"business_alignment": "Alineación estratégica de TI con los objetivos clínicos y operativos corporativos, garantizando interoperabilidad departamental (Soporte Técnico, Desarrollo, Biomédica, Mantenimiento General).",
+"frameworks_applied": ["TOGAF", "ITIL v4", "COBIT 2019", "PMI"],
+"governance_and_compliance": {
+"data_management": "Políticas de gobierno de datos para el MDM, asegurando una única fuente de verdad para pacientes y recursos humanos.",
+"risk_management": "Planes de continuidad de negocio y gestión de SLAs de servicios de TI.",
+"vendor_management": "Gestión de hitos de despliegue y pase a producción con proveedores externos (ej. IPCOM) tras firma de UAT."
+},
+"business_capabilities_impacted": [
+"Gestión Integral de Salud",
+"Gestión de Talento Humano",
+"Mesa de Ayuda y Soporte Multicanal"
+]
+},
+"@AT_solution_architecture": {
+"infrastructure_model": "Arquitectura Híbrida / Cloud-Native (AWS)",
+"integration_architecture": {
+"patterns_used": ["API Gateway", "Event Broker", "Anti-Corruption Layer (ACL)"],
+"third_party_integrations": ["Plataformas IPCOM", "Sistemas ERP/CRM"]
+},
+"c4_model": {
+"context": "Sistema centralizado HIS/MDM que interactúa con personal clínico, pacientes, sistemas de RRHH y mesa de ayuda corporativa.",
+"containers": [
+"Web Frontend SPA",
+"API Gateway",
+"Identity Provider (IdP)",
+"MDM Service",
+"Helpdesk Service",
+"Relational Database",
+"Message Queue"
+]
+},
+"non_functional_requirements": {
+"scalability": "Escalado horizontal automático (Auto-scaling) para picos de concurrencia en horarios de alta demanda.",
+"availability": "Diseño Multi-AZ para alta disponibilidad y resiliencia ante fallos.",
+"security": "Cifrado End-to-End, IAM estricto, MFA y segmentación de red mediante VPCs."
+}
+},
+"@AS_software_architecture": {
+"architectural_style": "Microservicios con Event-Driven Architecture (EDA) y Arquitectura Hexagonal.",
+"domain_driven_design": {
+"core_domain": "Core Clínico y Maestro de Datos (MDM)",
+"bounded_contexts": [
+{
+"name": "Gestión de Identidad de Pacientes",
+"aggregates": ["Paciente", "HistorialDemografico"]
+},
+{
+"name": "Gestión de Tickets y Soporte",
+"aggregates": ["Solicitud", "DepartamentoAsignado", "SLA"]
+},
+{
+"name": "Gestión de Talento",
+"aggregates": ["Empleado", "Rol", "AsignacionProyecto"]
+}
+]
+},
+"tech_stack_recommendations": {
+"frontend": "Next.js / React (interfaces de usuario y portales de soporte)",
+"backend": "Node.js / Python / Java (según requerimiento de procesamiento del microservicio)",
+"database": "PostgreSQL (Estructurado), MongoDB (Documental), Redis (Caché)",
+"business_apps": "Odoo (para integración de procesos administrativos y talento humano)"
+},
+"quality_attributes": {
+"code_principles": ["SOLID", "DRY", "Clean Code"],
+"testing_strategy": "TDD/BDD continuo, integración de pruebas unitarias y e2e en pipelines CI/CD.",
+"observability": "Trazabilidad distribuida, monitoreo de APM y logs centralizados."
+}
+},
+"architecture_decision_records": [
+{
+"id": "ADR-001",
+"aliases_involved": ["@AE", "@AT"],
+"decision": "Uso de un Event Bus centralizado para la sincronización entre el MDM, el HIS y el portal de Helpdesk.",
+"context": "Múltiples departamentos necesitan reaccionar en tiempo real a la creación o modificación de perfiles sin generar un acoplamiento fuerte entre sistemas.",
+"consequences": {
+"positive": "Desacoplamiento total, facilitando la escalabilidad independiente de los módulos de soporte técnico y biomédica.",
+"negative": "Requiere mayor esfuerzo inicial en la configuración de la observabilidad y manejo de transacciones distribuidas (Saga Pattern)."
+}
+},
+{
+"id": "ADR-002",
+"aliases_involved": ["@AT"],
+"decision": "Implementación de una Anti-Corruption Layer (ACL) para las integraciones de producción con el proveedor.",
+"context": "El paso a producción gestionado técnica y contractualmente requiere aislar el dominio core de los modelos de datos del proveedor para evitar fugas de lógica de negocio externa.",
+"consequences": {
+"positive": "Protege la integridad del modelo de dominio interno (DDD) garantizando independencia tecnológica.",
+"negative": "Añade latencia mínima y requiere mantenimiento de una capa adicional de traducción de DTOs."
+}
+}
+]
+}
+}
