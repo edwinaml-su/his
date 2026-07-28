@@ -375,6 +375,8 @@ export const SECTIONS: NavSection[] = [
         description: "Bitácora de auditoría inmutable con hash chain (retención 10 años)." },
       { href: "/catalogs", label: "Catálogos", icon: Settings,
         description: "Catálogos transversales: sexo biológico, género, estado civil, etc." },
+      { href: "/catalogs/laboratorio", label: "Catálogo laboratorio", icon: FlaskConical,
+        description: "Paneles y exámenes parametrizables para solicitudes: laboratorio, radiología y cardiología (CC-0011)." },
       { href: "/countries", label: "Países", icon: Globe,
         description: "Configuración por país: validadores, identificadores, divisa." },
       { href: "/exchange-rates", label: "Tipos de cambio", icon: Coins,
