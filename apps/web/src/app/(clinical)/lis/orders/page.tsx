@@ -12,6 +12,7 @@
  */
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import {
   Table,
@@ -24,6 +25,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@his/ui/components/tabs";
 import { parseDateOnly } from "@/lib/date-only";
 import {
   Select,
@@ -35,6 +37,7 @@ import {
 import { trpc } from "@/lib/trpc/react";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
+import { Tablero } from "./_components/tablero";
 
 type LabPriority = "ROUTINE" | "URGENT" | "STAT";
 type LabOrderStatus =
@@ -76,7 +79,41 @@ const STATUS_LABEL: Record<LabOrderStatus, string> = {
 
 const ALL = "__ALL__";
 
+/**
+ * CC-0013 — dos vistas: Lista (filtros clásicos) y Tablero (por cuenta,
+ * mockup docs/CC/0013). `?vista=tablero` selecciona la pestaña inicial
+ * (enlazado desde el botón "Consultar Tablero" de /lis/orders/new).
+ */
 export default function LisOrdersPage(): React.ReactElement {
+  const searchParams = useSearchParams();
+  const vistaInicial = searchParams.get("vista") === "tablero" ? "tablero" : "lista";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Órdenes de Laboratorio</h1>
+        <Button asChild>
+          <Link href="/lis/orders/new">Nueva orden</Link>
+        </Button>
+      </div>
+
+      <Tabs defaultValue={vistaInicial}>
+        <TabsList aria-label="Vista de órdenes de laboratorio">
+          <TabsTrigger value="lista">Lista</TabsTrigger>
+          <TabsTrigger value="tablero">Tablero por cuenta</TabsTrigger>
+        </TabsList>
+        <TabsContent value="lista">
+          <ListaOrdenes />
+        </TabsContent>
+        <TabsContent value="tablero">
+          <Tablero />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function ListaOrdenes(): React.ReactElement {
   const [encounterId, setEncounterId] = React.useState("");
   const [patientId, setPatientId] = React.useState("");
   const [priority, setPriority] = React.useState<LabPriority | "">("");
@@ -101,13 +138,6 @@ export default function LisOrdersPage(): React.ReactElement {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Órdenes de Laboratorio</h1>
-        <Button asChild>
-          <Link href="/lis/orders/new">Nueva orden</Link>
-        </Button>
-      </div>
-
       <Card>
         <CardHeader>
           <CardTitle>Filtros</CardTitle>
@@ -230,7 +260,8 @@ export default function LisOrdersPage(): React.ReactElement {
                         : o.patientId}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {o.encounter?.encounterNumber ?? o.encounterId.slice(0, 8)}
+                      {/* CC-0013 — encounterId es opcional (cuenta ambulatoria sin admisión). */}
+                      {o.encounter?.encounterNumber ?? o.encounterId?.slice(0, 8) ?? "—"}
                     </TableCell>
                     <TableCell className="tabular-nums">
                       {new Date(o.orderedAt).toLocaleString("es-SV")}

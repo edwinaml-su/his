@@ -2268,6 +2268,10 @@ model LabTest {
   critical       Boolean      @default(false)
   /// CC-0011 — orden de aparición dentro del panel (mockup avante2).
   displayOrder   Int          @default(0)
+  /// CC-0013 — precio estándar del catálogo (parametrizable por admin). El
+  /// tarifario ServicePriceListItem (SQL 133) sigue siendo el override de
+  /// facturación cuando existe fila por code; este campo es el default.
+  standardPrice  Decimal?     @db.Decimal(12, 2)
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now()) @db.Timestamptz()
   updatedAt      DateTime     @updatedAt @db.Timestamptz()
@@ -2287,9 +2291,15 @@ model LabTest {
 model LabOrder {
   id                   String         @id @default(uuid()) @db.Uuid
   organizationId       String         @db.Uuid
-  encounterId          String         @db.Uuid
+  /// CC-0013 — opcional desde SQL 189: una orden puede anclarse a una cuenta
+  /// ambulatoria sin admisión (PatientAccount.encounterId también es opcional).
+  encounterId          String?        @db.Uuid
   prescriberId         String         @db.Uuid /// User.
   patientId            String         @db.Uuid
+  /// CC-0013 — cuenta administrativa del paciente (ancla transversal del
+  /// tablero de exámenes). Toda orden creada vía el módulo de escogitación
+  /// persiste esta referencia; el flujo legado por encounterId puede quedar null.
+  patientAccountId     String?        @db.Uuid
   orderedAt            DateTime       @default(now()) @db.Timestamptz()
   priority             LabPriority    @default(ROUTINE)
   status               LabOrderStatus @default(DRAFT)
@@ -2308,11 +2318,13 @@ model LabOrder {
   ejecutorCostCenter CostCenter?  @relation("LabOrderEjecutor", fields: [ejecutorCostCenterId], references: [id], onDelete: Restrict)
   // HH-10 (audit Stream H): relaciones declaradas — las FK físicas ya existen.
   patient          Patient        @relation("PatLabOrders", fields: [patientId], references: [id], onDelete: Restrict)
-  encounter        Encounter      @relation("EncLabOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  encounter        Encounter?     @relation("EncLabOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  patientAccount   PatientAccount? @relation("LabOrderPatientAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, orderedAt])
   @@index([encounterId])
   @@index([patientId])
+  @@index([patientAccountId])
   @@index([costCenterId])
   @@index([ejecutorCostCenterId])
   @@schema("public")
@@ -7279,6 +7291,8 @@ model PatientAccount {
   patient      Patient               @relation("PatientAccounts", fields: [patientId], references: [id], onDelete: Restrict)
   encounter    Encounter?            @relation("EncounterAccounts", fields: [encounterId], references: [id], onDelete: SetNull)
   servicios    PatientAccountService[]
+  /// CC-0013 — órdenes de laboratorio ancladas a esta cuenta (tablero de exámenes).
+  labOrders    LabOrder[]            @relation("LabOrderPatientAccount")
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])

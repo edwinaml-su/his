@@ -52,21 +52,42 @@ export const labOrderItemInput = z.object({
   notes: z.string().trim().max(2000).optional(),
 });
 
-export const labOrderCreateInput = z.object({
-  encounterId: z.string().uuid(),
-  patientId: z.string().uuid(),
-  priority: labPriorityEnum.default("ROUTINE"),
-  clinicalIndication: z.string().trim().max(2000).optional(),
-  items: z.array(labOrderItemInput).min(1).max(50),
-  /** Centro de costo solicitante (productivo o intermedio). */
-  costCenterId: z.string().uuid().optional(),
-  /** Centro ejecutor. Si se omite, el router asigna el laboratorio clínico (code 2-LAB-CLI). */
-  ejecutorCostCenterId: z.string().uuid().optional(),
-});
+/**
+ * CC-0013 — módulo transversal de escogitación de exámenes por cuenta
+ * (docs/CC/0013/mockup_examenes_laboratorio.html). Una orden se crea con
+ * `cuentaId` (ancla a PatientAccount, resuelve patient/encounter server-side)
+ * O con el par legado `encounterId` + `patientId` — al menos uno de los dos
+ * caminos es obligatorio (superRefine abajo).
+ */
+export const labOrderCreateInput = z
+  .object({
+    encounterId: z.string().uuid().optional(),
+    patientId: z.string().uuid().optional(),
+    /** CC-0013 — cuenta administrativa (PatientAccount) que ancla la orden. */
+    cuentaId: z.string().uuid().optional(),
+    priority: labPriorityEnum.default("ROUTINE"),
+    clinicalIndication: z.string().trim().max(2000).optional(),
+    items: z.array(labOrderItemInput).min(1).max(50),
+    /** Centro de costo solicitante (productivo o intermedio). */
+    costCenterId: z.string().uuid().optional(),
+    /** Centro ejecutor. Si se omite, el router asigna el laboratorio clínico (code 2-LAB-CLI). */
+    ejecutorCostCenterId: z.string().uuid().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.cuentaId && !(data.encounterId && data.patientId)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Se requiere cuentaId, o encounterId junto con patientId.",
+        path: ["cuentaId"],
+      });
+    }
+  });
 
 export const labOrderListInput = z.object({
   encounterId: z.string().uuid().optional(),
   patientId: z.string().uuid().optional(),
+  /** CC-0013 — filtrar órdenes ancladas a una cuenta administrativa. */
+  cuentaId: z.string().uuid().optional(),
   priority: labPriorityEnum.optional(),
   status: labOrderStatusEnum.optional(),
   fromDate: z.coerce.date().optional(),
@@ -76,6 +97,40 @@ export const labOrderListInput = z.object({
   /** Filtrar por centro ejecutor. */
   ejecutorCostCenterId: z.string().uuid().optional(),
 });
+
+// ---------------------------------------------------------------------------
+// CC-0013 — Tablero de exámenes por cuenta (docs/CC/0013)
+// ---------------------------------------------------------------------------
+
+/** Búsqueda server-side opcional por número de cuenta, paciente o médico. */
+export const labOrderTableroInput = z.object({
+  search: z.string().trim().max(160).optional(),
+});
+export type LabOrderTableroInput = z.infer<typeof labOrderTableroInput>;
+
+/**
+ * Estados de LabOrderItem editables desde el modal "Solicitud" del tablero
+ * (mockup: select Pendiente/En proceso/Realizado). COLLECTED/VALIDATED/
+ * CANCELLED no son alcanzables desde esta UI — se manejan por el flujo LIS
+ * físico (specimen.collect / result.validate / cancelación administrativa).
+ */
+export const labOrderItemUpdateStatusEnum = z.enum(["ORDERED", "IN_PROCESS", "RESULTED"]);
+
+export const labOrderUpdateItemsInput = z.object({
+  orderId: z.string().uuid(),
+  /** Instrucción general para el laboratorio (mockup: textarea "Instrucción general"). */
+  clinicalIndication: z.string().trim().max(2000).optional(),
+  items: z
+    .array(
+      z.object({
+        itemId: z.string().uuid(),
+        status: labOrderItemUpdateStatusEnum,
+        notes: z.string().trim().max(2000).optional(),
+      }),
+    )
+    .min(1),
+});
+export type LabOrderUpdateItemsInput = z.infer<typeof labOrderUpdateItemsInput>;
 
 // JCI Standard: IPSG.1 ME 4 — toma de muestra bedside requiere 2 identificadores.
 export const specimenCollectInput = z.object({

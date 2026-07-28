@@ -1,30 +1,35 @@
 "use client";
 
 /**
- * §17 LIS — Crear orden de laboratorio.
+ * §17 LIS — Escogitación de exámenes de laboratorio por cuenta (CC-0013).
  *
- * Form simple (mismo patrón que /patients/new) con buscador de tests
- * debounced (300ms) → `trpc.lis.test.list.useQuery({ search })`. Tests
- * seleccionados se acumulan en estado local; submit envía
- * `trpc.lis.order.create` con el payload validado por
- * `labOrderCreateInput` (Zod).
+ * Fuente de verdad visual/funcional: docs/CC/0013/mockup_examenes_laboratorio.html
+ * (pantalla "Seleccionar Exámenes de Laboratorio"). Reemplaza el form plano
+ * anterior (UUIDs a mano) — ver historial en git para el form previo.
  *
- * Validaciones cliente: encounterId/patientId UUIDs, ≥1 test
- * seleccionado. La validación final ocurre server-side.
+ * Desviación aprobada de layout: sin la titlebar falsa de ventana del
+ * mockup (`.window`/`.titlebar`) — la pantalla vive dentro del shell real
+ * del HIS. Estructura y comportamiento del resto son 1:1 con el mockup.
  *
- * Wave 10: campos costCenterId (solicitante) y ejecutorCostCenterId (ejecutor).
- * El ejecutor se pre-selecciona automáticamente con el centro 2-LAB-CLI.
- * Si el usuario no cambia la selección, el router también asigna el default.
+ * Paleta: valores puntuales tomados literalmente del `:root` del mockup
+ * (líneas 8 del HTML) — este módulo es una herramienta operativa interna,
+ * no parte del design system de paciente, por eso NO se materializan como
+ * tokens Tailwind globales (instrucción explícita del brief CC-0013). Se
+ * centralizan aquí en un solo objeto para no repetir literales sueltos.
  */
+
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
-import { Form, FormField, FormError } from "@his/ui/components/form";
 import { Input } from "@his/ui/components/input";
-import { Label } from "@his/ui/components/label";
-import { Textarea } from "@his/ui/components/textarea";
-import { Button } from "@his/ui/components/button";
+import { Switch } from "@his/ui/components/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@his/ui/components/dialog";
 import {
   Select,
   SelectContent,
@@ -32,382 +37,473 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
+import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
+import { SelectorCuenta } from "./_components/selector-cuenta";
+import { MOCK_LAB_PALETTE as MOCK } from "../../_lib/mock-palette";
 
-type LabPriority = "ROUTINE" | "URGENT" | "STAT";
+type LabPriority = "ROUTINE" | "URGENT";
 
-interface LabTestRow {
-  id: string;
-  code: string;
-  name: string;
-}
-
-interface LabOrderItemInput {
+interface ExamenItem {
   testId: string;
-  notes?: string;
+  nombre: string;
+  seccion: string;
 }
 
-interface LabOrderCreateInput {
-  encounterId: string;
-  patientId: string;
-  priority: LabPriority;
-  clinicalIndication?: string;
-  items: LabOrderItemInput[];
-  costCenterId?: string;
-  ejecutorCostCenterId?: string;
-}
-
-interface LabOrderCreated {
-  id: string;
-}
-
-interface CostCenterRow {
-  id: string;
-  code: string;
-  name: string;
-  tipo: string | null;
-}
-
-interface LisAccess {
-  test: {
-    list: {
-      useQuery: (
-        input: { search?: string; activeOnly: boolean; limit?: number },
-        opts?: { enabled?: boolean },
-      ) => { data?: LabTestRow[]; isLoading: boolean };
-    };
-  };
-  order: {
-    create: {
-      useMutation: (opts: {
-        onSuccess?: (data: LabOrderCreated) => void;
-        onError?: (err: { message: string }) => void;
-      }) => {
-        mutate: (input: LabOrderCreateInput) => void;
-        isPending: boolean;
-        error?: { message: string } | null;
-      };
-    };
-  };
-}
-
-interface CostCenterAccess {
-  list: {
-    useQuery: (
-      input?: { tipo?: "productivo" | "intermedio" | "apoyo"; activo?: boolean },
-    ) => { data?: CostCenterRow[]; isLoading: boolean };
-  };
-}
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Código del laboratorio clínico — usado para pre-seleccionar ejecutor. */
-const LAB_CLI_CODE = "2-LAB-CLI";
+type ToastState = { title: string; variant?: "default" | "destructive" } | null;
 
 export default function NewLisOrderPage(): React.ReactElement {
   const router = useRouter();
-  // HH-10 (audit Stream H): lis + costCenter están montados en _app.ts —
-  // acceso directo, no requiere cast as-unknown.
-  const lis = trpc.lis;
-  const costCenter = trpc.costCenter;
+  const searchParams = useSearchParams();
+  const cuentaId = searchParams.get("cuentaId");
 
-  const [encounterId, setEncounterId] = React.useState("");
-  const [patientId, setPatientId] = React.useState("");
-  const [priority, setPriority] = React.useState<LabPriority>("ROUTINE");
-  const [clinicalIndication, setClinicalIndication] = React.useState("");
-  const [search, setSearch] = React.useState("");
-  const [debouncedSearch, setDebouncedSearch] = React.useState("");
-  const [selected, setSelected] = React.useState<LabTestRow[]>([]);
-  const [submitError, setSubmitError] = React.useState<string | null>(null);
-  const [costCenterId, setCostCenterId] = React.useState<string>("");
-  const [ejecutorCostCenterId, setEjecutorCostCenterId] = React.useState<string>("");
-
-  // Debounce 300ms para no spamear el endpoint mientras el usuario tipea.
-  React.useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300);
-    return () => clearTimeout(t);
-  }, [search]);
-
-  const tests = lis.test.list.useQuery(
-    { search: debouncedSearch || undefined, activeOnly: true, limit: 20 },
-    { enabled: debouncedSearch.length > 0 },
-  );
-
-  // Centros productivos + intermedios para el solicitante.
-  const solicitanteCenters = costCenter.list.useQuery({ activo: true });
-  // Centros intermedios para el ejecutor (solo tipo intermedio como 2-LAB-CLI).
-  const ejecutorCenters = costCenter.list.useQuery({ tipo: "intermedio", activo: true });
-
-  // Pre-seleccionar ejecutor con 2-LAB-CLI en cuanto se carguen los centros.
-  React.useEffect(() => {
-    if (ejecutorCenters.data && !ejecutorCostCenterId) {
-      const labCli = ejecutorCenters.data.find((c) => c.code === LAB_CLI_CODE);
-      if (labCli) setEjecutorCostCenterId(labCli.id);
-    }
-  }, [ejecutorCenters.data, ejecutorCostCenterId]);
-
-  const create = lis.order.create.useMutation({
-    onSuccess: () => {
-      router.push("/lis/orders");
-    },
-    onError: (err) => setSubmitError(err.message),
-  });
-
-  function addTest(t: LabTestRow): void {
-    setSelected((prev) =>
-      prev.some((x) => x.id === t.id) ? prev : [...prev, t],
+  if (!cuentaId) {
+    return (
+      <SelectorCuenta onSelect={(id) => router.push(`/lis/orders/new?cuentaId=${id}`)} />
     );
   }
 
-  function removeTest(id: string): void {
-    setSelected((prev) => prev.filter((t) => t.id !== id));
-  }
+  return <SeleccionExamenes cuentaId={cuentaId} />;
+}
 
-  const validUuids = UUID_RE.test(encounterId) && UUID_RE.test(patientId);
-  const canSubmit = validUuids && selected.length > 0 && !create.isPending;
+function SeleccionExamenes({ cuentaId }: { cuentaId: string }): React.ReactElement {
+  const router = useRouter();
 
-  function onSubmit(e: React.FormEvent): void {
-    e.preventDefault();
-    setSubmitError(null);
-    if (!canSubmit) {
-      if (!validUuids) {
-        setSubmitError("encounterId y patientId deben ser UUID válidos.");
-      } else if (selected.length === 0) {
-        setSubmitError("Selecciona al menos un test.");
-      }
-      return;
+  const contexto = trpc.patient.contextoCuenta.useQuery({ cuentaId });
+  const panelesQ = trpc.lis.test.listByArea.useQuery({ area: "LABORATORIO" });
+  const panels = React.useMemo(() => panelesQ.data ?? [], [panelesQ.data]);
+
+  const [modoBusqueda, setModoBusqueda] = React.useState(false);
+  const [buscador, setBuscador] = React.useState("");
+  const [seccionActual, setSeccionActual] = React.useState<string | null>(null);
+  const [seleccionadas, setSeleccionadas] = React.useState<Map<string, ExamenItem>>(new Map());
+  const [priority, setPriority] = React.useState<LabPriority>("ROUTINE");
+  const [resumenModo, setResumenModo] = React.useState<"ver" | "guardar" | null>(null);
+  const [toast, setToast] = React.useState<ToastState>(null);
+
+  React.useEffect(() => {
+    if (!seccionActual && panels.length > 0) setSeccionActual(panels[0]!.panelId);
+  }, [panels, seccionActual]);
+
+  const flatItems = React.useMemo<ExamenItem[]>(
+    () => panels.flatMap((p) => p.tests.map((t) => ({ testId: t.id, nombre: t.nombre, seccion: p.nombre }))),
+    [panels],
+  );
+
+  const panelActual = panels.find((p) => p.panelId === seccionActual) ?? null;
+
+  const listaVisible: ExamenItem[] = React.useMemo(() => {
+    if (modoBusqueda) {
+      const q = buscador.trim().toUpperCase();
+      if (!q) return flatItems;
+      return flatItems.filter(
+        (it) => it.nombre.toUpperCase().includes(q) || it.seccion.toUpperCase().includes(q),
+      );
     }
-    create.mutate({
-      encounterId,
-      patientId,
-      priority,
-      ...(clinicalIndication.trim() && {
-        clinicalIndication: clinicalIndication.trim(),
-      }),
-      items: selected.map((t) => ({ testId: t.id })),
-      ...(costCenterId && { costCenterId }),
-      ...(ejecutorCostCenterId && { ejecutorCostCenterId }),
+    if (!panelActual) return [];
+    return panelActual.tests.map((t) => ({ testId: t.id, nombre: t.nombre, seccion: panelActual.nombre }));
+  }, [modoBusqueda, buscador, flatItems, panelActual]);
+
+  function toggleSeleccion(item: ExamenItem): void {
+    setSeleccionadas((prev) => {
+      const next = new Map(prev);
+      if (next.has(item.testId)) next.delete(item.testId);
+      else next.set(item.testId, item);
+      return next;
     });
   }
 
-  // Filtra centros solicitantes a productivo + intermedio (excluye apoyo).
-  const centrosSolicitantes = (solicitanteCenters.data ?? []).filter(
-    (c) => c.tipo === "productivo" || c.tipo === "intermedio" || c.tipo === null,
+  function limpiarSeleccion(): void {
+    if (seleccionadas.size === 0) {
+      setToast({ title: "No hay selección que limpiar." });
+      return;
+    }
+    setSeleccionadas(new Map());
+    setToast({ title: "Selección limpiada." });
+  }
+
+  function cambiarModo(checked: boolean): void {
+    setModoBusqueda(checked);
+    if (!checked) setBuscador("");
+  }
+
+  const create = trpc.lis.order.create.useMutation({
+    onSuccess: (data) => {
+      setResumenModo(null);
+      setToast({ title: `${data.items.length} prestación(es) guardada(s) correctamente.` });
+      setSeleccionadas(new Map());
+    },
+    onError: (err) => {
+      setResumenModo(null);
+      setToast({ title: err.message, variant: "destructive" });
+    },
+  });
+
+  function onGuardarClick(): void {
+    if (seleccionadas.size === 0) {
+      setToast({ title: "Seleccione al menos una prestación antes de guardar." });
+      return;
+    }
+    setResumenModo("guardar");
+  }
+
+  function verSeleccion(): void {
+    if (seleccionadas.size === 0) {
+      setToast({ title: "No hay prestaciones seleccionadas." });
+      return;
+    }
+    setResumenModo("ver");
+  }
+
+  function confirmarGuardado(): void {
+    create.mutate({
+      cuentaId,
+      priority,
+      items: [...seleccionadas.values()].map((i) => ({ testId: i.testId })),
+    });
+  }
+
+  function onCancelar(): void {
+    if (
+      seleccionadas.size > 0 &&
+      !window.confirm("¿Desea cancelar? Se perderá la selección actual.")
+    ) {
+      return;
+    }
+    router.push("/lis/orders");
+  }
+
+  const seleccionArr = [...seleccionadas.values()].sort(
+    (a, b) => a.seccion.localeCompare(b.seccion) || a.nombre.localeCompare(b.nombre),
   );
+
+  const paciente = contexto.data?.paciente;
+  const edad = calcularEdadSimple(paciente?.birthDate ?? null);
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Nueva orden de laboratorio</h1>
-        <Button asChild variant="outline">
-          <Link href="/lis/orders">Cancelar</Link>
-        </Button>
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
+        <button
+          type="button"
+          onClick={onCancelar}
+          className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-white"
+          style={{ backgroundColor: MOCK.orange }}
+        >
+          ⊗ Cancelar
+        </button>
+        <div className="flex items-center gap-3">
+          {paciente ? (
+            <span className="text-sm text-muted-foreground">
+              {paciente.firstName} {paciente.lastName}
+              {edad !== null ? ` · ${edad} años` : ""}
+              {contexto.data?.cuenta.numeroCuenta ? ` · ${contexto.data.cuenta.numeroCuenta}` : ""}
+            </span>
+          ) : null}
+          <Select value={priority} onValueChange={(v) => setPriority(v as LabPriority)}>
+            <SelectTrigger className="w-32" aria-label="Prioridad">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ROUTINE">Rutina</SelectItem>
+              <SelectItem value="URGENT">Urgente</SelectItem>
+            </SelectContent>
+          </Select>
+          <button
+            type="button"
+            onClick={onGuardarClick}
+            className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-white"
+            style={{ backgroundColor: MOCK.teal }}
+          >
+            💾 Guardar Exámenes
+          </button>
+          <Link
+            href="/lis/orders?vista=tablero"
+            className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-white"
+            style={{ backgroundColor: MOCK.teal }}
+          >
+            📋 Consultar Tablero
+          </Link>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Datos de la orden</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Form onSubmit={onSubmit}>
-            <FormField>
-              <Label htmlFor="encounterId">Encuentro (UUID)</Label>
-              <Input
-                id="encounterId"
-                required
-                value={encounterId}
-                onChange={(e) => setEncounterId(e.target.value)}
-                placeholder="00000000-0000-0000-0000-000000000000"
-                aria-invalid={
-                  encounterId.length > 0 && !UUID_RE.test(encounterId)
-                }
+      <div className="rounded-lg border">
+        {/* Controles: toggle búsqueda + secciones */}
+        <div className="space-y-3 border-b p-4">
+          <div className="flex flex-wrap items-start gap-5">
+            <div className="flex min-w-[120px] flex-col items-start gap-1.5">
+              <span className="text-xs font-medium" style={{ color: MOCK.teal }}>
+                Buscar por N...
+              </span>
+              <Switch
+                checked={modoBusqueda}
+                onCheckedChange={cambiarModo}
+                aria-label="Buscar por nombre"
               />
-            </FormField>
+            </div>
+            <Input
+              className="flex-1"
+              placeholder="Escriba el nombre de la prueba..."
+              value={buscador}
+              onChange={(e) => setBuscador(e.target.value)}
+              disabled={!modoBusqueda}
+            />
+          </div>
 
-            <FormField>
-              <Label htmlFor="patientId">Paciente (UUID)</Label>
-              <Input
-                id="patientId"
-                required
-                value={patientId}
-                onChange={(e) => setPatientId(e.target.value)}
-                placeholder="00000000-0000-0000-0000-000000000000"
-                aria-invalid={
-                  patientId.length > 0 && !UUID_RE.test(patientId)
-                }
-              />
-            </FormField>
+          {!modoBusqueda ? (
+            <div>
+              <div className="mb-2 text-xs font-medium" style={{ color: MOCK.teal }}>
+                Sección
+              </div>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-5">
+                {panels.map((p) => (
+                  <label
+                    key={p.panelId}
+                    className="flex cursor-pointer items-center gap-2 py-0.5 text-sm"
+                    style={{ color: p.panelId === seccionActual ? MOCK.blue : MOCK.inkSoft }}
+                  >
+                    <input
+                      type="radio"
+                      name="seccion"
+                      checked={p.panelId === seccionActual}
+                      onChange={() => setSeccionActual(p.panelId)}
+                      style={{ accentColor: MOCK.blue }}
+                    />
+                    <span className={p.panelId === seccionActual ? "font-semibold" : undefined}>
+                      {p.nombre}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
 
-            <FormField>
-              <Label>Prioridad</Label>
-              <Select
-                value={priority}
-                onValueChange={(v) => setPriority(v as LabPriority)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ROUTINE">Rutina</SelectItem>
-                  <SelectItem value="URGENT">Urgente</SelectItem>
-                  <SelectItem value="STAT">STAT</SelectItem>
-                </SelectContent>
-              </Select>
-            </FormField>
-
-            <FormField>
-              <Label htmlFor="clinical">Indicación clínica</Label>
-              <Textarea
-                id="clinical"
-                value={clinicalIndication}
-                onChange={(e) => setClinicalIndication(e.target.value)}
-                rows={3}
-                maxLength={2000}
-                placeholder="Sospecha clínica, diagnóstico de trabajo, etc."
-              />
-            </FormField>
-
-            <FormField>
-              <Label htmlFor="cost-center-solicitante">
-                Centro solicitante{" "}
-                <span className="text-xs text-muted-foreground">(opcional)</span>
-              </Label>
-              <Select
-                value={costCenterId}
-                onValueChange={setCostCenterId}
-                disabled={solicitanteCenters.isLoading}
-              >
-                <SelectTrigger id="cost-center-solicitante">
-                  <SelectValue placeholder="Seleccionar centro..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {centrosSolicitantes.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      <span className="font-mono text-xs">{c.code}</span>
-                      <span className="ml-2">{c.name}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-
-            <FormField>
-              <Label htmlFor="cost-center-ejecutor">
-                Centro ejecutor{" "}
-                <span className="text-xs text-muted-foreground">(opcional — por defecto: {LAB_CLI_CODE})</span>
-              </Label>
-              <Select
-                value={ejecutorCostCenterId}
-                onValueChange={setEjecutorCostCenterId}
-                disabled={ejecutorCenters.isLoading}
-              >
-                <SelectTrigger id="cost-center-ejecutor">
-                  <SelectValue placeholder="Seleccionar centro ejecutor..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {(ejecutorCenters.data ?? []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      <span className="font-mono text-xs">{c.code}</span>
-                      <span className="ml-2">{c.name}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormField>
-
-            <FormField>
-              <Label htmlFor="test-search">Buscar tests</Label>
-              <Input
-                id="test-search"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Código o nombre del test (mín. 1 caracter)"
-                aria-controls="test-search-results"
-                aria-expanded={debouncedSearch.length > 0}
-              />
-              {debouncedSearch.length > 0 ? (
-                <ul
-                  id="test-search-results"
-                  role="listbox"
-                  className="mt-2 max-h-56 divide-y overflow-auto rounded-md border"
-                >
-                  {tests.isLoading ? (
-                    <li className="px-3 py-2 text-sm text-muted-foreground">
-                      Buscando…
-                    </li>
-                  ) : null}
-                  {!tests.isLoading && (tests.data?.length ?? 0) === 0 ? (
-                    <li className="px-3 py-2 text-sm text-muted-foreground">
-                      Sin resultados.
-                    </li>
-                  ) : null}
-                  {tests.data?.map((t) => {
-                    const already = selected.some((x) => x.id === t.id);
-                    return (
-                      <li key={t.id}>
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={already}
-                          disabled={already}
-                          onClick={() => addTest(t)}
-                          className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
+        {/* Prestaciones */}
+        <div className="flex items-center gap-4 px-4 pt-3">
+          <span className="text-base font-semibold">Prestaciones</span>
+          <span
+            className="rounded-full px-3 py-0.5 text-xs font-semibold text-white"
+            style={{ backgroundColor: seleccionadas.size === 0 ? "#aeb9bf" : MOCK.teal }}
+          >
+            {seleccionadas.size} {seleccionadas.size === 1 ? "seleccionada" : "seleccionadas"}
+          </span>
+        </div>
+        <div className="max-h-[42vh] overflow-y-auto px-4 py-3">
+          {panelesQ.isLoading ? (
+            <p className="text-sm text-muted-foreground">Cargando catálogo…</p>
+          ) : listaVisible.length === 0 ? (
+            <p className="italic text-muted-foreground">
+              {modoBusqueda
+                ? "No se encontraron prestaciones con ese criterio de búsqueda."
+                : "Esta sección no tiene prestaciones disponibles."}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-x-7 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-3">
+              {listaVisible.map((it) => {
+                const checked = seleccionadas.has(it.testId);
+                return (
+                  <label
+                    key={it.testId}
+                    className={`flex items-start gap-2 rounded px-1 py-1 text-sm hover:bg-muted ${checked ? "font-semibold" : ""}`}
+                    style={{ color: checked ? MOCK.ink : MOCK.inkSoft }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSeleccion(it)}
+                      className="mt-0.5"
+                      style={{ accentColor: MOCK.teal }}
+                    />
+                    <span>
+                      {it.nombre}
+                      {modoBusqueda ? (
+                        <span
+                          className="ml-1.5 rounded px-1.5 py-0.5 align-middle text-[10px] font-semibold"
+                          style={{ backgroundColor: "#e6eef0", color: MOCK.tealDark }}
                         >
-                          <span>
-                            <span className="font-mono text-xs">{t.code}</span>
-                            <span className="ml-2">{t.name}</span>
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {already ? "Agregado" : "Agregar"}
-                          </span>
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </FormField>
+                          {it.seccion}
+                        </span>
+                      ) : null}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
-            <FormField>
-              <Label>Tests seleccionados ({selected.length})</Label>
-              {selected.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Aún no agregaste ningún test.
-                </p>
-              ) : (
-                <ul className="divide-y rounded-md border">
-                  {selected.map((t) => (
-                    <li
-                      key={t.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-                    >
-                      <span>
-                        <span className="font-mono text-xs">{t.code}</span>
-                        <span className="ml-2">{t.name}</span>
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => removeTest(t.id)}
-                        aria-label={`Quitar ${t.name}`}
-                      >
-                        Quitar
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </FormField>
+        {/* Barra de selección */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-4 py-3">
+          <div className="text-sm" style={{ color: MOCK.inkSoft }}>
+            {seleccionadas.size === 0 ? (
+              "Ninguna prestación seleccionada."
+            ) : (
+              <>
+                <b style={{ color: MOCK.tealDark }}>{seleccionadas.size}</b> prestación(es):{" "}
+                {seleccionArr
+                  .slice(0, 3)
+                  .map((i) => i.nombre)
+                  .join(" · ")}
+                {seleccionadas.size > 3 ? " …" : ""}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <button type="button" className="underline" style={{ color: MOCK.blue }} onClick={verSeleccion}>
+              Ver selección
+            </button>
+            <span>·</span>
+            <button
+              type="button"
+              className="underline"
+              style={{ color: MOCK.blue }}
+              onClick={limpiarSeleccion}
+            >
+              Limpiar selección
+            </button>
+          </div>
+        </div>
 
-            <FormError>{submitError ?? create.error?.message}</FormError>
-            <Button type="submit" disabled={!canSubmit}>
-              {create.isPending ? "Creando…" : "Crear orden"}
-            </Button>
-          </Form>
-        </CardContent>
-      </Card>
+        {/* Panel Solicitud de laboratorio */}
+        <div className="space-y-3 border-t bg-muted/10 p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-base font-semibold">Solicitud de laboratorio</span>
+            <span
+              className="rounded-full px-3 py-0.5 text-xs font-semibold text-white"
+              style={{ backgroundColor: seleccionArr.length === 0 ? "#aeb9bf" : MOCK.teal }}
+            >
+              {seleccionArr.length} {seleccionArr.length === 1 ? "examen" : "exámenes"}
+            </span>
+            <span className="flex-1" />
+            <button
+              type="button"
+              className="text-sm underline"
+              style={{ color: MOCK.blue }}
+              onClick={limpiarSeleccion}
+            >
+              Vaciar solicitud
+            </button>
+            <button
+              type="button"
+              onClick={onGuardarClick}
+              className="inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-white"
+              style={{ backgroundColor: MOCK.teal }}
+            >
+              💾 Guardar Exámenes
+            </button>
+          </div>
+
+          {seleccionArr.length === 0 ? (
+            <p className="italic text-muted-foreground">
+              Aún no hay exámenes en la solicitud. Seleccione pruebas arriba para agregarlas.
+            </p>
+          ) : (
+            <div className="grid max-h-[30vh] grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+              {seleccionArr.map((it) => (
+                <div
+                  key={it.testId}
+                  className="flex items-center gap-2 rounded-lg border bg-background p-2 text-sm"
+                  style={{ borderColor: "#d9e6e8" }}
+                >
+                  <span className="flex-1 font-semibold leading-tight" style={{ color: MOCK.ink }}>
+                    {it.nombre}
+                  </span>
+                  <span
+                    className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                    style={{ backgroundColor: "#e6eef0", color: MOCK.tealDark }}
+                  >
+                    {it.seccion}
+                  </span>
+                  <button
+                    type="button"
+                    title="Quitar de la solicitud"
+                    onClick={() => toggleSeleccion(it)}
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs"
+                    style={{ backgroundColor: "#fbe4e0", color: "#c0392b" }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Modal resumen: Ver selección / Confirmar y Guardar */}
+      <Dialog open={resumenModo !== null} onOpenChange={(o) => !o && setResumenModo(null)}>
+        <DialogContent className="max-h-[80vh] max-w-xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {resumenModo === "guardar" ? "Prestaciones a guardar" : "Prestaciones seleccionadas"}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Total: <b>{seleccionArr.length}</b> prestación(es).
+          </p>
+          <ol className="list-decimal space-y-1 pl-5 text-sm">
+            {seleccionArr.map((it) => (
+              <li key={it.testId} style={{ color: MOCK.inkSoft }}>
+                {it.nombre}{" "}
+                <span
+                  className="rounded px-1.5 py-0.5 text-[10px] font-semibold"
+                  style={{ backgroundColor: "#e6eef0", color: MOCK.tealDark }}
+                >
+                  {it.seccion}
+                </span>
+              </li>
+            ))}
+          </ol>
+          {create.error ? (
+            <p className="text-sm text-destructive" role="alert">
+              {create.error.message}
+            </p>
+          ) : null}
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setResumenModo(null)}
+              className="rounded-md px-4 py-2 text-sm font-medium text-white"
+              style={{ backgroundColor: MOCK.orange }}
+            >
+              Cerrar
+            </button>
+            <button
+              type="button"
+              disabled={create.isPending}
+              onClick={resumenModo === "guardar" ? confirmarGuardado : () => setResumenModo(null)}
+              className="rounded-md px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+              style={{ backgroundColor: MOCK.teal }}
+            >
+              {resumenModo === "guardar"
+                ? create.isPending
+                  ? "Guardando…"
+                  : "Confirmar y Guardar"
+                : "Aceptar"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {toast ? (
+        <Toast
+          variant={toast.variant ?? "default"}
+          open
+          onOpenChange={(o) => !o && setToast(null)}
+        >
+          <ToastTitle>{toast.title}</ToastTitle>
+          <ToastDescription />
+        </Toast>
+      ) : null}
     </div>
   );
+}
+
+/** Edad simple en años, sin dependencia cruzada de paquete — mismo cálculo que el resto del router LIS. */
+function calcularEdadSimple(birthDate: Date | string | null | undefined): number | null {
+  if (!birthDate) return null;
+  const d = new Date(birthDate);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24 * 365.25));
 }

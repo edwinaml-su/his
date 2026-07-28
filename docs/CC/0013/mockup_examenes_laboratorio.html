@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seleccionar Exámenes de Laboratorio — Expediente Electrónico</title>
+<style>
+  :root{--teal:#2f8a99;--orange:#e8853d;--blue:#2f6fb0;--ink:#243642;--ink-soft:#4a5b66;--line:#d9e0e4;--panel:#fff;--check:#2f8a99;}
+  *{box-sizing:border-box;} html,body{margin:0;padding:0;}
+  body{font-family:"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:#c9d1d6;color:var(--ink);font-size:14px;padding:18px;}
+  .window{max-width:1500px;margin:0 auto;background:var(--panel);border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.25);overflow:hidden;border:1px solid #b9c2c8;}
+  .titlebar{background:#0f2b3a;color:#eaf1f4;display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;}
+  .titlebar .app-ico{width:18px;height:18px;border-radius:3px;background:#2f8a99;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;}
+  .titlebar .spacer{flex:1;} .titlebar .win-btns{display:flex;gap:14px;color:#c7d2d8;font-size:14px;}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 22px 6px;}
+  .modal-title{font-size:19px;font-weight:600;} .modal-x{border:none;background:none;font-size:20px;color:#8b98a0;cursor:pointer;}
+  .toolbar{display:flex;align-items:center;justify-content:space-between;padding:4px 22px 14px;border-bottom:1px solid var(--line);gap:14px;flex-wrap:wrap;}
+  .btn{border:none;border-radius:6px;cursor:pointer;font-size:13.5px;padding:9px 16px;display:inline-flex;align-items:center;gap:7px;font-weight:500;}
+  .btn:hover{filter:brightness(.96);} .btn-cancel{background:var(--orange);color:#fff;} .btn-teal{background:var(--teal);color:#fff;}
+  .toolbar-right{display:flex;gap:12px;}
+  .controls{padding:16px 22px 6px;}
+  .search-row{display:flex;align-items:flex-start;gap:20px;margin-bottom:10px;}
+  .toggle-wrap{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:120px;}
+  .toggle-label{color:var(--teal);font-size:13px;}
+  .switch{position:relative;display:inline-block;width:56px;height:26px;cursor:pointer;}
+  .switch input{display:none;}
+  .slider{position:absolute;inset:0;background:#c3ccd1;border-radius:20px;transition:.2s;}
+  .slider:before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.3);}
+  .switch input:checked + .slider{background:var(--teal);} .switch input:checked + .slider:before{transform:translateX(30px);}
+  .search-input{flex:1;padding:10px 14px;border:1px solid #cbd4d9;border-radius:6px;font-size:14px;outline:none;}
+  .search-input:focus{border-color:var(--teal);} .search-input:disabled{background:#f3f5f6;color:#9aa6ac;}
+  .section-block{display:none;margin-top:4px;} .section-block.on{display:block;}
+  .section-label{color:var(--teal);font-size:13px;margin:2px 0 8px;}
+  .section-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px 22px;margin-bottom:6px;}
+  .radio-item{display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--ink-soft);font-size:13.5px;padding:3px 0;}
+  .radio-item input{accent-color:var(--blue);width:15px;height:15px;cursor:pointer;} .radio-item.active{color:var(--blue);font-weight:600;}
+  .prest-header{display:flex;align-items:center;gap:16px;padding:14px 22px 6px;}
+  .prest-title{font-size:18px;font-weight:600;}
+  .prest-count{font-size:12.5px;color:#fff;background:var(--teal);border-radius:20px;padding:3px 12px;font-weight:600;}
+  .prest-count.zero{background:#aeb9bf;}
+  .list-wrap{padding:6px 22px 20px;max-height:52vh;overflow-y:auto;}
+  .prest-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 28px;align-content:start;}
+  .check-item{display:flex;align-items:flex-start;gap:9px;padding:5px 4px;border-radius:5px;cursor:pointer;font-size:13.5px;color:var(--ink-soft);line-height:1.25;}
+  .check-item:hover{background:#f0f6f7;} .check-item input{accent-color:var(--check);width:16px;height:16px;margin-top:1px;flex:none;cursor:pointer;}
+  .check-item.selected{color:var(--ink);font-weight:600;}
+  .sec-badge{display:inline-block;font-size:10px;background:#e6eef0;color:#2a7d8c;border-radius:4px;padding:1px 6px;margin-left:6px;font-weight:600;vertical-align:middle;}
+  .empty-note{color:#94a1a8;font-style:italic;padding:18px 4px;}
+  .list-scrollhint{height:4px;background:#d9e0e4;border-radius:3px;width:120px;margin:8px auto 0;}
+  .selection-bar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 22px;border-top:1px solid var(--line);background:#f7f9fa;flex-wrap:wrap;}
+  .sel-summary{font-size:13px;color:var(--ink-soft);} .sel-summary b{color:#2a7d8c;}
+  .link-btn{background:none;border:none;color:var(--blue);cursor:pointer;font-size:13px;text-decoration:underline;padding:0;}
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#0f2b3a;color:#eaf1f4;padding:12px 18px;border-radius:8px;font-size:13.5px;box-shadow:0 8px 24px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.25s;max-width:90vw;}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  .overlay{position:fixed;inset:0;background:rgba(15,43,58,.45);display:none;align-items:center;justify-content:center;padding:20px;z-index:20;}
+  .overlay.on{display:flex;}
+  .summary-card{background:#fff;border-radius:10px;max-width:640px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;}
+  .summary-card h3{margin:0;padding:18px 22px;border-bottom:1px solid var(--line);font-size:17px;}
+  .summary-body{padding:12px 22px;overflow-y:auto;} .summary-body ol{margin:6px 0;padding-left:22px;} .summary-body li{padding:3px 0;color:var(--ink-soft);font-size:13.5px;}
+  .summary-foot{padding:14px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;}
+  .mock-note{max-width:1500px;margin:12px auto 0;color:#48606c;font-size:12px;text-align:center;}
+  @media (max-width:1100px){.section-grid{grid-template-columns:repeat(3,1fr);}.prest-grid{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:680px){.section-grid{grid-template-columns:repeat(2,1fr);}.prest-grid{grid-template-columns:1fr;}}
+
+  /* ===== Panel Solicitud (grid de seleccionados) ===== */
+  .solicitud-panel{padding:14px 22px 22px;border-top:1px solid var(--line);background:#fafcfc;}
+  .solicitud-head{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+  .solicitud-head .t{font-size:16px;font-weight:600;color:var(--ink);}
+  .sol-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-height:34vh;overflow-y:auto;}
+  .sol-chip{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #d9e6e8;border-radius:8px;padding:8px 10px;font-size:13px;}
+  .sol-chip .nm{flex:1;color:var(--ink);font-weight:600;line-height:1.2;}
+  .sol-chip .chip-x{border:none;background:#fbe4e0;color:#c0392b;border-radius:6px;width:24px;height:24px;min-width:24px;cursor:pointer;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;}
+  .sol-chip .chip-x:hover{background:#f5c9c1;}
+  .sol-empty{color:#94a1a8;font-style:italic;padding:10px 2px;}
+  @media (max-width:1100px){.sol-grid{grid-template-columns:repeat(2,1fr);}}
+  @media (max-width:680px){.sol-grid{grid-template-columns:1fr;}}
+
+  /* ===== Tablero ===== */
+  .screen{display:none;} .screen.on{display:block;}
+  .tablero-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .tablero-toolbar .left{display:flex;align-items:center;gap:12px;}
+  .tablero-title{font-size:19px;font-weight:600;}
+  .tablero-search{padding:9px 14px;border:1px solid #cbd4d9;border-radius:6px;font-size:14px;outline:none;min-width:260px;}
+  .tablero-search:focus{border-color:var(--teal);}
+  .kpis{display:flex;gap:10px;padding:14px 22px 4px;flex-wrap:wrap;}
+  .kpi{background:#f0f6f7;border:1px solid #dbe7e9;border-radius:8px;padding:8px 16px;min-width:120px;}
+  .kpi .n{font-size:22px;font-weight:700;color:#2a7d8c;} .kpi .l{font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.03em;}
+  .table-wrap{padding:8px 22px 22px;overflow:auto;max-height:60vh;}
+  table.tb{width:100%;border-collapse:collapse;font-size:13px;}
+  table.tb th{background:var(--teal);color:#fff;text-align:left;padding:9px 12px;position:sticky;top:0;font-weight:600;white-space:nowrap;}
+  table.tb td{padding:8px 12px;border-bottom:1px solid var(--line);color:var(--ink-soft);vertical-align:middle;}
+  table.tb tr:hover td{background:#f0f6f7;}
+  .pill{display:inline-block;font-size:11px;border-radius:20px;padding:2px 10px;font-weight:600;}
+  .pill-activa{background:#e0f2e9;color:#1c7a4a;} .pill-urg{background:#fbe4e0;color:#c0392b;} .pill-rut{background:#e6eef0;color:#2a7d8c;}
+  .pill-pend{background:#fdf1dd;color:#b9791b;} .pill-proc{background:#e2ecfb;color:#2f6fb0;} .pill-list{background:#e0f2e9;color:#1c7a4a;}
+  .btn-abrir{background:var(--teal);color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer;font-weight:500;}
+  .btn-abrir:hover{filter:brightness(.95);}
+  .btn-ghost{background:#fff;color:var(--teal);border:1px solid var(--teal);border-radius:6px;padding:8px 14px;font-size:13px;cursor:pointer;font-weight:500;}
+  .btn-ghost:hover{background:#f0f6f7;}
+
+  /* ===== Modal solicitud ===== */
+  .sol-card{background:#fff;border-radius:10px;max-width:940px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.35);overflow:hidden;}
+  .sol-head{padding:16px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+  .sol-head h3{margin:0 0 4px;font-size:17px;} .sol-head .meta{font-size:12.5px;color:var(--ink-soft);line-height:1.5;}
+  .sol-body{padding:12px 22px;overflow:auto;}
+  .sol-note{width:100%;min-height:52px;border:1px solid #cbd4d9;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;resize:vertical;}
+  .sol-note:focus{outline:none;border-color:var(--teal);}
+  .sol-label{font-size:12px;color:var(--teal);font-weight:600;margin:10px 0 4px;}
+  table.ex{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px;}
+  table.ex th{background:#eef4f5;color:#2a4650;text-align:left;padding:7px 9px;font-weight:600;border-bottom:1px solid var(--line);}
+  table.ex td{padding:6px 9px;border-bottom:1px solid #eef1f3;vertical-align:middle;}
+  table.ex select,table.ex input{width:100%;border:1px solid #cbd4d9;border-radius:5px;padding:5px 7px;font-size:12.5px;font-family:inherit;}
+  table.ex select:focus,table.ex input:focus{outline:none;border-color:var(--teal);}
+  .sec-tag{font-size:10px;background:#e6eef0;color:#2a7d8c;border-radius:4px;padding:1px 6px;font-weight:600;}
+  .sol-foot{padding:14px 22px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .sol-foot .actions{display:flex;gap:10px;}
+</style>
+</head>
+<body>
+<div class="window">
+  <div class="titlebar"><span class="app-ico">Ex</span><span>Expediente Electrónico &nbsp;-&nbsp; ()&nbsp; -&nbsp; Historia Clínica</span><span class="spacer"></span><span class="win-btns"><span>&#9633;</span><span>&#8212;</span><span>&#10061;</span><span>&#10005;</span></span></div>
+  <div class="modal-head"><div class="modal-title">Seleccionar Exámenes de Laboratorio</div><button class="modal-x" onclick="cerrar()">&#10005;</button></div>
+  <div class="toolbar">
+    <button class="btn btn-cancel" onclick="cancelar()">&#8855; Cancelar</button>
+    <div class="toolbar-right">
+      <button class="btn btn-teal" onclick="guardar()">&#128190; Guardar Exámenes</button>
+      <button class="btn btn-teal" onclick="abrirTablero()">&#128203; Consultar Tablero</button>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="search-row">
+      <div class="toggle-wrap"><span class="toggle-label">Buscar por N...</span>
+        <label class="switch"><input type="checkbox" id="toggleBuscar" onchange="cambiarModo()"><span class="slider"></span></label>
+      </div>
+      <input type="text" class="search-input" id="buscador" placeholder="Escriba el nombre de la prueba..." oninput="renderLista()" disabled>
+    </div>
+    <div class="section-block on" id="sectionBlock">
+      <div class="section-label">Sección</div>
+      <div class="section-grid" id="sectionGrid"></div>
+    </div>
+  </div>
+  <div class="prest-header"><span class="prest-title">Prestaciones</span><span class="prest-count zero" id="contador">0 seleccionadas</span></div>
+  <div class="list-wrap"><div class="prest-grid" id="listaPrestaciones"></div><div class="list-scrollhint"></div></div>
+  <div class="selection-bar">
+    <div class="sel-summary" id="selSummary">Ninguna prestación seleccionada.</div>
+    <div><button class="link-btn" onclick="verSeleccion()">Ver selección</button> &nbsp;&middot;&nbsp; <button class="link-btn" onclick="limpiarSeleccion()">Limpiar selección</button></div>
+  </div>
+  <div class="solicitud-panel">
+    <div class="solicitud-head">
+      <span class="t">Solicitud de laboratorio</span>
+      <span class="prest-count zero" id="solChipCount">0 exámenes</span>
+      <span style="flex:1"></span>
+      <button class="link-btn" onclick="limpiarSeleccion()">Vaciar solicitud</button>
+      <button class="btn btn-teal" style="margin-left:12px" onclick="guardar()">&#128190; Guardar Exámenes</button>
+    </div>
+    <div class="sol-grid" id="solGrid"></div>
+  </div>
+</div>
+<p class="mock-note">Mockup funcional del módulo de escogitación de exámenes de laboratorio &middot; catálogo: PORTAFOLIO_EX (157 prestaciones en 10 secciones).</p>
+<!-- ===== Pantalla Tablero ===== -->
+<div class="overlay" id="tableroScreen" style="align-items:flex-start;overflow:auto;">
+  <div class="window" style="margin:18px auto;">
+    <div class="titlebar"><span class="app-ico">Ex</span><span>Expediente Electrónico &nbsp;-&nbsp; Tablero de Exámenes &nbsp;-&nbsp; Cuentas Activas</span><span class="spacer"></span><span class="win-btns"><span>&#9633;</span><span>&#8212;</span><span>&#10061;</span><span onclick="cerrarTablero()" style="cursor:pointer">&#10005;</span></span></div>
+    <div class="tablero-toolbar">
+      <div class="left">
+        <button class="btn-ghost" onclick="cerrarTablero()">&#8592; Volver a selección</button>
+        <span class="tablero-title">Consultar Tablero</span>
+      </div>
+      <input type="text" class="tablero-search" id="tableroSearch" placeholder="Buscar por cuenta, paciente o médico..." oninput="renderTablero()">
+    </div>
+    <div class="kpis" id="tableroKpis"></div>
+    <div class="table-wrap">
+      <table class="tb">
+        <thead><tr>
+          <th>Cuenta</th><th>Paciente</th><th>Edad/Sexo</th><th>Médico</th><th>Ingreso</th>
+          <th>Prioridad</th><th>Exámenes</th><th>Estado</th><th></th>
+        </tr></thead>
+        <tbody id="tableroBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Modal solicitud (exámenes de una cuenta) ===== -->
+<div class="overlay" id="solOverlay">
+  <div class="sol-card">
+    <div class="sol-head">
+      <div>
+        <h3 id="solTitle">Solicitud</h3>
+        <div class="meta" id="solMeta"></div>
+      </div>
+      <button class="modal-x" onclick="cerrarSolicitud()">&#10005;</button>
+    </div>
+    <div class="sol-body">
+      <div class="sol-label">Instrucción general para el laboratorio</div>
+      <textarea class="sol-note" id="solNota" placeholder="Ej.: Tomar muestras en ayunas, priorizar por urgencia, notificar resultados críticos al médico tratante..."></textarea>
+      <div class="sol-label">Exámenes relacionados a la cuenta</div>
+      <table class="ex">
+        <thead><tr><th style="width:34px">#</th><th>Examen</th><th style="width:150px">Sección</th><th style="width:150px">Estado</th><th style="width:34%">Instrucción</th></tr></thead>
+        <tbody id="solExams"></tbody>
+      </table>
+    </div>
+    <div class="sol-foot">
+      <span class="meta" id="solResumen" style="font-size:12.5px;color:#4a5b66;"></span>
+      <div class="actions">
+        <button class="btn-ghost" onclick="cerrarSolicitud()">Cerrar</button>
+        <button class="btn btn-teal" onclick="guardarSolicitud()">&#128190; Guardar cambios</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay"><div class="summary-card"><h3 id="summaryTitle">Prestaciones seleccionadas</h3><div class="summary-body" id="summaryBody"></div><div class="summary-foot"><button class="btn btn-cancel" onclick="cerrarResumen()">Cerrar</button><button class="btn btn-teal" id="summaryConfirm" onclick="cerrarResumen()">Aceptar</button></div></div></div>
+
+<script>
+const SECTIONS = {
+  "QUIMICA": [
+    "GLUCOSA",
+    "COLESTEROL",
+    "TRIGLICERIDO",
+    "ACIDO URICO",
+    "COLESTEROL HDL",
+    "COLESTEROL LDL",
+    "CREATININA",
+    "NITROGENO UREICO",
+    "CLORO",
+    "SODIO",
+    "POTASIO",
+    "FOSFORO",
+    "MAGNESIO",
+    "CALCIO",
+    "TGO",
+    "TGP",
+    "FOSFATASA ALCATINA",
+    "GAMMA-GT",
+    "LIPASA",
+    "AMILASA",
+    "BILIRRUBINA TOTAL",
+    "BILIRRUBINA DIRECTA",
+    "BILIRRUBINA INDIRECTA",
+    "PROTEINAS TOTALES",
+    "ALBUMINA",
+    "GLOBULINA",
+    "RELACION ALBUMINA/GLOBULINA",
+    "HIERRO",
+    "AMONIO",
+    "PROTEINA C REACTIVA",
+    "CK-TOTAL",
+    "LACTATO DESHIDROGENASA",
+    "TEST 'OSULLIVAN",
+    "CURVA TOLERANCIA GLUCOSA"
+  ],
+  "URIANALISIS": [
+    "GENERAL DE ORINA",
+    "PANEL RAPIDO DE DROGAS",
+    "DIMORFISMO ERITROCITARIO",
+    "PRUEBA DE EMBARAZO",
+    "GLUCOSA",
+    "ACIDO URICO",
+    "NITROGENO UREICO",
+    "FOSFORO",
+    "MAGNESIO",
+    "CALCIO",
+    "CREATININA",
+    "PROTEINAS TOTALES",
+    "AMILASA",
+    "CLORO",
+    "SODIO",
+    "POTASIO",
+    "DEPURACION DE CREATININA",
+    "DEPURACION DE PROTEINAS"
+  ],
+  "HEMATOLOGIA": [
+    "HEMOGRAMA COMPLETO",
+    "FROTIS DE SANGRE PERIFERICA",
+    "RETICULOCITOS",
+    "ERITROSEDIMENTACIÓN",
+    "GOTA GRUESA",
+    "CONCENTRADO DE STROUT",
+    "CONTEO DE EOSINOFILOS",
+    "INDUCCIÓN DE DREPANOCITOS",
+    "COLORACION DE WRIGHT",
+    "ANTICUERPOS ANTINUCLEARES"
+  ],
+  "PRUEBAS ESPECIALES": [
+    "PROCALCITONINA",
+    "INSULINA",
+    "CK-MB",
+    "VITAMINA B12",
+    "VITAMINA D",
+    "TSH",
+    "T3 TOTAL",
+    "T4 TOTAL",
+    "T3 LIBRE",
+    "T4 LIBRE",
+    "HIV CUARTA GENERACIÓN",
+    "SIFILIS CUARTA GENERACIÓN",
+    "CHAGAS",
+    "AG AUSTRALIANO HEP B",
+    "AC HEPATITIS C",
+    "PSA TOTAL",
+    "PSA LIBRE",
+    "HEMOGLOBINA GLICOSILADA",
+    "TROPONINA I",
+    "TROPONINA T",
+    "PRO-BNP",
+    "FERRITINA",
+    "CEA",
+    "CA 19-9",
+    "PCR-CARDIACA",
+    "ALFAFETO-PROTEINA",
+    "FACTOR REUMATOIDEO",
+    "CORTISOL",
+    "MIOGLOBINA"
+  ],
+  "COAGULACION": [
+    "TIEMPO DE PROTROMBINA",
+    "TIEMPO DE TROMBOPLASTINA PARCIAL",
+    "TIEMPO DE TROMBINA",
+    "FIBRINOGENO",
+    "TIEMPO DE COAGULACIÓN",
+    "TIEMPO DE SANGRAMIENTO",
+    "DIMERO D",
+    "ANTICOAGULANTE LUPICO"
+  ],
+  "COPROLOGIA": [
+    "GENERAL DE HECES",
+    "CONCENTRADO DE HECES",
+    "AZUL DE METILENO",
+    "SANGRE OCULTA",
+    "ANTIGENO PARA SALMONELLA",
+    "AG HELICOBACTER PYLORI",
+    "SUSTANCIAS REDUCTORAS",
+    "COLORACION DE COCCIDIOS",
+    "SUDAN III",
+    "ROTAVIRUS",
+    "PANEL GASTRICO VIRAL",
+    "PH EN HECES",
+    "CLOSTRIDIUM-PRUEBA RAPIDA"
+  ],
+  "INMUNOLOGIA/SEROLOGIA": [
+    "HIV-RAPIDO",
+    "RPR-CARBON",
+    "SIFILIS-RAPIDO",
+    "COMBO IgG/IgM HEPATITIS A",
+    "COMBO DENGUE NS1/IgG/IgM",
+    "PANEL ITS RAPIDO",
+    "COMBO SARAMPION IgG/IgM",
+    "LATEX-FACTOR REUMATOIDEO",
+    "ANTIGENOS FEBRILES",
+    "PANEL RAPIDO ARBOVIRUS",
+    "MONOTEST",
+    "PRUEBA DE EMBARAZO",
+    "INFLUENZA Ag A/B/H1N1",
+    "ANTIGENO COVID 19",
+    "ANTICUERPOS HELICOBACTER PYLORI",
+    "PRUEBA ASTO-LATEX",
+    "PANEL RESPIRATORIO RAPIDO"
+  ],
+  "BACTERIOLOGIA": [
+    "BACILOSCOPIA",
+    "COLORACION GRAM",
+    "COLORACION ZIEHL-NEELSEN",
+    "DIRECTO KOH",
+    "DIRECTO TINTA CHINA",
+    "CITOQUIMICO DE LIQUIDO DE DERRAME",
+    "HEMOCULTIVOS",
+    "CULTIVOS FARINGEO",
+    "CULTIVO DE ESPUTO",
+    "UROCULTIVO",
+    "COPROCULTIVO",
+    "CULTIVO VAGINAL",
+    "CULTIVO DE ULCERA",
+    "CULTIVO DE HERIDA OPERATORIA",
+    "CULTIVO DE LCR",
+    "CULTIVO ESPECIFICAR PROCEDENCIA"
+  ],
+  "INMUNO-HEMATOLOGIA": [
+    "TIPEO SANGUINEO",
+    "PRUEBA DU",
+    "ANTICUERPOS IRREGULARES",
+    "COOMBS DIRECTO",
+    "PRUEBA CRUZADA",
+    "AGLUTININAS"
+  ],
+  "BIOLOGIA MOLECULAR": [
+    "PANEL GASTROINTESTINAL",
+    "PANEL MENINGITIS/ENCEFALITIS",
+    "PANEL RESPIRATOIRO",
+    "PANELPNEUMONIA",
+    "PANEL DE INFECCION",
+    "PANEL DE SEPSIS"
+  ]
+};
+const ITEMS = [{"seccion": "PRUEBAS ESPECIALES", "prueba": "AC HEPATITIS C"}, {"seccion": "QUIMICA", "prueba": "ACIDO URICO"}, {"seccion": "URIANALISIS", "prueba": "ACIDO URICO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "AG AUSTRALIANO HEP B"}, {"seccion": "COPROLOGIA", "prueba": "AG HELICOBACTER PYLORI"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "AGLUTININAS"}, {"seccion": "QUIMICA", "prueba": "ALBUMINA"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "ALFAFETO-PROTEINA"}, {"seccion": "QUIMICA", "prueba": "AMILASA"}, {"seccion": "URIANALISIS", "prueba": "AMILASA"}, {"seccion": "QUIMICA", "prueba": "AMONIO"}, {"seccion": "COAGULACION", "prueba": "ANTICOAGULANTE LUPICO"}, {"seccion": "HEMATOLOGIA", "prueba": "ANTICUERPOS ANTINUCLEARES"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "ANTICUERPOS HELICOBACTER PYLORI"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "ANTICUERPOS IRREGULARES"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "ANTIGENO COVID 19"}, {"seccion": "COPROLOGIA", "prueba": "ANTIGENO PARA SALMONELLA"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "ANTIGENOS FEBRILES"}, {"seccion": "COPROLOGIA", "prueba": "AZUL DE METILENO"}, {"seccion": "BACTERIOLOGIA", "prueba": "BACILOSCOPIA"}, {"seccion": "QUIMICA", "prueba": "BILIRRUBINA DIRECTA"}, {"seccion": "QUIMICA", "prueba": "BILIRRUBINA INDIRECTA"}, {"seccion": "QUIMICA", "prueba": "BILIRRUBINA TOTAL"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "CA 19-9"}, {"seccion": "QUIMICA", "prueba": "CALCIO"}, {"seccion": "URIANALISIS", "prueba": "CALCIO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "CEA"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "CHAGAS"}, {"seccion": "BACTERIOLOGIA", "prueba": "CITOQUIMICO DE LIQUIDO DE DERRAME"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "CK-MB"}, {"seccion": "QUIMICA", "prueba": "CK-TOTAL"}, {"seccion": "QUIMICA", "prueba": "CLORO"}, {"seccion": "URIANALISIS", "prueba": "CLORO"}, {"seccion": "COPROLOGIA", "prueba": "CLOSTRIDIUM-PRUEBA RAPIDA"}, {"seccion": "QUIMICA", "prueba": "COLESTEROL"}, {"seccion": "QUIMICA", "prueba": "COLESTEROL HDL"}, {"seccion": "QUIMICA", "prueba": "COLESTEROL LDL"}, {"seccion": "COPROLOGIA", "prueba": "COLORACION DE COCCIDIOS"}, {"seccion": "HEMATOLOGIA", "prueba": "COLORACION DE WRIGHT"}, {"seccion": "BACTERIOLOGIA", "prueba": "COLORACION GRAM"}, {"seccion": "BACTERIOLOGIA", "prueba": "COLORACION ZIEHL-NEELSEN"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "COMBO DENGUE NS1/IgG/IgM"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "COMBO IgG/IgM HEPATITIS A"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "COMBO SARAMPION IgG/IgM"}, {"seccion": "COPROLOGIA", "prueba": "CONCENTRADO DE HECES"}, {"seccion": "HEMATOLOGIA", "prueba": "CONCENTRADO DE STROUT"}, {"seccion": "HEMATOLOGIA", "prueba": "CONTEO DE EOSINOFILOS"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "COOMBS DIRECTO"}, {"seccion": "BACTERIOLOGIA", "prueba": "COPROCULTIVO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "CORTISOL"}, {"seccion": "QUIMICA", "prueba": "CREATININA"}, {"seccion": "URIANALISIS", "prueba": "CREATININA"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO DE ESPUTO"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO DE HERIDA OPERATORIA"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO DE LCR"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO DE ULCERA"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO ESPECIFICAR PROCEDENCIA"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVO VAGINAL"}, {"seccion": "BACTERIOLOGIA", "prueba": "CULTIVOS FARINGEO"}, {"seccion": "QUIMICA", "prueba": "CURVA TOLERANCIA GLUCOSA"}, {"seccion": "URIANALISIS", "prueba": "DEPURACION DE CREATININA"}, {"seccion": "URIANALISIS", "prueba": "DEPURACION DE PROTEINAS"}, {"seccion": "COAGULACION", "prueba": "DIMERO D"}, {"seccion": "URIANALISIS", "prueba": "DIMORFISMO ERITROCITARIO"}, {"seccion": "BACTERIOLOGIA", "prueba": "DIRECTO KOH"}, {"seccion": "BACTERIOLOGIA", "prueba": "DIRECTO TINTA CHINA"}, {"seccion": "HEMATOLOGIA", "prueba": "ERITROSEDIMENTACIÓN"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "FACTOR REUMATOIDEO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "FERRITINA"}, {"seccion": "COAGULACION", "prueba": "FIBRINOGENO"}, {"seccion": "QUIMICA", "prueba": "FOSFATASA ALCATINA"}, {"seccion": "QUIMICA", "prueba": "FOSFORO"}, {"seccion": "URIANALISIS", "prueba": "FOSFORO"}, {"seccion": "HEMATOLOGIA", "prueba": "FROTIS DE SANGRE PERIFERICA"}, {"seccion": "QUIMICA", "prueba": "GAMMA-GT"}, {"seccion": "COPROLOGIA", "prueba": "GENERAL DE HECES"}, {"seccion": "URIANALISIS", "prueba": "GENERAL DE ORINA"}, {"seccion": "QUIMICA", "prueba": "GLOBULINA"}, {"seccion": "QUIMICA", "prueba": "GLUCOSA"}, {"seccion": "URIANALISIS", "prueba": "GLUCOSA"}, {"seccion": "HEMATOLOGIA", "prueba": "GOTA GRUESA"}, {"seccion": "BACTERIOLOGIA", "prueba": "HEMOCULTIVOS"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "HEMOGLOBINA GLICOSILADA"}, {"seccion": "HEMATOLOGIA", "prueba": "HEMOGRAMA COMPLETO"}, {"seccion": "QUIMICA", "prueba": "HIERRO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "HIV CUARTA GENERACIÓN"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "HIV-RAPIDO"}, {"seccion": "HEMATOLOGIA", "prueba": "INDUCCIÓN DE DREPANOCITOS"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "INFLUENZA Ag A/B/H1N1"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "INSULINA"}, {"seccion": "QUIMICA", "prueba": "LACTATO DESHIDROGENASA"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "LATEX-FACTOR REUMATOIDEO"}, {"seccion": "QUIMICA", "prueba": "LIPASA"}, {"seccion": "QUIMICA", "prueba": "MAGNESIO"}, {"seccion": "URIANALISIS", "prueba": "MAGNESIO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "MIOGLOBINA"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "MONOTEST"}, {"seccion": "QUIMICA", "prueba": "NITROGENO UREICO"}, {"seccion": "URIANALISIS", "prueba": "NITROGENO UREICO"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANEL DE INFECCION"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANEL DE SEPSIS"}, {"seccion": "COPROLOGIA", "prueba": "PANEL GASTRICO VIRAL"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANEL GASTROINTESTINAL"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "PANEL ITS RAPIDO"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANEL MENINGITIS/ENCEFALITIS"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "PANEL RAPIDO ARBOVIRUS"}, {"seccion": "URIANALISIS", "prueba": "PANEL RAPIDO DE DROGAS"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANEL RESPIRATOIRO"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "PANEL RESPIRATORIO RAPIDO"}, {"seccion": "BIOLOGIA MOLECULAR", "prueba": "PANELPNEUMONIA"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "PCR-CARDIACA"}, {"seccion": "COPROLOGIA", "prueba": "PH EN HECES"}, {"seccion": "QUIMICA", "prueba": "POTASIO"}, {"seccion": "URIANALISIS", "prueba": "POTASIO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "PRO-BNP"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "PROCALCITONINA"}, {"seccion": "QUIMICA", "prueba": "PROTEINA C REACTIVA"}, {"seccion": "QUIMICA", "prueba": "PROTEINAS TOTALES"}, {"seccion": "URIANALISIS", "prueba": "PROTEINAS TOTALES"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "PRUEBA ASTO-LATEX"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "PRUEBA CRUZADA"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "PRUEBA DE EMBARAZO"}, {"seccion": "URIANALISIS", "prueba": "PRUEBA DE EMBARAZO"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "PRUEBA DU"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "PSA LIBRE"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "PSA TOTAL"}, {"seccion": "QUIMICA", "prueba": "RELACION ALBUMINA/GLOBULINA"}, {"seccion": "HEMATOLOGIA", "prueba": "RETICULOCITOS"}, {"seccion": "COPROLOGIA", "prueba": "ROTAVIRUS"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "RPR-CARBON"}, {"seccion": "COPROLOGIA", "prueba": "SANGRE OCULTA"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "SIFILIS CUARTA GENERACIÓN"}, {"seccion": "INMUNOLOGIA/SEROLOGIA", "prueba": "SIFILIS-RAPIDO"}, {"seccion": "QUIMICA", "prueba": "SODIO"}, {"seccion": "URIANALISIS", "prueba": "SODIO"}, {"seccion": "COPROLOGIA", "prueba": "SUDAN III"}, {"seccion": "COPROLOGIA", "prueba": "SUSTANCIAS REDUCTORAS"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "T3 LIBRE"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "T3 TOTAL"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "T4 LIBRE"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "T4 TOTAL"}, {"seccion": "QUIMICA", "prueba": "TEST 'OSULLIVAN"}, {"seccion": "QUIMICA", "prueba": "TGO"}, {"seccion": "QUIMICA", "prueba": "TGP"}, {"seccion": "COAGULACION", "prueba": "TIEMPO DE COAGULACIÓN"}, {"seccion": "COAGULACION", "prueba": "TIEMPO DE PROTROMBINA"}, {"seccion": "COAGULACION", "prueba": "TIEMPO DE SANGRAMIENTO"}, {"seccion": "COAGULACION", "prueba": "TIEMPO DE TROMBINA"}, {"seccion": "COAGULACION", "prueba": "TIEMPO DE TROMBOPLASTINA PARCIAL"}, {"seccion": "INMUNO-HEMATOLOGIA", "prueba": "TIPEO SANGUINEO"}, {"seccion": "QUIMICA", "prueba": "TRIGLICERIDO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "TROPONINA I"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "TROPONINA T"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "TSH"}, {"seccion": "BACTERIOLOGIA", "prueba": "UROCULTIVO"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "VITAMINA B12"}, {"seccion": "PRUEBAS ESPECIALES", "prueba": "VITAMINA D"}];            // [{seccion, prueba}] para búsqueda por nombre
+const SECTION_ORDER = ["QUIMICA", "URIANALISIS", "HEMATOLOGIA", "PRUEBAS ESPECIALES", "COAGULACION", "COPROLOGIA", "INMUNOLOGIA/SEROLOGIA", "BACTERIOLOGIA", "INMUNO-HEMATOLOGIA", "BIOLOGIA MOLECULAR"];
+
+const seleccionadas = new Set();    // clave: seccion|||prueba
+let modoBusqueda = false;
+let seccionActual = SECTION_ORDER[0];
+
+const key = (sec,test)=> sec+'|||'+test;
+
+function renderSecciones(){
+  const grid=document.getElementById('sectionGrid'); grid.innerHTML='';
+  SECTION_ORDER.forEach(sec=>{
+    const label=document.createElement('label');
+    label.className='radio-item'+(sec===seccionActual?' active':'');
+    label.innerHTML='<input type="radio" name="seccion" '+(sec===seccionActual?'checked':'')+'><span>'+sec+'</span>';
+    label.querySelector('input').addEventListener('change',()=>{seccionActual=sec;renderSecciones();renderLista();});
+    grid.appendChild(label);
+  });
+}
+
+function getListaVisible(){
+  if(modoBusqueda){
+    const q=document.getElementById('buscador').value.trim().toUpperCase();
+    let list=ITEMS.slice();
+    if(q) list=list.filter(it=>it.prueba.toUpperCase().includes(q)||it.seccion.toUpperCase().includes(q));
+    return list;
+  }
+  return (SECTIONS[seccionActual]||[]).map(p=>({seccion:seccionActual,prueba:p}));
+}
+
+function renderLista(){
+  const cont=document.getElementById('listaPrestaciones'); cont.innerHTML='';
+  const lista=getListaVisible();
+  if(lista.length===0){
+    const n=document.createElement('div'); n.className='empty-note';
+    n.textContent=modoBusqueda?'No se encontraron prestaciones con ese criterio de búsqueda.':'Esta sección no tiene prestaciones disponibles.';
+    cont.appendChild(n); actualizarContador(); return;
+  }
+  lista.forEach(it=>{
+    const k=key(it.seccion,it.prueba);
+    const label=document.createElement('label');
+    label.className='check-item'+(seleccionadas.has(k)?' selected':'');
+    const badge=modoBusqueda?'<span class="sec-badge">'+it.seccion+'</span>':'';
+    label.innerHTML='<input type="checkbox" '+(seleccionadas.has(k)?'checked':'')+'><span>'+it.prueba+badge+'</span>';
+    label.querySelector('input').addEventListener('change',e=>{
+      if(e.target.checked) seleccionadas.add(k); else seleccionadas.delete(k);
+      label.classList.toggle('selected',e.target.checked); actualizarContador();
+    });
+    cont.appendChild(label);
+  });
+  actualizarContador();
+}
+
+function actualizarContador(){
+  const n=seleccionadas.size;
+  const c=document.getElementById('contador');
+  c.textContent=n+(n===1?' seleccionada':' seleccionadas'); c.classList.toggle('zero',n===0);
+  const sum=document.getElementById('selSummary');
+  if(n===0){sum.textContent='Ninguna prestación seleccionada.';}
+  else{
+    const muestras=[...seleccionadas].slice(0,3).map(k=>k.split('|||')[1]).join(' · ');
+    sum.innerHTML='<b>'+n+'</b> prestación(es): '+muestras+(n>3?' …':'');
+  }
+  renderSolicitud();
+}
+
+function renderSolicitud(){
+  const grid=document.getElementById('solGrid');
+  const cnt=document.getElementById('solChipCount');
+  const arr=[...seleccionadas].sort();
+  cnt.textContent=arr.length+(arr.length===1?' examen':' exámenes');
+  cnt.classList.toggle('zero',arr.length===0);
+  grid.innerHTML='';
+  if(arr.length===0){
+    grid.innerHTML='<div class="sol-empty">Aún no hay exámenes en la solicitud. Seleccione pruebas arriba para agregarlas.</div>';
+    return;
+  }
+  arr.forEach(k=>{
+    const [s,t]=k.split('|||');
+    const div=document.createElement('div'); div.className='sol-chip';
+    div.innerHTML='<span class="nm">'+t+'</span><span class="sec-badge">'+s+'</span><button class="chip-x" title="Quitar de la solicitud">&#10005;</button>';
+    div.querySelector('.chip-x').addEventListener('click',()=>{ seleccionadas.delete(k); renderLista(); });
+    grid.appendChild(div);
+  });
+}
+
+function cambiarModo(){
+  modoBusqueda=document.getElementById('toggleBuscar').checked;
+  document.getElementById('buscador').disabled=!modoBusqueda;
+  document.getElementById('sectionBlock').classList.toggle('on',!modoBusqueda);
+  if(modoBusqueda) document.getElementById('buscador').focus(); else document.getElementById('buscador').value='';
+  renderLista();
+}
+
+function guardar(){ if(seleccionadas.size===0){mostrarToast('Seleccione al menos una prestación antes de guardar.');return;} abrirResumen('Prestaciones a guardar',true); }
+function verSeleccion(){ if(seleccionadas.size===0){mostrarToast('No hay prestaciones seleccionadas.');return;} abrirResumen('Prestaciones seleccionadas',false); }
+
+function abrirResumen(titulo,esGuardar){
+  document.getElementById('summaryTitle').textContent=titulo;
+  const items=[...seleccionadas].sort();
+  let html='<p style="color:#4a5b66;margin:4px 0 10px;">Total: <b>'+items.length+'</b> prestación(es).</p><ol>';
+  items.forEach(k=>{const [s,t]=k.split('|||'); html+='<li>'+t+' <span class="sec-badge">'+s+'</span></li>';});
+  html+='</ol>';
+  document.getElementById('summaryBody').innerHTML=html;
+  const btn=document.getElementById('summaryConfirm');
+  btn.textContent=esGuardar?'Confirmar y Guardar':'Aceptar';
+  btn.onclick=esGuardar?confirmarGuardado:cerrarResumen;
+  document.getElementById('overlay').classList.add('on');
+}
+function confirmarGuardado(){cerrarResumen();mostrarToast('✓ '+seleccionadas.size+' prestación(es) guardada(s) correctamente.');}
+function cerrarResumen(){document.getElementById('overlay').classList.remove('on');}
+/* ===================== TABLERO ===================== */
+const ex = (seccion,prueba,estado)=>({seccion,prueba,estado:estado||'Pendiente',instruccion:''});
+const TABLERO = [
+  {cuenta:'CTA-100245', paciente:'María Elena Portillo', edad:54, sexo:'F', medico:'Dr. Ramírez', ingreso:'2026-07-25', prioridad:'Rutina', estado:'Activa', nota:'', examenes:[
+    ex('QUIMICA','GLUCOSA'), ex('QUIMICA','CREATININA'), ex('PRUEBAS ESPECIALES','HEMOGLOBINA GLICOSILADA'),
+    ex('HEMATOLOGIA','HEMOGRAMA COMPLETO'), ex('URIANALISIS','GENERAL DE ORINA')]},
+  {cuenta:'CTA-100246', paciente:'José Antonio Meléndez', edad:67, sexo:'M', medico:'Dra. Cáceres', ingreso:'2026-07-26', prioridad:'Urgente', estado:'Activa', nota:'Paciente con dolor torácico — priorizar cardíacos.', examenes:[
+    ex('PRUEBAS ESPECIALES','TROPONINA I','En proceso'), ex('PRUEBAS ESPECIALES','CK-MB'), ex('PRUEBAS ESPECIALES','PRO-BNP'),
+    ex('QUIMICA','SODIO'), ex('QUIMICA','POTASIO'), ex('QUIMICA','CLORO'), ex('COAGULACION','TIEMPO DE PROTROMBINA')]},
+  {cuenta:'CTA-100247', paciente:'Ana Sofía Cruz', edad:32, sexo:'F', medico:'Dr. Guevara', ingreso:'2026-07-26', prioridad:'Rutina', estado:'Activa', nota:'', examenes:[
+    ex('URIANALISIS','PRUEBA DE EMBARAZO'), ex('PRUEBAS ESPECIALES','TSH'), ex('HEMATOLOGIA','HEMOGRAMA COMPLETO'), ex('URIANALISIS','GENERAL DE ORINA')]},
+  {cuenta:'CTA-100248', paciente:'Carlos Mauricio Rivas', edad:45, sexo:'M', medico:'Dra. López', ingreso:'2026-07-24', prioridad:'Rutina', estado:'Activa', nota:'Muestras en ayuno de 12 horas.', examenes:[
+    ex('QUIMICA','COLESTEROL','Realizado'), ex('QUIMICA','COLESTEROL HDL','Realizado'), ex('QUIMICA','COLESTEROL LDL','En proceso'),
+    ex('QUIMICA','TRIGLICERIDO','En proceso'), ex('QUIMICA','GLUCOSA','Realizado'), ex('QUIMICA','ACIDO URICO')]},
+  {cuenta:'CTA-100249', paciente:'Gloria Estela Hernández', edad:71, sexo:'F', medico:'Dr. Ramírez', ingreso:'2026-07-27', prioridad:'Urgente', estado:'Activa', nota:'Sospecha de sepsis — notificar resultados críticos.', examenes:[
+    ex('BACTERIOLOGIA','HEMOCULTIVOS','En proceso'), ex('BACTERIOLOGIA','UROCULTIVO','En proceso'),
+    ex('PRUEBAS ESPECIALES','PROCALCITONINA'), ex('QUIMICA','PROTEINA C REACTIVA'), ex('URIANALISIS','GENERAL DE ORINA')]},
+  {cuenta:'CTA-100250', paciente:'Roberto Alfaro Díaz', edad:28, sexo:'M', medico:'Dra. Cáceres', ingreso:'2026-07-27', prioridad:'Rutina', estado:'Activa', nota:'', examenes:[
+    ex('INMUNOLOGIA/SEROLOGIA','HIV-RAPIDO'), ex('INMUNOLOGIA/SEROLOGIA','RPR-CARBON'),
+    ex('PRUEBAS ESPECIALES','AC HEPATITIS C'), ex('HEMATOLOGIA','HEMOGRAMA COMPLETO')]},
+  {cuenta:'CTA-100251', paciente:'Silvia Marroquín Vega', edad:60, sexo:'F', medico:'Dr. Guevara', ingreso:'2026-07-25', prioridad:'Rutina', estado:'Activa', nota:'Preparación pretransfusional.', examenes:[
+    ex('INMUNO-HEMATOLOGIA','TIPEO SANGUINEO','Realizado'), ex('INMUNO-HEMATOLOGIA','COOMBS DIRECTO'),
+    ex('INMUNO-HEMATOLOGIA','PRUEBA CRUZADA'), ex('HEMATOLOGIA','HEMOGRAMA COMPLETO')]},
+];
+const ESTADOS=['Pendiente','En proceso','Realizado'];
+const pillEstado=e=> e==='Realizado'?'pill-list': e==='En proceso'?'pill-proc':'pill-pend';
+let solActual=null;
+
+function abrirTablero(){ document.getElementById('tableroScreen').classList.add('on'); renderTablero(); }
+function cerrarTablero(){ document.getElementById('tableroScreen').classList.remove('on'); }
+
+function renderTablero(){
+  const q=(document.getElementById('tableroSearch').value||'').trim().toUpperCase();
+  const lista=TABLERO.filter(s=> !q || s.cuenta.toUpperCase().includes(q) || s.paciente.toUpperCase().includes(q) || s.medico.toUpperCase().includes(q));
+  // KPIs
+  const totalEx=TABLERO.reduce((a,s)=>a+s.examenes.length,0);
+  const pend=TABLERO.reduce((a,s)=>a+s.examenes.filter(e=>e.estado==='Pendiente').length,0);
+  const urg=TABLERO.filter(s=>s.prioridad==='Urgente').length;
+  document.getElementById('tableroKpis').innerHTML=
+    kpi(TABLERO.length,'Cuentas activas')+kpi(totalEx,'Exámenes totales')+kpi(pend,'Exámenes pendientes')+kpi(urg,'Solicitudes urgentes');
+  const tb=document.getElementById('tableroBody'); tb.innerHTML='';
+  if(!lista.length){ tb.innerHTML='<tr><td colspan="9" style="text-align:center;color:#94a1a8;padding:18px;">Sin resultados.</td></tr>'; return; }
+  lista.forEach(s=>{
+    const idx=TABLERO.indexOf(s);
+    const prClass=s.prioridad==='Urgente'?'pill-urg':'pill-rut';
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td><b>'+s.cuenta+'</b></td><td>'+s.paciente+'</td><td>'+s.edad+' / '+s.sexo+'</td><td>'+s.medico+'</td>'+
+      '<td>'+s.ingreso+'</td><td><span class="pill '+prClass+'">'+s.prioridad+'</span></td>'+
+      '<td>'+s.examenes.length+'</td><td><span class="pill pill-activa">'+s.estado+'</span></td>'+
+      '<td><button class="btn-abrir" onclick="abrirSolicitud('+idx+')">Abrir</button></td>';
+    tb.appendChild(tr);
+  });
+}
+function kpi(n,l){ return '<div class="kpi"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
+
+function abrirSolicitud(idx){
+  solActual=TABLERO[idx];
+  const s=solActual;
+  document.getElementById('solTitle').textContent=s.paciente+'  ·  '+s.cuenta;
+  document.getElementById('solMeta').innerHTML=
+    s.edad+' años / '+(s.sexo==='F'?'Femenino':'Masculino')+' &nbsp;|&nbsp; Médico: '+s.medico+' &nbsp;|&nbsp; Ingreso: '+s.ingreso+
+    ' &nbsp;|&nbsp; Prioridad: '+s.prioridad+' &nbsp;|&nbsp; Estado cuenta: '+s.estado;
+  document.getElementById('solNota').value=s.nota||'';
+  const body=document.getElementById('solExams'); body.innerHTML='';
+  s.examenes.forEach((e,i)=>{
+    const tr=document.createElement('tr');
+    const opts=ESTADOS.map(o=>'<option'+(o===e.estado?' selected':'')+'>'+o+'</option>').join('');
+    tr.innerHTML='<td>'+(i+1)+'</td><td>'+e.prueba+'</td><td><span class="sec-tag">'+e.seccion+'</span></td>'+
+      '<td><select data-i="'+i+'" class="sol-estado">'+opts+'</select></td>'+
+      '<td><input type="text" data-i="'+i+'" class="sol-instr" value="'+(e.instruccion||'').replace(/"/g,'&quot;')+'" placeholder="Indicación..."></td>';
+    body.appendChild(tr);
+  });
+  document.getElementById('solResumen').textContent=s.examenes.length+' examen(es) en esta cuenta';
+  document.getElementById('solOverlay').classList.add('on');
+}
+function cerrarSolicitud(){ document.getElementById('solOverlay').classList.remove('on'); solActual=null; }
+function guardarSolicitud(){
+  if(!solActual) return;
+  solActual.nota=document.getElementById('solNota').value;
+  document.querySelectorAll('#solExams .sol-estado').forEach(sel=>{ solActual.examenes[+sel.dataset.i].estado=sel.value; });
+  document.querySelectorAll('#solExams .sol-instr').forEach(inp=>{ solActual.examenes[+inp.dataset.i].instruccion=inp.value; });
+  const cuenta=solActual.cuenta;
+  cerrarSolicitud(); renderTablero();
+  mostrarToast('✓ Cambios guardados en la solicitud '+cuenta+'.');
+}
+function limpiarSeleccion(){if(seleccionadas.size===0){mostrarToast('No hay selección que limpiar.');return;}seleccionadas.clear();renderLista();mostrarToast('Selección limpiada.');}
+function cancelar(){if(seleccionadas.size>0){if(!confirm('¿Desea cancelar? Se perderá la selección actual.'))return;seleccionadas.clear();}document.getElementById('toggleBuscar').checked=false;cambiarModo();mostrarToast('Operación cancelada.');}
+function cerrar(){cancelar();}
+let toastTimer=null;
+function mostrarToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),2600);}
+renderSecciones(); renderLista();
+</script>
+</body>
+</html>

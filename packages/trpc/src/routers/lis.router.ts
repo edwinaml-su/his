@@ -28,6 +28,8 @@ import {
   labTestListInput,
   labOrderCreateInput,
   labOrderListInput,
+  labOrderTableroInput,
+  labOrderUpdateItemsInput,
   specimenCollectInput,
   specimenRejectInput,
   resultEnterInput,
@@ -305,6 +307,7 @@ export const lisRouter = router({
             organizationId: ctx.tenant.organizationId,
             ...(input.encounterId && { encounterId: input.encounterId }),
             ...(input.patientId && { patientId: input.patientId }),
+            ...(input.cuentaId && { patientAccountId: input.cuentaId }),
             ...(input.priority && { priority: input.priority }),
             ...(input.status && { status: input.status }),
             ...(input.fromDate && { orderedAt: { gte: input.fromDate } }),
@@ -382,15 +385,57 @@ export const lisRouter = router({
         });
       }),
 
+    /**
+     * CC-0013 — dos caminos de anclaje, validados por Zod (superRefine):
+     *  - `cuentaId`: resuelve patientId/encounterId desde la PatientAccount
+     *    (encounterId puede quedar null — cuenta ambulatoria sin admisión).
+     *  - `encounterId` + `patientId` (legado): valida el encounter y resuelve
+     *    la cuenta activa del paciente (por encounterId, fallback la más
+     *    reciente) para que la orden también aparezca en el tablero.
+     * `patientAccountId` se persiste siempre que se logre resolver.
+     */
     create: tenantProcedure.input(labOrderCreateInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        const enc = await tx.encounter.findFirst({
-          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-          select: { id: true, patientId: true },
-        });
-        if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
+        let encounterId: string | null = input.encounterId ?? null;
+        let patientId: string;
+        let patientAccountId: string | null = null;
+
+        if (input.cuentaId) {
+          const account = await tx.patientAccount.findFirst({
+            where: { id: input.cuentaId, organizationId: ctx.tenant.organizationId },
+            select: { id: true, patientId: true, encounterId: true },
+          });
+          if (!account) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta de paciente no encontrada." });
+          }
+          patientAccountId = account.id;
+          patientId = account.patientId;
+          encounterId = account.encounterId ?? null;
+        } else {
+          // Garantizado por Zod (superRefine): sin cuentaId, ambos son requeridos.
+          const enc = await tx.encounter.findFirst({
+            where: { id: input.encounterId!, organizationId: ctx.tenant.organizationId },
+            select: { id: true, patientId: true },
+          });
+          if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
+          }
+          patientId = input.patientId!;
+
+          // Resolver la cuenta activa del paciente: primero por encounterId,
+          // luego fallback a la más reciente (mismo criterio que CC-0012).
+          const account =
+            (await tx.patientAccount.findFirst({
+              where: { patientId, organizationId: ctx.tenant.organizationId, encounterId },
+              select: { id: true },
+            })) ??
+            (await tx.patientAccount.findFirst({
+              where: { patientId, organizationId: ctx.tenant.organizationId },
+              orderBy: { createdAt: "desc" },
+              select: { id: true },
+            }));
+          patientAccountId = account?.id ?? null;
         }
 
         // Si no se envía ejecutorCostCenterId, resolver el laboratorio clínico por code.
@@ -406,8 +451,9 @@ export const lisRouter = router({
         return tx.labOrder.create({
           data: {
             organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
+            encounterId,
+            patientId,
+            patientAccountId,
             prescriberId: ctx.user.id,
             priority: input.priority,
             status: "ORDERED",
@@ -420,6 +466,147 @@ export const lisRouter = router({
           },
           include: { items: true },
         });
+      });
+    }),
+
+    /**
+     * CC-0013 — Tablero de exámenes por cuenta (docs/CC/0013).
+     *
+     * Agrupa por `patientAccountId`. Cuando una cuenta acumula varias
+     * LabOrder (varias visitas a la pantalla de escogitación), se toma la
+     * MÁS RECIENTE como "la solicitud activa" — el mockup modela una única
+     * solicitud por cuenta, sin historial acumulado; simplificación
+     * documentada, no un bug.
+     *
+     * KPIs se calculan sobre el universo COMPLETO de cuentas (antes del
+     * filtro `search`), igual que el mockup (`renderTablero` calcula KPIs
+     * desde `TABLERO`, no desde `lista` filtrada).
+     */
+    tableroPorCuenta: tenantProcedure.input(labOrderTableroInput).query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const orders = await tx.labOrder.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            patientAccountId: { not: null },
+            status: { not: "CANCELLED" },
+          },
+          include: {
+            items: {
+              include: { test: { select: { id: true, name: true, panel: { select: { name: true } } } } },
+            },
+            patient: {
+              select: {
+                firstName: true,
+                lastName: true,
+                birthDate: true,
+                biologicalSex: { select: { code: true } },
+              },
+            },
+            patientAccount: { select: { id: true, numeroCuenta: true, createdAt: true } },
+          },
+          orderBy: { orderedAt: "desc" },
+        });
+
+        const porCuenta = new Map<string, (typeof orders)[number]>();
+        for (const o of orders) {
+          if (!o.patientAccountId || porCuenta.has(o.patientAccountId)) continue;
+          porCuenta.set(o.patientAccountId, o);
+        }
+
+        const prescriberIds = [...new Set([...porCuenta.values()].map((o) => o.prescriberId))];
+        const prescribers = prescriberIds.length
+          ? await tx.user.findMany({ where: { id: { in: prescriberIds } }, select: { id: true, fullName: true } })
+          : [];
+        const prescriberName = new Map(prescribers.map((p) => [p.id, p.fullName]));
+
+        const cuentaRows = [...porCuenta.values()].map((o) => {
+          const patientAgeYears = o.patient.birthDate
+            ? Math.floor((Date.now() - new Date(o.patient.birthDate).getTime()) / (1000 * 60 * 60 * 24 * 365.25))
+            : null;
+          const pendientes = o.items.filter((i) => i.status === "ORDERED" || i.status === "COLLECTED").length;
+          const enProceso = o.items.filter((i) => i.status === "IN_PROCESS").length;
+          const realizados = o.items.filter((i) => i.status === "RESULTED" || i.status === "VALIDATED").length;
+
+          return {
+            cuentaId: o.patientAccountId as string,
+            orderId: o.id,
+            numeroCuenta: o.patientAccount?.numeroCuenta ?? "",
+            paciente: {
+              nombre: `${o.patient.firstName} ${o.patient.lastName}`.trim(),
+              edad: patientAgeYears,
+              sexo: o.patient.biologicalSex?.code ?? null,
+            },
+            medico: prescriberName.get(o.prescriberId) ?? "—",
+            ingreso: o.patientAccount?.createdAt ?? o.orderedAt,
+            prioridad: (o.priority === "STAT" || o.priority === "URGENT" ? "Urgente" : "Rutina") as
+              | "Urgente"
+              | "Rutina",
+            clinicalIndication: o.clinicalIndication ?? "",
+            totalExamenes: o.items.length,
+            pendientes,
+            enProceso,
+            realizados,
+            estado: "Activa" as const,
+            examenes: o.items.map((i) => ({
+              itemId: i.id,
+              testId: i.testId,
+              nombre: i.test.name,
+              seccion: i.test.panel?.name ?? "",
+              estado: i.status,
+              notes: i.notes ?? "",
+            })),
+          };
+        });
+
+        const kpis = {
+          cuentasActivas: cuentaRows.length,
+          examenesTotales: cuentaRows.reduce((a, c) => a + c.totalExamenes, 0),
+          examenesPendientes: cuentaRows.reduce((a, c) => a + c.pendientes, 0),
+          solicitudesUrgentes: cuentaRows.filter((c) => c.prioridad === "Urgente").length,
+        };
+
+        const search = input.search?.trim().toLowerCase();
+        const cuentas = search
+          ? cuentaRows.filter(
+              (c) =>
+                c.numeroCuenta.toLowerCase().includes(search) ||
+                c.paciente.nombre.toLowerCase().includes(search) ||
+                c.medico.toLowerCase().includes(search),
+            )
+          : cuentaRows;
+
+        return { kpis, cuentas };
+      });
+    }),
+
+    /**
+     * CC-0013 — Guarda cambios del modal "Solicitud" (instrucción general +
+     * estado/instrucción por examen). Solo estados alcanzables desde la UI
+     * (ORDERED/IN_PROCESS/RESULTED — ver labOrderItemUpdateStatusEnum).
+     */
+    updateItems: tenantProcedure.input(labOrderUpdateItemsInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const order = await tx.labOrder.findFirst({
+          where: { id: input.orderId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!order) throw new TRPCError({ code: "NOT_FOUND", message: "Orden no encontrada." });
+
+        if (input.clinicalIndication !== undefined) {
+          await tx.labOrder.update({
+            where: { id: input.orderId },
+            data: { clinicalIndication: input.clinicalIndication || null },
+          });
+        }
+
+        for (const item of input.items) {
+          await tx.labOrderItem.updateMany({
+            where: { id: item.itemId, orderId: input.orderId },
+            data: { status: item.status, notes: item.notes || null },
+          });
+        }
+
+        return { ok: true as const };
       });
     }),
   }),

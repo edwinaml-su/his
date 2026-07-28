@@ -51,6 +51,16 @@ interface LabTestRow {
   name: string;
   displayOrder: number;
   active: boolean;
+  /** CC-0013 — precio estándar del catálogo (Prisma Decimal → string en el wire). */
+  standardPrice?: string | number | null;
+}
+
+/** CC-0013 — formatea standardPrice ($ 2 decimales) o "—" si no está definido. */
+function formatPrecio(v: string | number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  const n = typeof v === "string" ? Number(v) : v;
+  if (Number.isNaN(n)) return "—";
+  return `$ ${n.toFixed(2)}`;
 }
 
 type ToastState = { title: string; description?: string; variant?: "default" | "success" | "destructive" } | null;
@@ -154,6 +164,7 @@ export function TestTable({ panel }: TestTableProps) {
                 <TableHead className="w-28">Código</TableHead>
                 <TableHead>Nombre</TableHead>
                 <TableHead className="w-16">Orden</TableHead>
+                <TableHead className="w-24">Precio estándar</TableHead>
                 <TableHead className="w-20">Origen</TableHead>
                 <TableHead className="w-20">Estado</TableHead>
                 <TableHead className="w-40 text-right">Acciones</TableHead>
@@ -162,7 +173,7 @@ export function TestTable({ panel }: TestTableProps) {
             <TableBody>
               {rows.length === 0 && !query.isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
                     Sin exámenes en este panel.
                   </TableCell>
                 </TableRow>
@@ -174,6 +185,7 @@ export function TestTable({ panel }: TestTableProps) {
                     <TableCell className="font-mono text-xs">{row.code}</TableCell>
                     <TableCell>{row.name}</TableCell>
                     <TableCell className="tabular-nums">{row.displayOrder}</TableCell>
+                    <TableCell className="tabular-nums">{formatPrecio(row.standardPrice)}</TableCell>
                     <TableCell>
                       {isGlobal ? <Badge variant="outline">Global</Badge> : <Badge variant="secondary">Propio</Badge>}
                     </TableCell>
@@ -251,6 +263,7 @@ function TestFormDialog({ open, onOpenChange, panelId, initialValue, onToast }: 
   const [code, setCode] = React.useState("");
   const [name, setName] = React.useState("");
   const [displayOrder, setDisplayOrder] = React.useState("0");
+  const [standardPrice, setStandardPrice] = React.useState("");
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
 
@@ -259,6 +272,9 @@ function TestFormDialog({ open, onOpenChange, panelId, initialValue, onToast }: 
     setCode(initialValue?.code ?? "");
     setName(initialValue?.name ?? "");
     setDisplayOrder(String(initialValue?.displayOrder ?? 0));
+    setStandardPrice(
+      initialValue?.standardPrice != null ? String(initialValue.standardPrice) : "",
+    );
     setErrors({});
     setServerError(null);
   }, [open, initialValue]);
@@ -288,12 +304,15 @@ function TestFormDialog({ open, onOpenChange, panelId, initialValue, onToast }: 
     setErrors({});
 
     const displayOrderNum = Number(displayOrder);
+    // Campo vacío → sin cambio en create, limpia el precio en update (null).
+    const standardPriceNum = standardPrice.trim() === "" ? undefined : Number(standardPrice);
 
     if (isEdit && initialValue) {
       const parsed = labTestUpdateInput.safeParse({
         id: initialValue.id,
         name,
         displayOrder: displayOrderNum,
+        standardPrice: standardPriceNum ?? null,
       });
       if (!parsed.success) {
         setErrors(extractFieldErrors(parsed.error));
@@ -306,6 +325,7 @@ function TestFormDialog({ open, onOpenChange, panelId, initialValue, onToast }: 
         code,
         name,
         displayOrder: displayOrderNum,
+        ...(standardPriceNum !== undefined && { standardPrice: standardPriceNum }),
       });
       if (!parsed.success) {
         setErrors(extractFieldErrors(parsed.error));
@@ -366,6 +386,24 @@ function TestFormDialog({ open, onOpenChange, panelId, initialValue, onToast }: 
               aria-invalid={Boolean(errors.displayOrder)}
             />
             <FormError>{errors.displayOrder}</FormError>
+          </FormField>
+
+          <FormField>
+            <Label htmlFor="test-price">
+              Precio estándar{" "}
+              <span className="text-xs text-muted-foreground">(opcional)</span>
+            </Label>
+            <Input
+              id="test-price"
+              type="number"
+              min={0}
+              step="0.01"
+              value={standardPrice}
+              onChange={(e) => setStandardPrice(e.target.value)}
+              placeholder="0.00"
+              aria-invalid={Boolean(errors.standardPrice)}
+            />
+            <FormError>{errors.standardPrice}</FormError>
           </FormField>
 
           {serverError ? (

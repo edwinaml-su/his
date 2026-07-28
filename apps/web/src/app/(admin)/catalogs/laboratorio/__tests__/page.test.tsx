@@ -262,4 +262,37 @@ describe("LaboratorioCatalogPage", () => {
       screen.getByText("El catálogo global de laboratorio es de solo lectura. Cree un panel propio del tenant."),
     ).toBeInTheDocument();
   });
+
+  // ── 8. CC-0013 — precio estándar visible en la tabla ──────────────────────
+
+  it("CC-0013 — muestra el precio estándar formateado y '—' cuando es null", () => {
+    mockTestListQuery.mockReturnValue({
+      ...idleQuery,
+      data: [makeTest({ standardPrice: "12.50" }), makeTest({ id: "55555555-5555-5555-5555-555555555555", code: "AVT-LAB-HEM-02", name: "Otro examen", standardPrice: null })],
+    });
+    renderPage();
+
+    expect(screen.getByText("$ 12.50")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
+  });
+
+  // ── 9. CC-0013 — el formulario de examen permite editar el precio ─────────
+
+  it("CC-0013 — 'Nuevo examen' incluye el campo Precio estándar y lo envía en el create", () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "Nuevo examen" }));
+    expect(screen.getByLabelText(/Precio estándar/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Código/), { target: { value: "TEN-LAB-01-A" } });
+    fireEvent.change(screen.getByLabelText(/Nombre/), { target: { value: "Examen nuevo" } });
+    fireEvent.change(screen.getByLabelText(/Precio estándar/), { target: { value: "9.99" } });
+
+    const createMutate = mockTestCreate.mock.results.at(-1)?.value.mutate as ReturnType<typeof vi.fn>;
+    fireEvent.click(screen.getByRole("button", { name: "Crear" }));
+
+    expect(createMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "TEN-LAB-01-A", name: "Examen nuevo", standardPrice: 9.99 }),
+    );
+  });
 });
