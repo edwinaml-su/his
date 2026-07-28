@@ -31,15 +31,30 @@
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* no está en schema.prisma)
  * ---------------------------------------------------------------------------
- *   ece.signos_vitales                — fila principal: episodio_id, fecha_hora_toma,
+ *   ece.signos_vitales                — fila principal: episodio_id (nullable desde
+ *                                       CC-0012), cuenta_id, paciente_id, fecha_hora_toma,
  *                                       presion_sistolica, presion_diastolica,
  *                                       frecuencia_cardiaca, frecuencia_respiratoria,
  *                                       saturacion_o2, escala_dolor,
- *                                       peso_kg, talla_cm, imc, glucometria_mgdl
+ *                                       peso_kg, talla_cm, imc, glucometria_mgdl,
+ *                                       peso_lb, talla_ft (CC-0012),
+ *                                       go_gestas/go_partos_termino/go_partos_pretermino/
+ *                                       go_abortos/go_vivos, fpp_activo (CC-0012)
  *   ece.documento_instancia           — instancia de workflow del documento
  *   ece.documento_instancia_historial — log de transiciones + SHA-256 payload
  *   ece.tipo_documento                — resolución de tipoDocumentoId por código 'SIG_VIT'
  *   ece.flujo_estado                  — estado inicial configurado para SIG_VIT
+ *
+ * CC-0012 — módulo transversal: la toma se ancla al episodio y/o a la cuenta
+ * activa del paciente (public."PatientAccount"). `create` resuelve el ancla
+ * faltante server-side (mismo algoritmo que patient.router.ts#contextoCuenta):
+ *   - cuentaId sin episodioId → resuelve episodio abierto/en_curso (por
+ *     encounterId de la cuenta, fallback último abierto del paciente).
+ *   - episodioId sin cuentaId → resuelve la cuenta activa del paciente (por
+ *     encounterId del episodio, fallback más reciente createdAt) y la persiste.
+ * La resolución que toca `public."PatientAccount"` corre en transacciones
+ * `withTenantContext` separadas (RLS de esa tabla exige GUC `app.current_org_id`,
+ * distinto del contexto `ece.*` que setea `withEceContext`).
  *
  * ---------------------------------------------------------------------------
  * ROLES tRPC
@@ -60,19 +75,20 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
-// Importar desde schemas locales del worktree para evitar el symlink de node_modules
-// que apunta al main branch. Post-merge consolida en @his/contracts.
+import { withTenantContext } from "../../rls-context";
 import {
   eceSignosVitalesCreateSchema,
   eceSignosVitalesUpdateSchema,
   type EceSignosVitalesUpdateInput,
-} from "./signos-vitales.schemas";
+} from "@his/contracts";
 
 // ─── Tipos de fila raw ───────────────────────────────────────────────────────
 
 export interface SignosVitalesRow {
   id: string;
   episodio_id: string | null;
+  cuenta_id: string | null;
+  paciente_id: string | null;
   instancia_id: string | null;
   registrado_por: string;
   presion_sistolica: number | null;
@@ -102,6 +118,15 @@ export interface SignosVitalesRow {
   diuresis: number | null;
   fur: string | null;
   fpp: string | null;
+  // CC-0012 — módulo transversal (migración 188)
+  peso_lb: number | null;
+  talla_ft: number | null;
+  fpp_activo: boolean | null;
+  go_gestas: number | null;
+  go_partos_termino: number | null;
+  go_partos_pretermino: number | null;
+  go_abortos: number | null;
+  go_vivos: number | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -144,6 +169,141 @@ function calcularGlasgowTotal(
 function calcularIct(perimetroCintura: number | null | undefined, tallaCm: number | null | undefined): number | null {
   if (!perimetroCintura || !tallaCm || tallaCm === 0) return null;
   return Math.round((perimetroCintura / tallaCm) * 1000) / 1000;
+}
+
+// ─── CC-0012 — resolución de ancla transversal (episodio ↔ cuenta) ──────────
+
+type EceTx = {
+  $queryRaw: <T>(tpl: TemplateStringsArray, ...values: unknown[]) => Promise<T>;
+};
+
+/**
+ * Resuelve el episodio abierto/en_curso para una cuenta, mismo algoritmo que
+ * `patient.router.ts#contextoCuenta`: Paso 1 — por `encounterId` de la cuenta
+ * (si tiene); Paso 2 — fallback al episodio abierto más reciente del paciente.
+ * Corre DENTRO de la transacción ece (withEceContext) — solo toca ece.*.
+ */
+async function resolveEpisodioAbiertoDesdeCuenta(
+  tx: EceTx,
+  encounterId: string | null,
+  publicPatientId: string,
+): Promise<string | null> {
+  if (encounterId) {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT ea.id::text AS id
+      FROM ece.episodio_atencion ea
+      WHERE ea.public_encounter_id = ${encounterId}::uuid
+        AND ea.estado IN ('abierto', 'en_curso')
+      ORDER BY ea.creado_en DESC
+      LIMIT 1
+    `;
+    if (rows[0]) return rows[0].id;
+  }
+
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT ea.id::text AS id
+    FROM ece.episodio_atencion ea
+    JOIN ece.paciente ep ON ep.id = ea.paciente_id
+    WHERE ep.public_patient_id = ${publicPatientId}::uuid
+      AND ea.estado IN ('abierto', 'en_curso')
+    ORDER BY ea.creado_en DESC
+    LIMIT 1
+  `;
+  return rows[0]?.id ?? null;
+}
+
+interface EpisodioInfo {
+  pacienteIdEce: string;
+  publicPatientId: string | null;
+  publicEncounterId: string | null;
+}
+
+/** Resuelve paciente (ece interno + ACL público) y encuentro público del episodio. */
+async function resolveEpisodioInfo(tx: EceTx, episodioId: string): Promise<EpisodioInfo | null> {
+  const rows = await tx.$queryRaw<
+    { paciente_id_ece: string; public_patient_id: string | null; public_encounter_id: string | null }[]
+  >`
+    SELECT
+      ea.paciente_id::text AS paciente_id_ece,
+      ep.public_patient_id::text AS public_patient_id,
+      ea.public_encounter_id::text AS public_encounter_id
+    FROM ece.episodio_atencion ea
+    JOIN ece.paciente ep ON ep.id = ea.paciente_id
+    WHERE ea.id = ${episodioId}::uuid
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    pacienteIdEce: row.paciente_id_ece,
+    publicPatientId: row.public_patient_id,
+    publicEncounterId: row.public_encounter_id,
+  };
+}
+
+/** Resuelve ece.paciente.id (interno) a partir del ACL público (public."Patient".id). */
+async function resolvePacienteEceId(tx: EceTx, publicPatientId: string): Promise<string | null> {
+  const rows = await tx.$queryRaw<{ id: string }[]>`
+    SELECT id::text FROM ece.paciente WHERE public_patient_id = ${publicPatientId}::uuid LIMIT 1
+  `;
+  return rows[0]?.id ?? null;
+}
+
+interface PatientAccountLike {
+  id: string;
+  patientId: string;
+  encounterId: string | null;
+}
+
+/**
+ * Resuelve la cuenta de paciente (public."PatientAccount") dada por id, con
+ * enforcement de tenant (organizationId). Corre en su PROPIA transacción
+ * `withTenantContext` — RLS de PatientAccount exige el GUC `app.current_org_id`,
+ * que `withEceContext` no setea.
+ */
+async function resolveCuentaPorId(
+  prisma: Parameters<typeof withTenantContext>[0],
+  tenant: Parameters<typeof withTenantContext>[1],
+  cuentaId: string,
+): Promise<PatientAccountLike | null> {
+  return withTenantContext(prisma, tenant, async (tx) =>
+    tx.patientAccount.findFirst({
+      where: { id: cuentaId, organizationId: tenant.organizationId },
+      select: { id: true, patientId: true, encounterId: true },
+    }),
+  );
+}
+
+/**
+ * Resuelve la cuenta ACTIVA de un paciente: por `encounterId` (si coincide con
+ * el del episodio) o, en su defecto, la más reciente por `createdAt` (CC-0012).
+ * Misma transacción `withTenantContext` que `resolveCuentaPorId`.
+ */
+async function resolveCuentaActivaDePaciente(
+  prisma: Parameters<typeof withTenantContext>[0],
+  tenant: Parameters<typeof withTenantContext>[1],
+  publicPatientId: string,
+  encounterId: string | null,
+): Promise<PatientAccountLike | null> {
+  return withTenantContext(prisma, tenant, async (tx) => {
+    if (encounterId) {
+      const byEncounter = await tx.patientAccount.findFirst({
+        where: {
+          patientId: publicPatientId,
+          organizationId: tenant.organizationId,
+          encounterId,
+        },
+        select: { id: true, patientId: true, encounterId: true },
+      });
+      if (byEncounter) return byEncounter;
+    }
+
+    return tx.patientAccount.findFirst({
+      where: { patientId: publicPatientId, organizationId: tenant.organizationId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, patientId: true, encounterId: true },
+    });
+  });
 }
 
 /**
@@ -278,12 +438,14 @@ const tomaWrite = requireRole(["NURSE", "PHYSICIAN", "MC", "MT"]);
 export const eceSignosVitalesRouter = router({
   /**
    * Lista tomas de signos vitales con filtros opcionales.
-   * Al menos episodioId es requerido.
+   * CC-0012 — requiere al menos episodioId o cuentaId (ambos filtran por AND
+   * cuando se envían los dos).
    */
   list: base
     .input(
       z.object({
         episodioId: z.string().uuid().optional(),
+        cuentaId: z.string().uuid().optional(),
         desde: z.string().datetime({ offset: true }).optional(),
         hasta: z.string().datetime({ offset: true }).optional(),
         limit: z.number().int().min(1).max(200).default(50),
@@ -291,10 +453,10 @@ export const eceSignosVitalesRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      if (!input.episodioId) {
+      if (!input.episodioId && !input.cuentaId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Se requiere episodioId.",
+          message: "Se requiere episodioId o cuentaId.",
         });
       }
 
@@ -305,6 +467,8 @@ export const eceSignosVitalesRouter = router({
           SELECT
             sv.id::text,
             sv.episodio_id::text,
+            sv.cuenta_id::text,
+            sv.paciente_id::text,
             sv.instancia_id::text,
             sv.registrado_por::text,
             sv.presion_sistolica,
@@ -332,9 +496,18 @@ export const eceSignosVitalesRouter = router({
             sv.balance_hidrico,
             sv.diuresis,
             sv.fur::text,
-            sv.fpp::text
+            sv.fpp::text,
+            sv.peso_lb,
+            sv.talla_ft,
+            sv.fpp_activo,
+            sv.go_gestas,
+            sv.go_partos_termino,
+            sv.go_partos_pretermino,
+            sv.go_abortos,
+            sv.go_vivos
           FROM ece.signos_vitales sv
-          WHERE sv.episodio_id = ${input.episodioId}::uuid
+          WHERE (${input.episodioId ?? null}::uuid IS NULL OR sv.episodio_id = ${input.episodioId ?? null}::uuid)
+            AND (${input.cuentaId ?? null}::uuid IS NULL OR sv.cuenta_id = ${input.cuentaId ?? null}::uuid)
             AND (${input.desde ?? null}::timestamptz IS NULL
               OR sv.fecha_hora_toma >= ${input.desde ?? null}::timestamptz)
             AND (${input.hasta ?? null}::timestamptz IS NULL
@@ -364,6 +537,8 @@ export const eceSignosVitalesRouter = router({
           SELECT
             sv.id::text,
             sv.episodio_id::text,
+            sv.cuenta_id::text,
+            sv.paciente_id::text,
             sv.instancia_id::text,
             sv.registrado_por::text,
             sv.presion_sistolica,
@@ -391,7 +566,15 @@ export const eceSignosVitalesRouter = router({
             sv.balance_hidrico,
             sv.diuresis,
             sv.fur::text,
-            sv.fpp::text
+            sv.fpp::text,
+            sv.peso_lb,
+            sv.talla_ft,
+            sv.fpp_activo,
+            sv.go_gestas,
+            sv.go_partos_termino,
+            sv.go_partos_pretermino,
+            sv.go_abortos,
+            sv.go_vivos
           FROM ece.signos_vitales sv
           WHERE sv.id = ${input.id}::uuid
           LIMIT 1
@@ -411,20 +594,58 @@ export const eceSignosVitalesRouter = router({
   /**
    * Crea una nueva toma de signos vitales en estado "borrador".
    * Valida rangos plausibles vía Zod antes de llegar a la BD.
-   * IMC se calcula automáticamente si peso y talla están provistos.
+   * IMC/Glasgow total/ICT se calculan automáticamente si los insumos están
+   * provistos. CC-0012 — resuelve el ancla faltante (episodio ↔ cuenta) y
+   * persiste SIEMPRE paciente_id además de los campos G·P·P·A·V/pesoLb/
+   * tallaFt/fppActivo.
    */
   create: tomaWrite
     .input(eceSignosVitalesCreateSchema)
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = resolveEceIds(ctx);
+
+      // Fase 1 — si viene cuentaId: resolver patientId/encounterId de la
+      // cuenta (schema public, transacción withTenantContext propia).
+      let cuentaPatientId: string | null = null;
+      let cuentaEncounterId: string | null = null;
+      if (input.cuentaId) {
+        const account = await resolveCuentaPorId(ctx.prisma, ctx.tenant, input.cuentaId);
+        if (!account) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta de paciente no encontrada." });
+        }
+        cuentaPatientId = account.patientId;
+        cuentaEncounterId = account.encounterId;
+      }
+
       const imc = calcularImc(input.pesoKg, input.tallaCm);
       const glasgowTotal = calcularGlasgowTotal(input.glasgowOcular, input.glasgowVerbal, input.glasgowMotor);
       const ict = calcularIct(input.perimetroCintura, input.tallaCm);
 
-      return withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
+      // Fase 2 — resolución de anclas dentro del contexto ece + INSERT.
+      const resultado = await withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
+        let episodioId = input.episodioId ?? null;
+        let publicPatientId = cuentaPatientId;
+        let publicEncounterId = cuentaEncounterId;
+
+        if (!episodioId && cuentaPatientId) {
+          episodioId = await resolveEpisodioAbiertoDesdeCuenta(tx, cuentaEncounterId, cuentaPatientId);
+        }
+
+        let pacienteIdEce: string | null = null;
+        if (publicPatientId) {
+          pacienteIdEce = await resolvePacienteEceId(tx, publicPatientId);
+        } else if (episodioId) {
+          const info = await resolveEpisodioInfo(tx, episodioId);
+          if (info) {
+            pacienteIdEce = info.pacienteIdEce;
+            publicPatientId = info.publicPatientId;
+            publicEncounterId = info.publicEncounterId;
+          }
+        }
+
         const rows = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.signos_vitales (
-            episodio_id, registrado_por,
+            episodio_id, cuenta_id, paciente_id, registrado_por,
             presion_sistolica, presion_diastolica,
             frecuencia_cardiaca, frecuencia_respiratoria,
             temperatura, saturacion_o2, escala_dolor,
@@ -432,9 +653,12 @@ export const eceSignosVitalesRouter = router({
             fecha_hora_toma, estado_registro,
             glasgow_ocular, glasgow_verbal, glasgow_motor, glasgow_total,
             fio2, perimetro_cintura, ict, balance_hidrico, diuresis,
-            fur, fpp
+            fur, fpp, peso_lb, talla_ft, fpp_activo,
+            go_gestas, go_partos_termino, go_partos_pretermino, go_abortos, go_vivos
           ) VALUES (
-            ${input.episodioId ?? null}::uuid,
+            ${episodioId}::uuid,
+            ${input.cuentaId ?? null}::uuid,
+            ${pacienteIdEce}::uuid,
             ${personalId}::uuid,
             ${input.presionSistolica ?? null},
             ${input.presionDiastolica ?? null},
@@ -460,13 +684,45 @@ export const eceSignosVitalesRouter = router({
             ${input.balanceHidrico ?? null},
             ${input.diuresis ?? null},
             ${input.fur ?? null}::date,
-            ${input.fpp ?? null}::date
+            ${input.fpp ?? null}::date,
+            ${input.pesoLb ?? null},
+            ${input.tallaFt ?? null},
+            ${input.fppActivo ?? null},
+            ${input.goGestas ?? null},
+            ${input.goPartosTermino ?? null},
+            ${input.goPartosPretermino ?? null},
+            ${input.goAbortos ?? null},
+            ${input.goVivos ?? null}
           )
           RETURNING id::text
         `;
 
-        return { id: rows[0]!.id };
+        return { id: rows[0]!.id, episodioId, publicPatientId, publicEncounterId };
       });
+
+      // Fase 3 — si no vino cuentaId explícito, resolver la cuenta ACTIVA del
+      // paciente y persistirla (toda toma queda vinculada a la cuenta).
+      // Best-effort: si el paciente no tiene cuenta todavía, la toma queda
+      // igual anclada por episodioId (CHECK chk_signos_vitales_ancla).
+      let cuentaIdFinal = input.cuentaId ?? null;
+      if (!cuentaIdFinal && resultado.publicPatientId) {
+        const account = await resolveCuentaActivaDePaciente(
+          ctx.prisma,
+          ctx.tenant,
+          resultado.publicPatientId,
+          resultado.publicEncounterId,
+        );
+        if (account) {
+          cuentaIdFinal = account.id;
+          await withEceContext(ctx.prisma, personalId, establecimientoId, async (tx) => {
+            await tx.$executeRaw`
+              UPDATE ece.signos_vitales SET cuenta_id = ${account.id}::uuid WHERE id = ${resultado.id}::uuid
+            `;
+          });
+        }
+      }
+
+      return { id: resultado.id, episodioId: resultado.episodioId, cuentaId: cuentaIdFinal };
     }),
 
   /**
@@ -552,6 +808,14 @@ export const eceSignosVitalesRouter = router({
             diuresis                = COALESCE(${d.diuresis ?? null}, diuresis),
             fur                     = COALESCE(${d.fur ?? null}::date, fur),
             fpp                     = COALESCE(${d.fpp ?? null}::date, fpp),
+            peso_lb                 = COALESCE(${d.pesoLb ?? null}, peso_lb),
+            talla_ft                = COALESCE(${d.tallaFt ?? null}, talla_ft),
+            fpp_activo              = COALESCE(${d.fppActivo ?? null}, fpp_activo),
+            go_gestas               = COALESCE(${d.goGestas ?? null}, go_gestas),
+            go_partos_termino       = COALESCE(${d.goPartosTermino ?? null}, go_partos_termino),
+            go_partos_pretermino    = COALESCE(${d.goPartosPretermino ?? null}, go_partos_pretermino),
+            go_abortos              = COALESCE(${d.goAbortos ?? null}, go_abortos),
+            go_vivos                = COALESCE(${d.goVivos ?? null}, go_vivos),
             registrado_en           = now()
           WHERE id = ${input.id}::uuid
         `;

@@ -82,3 +82,4 @@ export function validateIdentifier(
 }
 
 export * from "./gs1";
+export * from "./signos-vitales";

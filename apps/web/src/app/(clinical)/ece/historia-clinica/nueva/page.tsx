@@ -52,18 +52,16 @@ import { trpc } from "@/lib/trpc/react";
 import { CampoModal } from "./_components/campo-modal";
 import { PlantillasBar } from "./_components/plantillas-bar";
 import { AntecedenteSubseccion, type SubseccionState } from "./_components/antecedente-subseccion";
-import {
-  SignosVitalesModal,
-  buildVitalesChips,
-  VITALES_INITIAL,
-  type VitalesState,
-} from "./_components/signos-vitales-modal";
+import { SignosVitalesModal } from "@/components/signos-vitales/SignosVitalesModal";
+import { useSignosVitales } from "@/components/signos-vitales/useSignosVitales";
+import { buildVitalesChips } from "./_components/vitales-chips";
+import { tieneSignosForm } from "@/components/signos-vitales/types";
 import { DiagnosticosGrid } from "./_components/diagnosticos-grid";
 import { ProcedimientosGrid } from "./_components/procedimientos-grid";
 import { PlanGrid } from "./_components/plan-grid";
 import { MiscelaneosConsulta } from "./_components/miscelaneos";
-import { parseNum, calcularFppEg } from "./_components/utils";
 import { SelectorCuenta } from "./_components/selector-cuenta";
+import { calcularEdad } from "@his/contracts/validators";
 
 // ── Constantes ─────────────────────────────────────────────────────────────────
 
@@ -509,7 +507,6 @@ export default function NuevaHistoriaClinicaPage() {
   const [motivoConsulta, setMotivoConsulta] = React.useState("");
   const [presentaEnfermedad, setPresentaEnfermedad] = React.useState("");
   const [antecedentes, setAntecedentes] = React.useState<AntState>(INIT_ANT);
-  const [vitales, setVitales] = React.useState<VitalesState>(VITALES_INITIAL);
   const [vitalesOpen, setVitalesOpen] = React.useState(false);
   const [lesionOpen, setLesionOpen] = React.useState(false);
   const [examenFisico, setExamenFisico] = React.useState("");
@@ -592,9 +589,11 @@ export default function NuevaHistoriaClinicaPage() {
     })),
   ];
 
-  const isFemenina = !!(
-    paciente?.biologicalSexId === "F" || paciente?.biologicalSexId?.toLowerCase().startsWith("f")
-  );
+  // CC-0012 — sexo/edad alimentan el módulo compartido de signos vitales
+  // (gineco-obstétrico solo femenina; FPP solo si además edad fértil).
+  const pacienteSexo = paciente?.biologicalSexId ?? null;
+  const pacienteEdad = calcularEdad(paciente?.birthDate ?? null);
+  const vitalesHook = useSignosVitales({ sexo: pacienteSexo, edad: pacienteEdad });
 
   // ── Mutaciones tRPC ────────────────────────────────────────────────────────────
 
@@ -628,7 +627,6 @@ export default function NuevaHistoriaClinicaPage() {
     },
   });
 
-  const signosM = trpc.eceSignosVitales.create.useMutation();
   const contactoEmergenciaM = trpc.patient.actualizarContactoEmergencia.useMutation();
 
   // ── Helpers de validación ──────────────────────────────────────────────────────
@@ -700,38 +698,6 @@ export default function NuevaHistoriaClinicaPage() {
 
   // ── Construcción del payload ───────────────────────────────────────────────────
 
-  // Signos vitales: toma separada en ece.signos_vitales (eceSignosVitales.create),
-  // keyed por episodioId. NO se embeben en el documento HC. glasgowTotal e ICT los
-  // deriva el router desde los componentes; aquí solo enviamos los componentes.
-  function buildSignos() {
-    const haySignos =
-      Object.entries(vitales).some(([k, v]) => k !== "dolor" && v !== "") ||
-      parseInt(vitales.dolor, 10) > 0;
-    if (!haySignos) return undefined;
-    const tallaM = parseNum(vitales.tallaM);
-    return {
-      presionSistolica: parseNum(vitales.sis),
-      presionDiastolica: parseNum(vitales.dia),
-      frecuenciaCardiaca: parseNum(vitales.fc),
-      frecuenciaRespiratoria: parseNum(vitales.fr),
-      temperatura: parseNum(vitales.temp),
-      saturacionO2: parseNum(vitales.spo2),
-      fio2: parseNum(vitales.fio2),
-      glasgowOcular: parseNum(vitales.gcsO),
-      glasgowVerbal: parseNum(vitales.gcsV),
-      glasgowMotor: parseNum(vitales.gcsM),
-      glucometriaMgdl: parseNum(vitales.gluco),
-      pesoKg: parseNum(vitales.pesoKg),
-      tallaCm: tallaM != null ? tallaM * 100 : undefined,
-      perimetroCintura: parseNum(vitales.cintura),
-      balanceHidrico: parseNum(vitales.balance),
-      diuresis: parseNum(vitales.diuresis),
-      fur: vitales.fur || undefined,
-      fpp: vitales.fur ? calcularFppEg(vitales.fur)?.fpp : undefined,
-      escalaDolor: parseNum(vitales.dolor),
-    };
-  }
-
   function buildPayload() {
     const examenFisicoPayload = examenFisico.trim()
       ? { sistemas: [{ sistema: "General", hallazgo: examenFisico.trim() }] }
@@ -758,13 +724,28 @@ export default function NuevaHistoriaClinicaPage() {
     };
   }
 
-  // Persiste la toma de signos vitales (si hay datos). Devuelve false si falla,
-  // para abortar el guardado del documento HC y conservar lo capturado.
+  // Persiste la toma de signos vitales (si hay datos capturadas). CC-0012 —
+  // usa el hook compartido: mapea TODOS los campos (incluye G·P·P·A·V,
+  // pesoLb, tallaFt, fppActivo — antes descartados) y ancla la toma a la
+  // cuenta activa (cuentaId) además del episodio. Devuelve false si falla o
+  // si hay datos parciales que no completan el núcleo obligatorio/fórmula
+  // obstétrica, para abortar el guardado del documento HC y conservar lo
+  // capturado (reabre el modal para que el usuario corrija).
   async function persistSignos(): Promise<boolean> {
-    const signos = buildSignos();
-    if (!signos) return true;
+    if (!tieneSignosForm(vitalesHook.value)) return true;
     try {
-      await signosM.mutateAsync({ episodioId: episodioId!, ...signos });
+      const resultado = await vitalesHook.guardar({
+        cuentaId: cuentaId || undefined,
+        episodioId: episodioId ?? undefined,
+      });
+      if (!resultado) {
+        setValidationErrors([
+          vitalesHook.mensajeError ?? "Complete los signos vitales antes de guardar.",
+        ]);
+        setPendingMode(null);
+        setVitalesOpen(true);
+        return false;
+      }
       return true;
     } catch (e) {
       setValidationErrors([`Error al guardar signos vitales: ${(e as Error).message}`]);
@@ -818,9 +799,9 @@ export default function NuevaHistoriaClinicaPage() {
     firmarM.mutate({ id: pendingHcId, pin: pin.trim() });
   }
 
-  const isSubmitting = createM.isPending || firmarM.isPending || signosM.isPending;
+  const isSubmitting = createM.isPending || firmarM.isPending || vitalesHook.guardando;
 
-  const vitalesChips = buildVitalesChips(vitales);
+  const vitalesChips = buildVitalesChips(vitalesHook.value);
   const hayVitales = vitalesChips.length > 0;
 
   // ── Estado de carga ──────────────────────────────────────────────────────────
@@ -1465,13 +1446,21 @@ export default function NuevaHistoriaClinicaPage() {
         </div>
       </div>
 
-      {/* Modal de signos vitales */}
+      {/* Modal de signos vitales — CC-0012: commit local (validar + cerrar); la
+          persistencia real corre al guardar el documento HC (persistSignos). */}
       <SignosVitalesModal
         open={vitalesOpen}
         onClose={() => setVitalesOpen(false)}
-        value={vitales}
-        onSave={setVitales}
-        isFemenina={isFemenina}
+        value={vitalesHook.value}
+        onChange={vitalesHook.setValue}
+        onGuardar={() => {
+          if (vitalesHook.validar()) setVitalesOpen(false);
+        }}
+        bloqueado={vitalesHook.bloqueado}
+        showErrors={vitalesHook.showErrors}
+        mensajeError={vitalesHook.mensajeError}
+        sexo={pacienteSexo}
+        edad={pacienteEdad}
       />
 
       {/* Modal fullscreen: Formulario de Lesión de Causa Externa (MINSAL) — solo-vista, iframe aislado */}
