@@ -45,6 +45,15 @@ export type LabPanelToggleInput = z.infer<typeof labPanelToggleInput>;
 // Test — CRUD admin
 // ---------------------------------------------------------------------------
 
+/**
+ * CC-0013 — precio estándar del catálogo. ≥0, máx 2 decimales (moneda).
+ * Nullable: `null` limpia el precio explícitamente (vuelve al tarifario/sin precio).
+ */
+const standardPriceSchema = z
+  .number()
+  .nonnegative("El precio no puede ser negativo.")
+  .refine((v) => Math.round(v * 100) === v * 100, "Máximo 2 decimales.");
+
 export const labTestCreateInput = z.object({
   panelId: z.string().uuid(),
   code: z.string().trim().min(1).max(20),
@@ -52,6 +61,8 @@ export const labTestCreateInput = z.object({
   specimen: specimenTypeEnum.default("OTHER"),
   unit: z.string().trim().max(40).optional(),
   displayOrder: z.number().int().min(0).max(999).default(0),
+  /** CC-0013 — precio estándar (opcional; el admin lo parametriza post-creación). */
+  standardPrice: standardPriceSchema.optional(),
 });
 export type LabTestCreateInput = z.infer<typeof labTestCreateInput>;
 
@@ -62,6 +73,8 @@ export const labTestUpdateInput = z.object({
   specimen: specimenTypeEnum.optional(),
   unit: z.string().trim().max(40).optional(),
   displayOrder: z.number().int().min(0).max(999).optional(),
+  /** CC-0013 — `null` limpia el precio explícitamente. */
+  standardPrice: standardPriceSchema.nullable().optional(),
 });
 export type LabTestUpdateInput = z.infer<typeof labTestUpdateInput>;
 

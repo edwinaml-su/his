@@ -147,6 +147,7 @@ describe("lisRouter", () => {
         id: u,
         patientId: u,
       } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -157,6 +158,46 @@ describe("lisRouter", () => {
       const args = prisma.labOrder.create.mock.calls[0]![0];
       expect(args.data.status).toBe("ORDERED");
       expect(args.data.priority).toBe("ROUTINE");
+    });
+
+    it("CC-0013 — crea orden con cuentaId: resuelve patientId/encounterId desde la cuenta", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        id: u,
+        patientId: v,
+        encounterId: w,
+      } as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        cuentaId: u,
+        items: [{ testId: u }],
+      });
+      const args = prisma.labOrder.create.mock.calls[0]![0];
+      expect(args.data.patientId).toBe(v);
+      expect(args.data.encounterId).toBe(w);
+      expect(args.data.patientAccountId).toBe(u);
+    });
+
+    it("CC-0013 — NOT_FOUND si cuentaId no existe en el tenant", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.create({ cuentaId: u, items: [{ testId: u }] }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("CC-0013 — encounterId auto-vincula la cuenta activa del paciente", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: v } as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        items: [{ testId: u }],
+      });
+      const args = prisma.labOrder.create.mock.calls[0]![0];
+      expect(args.data.patientAccountId).toBe(v);
     });
   });
 
@@ -689,6 +730,115 @@ describe("lisRouter", () => {
       await expect(
         caller.test.update({ id: u, name: "Intento de editar catálogo global" }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0013 — tablero de exámenes por cuenta + guardado del modal "Solicitud"
+  // ---------------------------------------------------------------------------
+
+  describe("order.tableroPorCuenta", () => {
+    it("agrupa por cuenta (última orden), calcula KPIs y breakdown de estados", async () => {
+      const orderUrgente = {
+        id: u,
+        prescriberId: v,
+        patientAccountId: w,
+        priority: "URGENT",
+        clinicalIndication: "Dolor torácico",
+        orderedAt: new Date("2026-07-27T10:00:00Z"),
+        items: [
+          { id: "item-1", testId: "test-1", status: "ORDERED", notes: null, test: { id: "test-1", name: "TROPONINA I", panel: { name: "PRUEBAS ESPECIALES" } } },
+          { id: "item-2", testId: "test-2", status: "IN_PROCESS", notes: null, test: { id: "test-2", name: "CK-MB", panel: { name: "PRUEBAS ESPECIALES" } } },
+        ],
+        patient: { firstName: "Jose", lastName: "Melendez", birthDate: new Date("1959-01-01"), biologicalSex: { code: "M" } },
+        patientAccount: { id: w, numeroCuenta: "CTA00099", createdAt: new Date("2026-07-26T08:00:00Z") },
+      };
+      const orderRutina = {
+        id: v,
+        prescriberId: u,
+        patientAccountId: "cuenta-2",
+        priority: "ROUTINE",
+        clinicalIndication: "",
+        orderedAt: new Date("2026-07-25T10:00:00Z"),
+        items: [
+          { id: "item-3", testId: "test-3", status: "RESULTED", notes: null, test: { id: "test-3", name: "GLUCOSA", panel: { name: "QUIMICA" } } },
+        ],
+        patient: { firstName: "Ana", lastName: "Cruz", birthDate: new Date("1994-01-01"), biologicalSex: { code: "F" } },
+        patientAccount: { id: "cuenta-2", numeroCuenta: "CTA00050", createdAt: new Date("2026-07-24T08:00:00Z") },
+      };
+      prisma.labOrder.findMany.mockResolvedValue([orderUrgente, orderRutina] as never);
+      prisma.user.findMany.mockResolvedValue([
+        { id: v, fullName: "Dra. Cáceres" },
+        { id: u, fullName: "Dr. Guevara" },
+      ] as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.tableroPorCuenta({});
+
+      expect(result.kpis).toEqual({
+        cuentasActivas: 2,
+        examenesTotales: 3,
+        examenesPendientes: 1,
+        solicitudesUrgentes: 1,
+      });
+      const urgente = result.cuentas.find((c) => c.cuentaId === w)!;
+      expect(urgente.prioridad).toBe("Urgente");
+      expect(urgente.medico).toBe("Dra. Cáceres");
+      expect(urgente.pendientes).toBe(1);
+      expect(urgente.enProceso).toBe(1);
+      expect(urgente.realizados).toBe(0);
+      expect(urgente.examenes).toHaveLength(2);
+    });
+
+    it("filtra por search (cuenta/paciente/médico) sin afectar los KPIs", async () => {
+      const order = {
+        id: u,
+        prescriberId: v,
+        patientAccountId: w,
+        priority: "ROUTINE",
+        clinicalIndication: "",
+        orderedAt: new Date(),
+        items: [{ id: "item-1", testId: "test-1", status: "ORDERED", notes: null, test: { id: "test-1", name: "GLUCOSA", panel: { name: "QUIMICA" } } }],
+        patient: { firstName: "Ana", lastName: "Cruz", birthDate: null, biologicalSex: null },
+        patientAccount: { id: w, numeroCuenta: "CTA00050", createdAt: new Date() },
+      };
+      prisma.labOrder.findMany.mockResolvedValue([order] as never);
+      prisma.user.findMany.mockResolvedValue([{ id: v, fullName: "Dr. Guevara" }] as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.tableroPorCuenta({ search: "no-existe" });
+
+      expect(result.cuentas).toHaveLength(0);
+      expect(result.kpis.cuentasActivas).toBe(1); // KPIs sobre el universo completo, no el filtrado.
+    });
+  });
+
+  describe("order.updateItems", () => {
+    it("NOT_FOUND si la orden no es del tenant", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue(null as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.updateItems({ orderId: u, items: [{ itemId: v, status: "IN_PROCESS" }] }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("actualiza clinicalIndication + status/notes por item", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labOrder.update.mockResolvedValue({ id: u } as never);
+      prisma.labOrderItem.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.updateItems({
+        orderId: u,
+        clinicalIndication: "Ayuno de 12 horas",
+        items: [{ itemId: v, status: "RESULTED", notes: "Muestra hemolizada, repetir" }],
+      });
+
+      const updateArgs = prisma.labOrder.update.mock.calls[0]![0];
+      expect(updateArgs.data.clinicalIndication).toBe("Ayuno de 12 horas");
+
+      const itemArgs = prisma.labOrderItem.updateMany.mock.calls[0]![0];
+      expect(itemArgs.where).toMatchObject({ id: v, orderId: u });
+      expect(itemArgs.data).toMatchObject({ status: "RESULTED", notes: "Muestra hemolizada, repetir" });
     });
   });
 });

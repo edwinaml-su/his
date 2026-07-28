@@ -12,6 +12,8 @@ import {
   labTestListInput,
   labOrderCreateInput,
   labOrderListInput,
+  labOrderTableroInput,
+  labOrderUpdateItemsInput,
   specimenCollectInput,
   specimenRejectInput,
   resultEnterInput,
@@ -88,6 +90,59 @@ describe("labOrderCreateInput", () => {
         items,
       }).success,
     ).toBe(false);
+  });
+
+  // CC-0013 — superRefine: cuentaId O (encounterId + patientId).
+  it("CC-0013 — acepta solo cuentaId (sin encounterId/patientId)", () => {
+    const r = labOrderCreateInput.safeParse({
+      cuentaId: u,
+      items: [{ testId: u }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("CC-0013 — rechaza sin cuentaId y sin encounterId+patientId", () => {
+    const r = labOrderCreateInput.safeParse({ items: [{ testId: u }] });
+    expect(r.success).toBe(false);
+  });
+
+  it("CC-0013 — rechaza encounterId sin patientId (y sin cuentaId)", () => {
+    const r = labOrderCreateInput.safeParse({
+      encounterId: u,
+      items: [{ testId: u }],
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("labOrderUpdateItemsInput (CC-0013)", () => {
+  it("acepta orderId + items con estado permitido", () => {
+    const r = labOrderUpdateItemsInput.safeParse({
+      orderId: u,
+      clinicalIndication: "Ayuno de 12 horas",
+      items: [{ itemId: u, status: "IN_PROCESS", notes: "Repetir en 2h" }],
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rechaza estado fuera del set editable desde el tablero (ej. VALIDATED)", () => {
+    const r = labOrderUpdateItemsInput.safeParse({
+      orderId: u,
+      items: [{ itemId: u, status: "VALIDATED" }],
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("rechaza items vacío", () => {
+    const r = labOrderUpdateItemsInput.safeParse({ orderId: u, items: [] });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("labOrderTableroInput (CC-0013)", () => {
+  it("search es opcional", () => {
+    expect(labOrderTableroInput.safeParse({}).success).toBe(true);
+    expect(labOrderTableroInput.safeParse({ search: "CTA00099" }).success).toBe(true);
   });
 });
 

@@ -103,7 +103,8 @@ interface LabSpecimenRow {
 interface LabOrderDetail {
   id: string;
   patientId: string;
-  encounterId: string;
+  /** CC-0013 — opcional: cuenta ambulatoria sin admisión puede no tener encounter. */
+  encounterId: string | null;
   patient?: { firstName: string; lastName: string; mrn: string } | null;
   encounter?: { encounterNumber: string } | null;
   priority: LabPriority;
@@ -298,7 +299,8 @@ export default function LisOrderDetailPage(): React.ReactElement {
                   <dt className="text-xs text-muted-foreground">Encuentro</dt>
                   <dd className="font-mono text-xs">
                     {order.data.encounter?.encounterNumber ??
-                      order.data.encounterId.slice(0, 8)}
+                      order.data.encounterId?.slice(0, 8) ??
+                      "—"}
                   </dd>
                 </div>
                 <div>
