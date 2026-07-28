@@ -18,15 +18,17 @@ describe("parseDocumento — §7 simulación", () => {
       apellidoCasada: "de Castellanos",
       sexoBiologico: "FEMENINO",
       fechaNacimiento: "1990-07-14",
+      tipoSangre: "O+",
     });
   });
 
-  it("cada tipo devuelve su propio tipoDocumento + sexo válido", () => {
+  it("cada tipo devuelve su propio tipoDocumento + sexo válido + tipo de sangre", () => {
     (["DUI", "PASAPORTE", "CARNET_RESIDENTE"] as TipoDocumento[]).forEach((t) => {
       const d = parseDocumento("raw", t);
       expect(d.tipoDocumento).toBe(t);
       expect(["MASCULINO", "FEMENINO"]).toContain(d.sexoBiologico);
       expect(d.fechaNacimiento).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(d.tipoSangre).toMatch(/^(A|B|AB|O)( Du|[+-])$/);
     });
   });
 });

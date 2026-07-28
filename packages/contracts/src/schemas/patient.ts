@@ -92,16 +92,20 @@ const patientBaseObject = z.object({
   // CC-0008 §6: mrn ya no se captura en pre-registro; se autogenera server-side (= expediente).
   // Permanece opcional para tolerar update y compatibilidad con módulos que aún lo envían.
   mrn: z.string().max(40).optional(),
-  firstName: z.string().min(1).max(120),
+  // CC-0008b: opcionales a nivel base — requeridos vía superRefine solo si !isUnknown
+  // (el servidor compone firstName/lastName para el "Paciente no identificado").
+  firstName: z.string().max(120).optional(),
   middleName: z.string().max(120).nullable().optional(),
   thirdName: z.string().max(120).nullable().optional(), // CC-0008 §6: tercer nombre.
-  lastName: z.string().min(1).max(120),
+  lastName: z.string().max(120).optional(),
   secondLastName: z.string().max(120).nullable().optional(),
   marriedLastName: z.string().max(120).nullable().optional(), // CC-0008 §6: apellido de casada.
   preferredName: z.string().max(120).nullable().optional(),
   // CC-0008 §6: switch "el paciente trae documento de identidad" (default ON).
   traeDocumento: z.boolean().default(true),
-  birthDate: z.coerce.date(), // CC-0002: requerida para generar expediente.
+  // CC-0002: requerida para generar expediente — CC-0008b la relaja cuando
+  // isUnknown=true (el expediente usa el año actual, no el de nacimiento).
+  birthDate: z.coerce.date().nullable().optional(),
   birthDateEstimated: z.boolean().default(false),
   biologicalSexId: z.string().uuid(),
   genderId: z.string().uuid().nullable().optional(),
@@ -109,7 +113,9 @@ const patientBaseObject = z.object({
   educationLevelId: z.string().uuid().nullable().optional(),
   occupationId: z.string().uuid().nullable().optional(),
   bloodTypeAbo: z.enum(["A", "B", "AB", "O"]).nullable().optional(),
-  bloodRh: z.enum(["+", "-"]).nullable().optional(),
+  bloodRh: z.enum(["+", "-", "Du"]).nullable().optional(),
+  // CC-0008b: "No reportado en documento de identificación" — excluyente con abo/rh.
+  bloodTypeNotReported: z.boolean().optional(),
   isUnknown: z.boolean().default(false),
   // CC-0002 §3/§5: documento de registro (opcional, tolera pacientes existentes sin doc).
   documentType: documentTypeEnum.optional(),
@@ -118,7 +124,52 @@ const patientBaseObject = z.object({
 });
 
 export const patientCreateSchema = patientBaseObject.superRefine((val, ctx) => {
-  const { documentType, documentNumber, responsable, birthDate } = val;
+  const { documentType, documentNumber, responsable, birthDate, isUnknown } = val;
+
+  // CC-0008b — paciente no identificado (emergencia): el servidor compone
+  // firstName/lastName y no requiere fecha de nacimiento (desconocida).
+  // Paciente normal: ambos nombres y la fecha de nacimiento siguen obligatorios.
+  if (!isUnknown) {
+    if (!val.firstName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Primer nombre requerido.",
+        path: ["firstName"],
+      });
+    }
+    if (!val.lastName?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Primer apellido requerido.",
+        path: ["lastName"],
+      });
+    }
+    if (!birthDate) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Fecha de nacimiento requerida para generar el expediente (CC-0002).",
+        path: ["birthDate"],
+      });
+    }
+  }
+
+  // CC-0008b — tipo de sangre: "no reportado" es excluyente con abo/rh;
+  // si se indica uno de abo/rh, ambos deben venir juntos.
+  if (val.bloodTypeNotReported) {
+    if (val.bloodTypeAbo || val.bloodRh) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "No debe indicar ABO/Rh cuando el tipo de sangre no fue reportado en el documento.",
+        path: ["bloodTypeNotReported"],
+      });
+    }
+  } else if ((val.bloodTypeAbo != null) !== (val.bloodRh != null)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Debe indicar el grupo ABO y el factor Rh juntos.",
+      path: ["bloodRh"],
+    });
+  }
 
   if (
     documentType &&

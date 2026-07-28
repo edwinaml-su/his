@@ -46,17 +46,25 @@ describe("patientCreateSchema", () => {
     expect(r.success).toBe(true);
   });
 
-  it("rechaza isUnknown=true sin birthDate (CC-0002: birthDate es requerida para generar expediente)", () => {
-    // CC-0002 §6: birthDate es requerida para derivar el AA del expediente.
-    // Los pacientes NN deben registrarse con la fecha estimada más cercana posible.
+  it("rechaza birthDate ausente cuando isUnknown=false (CC-0002: requerida para generar expediente)", () => {
     const r = patientCreateSchema.safeParse({
-      mrn: "NN-0001",
-      firstName: "Desconocido",
-      lastName: "NN",
+      mrn: "MRN-0001",
+      firstName: "Ana",
+      lastName: "Pérez",
       biologicalSexId: baseUuid,
-      isUnknown: true,
     });
     expect(r.success).toBe(false);
+  });
+
+  // CC-0008b — paciente no identificado: birthDate/firstName/lastName se relajan
+  // porque el servidor compone la identidad temporal (nombre + expediente año actual).
+  it("acepta isUnknown=true sin birthDate ni nombres (identidad temporal la compone el servidor)", () => {
+    const r = patientCreateSchema.safeParse({
+      biologicalSexId: baseUuid,
+      isUnknown: true,
+      bloodTypeNotReported: true,
+    });
+    expect(r.success).toBe(true);
   });
 
   it("rechaza mrn que excede 40 caracteres", () => {
@@ -161,6 +169,60 @@ describe("patientCreateSchema", () => {
     if (!r.success) {
       expect(r.error.issues.some((i) => i.path.includes("documentType"))).toBe(true);
     }
+  });
+});
+
+// =============================================================================
+// CC-0008b — tipo de sangre: enum Du + reglas cruzadas bloodTypeNotReported/abo/rh.
+// =============================================================================
+
+describe("patientCreateSchema — tipo de sangre (CC-0008b)", () => {
+  const valid = {
+    firstName: "Ana",
+    lastName: "Pérez",
+    biologicalSexId: baseUuid,
+    birthDate: "1990-01-01",
+  };
+
+  it("acepta bloodRh='Du' (variante débil del factor Rh)", () => {
+    const r = patientCreateSchema.safeParse({ ...valid, bloodTypeAbo: "A", bloodRh: "Du" });
+    expect(r.success).toBe(true);
+  });
+
+  it("rechaza bloodRh fuera del enum (+, -, Du)", () => {
+    const r = patientCreateSchema.safeParse({ ...valid, bloodTypeAbo: "A", bloodRh: "++" });
+    expect(r.success).toBe(false);
+  });
+
+  it("acepta bloodTypeNotReported=true sin abo/rh", () => {
+    const r = patientCreateSchema.safeParse({ ...valid, bloodTypeNotReported: true });
+    expect(r.success).toBe(true);
+  });
+
+  it("rechaza bloodTypeNotReported=true junto con bloodTypeAbo/bloodRh (excluyentes)", () => {
+    const r = patientCreateSchema.safeParse({
+      ...valid,
+      bloodTypeNotReported: true,
+      bloodTypeAbo: "O",
+      bloodRh: "+",
+    });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.includes("bloodTypeNotReported"))).toBe(true);
+    }
+  });
+
+  it("rechaza bloodTypeAbo sin bloodRh (deben venir juntos)", () => {
+    const r = patientCreateSchema.safeParse({ ...valid, bloodTypeAbo: "O" });
+    expect(r.success).toBe(false);
+    if (!r.success) {
+      expect(r.error.issues.some((i) => i.path.includes("bloodRh"))).toBe(true);
+    }
+  });
+
+  it("rechaza bloodRh sin bloodTypeAbo (deben venir juntos)", () => {
+    const r = patientCreateSchema.safeParse({ ...valid, bloodRh: "+" });
+    expect(r.success).toBe(false);
   });
 });
 

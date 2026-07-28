@@ -321,6 +321,119 @@ describe("patientRouter", () => {
       expect(prisma.$queryRaw).not.toHaveBeenCalled();
       expect(prisma.patient.create).not.toHaveBeenCalled();
     });
+
+    // ─── CC-0008b — paciente no identificado ────────────────────────────────
+    describe("isUnknown (paciente no identificado)", () => {
+      function setupTxUnknown() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+          .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+        prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+      }
+
+      it("compone firstName/lastName por sexo, expediente con año ACTUAL, unknownLabel y traeDocumento=false", async () => {
+        setupTxUnknown();
+        prisma.biologicalSex.findUnique.mockResolvedValue({ code: "F" } as never);
+        prisma.$queryRaw
+          .mockResolvedValueOnce([{ n: 3 }] as never) // fn_next_expediente
+          .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_no_identificado
+          .mockResolvedValue([] as never); // hook ECE (existencia/colisión/insert) → no-op
+        prisma.patient.create.mockResolvedValue({
+          id: "nn-1",
+          mrn: "SV2600003",
+          expediente: "SV2600003",
+        } as never);
+
+        const currentYearAA = String(new Date().getFullYear()).slice(-2);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await caller.create({
+          biologicalSexId: "00000000-0000-0000-0000-000000000099",
+          isUnknown: true,
+        } as never);
+
+        const args = prisma.patient.create.mock.calls[0]![0];
+        expect(args.data).toMatchObject({
+          firstName: "PACIENTE FEMENINO NO IDENTIFICADO",
+          traeDocumento: false,
+          birthDate: null,
+          isUnknown: true,
+        });
+        expect(args.data.lastName).toMatch(/^\d{8}-01$/);
+        expect(args.data.unknownLabel).toBe(args.data.lastName);
+
+        // fn_next_expediente se invocó con el AA del año ACTUAL (no hay birthDate).
+        const expedienteCall = prisma.$queryRaw.mock.calls[0] as unknown as [
+          TemplateStringsArray,
+          string,
+          string,
+        ];
+        expect(expedienteCall[2]).toBe(currentYearAA);
+      });
+
+      it("compone 'PACIENTE MASCULINO NO IDENTIFICADO' cuando el código de sexo es M", async () => {
+        setupTxUnknown();
+        prisma.biologicalSex.findUnique.mockResolvedValue({ code: "M" } as never);
+        prisma.$queryRaw
+          .mockResolvedValueOnce([{ n: 1 }] as never)
+          .mockResolvedValueOnce([{ n: 1 }] as never)
+          .mockResolvedValue([] as never);
+        prisma.patient.create.mockResolvedValue({ id: "nn-2", expediente: "SV2600001" } as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await caller.create({
+          biologicalSexId: "00000000-0000-0000-0000-000000000098",
+          isUnknown: true,
+        } as never);
+
+        const args = prisma.patient.create.mock.calls[0]![0];
+        expect(args.data.firstName).toBe("PACIENTE MASCULINO NO IDENTIFICADO");
+      });
+
+      it("pasa tipo_registro_identidad='desconocido' al hook ECE (no 'sin_documento')", async () => {
+        setupTxUnknown();
+        prisma.biologicalSex.findUnique.mockResolvedValue({ code: "F" } as never);
+        prisma.$queryRaw
+          .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_expediente
+          .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_no_identificado
+          .mockResolvedValue([] as never); // hook: existencia / colisión / insert
+        prisma.patient.create.mockResolvedValue({ id: "nn-3", expediente: "SV2600001" } as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await caller.create({
+          biologicalSexId: "00000000-0000-0000-0000-000000000097",
+          isUnknown: true,
+        } as never);
+
+        // Llamada #5 (índice 4): INSERT INTO ece.paciente dentro del hook.
+        const insertCall = prisma.$queryRaw.mock.calls[4];
+        const allArgs = insertCall?.flat().map(String).join(" ");
+        expect(allArgs).toContain("desconocido");
+      });
+    });
+
+    // ─── CC-0008b — tipo de sangre ──────────────────────────────────────────
+    it("persiste bloodTypeAbo/bloodRh/bloodTypeNotReported en el paciente", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+      prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
+      prisma.patient.create.mockResolvedValue({ id: "with-blood", expediente: "SV8400001" } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.create({
+        firstName: "Juan",
+        lastName: "Pérez",
+        biologicalSexId: "00000000-0000-0000-0000-000000000099",
+        birthDate: "1984-03-15",
+        bloodTypeAbo: "O",
+        bloodRh: "Du",
+      } as never);
+
+      const args = prisma.patient.create.mock.calls[0]![0];
+      expect(args.data).toMatchObject({ bloodTypeAbo: "O", bloodRh: "Du" });
+    });
   });
 
   describe("addIdentifier", () => {

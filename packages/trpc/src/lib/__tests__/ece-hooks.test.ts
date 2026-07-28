@@ -89,6 +89,34 @@ describe("hookEcePacienteAfterCreate", () => {
     const allArgs = insertCall?.flat().map(String).join(" ");
     expect(allArgs).toContain("MRN-003-aabbccdd");
   });
+
+  // CC-0008b — paciente no identificado: tipo_registro_identidad='desconocido'.
+  it("usa tipo_registro_identidad='desconocido' cuando se pasa explícito (paciente no identificado)", async () => {
+    const tx = makeTxMock([
+      [], // SELECT public_patient_id → no existe
+      [], // SELECT numero_expediente colisión → no colisión
+      [{ id: "ece-pac-nn" }], // INSERT RETURNING
+    ]);
+    const result = await hookEcePacienteAfterCreate(
+      tx,
+      "patient-uuid-nn",
+      "establishment-uuid",
+      "27072026-01",
+      "desconocido",
+    );
+    expect(result).toBe("ece-pac-nn");
+    const insertCall = tx.$queryRaw.mock.calls[2];
+    const allArgs = insertCall?.flat().map(String).join(" ");
+    expect(allArgs).toContain("desconocido");
+  });
+
+  it("usa tipo_registro_identidad='sin_documento' por default cuando no se pasa el parámetro", async () => {
+    const tx = makeTxMock([[], [], [{ id: "ece-pac-default" }]]);
+    await hookEcePacienteAfterCreate(tx, "patient-uuid-default", "establishment-uuid", "MRN-004");
+    const insertCall = tx.$queryRaw.mock.calls[2];
+    const allArgs = insertCall?.flat().map(String).join(" ");
+    expect(allArgs).toContain("sin_documento");
+  });
 });
 
 // ─── hookEceEpisodioAfterAdmit ────────────────────────────────────────────────

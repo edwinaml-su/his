@@ -20,6 +20,7 @@ import { withTenantContext } from "../rls-context";
 import { withEceContext } from "../ece/rls-context";
 import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
 import { nextExpediente } from "../lib/expediente-numbering";
+import { nextNoIdentificadoLabel } from "../lib/no-identificado-numbering";
 import { validateDUI } from "@his/contracts";
 
 // =============================================================================
@@ -388,8 +389,11 @@ export const patientRouter = router({
     const establishmentId = ctx.tenant.establishmentId;
 
     return ctx.prisma.$transaction(async (tx) => {
-      // CC-0002 §6: el expediente requiere birthDate y que el país tenga isoAlpha2.
-      if (!input.birthDate) {
+      // CC-0002 §6 / CC-0008b: el expediente requiere una fecha para derivar el AA.
+      // Paciente no identificado (isUnknown): no se conoce su nacimiento → se usa
+      // la fecha ACTUAL del registro (año vigente), no la de nacimiento.
+      const expedienteBirthDate = input.isUnknown ? new Date() : input.birthDate;
+      if (!expedienteBirthDate) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "La fecha de nacimiento es requerida para generar el expediente del paciente (CC-0002).",
@@ -410,6 +414,7 @@ export const patientRouter = router({
       }
 
       // CC-0002 §5 / CC-0005: dedup por documento propio antes de crear.
+      // No aplica a isUnknown (no trae documento).
       if (
         input.documentType &&
         ["DUI", "DNI", "PASAPORTE", "CARNET_RESIDENCIA"].includes(input.documentType) &&
@@ -426,32 +431,75 @@ export const patientRouter = router({
         if (existing) return existing; // recuperar expediente existente, NO crear uno nuevo.
       }
 
-      const expediente = await nextExpediente(tx, alpha2, input.birthDate);
+      const expediente = await nextExpediente(tx, alpha2, expedienteBirthDate);
 
-      // responsable no es columna de Patient — excluirlo del data.
+      // CC-0008b — paciente no identificado: el servidor compone la identidad
+      // temporal (nombre + código DDMMAAAA-NN) según el sexo biológico capturado.
+      // El mockup exige sexo biológico siempre (chip Masculino/Femenino).
+      let firstName = input.firstName?.trim();
+      let lastName = input.lastName?.trim();
+      let unknownLabel: string | undefined;
+
+      if (input.isUnknown) {
+        const sex = await tx.biologicalSex.findUnique({
+          where: { id: input.biologicalSexId },
+          select: { code: true },
+        });
+        unknownLabel = await nextNoIdentificadoLabel(tx, ctx.tenant.organizationId);
+        const genero = sex?.code === "M" ? "MASCULINO" : sex?.code === "F" ? "FEMENINO" : null;
+        firstName = genero ? `PACIENTE ${genero} NO IDENTIFICADO` : "PACIENTE NO IDENTIFICADO";
+        lastName = unknownLabel;
+      }
+
+      if (!firstName || !lastName) {
+        // El superRefine de patientCreateSchema ya garantiza esto para !isUnknown;
+        // defensa en profundidad si isUnknown=true y no se pudo componer el nombre.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Nombre y apellido son requeridos.",
+        });
+      }
+
+      // responsable/firstName/lastName/birthDate se excluyen del spread: se
+      // recomponen explícitamente abajo (identidad temporal + AA no identificado).
       // CC-0008 §6: el mrn ya no se captura en pre-registro; se autogenera = expediente.
       // Se respeta un mrn provisto (otros módulos lo envían) por compatibilidad.
-      const { responsable, mrn: inputMrn, ...patientData } = input;
+      const {
+        responsable,
+        mrn: inputMrn,
+        firstName: _inputFirstName,
+        lastName: _inputLastName,
+        birthDate: _inputBirthDate,
+        ...patientData
+      } = input;
       const mrn = inputMrn?.trim() ? inputMrn.trim() : expediente;
 
       const patient = await tx.patient.create({
         data: {
           ...patientData,
+          firstName,
+          lastName,
           mrn,
           organizationId: ctx.tenant.organizationId,
           createdBy: ctx.user.id,
           expediente,
+          ...(input.isUnknown
+            ? { unknownLabel, birthDate: null, traeDocumento: false }
+            : { birthDate: input.birthDate }),
         },
       });
 
       // Hook automático: crear ece.paciente para habilitar documentos clínicos ECE.
       // Pasa el expediente nuevo (CC-0002) como numero_expediente en ECE.
+      // CC-0008b: 'desconocido' para no identificado (único valor NTEC que aplica
+      // — distinto de 'sin_documento', que implica identidad conocida sin porte).
       // Non-fatal: si falla, el Patient ya se creó y se puede backfillear luego.
       const pacienteEceId = await hookEcePacienteAfterCreate(
         tx,
         patient.id,
         establishmentId,
         patient.expediente ?? patient.mrn,
+        input.isUnknown ? "desconocido" : "sin_documento",
       ).catch((err: unknown) => {
         console.error(
           `[patient.create] hook ECE falló para patient=${patient.id}:`,
