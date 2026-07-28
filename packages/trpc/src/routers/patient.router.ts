@@ -402,14 +402,15 @@ export const patientRouter = router({
 
       const org = await tx.organization.findUnique({
         where: { id: ctx.tenant.organizationId },
-        select: { country: { select: { isoAlpha2: true } } },
+        select: { country: { select: { isoAlpha2: true, isoNumeric: true } } },
       });
 
       const alpha2 = org?.country?.isoAlpha2;
-      if (!alpha2) {
+      const isoNumeric = org?.country?.isoNumeric;
+      if (!alpha2 || isoNumeric == null) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "El país de la organización no tiene código ISO alfa-2 configurado (CC-0002). Contacta al administrador.",
+          message: "El país de la organización no tiene código ISO alfa-2 o numérico configurado (CC-0002/CC-0014). Contacta al administrador.",
         });
       }
 
@@ -431,7 +432,7 @@ export const patientRouter = router({
         if (existing) return existing; // recuperar expediente existente, NO crear uno nuevo.
       }
 
-      const expediente = await nextExpediente(tx, alpha2, expedienteBirthDate);
+      const expediente = await nextExpediente(tx, { isoAlpha2: alpha2, isoNumeric }, expedienteBirthDate);
 
       // CC-0008b — paciente no identificado: el servidor compone la identidad
       // temporal (nombre + código DDMMAAAA-NN) según el sexo biológico capturado.

@@ -112,7 +112,7 @@ export default function PatientsPage() {
             </div>
             <div className="space-y-1">
               <Label htmlFor="f-expediente">Número de expediente</Label>
-              <Input id="f-expediente" value={expediente} onChange={(e) => setExpediente(e.target.value)} placeholder="SV…" />
+              <Input id="f-expediente" value={expediente} onChange={(e) => setExpediente(e.target.value)} placeholder="222…" />
             </div>
             <div className="space-y-1">
               <Label htmlFor="f-sexo">Sexo</Label>

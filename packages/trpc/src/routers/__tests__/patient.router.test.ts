@@ -167,12 +167,12 @@ describe("patientRouter", () => {
 
       // Mock de organization.findUnique para obtener isoAlpha2 del país.
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV" },
+        country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
       // Mock de $queryRaw: fn_next_expediente devuelve 1.
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
       // Mock del patient create.
-      prisma.patient.create.mockResolvedValue({ id: "new", mrn: "MRN-X", expediente: "SV8400001" } as never);
+      prisma.patient.create.mockResolvedValue({ id: "new", mrn: "MRN-X", expediente: "2228400001" } as never);
 
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
@@ -188,7 +188,7 @@ describe("patientRouter", () => {
       expect(args.data).toMatchObject({
         organizationId: MOCK_TENANT.organizationId,
         createdBy: MOCK_USER_ADMIN.id,
-        expediente: "SV8400001",
+        expediente: "2228400001",
       });
     });
 
@@ -241,14 +241,14 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       // $queryRaw: fn_next_expediente devuelve 1 para el primer menor; luego hook ECE queries → []
       prisma.$queryRaw
         .mockResolvedValueOnce([{ n: 1 }] as never)   // fn_next_expediente → SV{AA}00001
         .mockResolvedValue([] as never);               // hook ECE queries (idempotencia) → no existente → falló non-fatal
       prisma.patient.create.mockResolvedValueOnce({
         id: "minor-1",
-        expediente: "SV0000001",
+        expediente: "2220000001",
       } as never);
 
       const caller1 = patientRouter.createCaller(makeCtx({ prisma }));
@@ -260,7 +260,7 @@ describe("patientRouter", () => {
         .mockResolvedValue([] as never);
       prisma.patient.create.mockResolvedValueOnce({
         id: "minor-2",
-        expediente: "SV0000002",
+        expediente: "2220000002",
       } as never);
 
       const caller2 = patientRouter.createCaller(makeCtx({ prisma }));
@@ -291,13 +291,13 @@ describe("patientRouter", () => {
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
 
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV" },
+        country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
 
       const existingPatient = {
         id: "existing-uuid",
         mrn: "MRN-EXIST",
-        expediente: "SV8400001",
+        expediente: "2228400001",
         documentType: "DUI",
         documentNumber: VALID_DUIS[0],
       };
@@ -328,7 +328,7 @@ describe("patientRouter", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
           .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-        prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+        prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       }
 
       it("compone firstName/lastName por sexo, expediente con año ACTUAL, unknownLabel y traeDocumento=false", async () => {
@@ -340,8 +340,8 @@ describe("patientRouter", () => {
           .mockResolvedValue([] as never); // hook ECE (existencia/colisión/insert) → no-op
         prisma.patient.create.mockResolvedValue({
           id: "nn-1",
-          mrn: "SV2600003",
-          expediente: "SV2600003",
+          mrn: "2222600003",
+          expediente: "2222600003",
         } as never);
 
         const currentYearAA = String(new Date().getFullYear()).slice(-2);
@@ -378,7 +378,7 @@ describe("patientRouter", () => {
           .mockResolvedValueOnce([{ n: 1 }] as never)
           .mockResolvedValueOnce([{ n: 1 }] as never)
           .mockResolvedValue([] as never);
-        prisma.patient.create.mockResolvedValue({ id: "nn-2", expediente: "SV2600001" } as never);
+        prisma.patient.create.mockResolvedValue({ id: "nn-2", expediente: "2222600001" } as never);
 
         const caller = patientRouter.createCaller(makeCtx({ prisma }));
         await caller.create({
@@ -397,7 +397,7 @@ describe("patientRouter", () => {
           .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_expediente
           .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_no_identificado
           .mockResolvedValue([] as never); // hook: existencia / colisión / insert
-        prisma.patient.create.mockResolvedValue({ id: "nn-3", expediente: "SV2600001" } as never);
+        prisma.patient.create.mockResolvedValue({ id: "nn-3", expediente: "2222600001" } as never);
 
         const caller = patientRouter.createCaller(makeCtx({ prisma }));
         await caller.create({
@@ -417,9 +417,9 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV" } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
-      prisma.patient.create.mockResolvedValue({ id: "with-blood", expediente: "SV8400001" } as never);
+      prisma.patient.create.mockResolvedValue({ id: "with-blood", expediente: "2228400001" } as never);
 
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await caller.create({
@@ -507,7 +507,7 @@ describe("patientRouter", () => {
         firstName: "Juan",
         lastName: "Pérez",
         secondLastName: "García",
-        expediente: "SV2600001",
+        expediente: "2222600001",
       } as never);
 
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
@@ -520,7 +520,7 @@ describe("patientRouter", () => {
       expect(result).not.toBeNull();
       expect(result?.id).toBe("00000000-0000-0000-0000-000000000099");
       expect(result?.displayName).toContain("Juan");
-      expect(result?.expediente).toBe("SV2600001");
+      expect(result?.expediente).toBe("2222600001");
     });
 
     it("devuelve null cuando el paciente no existe", async () => {

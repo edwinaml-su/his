@@ -8,7 +8,8 @@
  * sangre, toggle "no identificado", panel de éxito).
  *
  * @QA — E2E (Playwright): pre-registrar con DUI real muestra expediente
- *   SV{AA}{NNNNN}; reutilizar el mismo DUI recupera el expediente existente;
+ *   {NNN}{AA}{NNNNN} (CC-0014, NNN = ISO 3166-1 numérico del país); reutilizar
+ *   el mismo DUI recupera el expediente existente;
  *   pre-registrar "paciente no identificado" muestra el código DDMMAAAA-NN
  *   real (asignado por el servidor) en el panel de éxito.
  */
@@ -154,11 +155,11 @@ describe("PreRegistroPage", () => {
     );
 
     render(<PreRegistroPage />);
-    capturedOnSuccess?.({ id: "patient-1", expediente: "SV8400001" });
+    capturedOnSuccess?.({ id: "patient-1", expediente: "2228400001" });
 
     await waitFor(() => {
       expect(screen.getByRole("status")).toBeInTheDocument();
-      expect(screen.getByText(/SV8400001/)).toBeInTheDocument();
+      expect(screen.getByText(/2228400001/)).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Ver expediente del paciente" }),
       ).toBeInTheDocument();
@@ -180,7 +181,7 @@ describe("PreRegistroPage", () => {
     );
 
     render(<PreRegistroPage />);
-    capturedOnSuccess?.({ id: "nn-1", expediente: "SV2600001", unknownLabel: "27072026-01" });
+    capturedOnSuccess?.({ id: "nn-1", expediente: "2222600001", unknownLabel: "27072026-01" });
 
     await waitFor(() => {
       expect(screen.getByText(/27072026-01/)).toBeInTheDocument();
