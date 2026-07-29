@@ -192,6 +192,28 @@ export default function PreRegistroPage() {
       }),
   });
 
+  // CC-0008b — al guardar el pre-registro se ejecuta automáticamente la
+  // orientación táctil (/orientacion): cuenta regresiva visible para que el
+  // operador alcance a leer el expediente antes del salto automático.
+  const ORIENTACION_DELAY_S = 6;
+  const [orientacionEn, setOrientacionEn] = React.useState(ORIENTACION_DELAY_S);
+  React.useEffect(() => {
+    if (!created) return;
+    setOrientacionEn(ORIENTACION_DELAY_S);
+    const iv = setInterval(() => {
+      setOrientacionEn((s) => {
+        if (s <= 1) {
+          clearInterval(iv);
+          router.push("/orientacion");
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [created]);
+
   const [form, setForm] = React.useState({
     traeDocumento: true,
     noId: false, // CC-0008b — "Paciente no identificado" (emergencia).
@@ -450,13 +472,26 @@ export default function PreRegistroPage() {
                 <span className="font-semibold text-[#15212E]">{created.unknownLabel}</span>
               </p>
             )}
-            <button
-              type="button"
-              onClick={() => router.push(`/patients/${created.id}`)}
-              className="rounded-lg bg-[#0B3D5C] px-[26px] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0E4A6E]"
-            >
-              Ver expediente del paciente
-            </button>
+            <p className="text-sm text-[#5B6B7B]" aria-live="polite">
+              Abriendo la orientación táctil en{" "}
+              <span className="font-semibold text-[#15212E]">{orientacionEn} s</span>…
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => router.push("/orientacion")}
+                className="rounded-lg bg-[#0B3D5C] px-[26px] py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0E4A6E]"
+              >
+                Ir a orientación ahora
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/patients/${created.id}`)}
+                className="rounded-lg border-[1.5px] border-[#0B3D5C] bg-white px-[26px] py-3 text-sm font-semibold text-[#0B3D5C] transition-colors hover:bg-[#F0F5FC]"
+              >
+                Ver expediente del paciente
+              </button>
+            </div>
           </div>
         </div>
       </div>

@@ -188,6 +188,50 @@ describe("PreRegistroPage", () => {
     });
   });
 
+  // ── CC-0008b iteración — orientación táctil automática tras guardar ────────
+  describe("orientación táctil automática tras el pre-registro", () => {
+    function renderYCrear() {
+      let capturedOnSuccess: ((p: { id: string; expediente: string }) => void) | undefined;
+      mockUseMutation.mockImplementation(
+        (opts: { onSuccess?: (p: { id: string; expediente: string }) => void }) => {
+          capturedOnSuccess = opts?.onSuccess;
+          return makeMutationState();
+        },
+      );
+      render(<PreRegistroPage />);
+      capturedOnSuccess?.({ id: "patient-1", expediente: "2228400001" });
+    }
+
+    it("el panel de éxito muestra la cuenta regresiva y el botón de ir ahora", async () => {
+      renderYCrear();
+      await waitFor(() => {
+        expect(screen.getByText(/Abriendo la orientación táctil en/)).toBeInTheDocument();
+        expect(
+          screen.getByRole("button", { name: "Ir a orientación ahora" }),
+        ).toBeInTheDocument();
+      });
+    });
+
+    it("«Ir a orientación ahora» navega de inmediato a /orientacion", async () => {
+      renderYCrear();
+      const btn = await screen.findByRole("button", { name: "Ir a orientación ahora" });
+      fireEvent.click(btn);
+      expect(mockPush).toHaveBeenCalledWith("/orientacion");
+    });
+
+    it("al agotarse la cuenta regresiva navega automáticamente a /orientacion", async () => {
+      vi.useFakeTimers();
+      try {
+        renderYCrear();
+        // El panel se pinta en el siguiente tick de React; avanza los 6s del countdown.
+        await vi.advanceTimersByTimeAsync(6100);
+        expect(mockPush).toHaveBeenCalledWith("/orientacion");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // ── CC-0008b — banner permanente de tipo de sangre (4 estados) ─────────────
   describe("banner de tipo de sangre", () => {
     it("estado inicial (trae ON, sin sangre seleccionada): 'Sin registrar'", () => {
