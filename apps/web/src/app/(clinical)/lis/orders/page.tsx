@@ -38,6 +38,7 @@ import { trpc } from "@/lib/trpc/react";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
 import { Tablero } from "./_components/tablero";
+import { Estudios } from "./_components/estudios";
 
 type LabPriority = "ROUTINE" | "URGENT" | "STAT";
 type LabOrderStatus =
@@ -80,28 +81,42 @@ const STATUS_LABEL: Record<LabOrderStatus, string> = {
 const ALL = "__ALL__";
 
 /**
- * CC-0013 — dos vistas: Lista (filtros clásicos) y Tablero (por cuenta,
- * mockup docs/CC/0013). `?vista=tablero` selecciona la pestaña inicial
- * (enlazado desde el botón "Consultar Tablero" de /lis/orders/new).
+ * CC-0013 / CC-0013b — tres vistas: Estudios (grid de consulta a nivel de
+ * examen, todos los estados — default), Tablero (por cuenta, mockup
+ * docs/CC/0013) y Lista (filtros clásicos por encuentro/paciente).
+ * `?vista=tablero` / `?vista=lista` seleccionan la pestaña inicial; sin el
+ * parámetro (o con un valor desconocido) la pestaña inicial es "Estudios"
+ * — CC-0013b cambia el default, que antes era "Lista".
  */
 export default function LisOrdersPage(): React.ReactElement {
   const searchParams = useSearchParams();
-  const vistaInicial = searchParams.get("vista") === "tablero" ? "tablero" : "lista";
+  const vistaParam = searchParams.get("vista");
+  const vistaInicial =
+    vistaParam === "tablero" ? "tablero" : vistaParam === "lista" ? "lista" : "estudios";
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Órdenes de Laboratorio</h1>
-        <Button asChild>
-          <Link href="/lis/orders/new">Nueva orden</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/lis/results">Resultados (validación)</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/lis/orders/new">Nueva orden</Link>
+          </Button>
+        </div>
       </div>
 
       <Tabs defaultValue={vistaInicial}>
         <TabsList aria-label="Vista de órdenes de laboratorio">
+          <TabsTrigger value="estudios">Estudios</TabsTrigger>
           <TabsTrigger value="lista">Lista</TabsTrigger>
           <TabsTrigger value="tablero">Tablero por cuenta</TabsTrigger>
         </TabsList>
+        <TabsContent value="estudios">
+          <Estudios />
+        </TabsContent>
         <TabsContent value="lista">
           <ListaOrdenes />
         </TabsContent>

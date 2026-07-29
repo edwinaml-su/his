@@ -30,6 +30,9 @@ import {
   labOrderListInput,
   labOrderTableroInput,
   labOrderUpdateItemsInput,
+  labOrderEstudiosInput,
+  labOrderCuentaModalInput,
+  type LabOrderEstudioEstado,
   specimenCollectInput,
   specimenRejectInput,
   resultEnterInput,
@@ -519,44 +522,9 @@ export const lisRouter = router({
           : [];
         const prescriberName = new Map(prescribers.map((p) => [p.id, p.fullName]));
 
-        const cuentaRows = [...porCuenta.values()].map((o) => {
-          const patientAgeYears = o.patient.birthDate
-            ? Math.floor((Date.now() - new Date(o.patient.birthDate).getTime()) / (1000 * 60 * 60 * 24 * 365.25))
-            : null;
-          const pendientes = o.items.filter((i) => i.status === "ORDERED" || i.status === "COLLECTED").length;
-          const enProceso = o.items.filter((i) => i.status === "IN_PROCESS").length;
-          const realizados = o.items.filter((i) => i.status === "RESULTED" || i.status === "VALIDATED").length;
-
-          return {
-            cuentaId: o.patientAccountId as string,
-            orderId: o.id,
-            numeroCuenta: o.patientAccount?.numeroCuenta ?? "",
-            paciente: {
-              nombre: `${o.patient.firstName} ${o.patient.lastName}`.trim(),
-              edad: patientAgeYears,
-              sexo: o.patient.biologicalSex?.code ?? null,
-            },
-            medico: prescriberName.get(o.prescriberId) ?? "—",
-            ingreso: o.patientAccount?.createdAt ?? o.orderedAt,
-            prioridad: (o.priority === "STAT" || o.priority === "URGENT" ? "Urgente" : "Rutina") as
-              | "Urgente"
-              | "Rutina",
-            clinicalIndication: o.clinicalIndication ?? "",
-            totalExamenes: o.items.length,
-            pendientes,
-            enProceso,
-            realizados,
-            estado: "Activa" as const,
-            examenes: o.items.map((i) => ({
-              itemId: i.id,
-              testId: i.testId,
-              nombre: i.test.name,
-              seccion: i.test.panel?.name ?? "",
-              estado: i.status,
-              notes: i.notes ?? "",
-            })),
-          };
-        });
+        const cuentaRows = [...porCuenta.values()].map((o) =>
+          buildCuentaRow(o, prescriberName.get(o.prescriberId) ?? "—"),
+        );
 
         const kpis = {
           cuentasActivas: cuentaRows.length,
@@ -607,6 +575,165 @@ export const lisRouter = router({
         }
 
         return { ok: true as const };
+      });
+    }),
+
+    /**
+     * CC-0013b — vista «Estudios»: grid a nivel de EXAMEN (un row por
+     * LabOrderItem) en todos los estados, con filtros server-side
+     * (paciente/expediente, centro solicitante-o-ejecutor, estado agrupado,
+     * rango de fechas) + paginación cursor (mismo patrón que
+     * `notifications.router.ts#list`).
+     */
+    estudios: tenantProcedure.input(labOrderEstudiosInput).query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const orderFilter: Prisma.LabOrderWhereInput = {
+          organizationId: ctx.tenant.organizationId,
+          ...(input.costCenterId && {
+            OR: [{ costCenterId: input.costCenterId }, { ejecutorCostCenterId: input.costCenterId }],
+          }),
+          ...((input.fechaDesde || input.fechaHasta) && {
+            createdAt: {
+              ...(input.fechaDesde && { gte: input.fechaDesde }),
+              ...(input.fechaHasta && { lte: input.fechaHasta }),
+            },
+          }),
+          ...(input.search && {
+            patient: {
+              OR: [
+                { firstName: { contains: input.search, mode: "insensitive" } },
+                { lastName: { contains: input.search, mode: "insensitive" } },
+                { expediente: { contains: input.search, mode: "insensitive" } },
+              ],
+            },
+          }),
+        };
+
+        const statusFilter = input.estado
+          ? ESTUDIO_STATUS_GROUPS[input.estado]
+          : ESTUDIO_STATUS_ACTIVOS;
+
+        const items = await tx.labOrderItem.findMany({
+          where: {
+            status: { in: [...statusFilter] },
+            order: orderFilter,
+          },
+          include: {
+            test: { select: { name: true, code: true, panel: { select: { name: true } } } },
+            order: {
+              select: {
+                id: true,
+                createdAt: true,
+                priority: true,
+                prescriberId: true,
+                patient: { select: { firstName: true, lastName: true, expediente: true, mrn: true } },
+                patientAccount: { select: { numeroCuenta: true } },
+                ejecutorCostCenter: { select: { code: true, name: true } },
+              },
+            },
+          },
+          orderBy: [{ order: { createdAt: "desc" } }, { id: "desc" }],
+          take: input.limit,
+          ...(input.cursor && { cursor: { id: input.cursor }, skip: 1 }),
+        });
+
+        const prescriberIds = [...new Set(items.map((i) => i.order.prescriberId))];
+        const prescribers = prescriberIds.length
+          ? await tx.user.findMany({ where: { id: { in: prescriberIds } }, select: { id: true, fullName: true } })
+          : [];
+        const prescriberName = new Map(prescribers.map((p) => [p.id, p.fullName]));
+
+        const rows = items.map((i) => ({
+          itemId: i.id,
+          testId: i.testId,
+          orderId: i.order.id,
+          examen: i.test.name,
+          seccion: i.test.panel?.name ?? i.test.code,
+          paciente: {
+            nombre: `${i.order.patient.firstName} ${i.order.patient.lastName}`.trim(),
+            expediente: i.order.patient.expediente ?? i.order.patient.mrn,
+          },
+          cuenta: i.order.patientAccount?.numeroCuenta ?? null,
+          centro: i.order.ejecutorCostCenter
+            ? `${i.order.ejecutorCostCenter.code} — ${i.order.ejecutorCostCenter.name}`
+            : "—",
+          medico: prescriberName.get(i.order.prescriberId) ?? "—",
+          fecha: i.order.createdAt,
+          estado: i.status,
+          estadoGrupo: statusToEstudioGrupo(i.status),
+          prioridad: i.order.priority,
+        }));
+
+        const nextCursor = items.length === input.limit ? items[items.length - 1]!.id : null;
+
+        // KPIs sobre el universo filtrado (search/centro/fechas) sin el filtro
+        // de estado — así el grid puede mostrar el desglose por grupo aunque
+        // el usuario esté viendo un solo grupo.
+        const counts = await tx.labOrderItem.groupBy({
+          by: ["status"],
+          where: { order: orderFilter },
+          _count: { _all: true },
+        });
+        const sumGroup = (codes: readonly string[]): number =>
+          counts
+            .filter((c) => codes.includes(c.status))
+            .reduce((acc, c) => acc + c._count._all, 0);
+        const kpis = {
+          total:
+            sumGroup(ESTUDIO_STATUS_GROUPS.CREADO) +
+            sumGroup(ESTUDIO_STATUS_GROUPS.EN_PROCESO) +
+            sumGroup(ESTUDIO_STATUS_GROUPS.HECHO),
+          creados: sumGroup(ESTUDIO_STATUS_GROUPS.CREADO),
+          enProceso: sumGroup(ESTUDIO_STATUS_GROUPS.EN_PROCESO),
+          hechos: sumGroup(ESTUDIO_STATUS_GROUPS.HECHO),
+        };
+
+        return { kpis, items: rows, nextCursor };
+      });
+    }),
+
+    /**
+     * CC-0013b — reabre el modal "Solicitud" del tablero (mismo shape que
+     * `tableroPorCuenta`) para UNA orden puntual, identificada por id en vez
+     * de "la más reciente de la cuenta". Usado desde la vista Estudios,
+     * donde una fila puede referenciar cualquier orden histórica de la cuenta.
+     * NOT_FOUND si la orden no existe o no está anclada a una cuenta
+     * administrativa (flujo legado sin patientAccountId).
+     */
+    cuentaModal: tenantProcedure.input(labOrderCuentaModalInput).query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const o = await tx.labOrder.findFirst({
+          where: {
+            id: input.orderId,
+            organizationId: ctx.tenant.organizationId,
+            patientAccountId: { not: null },
+          },
+          include: {
+            items: {
+              include: { test: { select: { id: true, name: true, panel: { select: { name: true } } } } },
+            },
+            patient: {
+              select: {
+                firstName: true,
+                lastName: true,
+                birthDate: true,
+                biologicalSex: { select: { code: true } },
+              },
+            },
+            patientAccount: { select: { id: true, numeroCuenta: true, createdAt: true } },
+          },
+        });
+        if (!o) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Orden no encontrada o no anclada a una cuenta administrativa.",
+          });
+        }
+        const prescriber = await tx.user.findUnique({
+          where: { id: o.prescriberId },
+          select: { fullName: true },
+        });
+        return buildCuentaRow(o, prescriber?.fullName ?? "—");
       });
     }),
   }),
@@ -925,6 +1052,102 @@ export const lisRouter = router({
 // ---------------------------------------------------------------------------
 // Helpers privados
 // ---------------------------------------------------------------------------
+
+/**
+ * CC-0013b — agrupa LabOrderStatus en los 3 buckets operativos que pide
+ * Edwin (Creado/En proceso/Hecho) + Anulado. El modal "Solicitud" del
+ * tablero (CC-0013) sigue usando los estados crudos ORDERED/IN_PROCESS/
+ * RESULTED vía `labOrderItemUpdateStatusEnum` — este agrupado es solo para
+ * la vista de consulta "Estudios", no reemplaza esos labels.
+ */
+const ESTUDIO_STATUS_GROUPS = {
+  CREADO: ["DRAFT", "ORDERED", "COLLECTED"],
+  EN_PROCESO: ["IN_PROCESS"],
+  HECHO: ["RESULTED", "VALIDATED"],
+  ANULADO: ["CANCELLED"],
+} as const;
+
+const ESTUDIO_STATUS_ACTIVOS = [
+  ...ESTUDIO_STATUS_GROUPS.CREADO,
+  ...ESTUDIO_STATUS_GROUPS.EN_PROCESO,
+  ...ESTUDIO_STATUS_GROUPS.HECHO,
+];
+
+function statusToEstudioGrupo(status: string): LabOrderEstudioEstado {
+  for (const grupo of Object.keys(ESTUDIO_STATUS_GROUPS) as LabOrderEstudioEstado[]) {
+    if ((ESTUDIO_STATUS_GROUPS[grupo] as readonly string[]).includes(status)) return grupo;
+  }
+  return "ANULADO";
+}
+
+/**
+ * CC-0013 — shape del row consumido por `<SolicitudModal>` (tablero por
+ * cuenta). Extraído a helper para que `tableroPorCuenta` (más reciente por
+ * cuenta) y `cuentaModal` (una orden puntual, CC-0013b) compartan la misma
+ * lógica de mapeo sin duplicarla.
+ */
+function buildCuentaRow(
+  o: {
+    id: string;
+    patientAccountId: string | null;
+    prescriberId: string;
+    orderedAt: Date;
+    priority: "ROUTINE" | "URGENT" | "STAT";
+    clinicalIndication: string | null;
+    patient: {
+      firstName: string;
+      lastName: string;
+      birthDate: Date | null;
+      biologicalSex: { code: string } | null;
+    };
+    patientAccount: { numeroCuenta: string; createdAt: Date } | null;
+    items: Array<{
+      id: string;
+      testId: string;
+      status: string;
+      notes: string | null;
+      test: { name: string; panel: { name: string } | null };
+    }>;
+  },
+  medico: string,
+) {
+  const patientAgeYears = o.patient.birthDate
+    ? Math.floor((Date.now() - new Date(o.patient.birthDate).getTime()) / (1000 * 60 * 60 * 24 * 365.25))
+    : null;
+  const pendientes = o.items.filter((i) => i.status === "ORDERED" || i.status === "COLLECTED").length;
+  const enProceso = o.items.filter((i) => i.status === "IN_PROCESS").length;
+  const realizados = o.items.filter((i) => i.status === "RESULTED" || i.status === "VALIDATED").length;
+
+  return {
+    cuentaId: o.patientAccountId as string,
+    orderId: o.id,
+    numeroCuenta: o.patientAccount?.numeroCuenta ?? "",
+    paciente: {
+      nombre: `${o.patient.firstName} ${o.patient.lastName}`.trim(),
+      edad: patientAgeYears,
+      sexo: o.patient.biologicalSex?.code ?? null,
+    },
+    medico,
+    ingreso: o.patientAccount?.createdAt ?? o.orderedAt,
+    prioridad: (o.priority === "STAT" || o.priority === "URGENT" ? "Urgente" : "Rutina") as
+      | "Urgente"
+      | "Rutina",
+    clinicalIndication: o.clinicalIndication ?? "",
+    totalExamenes: o.items.length,
+    pendientes,
+    enProceso,
+    realizados,
+    estado: "Activa" as const,
+    examenes: o.items.map((i) => ({
+      itemId: i.id,
+      testId: i.testId,
+      nombre: i.test.name,
+      seccion: i.test.panel?.name ?? "",
+      estado: i.status,
+      notes: i.notes ?? "",
+    })),
+  };
+}
 
 /**
  * Beta.3 — Construye LabReferenceRange[] desde los campos simples del schema

@@ -50,7 +50,7 @@ export interface OrientacionKioskoProps {
 const DEST = {
   emerg:   { deskCode: "05", deskName: "Admisión de emergencias", screen: "Emergencias", section: "Clínico", route: "/emergency", icon: Siren,
              extra: [ { label: "Triage Manchester", route: "/triage" }, { label: "Monitor Triage", route: "/triage/monitor" } ] },
-  lab:     { deskCode: "02", deskName: "Admisión de laboratorio", screen: "Laboratorio (LIS)", section: "Diagnóstico", route: "/lis/results", icon: FlaskConical },
+  lab:     { deskCode: "02", deskName: "Admisión de laboratorio", screen: "Laboratorio (LIS)", section: "Diagnóstico", route: "/lis/orders", icon: FlaskConical },
   clin:    { deskCode: "03", deskName: "Admisión de clínicas", screen: "Consulta externa", section: "Clínico", route: "/outpatient", icon: CalendarCheck },
   central: { deskCode: "04", deskName: "Admisión central", screen: "Admisión", section: "Clínico", route: "/admission", icon: ClipboardList },
   citas:   { deskCode: "01", deskName: "Admisión de citas y procedimiento", screen: "Admisión", section: "Clínico", route: "/admission", icon: ClipboardList },
