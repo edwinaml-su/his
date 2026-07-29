@@ -22,6 +22,9 @@ const PAGES_AUTH_REQUIRED = [
 
 test.describe("Accesibilidad — sin violaciones serias o críticas", () => {
   test("Login (público)", async ({ page }) => {
+    // reduced-motion: hace determinista la auditoría (CC-0010) — sin esto,
+    // axe podría escanear la tarjeta a mitad de la animación de entrada.
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/login");
     const r = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])

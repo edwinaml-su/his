@@ -22,9 +22,33 @@ export const TEST_CREDENTIALS = {
 
 export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "admin") {
   const creds = TEST_CREDENTIALS[who];
-  await page.goto("/login");
+  // ?skipIntro=1 salta la animación AxisMed (CC-0010) — la tarjeta de login
+  // queda visible de inmediato, sin esperar los ~12.6s de la secuencia.
+  await page.goto("/login?skipIntro=1");
   await page.getByLabel(/correo|email/i).fill(creds.email);
   await page.getByLabel(/contraseña|password/i).fill(creds.password);
   await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
+  await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|patients|beds|triage|admission)/);
+}
+
+/**
+ * Paso 2 del login (CC-0010): si el usuario tiene más de una sede activa,
+ * aparece un select "Sede" antes de entrar. Si solo tiene una, el login
+ * auto-avanza sin mostrar este paso — por eso es tolerante: no falla si
+ * el select nunca aparece.
+ */
+async function maybeSelectSede(page: Page): Promise<void> {
+  const sedeSelect = page.locator("#loginSede");
+  try {
+    await sedeSelect.waitFor({ state: "visible", timeout: 3_000 });
+  } catch {
+    return;
+  }
+  const options = await sedeSelect.locator("option").all();
+  if (options.length > 1) {
+    const value = await options[1]!.getAttribute("value");
+    if (value) await sedeSelect.selectOption(value);
+  }
+  await page.getByRole("button", { name: /ingresar a la sede|enter site/i }).click();
 }

@@ -1,0 +1,784 @@
+/*
+ * Login AxisMed (CC-0010) — fidelidad 1:1 a docs/CC/0010/axismedlogin.html.
+ * Selectores por #id del mockup -> clases de CSS module (mismo nombre, sin #).
+ * Tokens de color en `.vars` (precedente: calc-admin.module.css) para no
+ * filtrar al design system global — este módulo es de una sola pantalla.
+ */
+
+.vars {
+  --marino: #232349;
+  --medio: #1d4f9c;
+  --brillante: #0c74c2;
+  --rojo: #d31e26;
+  --txt: #16204a;
+  --txt2: #44506f;
+  --txt3: #55617f;
+  --grisazul: #7a88ac;
+  --borde: #d7dfec;
+  --divisor: #e3e9f2;
+  --fondo: #dce8f5;
+  --ok: #1e7a2e;
+  --okbg: #eff7ef;
+  --okbd: #bfdfc2;
+  /* Deviación CC-0010 punto 8: banner ámbar para el stub biométrico
+     "próximamente" — no existe en el mockup original (ahí el botón biométrico
+     siempre concede acceso). Mismo tratamiento visual que okBanner. */
+  --warn: #8a5a00;
+  --warnbg: #fff6e5;
+  --warnbd: #f0dba6;
+  --ease: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+.app {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--fondo);
+  color: var(--txt);
+}
+.app,
+.app * {
+  box-sizing: border-box;
+}
+.app button {
+  font-family: inherit;
+}
+.app [hidden] {
+  display: none !important;
+}
+
+/* ===== Escenario de la animación (1280x720 escalado) ===== */
+.stageWrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.stage {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  flex: none;
+  border-radius: 18px;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 42%, #f3f8fd 0%, #e5eef8 48%, #dce8f5 100%);
+}
+.grid {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(22, 32, 74, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(22, 32, 74, 0.045) 1px, transparent 1px);
+  background-size: 80px 80px;
+}
+.vignette {
+  position: absolute;
+  inset: 0;
+  box-shadow: inset 0 0 170px rgba(22, 32, 74, 0.1);
+}
+.camera {
+  position: absolute;
+  inset: 0;
+  animation: camZoom 2.4s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+}
+@keyframes camZoom {
+  from {
+    transform: scale(1.12);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+/* Escena 1: circuito */
+.circuit {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.9s ease;
+}
+.s2 .circuit {
+  opacity: 0.18;
+}
+.trace {
+  fill: none;
+  stroke: rgba(22, 32, 74, 0.5);
+  stroke-width: 2.5;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw 0.9s var(--ease) forwards;
+}
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.pad {
+  fill: rgba(22, 32, 74, 0.55);
+  opacity: 0;
+  animation: padIn 0.35s ease forwards;
+}
+.ring {
+  fill: none;
+  stroke: rgba(22, 32, 74, 0.5);
+  stroke-width: 2;
+  opacity: 0;
+  animation: padIn 0.35s ease forwards;
+}
+@keyframes padIn {
+  to {
+    opacity: 1;
+  }
+}
+.pulses {
+  position: absolute;
+  inset: 0;
+  transition: opacity 0.6s;
+}
+.s2 .pulses {
+  opacity: 0;
+}
+.pulse {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #1d4f9c 0 2px, rgba(29, 79, 156, 0.4) 2px 4.5px, transparent 4.5px);
+  box-shadow: 0 0 10px 2px rgba(29, 79, 156, 0.5);
+  offset-rotate: 0deg;
+  opacity: 0;
+  animation: pulseRun 1.5s var(--ease) forwards;
+}
+@keyframes pulseRun {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  86% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+
+/* Onda expansiva (escena 2) */
+.shock {
+  position: absolute;
+  left: 640px;
+  top: 360px;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(29, 79, 156, 0.55);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+}
+.s2 .shock {
+  animation: shock 1.1s ease-out forwards;
+}
+@keyframes shock {
+  0% {
+    width: 0;
+    height: 0;
+    opacity: 0.85;
+  }
+  100% {
+    width: 1120px;
+    height: 1120px;
+    opacity: 0;
+  }
+}
+
+/* ===== Grupo del logo (cruz + marca) ===== */
+.logoGroup {
+  position: absolute;
+  inset: 0;
+  transform-origin: 652px 242px;
+}
+.logoGroup.dock {
+  transform: translate(-12px, -160px) scale(0.35);
+  transition: transform 1.4s var(--ease);
+}
+.crossPos {
+  position: absolute;
+  left: 640px;
+  top: 360px;
+}
+.crossMove {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.s3 .crossMove {
+  transition: transform 0.9s var(--ease);
+  transform: translate(-230px, -118px) scale(0.8);
+}
+.halo {
+  position: absolute;
+  left: -190px;
+  top: -190px;
+  width: 380px;
+  height: 380px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(12, 116, 194, 0.26), transparent 65%);
+  opacity: 0;
+  transition: opacity 0.8s;
+}
+.s3 .halo {
+  opacity: 1;
+}
+.cross {
+  position: absolute;
+  left: -150px;
+  top: -150px;
+  width: 300px;
+  height: 300px;
+}
+.block {
+  position: absolute;
+  width: 75px;
+  height: 75px;
+  opacity: 0;
+}
+.s2 .block {
+  animation: blockIn 0.6s cubic-bezier(0.33, 1, 0.68, 1) forwards;
+  animation-delay: var(--d);
+}
+@keyframes blockIn {
+  0% {
+    opacity: 0;
+    transform: translate(var(--dx), var(--dy)) scale(0.55);
+    box-shadow: 0 0 24px 5px rgba(12, 116, 194, 0.55);
+  }
+  70% {
+    opacity: 1;
+    box-shadow: 0 0 16px 3px rgba(12, 116, 194, 0.3);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+    box-shadow: 0 0 0 0 rgba(12, 116, 194, 0);
+  }
+}
+.xline {
+  position: absolute;
+  background: #fff;
+  opacity: 0;
+}
+.lineV {
+  left: 50%;
+  top: 0;
+  width: 13.5px;
+  height: 100%;
+  transform: translateX(-50%) scaleY(0);
+}
+.lineH {
+  top: 50%;
+  left: 0;
+  height: 13.5px;
+  width: 100%;
+  transform: translateY(-50%) scaleX(0);
+}
+.s2 .lineV {
+  animation: growV 0.5s var(--ease) 1.15s forwards;
+}
+.s2 .lineH {
+  animation: growH 0.5s var(--ease) 1.28s forwards;
+}
+@keyframes growV {
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scaleY(1);
+  }
+}
+@keyframes growH {
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scaleX(1);
+  }
+}
+.node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 26px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: nodeGlow 2.4s ease forwards;
+  transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.8s, height 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 1.8s;
+  z-index: 5;
+}
+.node::after {
+  content: "";
+  display: block;
+  width: 62.5%;
+  height: 62.5%;
+  border-radius: 50%;
+  background: var(--rojo);
+}
+@keyframes nodeGlow {
+  from {
+    box-shadow: 0 0 0 0 rgba(29, 79, 156, 0);
+  }
+  to {
+    box-shadow: 0 0 28px 7px rgba(29, 79, 156, 0.45);
+  }
+}
+.s2 .node {
+  width: 48px;
+  height: 48px;
+}
+
+/* Marca (escena 3) */
+.brand {
+  position: absolute;
+  left: 566px;
+  top: 242px;
+  transform: translateY(-52%);
+  opacity: 0;
+}
+.s3 .brand {
+  opacity: 1;
+}
+.wordmark {
+  font-weight: 700;
+  font-size: 100px;
+  line-height: 1.02;
+  letter-spacing: -0.01em;
+  clip-path: inset(0 100% 0 0);
+}
+.s3 .wordmark {
+  animation: reveal 1s var(--ease) 0.55s forwards;
+}
+@keyframes reveal {
+  to {
+    clip-path: inset(0 -8% 0 0);
+  }
+}
+.axis {
+  color: var(--txt);
+}
+.med {
+  color: var(--brillante);
+}
+.byrow {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+}
+.s3 .byrow {
+  animation: fadeUp 0.6s ease 1.25s forwards;
+}
+@keyframes fadeUp {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.redbar {
+  width: 46px;
+  height: 3px;
+  background: var(--rojo);
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.s3 .redbar {
+  animation: barGrow 0.5s var(--ease) 1.3s forwards;
+}
+@keyframes barGrow {
+  to {
+    transform: scaleX(1);
+  }
+}
+.bytext {
+  font-size: 21px;
+  letter-spacing: 0.42em;
+  color: var(--txt2);
+  font-weight: 600;
+}
+
+/* HUD inferior */
+.hud {
+  position: absolute;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  text-align: center;
+  transition: opacity 0.9s;
+}
+.hudDone {
+  opacity: 0;
+}
+.hudLabel {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--txt2);
+  font-weight: 600;
+}
+.hudPct {
+  font-size: 12px;
+  color: var(--medio);
+  margin-top: 6px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.hudBar {
+  width: 400px;
+  height: 3px;
+  background: rgba(22, 32, 74, 0.12);
+  border-radius: 2px;
+  margin: 8px auto 0;
+  overflow: hidden;
+}
+.hudFill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #1d4f9c, #0c74c2);
+  border-radius: 2px;
+}
+
+/* ===== Tarjeta de login ===== */
+.loginCard {
+  position: absolute;
+  left: 50%;
+  top: 23vh;
+  width: 430px;
+  transform: translateX(-50%) translateY(24px);
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 18px 48px rgba(22, 60, 58, 0.24);
+  padding: 18px 28px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.9s ease, transform 0.9s ease;
+}
+.loginCard.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+.cardHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.cardTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--txt);
+}
+.langPill {
+  display: flex;
+  background: #edf1f8;
+  border-radius: 999px;
+  padding: 3px;
+  flex: none;
+}
+.langPill button {
+  border: 0;
+  background: transparent;
+  color: #5b6b92;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  min-height: 0;
+}
+.langPill button.active {
+  background: var(--medio);
+  color: #fff;
+}
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.fld {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt2);
+}
+.app input[type="text"],
+.app input[type="email"],
+.app input[type="password"],
+.app select {
+  height: 44px;
+  border: 1.5px solid var(--borde);
+  border-radius: 10px;
+  padding: 0 13px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--txt);
+  background: #fff;
+  outline: none;
+  width: 100%;
+}
+.app input:focus,
+.app select:focus {
+  border-color: var(--medio);
+  box-shadow: 0 0 0 3px rgba(29, 79, 156, 0.15);
+}
+.passWrap {
+  position: relative;
+}
+.passWrap input {
+  padding-right: 46px;
+}
+.eyeBtn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--grisazul);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+}
+.eyeBtn:hover {
+  color: var(--medio);
+}
+.app .eyeBtn:focus-visible,
+.app button:focus-visible,
+.app a:focus-visible,
+.app input:focus-visible {
+  outline: 2px solid var(--medio);
+  outline-offset: 2px;
+}
+.rowBetween {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--txt2);
+  cursor: pointer;
+  font-weight: 500;
+}
+.chk input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--medio);
+  cursor: pointer;
+}
+.link {
+  color: var(--medio);
+  text-decoration: none;
+  font-size: 13px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+.link:hover {
+  text-decoration: underline;
+}
+.btnPri {
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  background: linear-gradient(135deg, #1d4f9c, #0c74c2);
+  width: 100%;
+}
+.btnPri:hover {
+  filter: brightness(1.1);
+}
+.btnPri:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+}
+.btnSec {
+  min-height: 44px;
+  border: 1.5px solid var(--medio);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--medio);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  width: 100%;
+}
+.btnSec:hover {
+  background: #f0f5fc;
+}
+.btnSec:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.errorMsg {
+  color: var(--rojo);
+  font-size: 13px;
+  text-align: center;
+  font-weight: 500;
+}
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--txt3);
+  font-size: 12px;
+}
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--divisor);
+}
+.okBanner {
+  background: var(--okbg);
+  border: 1px solid var(--okbd);
+  color: var(--ok);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.warnBanner {
+  background: var(--warnbg);
+  border: 1px solid var(--warnbd);
+  color: var(--warn);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: center;
+}
+.backLink {
+  background: none;
+  border: 0;
+  color: var(--medio);
+  font-size: 13px;
+  cursor: pointer;
+  align-self: center;
+  padding: 6px;
+}
+.backLink:hover {
+  text-decoration: underline;
+}
+.cardFoot {
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--grisazul);
+  text-align: center;
+}
+
+/* Modal dispositivo seguro */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 20, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modalCard {
+  width: 380px;
+  background: #fff;
+  border-radius: 14px;
+  padding: 22px 24px;
+  box-shadow: 0 18px 48px rgba(22, 60, 58, 0.3);
+}
+.modalTitle {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.modalBody {
+  font-size: 13.5px;
+  color: var(--txt2);
+  line-height: 1.55;
+  margin-bottom: 18px;
+}
+.modalBtns {
+  display: flex;
+  gap: 10px;
+}
+.modalBtns button {
+  flex: 1;
+}
+
+/* Botón reiniciar */
+.restartBtn {
+  position: fixed;
+  left: 14px;
+  bottom: 12px;
+  z-index: 60;
+  border: 1px solid var(--borde);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--txt3);
+  font-size: 11.5px;
+  border-radius: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+.restartBtn:hover {
+  background: #fff;
+  color: var(--medio);
+}
+
+/* Reduced motion / skip: sin transiciones bruscas en la tarjeta ni el dock */
+.noMotion .loginCard,
+.noMotion .logoGroup,
+.noMotion .crossMove,
+.noMotion .hud {
+  transition: none !important;
+}
+.noMotion .camera,
+.noMotion .trace,
+.noMotion .pad,
+.noMotion .ring,
+.noMotion .pulse,
+.noMotion .shock,
+.noMotion .block,
+.noMotion .lineV,
+.noMotion .lineH,
+.noMotion .node,
+.noMotion .wordmark,
+.noMotion .byrow,
+.noMotion .redbar {
+  animation: none !important;
+}

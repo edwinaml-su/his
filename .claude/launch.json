@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "his-web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "-w", "@his/web", "dev"],
+      "port": 3000
+    }
+  ]
+}

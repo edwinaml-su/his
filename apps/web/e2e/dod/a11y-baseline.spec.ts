@@ -50,6 +50,10 @@ test.describe("DoD.0 — Baseline A11y (WCAG 2.1 AA)", () => {
         !!role && !HAS_REAL_SUPABASE,
         `Requiere Supabase real para autenticar (rol=${role}). CI ephemeral usa dummy.`,
       );
+      // reduced-motion: hace determinista la auditoría de /login (CC-0010) —
+      // sin esto, axe podría escanear la tarjeta a mitad de la animación de
+      // entrada (opacity 0 -> 1). Inocuo para el resto de páginas.
+      await page.emulateMedia({ reducedMotion: "reduce" });
       // Navegar (con login si aplica)
       if (role) {
         await login(page, role);

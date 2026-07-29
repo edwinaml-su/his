@@ -19,7 +19,8 @@ test.describe("@smoke - Autenticación", () => {
   });
 
   test("login con credenciales inválidas muestra error", async ({ page }) => {
-    await page.goto("/login");
+    // ?skipIntro=1 salta la animación AxisMed (CC-0010).
+    await page.goto("/login?skipIntro=1");
     await page.getByLabel(/correo|email/i).fill(TEST_CREDENTIALS.admin.email);
     await page.getByLabel(/contraseña|password/i).fill("contraseña-invalida");
     await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
