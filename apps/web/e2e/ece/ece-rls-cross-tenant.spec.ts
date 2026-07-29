@@ -51,12 +51,30 @@ async function loginAs(
   email: string,
   password = "TestPass123!",
 ): Promise<boolean> {
-  await page.goto("/login");
+  // ?skipIntro=1 salta la animación AxisMed (CC-0010).
+  await page.goto("/login?skipIntro=1");
   await page.getByLabel(/correo|email/i).fill(email);
   await page.getByLabel(/contraseña|password/i).fill(password);
   await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
+  await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|ece|patients|login)/, { timeout: 12_000 });
   return !page.url().includes("/login");
+}
+
+/** Paso 2 del login (CC-0010): tolerante — no falla si el usuario tiene 1 sola sede. */
+async function maybeSelectSede(page: Page): Promise<void> {
+  const sedeSelect = page.locator("#loginSede");
+  try {
+    await sedeSelect.waitFor({ state: "visible", timeout: 3_000 });
+  } catch {
+    return;
+  }
+  const options = await sedeSelect.locator("option").all();
+  if (options.length > 1) {
+    const value = await options[1]!.getAttribute("value");
+    if (value) await sedeSelect.selectOption(value);
+  }
+  await page.getByRole("button", { name: /ingresar a la sede|enter site/i }).click();
 }
 
 async function probeRoute(page: Page, path: string): Promise<number> {

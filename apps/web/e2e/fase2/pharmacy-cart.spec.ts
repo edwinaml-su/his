@@ -30,11 +30,29 @@ const SKIP = process.env.SKIP_E2E_CART === "1";
 // ---------------------------------------------------------------------------
 
 async function loginAs(page: Page, email: string, password = "TestPass123!") {
-  await page.goto("/login");
+  // ?skipIntro=1 salta la animación AxisMed (CC-0010).
+  await page.goto("/login?skipIntro=1");
   await page.fill('[name="email"]', email);
   await page.fill('[name="password"]', password);
   await page.click('[type="submit"]');
+  await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|pharmacy|enfermeria)/);
+}
+
+/** Paso 2 del login (CC-0010): tolerante — no falla si el usuario tiene 1 sola sede. */
+async function maybeSelectSede(page: Page): Promise<void> {
+  const sedeSelect = page.locator("#loginSede");
+  try {
+    await sedeSelect.waitFor({ state: "visible", timeout: 3_000 });
+  } catch {
+    return;
+  }
+  const options = await sedeSelect.locator("option").all();
+  if (options.length > 1) {
+    const value = await options[1]!.getAttribute("value");
+    if (value) await sedeSelect.selectOption(value);
+  }
+  await page.click('button:has-text("Ingresar a la sede")');
 }
 
 // ---------------------------------------------------------------------------
