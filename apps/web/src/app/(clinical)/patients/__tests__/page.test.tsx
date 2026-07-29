@@ -29,7 +29,7 @@ import PatientsPage from "../page";
 const rows = [
   {
     patientId: "p1",
-    expediente: "SV2600001",
+    expediente: "2222600001",
     mrn: "MRN-1",
     nombreCompleto: "María Hernández",
     documentNumber: "01234567-8",
@@ -43,7 +43,7 @@ const rows = [
   },
   {
     patientId: "p2",
-    expediente: "SV2600002",
+    expediente: "2222600002",
     mrn: "MRN-2",
     nombreCompleto: "Juan Pérez",
     documentNumber: "08765432-1",
@@ -75,7 +75,7 @@ describe("PatientsPage", () => {
     render(<PatientsPage />);
 
     expect(screen.getByRole("heading", { name: "Pacientes" })).toBeInTheDocument();
-    expect(screen.getByText("SV2600001")).toBeInTheDocument();
+    expect(screen.getByText("2222600001")).toBeInTheDocument();
     expect(screen.getByText("María Hernández")).toBeInTheDocument();
     expect(screen.getByText("Hospitalización · H-12")).toBeInTheDocument();
   });
