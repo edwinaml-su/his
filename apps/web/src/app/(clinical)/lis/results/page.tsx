@@ -11,8 +11,10 @@
  * la regla 4-eyes server-side).
  */
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
+import { Button } from "@his/ui/components/button";
 import {
   Table,
   TableBody,
@@ -80,7 +82,12 @@ export default function LisResultsQueuePage(): React.ReactElement {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Resultados pendientes de validación</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Resultados pendientes de validación</h1>
+        <Button asChild variant="outline">
+          <Link href="/lis/orders">← Tablero de estudios</Link>
+        </Button>
+      </div>
 
       <Card>
         <CardHeader>

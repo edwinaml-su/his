@@ -23,3 +23,22 @@ export const ESTADOS_EDITABLES: { value: "ORDERED" | "IN_PROCESS" | "RESULTED"; 
   { value: "IN_PROCESS", label: "En proceso" },
   { value: "RESULTED", label: "Realizado" },
 ];
+
+/**
+ * CC-0013b — pill de estado agrupado para la vista "Estudios" (grid de
+ * consulta de todos los estados). Colores literales del mockup CC-0013
+ * (`.pill-pend`/`.pill-proc`/`.pill-list`, línea 94 del HTML). Pendiente del
+ * modal "Solicitud" ≡ Creado aquí — mismo grupo de estados
+ * (DRAFT/ORDERED/COLLECTED), solo se re-etiqueta para esta vista porque
+ * Edwin pidió explícitamente Creado/En proceso/Hecho. ANULADO no está en el
+ * mockup original (CANCELLED no es alcanzable desde el modal); color propio.
+ */
+export const ESTUDIO_ESTADO_PILL: Record<
+  "CREADO" | "EN_PROCESO" | "HECHO" | "ANULADO",
+  { label: string; background: string; color: string }
+> = {
+  CREADO: { label: "Creado", background: "#fdf1dd", color: "#b9791b" },
+  EN_PROCESO: { label: "En proceso", background: "#e2ecfb", color: "#2f6fb0" },
+  HECHO: { label: "Hecho", background: "#e0f2e9", color: "#1c7a4a" },
+  ANULADO: { label: "Anulado", background: "#f3d9d9", color: "#b3261e" },
+};

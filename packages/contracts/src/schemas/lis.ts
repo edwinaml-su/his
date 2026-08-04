@@ -132,6 +132,38 @@ export const labOrderUpdateItemsInput = z.object({
 });
 export type LabOrderUpdateItemsInput = z.infer<typeof labOrderUpdateItemsInput>;
 
+// ---------------------------------------------------------------------------
+// CC-0013b — Vista «Estudios»: grid de consulta a nivel de examen, todos los
+// estados (docs/CC/0013b). Agrupa LabOrderStatus en 3 buckets + anulado:
+//   CREADO = DRAFT/ORDERED/COLLECTED · EN_PROCESO = IN_PROCESS ·
+//   HECHO = RESULTED/VALIDATED · ANULADO = CANCELLED (solo si se pide explícito).
+// ---------------------------------------------------------------------------
+
+export const labOrderEstudioEstadoEnum = z.enum(["CREADO", "EN_PROCESO", "HECHO", "ANULADO"]);
+export type LabOrderEstudioEstado = z.infer<typeof labOrderEstudioEstadoEnum>;
+
+export const labOrderEstudiosInput = z.object({
+  /** Coincide contra nombre/apellido del paciente o su expediente. */
+  search: z.string().trim().max(160).optional(),
+  /** Coincide contra el centro solicitante O el ejecutor de la orden. */
+  costCenterId: z.string().uuid().optional(),
+  /** Sin filtro = CREADO+EN_PROCESO+HECHO (excluye ANULADO). */
+  estado: labOrderEstudioEstadoEnum.optional(),
+  /** Sobre LabOrder.createdAt. */
+  fechaDesde: z.coerce.date().optional(),
+  fechaHasta: z.coerce.date().optional(),
+  limit: z.number().int().min(1).max(100).default(25),
+  /** Cursor por LabOrderItem.id (mismo patrón que notifications.list). */
+  cursor: z.string().uuid().optional(),
+});
+export type LabOrderEstudiosInput = z.infer<typeof labOrderEstudiosInput>;
+
+/** Input de `order.cuentaModal` — reabre el modal "Solicitud" del tablero desde una fila de Estudios. */
+export const labOrderCuentaModalInput = z.object({
+  orderId: z.string().uuid(),
+});
+export type LabOrderCuentaModalInput = z.infer<typeof labOrderCuentaModalInput>;
+
 // JCI Standard: IPSG.1 ME 4 — toma de muestra bedside requiere 2 identificadores.
 export const specimenCollectInput = z.object({
   orderId: z.string().uuid(),

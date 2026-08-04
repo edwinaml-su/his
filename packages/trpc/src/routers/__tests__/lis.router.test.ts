@@ -841,4 +841,181 @@ describe("lisRouter", () => {
       expect(itemArgs.data).toMatchObject({ status: "RESULTED", notes: "Muestra hemolizada, repetir" });
     });
   });
+
+  describe("order.estudios", () => {
+    const itemRow = (overrides: Record<string, unknown> = {}) => ({
+      id: "item-1",
+      testId: "test-1",
+      status: "ORDERED",
+      notes: null,
+      test: { name: "GLUCOSA", code: "GLU", panel: { name: "QUIMICA" } },
+      order: {
+        id: u,
+        createdAt: new Date("2026-07-28T10:00:00Z"),
+        priority: "ROUTINE",
+        prescriberId: v,
+        patient: { firstName: "Ana", lastName: "Cruz", expediente: "22290000012", mrn: "MRN-1" },
+        patientAccount: { numeroCuenta: "CTA00050" },
+        ejecutorCostCenter: { code: "2-LAB-CLI", name: "Laboratorio Clínico" },
+      },
+      ...overrides,
+    });
+
+    it("excluye CANCELLED cuando no se filtra por estado", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.estudios({ limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      expect(args!.where!.status).toEqual({
+        in: ["DRAFT", "ORDERED", "COLLECTED", "IN_PROCESS", "RESULTED", "VALIDATED"],
+      });
+    });
+
+    it("estado=EN_PROCESO filtra solo IN_PROCESS", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.estudios({ estado: "EN_PROCESO", limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      expect(args!.where!.status).toEqual({ in: ["IN_PROCESS"] });
+    });
+
+    it("estado=ANULADO solo se aplica si se pide explícito", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.estudios({ estado: "ANULADO", limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      expect(args!.where!.status).toEqual({ in: ["CANCELLED"] });
+    });
+
+    it("costCenterId matchea solicitante O ejecutor", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.estudios({ costCenterId: w, limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      const orderWhere = args!.where!.order as Record<string, unknown>;
+      expect(orderWhere.OR).toEqual([{ costCenterId: w }, { ejecutorCostCenterId: w }]);
+    });
+
+    it("search filtra por nombre/apellido/expediente del paciente", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.estudios({ search: "Cruz", limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      const orderWhere = args!.where!.order as { patient: { OR: unknown } };
+      expect(orderWhere.patient.OR).toEqual([
+        { firstName: { contains: "Cruz", mode: "insensitive" } },
+        { lastName: { contains: "Cruz", mode: "insensitive" } },
+        { expediente: { contains: "Cruz", mode: "insensitive" } },
+      ]);
+    });
+
+    it("fechaDesde/fechaHasta filtran sobre order.createdAt", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const desde = new Date("2026-07-01T00:00:00Z");
+      const hasta = new Date("2026-07-31T23:59:59Z");
+      await caller.order.estudios({ fechaDesde: desde, fechaHasta: hasta, limit: 25 });
+      const args = prisma.labOrderItem.findMany.mock.calls[0]![0];
+      const orderWhere = args!.where!.order as { createdAt: unknown };
+      expect(orderWhere.createdAt).toEqual({ gte: desde, lte: hasta });
+    });
+
+    it("mapea rows con paciente/cuenta/centro/médico y agrupa el estado", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([itemRow()] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([
+        { status: "ORDERED", _count: { _all: 1 } },
+      ] as never);
+      prisma.user.findMany.mockResolvedValue([{ id: v, fullName: "Dr. Guevara" }] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.estudios({ limit: 25 });
+      expect(result.items).toHaveLength(1);
+      const row = result.items[0]!;
+      expect(row.examen).toBe("GLUCOSA");
+      expect(row.seccion).toBe("QUIMICA");
+      expect(row.paciente).toEqual({ nombre: "Ana Cruz", expediente: "22290000012" });
+      expect(row.cuenta).toBe("CTA00050");
+      expect(row.centro).toBe("2-LAB-CLI — Laboratorio Clínico");
+      expect(row.medico).toBe("Dr. Guevara");
+      expect(row.estado).toBe("ORDERED");
+      expect(row.estadoGrupo).toBe("CREADO");
+    });
+
+    it("KPIs se calculan desde groupBy respetando filtros pero no el estado", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([
+        { status: "ORDERED", _count: { _all: 3 } },
+        { status: "IN_PROCESS", _count: { _all: 2 } },
+        { status: "RESULTED", _count: { _all: 1 } },
+        { status: "CANCELLED", _count: { _all: 5 } },
+      ] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.estudios({ estado: "HECHO", limit: 25 });
+      expect(result.kpis).toEqual({ total: 6, creados: 3, enProceso: 2, hechos: 1 });
+    });
+
+    it("nextCursor = id del último item cuando el batch está lleno", async () => {
+      const rows = [itemRow({ id: "item-1" }), itemRow({ id: "item-2" })];
+      prisma.labOrderItem.findMany.mockResolvedValue(rows as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      prisma.user.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.estudios({ limit: 2 });
+      expect(result.nextCursor).toBe("item-2");
+    });
+
+    it("nextCursor = null cuando hay menos items que el limit", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([itemRow()] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      prisma.user.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.estudios({ limit: 25 });
+      expect(result.nextCursor).toBeNull();
+    });
+  });
+
+  describe("order.cuentaModal", () => {
+    it("NOT_FOUND si la orden no existe o no está anclada a una cuenta", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue(null as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.order.cuentaModal({ orderId: u })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("retorna el mismo shape que tableroPorCuenta para la orden puntual", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue({
+        id: u,
+        prescriberId: v,
+        patientAccountId: w,
+        priority: "STAT",
+        clinicalIndication: "Control",
+        orderedAt: new Date("2026-07-20T08:00:00Z"),
+        items: [
+          {
+            id: "item-1",
+            testId: "test-1",
+            status: "RESULTED",
+            notes: null,
+            test: { id: "test-1", name: "GLUCOSA", panel: { name: "QUIMICA" } },
+          },
+        ],
+        patient: { firstName: "Ana", lastName: "Cruz", birthDate: null, biologicalSex: null },
+        patientAccount: { id: w, numeroCuenta: "CTA00050", createdAt: new Date("2026-07-19T08:00:00Z") },
+      } as never);
+      prisma.user.findUnique.mockResolvedValue({ fullName: "Dr. Guevara" } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.cuentaModal({ orderId: u });
+      expect(result.cuentaId).toBe(w);
+      expect(result.numeroCuenta).toBe("CTA00050");
+      expect(result.medico).toBe("Dr. Guevara");
+      expect(result.prioridad).toBe("Urgente");
+      expect(result.realizados).toBe(1);
+    });
+  });
 });
