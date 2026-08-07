@@ -16,6 +16,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { resolverPrecio } from "../lib/price-resolver";
 
 // ---------------------------------------------------------------------------
 // Tipos raw
@@ -112,6 +113,20 @@ const updateItemInput = z.object({
 const setItemActiveInput = z.object({ id: z.string().uuid(), active: z.boolean() });
 const setListActiveInput = z.object({ id: z.string().uuid(), active: z.boolean() });
 
+// CC-0015 — filtro opcional por lista (usado por finance/invoices/nuevo cuando
+// hay una cuenta con tipoCuenta.priceListId seleccionada).
+const listActiveItemsInput = z
+  .object({
+    priceListId: z.string().uuid().optional(),
+  })
+  .optional();
+
+// CC-0015 — resolución de precios por cuenta de paciente (pivote tipoCuenta → lista).
+const resolverPorCuentaInput = z.object({
+  cuentaId: z.string().uuid(),
+  codes: z.array(z.string().trim().min(1)).min(1).max(200),
+});
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -192,11 +207,22 @@ export const servicePriceListRouter = router({
    * Todos los items activos de tarifarios activos del tenant.
    * Usado por el autocomplete en el formulario de Invoice.
    * Incluye info del CostCenter sugerido para auto-fill.
+   *
+   * CC-0015: `priceListId` filtra a una sola lista (usada cuando la factura
+   * tiene una cuenta seleccionada y se conoce su tipoCuenta.priceListId).
+   * Sin el filtro, el comportamiento es el mismo de antes (todas las listas activas).
    */
-  listActiveItems: readerProc.query(async ({ ctx }) => {
+  listActiveItems: readerProc.input(listActiveItemsInput).query(async ({ ctx, input }) => {
     const { tenant, prisma } = ctx;
 
     return withTenantContext(prisma, tenant, async (tx) => {
+      const params: unknown[] = [tenant.organizationId];
+      let filterSql = "";
+      if (input?.priceListId) {
+        filterSql = `AND pl.id = $2`;
+        params.push(input.priceListId);
+      }
+
       const rows = await tx.$queryRawUnsafe<
         Array<{
           id: string;
@@ -222,12 +248,34 @@ export const servicePriceListRouter = router({
             AND pl."organizationId" = $1
             AND pl.active = true
            LEFT JOIN "CostCenter" cc ON cc.id = i."suggestedCostCenterId"
-          WHERE i.active = true
+          WHERE i.active = true ${filterSql}
           ORDER BY i.code NULLS LAST, i.description`,
-        tenant.organizationId,
+        ...params,
       );
 
       return rows;
+    });
+  }),
+
+  /**
+   * CC-0015 — resuelve el precio de una lista de `codes` para una cuenta,
+   * siguiendo la cadena: item de la lista del tipoCuenta → LabTest.standardPrice → null.
+   */
+  resolverPorCuenta: readerProc.input(resolverPorCuentaInput).query(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      const resultados = await Promise.all(
+        input.codes.map(async (code) => {
+          const r = await resolverPrecio(tx, {
+            organizationId: tenant.organizationId,
+            cuentaId: input.cuentaId,
+            code,
+          });
+          return { code, precio: r.precio, fuente: r.fuente };
+        }),
+      );
+      return resultados;
     });
   }),
 

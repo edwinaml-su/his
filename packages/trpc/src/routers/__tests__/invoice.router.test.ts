@@ -137,6 +137,74 @@ describe("invoiceRouter", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });
+
+  // CC-0015 — patientAccountId ancla la factura a la cuenta de origen.
+  describe("create — patientAccountId (CC-0015)", () => {
+    const patientId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const accountId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const baseInput = {
+      patientId,
+      currencyId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      items: [
+        {
+          description: "Consulta general",
+          quantity: 1,
+          unitPrice: 10,
+          costCenterId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        },
+      ],
+    };
+
+    it("crea sin patientAccountId — comportamiento previo intacto", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
+        .mockResolvedValueOnce([{ id: "inv-1" }]) // INSERT Invoice RETURNING id
+        .mockResolvedValueOnce(undefined); // INSERT InvoiceItem
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.create(baseInput);
+
+      expect(result).toMatchObject({ id: "inv-1" });
+      expect(queryMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("rechaza patientAccountId que no pertenece al tenant/paciente", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
+        .mockResolvedValueOnce([]); // PatientAccount check — no encontrada
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.create({ ...baseInput, patientAccountId: accountId }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(queryMock).toHaveBeenCalledTimes(2); // nunca llega al INSERT
+    });
+
+    it("persiste patientAccountId cuando la cuenta pertenece al tenant y paciente", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
+        .mockResolvedValueOnce([{ id: accountId }]) // PatientAccount check — OK
+        .mockResolvedValueOnce([{ id: "inv-1" }]) // INSERT Invoice RETURNING id
+        .mockResolvedValueOnce(undefined); // INSERT InvoiceItem
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.create({ ...baseInput, patientAccountId: accountId });
+
+      expect(result).toMatchObject({ id: "inv-1" });
+      const insertCall = queryMock.mock.calls[2]!;
+      expect(String(insertCall[0])).toContain('"patientAccountId"');
+      expect(insertCall.at(-1)).toBe(accountId);
+    });
+  });
 });
 
 // Suprime el import implícito de vi

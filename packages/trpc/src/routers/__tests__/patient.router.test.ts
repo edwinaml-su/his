@@ -676,6 +676,45 @@ describe("patientRouter", () => {
       expect(result.paciente?.domicilio).toBeNull();
       expect(result.cuenta.tipo).toBeNull();
     });
+
+    // CC-0015 — tipoCuenta real (pivote de lista de precios) en la cabecera.
+    it("CC-0015 — incluye tipoCuenta {code, nombre} cuando la cuenta lo tiene", async () => {
+      setupTxContexto();
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        ...fakeAccount,
+        tipoCuenta: { code: "ISBM", nombre: "ISBM" },
+      } as never);
+      prisma.patient.findFirst.mockResolvedValue(fakePatient as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+      );
+      const result = await caller.contextoCuenta({ cuentaId: CUENTA_ID });
+
+      expect(result.cuenta.tipoCuenta).toEqual({ code: "ISBM", nombre: "ISBM" });
+    });
+
+    it("CC-0015 — tipoCuenta es null en cuentas legacy sin tipoCuentaId", async () => {
+      setupTxContexto();
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        ...fakeAccount,
+        tipoCuenta: null,
+      } as never);
+      prisma.patient.findFirst.mockResolvedValue(fakePatient as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+      prisma.patientEmergencyContact.findMany.mockResolvedValue([] as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(
+        makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+      );
+      const result = await caller.contextoCuenta({ cuentaId: CUENTA_ID });
+
+      expect(result.cuenta.tipoCuenta).toBeNull();
+    });
   });
 
   // ─── CC-0011 (item e) — actualizarContactoEmergencia ───────────────────────

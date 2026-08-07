@@ -72,3 +72,4 @@ secrets/
 # Vercel
 .vercel
 backups/
+.env*

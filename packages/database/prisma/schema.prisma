@@ -479,6 +479,8 @@ model Organization {
   allocationRules           CostCenterAllocationRule[] @relation("AllocationRuleOrganization")
   // CC-0002 §7 — cuentas de paciente por organización
   patientAccounts           PatientAccount[]           @relation("PatientAccountOrg")
+  // CC-0015 — tipos de cuenta (pivote de lista de precios) por organización
+  tiposCuenta               TipoCuenta[]               @relation("TipoCuentaOrg")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -3197,6 +3199,8 @@ model Insurer {
   // Finance — sql/127
   invoices        Invoice[]       @relation("InvoiceInsurer")
   insuranceClaims InsuranceClaim[] @relation("ClaimInsurer")
+  // CC-0015 — tipos de cuenta vinculados a esta aseguradora (opcional)
+  tiposCuenta     TipoCuenta[]    @relation("TipoCuentaInsurer")
 
   @@unique([organizationId, code])
   @@index([active])
@@ -7087,6 +7091,8 @@ model Invoice {
   encounterId                 String?                 @db.Uuid
   patientId                   String                  @db.Uuid
   insurerId                   String?                 @db.Uuid
+  /// CC-0015 — cuenta de origen de los cargos (ancla la lista de precios aplicada).
+  patientAccountId            String?                 @db.Uuid
   invoiceNumber               String                  @db.VarChar(40)
   issuedAt                    DateTime                @default(now()) @db.Timestamptz()
   dueAt                       DateTime?               @db.Timestamptz()
@@ -7114,6 +7120,7 @@ model Invoice {
   insurer       Insurer?      @relation("InvoiceInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
   currency      Currency      @relation("InvoiceCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
   costCenter    CostCenter?   @relation("InvoiceCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
+  patientAccount PatientAccount? @relation("InvoicePatientAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
   items         InvoiceItem[]
   payments      InvoicePayment[]
   claims        InsuranceClaim[]
@@ -7125,6 +7132,7 @@ model Invoice {
   @@index([organizationId, status])
   @@index([organizationId, electronicInvoiceStatus])
   @@index([costCenterId])
+  @@index([patientAccountId])
   @@schema("public")
 }
 
@@ -7284,20 +7292,26 @@ model PatientAccount {
   patientId      String   @db.Uuid
   numeroCuenta   String   @db.VarChar(20) /// CTA00001 — correlativo por expediente (CC-0002 §7).
   encounterId    String?  @db.Uuid       /// opcional: cuenta con o sin admisión.
+  /// CC-0015 — tipo de cuenta (pivote de lista de precios). Requerido al crear cuentas nuevas.
+  tipoCuentaId   String?  @db.Uuid
   createdAt      DateTime @default(now()) @db.Timestamptz()
   createdBy      String?  @db.Uuid
 
   organization Organization          @relation("PatientAccountOrg", fields: [organizationId], references: [id], onDelete: Restrict)
   patient      Patient               @relation("PatientAccounts", fields: [patientId], references: [id], onDelete: Restrict)
   encounter    Encounter?            @relation("EncounterAccounts", fields: [encounterId], references: [id], onDelete: SetNull)
+  tipoCuenta   TipoCuenta?           @relation("PatientAccountTipoCuenta", fields: [tipoCuentaId], references: [id], onDelete: Restrict)
   servicios    PatientAccountService[]
   /// CC-0013 — órdenes de laboratorio ancladas a esta cuenta (tablero de exámenes).
   labOrders    LabOrder[]            @relation("LabOrderPatientAccount")
+  /// CC-0015 — facturas ancladas a esta cuenta.
+  invoices     Invoice[]             @relation("InvoicePatientAccount")
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])
   @@index([patientId])
   @@index([encounterId])
+  @@index([tipoCuentaId])
   @@schema("public")
 }
 
@@ -7316,6 +7330,35 @@ model PatientAccountService {
 
   @@index([accountId])
   @@index([encounterId])
+  @@schema("public")
+}
+
+/// CC-0015 — Tipo de cuenta del paciente (pivote de cobro): determina la
+/// ServicePriceList que aplica a los cargos de la cuenta. PARTICULAR o uno de
+/// los 15 tipos-pagador (ISBM, MAPFRE, etc.) sembrados por org en SQL 191.
+/// NOTA: ServicePriceList NO tiene modelo Prisma (tabla fuera de schema.prisma
+/// por diseño — sql/133). priceListId queda como escalar uuid sin relación
+/// Prisma; el join se hace vía $queryRaw en tipo-cuenta.router.ts.
+model TipoCuenta {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  code           String   @db.VarChar(30)
+  nombre         String   @db.VarChar(120)
+  priceListId    String?  @db.Uuid /// FK lógica a "ServicePriceList" (sql/133) — sin relación Prisma.
+  insurerId      String?  @db.Uuid
+  esParticular   Boolean  @default(false)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  createdBy      String?  @db.Uuid
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+  updatedBy      String?  @db.Uuid
+
+  organization    Organization      @relation("TipoCuentaOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  insurer         Insurer?          @relation("TipoCuentaInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
+  patientAccounts PatientAccount[]  @relation("PatientAccountTipoCuenta")
+
+  @@unique([organizationId, code])
+  @@index([organizationId, active])
   @@schema("public")
 }
 
