@@ -17,20 +17,27 @@ function makeTx(opts: {
   itemRows?: Array<{ unitPrice: string }>;
   labTestTenant?: { standardPrice: unknown } | null;
   labTestGlobal?: { standardPrice: unknown } | null;
+  /** CC-0016 — respuestas sucesivas de $queryRawUnsafe (alias primero, code nativo después). */
+  queryRawUnsafeSequence?: Array<Array<{ unitPrice: string }>>;
+  imagingAttrs?: { codigoTarifario: string | null } | null;
 }) {
-  const queryRawUnsafe = vi.fn().mockResolvedValue(opts.itemRows ?? []);
+  const queryRawUnsafe = opts.queryRawUnsafeSequence
+    ? vi.fn(() => Promise.resolve(opts.queryRawUnsafeSequence!.shift() ?? []))
+    : vi.fn().mockResolvedValue(opts.itemRows ?? []);
   const patientAccountFindFirst = vi.fn().mockResolvedValue(opts.patientAccount ?? null);
   const tipoCuentaFindFirst = vi.fn().mockResolvedValue(opts.tipoCuenta ?? null);
   const labTestFindFirst = vi
     .fn()
     .mockImplementationOnce(async () => opts.labTestTenant ?? null)
     .mockImplementationOnce(async () => opts.labTestGlobal ?? null);
+  const imagingTestAttrsFindUnique = vi.fn().mockResolvedValue(opts.imagingAttrs ?? null);
 
   return {
     $queryRawUnsafe: queryRawUnsafe,
     patientAccount: { findFirst: patientAccountFindFirst },
     tipoCuenta: { findFirst: tipoCuentaFindFirst },
     labTest: { findFirst: labTestFindFirst },
+    imagingTestAttrs: { findUnique: imagingTestAttrsFindUnique },
   };
 }
 
@@ -106,5 +113,81 @@ describe("resolverPrecio", () => {
     const result = await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "GLU" });
 
     expect(result).toEqual({ precio: null, fuente: null, priceListId: null });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0016 — alias ImagingTestAttrs.codigoTarifario
+  // ---------------------------------------------------------------------------
+
+  it("sin labTestId, el comportamiento es idéntico al de antes de CC-0016 (regresión)", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: TIPO_CUENTA_ID },
+      tipoCuenta: { priceListId: PRICE_LIST_ID },
+      itemRows: [{ unitPrice: "42.50" }],
+    });
+
+    const result = await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "RX001" });
+
+    expect(result).toEqual({ precio: 42.5, fuente: "lista", priceListId: PRICE_LIST_ID });
+    // No debió consultar ImagingTestAttrs — labTestId no se pasó.
+    expect(tx.imagingTestAttrs.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("con labTestId pero sin fila de attrs (o sin codigoTarifario), cae al code nativo (regresión)", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: TIPO_CUENTA_ID },
+      tipoCuenta: { priceListId: PRICE_LIST_ID },
+      imagingAttrs: null,
+      queryRawUnsafeSequence: [[{ unitPrice: "20.00" }]],
+    });
+
+    const result = await resolverPrecio(tx as never, {
+      organizationId: ORG_ID,
+      cuentaId: CUENTA_ID,
+      code: "RX001",
+      labTestId: "test-1",
+    });
+
+    expect(result).toEqual({ precio: 20, fuente: "lista", priceListId: PRICE_LIST_ID });
+  });
+
+  it("prueba codigoTarifario ANTES que el code nativo cuando existe la fila de attrs", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: TIPO_CUENTA_ID },
+      tipoCuenta: { priceListId: PRICE_LIST_ID },
+      imagingAttrs: { codigoTarifario: "ODOO-RX-999" },
+      queryRawUnsafeSequence: [[{ unitPrice: "99.00" }]],
+    });
+
+    const result = await resolverPrecio(tx as never, {
+      organizationId: ORG_ID,
+      cuentaId: CUENTA_ID,
+      code: "RX001",
+      labTestId: "test-1",
+    });
+
+    expect(result).toEqual({ precio: 99, fuente: "lista", priceListId: PRICE_LIST_ID });
+    // La primera consulta debió usar el alias, no el code nativo.
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    expect((tx.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0]![2]).toBe("ODOO-RX-999");
+  });
+
+  it("si el alias no matchea ningún item, cae al code nativo", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: TIPO_CUENTA_ID },
+      tipoCuenta: { priceListId: PRICE_LIST_ID },
+      imagingAttrs: { codigoTarifario: "ODOO-RX-999" },
+      queryRawUnsafeSequence: [[], [{ unitPrice: "15.00" }]],
+    });
+
+    const result = await resolverPrecio(tx as never, {
+      organizationId: ORG_ID,
+      cuentaId: CUENTA_ID,
+      code: "RX001",
+      labTestId: "test-1",
+    });
+
+    expect(result).toEqual({ precio: 15, fuente: "lista", priceListId: PRICE_LIST_ID });
+    expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(2);
   });
 });

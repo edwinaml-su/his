@@ -53,6 +53,7 @@ export * from "./emergency";
 export * from "./encounter";
 export * from "./exchange-rate";
 export * from "./imaging";
+export * from "./imaging-request";
 export * from "./inpatient";
 export * from "./insurance";
 export * from "./inventory";

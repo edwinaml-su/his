@@ -419,6 +419,9 @@ model Organization {
   surgeryCases              SurgeryCase[]              @relation("OrgSurgeryCases")
   medicationAdministrations MedicationAdministration[] @relation("OrgMedAdmins")
   imagingOrders             ImagingOrder[]             @relation("OrgImagingOrders")
+  imagingRequests           ImagingRequest[]           @relation("OrgImagingRequests")
+  imagingFormFieldConfigs   ImagingFormFieldConfig[]   @relation("OrgImagingFormFieldConfig")
+  imagingModuleRules        ImagingModuleRule[]        @relation("OrgImagingModuleRule")
   insurers                  Insurer[]                  @relation("OrgInsurers")
   patientCoverages          PatientCoverage[]          @relation("OrgPatientCoverages")
   authorizationRequests     AuthorizationRequest[]     @relation("OrgAuthRequests")
@@ -1217,6 +1220,7 @@ model Patient {
   emergencyVisits        EmergencyVisit[]          @relation("PatEmergencyVisits")
   surgeryCases           SurgeryCase[]             @relation("PatSurgeryCases")
   imagingOrders          ImagingOrder[]            @relation("PatImagingOrders")
+  imagingRequests        ImagingRequest[]          @relation("PatImagingRequests")
   labOrders              LabOrder[]                @relation("PatLabOrders")
   coverages              PatientCoverage[]         @relation("PatCoverages")
   respiratoryOrders      RespiratoryOrder[]        @relation("PatRespiratoryOrders")
@@ -1629,6 +1633,7 @@ model Encounter {
   emergencyVisit         EmergencyVisit?         @relation("EncEmergencyVisit")
   surgeryCases           SurgeryCase[]           @relation("EncSurgeryCases")
   imagingOrders          ImagingOrder[]          @relation("EncImagingOrders")
+  imagingRequests        ImagingRequest[]        @relation("EncImagingRequests")
   labOrders              LabOrder[]              @relation("EncLabOrders")
   authorizationRequests  AuthorizationRequest[]  @relation("EncAuthRequests")
   respiratoryOrders      RespiratoryOrder[]      @relation("EncRespiratoryOrders")
@@ -2283,6 +2288,9 @@ model LabTest {
   referenceRanges LabReferenceRange[]
   triggersFor     LabReflexRule[]     @relation("LabReflexTrigger")
   reflexesFor     LabReflexRule[]     @relation("LabReflexReflex")
+  /// CC-0016 — atributos de parametrización del módulo de imágenes (1:1, solo
+  /// cuando el test pertenece al catálogo de radiología/imágenes).
+  imagingAttrs    ImagingTestAttrs?
 
   @@index([code])
   @@index([panelId])
@@ -3065,6 +3073,8 @@ model ImagingModality {
 
   establishment Establishment  @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
   orders        ImagingOrder[]
+  /// CC-0016 — prestaciones del catálogo cuya sala/equipo por defecto es esta modalidad.
+  testAttrs     ImagingTestAttrs[]
 
   @@unique([establishmentId, code])
   @@index([establishmentId])
@@ -3077,7 +3087,9 @@ model ImagingOrder {
   id                 String              @id @default(uuid()) @db.Uuid
   organizationId     String              @db.Uuid
   establishmentId    String              @db.Uuid
-  encounterId        String              @db.Uuid
+  /// CC-0016 — opcional: una orden puede anclarse solo a una cuenta ambulatoria
+  /// sin admisión (PatientAccount.encounterId también es opcional; patrón CC-0013).
+  encounterId        String?             @db.Uuid
   patientId          String              @db.Uuid
   modalityId         String?             @db.Uuid
   orderingProviderId String              @db.Uuid /// User.
@@ -3100,6 +3112,16 @@ model ImagingOrder {
   costCenterId          String?             @db.Uuid
   /// Centro intermedio ejecutor (depende de modalidad). FK RESTRICT.
   ejecutorCostCenterId  String?             @db.Uuid
+  /// CC-0016 — cuenta administrativa del paciente (ancla transversal del
+  /// módulo de solicitud de imágenes). Toda orden creada vía el wizard de
+  /// solicitud persiste esta referencia.
+  patientAccountId   String?             @db.Uuid
+  /// CC-0016 — solicitud (cabecera) que agrupa esta orden con sus hermanas.
+  requestId          String?             @db.Uuid
+  /// CC-0016 — true si esta prestación se solicitó con medio de contraste.
+  conContraste       Boolean?            @default(false)
+  /// CC-0016 — nota libre capturada por prestación en el chip de selección.
+  notaEstudio        String?             @db.Text
   createdAt          DateTime            @default(now()) @db.Timestamptz()
   createdBy          String?             @db.Uuid
   updatedAt          DateTime            @updatedAt @db.Timestamptz()
@@ -3108,12 +3130,14 @@ model ImagingOrder {
 
   organization          Organization     @relation("OrgImagingOrders", fields: [organizationId], references: [id], onDelete: Restrict)
   establishment         Establishment    @relation("EstImagingOrders", fields: [establishmentId], references: [id], onDelete: Restrict)
-  encounter             Encounter        @relation("EncImagingOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  encounter             Encounter?       @relation("EncImagingOrders", fields: [encounterId], references: [id], onDelete: Restrict)
   patient               Patient          @relation("PatImagingOrders", fields: [patientId], references: [id], onDelete: Restrict)
   modality              ImagingModality? @relation(fields: [modalityId], references: [id], onDelete: SetNull)
   orderingProvider      User             @relation("ImagingOrderingProvider", fields: [orderingProviderId], references: [id], onDelete: Restrict)
   costCenter            CostCenter?      @relation("ImagingOrderCostCenter", fields: [costCenterId], references: [id], onDelete: Restrict)
   ejecutorCostCenter    CostCenter?      @relation("ImagingOrderEjecutorCostCenter", fields: [ejecutorCostCenterId], references: [id], onDelete: Restrict)
+  patientAccount        PatientAccount?  @relation("ImagingOrderPatientAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
+  request               ImagingRequest?  @relation("ImagingRequestOrders", fields: [requestId], references: [id], onDelete: SetNull)
 
   report ImagingReport?
 
@@ -3127,6 +3151,8 @@ model ImagingOrder {
   @@index([orderedAt]) /// SLA/overdue queries.
   @@index([costCenterId])
   @@index([ejecutorCostCenterId])
+  @@index([patientAccountId])
+  @@index([requestId])
   @@schema("public")
 }
 
@@ -3150,6 +3176,104 @@ model ImagingReport {
   radiologist User         @relation("ImagingRadiologist", fields: [radiologistId], references: [id], onDelete: Restrict)
 
   @@index([radiologistId])
+  @@schema("public")
+}
+
+// =============================================================================
+// CC-0016 — Módulo de Radiología e Imágenes (mockup) sobre el RIS legacy §18.
+// Fuente: docs/CC/0016/mockup_modulo_imagenes.html. SQL: 192_cc0016_modulo_imagenes.sql.
+// =============================================================================
+
+/// CC-0016 — cabecera de una solicitud de radiología/imágenes (agrupa N ImagingOrder
+/// hijas). El ESTADO no es columna: se deriva del agregado de sus ImagingOrder
+/// (mínimo en el orden ORDERED<SCHEDULED<IN_PROGRESS<COMPLETED<REPORTED<VALIDATED).
+model ImagingRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @db.Uuid
+  folio             String    @db.VarChar(20) /// SOL-{YYYY}-{NNNN}, único por org.
+  patientId         String    @db.Uuid
+  patientAccountId  String?   @db.Uuid
+  encounterId       String?   @db.Uuid
+  prioridad         String    @db.VarChar(10) /// ROUTINE | URGENT | STAT
+  dx                String?   @db.VarChar(300)
+  justificacion     String?   @db.Text
+  fechaDeseada      DateTime? @db.Date
+  embarazo          String?   @db.VarChar(20)
+  alergias          String?   @db.VarChar(300)
+  creatinina        String?   @db.VarChar(40)
+  observaciones     String?   @db.Text
+  firmadoPor        String?   @db.Uuid
+  firmadoEn         DateTime? @db.Timestamptz()
+  createdAt         DateTime  @default(now()) @db.Timestamptz()
+  createdBy         String?   @db.Uuid
+  updatedAt         DateTime  @updatedAt @db.Timestamptz()
+
+  organization   Organization    @relation("OrgImagingRequests", fields: [organizationId], references: [id], onDelete: Restrict)
+  patient        Patient         @relation("PatImagingRequests", fields: [patientId], references: [id], onDelete: Restrict)
+  patientAccount PatientAccount? @relation("ImagingRequestPatientAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
+  encounter      Encounter?      @relation("EncImagingRequests", fields: [encounterId], references: [id], onDelete: Restrict)
+  orders         ImagingOrder[]  @relation("ImagingRequestOrders")
+
+  @@unique([organizationId, folio])
+  @@index([organizationId])
+  @@index([patientId])
+  @@index([patientAccountId])
+  @@schema("public")
+}
+
+/// CC-0016 — atributos de parametrización del catálogo de imágenes, satélite
+/// 1:1 de LabTest (el catálogo físico de prestaciones lo sigue siendo LabTest,
+/// igual que CC-0011/CC-0013 para radiología/laboratorio).
+model ImagingTestAttrs {
+  labTestId             String               @id @db.Uuid
+  requiereContraste     Boolean              @default(false)
+  requiereAyuno         Boolean              @default(false)
+  requiereAutorizacion  Boolean              @default(false)
+  duracionMin           Int                  @default(20)
+  modalityType          ImagingModalityType
+  modalityId            String?              @db.Uuid
+  preparacionPaciente   String?              @db.Text
+  /// Alias de code para el price-resolver (CC-0015), fase 2 — NULL en el seed inicial.
+  codigoTarifario       String?              @db.VarChar(40)
+  createdAt             DateTime             @default(now()) @db.Timestamptz()
+  updatedAt             DateTime             @updatedAt @db.Timestamptz()
+
+  test     LabTest          @relation(fields: [labTestId], references: [id], onDelete: Cascade)
+  modality ImagingModality? @relation(fields: [modalityId], references: [id], onDelete: SetNull)
+
+  @@index([modalityId])
+  @@schema("public")
+}
+
+/// CC-0016 — parametrización de campos del formulario de solicitud (dx/just/prio/...).
+model ImagingFormFieldConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  fieldKey       String   @db.VarChar(30)
+  estado         String   @db.VarChar(15) /// obligatorio | opcional | oculto
+  displayOrder   Int      @default(0)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgImagingFormFieldConfig", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, fieldKey])
+  @@schema("public")
+}
+
+/// CC-0016 — reglas generales del módulo (toggles + maxN configurable).
+model ImagingModuleRule {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  ruleKey        String   @db.VarChar(20)
+  enabled        Boolean  @default(false)
+  valorNum       Int?
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  organization Organization @relation("OrgImagingModuleRule", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, ruleKey])
   @@schema("public")
 }
 
@@ -7306,6 +7430,9 @@ model PatientAccount {
   labOrders    LabOrder[]            @relation("LabOrderPatientAccount")
   /// CC-0015 — facturas ancladas a esta cuenta.
   invoices     Invoice[]             @relation("InvoicePatientAccount")
+  /// CC-0016 — órdenes y solicitudes de imagen ancladas a esta cuenta.
+  imagingOrders   ImagingOrder[]   @relation("ImagingOrderPatientAccount")
+  imagingRequests ImagingRequest[] @relation("ImagingRequestPatientAccount")
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])

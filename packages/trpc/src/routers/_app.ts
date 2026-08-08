@@ -36,6 +36,7 @@ import { emergencyRouter } from "./emergency.router";
 import { surgeryRouter } from "./surgery.router";
 import { medicationAdminRouter } from "./medication-admin.router";
 import { imagingRouter } from "./imaging.router";
+import { imagingRequestRouter } from "./imaging-request.router";
 import { insuranceRouter } from "./insurance.router";
 import { inventoryRouter } from "./inventory.router";
 import { nutritionRouter } from "./nutrition.router";
@@ -264,6 +265,7 @@ export const appRouter = router({
   surgery: surgeryRouter,
   medicationAdmin: medicationAdminRouter,
   imaging: imagingRouter,
+  imagingRequest: imagingRequestRouter,
   insurance: insuranceRouter,
   inventory: inventoryRouter,
   servicesEquipment: servicesEquipmentRouter,

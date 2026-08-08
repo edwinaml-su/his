@@ -419,15 +419,20 @@ async function insertBitacora(
 // Verificación central de PIN con lockout y auditoría
 // =============================================================================
 
-type PinCheckResult = { firmaId: string; verifiedAt: string };
+export type PinCheckResult = { firmaId: string; verifiedAt: string };
 
 /**
  * Valida el PIN contra la firma del usuario.
  * Incrementa failed_attempts si falla; resetea y rellena session cache si ok.
  * Registra siempre en ece.bitacora_acceso.
  * Lanza TRPCError en cualquier fallo.
+ *
+ * Exportado (CC-0016) para que otros routers puedan exigir firma PIN dentro
+ * de su propia transacción (`withTenantContext`) sin duplicar la lógica de
+ * lockout/argon2/bitácora. Acepta `tx` (transacción) o `ctx.prisma` — el tipo
+ * estructural solo requiere $queryRaw/$executeRaw.
  */
-async function checkPin(
+export async function checkPin(
   prisma: {
     $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
     $executeRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;

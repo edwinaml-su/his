@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — Módulo de Radiología e Imágenes</title>
+<style>
+  :root{
+    --primary:#0e7490; --primary-dark:#155e75; --primary-light:#e0f2f7;
+    --accent:#f59e0b; --danger:#dc2626; --ok:#059669;
+    --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; --bg:#f1f5f9; --card:#ffffff;
+    --radius:10px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--ink); font-size:14px;}
+
+  /* ===== Header ===== */
+  .app-header{background:linear-gradient(90deg,var(--primary-dark),var(--primary)); color:#fff; padding:10px 22px; display:flex; align-items:center; gap:14px;}
+  .app-header .logo{width:34px;height:34px;border-radius:8px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:18px;}
+  .app-header h1{font-size:16px; font-weight:600;}
+  .app-header small{display:block; font-weight:400; opacity:.8; font-size:11.5px;}
+  .badge-mockup{margin-left:auto; background:var(--accent); color:#442c00; font-size:11px; font-weight:700; padding:4px 10px; border-radius:999px; letter-spacing:.5px;}
+
+  /* ===== Patient bar ===== */
+  .patient-bar{background:#fff; border-bottom:1px solid var(--line); padding:8px 22px; display:flex; gap:26px; align-items:center; flex-wrap:wrap;}
+  .patient-bar .avatar{width:36px;height:36px;border-radius:50%;background:var(--primary-light);color:var(--primary-dark);display:flex;align-items:center;justify-content:center;font-weight:700;}
+  .patient-bar b{font-size:13.5px;}
+  .pfield{font-size:12px; color:var(--muted);}
+  .pfield span{display:block; color:var(--ink); font-weight:600; font-size:12.5px;}
+
+  /* ===== Main nav tabs ===== */
+  .main-tabs{display:flex; gap:4px; padding:10px 22px 0; background:#fff; border-bottom:1px solid var(--line);}
+  .main-tab{border:none; background:transparent; padding:10px 18px; font-size:13.5px; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:3px solid transparent;}
+  .main-tab.active{color:var(--primary-dark); border-bottom-color:var(--primary);}
+  .main-tab:hover{color:var(--primary-dark);}
+
+  .view{display:none; padding:18px 22px 60px; max-width:1500px; margin:0 auto;}
+  .view.active{display:block;}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin-bottom:16px;}
+  .card h3{font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--primary-dark); margin-bottom:12px; display:flex; align-items:center; gap:8px;}
+  .card h3 .hint{font-size:11px; color:var(--muted); text-transform:none; letter-spacing:0; font-weight:400;}
+
+  /* ===== Buttons ===== */
+  .btn{border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px;}
+  .btn-primary{background:var(--primary); color:#fff;}
+  .btn-primary:hover{background:var(--primary-dark);}
+  .btn-outline{background:#fff; color:var(--primary-dark); border:1px solid var(--primary);}
+  .btn-cancel{background:#f97316; color:#fff;}
+  .btn-ghost{background:transparent; color:var(--muted); border:1px solid var(--line);}
+  .btn-sm{padding:5px 10px; font-size:12px; border-radius:6px;}
+  .btn:disabled{opacity:.45; cursor:not-allowed;}
+
+  /* ===== Solicitud layout ===== */
+  .solicitud-grid{display:grid; grid-template-columns:1fr 360px; gap:16px; align-items:start;}
+  @media (max-width:1100px){ .solicitud-grid{grid-template-columns:1fr;} }
+
+  .cat-tabs{display:flex; flex-wrap:wrap; gap:8px;}
+  .cat-tab{border:1.5px solid var(--line); background:#fff; border-radius:999px; padding:7px 15px; font-size:12.5px; font-weight:600; color:var(--muted); cursor:pointer; display:flex; gap:7px; align-items:center;}
+  .cat-tab .cnt{background:var(--bg); border-radius:999px; padding:1px 7px; font-size:11px;}
+  .cat-tab.active{background:var(--primary); border-color:var(--primary); color:#fff;}
+  .cat-tab.active .cnt{background:rgba(255,255,255,.25); color:#fff;}
+  .cat-tab .sel-dot{background:var(--accent); color:#442c00; border-radius:999px; padding:1px 7px; font-size:11px; font-weight:700;}
+
+  .search-row{display:flex; gap:14px; align-items:center; margin:14px 0 6px; flex-wrap:wrap;}
+  .search-box{flex:1; min-width:260px; position:relative;}
+  .search-box input{width:100%; padding:9px 12px 9px 34px; border:1.5px solid var(--line); border-radius:8px; font-size:13.5px;}
+  .search-box input:focus{outline:none; border-color:var(--primary);}
+  .search-box::before{content:"🔍"; position:absolute; left:10px; top:8px; font-size:13px; opacity:.5;}
+  .switch{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted); cursor:pointer; user-select:none;}
+  .switch input{display:none;}
+  .switch .track{width:36px;height:20px;border-radius:999px;background:#cbd5e1;position:relative;transition:.15s;}
+  .switch .track::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s;}
+  .switch input:checked + .track{background:var(--primary);}
+  .switch input:checked + .track::after{left:18px;}
+
+  .exam-list{columns:3; column-gap:22px; margin-top:10px;}
+  @media (max-width:1300px){.exam-list{columns:2;}}
+  @media (max-width:800px){.exam-list{columns:1;}}
+  .exam-item{break-inside:avoid; display:flex; align-items:flex-start; gap:8px; padding:5px 6px; border-radius:6px; cursor:pointer; font-size:13px;}
+  .exam-item:hover{background:var(--primary-light);}
+  .exam-item input{margin-top:2px; accent-color:var(--primary); width:15px; height:15px; flex:none;}
+  .exam-item .cat-badge{font-size:10px; background:var(--bg); border:1px solid var(--line); color:var(--muted); border-radius:4px; padding:1px 5px; margin-left:4px; white-space:nowrap;}
+  .exam-item .flag{font-size:10px; border-radius:4px; padding:1px 5px; margin-left:4px; white-space:nowrap;}
+  .flag.contraste{background:#fef3c7; color:#92400e;}
+  .flag.ayuno{background:#dbeafe; color:#1e40af;}
+  .empty-msg{color:var(--muted); font-size:13px; padding:18px 6px; text-align:center;}
+
+  /* ===== Panel resumen ===== */
+  .panel-resumen{position:sticky; top:14px;}
+  .sel-chip{border:1px solid var(--line); border-left:4px solid var(--primary); border-radius:8px; padding:9px 11px; margin-bottom:9px; background:#fff;}
+  .sel-chip .top{display:flex; justify-content:space-between; gap:8px; align-items:flex-start;}
+  .sel-chip .name{font-size:12.5px; font-weight:700;}
+  .sel-chip .cat{font-size:10.5px; color:var(--muted);}
+  .sel-chip .remove{border:none;background:none;color:var(--danger);cursor:pointer;font-size:15px;line-height:1;}
+  .sel-chip .opts{display:flex; gap:8px; margin-top:7px; flex-wrap:wrap; align-items:center;}
+  .sel-chip select, .sel-chip input[type=text]{border:1px solid var(--line); border-radius:6px; padding:4px 6px; font-size:11.5px;}
+  .sel-chip input[type=text]{flex:1; min-width:110px;}
+  .sel-chip label.mini{font-size:11px; display:flex; align-items:center; gap:4px; color:var(--muted);}
+  .sel-chip label.mini input{accent-color:var(--primary);}
+  .prio-STAT{border-left-color:var(--danger)!important;}
+  .prio-Urgente{border-left-color:var(--accent)!important;}
+
+  .gfield{margin-bottom:11px;}
+  .gfield label{display:block; font-size:12px; font-weight:600; margin-bottom:4px;}
+  .gfield label .req{color:var(--danger);}
+  .gfield input, .gfield select, .gfield textarea{width:100%; border:1.5px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit;}
+  .gfield input:focus,.gfield select:focus,.gfield textarea:focus{outline:none;border-color:var(--primary);}
+  .gfield .invalid{border-color:var(--danger)!important; background:#fef2f2;}
+
+  .total-bar{display:flex; justify-content:space-between; align-items:center; padding:10px 2px 4px; font-size:13px;}
+  .total-bar b{color:var(--primary-dark);}
+
+  /* ===== Tables ===== */
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th{text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); border-bottom:2px solid var(--line); padding:8px 10px;}
+  td{border-bottom:1px solid var(--line); padding:8px 10px; vertical-align:middle;}
+  tr:hover td{background:#f8fafc;}
+  .pill{display:inline-block; font-size:11px; font-weight:700; border-radius:999px; padding:3px 10px;}
+  .pill.ok{background:#d1fae5;color:#065f46;} .pill.off{background:#fee2e2;color:#991b1b;}
+  .pill.pend{background:#fef3c7;color:#92400e;} .pill.prog{background:#dbeafe;color:#1e40af;}
+  .pill.real{background:#e0e7ff;color:#3730a3;} .pill.inf{background:#d1fae5;color:#065f46;}
+  .code{font-family:Consolas,monospace; font-size:12px; color:var(--muted);}
+
+  /* ===== Parametrización ===== */
+  .sub-tabs{display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap;}
+  .sub-tab{border:1.5px solid var(--line); background:#fff; padding:8px 16px; border-radius:8px; font-size:13px; font-weight:600; color:var(--muted); cursor:pointer;}
+  .sub-tab.active{background:var(--primary-light); border-color:var(--primary); color:var(--primary-dark);}
+  .subview{display:none;} .subview.active{display:block;}
+
+  .field-cfg-row{display:grid; grid-template-columns:1fr 320px; gap:10px; align-items:center; padding:9px 6px; border-bottom:1px solid var(--line);}
+  .field-cfg-row:last-child{border-bottom:none;}
+  .field-cfg-row .fname{font-weight:600; font-size:13px;}
+  .field-cfg-row .fdesc{font-size:11.5px; color:var(--muted);}
+  .seg{display:flex; border:1.5px solid var(--line); border-radius:8px; overflow:hidden; width:fit-content;}
+  .seg button{border:none; background:#fff; padding:6px 14px; font-size:12px; font-weight:600; color:var(--muted); cursor:pointer; border-right:1px solid var(--line);}
+  .seg button:last-child{border-right:none;}
+  .seg button.on.obligatorio{background:var(--primary); color:#fff;}
+  .seg button.on.opcional{background:#0891b2; color:#fff;}
+  .seg button.on.oculto{background:#94a3b8; color:#fff;}
+
+  .toggles-grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:6px 26px;}
+  .toggle-row{display:flex; justify-content:space-between; align-items:center; padding:8px 4px; border-bottom:1px dashed var(--line); font-size:13px;}
+  .toggle-row small{display:block; color:var(--muted); font-size:11.5px;}
+
+  .filter-row{display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;}
+  .filter-row select,.filter-row input{border:1.5px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px;}
+  .filter-row input{flex:1; min-width:220px;}
+
+  /* ===== Modal ===== */
+  .modal-bg{position:fixed; inset:0; background:rgba(15,23,42,.5); display:none; align-items:center; justify-content:center; z-index:50; padding:16px;}
+  .modal-bg.open{display:flex;}
+  .modal{background:#fff; border-radius:14px; width:640px; max-width:100%; max-height:92vh; overflow:auto; padding:22px;}
+  .modal h2{font-size:16px; color:var(--primary-dark); margin-bottom:4px;}
+  .modal .sub{font-size:12px; color:var(--muted); margin-bottom:16px;}
+  .modal-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .modal-grid .full{grid-column:1/-1;}
+  .modal-actions{display:flex; justify-content:flex-end; gap:10px; margin-top:18px;}
+  .chk-line{display:flex; align-items:center; gap:8px; font-size:13px; padding:6px 0;}
+  .chk-line input{accent-color:var(--primary); width:15px; height:15px;}
+
+  /* ===== Toast ===== */
+  #toast{position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px); background:var(--ink); color:#fff; padding:11px 20px; border-radius:10px; font-size:13px; opacity:0; transition:.25s; z-index:99; box-shadow:0 8px 24px rgba(0,0,0,.25);}
+  #toast.show{transform:translateX(-50%) translateY(0); opacity:1;}
+  #toast.ok{background:var(--ok);} #toast.err{background:var(--danger);}
+
+  .note-banner{background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:8px 12px; font-size:12px; margin-bottom:14px;}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="logo">🩻</div>
+  <div>
+    <h1>Expediente Electrónico — Módulo de Radiología e Imágenes</h1>
+    <small>Historia Clínica · Solicitud, parametrización y seguimiento de estudios</small>
+  </div>
+  <span class="badge-mockup">MOCKUP v1</span>
+</header>
+
+<div class="patient-bar">
+  <div class="avatar">AH</div>
+  <div><b>ALVARADO HERRERA, JUAN CARLOS</b><div class="pfield">Expediente Nº <b>220011187</b></div></div>
+  <div class="pfield">Edad / Sexo<span>54 años · M</span></div>
+  <div class="pfield">Servicio<span>Consulta Externa — Medicina Interna</span></div>
+  <div class="pfield">Médico solicitante<span>Dra. E. Martínez</span></div>
+  <div class="pfield">Fecha<span id="todayLbl"></span></div>
+</div>
+
+<nav class="main-tabs">
+  <button class="main-tab active" data-view="solicitud" onclick="showView('solicitud')">➕ Nueva Solicitud</button>
+  <button class="main-tab" data-view="listado" onclick="showView('listado')">📋 Solicitudes del paciente</button>
+  <button class="main-tab" data-view="param" onclick="showView('param')">⚙️ Parametrización</button>
+</nav>
+
+<!-- ================= VISTA: NUEVA SOLICITUD ================= -->
+<section id="view-solicitud" class="view active">
+  <div class="solicitud-grid">
+    <div>
+      <div class="card">
+        <h3>Recepción / Tipo de estudio <span class="hint">— seleccione una categoría o active la búsqueda global</span></h3>
+        <div class="cat-tabs" id="catTabs"></div>
+        <div class="search-row">
+          <div class="search-box"><input id="searchInput" type="text" placeholder="Buscar prestación… (ej. tórax, doppler, columna)" oninput="renderExams()"></div>
+          <label class="switch"><input type="checkbox" id="globalSearch" onchange="renderExams()"><span class="track"></span> Buscar en todas las categorías</label>
+        </div>
+        <div id="examList" class="exam-list"></div>
+      </div>
+    </div>
+
+    <div class="panel-resumen">
+      <div class="card">
+        <h3>Solicitud actual <span class="hint" id="selCountLbl"></span></h3>
+        <div id="selChips"><div class="empty-msg">Aún no hay prestaciones seleccionadas.<br>Marque los estudios en el listado.</div></div>
+      </div>
+      <div class="card">
+        <h3>Datos de la solicitud <span class="hint">— campos según parametrización</span></h3>
+        <div id="globalFields"></div>
+        <div class="total-bar"><span>Prestaciones seleccionadas</span><b id="totalLbl">0</b></div>
+        <div style="display:flex; gap:10px; margin-top:8px;">
+          <button class="btn btn-cancel" onclick="clearAll()">✕ Cancelar</button>
+          <button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="guardar()">💾 Guardar Prestaciones</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= VISTA: LISTADO ================= -->
+<section id="view-listado" class="view">
+  <div class="card">
+    <h3>Solicitudes de radiología e imágenes del paciente</h3>
+    <table>
+      <thead><tr><th>Folio</th><th>Fecha</th><th>Categoría(s)</th><th>Prestaciones</th><th>Prioridad</th><th>Estado</th><th></th></tr></thead>
+      <tbody id="solicitudesBody"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ================= VISTA: PARAMETRIZACIÓN ================= -->
+<section id="view-param" class="view">
+  <div class="note-banner">⚙️ <b>Parametrización del módulo:</b> los cambios aquí se reflejan de inmediato en la pantalla «Nueva Solicitud» (categorías activas, catálogo de exámenes y comportamiento de los campos de llenado).</div>
+  <div class="sub-tabs">
+    <button class="sub-tab active" data-sub="cat" onclick="showSub('cat')">🗂 Categorías</button>
+    <button class="sub-tab" data-sub="cata" onclick="showSub('cata')">🩻 Catálogo de exámenes</button>
+    <button class="sub-tab" data-sub="campos" onclick="showSub('campos')">📝 Opciones de llenado</button>
+    <button class="sub-tab" data-sub="reglas" onclick="showSub('reglas')">🔧 Reglas generales</button>
+  </div>
+
+  <div id="sub-cat" class="subview active">
+    <div class="card">
+      <h3>Categorías de estudios <span class="hint">— orden de aparición y activación</span></h3>
+      <table>
+        <thead><tr><th style="width:60px">Orden</th><th>Categoría</th><th>Prestaciones</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="catBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="sub-cata" class="subview">
+    <div class="card">
+      <h3>Catálogo de prestaciones <span class="hint" id="cataCountLbl"></span></h3>
+      <div class="filter-row">
+        <select id="cataFilterCat" onchange="renderCatalogo()"></select>
+        <input id="cataFilterTxt" type="text" placeholder="Filtrar por nombre o código…" oninput="renderCatalogo()">
+        <button class="btn btn-outline" onclick="openModal(null)">＋ Nueva prestación</button>
+      </div>
+      <table>
+        <thead><tr><th>Código</th><th>Prestación</th><th>Categoría</th><th>Contraste</th><th>Ayuno</th><th>Duración</th><th>Estado</th><th></th></tr></thead>
+        <tbody id="cataBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="sub-campos" class="subview">
+    <div class="card">
+      <h3>Campos del formulario de solicitud <span class="hint">— defina si cada campo es obligatorio, opcional u oculto</span></h3>
+      <div id="fieldCfgList"></div>
+    </div>
+  </div>
+
+  <div id="sub-reglas" class="subview">
+    <div class="card">
+      <h3>Reglas generales del módulo</h3>
+      <div class="toggles-grid" id="rulesList"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= MODAL EDICIÓN ================= -->
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this) closeModal()">
+  <div class="modal">
+    <h2 id="modalTitle">Editar prestación</h2>
+    <div class="sub">Parámetros del examen dentro del catálogo del módulo.</div>
+    <div class="modal-grid">
+      <div class="gfield"><label>Código <span class="req">*</span></label><input id="m_codigo" type="text"></div>
+      <div class="gfield"><label>Categoría <span class="req">*</span></label><select id="m_cat"></select></div>
+      <div class="gfield full"><label>Nombre de la prestación <span class="req">*</span></label><input id="m_nombre" type="text"></div>
+      <div class="gfield"><label>Duración estimada (min)</label><input id="m_dur" type="number" min="5" step="5"></div>
+      <div class="gfield"><label>Sala / Equipo</label><select id="m_sala"><option>Rayos X 1</option><option>Rayos X 2</option><option>Sala TAC</option><option>Sala RM</option><option>Sala USG 1</option><option>Sala USG 2</option><option>Sala Intervencionismo</option></select></div>
+      <div class="full">
+        <div class="chk-line"><input type="checkbox" id="m_contraste"><label for="m_contraste">Requiere medio de contraste (habilita verificación de creatinina y alergias)</label></div>
+        <div class="chk-line"><input type="checkbox" id="m_ayuno"><label for="m_ayuno">Requiere ayuno</label></div>
+        <div class="chk-line"><input type="checkbox" id="m_autoriz"><label for="m_autoriz">Requiere autorización previa (jefatura / aseguradora)</label></div>
+        <div class="chk-line"><input type="checkbox" id="m_activo" checked><label for="m_activo">Prestación activa (visible en la pantalla de solicitud)</label></div>
+      </div>
+      <div class="gfield full"><label>Indicaciones de preparación para el paciente</label><textarea id="m_prep" rows="3" placeholder="Ej.: Ayuno de 8 horas. Suspender metformina 48 h antes si se usa contraste…"></textarea></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveModal()">Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ============================================================
+   DATOS — catálogo tomado de las pantallas del sistema actual
+   ============================================================ */
+const CATS = [
+  {id:'esp', nombre:'Estudios Especiales', activo:true},
+  {id:'rx',  nombre:'Radiografías', activo:true},
+  {id:'rm',  nombre:'Resonancia Magnética', activo:true},
+  {id:'tac', nombre:'Tomografías', activo:true},
+  {id:'usg', nombre:'Ultrasonografías', activo:true},
+];
+
+const RAW = {
+esp:["ARTERIOGRAFIA AORTA Y MIEMBROS INFERIORES","ARTERIOGRAFIA CAROTIDAS","ARTERIOGRAFIA MIEMBRO INFERIOR DERECHO","ARTERIOGRAFIA MIEMBRO INFERIOR IZQUIERDO","BIOPSIA CERVICAL","BIOPSIA DE BRAZO","BIOPSIA DE PANCREAS","BIOPSIA DE PULMON","BIOPSIA DE PULMON POR TAC","BIOPSIA HEPATICA TRANSYUGULAR","BIOPSIA LUMBAR","BLOQUEO SACROILIACO","BLOQUEOS","CAMBIO DE CATETER DE VIAS BILIARES","CAMBIO DE CATETER POR COLECISTOSTOMIA","COLANGIOGRAFIA POR TUBO EN T","COLECISTOSTOMIA","COLOCACION DE INPLANTOFIX","COLOCACION O RETIRO DE CATETER","COLOCACION PUERTOS QUIMIO","DRENAJE DE QUISTE DE ANEXO","DRENAJE PERCUTANEO DE COLECCIONES","DRENAJE PERCUTANEO VIA BILIAR","FLUOROSCOPIAS","PANANGIOGRAFIA","PUNSION DE QUISTE OVARICO","QUIMIOEMBOLIZACION","REVISION DE CATETER Y COLOCACION DE STENT","RX ARTERIOGRAFIA","RX ARTROGRAMA","RX ESOFAGOGRAMA","RX FISTULOGRAMA","RX FLEBOGRAFIA","RX TRANSITO INTESTINAL","RX VENOGRAFIA","TOMA VENA DIRIGIDO POR USG"],
+rx:["RX ABDOMEN","RX ABDOMEN SIMPLE","RX AMBAS MANOS","RX AMBAS RODILLAS","RX ANTEBRAZO DERECHO","RX ANTEBRAZO IZQUIERDO","RX ATM (ARTICULACION TEMPOROMAXILAR)","RX BRAZO DERECHO","RX BRAZO IZQUIERDO","RX CADERA","RX CARA","RX CISTOURETROGRAMA","RX CODO DERECHO","RX CODO IZQUIERDO","RX COLANGIOGRAMA","RX COLUMNA CERVICAL","RX COLUMNA LUMBAR","RX COLUMNA LUMBAR OBLICUAS Y DINAMICAS","RX COLUMNA TORACICA","RX COSTILLAS","RX CRANEO","RX CUELLO","RX DEDO DERECHO","RX DEDO IZQUIERDO","RX ENEMA BARITADO (TDI)","RX EXTREMIDADES INFERIORES","RX EXTREMIDADES SUPERIORES","RX FEMUR DERECHO","RX FEMUR IZQUIERDO","RX HOMBRO DERECHO","RX HOMBRO IZQUIERDO","RX H.P. NARIZ","RX HUMERO DERECHO","RX HUMERO IZQUIERDO","RX LUMBO SACRO","RX MACISO FACIAL","RX MANO DERECHA","RX MANO IZQUIERDA","RX MASTOIDES","RX MAXILARES SUPERIORES","RX MUÑECA DERECHA","RX MUÑECA IZQUIERDA","RX MUSLO DERECHO","RX MUSLO IZQUIERDO","RX ORBITAS","RX PELVIS","RX PIE DERECHO","RX PIE IZQUIERDO","RX PIELOGRAMA","RX RODILLA DERECHA","RX RODILLA IZQUIERDA","RX SACRO CERVICAL","RX SACRO COXIS","RX SENOS PARANASALES","RX SERIE ABDOMINAL","RX SERIE DEL CARPO","RX SERIE MANDIBULAR","RX SERIE OSEA","RX SILLA TURCA","RX TALON","RX TIBIA Y PERONE DERECHO","RX TIBIA Y PERONE IZQUIERDO","RX TOBILLO DERECHO","RX TOBILLO IZQUIERDO","RX TORAX","RX TOWNE","RX TUBO DIGESTIVO SUPERIOR","RX URETROGRAMA","RX UROGRAFIA ESCRETORA","RX WATERS"],
+rm:["R. MAGNETICA ABDOMINAL","R. MAGNETICA ABDOMINAL ESTUDIOS ESPECIALES","R. MAGNETICA AMBAS RODILLAS","R. MAGNETICA AMBAS TIBIA Y PERONE","R. MAGNETICA AMBOS ANTEBRAZOS","R. MAGNETICA AMBOS CODOS","R. MAGNETICA AMBOS FEMUR","R. MAGNETICA AMBOS HOMBROS","R. MAGNETICA AMBOS HUMEROS","R. MAGNETICA AMBOS PIES","R. MAGNETICA AMBOS TOBILLOS","R. MAGNETICA ANTEBRAZO DERECHO","R. MAGNETICA ANTEBRAZO IZQUIERDO","R. MAGNETICA CADERA","R. MAGNETICA CARDIACA","R. MAGNETICA CEREBRAL","R. MAGNETICA CERVICO DORSAL","R. MAGNETICA CODO DERECHO","R. MAGNETICA CODO IZQUIERDO","R. MAGNETICA COLANGIORESONANCIA","R. MAGNETICA COLANGIORESONANCIA ESTUDIOS ESPECIALES","R. MAGNETICA COLEDOCO","R. MAGNETICA COLUMNA CERVICAL","R. MAGNETICA COLUMNA DORSAL","R. MAGNETICA COLUMNA LUMBAR","R. MAGNETICA COLUMNA TORAXICA","R. MAGNETICA CUELLO","R. MAGNETICA DORSO LUMBAR","R. MAGNETICA EXTREMIDADES INFERIORES","R. MAGNETICA EXTREMIDADES SUPERIORES","R. MAGNETICA FEMUR DERECHO","R. MAGNETICA FEMUR IZQUIERDO","R. MAGNETICA HIPOFISIS","R. MAGNETICA HOMBRO DERECHO","R. MAGNETICA HOMBRO IZQUIERDO","R. MAGNETICA HUMERO DERECHO","R. MAGNETICA HUMERO IZQUIERDO","R. MAGNETICA LUMBO SACRA","R. MAGNETICA MAMORESONANCIA","R. MAGNETICA MANO DERECHA","R. MAGNETICA MANO IZQUIERDA","R. MAGNETICA ORBITAS","R. MAGNETICA PELVIS","R. MAGNETICA PIE DERECHO","R. MAGNETICA PIE IZQUIERDO","R. MAGNETICA RODILLA DERECHA","R. MAGNETICA RODILLA IZQUIERDA","R. MAGNETICA SILLA TURCA","R. MAGNETICA TIBIA Y PERONE DERECHA","R. MAGNETICA TIBIA Y PERONE IZQUIERDA","R. MAGNETICA TOBILLO DERECHO","R. MAGNETICA TOBILLO IZQUIERDO","R. MAGNETICA TORAXICA"],
+tac:["BIOPSIA RENAL","CISTERNO TAC","PIELOTAC","TAC DE PARED ABDOMINAL CON Y SIN VALSALVA SIN CONTRASTE","TOMOGRAFIA ABDOMEN","TOMOGRAFIA ABDOMINOPELVICO","TOMOGRAFIA ALTA RESOLUCION (TACAR)","TOMOGRAFIA AMBAS RODILLAS","TOMOGRAFIA AMBOS CODOS","TOMOGRAFIA AMBOS PIES","TOMOGRAFIA AMBOS TOBILLOS","TOMOGRAFIA ANGIO ABDOMINAL","TOMOGRAFIA ANGIO AMBOS MIEMBROS INFERIORES","TOMOGRAFIA ANGIO AORTA ABDOMINAL ILIACO Y/O BIFEMORAL","TOMOGRAFIA ANGIO CAROTIDEA","TOMOGRAFIA ANGIO CEREBRAL","TOMOGRAFIA ANGIO DE MIEMBRO INFERIOR DERECHO","TOMOGRAFIA ANGIO DE MIEMBRO INFERIOR IZQUIERDO","TOMOGRAFIA ANGIO DE MIEMBRO SUPERIOR DERECHO","TOMOGRAFIA ANGIO DE MIEMBRO SUPERIOR IZQUIERDO","TOMOGRAFIA ANGIO PELVIS","TOMOGRAFIA ANGIO RENAL","TOMOGRAFIA ANGIO TORAXICA","TOMOGRAFIA ANTEBRAZO DERECHO","TOMOGRAFIA ANTEBRAZO IZQUIERDO","TOMOGRAFIA BIOPSIA COLUMNA CERVICAL","TOMOGRAFIA BIOPSIA COLUMNA LUMBAR","TOMOGRAFIA BIOPSIA HEPATICA","TOMOGRAFIA BRAZO DERECHO","TOMOGRAFIA BRAZO IZQUIERDO","TOMOGRAFIA CADERA","TOMOGRAFIA CEREBRO","TOMOGRAFIA CERVICO DORSAL","TOMOGRAFIA CODO DERECHO","TOMOGRAFIA CODO IZQUIERDO","TOMOGRAFIA COLUMNA CERVICAL","TOMOGRAFIA COLUMNA DORSAL","TOMOGRAFIA COLUMNA LUMBAR","TOMOGRAFIA COLUMNA MIELOTAC","TOMOGRAFIA CORONARIA","TOMOGRAFIA CRANEO","TOMOGRAFIA CUELLO","TOMOGRAFIA DE PIE DERECHO","TOMOGRAFIA DORSO LUMBAR","TOMOGRAFIA FEMUR DERECHO","TOMOGRAFIA FEMUR IZQUIERDO","TOMOGRAFIA FOSA POSTERIOR","TOMOGRAFIA HIPOFISIS","TOMOGRAFIA HOMBRO DERECHO","TOMOGRAFIA HOMBRO IZQUIERDO","TOMOGRAFIA MACISO FACIAL","TOMOGRAFIA MANO DERECHA","TOMOGRAFIA MANO IZQUIERDA","TOMOGRAFIA MUÑECA DERECHA","TOMOGRAFIA MUÑECA IZQUIERDA","TOMOGRAFIA OIDO","TOMOGRAFIA ORBITA","TOMOGRAFIA PELVICA","TOMOGRAFIA PIE IZQUIERDO","TOMOGRAFIA RENAL","TOMOGRAFIA RODILLA DERECHA","TOMOGRAFIA RODILLA IZQUIERDA","TOMOGRAFIA SENOS PARANASALES","TOMOGRAFIA TIBIA Y PERONE DERECHA","TOMOGRAFIA TIBIA Y PERONE IZQUIERDA","TOMOGRAFIA TOBILLO DERECHO","TOMOGRAFIA TOBILLO IZQUIERDO","TOMOGRAFIA TORACO ABDOMINAL","TOMOGRAFIA TORAX","TOMOGRAFIA TORAX ABDOMEN PELVIS","UROTOMOGRAFIA"],
+usg:["CAAF","DOPPLER ARTERIAL MIEMBRO INFERIOR DERECHO","DOPPLER ARTERIAL MIEMBRO INFERIOR IZQUIERDO","DOPPLER ARTERIAL MIEMBRO SUPERIOR DERECHO","DOPPLER ARTERIAL MIEMBRO SUPERIOR IZQUIERDO","DOPPLER ARTERIAL MIEMBROS INFERIORES","DOPPLER ARTERIAL MIEMBROS SUPERIORES","DOPPLER AXILAR","DOPPLER CAROTIDEO","DOPPLER DE MIEMBROS INFERIORES","DOPPLER DE MIEMBROS SUPERIORES","DOPPLER INGUINAL","DOPPLER RENAL","DOPPLER VENOSO AMBOS MIEMBROS INFERIORES","DOPPLER VENOSO AMBOS MIEMBROS SUPERIORES","DOPPLER VENOSO MIEMBRO INFERIOR DERECHO","DOPPLER VENOSO MIEMBRO INFERIOR IZQUIERDO","DOPPLER VENOSO MIEMBRO SUPERIOR DERECHO","DOPPLER VENOSO MIEMBRO SUPERIOR IZQUIERDO","ULTRASONIDO ABDOMINAL","ULTRASONIDO AMBAS MANOS","ULTRASONIDO AMBAS MUÑECAS","ULTRASONIDO AMBAS RODILLAS","ULTRASONIDO AMBOS HOMBROS","ULTRASONIDO BIOPSIAS","ULTRASONIDO CUADRICEPS","ULTRASONIDO CUELLO","ULTRASONIDO DEDO","ULTRASONIDO DRENAJES","ULTRASONIDO ESCROTAL","ULTRASONIDO FAST","ULTRASONIDO FOSA POPLITEA","ULTRASONIDO GLANDULA PAROTIDA","ULTRASONIDO GLANDULA SUBLINGUAL","ULTRASONIDO GLANDULA SUBMANDIBULAR","ULTRASONIDO GLANDULA SUBMAXILARES","ULTRASONIDO HIGADO","ULTRASONIDO HOMBRO DERECHO","ULTRASONIDO HOMBRO IZQUIERDO","ULTRASONIDO MAMAS","ULTRASONIDO MANO DERECHA","ULTRASONIDO MANO IZQUIERDA","ULTRASONIDO MUÑECA DERECHA","ULTRASONIDO MUÑECA IZQUIERDA","ULTRASONIDO OCULAR","ULTRASONIDO PARACENTESIS","ULTRASONIDO PELVICO","ULTRASONIDO PIE IZQUIERDO","ULTRASONIDO PROSTATA","ULTRASONIDO REGION INGUINAL","ULTRASONIDO RENAL","ULTRASONIDO RIÑON","ULTRASONIDO RODILLA DERECHA","ULTRASONIDO RODILLA IZQUIERDA","ULTRASONIDO TEJIDOS BLANDOS","ULTRASONIDO TESTICULAR","ULTRASONIDO TIROIDES","ULTRASONIDO TOBILLO","ULTRASONIDO TORAX","ULTRASONIDO TRANSFONTANELAR","ULTRASONIDO VESICAL","ULTRASONIDO VIAS BILIARES"]
+};
+
+const RE_CONTRASTE = /ANGIO|CONTRASTE|UROGRAFIA|UROTOMOGRAFIA|COLANGIO|ENEMA|ESOFAGOGRAMA|TRANSITO|PIELOGRAMA|PIELOTAC|ARTERIOGRAFIA|FLEBOGRAFIA|VENOGRAFIA|FISTULOGRAMA|ARTROGRAMA|CISTOURETROGRAMA|URETROGRAMA|QUIMIOEMBOLIZACION|CORONARIA|MIELOTAC|TUBO DIGESTIVO/;
+const RE_AYUNO = /ABDOMEN|ABDOMINAL|HIGADO|VIAS BILIARES|VESICAL|PROSTATA|PELVICO|COLEDOCO|ENEMA|TRANSITO|TUBO DIGESTIVO|ESOFAGOGRAMA/;
+
+const PREF = {esp:'EE', rx:'RX', rm:'RM', tac:'TC', usg:'US'};
+let CATALOGO = [];
+Object.keys(RAW).forEach(cid=>{
+  RAW[cid].forEach((n,i)=>{
+    CATALOGO.push({
+      id: cid+'-'+i,
+      codigo: PREF[cid]+String(i+1).padStart(3,'0'),
+      nombre: n, cat: cid,
+      contraste: RE_CONTRASTE.test(n),
+      ayuno: RE_AYUNO.test(n),
+      autoriz: cid==='esp',
+      dur: cid==='rm'?40 : cid==='tac'?25 : cid==='esp'?60 : cid==='usg'?20 : 15,
+      activo: true, prep: ''
+    });
+  });
+});
+
+/* Campos de llenado configurables (parametrización → formulario) */
+let FIELDS = [
+  {key:'dx',        label:'Diagnóstico presuntivo (CIE-10)', desc:'Código y descripción del diagnóstico que motiva el estudio', tipo:'text',   ph:'Ej. M54.5 — Lumbalgia', estado:'obligatorio'},
+  {key:'just',      label:'Justificación clínica',           desc:'Motivo / hallazgos que justifican la solicitud',              tipo:'textarea',ph:'Describa el motivo clínico del estudio…', estado:'obligatorio'},
+  {key:'prio',      label:'Prioridad de la solicitud',       desc:'Rutina, Urgente o STAT (aplica a toda la solicitud)',         tipo:'select', opts:['Rutina','Urgente','STAT'], estado:'obligatorio'},
+  {key:'fecha',     label:'Fecha deseada del estudio',       desc:'Fecha propuesta para programación',                           tipo:'date',   estado:'opcional'},
+  {key:'embarazo',  label:'¿Posibilidad de embarazo?',       desc:'Seguridad radiológica en pacientes femeninas',                tipo:'select', opts:['No aplica','No','Sí','Se desconoce'], estado:'opcional'},
+  {key:'alergias',  label:'Alergias conocidas',              desc:'Relevante para estudios con medio de contraste',              tipo:'text',   ph:'Ej. Yodo, mariscos, ninguna conocida…', estado:'opcional'},
+  {key:'creat',     label:'Creatinina sérica (mg/dL)',       desc:'Se exige cuando hay estudios con contraste',                  tipo:'text',   ph:'Ej. 0.9', estado:'opcional'},
+  {key:'obs',       label:'Observaciones para el técnico',   desc:'Indicaciones adicionales de realización',                     tipo:'textarea',ph:'Ej. Paciente con marcapasos, claustrofobia…', estado:'oculto'},
+];
+
+let RULES = [
+  {key:'multi',   label:'Permitir varias categorías en una misma solicitud', desc:'Si se apaga, cambiar de categoría limpia la selección', on:true},
+  {key:'global',  label:'Habilitar búsqueda global de prestaciones', desc:'Muestra el interruptor «Buscar en todas las categorías»', on:true},
+  {key:'codigo',  label:'Mostrar código de la prestación en el listado', desc:'Prefijo + correlativo junto al nombre', on:false},
+  {key:'flags',   label:'Mostrar etiquetas de contraste / ayuno', desc:'Ayudas visuales en el listado de prestaciones', on:true},
+  {key:'dupWarn', label:'Alertar prestaciones duplicadas en solicitudes previas', desc:'Aviso si el estudio ya fue solicitado en los últimos 30 días', on:true},
+  {key:'firma',   label:'Requerir firma electrónica al guardar', desc:'Solicita PIN del médico antes de registrar', on:false},
+  {key:'maxN',    label:'Máximo 10 prestaciones por solicitud', desc:'Límite configurable por perfil de usuario', on:false},
+];
+
+let seleccion = {};                 // id -> {prioridad, conContraste, nota}
+let solicitudes = [
+  {folio:'SOL-2026-0142', fecha:'12/07/2026', cats:'Radiografías', n:2, prio:'Rutina', estado:'inf'},
+  {folio:'SOL-2026-0155', fecha:'18/07/2026', cats:'Tomografías', n:1, prio:'Urgente', estado:'real'},
+  {folio:'SOL-2026-0161', fecha:'21/07/2026', cats:'Ultrasonografías', n:1, prio:'Rutina', estado:'prog'},
+  {folio:'SOL-2026-0170', fecha:'26/07/2026', cats:'Estudios Especiales', n:1, prio:'STAT', estado:'pend'},
+];
+let activeCat = 'esp';
+let folioSeq = 171;
+let editingId = null;
+
+/* ============ helpers ============ */
+const $ = id => document.getElementById(id);
+const catName = id => CATS.find(c=>c.id===id).nombre;
+function toast(msg, cls){ const t=$('toast'); t.textContent=msg; t.className='show '+(cls||''); setTimeout(()=>t.className='',2600); }
+function esc(s){ return s.replace(/"/g,'&quot;'); }
+
+/* ============ vistas ============ */
+function showView(v){
+  document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.main-tab').forEach(x=>x.classList.toggle('active', x.dataset.view===v));
+  $('view-'+v).classList.add('active');
+}
+function showSub(s){
+  document.querySelectorAll('.subview').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.sub-tab').forEach(x=>x.classList.toggle('active', x.dataset.sub===s));
+  $('sub-'+s).classList.add('active');
+}
+
+/* ============ Solicitud: categorías y listado ============ */
+function renderCatTabs(){
+  const wrap = $('catTabs'); wrap.innerHTML='';
+  CATS.filter(c=>c.activo).forEach(c=>{
+    const nSel = Object.keys(seleccion).filter(id=>CATALOGO.find(e=>e.id===id).cat===c.id).length;
+    const b = document.createElement('button');
+    b.className = 'cat-tab'+(activeCat===c.id?' active':'');
+    b.innerHTML = `${c.nombre} <span class="cnt">${CATALOGO.filter(e=>e.cat===c.id && e.activo).length}</span>` + (nSel?` <span class="sel-dot">${nSel} ✓</span>`:'');
+    b.onclick = ()=>{ activeCat=c.id; renderCatTabs(); renderExams(); };
+    wrap.appendChild(b);
+  });
+  // si la categoría activa fue desactivada, saltar a la primera activa
+  if(!CATS.find(c=>c.id===activeCat && c.activo)){ const f=CATS.find(c=>c.activo); if(f){activeCat=f.id;} }
+}
+
+function renderExams(){
+  const q = $('searchInput').value.trim().toUpperCase();
+  const global = $('globalSearch').checked;
+  const showFlags = RULES.find(r=>r.key==='flags').on;
+  const showCode = RULES.find(r=>r.key==='codigo').on;
+  const activeCatIds = CATS.filter(c=>c.activo).map(c=>c.id);
+  let items = CATALOGO.filter(e=>e.activo && activeCatIds.includes(e.cat));
+  if(global && q){ items = items.filter(e=>e.nombre.includes(q)); }
+  else { items = items.filter(e=>e.cat===activeCat && (!q || e.nombre.includes(q))); }
+
+  const wrap = $('examList'); wrap.innerHTML='';
+  if(!items.length){ wrap.innerHTML = '<div class="empty-msg">Sin resultados para la búsqueda.</div>'; return; }
+  items.forEach(e=>{
+    const l = document.createElement('label');
+    l.className='exam-item';
+    l.innerHTML = `<input type="checkbox" ${seleccion[e.id]?'checked':''} onchange="toggleSel('${e.id}', this.checked)">
+      <span>${showCode?'<span class="code">'+e.codigo+'</span> ':''}${e.nombre}
+      ${(global&&q)?`<span class="cat-badge">${catName(e.cat)}</span>`:''}
+      ${showFlags&&e.contraste?'<span class="flag contraste">contraste</span>':''}
+      ${showFlags&&e.ayuno?'<span class="flag ayuno">ayuno</span>':''}</span>`;
+    wrap.appendChild(l);
+  });
+}
+
+/* ============ Selección ============ */
+function toggleSel(id, on){
+  if(on){
+    const max = RULES.find(r=>r.key==='maxN').on;
+    if(max && Object.keys(seleccion).length>=10){ toast('Límite de 10 prestaciones por solicitud alcanzado','err'); renderExams(); return; }
+    const multi = RULES.find(r=>r.key==='multi').on;
+    const e = CATALOGO.find(x=>x.id===id);
+    if(!multi){
+      const otras = Object.keys(seleccion).some(sid=>CATALOGO.find(x=>x.id===sid).cat!==e.cat);
+      if(otras){ seleccion={}; toast('Se limpió la selección: solo se permite una categoría por solicitud'); }
+    }
+    seleccion[id] = {conContraste:e.contraste, nota:''};
+    if(RULES.find(r=>r.key==='dupWarn').on && solicitudes.length && Math.random()<0.12){
+      toast('⚠ Aviso: prestación similar solicitada en los últimos 30 días');
+    }
+  } else delete seleccion[id];
+  renderSel(); renderCatTabs(); renderExams();
+}
+
+function renderSel(){
+  const wrap = $('selChips'); const ids = Object.keys(seleccion);
+  $('totalLbl').textContent = ids.length;
+  $('selCountLbl').textContent = ids.length? `— ${ids.length} prestación(es)` : '';
+  if(!ids.length){ wrap.innerHTML='<div class="empty-msg">Aún no hay prestaciones seleccionadas.<br>Marque los estudios en el listado.</div>'; return; }
+  wrap.innerHTML='';
+  ids.forEach(id=>{
+    const e = CATALOGO.find(x=>x.id===id); const s = seleccion[id];
+    const d = document.createElement('div');
+    d.className='sel-chip';
+    d.innerHTML = `
+      <div class="top"><div><div class="name">${e.nombre}</div><div class="cat">${catName(e.cat)} · ${e.codigo} · ${e.dur} min</div></div>
+      <button class="remove" title="Quitar" onclick="toggleSel('${id}',false)">✕</button></div>
+      <div class="opts">
+        ${e.contraste?`<label class="mini"><input type="checkbox" ${s.conContraste?'checked':''} onchange="seleccion['${id}'].conContraste=this.checked"> con contraste</label>`:''}
+        ${e.ayuno?'<span class="flag ayuno">requiere ayuno</span>':''}
+        ${e.autoriz?'<span class="flag contraste">requiere autorización</span>':''}
+        <input type="text" placeholder="Nota para este estudio…" value="${esc(s.nota)}" oninput="seleccion['${id}'].nota=this.value">
+      </div>`;
+    wrap.appendChild(d);
+  });
+}
+
+/* ============ Campos globales (según parametrización) ============ */
+function renderGlobalFields(){
+  const wrap = $('globalFields'); wrap.innerHTML='';
+  FIELDS.filter(f=>f.estado!=='oculto').forEach(f=>{
+    const req = f.estado==='obligatorio';
+    let control='';
+    if(f.tipo==='select') control = `<select id="gf_${f.key}"><option value="">— Seleccione —</option>${f.opts.map(o=>`<option>${o}</option>`).join('')}</select>`;
+    else if(f.tipo==='textarea') control = `<textarea id="gf_${f.key}" rows="2" placeholder="${f.ph||''}"></textarea>`;
+    else if(f.tipo==='date') control = `<input id="gf_${f.key}" type="date">`;
+    else control = `<input id="gf_${f.key}" type="text" placeholder="${f.ph||''}">`;
+    const d = document.createElement('div');
+    d.className='gfield';
+    d.innerHTML = `<label>${f.label} ${req?'<span class="req">*</span>':''}</label>${control}`;
+    wrap.appendChild(d);
+  });
+}
+
+/* ============ Guardar ============ */
+function guardar(){
+  const ids = Object.keys(seleccion);
+  if(!ids.length){ toast('Seleccione al menos una prestación','err'); return; }
+  // validar obligatorios
+  let ok = true;
+  FIELDS.filter(f=>f.estado==='obligatorio').forEach(f=>{
+    const el = $('gf_'+f.key); if(!el) return;
+    if(!el.value.trim()){ el.classList.add('invalid'); ok=false; } else el.classList.remove('invalid');
+  });
+  // regla: contraste exige creatinina si el campo está visible
+  const hayContraste = ids.some(id=>seleccion[id].conContraste);
+  const fCreat = FIELDS.find(f=>f.key==='creat');
+  if(hayContraste && fCreat.estado!=='oculto'){
+    const el = $('gf_creat');
+    if(el && !el.value.trim()){ el.classList.add('invalid'); ok=false; toast('Estudios con contraste requieren creatinina reciente','err'); }
+  }
+  if(!ok){ if(hayContraste===false) toast('Complete los campos obligatorios (*)','err'); return; }
+  if(RULES.find(r=>r.key==='firma').on){ toast('✍ Firma electrónica solicitada (simulada en el mockup)…'); }
+
+  const catsSel = [...new Set(ids.map(id=>catName(CATALOGO.find(e=>e.id===id).cat)))].join(', ');
+  const prioEl = $('gf_prio');
+  solicitudes.unshift({folio:'SOL-2026-0'+(folioSeq++), fecha:$('todayLbl').textContent, cats:catsSel, n:ids.length, prio:(prioEl&&prioEl.value)||'Rutina', estado:'pend'});
+  renderSolicitudes();
+  clearAll(false);
+  toast('✔ Solicitud guardada correctamente','ok');
+  showView('listado');
+}
+
+function clearAll(msg=true){
+  seleccion={}; renderSel(); renderCatTabs(); renderExams(); renderGlobalFields();
+  if(msg) toast('Solicitud cancelada');
+}
+
+/* ============ Listado de solicitudes ============ */
+const ESTADOS = {pend:['pend','Pendiente'], prog:['prog','Programado'], real:['real','Realizado'], inf:['inf','Informado']};
+function renderSolicitudes(){
+  const b = $('solicitudesBody'); b.innerHTML='';
+  solicitudes.forEach(s=>{
+    const [cls,lbl] = ESTADOS[s.estado];
+    b.innerHTML += `<tr><td class="code">${s.folio}</td><td>${s.fecha}</td><td>${s.cats}</td><td>${s.n}</td>
+      <td>${s.prio==='STAT'?'<span class="pill off">STAT</span>':s.prio==='Urgente'?'<span class="pill pend">Urgente</span>':'Rutina'}</td>
+      <td><span class="pill ${cls}">${lbl}</span></td>
+      <td><button class="btn btn-ghost btn-sm" onclick="toast('Vista de detalle (fuera del alcance del mockup)')">Ver</button></td></tr>`;
+  });
+}
+
+/* ============ Parametrización: categorías ============ */
+function renderCats(){
+  const b = $('catBody'); b.innerHTML='';
+  CATS.forEach((c,i)=>{
+    b.innerHTML += `<tr>
+      <td><button class="btn btn-ghost btn-sm" onclick="moveCat(${i},-1)" ${i===0?'disabled':''}>▲</button>
+          <button class="btn btn-ghost btn-sm" onclick="moveCat(${i},1)" ${i===CATS.length-1?'disabled':''}>▼</button></td>
+      <td><b>${c.nombre}</b></td>
+      <td>${CATALOGO.filter(e=>e.cat===c.id).length} <span class="code">(${CATALOGO.filter(e=>e.cat===c.id&&e.activo).length} activas)</span></td>
+      <td><span class="pill ${c.activo?'ok':'off'}">${c.activo?'Activa':'Inactiva'}</span></td>
+      <td><label class="switch"><input type="checkbox" ${c.activo?'checked':''} onchange="toggleCatActivo('${c.id}',this.checked)"><span class="track"></span></label></td>
+    </tr>`;
+  });
+}
+function toggleCatActivo(id,on){ CATS.find(c=>c.id===id).activo=on; renderCats(); renderCatTabs(); renderExams(); renderCatFilter(); toast(on?'Categoría activada':'Categoría desactivada — ya no aparece en Nueva Solicitud'); }
+function moveCat(i,dir){ const j=i+dir; [CATS[i],CATS[j]]=[CATS[j],CATS[i]]; renderCats(); renderCatTabs(); }
+
+/* ============ Parametrización: catálogo ============ */
+function renderCatFilter(){
+  const s = $('cataFilterCat');
+  const cur = s.value;
+  s.innerHTML = '<option value="">Todas las categorías</option>' + CATS.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('');
+  s.value = cur;
+  const ms = $('m_cat');
+  ms.innerHTML = CATS.map(c=>`<option value="${c.id}">${c.nombre}</option>`).join('');
+}
+function renderCatalogo(){
+  const fc = $('cataFilterCat').value, q = $('cataFilterTxt').value.trim().toUpperCase();
+  let items = CATALOGO.filter(e=>(!fc||e.cat===fc)&&(!q||e.nombre.includes(q)||e.codigo.includes(q)));
+  $('cataCountLbl').textContent = `— ${items.length} de ${CATALOGO.length} prestaciones`;
+  const b = $('cataBody'); b.innerHTML='';
+  items.slice(0,60).forEach(e=>{
+    b.innerHTML += `<tr>
+      <td class="code">${e.codigo}</td><td>${e.nombre}</td><td>${catName(e.cat)}</td>
+      <td>${e.contraste?'💉 Sí':'—'}</td><td>${e.ayuno?'🍽 Sí':'—'}</td><td>${e.dur} min</td>
+      <td><span class="pill ${e.activo?'ok':'off'}">${e.activo?'Activa':'Inactiva'}</span></td>
+      <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="openModal('${e.id}')">✎ Editar</button>
+      <button class="btn btn-ghost btn-sm" onclick="toggleExamActivo('${e.id}')">${e.activo?'Desactivar':'Activar'}</button></td>
+    </tr>`;
+  });
+  if(items.length>60) b.innerHTML += `<tr><td colspan="8" class="empty-msg">… ${items.length-60} prestaciones más (use el filtro para acotar)</td></tr>`;
+}
+function toggleExamActivo(id){ const e=CATALOGO.find(x=>x.id===id); e.activo=!e.activo; renderCatalogo(); renderExams(); renderCatTabs(); toast(e.activo?'Prestación activada':'Prestación desactivada'); }
+
+/* ============ Modal ============ */
+function openModal(id){
+  editingId = id;
+  renderCatFilter();
+  if(id){
+    const e = CATALOGO.find(x=>x.id===id);
+    $('modalTitle').textContent = 'Editar prestación';
+    $('m_codigo').value=e.codigo; $('m_nombre').value=e.nombre; $('m_cat').value=e.cat;
+    $('m_dur').value=e.dur; $('m_contraste').checked=e.contraste; $('m_ayuno').checked=e.ayuno;
+    $('m_autoriz').checked=e.autoriz; $('m_activo').checked=e.activo; $('m_prep').value=e.prep;
+  } else {
+    $('modalTitle').textContent = 'Nueva prestación';
+    $('m_codigo').value=''; $('m_nombre').value=''; $('m_cat').value=activeCat;
+    $('m_dur').value=20; $('m_contraste').checked=false; $('m_ayuno').checked=false;
+    $('m_autoriz').checked=false; $('m_activo').checked=true; $('m_prep').value='';
+  }
+  $('modalBg').classList.add('open');
+}
+function closeModal(){ $('modalBg').classList.remove('open'); }
+function saveModal(){
+  const nombre = $('m_nombre').value.trim().toUpperCase();
+  const codigo = $('m_codigo').value.trim().toUpperCase();
+  if(!nombre||!codigo){ toast('Código y nombre son obligatorios','err'); return; }
+  if(editingId){
+    const e = CATALOGO.find(x=>x.id===editingId);
+    Object.assign(e,{codigo,nombre,cat:$('m_cat').value,dur:+$('m_dur').value||20,contraste:$('m_contraste').checked,ayuno:$('m_ayuno').checked,autoriz:$('m_autoriz').checked,activo:$('m_activo').checked,prep:$('m_prep').value});
+    toast('✔ Prestación actualizada','ok');
+  } else {
+    CATALOGO.push({id:'new-'+Date.now(),codigo,nombre,cat:$('m_cat').value,dur:+$('m_dur').value||20,contraste:$('m_contraste').checked,ayuno:$('m_ayuno').checked,autoriz:$('m_autoriz').checked,activo:$('m_activo').checked,prep:$('m_prep').value});
+    toast('✔ Prestación agregada al catálogo','ok');
+  }
+  closeModal(); renderCatalogo(); renderExams(); renderCatTabs(); renderCats();
+}
+
+/* ============ Parametrización: campos de llenado ============ */
+function renderFieldCfg(){
+  const wrap = $('fieldCfgList'); wrap.innerHTML='';
+  FIELDS.forEach(f=>{
+    const d = document.createElement('div');
+    d.className='field-cfg-row';
+    d.innerHTML = `<div><div class="fname">${f.label}</div><div class="fdesc">${f.desc}</div></div>
+      <div class="seg">
+        ${['obligatorio','opcional','oculto'].map(s=>`<button class="${s}${f.estado===s?' on':''}" onclick="setFieldState('${f.key}','${s}')">${s.charAt(0).toUpperCase()+s.slice(1)}</button>`).join('')}
+      </div>`;
+    wrap.appendChild(d);
+  });
+}
+function setFieldState(key,state){
+  FIELDS.find(f=>f.key===key).estado=state;
+  renderFieldCfg(); renderGlobalFields();
+  toast(`Campo «${FIELDS.find(f=>f.key===key).label}» → ${state}`);
+}
+
+/* ============ Parametrización: reglas ============ */
+function renderRules(){
+  const wrap = $('rulesList'); wrap.innerHTML='';
+  RULES.forEach(r=>{
+    const d = document.createElement('div');
+    d.className='toggle-row';
+    d.innerHTML = `<div>${r.label}<small>${r.desc}</small></div>
+      <label class="switch"><input type="checkbox" ${r.on?'checked':''} onchange="setRule('${r.key}',this.checked)"><span class="track"></span></label>`;
+    wrap.appendChild(d);
+  });
+}
+function setRule(key,on){
+  RULES.find(r=>r.key===key).on=on;
+  if(key==='global') document.querySelector('.switch input#globalSearch').closest('.switch').style.display = on?'flex':'none';
+  renderExams(); toast('Regla actualizada');
+}
+
+/* ============ init ============ */
+(function init(){
+  const hoy = new Date();
+  $('todayLbl').textContent = hoy.toLocaleDateString('es-SV',{day:'2-digit',month:'2-digit',year:'numeric'});
+  renderCatTabs(); renderExams(); renderSel(); renderGlobalFields();
+  renderSolicitudes(); renderCats(); renderCatFilter(); renderCatalogo(); renderFieldCfg(); renderRules();
+})();
+</script>
+</body>
+</html>
