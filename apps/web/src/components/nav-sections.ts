@@ -74,6 +74,7 @@ import {
   BriefcaseMedical,
   UserCog,
   Footprints,
+  CreditCard,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -332,6 +333,8 @@ export const SECTIONS: NavSection[] = [
         description: "41 centros de costo NTEC (productivos / intermedios / apoyo)." },
       { href: "/finance/price-lists", label: "Tarifario de Servicios", icon: BookOpen,
         description: "Tarifario de servicios clínicos. Auto-fill en facturación." },
+      { href: "/finance/tipos-cuenta", label: "Tipos de Cuenta", icon: CreditCard,
+        description: "Pivote de cobro por cuenta: PARTICULAR, ISBM, MAPFRE, etc. → lista de precios." },
       { href: "/finance/invoices", label: "Facturas", icon: FileText,
         description: "Emisión y consulta de facturas con imputación a centro de costo." },
       { href: "/finance/operating-costs", label: "Costos Operativos HIS", icon: Coins,

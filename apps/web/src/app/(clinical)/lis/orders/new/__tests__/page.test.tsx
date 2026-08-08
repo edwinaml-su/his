@@ -49,6 +49,10 @@ const mockListByArea = vi.fn();
 const mockPatientSearch = vi.fn();
 const mockListarPorPaciente = vi.fn();
 const mockOrderCreate = vi.fn();
+// CC-0015 — SelectorCuenta compartido ahora también consulta tipos de cuenta
+// y puede crear cuentas inline.
+const mockTipoCuentaList = vi.fn();
+const mockPatientAccountCrear = vi.fn();
 
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
@@ -58,6 +62,10 @@ vi.mock("@/lib/trpc/react", () => ({
     },
     patientAccount: {
       listarPorPaciente: { useQuery: (...args: unknown[]) => mockListarPorPaciente(...args) },
+      crear: { useMutation: (opts?: unknown) => mockPatientAccountCrear(opts) },
+    },
+    tipoCuenta: {
+      list: { useQuery: (...args: unknown[]) => mockTipoCuentaList(...args) },
     },
     lis: {
       test: { listByArea: { useQuery: (...args: unknown[]) => mockListByArea(...args) } },
@@ -131,6 +139,8 @@ describe("NewLisOrderPage (CC-0013)", () => {
     mockPatientSearch.mockReturnValue({ ...idleQuery, data: [] });
     mockListarPorPaciente.mockReturnValue({ ...idleQuery, data: [] });
     mockOrderCreate.mockImplementation(defaultMutationImpl);
+    mockTipoCuentaList.mockReturnValue({ ...idleQuery, data: [] });
+    mockPatientAccountCrear.mockImplementation(defaultMutationImpl);
   });
 
   afterEach(() => cleanup());

@@ -81,6 +81,8 @@ const createInput = z.object({
   encounterId: z.string().uuid().optional(),
   insurerId: z.string().uuid().optional(),
   costCenterId: z.string().uuid().optional(),
+  // CC-0015 — cuenta de origen de los cargos (ancla la lista de precios aplicada).
+  patientAccountId: z.string().uuid().optional(),
   currencyId: z.string().uuid(),
   items: z.array(itemInput).min(1),
   status: z.enum(["DRAFT", "ISSUED"]).default("DRAFT"),
@@ -115,6 +117,7 @@ interface InvoiceRow {
   encounterId: string | null;
   patientId: string;
   insurerId: string | null;
+  patientAccountId: string | null;
   invoiceNumber: string;
   issuedAt: Date;
   dueAt: Date | null;
@@ -224,7 +227,7 @@ export const invoiceRouter = router({
 
       const rows = await tx.$queryRawUnsafe<InvoiceRow[]>(
         `SELECT i.id, i."organizationId", i."establishmentId", i."encounterId",
-                i."patientId", i."insurerId", i."invoiceNumber", i."issuedAt",
+                i."patientId", i."insurerId", i."patientAccountId", i."invoiceNumber", i."issuedAt",
                 i."dueAt", i."currencyId", i."exchangeRateToFunc",
                 i.subtotal, i."taxAmount", i."totalAmount", i."paidAmount",
                 i.status, i."electronicInvoiceStatus", i."costCenterId",
@@ -250,7 +253,7 @@ export const invoiceRouter = router({
       const [invoices, items, payments, claims] = await Promise.all([
         tx.$queryRawUnsafe<InvoiceRow[]>(
           `SELECT i.id, i."organizationId", i."establishmentId", i."encounterId",
-                  i."patientId", i."insurerId", i."invoiceNumber", i."issuedAt",
+                  i."patientId", i."insurerId", i."patientAccountId", i."invoiceNumber", i."issuedAt",
                   i."dueAt", i."currencyId", i."exchangeRateToFunc",
                   i.subtotal, i."taxAmount", i."totalAmount", i."paidAmount",
                   i.status, i."electronicInvoiceStatus", i."costCenterId",
@@ -317,6 +320,24 @@ export const invoiceRouter = router({
         });
       }
 
+      // CC-0015 — si viene patientAccountId, validar que la cuenta pertenece
+      // al tenant y al mismo paciente de la factura.
+      if (input.patientAccountId) {
+        type AccountCheckRow = { id: string };
+        const accountRows = await tx.$queryRawUnsafe<AccountCheckRow[]>(
+          `SELECT id FROM "PatientAccount" WHERE id = $1 AND "organizationId" = $2 AND "patientId" = $3`,
+          input.patientAccountId,
+          tenant.organizationId,
+          input.patientId,
+        );
+        if (accountRows.length === 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La cuenta indicada no pertenece a este paciente o tenant.",
+          });
+        }
+      }
+
       // Calcular totales
       const subtotal = input.items.reduce(
         (acc, it) => acc + it.quantity * it.unitPrice,
@@ -334,9 +355,9 @@ export const invoiceRouter = router({
         `INSERT INTO "Invoice" (
            "organizationId", "establishmentId", "patientId", "encounterId",
            "insurerId", "costCenterId", "currencyId", "invoiceNumber",
-           subtotal, "taxAmount", "totalAmount", status
+           subtotal, "taxAmount", "totalAmount", status, "patientAccountId"
          ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13
          ) RETURNING id`,
         tenant.organizationId,
         establishmentId,
@@ -350,6 +371,7 @@ export const invoiceRouter = router({
         taxAmount,
         totalAmount,
         input.status,
+        input.patientAccountId ?? null,
       );
 
       const invoiceId = inserted[0]?.id;

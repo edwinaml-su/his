@@ -5,7 +5,12 @@
  * PatientAccountService: tipo HOSPITALARIO | NO_HOSPITALARIO.
  * encounterId es opcional en ambos — un paciente ambulatorio puede generar
  * una cuenta sin admisión asociada.
+ *
+ * CC-0015: `crear` ahora requiere `tipoCuentaId` (pivote de lista de precios
+ * de los cargos de la cuenta) y acepta un `servicio` opcional para crear
+ * cuenta + primer servicio en un solo paso.
  */
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
@@ -32,26 +37,67 @@ export const patientAccountRouter = router({
   /**
    * Crea una nueva cuenta para un paciente.
    * Genera el correlativo CTA{NNNNN} de forma atómica vía fn_next_cuenta.
+   *
+   * CC-0015: `tipoCuentaId` es requerido (pivote de lista de precios de los
+   * cargos de la cuenta) — se valida que exista, esté activo y pertenezca al
+   * tenant. `servicio` opcional crea el primer PatientAccountService en el
+   * mismo paso (usado por el selector-cuenta inline).
    */
   crear: tenantProcedure
     .input(
       z.object({
         patientId: z.string().uuid(),
         encounterId: z.string().uuid().optional(),
+        tipoCuentaId: z.string().uuid(),
+        servicio: z
+          .object({
+            tipo: tipoServicioEnum,
+            descripcion: z.string().max(300).optional(),
+          })
+          .optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const tipoCuenta = await tx.tipoCuenta.findFirst({
+          where: {
+            id: input.tipoCuentaId,
+            organizationId: ctx.tenant.organizationId,
+            active: true,
+          },
+        });
+        if (!tipoCuenta) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Tipo de cuenta no encontrado o inactivo.",
+          });
+        }
+
         const numeroCuenta = await nextCuenta(tx, input.patientId);
-        return tx.patientAccount.create({
+        const account = await tx.patientAccount.create({
           data: {
             organizationId: ctx.tenant.organizationId,
             patientId: input.patientId,
             encounterId: input.encounterId ?? null,
+            tipoCuentaId: input.tipoCuentaId,
             numeroCuenta,
             createdBy: ctx.user.id,
           },
         });
+
+        if (input.servicio) {
+          await tx.patientAccountService.create({
+            data: {
+              accountId: account.id,
+              tipo: input.servicio.tipo,
+              descripcion: input.servicio.descripcion ?? null,
+              encounterId: input.encounterId ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
+        }
+
+        return account;
       });
     }),
 
@@ -82,7 +128,7 @@ export const patientAccountRouter = router({
     }),
 
   /**
-   * Lista cuentas de un paciente con sus servicios incluidos.
+   * Lista cuentas de un paciente con sus servicios y tipo de cuenta incluidos.
    */
   listarPorPaciente: tenantProcedure
     .input(z.object({ patientId: z.string().uuid() }))
@@ -93,7 +139,10 @@ export const patientAccountRouter = router({
             patientId: input.patientId,
             organizationId: ctx.tenant.organizationId,
           },
-          include: { servicios: true },
+          include: {
+            servicios: true,
+            tipoCuenta: { select: { id: true, code: true, nombre: true } },
+          },
           orderBy: { numeroCuenta: "asc" },
         });
       });

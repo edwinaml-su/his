@@ -209,10 +209,10 @@ const DOCUMENT_TYPE_LABELS: Record<string, string> = {
   CARNET_RESIDENCIA: "Carnet Residencia",
 };
 
-// Etiqueta legible del tipo de cuenta (TipoServicio — packages/database/prisma/schema.prisma).
-// Nota: el mockup usa datos demostrativos ("Convenio", categoría de aseguradora); el dato real
-// disponible en patient.contextoCuenta es el tipo de servicio de la cuenta (hospitalario/no
-// hospitalario). Se documenta como desviación en el reporte final.
+// Etiqueta legible del tipo de servicio (TipoServicio — packages/database/prisma/schema.prisma).
+// DESVIACIÓN CC-0011 CERRADA por CC-0015: la cabecera ahora muestra `cuenta.tipoCuenta.nombre`
+// (pivote real de cobro: PARTICULAR, ISBM, MAPFRE, etc.) cuando la cuenta lo tiene. Este mapa
+// queda solo como fallback legacy para cuentas creadas antes de CC-0015 (sin tipoCuentaId).
 const ACCOUNT_TIPO_LABELS: Record<string, string> = {
   HOSPITALARIO: "Hospitalario",
   NO_HOSPITALARIO: "No hospitalario",
@@ -237,6 +237,7 @@ interface PacienteHeaderProps {
     numeroCuenta: string | null;
     encounterId: string | null;
     tipo: string | null;
+    tipoCuenta: { code: string; nombre: string } | null;
   } | null;
   alergias: Array<{
     id: string;
@@ -315,7 +316,7 @@ function PacienteHeader({
                 F. Nac.: <strong className="text-foreground">{fmtFecha(paciente.birthDate)}</strong>
               </span>
             )}
-            {cuenta?.tipo && (
+            {(cuenta?.tipoCuenta || cuenta?.tipo) && (
               <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">
                 Tipo de cuenta:{" "}
                 <strong
@@ -326,7 +327,9 @@ function PacienteHeader({
                     borderColor: "color-mix(in oklab, var(--primary) 30%, transparent)",
                   }}
                 >
-                  {ACCOUNT_TIPO_LABELS[cuenta.tipo] ?? cuenta.tipo}
+                  {cuenta.tipoCuenta
+                    ? cuenta.tipoCuenta.nombre
+                    : (ACCOUNT_TIPO_LABELS[cuenta.tipo!] ?? cuenta.tipo)}
                 </strong>
               </span>
             )}

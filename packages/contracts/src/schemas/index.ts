@@ -77,6 +77,7 @@ export * from "./rbac";
 export * from "./session";
 export * from "./sso";
 export * from "./surgery";
+export * from "./tipo-cuenta";
 export * from "./transfer";
 export * from "./triage";
 export * from "./triage-dashboard";

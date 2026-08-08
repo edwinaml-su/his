@@ -843,6 +843,8 @@ export const patientRouter = router({
             id: input.cuentaId,
             organizationId: ctx.tenant.organizationId,
           },
+          // CC-0015 — tipo de cuenta real (pivote de lista de precios).
+          include: { tipoCuenta: { select: { code: true, nombre: true } } },
         });
       });
 
@@ -998,7 +1000,14 @@ export const patientRouter = router({
           numeroCuenta: account.numeroCuenta,
           encounterId: account.encounterId ?? null,
           // CC-0011 (item f) — tipo de cuenta (HOSPITALARIO | NO_HOSPITALARIO) del servicio registrado.
+          // DEVIACIÓN CC-0011 ya no aplica: desde CC-0015 la UI muestra `tipoCuenta` (pivote real
+          // de cobro) cuando existe; este campo queda solo como fallback legacy.
           tipo: servicioRow?.tipo ?? null,
+          // CC-0015 — tipo de cuenta real (ISBM, MAPFRE, Particular, etc.). null en cuentas legacy
+          // creadas antes de CC-0015 (sin tipoCuentaId).
+          tipoCuenta: account.tipoCuenta
+            ? { code: account.tipoCuenta.code, nombre: account.tipoCuenta.nombre }
+            : null,
         },
         episodioId,
         paciente: patient
