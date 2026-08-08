@@ -492,4 +492,280 @@ describe("rbacRouter", () => {
       expect(result.count).toBe(0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // CC-0017 — setRoleInheritance
+  // ---------------------------------------------------------------------------
+
+  describe("setRoleInheritance", () => {
+    const parentId = "00000000-0000-0000-0000-000000000003";
+    const grandparentId = "00000000-0000-0000-0000-000000000004";
+
+    it("NOT_FOUND si el rol no existe", async () => {
+      prisma.role.findUnique.mockResolvedValue(null as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("FORBIDDEN si el rol es global y el caller no es super_admin", async () => {
+      prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: null } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("FORBIDDEN si el rol es de otra organización", async () => {
+      prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: otherOrgId } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("parentRoleId null limpia la herencia", async () => {
+      prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
+      prisma.role.update.mockResolvedValue({ id: roleId, inheritsFromRoleId: null } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setRoleInheritance({ roleId, parentRoleId: null });
+
+      expect(result.inheritsFromRoleId).toBeNull();
+      expect(prisma.role.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { inheritsFromRoleId: null } }),
+      );
+    });
+
+    it("BAD_REQUEST si parentRoleId === roleId (auto-herencia)", async () => {
+      prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: roleId }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("NOT_FOUND si el rol padre no existe", async () => {
+      prisma.role.findUnique
+        .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never)
+        .mockResolvedValueOnce(null as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("FORBIDDEN si el rol padre es de otra organización (y no es global)", async () => {
+      prisma.role.findUnique
+        .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never)
+        .mockResolvedValueOnce({ id: parentId, organizationId: otherOrgId } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("BAD_REQUEST si la herencia propuesta crea un ciclo", async () => {
+      // roleId <- parentId (ya existe) — pedir roleId hereda de parentId,
+      // y parentId ya hereda (transitivamente) de roleId.
+      prisma.role.findUnique
+        .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never) // role
+        .mockResolvedValueOnce({
+          id: parentId,
+          organizationId: orgId,
+          inheritsFromRoleId: roleId, // parentId ya hereda de roleId -> ciclo
+        } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("happy-path: setea inheritsFromRoleId cuando no hay ciclo", async () => {
+      prisma.role.findUnique
+        .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never) // role
+        .mockResolvedValueOnce({
+          id: parentId,
+          organizationId: orgId,
+          inheritsFromRoleId: null,
+        } as never); // parent, sin más ancestros
+      prisma.role.update.mockResolvedValue({
+        id: roleId,
+        inheritsFromRoleId: parentId,
+      } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setRoleInheritance({ roleId, parentRoleId: parentId });
+
+      expect(result.inheritsFromRoleId).toBe(parentId);
+    });
+
+    it("happy-path: permite herencia transitiva de 2 niveles sin falsos positivos de ciclo", async () => {
+      prisma.role.findUnique
+        .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never) // role
+        .mockResolvedValueOnce({
+          id: parentId,
+          organizationId: orgId,
+          inheritsFromRoleId: grandparentId,
+        } as never) // parent hereda de grandparent
+        .mockResolvedValueOnce({
+          id: grandparentId,
+          inheritsFromRoleId: null,
+        } as never); // grandparent, tope de la cadena
+      prisma.role.update.mockResolvedValue({
+        id: roleId,
+        inheritsFromRoleId: parentId,
+      } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setRoleInheritance({ roleId, parentRoleId: parentId });
+
+      expect(result.inheritsFromRoleId).toBe(parentId);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0017 — alias de código de rol
+  // ---------------------------------------------------------------------------
+
+  describe("listRoleAliases", () => {
+    it("lista alias de la org del tenant + globales", async () => {
+      prisma.roleCodeAlias.findMany.mockResolvedValue([
+        { id: "a1", organizationId: null, sourceCode: "MEDICO", canonicalCode: "PHYSICIAN" },
+      ] as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.listRoleAliases({});
+
+      expect(result).toHaveLength(1);
+      const args = prisma.roleCodeAlias.findMany.mock.calls[0]![0];
+      expect(JSON.stringify(args?.where)).toContain(orgId);
+    });
+  });
+
+  describe("setRoleAlias", () => {
+    it("FORBIDDEN si intenta crear alias global sin ser super_admin", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleAlias({ organizationId: null, sourceCode: "MEDICO", canonicalCode: "PHYSICIAN" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("FORBIDDEN si intenta crear alias en otra organización", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleAlias({
+          organizationId: otherOrgId,
+          sourceCode: "MEDICO",
+          canonicalCode: "PHYSICIAN",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("crea un alias nuevo (org del tenant) cuando no existe", async () => {
+      prisma.roleCodeAlias.findFirst.mockResolvedValue(null as never);
+      prisma.roleCodeAlias.create.mockResolvedValue({
+        id: "a1",
+        organizationId: orgId,
+        sourceCode: "MEDICO",
+        canonicalCode: "PHYSICIAN",
+      } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setRoleAlias({ sourceCode: "MEDICO", canonicalCode: "PHYSICIAN" });
+
+      expect(result.sourceCode).toBe("MEDICO");
+      expect(prisma.roleCodeAlias.create).toHaveBeenCalledOnce();
+    });
+
+    it("actualiza el alias existente (idempotente) en vez de duplicar", async () => {
+      prisma.roleCodeAlias.findFirst.mockResolvedValue({
+        id: "a1",
+        organizationId: orgId,
+        sourceCode: "MEDICO",
+        canonicalCode: "PHYSICIAN",
+      } as never);
+      prisma.roleCodeAlias.update.mockResolvedValue({
+        id: "a1",
+        organizationId: orgId,
+        sourceCode: "MEDICO",
+        canonicalCode: "MC",
+      } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setRoleAlias({ sourceCode: "MEDICO", canonicalCode: "MC" });
+
+      expect(result.canonicalCode).toBe("MC");
+      expect(prisma.roleCodeAlias.create).not.toHaveBeenCalled();
+    });
+
+    it("super_admin puede crear alias global", async () => {
+      prisma.roleCodeAlias.findFirst.mockResolvedValue(null as never);
+      prisma.roleCodeAlias.create.mockResolvedValue({
+        id: "a1",
+        organizationId: null,
+        sourceCode: "MEDICO",
+        canonicalCode: "PHYSICIAN",
+      } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
+      const result = await caller.setRoleAlias({
+        organizationId: null,
+        sourceCode: "MEDICO",
+        canonicalCode: "PHYSICIAN",
+      });
+
+      expect(result.organizationId).toBeNull();
+    });
+  });
+
+  describe("deleteRoleAlias", () => {
+    const aliasId = "00000000-0000-0000-0000-000000000005";
+
+    it("NOT_FOUND si el alias no existe", async () => {
+      prisma.roleCodeAlias.findUnique.mockResolvedValue(null as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.deleteRoleAlias({ id: aliasId })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("FORBIDDEN si el alias es global y el caller no es super_admin", async () => {
+      prisma.roleCodeAlias.findUnique.mockResolvedValue({
+        id: aliasId,
+        organizationId: null,
+      } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.deleteRoleAlias({ id: aliasId })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("FORBIDDEN si el alias es de otra organización", async () => {
+      prisma.roleCodeAlias.findUnique.mockResolvedValue({
+        id: aliasId,
+        organizationId: otherOrgId,
+      } as never);
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.deleteRoleAlias({ id: aliasId })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("happy-path: elimina el alias de la org propia", async () => {
+      prisma.roleCodeAlias.findUnique.mockResolvedValue({
+        id: aliasId,
+        organizationId: orgId,
+      } as never);
+      prisma.roleCodeAlias.delete.mockResolvedValue({ id: aliasId } as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.deleteRoleAlias({ id: aliasId });
+
+      expect(result.ok).toBe(true);
+      expect(prisma.roleCodeAlias.delete).toHaveBeenCalledWith({ where: { id: aliasId } });
+    });
+  });
 });

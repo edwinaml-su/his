@@ -20,6 +20,10 @@ import {
   roleWithStatsSchema,
   BASE_ROLE_CODES,
   KNOWN_RESOURCES,
+  rbacSetRoleInheritanceInput,
+  rbacListRoleAliasesInput,
+  rbacSetRoleAliasInput,
+  rbacDeleteRoleAliasInput,
 } from "../rbac";
 
 const uuid = "00000000-0000-0000-0000-000000000001";
@@ -363,5 +367,89 @@ describe("roleWithStatsSchema", () => {
 
   it("rechaza permissionCount negativo", () => {
     expect(roleWithStatsSchema.safeParse({ ...validStats, permissionCount: -1 }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CC-0017 — rbacSetRoleInheritanceInput
+// ---------------------------------------------------------------------------
+
+describe("rbacSetRoleInheritanceInput", () => {
+  it("acepta parentRoleId UUID", () => {
+    expect(
+      rbacSetRoleInheritanceInput.safeParse({ roleId: uuid, parentRoleId: uuid2 }).success,
+    ).toBe(true);
+  });
+
+  it("acepta parentRoleId null (limpiar herencia)", () => {
+    expect(
+      rbacSetRoleInheritanceInput.safeParse({ roleId: uuid, parentRoleId: null }).success,
+    ).toBe(true);
+  });
+
+  it("rechaza roleId no-UUID", () => {
+    expect(
+      rbacSetRoleInheritanceInput.safeParse({ roleId: "bad", parentRoleId: uuid2 }).success,
+    ).toBe(false);
+  });
+
+  it("requiere parentRoleId explícito (no permite omitirlo)", () => {
+    expect(rbacSetRoleInheritanceInput.safeParse({ roleId: uuid }).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CC-0017 — rbacListRoleAliasesInput
+// ---------------------------------------------------------------------------
+
+describe("rbacListRoleAliasesInput", () => {
+  it("default vacío es válido", () => {
+    expect(rbacListRoleAliasesInput.parse(undefined)).toEqual({});
+  });
+
+  it("acepta organizationId UUID", () => {
+    const r = rbacListRoleAliasesInput.parse({ organizationId: uuid });
+    expect(r.organizationId).toBe(uuid);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CC-0017 — rbacSetRoleAliasInput
+// ---------------------------------------------------------------------------
+
+describe("rbacSetRoleAliasInput", () => {
+  const base = { sourceCode: "MEDICO", canonicalCode: "PHYSICIAN" };
+
+  it("acepta input mínimo (org del tenant por defecto)", () => {
+    expect(rbacSetRoleAliasInput.safeParse(base).success).toBe(true);
+  });
+
+  it("acepta organizationId null (alias global)", () => {
+    expect(rbacSetRoleAliasInput.safeParse({ ...base, organizationId: null }).success).toBe(true);
+  });
+
+  it("rechaza sourceCode === canonicalCode", () => {
+    const r = rbacSetRoleAliasInput.safeParse({ sourceCode: "MC", canonicalCode: "MC" });
+    expect(r.success).toBe(false);
+  });
+
+  it("rechaza sourceCode con espacios", () => {
+    expect(
+      rbacSetRoleAliasInput.safeParse({ ...base, sourceCode: "mi codigo" }).success,
+    ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CC-0017 — rbacDeleteRoleAliasInput
+// ---------------------------------------------------------------------------
+
+describe("rbacDeleteRoleAliasInput", () => {
+  it("acepta UUID válido", () => {
+    expect(rbacDeleteRoleAliasInput.safeParse({ id: uuid }).success).toBe(true);
+  });
+
+  it("rechaza id no-UUID", () => {
+    expect(rbacDeleteRoleAliasInput.safeParse({ id: "bad" }).success).toBe(false);
   });
 });

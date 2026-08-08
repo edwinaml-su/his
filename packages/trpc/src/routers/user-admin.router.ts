@@ -35,7 +35,7 @@ import {
   userAdminResetPasswordInput,
 } from "@his/contracts";
 import { hashPin, logger } from "@his/infrastructure";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requirePermission } from "../trpc";
 
 function rethrowPrisma(err: unknown): never {
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
@@ -225,10 +225,16 @@ export const userAdminRouter = router({
    *     (mismo algoritmo que GoTrue verifica).
    *   - Auditoría: emite evento `user.password_reset` con razón.
    *
-   * TODO — gate por requireRole(['ADMIN']) cuando el helper esté disponible;
-   * por ahora `tenantProcedure` + validación explícita rol ADMIN.
+   * CC-0017 — prueba de concepto #3 de `requirePermission`: resuelve el TODO
+   * histórico ("gate por requireRole(['ADMIN']) cuando el helper esté
+   * disponible") reemplazando el chequeo manual de `UserOrganizationRole` por
+   * el permiso `user.manage` (ya existía en el catálogo MVP). El seed
+   * `194_cc0017_rbac_parametrizable.sql` otorga `user.manage` a ADMIN
+   * (espejo exacto del chequeo `role.code === "ADMIN"` que reemplaza) — sin
+   * seed aplicado, este procedure deniega a todos (fail-safe de
+   * `requirePermission` hacia "denegar").
    */
-  resetPassword: tenantProcedure
+  resetPassword: requirePermission("user.manage")
     .input(userAdminResetPasswordInput)
     .mutation(async ({ ctx, input }) => {
       if (input.id === ctx.user.id) {
@@ -236,23 +242,6 @@ export const userAdminRouter = router({
           code: "BAD_REQUEST",
           message:
             "No puedes resetear tu propio password aquí. Usa el flujo de cambio propio.",
-        });
-      }
-
-      // Validar que el caller es ADMIN — defensa explícita.
-      const callerRoles = await ctx.prisma.userOrganizationRole.findMany({
-        where: {
-          userId: ctx.user.id,
-          validFrom: { lte: new Date() },
-          OR: [{ validTo: null }, { validTo: { gte: new Date() } }],
-        },
-        include: { role: { select: { code: true } } },
-      });
-      const isAdmin = callerRoles.some((r) => r.role.code === "ADMIN");
-      if (!isAdmin) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Solo administradores pueden resetear passwords.",
         });
       }
 

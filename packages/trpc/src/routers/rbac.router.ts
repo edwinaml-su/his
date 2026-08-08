@@ -33,8 +33,12 @@ import {
   rbacUpdateRoleInput,
   rbacDeactivateRoleInput,
   rbacSetRolePermissionsInput,
+  rbacSetRoleInheritanceInput,
+  rbacListRoleAliasesInput,
+  rbacSetRoleAliasInput,
+  rbacDeleteRoleAliasInput,
 } from "@his/contracts";
-import { requireRole, router, tenantProcedure } from "../trpc";
+import { requirePermission, requireRole, router, tenantProcedure } from "../trpc";
 
 const SUPER_ADMIN_CODE = "super_admin";
 
@@ -191,6 +195,8 @@ export const rbacRouter = router({
       name: role.name,
       description: role.description,
       active: role.active,
+      // CC-0017 — para el selector "hereda de" en /roles.
+      inheritsFromRoleId: role.inheritsFromRoleId,
       permissions: role.permissions.map((rp) => ({
         permissionId: rp.permissionId,
         effect: rp.effect,
@@ -466,9 +472,15 @@ export const rbacRouter = router({
    * US.F2.7.20 — Depuración anual de usuarios inactivos.
    * Detecta usuarios cuyo lastLoginAt < now() - 1 año y los marca INACTIVE.
    * Notifica al DIR (outbox simple: DomainEvent).
-   * Solo super_admin o DIR pueden ejecutar.
+   *
+   * CC-0017 — prueba de concepto #2 de `requirePermission`: reemplaza
+   * `requireRole(["DIR","super_admin"])` por el permiso `rbac.manage`. El
+   * seed `194_cc0017_rbac_parametrizable.sql` otorga `rbac.manage` a
+   * exactamente DIR y super_admin (espejo del requireRole anterior) — sin
+   * ese seed aplicado, este procedure deniega a todos (fail-safe hacia
+   * "denegar" de `requirePermission`, ver packages/trpc/src/trpc.ts).
    */
-  purgeInactiveUsers: requireRole(["DIR", "super_admin"])
+  purgeInactiveUsers: requirePermission("rbac.manage")
     .input(z.object({
       dryRun: z.boolean().default(true),
       // inactividad en días (default: 365)
@@ -542,6 +554,163 @@ export const rbacRouter = router({
         },
       });
 
+      return { ok: true as const };
+    }),
+
+  // ---------------------------------------------------------------------------
+  // CC-0017 — herencia de roles + alias de código
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Setea (o limpia con `parentRoleId: null`) el rol del que `roleId` hereda
+   * sus accesos efectivos. Ver `packages/trpc/src/rbac/effective-roles.ts`
+   * para cómo se expande en runtime (roles EFECTIVOS de `requireRole`).
+   *
+   * Guards: no auto-herencia, no ciclo (camino completo hacia arriba desde
+   * `parentRoleId`), mismos boundaries tenant/global que el resto de RBAC.
+   */
+  setRoleInheritance: tenantProcedure
+    .input(rbacSetRoleInheritanceInput)
+    .mutation(async ({ ctx, input }) => {
+      const role = await ctx.prisma.role.findUnique({ where: { id: input.roleId } });
+      if (!role) throw new TRPCError({ code: "NOT_FOUND", message: "Rol no encontrado." });
+
+      if (role.organizationId === null && !isSuperAdmin(ctx.tenant.roleCodes)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Sólo super_admin puede modificar herencia de roles globales.",
+        });
+      }
+      if (role.organizationId !== null && role.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Rol fuera de tu organización." });
+      }
+
+      if (input.parentRoleId === null) {
+        const updated = await ctx.prisma.role.update({
+          where: { id: input.roleId },
+          data: { inheritsFromRoleId: null },
+        });
+        return { id: updated.id, inheritsFromRoleId: updated.inheritsFromRoleId };
+      }
+
+      if (input.parentRoleId === input.roleId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Un rol no puede heredar de sí mismo.",
+        });
+      }
+
+      const parent = await ctx.prisma.role.findUnique({ where: { id: input.parentRoleId } });
+      if (!parent) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rol padre no encontrado." });
+      }
+      if (parent.organizationId !== null && parent.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El rol padre debe ser global o de tu organización.",
+        });
+      }
+
+      // Anti-ciclo: camina hacia arriba desde `parent` — si `role.id` aparece
+      // en esa cadena (como nodo o como próximo salto), el nuevo enlace
+      // cerraría un ciclo. Se chequea `inheritsFromRoleId === role.id` en
+      // cada paso (no sólo `current.id === role.id`) para detectar el ciclo
+      // de 1 hop sin necesitar una vuelta extra a la BD.
+      let current: { id: string; inheritsFromRoleId: string | null } | null = parent;
+      const visited = new Set<string>([input.roleId]);
+      let hops = 0;
+      while (current && hops < 50) {
+        if (visited.has(current.id)) break; // ciclo preexistente — no seguir.
+        visited.add(current.id);
+        if (current.id === input.roleId || current.inheritsFromRoleId === input.roleId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Esa herencia crearía un ciclo (el rol padre ya desciende de este rol).",
+          });
+        }
+        if (!current.inheritsFromRoleId) break;
+        current = await ctx.prisma.role.findUnique({
+          where: { id: current.inheritsFromRoleId },
+          select: { id: true, inheritsFromRoleId: true },
+        });
+        hops++;
+      }
+
+      const updated = await ctx.prisma.role.update({
+        where: { id: input.roleId },
+        data: { inheritsFromRoleId: input.parentRoleId },
+      });
+      return { id: updated.id, inheritsFromRoleId: updated.inheritsFromRoleId };
+    }),
+
+  /** Lista alias visibles: los de la org del tenant + los globales. */
+  listRoleAliases: tenantProcedure
+    .input(rbacListRoleAliasesInput)
+    .query(async ({ ctx, input }) => {
+      const orgId = input.organizationId ?? ctx.tenant.organizationId;
+      return ctx.prisma.roleCodeAlias.findMany({
+        where: { OR: [{ organizationId: orgId }, { organizationId: null }] },
+        orderBy: [{ organizationId: "asc" }, { sourceCode: "asc" }],
+      });
+    }),
+
+  /**
+   * Crea o actualiza (idempotente por sourceCode+scope) un alias de código de
+   * rol. Alias GLOBALES (organizationId null) sólo por super_admin.
+   */
+  setRoleAlias: tenantProcedure
+    .input(rbacSetRoleAliasInput)
+    .mutation(async ({ ctx, input }) => {
+      const wantsGlobal = input.organizationId === null;
+      if (wantsGlobal && !isSuperAdmin(ctx.tenant.roleCodes)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Sólo super_admin puede crear alias globales.",
+        });
+      }
+      const orgId = wantsGlobal ? null : (input.organizationId ?? ctx.tenant.organizationId);
+      if (orgId !== null && orgId !== ctx.tenant.organizationId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No puedes crear alias en otra organización.",
+        });
+      }
+
+      const existing = await ctx.prisma.roleCodeAlias.findFirst({
+        where: { organizationId: orgId, sourceCode: input.sourceCode },
+      });
+      if (existing) {
+        return ctx.prisma.roleCodeAlias.update({
+          where: { id: existing.id },
+          data: { canonicalCode: input.canonicalCode },
+        });
+      }
+      return ctx.prisma.roleCodeAlias.create({
+        data: {
+          organizationId: orgId,
+          sourceCode: input.sourceCode,
+          canonicalCode: input.canonicalCode,
+        },
+      });
+    }),
+
+  deleteRoleAlias: tenantProcedure
+    .input(rbacDeleteRoleAliasInput)
+    .mutation(async ({ ctx, input }) => {
+      const alias = await ctx.prisma.roleCodeAlias.findUnique({ where: { id: input.id } });
+      if (!alias) throw new TRPCError({ code: "NOT_FOUND", message: "Alias no encontrado." });
+
+      if (alias.organizationId === null && !isSuperAdmin(ctx.tenant.roleCodes)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Sólo super_admin puede eliminar alias globales.",
+        });
+      }
+      if (alias.organizationId !== null && alias.organizationId !== ctx.tenant.organizationId) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Alias fuera de tu organización." });
+      }
+
+      await ctx.prisma.roleCodeAlias.delete({ where: { id: input.id } });
       return { ok: true as const };
     }),
 });

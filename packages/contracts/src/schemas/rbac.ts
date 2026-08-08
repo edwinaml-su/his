@@ -134,6 +134,42 @@ export const rbacSetRolePermissionsInput = z.object({
 });
 
 // -----------------------------------------------------------------------------
+// CC-0017 — herencia de roles + alias de código
+// -----------------------------------------------------------------------------
+
+/** Setea (o limpia con `parentRoleId: null`) el rol del que `roleId` hereda. */
+export const rbacSetRoleInheritanceInput = z.object({
+  roleId: z.string().uuid(),
+  parentRoleId: z.string().uuid().nullable(),
+});
+
+export const rbacListRoleAliasesInput = z
+  .object({
+    /** Si se omite, usa la org del tenant + los alias globales. */
+    organizationId: z.string().uuid().optional(),
+  })
+  .default({});
+
+const roleCodePattern = /^[a-zA-Z0-9_\-.]+$/;
+
+export const rbacSetRoleAliasInput = z
+  .object({
+    /**
+     * `null` => alias global (sólo super_admin); `undefined` => la org del
+     * tenant.
+     */
+    organizationId: z.string().uuid().nullable().optional(),
+    sourceCode: z.string().trim().min(1).max(60).regex(roleCodePattern),
+    canonicalCode: z.string().trim().min(1).max(60).regex(roleCodePattern),
+  })
+  .refine((v) => v.sourceCode !== v.canonicalCode, {
+    message: "sourceCode y canonicalCode no pueden ser iguales.",
+    path: ["canonicalCode"],
+  });
+
+export const rbacDeleteRoleAliasInput = z.object({ id: z.string().uuid() });
+
+// -----------------------------------------------------------------------------
 // Outputs (no estrictamente validados en runtime; útiles para tipar UI)
 // -----------------------------------------------------------------------------
 

@@ -396,6 +396,21 @@ describe("accountingRouter", () => {
   // journal.post
   // -------------------------------------------------------------------------
   describe("journal.post", () => {
+    // CC-0017 — journal.post migró de requireRole a
+    // requirePermission("accounting.post"). El seed
+    // 194_cc0017_rbac_parametrizable.sql otorga ese permiso a
+    // ACCOUNTANT/ACCOUNTANT_SENIOR/ADMIN (espejo del requireRole anterior);
+    // se mockea el equivalente aquí. Ver packages/trpc/src/rbac/effective-roles.ts.
+    beforeEach(() => {
+      prisma.role.findMany.mockResolvedValue([
+        { id: "role-admin", code: "ADMIN", inheritsFromRoleId: null },
+      ] as never);
+      prisma.roleCodeAlias.findMany.mockResolvedValue([] as never);
+      prisma.rolePermission.findMany.mockResolvedValue([
+        { effect: "ALLOW", permission: { code: "accounting.post" } },
+      ] as never);
+    });
+
     it("postea asiento DRAFT y emite evento si supera umbral", async () => {
       const highValueEntry = {
         ...DRAFT_ENTRY,

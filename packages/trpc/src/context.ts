@@ -31,6 +31,15 @@ export interface TRPCContext {
   /** IP / UA opcional para auditoría. */
   ip?: string;
   userAgent?: string;
+  /**
+   * CC-0017 — roles efectivos (directos ∪ herencia ∪ alias) resueltos por
+   * `requireRole`/`requirePermission`. Ausente hasta que uno de esos dos
+   * middlewares corre; NO reemplaza `tenant.roleCodes` (que sigue siendo la
+   * selección directa del usuario, usada para lógica de negocio/auditoría).
+   */
+  effectiveRoleCodes?: string[];
+  /** CC-0017 — permisos efectivos resueltos por `requirePermission`. */
+  effectivePermissions?: Map<string, "ALLOW" | "DENY">;
 }
 
 export interface CreateContextInput {
