@@ -41,6 +41,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { Prisma, PrismaClient } from "@his/database";
 import { router, protectedProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // -----------------------------------------------------------------------------
 // Schemas locales — espejo de `packages/contracts/src/schemas/ledger.ts`.
@@ -198,20 +199,26 @@ export const ledgerRouter = router({
    */
   list: protectedProcedure.input(ledgerListInput).query(async ({ ctx, input }) => {
     const orgId = resolveOrgId(input?.organizationId, ctx.tenant?.organizationId);
-    await assertAdminMembership(ctx.prisma, ctx.user!.id, orgId);
 
-    const rows = await ctx.prisma.ledger.findMany({
-      where: {
-        organizationId: orgId,
-        ...(input?.kind ? { kind: input.kind } : {}),
-        ...(input?.activeOnly ? { active: true } : {}),
+    return withTenantContext(
+      ctx.prisma,
+      { userId: ctx.user!.id, organizationId: orgId },
+      async (tx) => {
+        await assertAdminMembership(tx, ctx.user!.id, orgId);
+
+        return tx.ledger.findMany({
+          where: {
+            organizationId: orgId,
+            ...(input?.kind ? { kind: input.kind } : {}),
+            ...(input?.activeOnly ? { active: true } : {}),
+          },
+          orderBy: [{ active: "desc" }, { kind: "asc" }, { name: "asc" }],
+          include: {
+            currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
+          },
+        });
       },
-      orderBy: [{ active: "desc" }, { kind: "asc" }, { name: "asc" }],
-      include: {
-        currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
-      },
-    });
-    return rows;
+    );
   }),
 
   /**
@@ -219,22 +226,44 @@ export const ledgerRouter = router({
    * `ChartOfAccounts` aún no existe; devolvemos 0).
    */
   get: protectedProcedure.input(ledgerGetInput).query(async ({ ctx, input }) => {
-    const ledger = await ctx.prisma.ledger.findUnique({
+    // `protectedProcedure` no exige tenant activo y el input solo trae `id`:
+    // la organización del libro se desconoce hasta buscarlo. No es posible fijar
+    // el contexto RLS (SET LOCAL app.current_org_id) sin conocer antes el org
+    // destino, así que esta lectura puntual —solo `organizationId`, sin datos
+    // sensibles— corre fuera de `withTenantContext` (misma excepción que aplica
+    // a la verificación de membresía). El resto (datos completos del libro +
+    // assertAdminMembership) sí corre dentro de la transacción RLS-scoped al
+    // org ya resuelto.
+    const found = await ctx.prisma.ledger.findUnique({
       where: { id: input.id },
-      include: {
-        currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
-        organization: { select: { id: true, legalName: true, tradeName: true } },
-      },
+      select: { organizationId: true },
     });
-    if (!ledger) {
+    if (!found) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
     }
-    await assertAdminMembership(ctx.prisma, ctx.user!.id, ledger.organizationId);
 
-    // TODO(Sprint 5): `ctx.prisma.chartOfAccounts.count({ where: { ledgerId: input.id } })`.
-    const accountsCount = 0;
+    return withTenantContext(
+      ctx.prisma,
+      { userId: ctx.user!.id, organizationId: found.organizationId },
+      async (tx) => {
+        const ledger = await tx.ledger.findUnique({
+          where: { id: input.id },
+          include: {
+            currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
+            organization: { select: { id: true, legalName: true, tradeName: true } },
+          },
+        });
+        if (!ledger) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
+        }
+        await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
 
-    return { ...ledger, accountsCount };
+        // TODO(Sprint 5): `tx.chartOfAccounts.count({ where: { ledgerId: input.id } })`.
+        const accountsCount = 0;
+
+        return { ...ledger, accountsCount };
+      },
+    );
   }),
 
   /**
@@ -253,56 +282,62 @@ export const ledgerRouter = router({
   create: protectedProcedure
     .input(ledgerCreateInput)
     .mutation(async ({ ctx, input }) => {
-      await assertAdminMembership(ctx.prisma, ctx.user!.id, input.organizationId);
+      return withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user!.id, organizationId: input.organizationId },
+        async (tx) => {
+          await assertAdminMembership(tx, ctx.user!.id, input.organizationId);
 
-      const currency = await ctx.prisma.currency.findUnique({
-        where: { id: input.functionalCurrencyId },
-        select: { id: true, active: true },
-      });
-      if (!currency) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Moneda no existe." });
-      }
-      if (!currency.active) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "La moneda funcional debe estar activa.",
-        });
-      }
-
-      const existing = await ctx.prisma.ledger.findFirst({
-        where: { organizationId: input.organizationId, kind: input.kind },
-        select: { id: true, active: true },
-      });
-      if (existing) {
-        if (existing.active) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `Ya existe un libro activo de tipo ${input.kind} en esta organización.`,
+          const currency = await tx.currency.findUnique({
+            where: { id: input.functionalCurrencyId },
+            select: { id: true, active: true },
           });
-        }
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Existe un libro inactivo de tipo ${input.kind}. Reactívalo en lugar de crear uno nuevo.`,
-        });
-      }
+          if (!currency) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "Moneda no existe." });
+          }
+          if (!currency.active) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "La moneda funcional debe estar activa.",
+            });
+          }
 
-      try {
-        return await ctx.prisma.ledger.create({
-          data: {
-            organizationId: input.organizationId,
-            kind: input.kind,
-            code: input.kind, // unique [orgId, code] = unique [orgId, kind] por convención.
-            name: input.name,
-            currencyId: input.functionalCurrencyId,
-            active: true,
-          },
-          include: {
-            currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
-          },
-        });
-      } catch (err) {
-        rethrowPrisma(err);
-      }
+          const existing = await tx.ledger.findFirst({
+            where: { organizationId: input.organizationId, kind: input.kind },
+            select: { id: true, active: true },
+          });
+          if (existing) {
+            if (existing.active) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: `Ya existe un libro activo de tipo ${input.kind} en esta organización.`,
+              });
+            }
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Existe un libro inactivo de tipo ${input.kind}. Reactívalo en lugar de crear uno nuevo.`,
+            });
+          }
+
+          try {
+            return await tx.ledger.create({
+              data: {
+                organizationId: input.organizationId,
+                kind: input.kind,
+                code: input.kind, // unique [orgId, code] = unique [orgId, kind] por convención.
+                name: input.name,
+                currencyId: input.functionalCurrencyId,
+                active: true,
+              },
+              include: {
+                currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
+              },
+            });
+          } catch (err) {
+            rethrowPrisma(err);
+          }
+        },
+      );
     }),
 
   /**
@@ -313,44 +348,55 @@ export const ledgerRouter = router({
   update: protectedProcedure
     .input(ledgerUpdateInput)
     .mutation(async ({ ctx, input }) => {
-      const ledger = await ctx.prisma.ledger.findUnique({
+      // Resolución cross-org por id (ver comentario en `get`): esta lectura
+      // puntual (solo `id`/`organizationId`) es la misma que ya existía antes
+      // del fix y corre fuera de RLS porque el org aún no se conoce. La
+      // verificación de membresía y la escritura sí quedan RLS-scoped abajo.
+      const found = await ctx.prisma.ledger.findUnique({
         where: { id: input.id },
         select: { id: true, organizationId: true },
       });
-      if (!ledger) {
+      if (!found) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
       }
-      await assertAdminMembership(ctx.prisma, ctx.user!.id, ledger.organizationId);
 
-      if (input.functionalCurrencyId) {
-        const currency = await ctx.prisma.currency.findUnique({
-          where: { id: input.functionalCurrencyId },
-          select: { active: true },
-        });
-        if (!currency || !currency.active) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "La moneda funcional debe existir y estar activa.",
-          });
-        }
-      }
+      return withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user!.id, organizationId: found.organizationId },
+        async (tx) => {
+          await assertAdminMembership(tx, ctx.user!.id, found.organizationId);
 
-      try {
-        return await ctx.prisma.ledger.update({
-          where: { id: input.id },
-          data: {
-            ...(input.name !== undefined ? { name: input.name } : {}),
-            ...(input.functionalCurrencyId !== undefined
-              ? { currencyId: input.functionalCurrencyId }
-              : {}),
-          },
-          include: {
-            currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
-          },
-        });
-      } catch (err) {
-        rethrowPrisma(err);
-      }
+          if (input.functionalCurrencyId) {
+            const currency = await tx.currency.findUnique({
+              where: { id: input.functionalCurrencyId },
+              select: { active: true },
+            });
+            if (!currency || !currency.active) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "La moneda funcional debe existir y estar activa.",
+              });
+            }
+          }
+
+          try {
+            return await tx.ledger.update({
+              where: { id: input.id },
+              data: {
+                ...(input.name !== undefined ? { name: input.name } : {}),
+                ...(input.functionalCurrencyId !== undefined
+                  ? { currencyId: input.functionalCurrencyId }
+                  : {}),
+              },
+              include: {
+                currency: { select: { id: true, isoCode: true, name: true, symbol: true } },
+              },
+            });
+          } catch (err) {
+            rethrowPrisma(err);
+          }
+        },
+      );
     }),
 
   /**
@@ -360,6 +406,7 @@ export const ledgerRouter = router({
   activate: protectedProcedure
     .input(ledgerActivateInput)
     .mutation(async ({ ctx, input }) => {
+      // Resolución cross-org por id (ver comentario en `get`).
       const ledger = await ctx.prisma.ledger.findUnique({
         where: { id: input.id },
         select: { id: true, organizationId: true, active: true, kind: true },
@@ -367,15 +414,22 @@ export const ledgerRouter = router({
       if (!ledger) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
       }
-      await assertAdminMembership(ctx.prisma, ctx.user!.id, ledger.organizationId);
 
-      if (ledger.active) {
-        return ledger; // idempotente
-      }
-      return ctx.prisma.ledger.update({
-        where: { id: input.id },
-        data: { active: true },
-      });
+      return withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user!.id, organizationId: ledger.organizationId },
+        async (tx) => {
+          await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
+
+          if (ledger.active) {
+            return ledger; // idempotente
+          }
+          return tx.ledger.update({
+            where: { id: input.id },
+            data: { active: true },
+          });
+        },
+      );
     }),
 
   /**
@@ -386,6 +440,7 @@ export const ledgerRouter = router({
   deactivate: protectedProcedure
     .input(ledgerActivateInput)
     .mutation(async ({ ctx, input }) => {
+      // Resolución cross-org por id (ver comentario en `get`).
       const ledger = await ctx.prisma.ledger.findUnique({
         where: { id: input.id },
         select: { id: true, organizationId: true, active: true },
@@ -393,15 +448,22 @@ export const ledgerRouter = router({
       if (!ledger) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
       }
-      await assertAdminMembership(ctx.prisma, ctx.user!.id, ledger.organizationId);
 
-      if (!ledger.active) {
-        return ledger; // idempotente
-      }
-      return ctx.prisma.ledger.update({
-        where: { id: input.id },
-        data: { active: false },
-      });
+      return withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user!.id, organizationId: ledger.organizationId },
+        async (tx) => {
+          await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
+
+          if (!ledger.active) {
+            return ledger; // idempotente
+          }
+          return tx.ledger.update({
+            where: { id: input.id },
+            data: { active: false },
+          });
+        },
+      );
     }),
 
   /**
@@ -423,11 +485,17 @@ export const ledgerRouter = router({
 
       if (orgId) {
         // Best-effort: si hay org, marcamos los kinds tomados.
-        // No exigimos ADMIN: este endpoint sólo lista metadata.
-        const existing = await ctx.prisma.ledger.findMany({
-          where: { organizationId: orgId },
-          select: { kind: true, active: true },
-        });
+        // No exigimos ADMIN (este endpoint sólo lista metadata), pero sí RLS
+        // porque Ledger es tabla tenant-scoped.
+        const existing = await withTenantContext(
+          ctx.prisma,
+          { userId: ctx.user!.id, organizationId: orgId },
+          (tx) =>
+            tx.ledger.findMany({
+              where: { organizationId: orgId },
+              select: { kind: true, active: true },
+            }),
+        );
         for (const e of existing) {
           if (e.active) activeKinds.add(e.kind);
           else inactiveKinds.add(e.kind);
@@ -451,6 +519,7 @@ export const ledgerRouter = router({
   roundingPolicy: protectedProcedure
     .input(ledgerRoundingPolicyInput)
     .query(async ({ ctx, input }) => {
+      // Resolución cross-org por id (ver comentario en `get`).
       const ledger = await ctx.prisma.ledger.findUnique({
         where: { id: input.ledgerId },
         select: { id: true, organizationId: true, currencyId: true },
@@ -458,16 +527,23 @@ export const ledgerRouter = router({
       if (!ledger) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
       }
-      await assertAdminMembership(ctx.prisma, ctx.user!.id, ledger.organizationId);
 
-      // TODO(Sprint 5): SELECT * FROM LedgerRoundingPolicy WHERE ledgerId = ...
-      return {
-        ledgerId: ledger.id,
-        currencyId: ledger.currencyId,
-        decimals: 2,
-        mode: "HALF_EVEN" as const,
-        isStub: true,
-        note: "Política por defecto (Sprint 5: tabla LedgerRoundingPolicy persistida).",
-      };
+      return withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user!.id, organizationId: ledger.organizationId },
+        async (tx) => {
+          await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
+
+          // TODO(Sprint 5): SELECT * FROM LedgerRoundingPolicy WHERE ledgerId = ...
+          return {
+            ledgerId: ledger.id,
+            currencyId: ledger.currencyId,
+            decimals: 2,
+            mode: "HALF_EVEN" as const,
+            isStub: true,
+            note: "Política por defecto (Sprint 5: tabla LedgerRoundingPolicy persistida).",
+          };
+        },
+      );
     }),
 });
