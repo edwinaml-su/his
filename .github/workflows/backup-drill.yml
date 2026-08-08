@@ -144,7 +144,7 @@ jobs:
       # Notificacion Slack (opcional — configurar secret SLACK_WEBHOOK_DR)
       # ------------------------------------------------------------------
       - name: Notificar resultado a Slack
-        if: always() && secrets.SLACK_WEBHOOK_DR != ''
+        if: always() && env.SLACK_WEBHOOK != ''
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_DR }}
           STATUS: ${{ job.status }}
