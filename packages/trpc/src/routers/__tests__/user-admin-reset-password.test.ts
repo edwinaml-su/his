@@ -22,8 +22,21 @@ const TARGET_EMAIL = "target@his.test";
 const AUTH_UUID = "a48fed25-9eb2-4d07-9124-e25c6ac95cbe";
 const VALID_INPUT = { id: TARGET_ID, newPassword: "Avante062026", reason: "reset por olvido" };
 
-function adminCallerRoles() {
-  return [{ role: { code: "ADMIN" } }];
+/**
+ * CC-0017 — resetPassword migró de un chequeo manual
+ * (`userOrganizationRole.findMany` + `role.code === "ADMIN"`) a
+ * `requirePermission("user.manage")`. Este helper mockea el equivalente al
+ * grant sembrado en 194_cc0017_rbac_parametrizable.sql (ADMIN →
+ * user.manage) — ver packages/trpc/src/rbac/effective-roles.ts.
+ */
+function grantUserManageToAdmin(prisma: DeepMockProxy<PrismaClient>) {
+  prisma.role.findMany.mockResolvedValue([
+    { id: "role-admin", code: "ADMIN", inheritsFromRoleId: null },
+  ] as never);
+  prisma.roleCodeAlias.findMany.mockResolvedValue([] as never);
+  prisma.rolePermission.findMany.mockResolvedValue([
+    { effect: "ALLOW", permission: { code: "user.manage" } },
+  ] as never);
 }
 
 describe("userAdmin.resetPassword", () => {
@@ -39,20 +52,22 @@ describe("userAdmin.resetPassword", () => {
   }
 
   it("bloquea auto-reset (id === caller)", async () => {
+    grantUserManageToAdmin(prisma);
     await expect(
       caller().resetPassword({ ...VALID_INPUT, id: MOCK_USER_ADMIN.id }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("rechaza caller no-ADMIN con FORBIDDEN", async () => {
-    prisma.userOrganizationRole.findMany.mockResolvedValue([] as never);
+  it("rechaza caller sin el permiso user.manage con FORBIDDEN", async () => {
+    // Sin grant: requirePermission deniega por defecto (fail-safe hacia
+    // "denegar" — ver packages/trpc/src/trpc.ts).
     await expect(caller().resetPassword(VALID_INPUT)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
   });
 
   it("NOT_FOUND si el usuario destino no existe", async () => {
-    prisma.userOrganizationRole.findMany.mockResolvedValue(adminCallerRoles() as never);
+    grantUserManageToAdmin(prisma);
     prisma.user.findUnique.mockResolvedValue(null as never);
     await expect(caller().resetPassword(VALID_INPUT)).rejects.toMatchObject({
       code: "NOT_FOUND",
@@ -60,7 +75,7 @@ describe("userAdmin.resetPassword", () => {
   });
 
   it("BAD_REQUEST si el usuario destino está inactivo", async () => {
-    prisma.userOrganizationRole.findMany.mockResolvedValue(adminCallerRoles() as never);
+    grantUserManageToAdmin(prisma);
     prisma.user.findUnique.mockResolvedValue({
       id: TARGET_ID,
       email: TARGET_EMAIL,
@@ -72,7 +87,7 @@ describe("userAdmin.resetPassword", () => {
   });
 
   it("PRECONDITION_FAILED si no hay cuenta en Supabase Auth", async () => {
-    prisma.userOrganizationRole.findMany.mockResolvedValue(adminCallerRoles() as never);
+    grantUserManageToAdmin(prisma);
     prisma.user.findUnique.mockResolvedValue({
       id: TARGET_ID,
       email: TARGET_EMAIL,
@@ -85,7 +100,7 @@ describe("userAdmin.resetPassword", () => {
   });
 
   it("happy path: escribe a Supabase Auth (auth.users) y devuelve ok", async () => {
-    prisma.userOrganizationRole.findMany.mockResolvedValue(adminCallerRoles() as never);
+    grantUserManageToAdmin(prisma);
     prisma.user.findUnique.mockResolvedValue({
       id: TARGET_ID,
       email: TARGET_EMAIL,

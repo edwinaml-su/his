@@ -720,14 +720,40 @@ model Role {
   active         Boolean  @default(true)
   createdAt      DateTime @default(now()) @db.Timestamptz()
   updatedAt      DateTime @updatedAt @db.Timestamptz()
+  /// CC-0017 — herencia 1:1: este rol hereda los accesos EFECTIVOS (roles +
+  /// permisos) del rol referenciado. Expandido en runtime por
+  /// `packages/trpc/src/rbac/effective-roles.ts` (anti-ciclo + fail-safe).
+  inheritsFromRoleId String? @db.Uuid
 
   permissions          RolePermission[]
   userRoles            UserOrganizationRole[]
   notificationDefaults RoleNotificationDefault[]
   // Nivel A scope por servicio — sql/60
   serviceUnitAssignments UserServiceUnitAssignment[] @relation("RoleAssignedServiceUnits")
+  // CC-0017 — herencia de roles (self-relation 1:1)
+  inheritsFrom Role?  @relation("RoleInheritance", fields: [inheritsFromRoleId], references: [id], onDelete: SetNull)
+  inheritedBy  Role[] @relation("RoleInheritance")
 
   @@unique([organizationId, code])
+  @@index([inheritsFromRoleId])
+  @@schema("public")
+}
+
+/// CC-0017 — mapea códigos de rol equivalentes (drift de nomenclatura, p.ej.
+/// "MEDICO" → "PHYSICIAN") al código canónico que usan los literales
+/// `requireRole([...])`. `organizationId` NULL = alias global. La unicidad
+/// real (incl. el caso NULL) vive en dos índices únicos parciales en SQL
+/// (`194_cc0017_rbac_parametrizable.sql`) — Postgres no trata NULL como
+/// valor comparable en un `@@unique` compuesto estándar.
+model RoleCodeAlias {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid /// null => alias global. Sin FK dura, igual que Role.organizationId.
+  sourceCode     String   @db.VarChar(60)
+  canonicalCode  String   @db.VarChar(60)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+
+  @@unique([organizationId, sourceCode])
+  @@index([organizationId])
   @@schema("public")
 }
 

@@ -6,6 +6,7 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
 import type { TRPCContext } from "./context";
+import { getEffectiveRoleCodes, getEffectivePermissions } from "./rbac/effective-roles";
 
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
@@ -54,16 +55,59 @@ export const portalProcedure = t.procedure.use(({ ctx, next }) => {
   return next({ ctx: { ...ctx, portalAccount: ctx.portalAccount } });
 });
 
-/** Helper: verifica que el usuario tenga al menos un rol de los listados. */
+/**
+ * Helper: verifica que el usuario tenga al menos un rol de los listados.
+ *
+ * CC-0017 — evalúa contra los roles EFECTIVOS (directos ∪ herencia de
+ * `Role.inheritsFromRoleId` ∪ alias de `RoleCodeAlias`), no sólo los
+ * directos. Esto permite que un rol nuevo (creado en /roles heredando de uno
+ * existente) pase los `requireRole([...])` ya escritos en los 376 call sites
+ * SIN tocarlos. La firma de la función no cambia.
+ *
+ * FAIL-SAFE: sin herencia/alias configurados, `getEffectiveRoleCodes` hace
+ * fallback a `ctx.tenant.roleCodes` tal cual — el comportamiento es
+ * BIT-IDÉNTICO al de antes de CC-0017. Ver
+ * `packages/trpc/src/__tests__/rbac/effective-roles.test.ts`.
+ */
 export function requireRole(roleCodes: string[]) {
-  return tenantProcedure.use(({ ctx, next }) => {
-    const has = ctx.tenant.roleCodes.some((r) => roleCodes.includes(r));
+  return tenantProcedure.use(async ({ ctx, next }) => {
+    const effectiveRoleCodes = await getEffectiveRoleCodes(ctx.prisma, ctx.tenant);
+    const has = effectiveRoleCodes.some((r) => roleCodes.includes(r));
     if (!has) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: `Rol requerido: ${roleCodes.join(", ")}`,
       });
     }
-    return next();
+    return next({ ctx: { ...ctx, effectiveRoleCodes } });
+  });
+}
+
+/**
+ * CC-0017 — helper NUEVO, opt-in: verifica un permiso `resource.action` del
+ * catálogo `Permission` contra el set efectivo de `RolePermission` de los
+ * roles efectivos del tenant (DENY gana sobre ALLOW). No reemplaza
+ * `requireRole` en los 376 call sites existentes — sólo se usa en procedures
+ * que migren explícitamente (ver ejemplos: `accounting.journalEntry.post`,
+ * `rbac.purgeInactiveUsers`, `userAdmin.resetPassword`).
+ *
+ * A diferencia de `requireRole`, esto SÍ depende de que `RolePermission`
+ * tenga datos — sin seed (`194_cc0017_rbac_parametrizable.sql`) deniega por
+ * defecto (fail-safe hacia "denegar", apropiado para un gate nuevo que aún
+ * no gobierna nada heredado).
+ */
+export function requirePermission(permissionCode: string) {
+  return tenantProcedure.use(async ({ ctx, next }) => {
+    const [effectiveRoleCodes, effectivePermissions] = await Promise.all([
+      getEffectiveRoleCodes(ctx.prisma, ctx.tenant),
+      getEffectivePermissions(ctx.prisma, ctx.tenant),
+    ]);
+    if (effectivePermissions.get(permissionCode) !== "ALLOW") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Permiso requerido: ${permissionCode}`,
+      });
+    }
+    return next({ ctx: { ...ctx, effectiveRoleCodes, effectivePermissions } });
   });
 }

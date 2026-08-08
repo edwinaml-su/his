@@ -12,6 +12,7 @@ import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { trpc } from "@/lib/trpc/react";
 import { PermissionMatrix } from "../permission-matrix";
+import { RoleInheritance } from "../role-inheritance";
 
 type RoleDetail = {
   id: string;
@@ -20,6 +21,8 @@ type RoleDetail = {
   name: string;
   description: string | null;
   active: boolean;
+  /** CC-0017 — rol del que hereda accesos efectivos (null = ninguno). */
+  inheritsFromRoleId: string | null;
   permissions: {
     permissionId: string;
     effect: "ALLOW" | "DENY";
@@ -80,7 +83,29 @@ export default function RoleDetailPage() {
       {role ? (
         <Card>
           <CardHeader>
+            <CardTitle>Herencia de roles</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RoleInheritance
+              roleId={role.id}
+              roleCode={role.code}
+              inheritsFromRoleId={role.inheritsFromRoleId}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {role ? (
+        <Card>
+          <CardHeader>
             <CardTitle>Permisos</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Esta matriz alimenta <code>requirePermission(...)</code> — hoy
+              sólo 3 procedures de prueba de concepto la consultan
+              (accounting.post, rbac.purgeInactiveUsers, userAdmin.resetPassword).
+              El resto de la plataforma sigue en <code>requireRole([...])</code>,
+              que respeta la herencia de arriba pero no esta matriz.
+            </p>
           </CardHeader>
           <CardContent>
             <PermissionMatrix

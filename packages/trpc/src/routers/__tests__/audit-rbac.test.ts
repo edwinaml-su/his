@@ -484,7 +484,24 @@ describe("rbac.permissionMatrix", () => {
 describe("rbac.purgeInactiveUsers", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
-  beforeEach(() => { prisma = mockDeep<PrismaClient>(); vi.clearAllMocks(); });
+  // CC-0017 — purgeInactiveUsers migró de requireRole(["DIR","super_admin"])
+  // a requirePermission("rbac.manage"). El motor efectivo (ver
+  // packages/trpc/src/rbac/effective-roles.ts) consulta prisma.role.findMany
+  // + prisma.rolePermission.findMany; sin mockearlos, requirePermission
+  // deniega por defecto (fail-safe hacia "denegar" — no hacia "permitir a
+  // cualquiera"). Se mockea aquí el equivalente al grant sembrado en
+  // 194_cc0017_rbac_parametrizable.sql (DIR → rbac.manage).
+  const DIR_ROLE_ID = "00000000-0000-0000-0000-0000000000d1";
+  beforeEach(() => {
+    prisma = mockDeep<PrismaClient>();
+    vi.clearAllMocks();
+    prisma.role.findMany.mockResolvedValue([
+      { id: DIR_ROLE_ID, code: "DIR", inheritsFromRoleId: null },
+    ] as never);
+    prisma.rolePermission.findMany.mockResolvedValue([
+      { effect: "ALLOW", permission: { code: "rbac.manage" } },
+    ] as never);
+  });
 
   it("[US.F2.7.20] dryRun retorna candidatos sin modificar BD", async () => {
     const caller = makeRbacCaller(prisma);

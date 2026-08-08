@@ -32,7 +32,7 @@ import {
   type AccountingPeriodClosedPayload,
   type AccountingJournalPostedHighValuePayload,
 } from "@his/contracts/events";
-import { router, requireRole } from "../trpc";
+import { router, requireRole, requirePermission } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
@@ -515,7 +515,13 @@ const journalRouter = router({
       });
     }),
 
-  post: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN"])
+  // CC-0017 — prueba de concepto #1 de `requirePermission`: reemplaza
+  // requireRole(["ACCOUNTANT","ACCOUNTANT_SENIOR","ADMIN"]) por el permiso
+  // "accounting.post". El seed `194_cc0017_rbac_parametrizable.sql` otorga
+  // ese permiso a exactamente esos 3 roles (espejo del requireRole anterior)
+  // — sin seed aplicado, este procedure deniega a todos (fail-safe de
+  // `requirePermission` hacia "denegar", ver packages/trpc/src/trpc.ts).
+  post: requirePermission("accounting.post")
     .input(journalPostInput)
     .mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
