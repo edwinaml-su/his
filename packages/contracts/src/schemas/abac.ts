@@ -101,3 +101,136 @@ export const abacDecisionSchema = z.object({
   reason: z.string(),
 });
 export type AbacDecision = z.infer<typeof abacDecisionSchema>;
+
+// -----------------------------------------------------------------------------
+// CC-0017 F2 — ABAC persistente (tabla `AbacRule`).
+//
+// Reemplaza la evaluación puramente informativa de arriba: las reglas viven
+// en BD (`packages/database/sql/195_cc0017_f2_abac.sql`), se evalúan
+// server-side en `packages/trpc/src/abac/motor.ts` y se editan desde /abac
+// (antes solo-lectura). Los tipos `AbacRule`/`abacRuleSchema` de arriba se
+// mantienen para no romper la vista informativa legacy y los helpers sync de
+// `apps/web/src/lib/auth/abac.ts` (ver doc REQ-SEC-ABAC-002 para el detalle
+// de qué se migró y qué quedó como fallback documentado).
+// -----------------------------------------------------------------------------
+
+/** Recurso protegido por una AbacRule persistida. Deriva de las 5 funciones canX. */
+export const abacRecursoSchema = z.enum([
+  "patient",
+  "prescription",
+  "dispensation",
+  "service",
+  "signature",
+]);
+export type AbacRecurso = z.infer<typeof abacRecursoSchema>;
+
+/** Acción sobre el recurso. */
+export const abacAccionSchema = z.enum(["access", "prescribe", "dispense", "sign"]);
+export type AbacAccion = z.infer<typeof abacAccionSchema>;
+
+/** Efecto de la regla. DENY siempre gana sobre ALLOW en el motor. */
+export const abacEffectSchema = z.enum(["ALLOW", "DENY"]);
+export type AbacEffect = z.infer<typeof abacEffectSchema>;
+
+/** Atributos soportados en las condiciones de una AbacRule. */
+export const abacAtributoSchema = z.enum([
+  "rol",
+  "establecimiento",
+  "servicio",
+  "horario",
+  "pacienteConTriaje",
+  "usuarioActivo",
+  "esPropioPaciente",
+]);
+export type AbacAtributoNombre = z.infer<typeof abacAtributoSchema>;
+
+/** Operadores evaluables. `ENTRE_HORAS` solo aplica al atributo `horario`. */
+export const abacOperadorSchema = z.enum([
+  "IGUAL",
+  "DIFERENTE",
+  "EN",
+  "NO_EN",
+  "ENTRE_HORAS",
+  "ES_VERDADERO",
+  "ES_FALSO",
+]);
+export type AbacOperador = z.infer<typeof abacOperadorSchema>;
+
+/** Rango horario HH:MM (24h). Soporta wrap de medianoche (desde > hasta). */
+export const abacHorarioValorSchema = z.object({
+  desde: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato HH:MM (24h)."),
+  hasta: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato HH:MM (24h)."),
+});
+export type AbacHorarioValor = z.infer<typeof abacHorarioValorSchema>;
+
+/** Un predicado de condición: `atributo operador valor`. La lista completa de una regla es AND. */
+export const abacCondicionSchema = z.object({
+  atributo: abacAtributoSchema,
+  operador: abacOperadorSchema,
+  valor: z.union([
+    z.string(),
+    z.array(z.string()),
+    z.boolean(),
+    abacHorarioValorSchema,
+  ]),
+});
+export type AbacCondicion = z.infer<typeof abacCondicionSchema>;
+
+/** Fila persistida de AbacRule (shape de respuesta del router). */
+export const abacRuleRecordSchema = z.object({
+  id: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  recurso: abacRecursoSchema,
+  accion: abacAccionSchema,
+  effect: abacEffectSchema,
+  prioridad: z.number().int(),
+  descripcion: z.string().nullable(),
+  condiciones: z.array(abacCondicionSchema),
+  active: z.boolean(),
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+export type AbacRuleRecord = z.infer<typeof abacRuleRecordSchema>;
+
+// -----------------------------------------------------------------------------
+// CRUD inputs — abac.router.ts
+// -----------------------------------------------------------------------------
+
+export const abacRuleListInput = z
+  .object({
+    recurso: abacRecursoSchema.optional(),
+    accion: abacAccionSchema.optional(),
+    activeOnly: z.boolean().optional(),
+  })
+  .default({});
+export type AbacRuleListInput = z.infer<typeof abacRuleListInput>;
+
+export const abacRuleGetInput = z.object({ id: z.string().uuid() });
+
+export const abacRuleCreateInput = z.object({
+  recurso: abacRecursoSchema,
+  accion: abacAccionSchema,
+  effect: abacEffectSchema.default("ALLOW"),
+  prioridad: z.number().int().min(0).max(10_000).default(100),
+  descripcion: z.string().trim().max(500).optional(),
+  condiciones: z.array(abacCondicionSchema).default([]),
+});
+export type AbacRuleCreateInput = z.infer<typeof abacRuleCreateInput>;
+
+export const abacRuleUpdateInput = z.object({
+  id: z.string().uuid(),
+  recurso: abacRecursoSchema.optional(),
+  accion: abacAccionSchema.optional(),
+  effect: abacEffectSchema.optional(),
+  prioridad: z.number().int().min(0).max(10_000).optional(),
+  descripcion: z.string().trim().max(500).nullable().optional(),
+  condiciones: z.array(abacCondicionSchema).optional(),
+});
+export type AbacRuleUpdateInput = z.infer<typeof abacRuleUpdateInput>;
+
+export const abacRuleSetActiveInput = z.object({
+  id: z.string().uuid(),
+  active: z.boolean(),
+});
+
+export const abacRuleDeleteInput = z.object({ id: z.string().uuid() });
