@@ -3,7 +3,10 @@
  *
  * Cadena de resolución (Edwin, regla de negocio confirmada):
  *   1. Item activo de la ServicePriceList asignada al TipoCuenta de la cuenta
- *      (match por `code`).
+ *      (match por `code`) — o por `ImagingTestAttrs.codigoTarifario` como
+ *      ALIAS probado antes que `code`, cuando se pasa `labTestId` (CC-0016:
+ *      permite mapear el código interno del catálogo de imágenes al código
+ *      real del tarifario Odoo, cuando difieren).
  *   2. Fallback: LabTest.standardPrice (CC-0013) por `code`.
  *   3. null — el llamador debe pedir precio manual con aviso.
  *
@@ -38,6 +41,12 @@ type TxForPriceResolver = {
       where: { code: string; standardPrice: { not: null }; organizationId: string | null };
     }) => Promise<{ standardPrice: unknown } | null>;
   };
+  /** CC-0016 — opcional: solo lo requieren callers que resuelven precio de imágenes. */
+  imagingTestAttrs?: {
+    findUnique: (args: {
+      where: { labTestId: string };
+    }) => Promise<{ codigoTarifario: string | null } | null>;
+  };
 };
 
 /**
@@ -62,17 +71,39 @@ export async function resolverPriceListIdDeCuenta(
 
 /**
  * Resuelve el precio de un `code` para una cuenta dada, siguiendo la cadena
- * lista de precios del tipo de cuenta → LabTest.standardPrice → null.
+ * lista de precios del tipo de cuenta (probando primero el alias
+ * `ImagingTestAttrs.codigoTarifario` cuando se pasa `labTestId`) →
+ * LabTest.standardPrice → null.
  */
 export async function resolverPrecio(
   tx: TxForPriceResolver,
-  params: { organizationId: string; cuentaId: string; code: string },
+  params: { organizationId: string; cuentaId: string; code: string; labTestId?: string },
 ): Promise<PrecioResuelto> {
-  const { organizationId, cuentaId, code } = params;
+  const { organizationId, cuentaId, code, labTestId } = params;
 
   const priceListId = await resolverPriceListIdDeCuenta(tx, organizationId, cuentaId);
 
   if (priceListId) {
+    // CC-0016 — alias de facturación: se prueba ANTES que `code` nativo.
+    // Sin labTestId (o sin fila de attrs / sin alias configurado) el
+    // comportamiento es idéntico al de antes de CC-0016 — cero regresión LIS.
+    if (labTestId && tx.imagingTestAttrs) {
+      const attrs = await tx.imagingTestAttrs.findUnique({ where: { labTestId } });
+      if (attrs?.codigoTarifario) {
+        const aliasRows = await tx.$queryRawUnsafe<Array<{ unitPrice: string }>>(
+          `SELECT i."unitPrice"
+             FROM "ServicePriceListItem" i
+            WHERE i."priceListId" = $1 AND i.code = $2 AND i.active = true
+            LIMIT 1`,
+          priceListId,
+          attrs.codigoTarifario,
+        );
+        if (aliasRows[0]) {
+          return { precio: Number(aliasRows[0].unitPrice), fuente: "lista", priceListId };
+        }
+      }
+    }
+
     const rows = await tx.$queryRawUnsafe<Array<{ unitPrice: string }>>(
       `SELECT i."unitPrice"
          FROM "ServicePriceListItem" i

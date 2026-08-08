@@ -29,21 +29,8 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
-
-/**
- * Mapeo modalidad DICOM → code de centro de costo ejecutor.
- * Definido en Wave 10: 41 centros sembrados, 4 centros de imagen.
- */
-const MODALITY_EXECUTOR_CODE: Partial<Record<string, string>> = {
-  CR: "2-IMG-RAY",
-  XA: "2-IMG-RAY", // Angiografía también usa sala RX
-  MG: "2-IMG-RAY", // Mamografía en mismo servicio radiología
-  NM: "2-IMG-RAY", // Nuclear medicine comparte RX en establecimientos pequeños
-  US: "2-IMG-USG",
-  CT: "2-IMG-TAC",
-  MR: "2-IMG-RMN",
-  PT: "2-IMG-RMN", // PET/RMN — misma unidad
-};
+// CC-0016: extraído a lib compartida — también lo usa imaging-request.router.ts.
+import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
 
 export const imagingRouter = router({
   modality: router({
