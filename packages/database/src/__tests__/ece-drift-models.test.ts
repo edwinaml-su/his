@@ -55,4 +55,11 @@ describe("ECE drift sync — modelos Prisma compilados", () => {
     expect(typeof prisma.eceColdChainAlerta.count).toBe("function");
     expect(typeof prisma.eceColdChainConfigEquipo.count).toBe("function");
   });
+
+  it("delegados CC-0018 SQL 193 (multilibro contable) existen", () => {
+    expect(typeof prisma.account.count).toBe("function");
+    expect(typeof prisma.accountingPeriod.count).toBe("function");
+    expect(typeof prisma.journalEntry.count).toBe("function");
+    expect(typeof prisma.journalLine.count).toBe("function");
+  });
 });
