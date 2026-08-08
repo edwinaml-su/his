@@ -13,6 +13,11 @@
  *
  * Patrón: protectedProcedure → makeCtx con MOCK_USER_ADMIN.
  * assertAdminMembership mockeado vía prisma.userOrganizationRole.findFirst.
+ *
+ * Fix RLS (hallazgo CC-0018): ledger.router ahora envuelve sus queries
+ * tenant-scoped en withTenantContext → se necesita wireTransaction (mismo
+ * patrón que accounting.test.ts) para que `$transaction`/`$executeRawUnsafe`
+ * no devuelvan `undefined` y rompan las aserciones sobre `prisma.ledger.*`.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -52,11 +57,24 @@ const baseLedger = {
   currency: activeCurrency,
 };
 
+/** Wiring de `$transaction`/`$executeRawUnsafe` para `withTenantContext` (ver accounting.test.ts). */
+function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  prisma.$transaction.mockImplementation(async (cb: any) => {
+    if (typeof cb === "function") {
+      return cb(prisma);
+    }
+    return cb;
+  });
+  prisma.$executeRawUnsafe.mockResolvedValue(undefined as never);
+}
+
 describe("ledgerRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    wireTransaction(prisma);
   });
 
   // ---------------------------------------------------------------------------
