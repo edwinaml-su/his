@@ -53,6 +53,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
+import { abacGuard } from "../../abac";
 import {
   validateClinicalText,
   forbiddenAbbreviationsRefine,
@@ -357,6 +358,10 @@ export const indicacionesMedicasRouter = router({
    */
   create: physicianProcedure
     .input(createSchema)
+    // CC-0017 F2 — prueba de concepto abacGuard: DENY explícito en AbacRule
+    // bloquea aunque el rol pase requireRole. Sin regla configurada (seed
+    // MVP replica el comportamiento actual) → ALLOW, no rompe nada existente.
+    .use(abacGuard("prescription", "prescribe"))
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = eceIds(ctx);
 

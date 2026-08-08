@@ -484,6 +484,8 @@ model Organization {
   patientAccounts           PatientAccount[]           @relation("PatientAccountOrg")
   // CC-0015 — tipos de cuenta (pivote de lista de precios) por organización
   tiposCuenta               TipoCuenta[]               @relation("TipoCuentaOrg")
+  // CC-0017 F2 — reglas ABAC persistidas por organización
+  abacRules                 AbacRule[]                 @relation("AbacRuleOrg")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -7486,6 +7488,39 @@ model TipoCuenta {
 
   @@unique([organizationId, code])
   @@index([organizationId, active])
+  @@schema("public")
+}
+
+/// CC-0017 F2 — ABAC persistente (SQL sql/195_cc0017_f2_abac.sql).
+/// Reemplaza las reglas hardcoded de apps/web/src/lib/auth/abac.ts (MVP_ABAC_RULES)
+/// por filas editables. `condiciones` es un array de predicados
+/// { atributo, operador, valor } evaluado por packages/trpc/src/abac/motor.ts.
+/// Precedencia: DENY siempre gana sobre ALLOW; sin regla que aplique → ALLOW
+/// fail-safe (ver docs/CC/0017/REQ-SEC-ABAC-002-abac-enforcement.md).
+model AbacRule {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  /// Recurso protegido: 'patient' | 'prescription' | 'dispensation' | 'service' | 'signature'.
+  recurso        String           @db.VarChar(40)
+  /// Acción sobre el recurso: 'access' | 'prescribe' | 'dispense' | 'sign'.
+  accion         String           @db.VarChar(40)
+  effect         PermissionEffect @default(ALLOW)
+  /// Orden de evaluación entre reglas que matchean el mismo (recurso, accion).
+  /// Más alto = se reporta primero como `matchedRuleId` dentro de su mismo effect.
+  prioridad      Int              @default(100)
+  descripcion    String?          @db.Text
+  /// Lista de predicados AND: [{ atributo, operador, valor }, ...]. Ver
+  /// `AbacCondicion` en @his/contracts/schemas/abac.ts para el shape tipado.
+  condiciones    Json             @default("[]")
+  active         Boolean          @default(true)
+  createdAt      DateTime         @default(now()) @db.Timestamptz()
+  createdBy      String?          @db.Uuid
+  updatedAt      DateTime         @updatedAt @db.Timestamptz()
+  updatedBy      String?          @db.Uuid
+
+  organization Organization @relation("AbacRuleOrg", fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, recurso, accion, active])
   @@schema("public")
 }
 

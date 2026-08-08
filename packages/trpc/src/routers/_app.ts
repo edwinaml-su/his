@@ -13,6 +13,7 @@ import { consentRouter } from "./consent.router";
 import { mfaRouter } from "./mfa.router";
 import { exchangeRateRouter } from "./exchange-rate.router";
 import { rbacRouter } from "./rbac.router";
+import { abacRouter } from "./abac.router";
 import { userAdminRouter } from "./user-admin.router";
 import { userServiceUnitRouter } from "./user-service-unit.router";
 import { localeRouter } from "./locale.router";
@@ -242,6 +243,7 @@ export const appRouter = router({
   mfa: mfaRouter,
   exchangeRate: exchangeRateRouter,
   rbac: rbacRouter,
+  abac: abacRouter,
   userAdmin: userAdminRouter,
   userServiceUnit: userServiceUnitRouter,
   locale: localeRouter,

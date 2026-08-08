@@ -23,6 +23,8 @@ const t = initTRPC.context<TRPCContext>().create({
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
+/** Middleware standalone (no ligado a un procedure base) — para helpers como `abacGuard`. */
+export const middleware = t.middleware;
 
 /** Requiere usuario autenticado. */
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {

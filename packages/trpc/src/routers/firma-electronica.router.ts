@@ -44,6 +44,7 @@ import { protectedProcedure, publicProcedure, requireRole, router } from "../trp
 // argon2 must be in packages/trpc/package.json: "argon2": "^0.41.1"
 import { argon2 } from "@his/infrastructure";
 import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
+import { evaluarAbac, atributosDesdeContexto } from "../abac";
 
 // =============================================================================
 // Constantes
@@ -616,6 +617,27 @@ export const firmaElectronicaRouter = router({
   confirm: protectedProcedure
     .input(confirmInput)
     .mutation(async ({ ctx, input }) => {
+      // CC-0017 F2 — prueba de concepto abacGuard (canSign), invocado inline
+      // (no vía `.use()`) porque `confirm` es protectedProcedure: no todo
+      // caller de firma tiene una organización seleccionada. Sin
+      // ctx.tenant, se salta la evaluación — fail-safe ALLOW, comportamiento
+      // idéntico al actual. Con tenant, el seed MVP (rol EN [medico])
+      // reproduce el comportamiento de hoy; una DENY nueva desde /abac sí
+      // bloquea la firma.
+      if (ctx.tenant) {
+        const decision = await evaluarAbac(ctx.prisma, ctx.tenant, {
+          recurso: "signature",
+          accion: "sign",
+          atributos: atributosDesdeContexto(ctx.tenant),
+        });
+        if (!decision.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `ABAC: acceso denegado (signature/sign) — ${decision.reason}`,
+          });
+        }
+      }
+
       const contexto = `${input.resource}::${input.action}`;
       return checkPin(ctx.prisma, {
         userId: ctx.user.id,

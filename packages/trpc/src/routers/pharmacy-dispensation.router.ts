@@ -28,6 +28,7 @@ import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
+import { abacGuard } from "../abac";
 
 // ---------------------------------------------------------------------------
 // Helpers: parseo de frecuencia médica a minutos
@@ -122,6 +123,10 @@ export const pharmacyDispensationRouter = router({
    */
   reserveItem: requireRole(["PHARM", "ADMIN"])
     .input(reserveItemInput)
+    // CC-0017 F2 — prueba de concepto abacGuard (canDispense). Seed MVP
+    // replica el comportamiento actual (rol EN [farmaceutico]) — no bloquea
+    // nada hoy; un admin puede añadir una DENY más específica desde /abac.
+    .use(abacGuard("dispensation", "dispense"))
     .mutation(async ({ ctx, input }) => {
       const { prisma, tenant } = ctx;
       return withTenantContext(prisma, tenant, async (tx) => {
