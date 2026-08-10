@@ -21,6 +21,9 @@ import { cookies } from "next/headers";
 import { prisma } from "@his/database";
 import { type TenantContext, isCrossServiceRoleCode } from "@his/contracts";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { BREAK_GLASS_COOKIE_NAME, parseBreakGlassCookie } from "./break-glass-cookie";
+export type { BreakGlassSession } from "./break-glass-cookie";
+export { parseBreakGlassCookie } from "./break-glass-cookie";
 
 const ORG_COOKIE = "his.org";
 const ESTAB_COOKIE = "his.estab";
@@ -167,6 +170,14 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
   const assignedServiceUnitIds = assignments.map((a) => a.serviceUnitId);
   const assignedServiceUnitCodes = assignments.map((a) => a.serviceUnit.code);
 
+  // CC-0017 F3 — Break-glass: única lectura de la cookie en todo el server.
+  // `withTenantContext` (rls-context.ts) hereda `breakGlass` automáticamente
+  // desde este objeto — ningún router necesita pasarlo explícito.
+  const breakGlassSession = parseBreakGlassCookie(
+    cookieStore.get(BREAK_GLASS_COOKIE_NAME)?.value,
+    now,
+  );
+
   return {
     userId: user.id,
     countryId: chosen.organization.countryId,
@@ -179,6 +190,8 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
     assignedServiceUnitIds,
     assignedServiceUnitCodes,
     isCrossServiceRole,
+    breakGlass: breakGlassSession !== null,
+    ...(breakGlassSession ? { breakGlassSession } : {}),
   };
 });
 

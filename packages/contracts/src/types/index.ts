@@ -38,6 +38,25 @@ export interface TenantContext {
    * filtro de servicio (pueden ver TODO dentro de su org).
    */
   isCrossServiceRole: boolean;
+  /**
+   * CC-0017 F3 — `true` si el usuario tiene una sesión break-glass vigente
+   * (cookie httpOnly `his.break_glass` presente, con estructura válida y no
+   * expirada). Resuelto una sola vez en `getTenantContext()` (server-side) a
+   * partir de la cookie — NUNCA confiar en un valor de cliente.
+   *
+   * Opcional (default ausente = `false` para todo consumidor existente) para
+   * no romper los ~50 call sites de `withTenantContext` ni los fixtures de
+   * test que construyen un `TenantContext` sin este campo — fail-safe por
+   * construcción del tipo, no solo en runtime.
+   */
+  breakGlass?: boolean;
+  /** Metadata de la sesión break-glass activa — solo presente si `breakGlass === true`. */
+  breakGlassSession?: {
+    patientId: string;
+    justification: string;
+    activatedAt: string;
+    expiresAt: string;
+  };
 }
 
 /** Roles que NO se restringen a un servicio específico — ven todo. */

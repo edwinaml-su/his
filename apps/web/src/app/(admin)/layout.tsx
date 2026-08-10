@@ -22,6 +22,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         userId: user.id,
         organizationId: tenant?.organizationId,
       }}
+      breakGlass={tenant?.breakGlassSession ?? null}
       topbar={
         <div className="flex w-full items-center justify-end gap-1 sm:gap-2">
           {tenant ? <NotificationsBadge /> : null}

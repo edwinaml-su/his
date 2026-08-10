@@ -16,6 +16,7 @@ import { ChatWidget } from "./chat-widget";
 import { CalcWidget } from "./calculadoras/calc-widget";
 import { AppSidebar } from "./app-sidebar";
 import { CommandPalette, CommandPaletteButton } from "./command-palette";
+import { BreakGlassBanner, type BreakGlassBannerSession } from "./break-glass-banner";
 
 export function AppShell({
   children,
@@ -24,6 +25,7 @@ export function AppShell({
   assignedServiceUnitCodes = [],
   isCrossServiceRole = false,
   chatAuth,
+  breakGlass = null,
 }: {
   children: React.ReactNode;
   topbar?: React.ReactNode;
@@ -43,6 +45,8 @@ export function AppShell({
   isCrossServiceRole?: boolean;
   /** Identidad del usuario para tools tenant-scoped del chatbot. */
   chatAuth?: { userId: string; organizationId?: string };
+  /** CC-0017 F3 — sesión break-glass activa (null = sin break-glass, default). */
+  breakGlass?: BreakGlassBannerSession | null;
 }) {
   const pathname = usePathname();
   const isMobile = useIsMobile();
@@ -105,6 +109,9 @@ export function AppShell({
 
               <div className="min-w-0 flex-1 text-sm text-muted-foreground">{topbar}</div>
             </header>
+
+            {/* CC-0017 F3 — banner persistente mientras haya sesión break-glass activa. */}
+            <BreakGlassBanner session={breakGlass} />
 
             {/* Breadcrumbs (barra de navegabilidad) */}
             <Breadcrumbs pathname={pathname} />

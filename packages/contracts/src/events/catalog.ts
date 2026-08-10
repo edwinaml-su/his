@@ -173,6 +173,9 @@ export const EVENT_TYPES = [
   "jci.ipsg3.lasa_acknowledged",
   // JCI IPSG.1-H1 (US-21-D5) — Verificación 2-IDs en toma de muestra de laboratorio bedside
   "jci.ipsg1.lab_bedside_verified",
+  // CC-0017 F3 — Break-glass: notifica a DIR/ADMIN/MEDICAL_DIRECTOR de la org
+  // (no existe rol "jefe de servicio" seedeado, ver docs/CC/0017).
+  "security.breakGlass.activated",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

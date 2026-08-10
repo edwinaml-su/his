@@ -27,6 +27,7 @@ import type {
   PathologyCriticalFindingPayload,
   AccountingPeriodClosedPayload,
   AccountingJournalPostedHighValuePayload,
+  SecurityBreakGlassActivatedPayload,
 } from "@his/contracts";
 
 export interface RenderedTemplate {
@@ -861,6 +862,69 @@ ${infoRow("ID asiento:", escape(payload.journalEntryId))}
     ``,
     `Revisa el asiento en el módulo de Contabilidad para confirmar su validez.`,
     ...(ctx.url ? [``, `Ver asiento: ${ctx.url}`] : []),
+    ``,
+    `---`,
+    `Inversiones Avante — HIS Multipaís`,
+    `Mensaje automático. Ajusta tus preferencias en el HIS.`,
+  ];
+
+  return { subject, html, text: lines.join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// security.breakGlass.activated  (CC-0017 F3)
+// NOTA: por diseño el payload NO incluye datos identificativos del paciente
+// (solo patientId, no usado aquí) — evita filtrar PHI a un canal de correo
+// menos controlado que el HIS. El destinatario revisa el detalle completo
+// en el módulo de Auditoría.
+// ---------------------------------------------------------------------------
+
+export function buildSecurityBreakGlassActivatedTemplate(
+  payload: SecurityBreakGlassActivatedPayload,
+  ctx: TemplateContext = {},
+): RenderedTemplate {
+  const subject = `[CRÍTICO] Acceso de emergencia (break-glass) activado`;
+
+  const greeting = ctx.recipientName
+    ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">Estimado/a <strong>${escape(ctx.recipientName)}</strong>,</p>`
+    : "";
+
+  const html =
+    htmlHeader() +
+    `<tr><td>
+${greeting}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:16px;">
+<tr>
+<td style="font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:${COLOR.bodyText};padding-bottom:4px;">
+  ${severityBadge("CRÍTICO", true)}
+  <span style="margin-left:8px;">Acceso de emergencia activado</span>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">
+  Un usuario activó el acceso de emergencia (break-glass) sobre el expediente de un paciente. Este acceso queda auditado de forma inmutable y expira automáticamente.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:20px;width:100%;max-width:400px;">
+${infoRow("Justificación:", escape(payload.justification))}
+${infoRow("Vence:", escape(payload.expiresAt))}
+${infoRow("ID auditoría:", escape(payload.auditLogId))}
+</table>
+<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:${COLOR.footerText};">
+  Revisa el detalle completo (paciente, usuario) en el módulo de Auditoría del HIS.
+</p>
+</td></tr>` +
+    htmlFooter(ctx.url);
+
+  const lines: string[] = [
+    `[CRÍTICO] Acceso de emergencia (break-glass) activado`,
+    `=======================================================`,
+    ...(ctx.recipientName ? [`Estimado/a ${ctx.recipientName},`, ``] : []),
+    `Justificación: ${payload.justification}`,
+    `Vence: ${payload.expiresAt}`,
+    `ID auditoría: ${payload.auditLogId}`,
+    ``,
+    `Revisa el detalle completo en el módulo de Auditoría del HIS.`,
+    ...(ctx.url ? [``, `Ver auditoría: ${ctx.url}`] : []),
     ``,
     `---`,
     `Inversiones Avante — HIS Multipaís`,

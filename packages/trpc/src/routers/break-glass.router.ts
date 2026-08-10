@@ -18,6 +18,7 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 
 // -----------------------------------------------------------------------------
@@ -90,6 +91,37 @@ export const breakGlassRouter = router({
           },
           select: { id: true, occurredAt: true },
         });
+
+        // CC-0017 F3 — encola notificación al jefe de servicio (fallback
+        // DIR/ADMIN/MEDICAL_DIRECTOR de la org, ver
+        // docs/CC/0017/REQ-SEC-BG-003-break-glass-funcional.md). Best-effort:
+        // el acceso YA quedó auditado arriba — un fallo aquí NO debe
+        // convertir la activación (ya exitosa) en un error 500.
+        const expiresAt = new Date(
+          log.occurredAt.getTime() + BREAK_GLASS_TTL_SECONDS * 1000,
+        );
+        try {
+          await emitDomainEvent(ctx.prisma, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "security.breakGlass.activated",
+            aggregateType: "Patient",
+            aggregateId: input.patientId,
+            emittedById: ctx.user.id,
+            payload: {
+              auditLogId: log.id.toString(),
+              userId: ctx.user.id,
+              patientId: input.patientId,
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: ctx.tenant.establishmentId ?? null,
+              justification: input.justification,
+              activatedAt: log.occurredAt.toISOString(),
+              expiresAt: expiresAt.toISOString(),
+            },
+          });
+        } catch (notifyErr) {
+          // eslint-disable-next-line no-console
+          console.error("[break-glass.activate] error encolando notificación:", notifyErr);
+        }
 
         return {
           ok: true as const,

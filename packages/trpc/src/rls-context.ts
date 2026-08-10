@@ -32,7 +32,15 @@ import type { PrismaClient } from "@prisma/client";
 import type { TenantContext } from "@his/contracts";
 
 export interface RlsContextOptions {
-  /** Si es true, el GUC `app.is_break_glass` se setea a true. Audit trail aparte. */
+  /**
+   * Si se provee explícito (`true`/`false`), gana sobre `tenant.breakGlass`
+   * (útil en tests/seeders que quieren forzar el flag). Si se omite,
+   * `applyTenantContext`/`withTenantContext` usan `tenant.breakGlass` — CC-0017
+   * F3: así los ~50 call sites existentes de `withTenantContext(prisma,
+   * ctx.tenant, ...)` heredan la elevación automáticamente cuando
+   * `ctx.tenant.breakGlass === true` (cookie `his.break_glass` válida
+   * resuelta en `getTenantContext()`), sin tener que tocar cada uno.
+   */
   breakGlass?: boolean;
   /**
    * Si es false, NO ejecuta `SET LOCAL ROLE authenticated` después de
@@ -60,7 +68,7 @@ export interface RlsContextOptions {
  */
 export async function applyTenantContext(
   tx: Pick<PrismaClient, "$executeRawUnsafe">,
-  tenant: Pick<TenantContext, "userId" | "organizationId">,
+  tenant: Pick<TenantContext, "userId" | "organizationId" | "breakGlass">,
   options: RlsContextOptions = {},
 ): Promise<void> {
   // `set_tenant_context` viene de `04_rls_session_helpers.sql`.
@@ -70,7 +78,11 @@ export async function applyTenantContext(
   // Postgres aborta la transacción.
   const userId = String(tenant.userId).replace(/'/g, "''");
   const orgId = String(tenant.organizationId).replace(/'/g, "''");
-  const bg = options.breakGlass ? "true" : "false";
+  // CC-0017 F3 — options.breakGlass explícito gana; si se omite, hereda de
+  // tenant.breakGlass (ver doc en RlsContextOptions). `tenant.breakGlass`
+  // ausente/undefined → false, fail-safe idéntico al comportamiento previo.
+  const effectiveBreakGlass = options.breakGlass ?? tenant.breakGlass ?? false;
+  const bg = effectiveBreakGlass ? "true" : "false";
 
   await tx.$executeRawUnsafe(
     `SELECT public.set_tenant_context('${userId}'::uuid, '${orgId}'::uuid, ${bg});`,
@@ -113,7 +125,7 @@ export async function clearTenantContext(
  */
 export async function withTenantContext<T>(
   prisma: PrismaClient,
-  tenant: Pick<TenantContext, "userId" | "organizationId">,
+  tenant: Pick<TenantContext, "userId" | "organizationId" | "breakGlass">,
   fn: (tx: PrismaClient) => Promise<T>,
   options: RlsContextOptions = {},
 ): Promise<T> {

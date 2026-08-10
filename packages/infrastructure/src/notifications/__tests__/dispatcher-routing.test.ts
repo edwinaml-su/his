@@ -378,4 +378,74 @@ describe("dispatcher routing — Beta.16.1 + Beta.17.1 + Beta.18.1", () => {
       expect(result.skippedReason).toBe("no-recipient");
     });
   });
+
+  // -------------------------------------------------------------------------
+  // security.breakGlass.activated (CC-0017 F3)
+  // -------------------------------------------------------------------------
+
+  describe("security.breakGlass.activated", () => {
+    const AUDIT_LOG_ID = "10000000-0000-4000-8000-000000000001";
+    const now = new Date().toISOString();
+
+    function makeEvent(): DispatchInputEvent {
+      return {
+        id: EVENT_ID,
+        organizationId: ORG,
+        eventType: "security.breakGlass.activated",
+        aggregateType: "Patient",
+        aggregateId: PATIENT_ID,
+        payload: {
+          auditLogId: AUDIT_LOG_ID,
+          userId: USER_A,
+          patientId: PATIENT_ID,
+          organizationId: ORG,
+          establishmentId: null,
+          justification: "Paciente inconsciente, requiere revisión urgente.",
+          activatedAt: now,
+          expiresAt: now,
+        },
+      };
+    }
+
+    it("resuelve DIR/ADMIN/MEDICAL_DIRECTOR vigentes → notifica a todos CRITICAL", async () => {
+      prisma.userOrganizationRole.findMany.mockResolvedValue([
+        { userId: USER_B, role: { code: "DIR" }, user: { email: "dir@his.test", fullName: "Dir Test" } },
+        { userId: USER_C, role: { code: "ADMIN" }, user: { email: "admin@his.test", fullName: "Admin Test" } },
+      ] as never);
+
+      const result = await dispatchDomainEvent(makeEvent(), baseCtx(prisma));
+
+      expect(result.skippedReason).toBeUndefined();
+      const createCalls = prisma.notification.create.mock.calls;
+      const recipients = createCalls.map((c) => (c[0] as { data: { recipientUserId: string } }).data.recipientUserId);
+      expect(new Set(recipients)).toEqual(new Set([USER_B, USER_C]));
+      const severities = createCalls.map((c) => (c[0] as { data: { severity: string } }).data.severity);
+      expect(severities.every((s) => s === "CRITICAL")).toBe(true);
+      const channels = createCalls.map((c) => (c[0] as { data: { channel: string } }).data.channel);
+      expect(channels).toContain("INBOX");
+    });
+
+    it("sin DIR/ADMIN/MEDICAL_DIRECTOR vigentes → no-recipient (no bloquea el break-glass)", async () => {
+      prisma.userOrganizationRole.findMany.mockResolvedValue([] as never);
+
+      const result = await dispatchDomainEvent(makeEvent(), baseCtx(prisma));
+
+      expect(result.skippedReason).toBe("no-recipient");
+      expect(prisma.notification.create).not.toHaveBeenCalled();
+    });
+
+    it("el payload de la notificación NO incluye datos identificativos de PHI del paciente en el email", async () => {
+      prisma.userOrganizationRole.findMany.mockResolvedValue([
+        { userId: USER_B, role: { code: "DIR" }, user: { email: "dir@his.test", fullName: "Dir Test" } },
+      ] as never);
+
+      await dispatchDomainEvent(makeEvent(), baseCtx(prisma));
+
+      const createCalls = prisma.notification.create.mock.calls;
+      const bodies = createCalls.map((c) => (c[0] as { data: { body: string } }).data.body);
+      // El justification SÍ es clínico-necesario y se incluye; el patientId
+      // (UUID) NO debe filtrarse a un canal de correo menos controlado.
+      expect(bodies.every((b) => !b.includes(PATIENT_ID))).toBe(true);
+    });
+  });
 });
