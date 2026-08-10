@@ -24,7 +24,7 @@
 import { cookies } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { prisma } from "@his/database";
+import { prisma, emitDomainEvent } from "@his/database";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 
 // -----------------------------------------------------------------------------
@@ -113,6 +113,36 @@ export async function activateBreakGlass(
   };
   const expiresAt = new Date(log.occurredAt.getTime() + BREAK_GLASS_TTL_SECONDS * 1000);
 
+  // 5b. CC-0017 F3 — encola la notificación al jefe de servicio (fallback
+  // DIR/ADMIN/MEDICAL_DIRECTOR de la org — no existe rol "jefe de servicio"
+  // seedeado, ver docs/CC/0017/REQ-SEC-BG-003-break-glass-funcional.md).
+  // Reutiliza el outbox existente (Beta.15): DomainEvent + dispatcher
+  // (packages/infrastructure/notifications), NO un email directo ad-hoc.
+  // Best-effort: el acceso YA quedó auditado en el paso 4 — perder la
+  // notificación no debe bloquear la atención de emergencia.
+  try {
+    await emitDomainEvent(prisma, {
+      organizationId: tenant.organizationId,
+      eventType: "security.breakGlass.activated",
+      aggregateType: "Patient",
+      aggregateId: input.patientId,
+      emittedById: user.id,
+      payload: {
+        auditLogId: log.id.toString(),
+        userId: user.id,
+        patientId: input.patientId,
+        organizationId: tenant.organizationId,
+        establishmentId: tenant.establishmentId ?? null,
+        justification: input.justification,
+        activatedAt: log.occurredAt.toISOString(),
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[break-glass] error encolando notificación al jefe de servicio:", err);
+  }
+
   cookies().set(BREAK_GLASS_COOKIE_NAME, JSON.stringify(payload), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -131,9 +161,41 @@ export async function activateBreakGlass(
   };
 }
 
-/** Limpia la sesión break-glass (al expirar o al cerrar el caso). */
+/**
+ * Limpia la sesión break-glass (desactivación manual desde el banner del
+ * shell, o al expirar). CC-0017 F3: audita el cierre — lee el payload de la
+ * cookie ANTES de borrarla para saber sobre qué paciente se estaba operando.
+ * Best-effort: un fallo al auditar NO debe impedir que el usuario cierre su
+ * sesión de emergencia.
+ */
 export async function clearBreakGlass(): Promise<{ ok: true }> {
+  const raw = cookies().get(BREAK_GLASS_COOKIE_NAME)?.value;
   cookies().delete(BREAK_GLASS_COOKIE_NAME);
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { patientId?: unknown };
+      const user = await getCurrentUser();
+      const tenant = user ? await getTenantContext() : null;
+      if (user && tenant && typeof parsed.patientId === "string") {
+        await prisma.auditLog.create({
+          data: {
+            userId: user.id,
+            organizationId: tenant.organizationId,
+            establishmentId: tenant.establishmentId ?? null,
+            action: "UPDATE",
+            entity: "BreakGlassAccess",
+            entityId: parsed.patientId,
+            justification: "Break-glass desactivado manualmente por el usuario.",
+          },
+        });
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("[break-glass] error auditando desactivación:", err);
+    }
+  }
+
   revalidatePath("/", "layout");
   return { ok: true };
 }

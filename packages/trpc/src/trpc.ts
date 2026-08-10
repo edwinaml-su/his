@@ -33,15 +33,61 @@ export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   return next({ ctx: { ...ctx, user: ctx.user } });
 });
 
+/**
+ * CC-0017 F3 — Registra en `audit.AuditLog` cada request tRPC que corrió con
+ * `ctx.tenant.breakGlass === true`. Postgres no soporta triggers BEFORE
+ * SELECT (ver comentario en `packages/database/sql/02_audit_triggers.sql`
+ * §4), así que las lecturas bajo break-glass NO quedan cubiertas por el
+ * trigger genérico de auditoría — este es el único punto que las captura.
+ *
+ * Best-effort: si el INSERT de auditoría falla, se loggea pero NO se
+ * bloquea la respuesta al cliente — el acceso de emergencia ya quedó
+ * auditado en la activación (break-glass.router.ts `activate`); perder este
+ * registro puntual de "uso" no debe impedir la atención clínica.
+ */
+async function auditBreakGlassAccess(
+  ctx: TRPCContext,
+  meta: { path: string; type: string },
+): Promise<void> {
+  const tenant = ctx.tenant;
+  if (!tenant) return;
+  try {
+    await ctx.prisma.auditLog.create({
+      data: {
+        userId: ctx.user?.id ?? null,
+        organizationId: tenant.organizationId,
+        establishmentId: tenant.establishmentId ?? null,
+        action: "READ",
+        entity: "BreakGlassAccess",
+        entityId: tenant.breakGlassSession?.patientId ?? null,
+        justification: `break-glass activo: ${meta.type} ${meta.path}`,
+        afterJson: {
+          path: meta.path,
+          type: meta.type,
+          patientIdDeclarado: tenant.breakGlassSession?.patientId ?? null,
+        },
+      },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[break-glass audit] error registrando acceso:", err);
+  }
+}
+
 /** Requiere usuario + organización seleccionada (tenant). */
-export const tenantProcedure = protectedProcedure.use(({ ctx, next }) => {
+export const tenantProcedure = protectedProcedure.use(async ({ ctx, next, path, type }) => {
   if (!ctx.tenant) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Selecciona una organización antes de continuar.",
     });
   }
-  return next({ ctx: { ...ctx, tenant: ctx.tenant } });
+  const tenant = ctx.tenant;
+  const result = await next({ ctx: { ...ctx, tenant } });
+  if (tenant.breakGlass && result.ok) {
+    await auditBreakGlassAccess(ctx, { path, type });
+  }
+  return result;
 });
 
 /** Requiere sesión autenticada en el Portal del Paciente (Beta.20). */

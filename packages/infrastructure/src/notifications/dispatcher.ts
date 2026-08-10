@@ -35,6 +35,7 @@ import {
   type PathologyCriticalFindingPayload,
   type AccountingPeriodClosedPayload,
   type AccountingJournalPostedHighValuePayload,
+  type SecurityBreakGlassActivatedPayload,
 } from "@his/contracts";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
@@ -54,6 +55,7 @@ import {
   buildPathologyCriticalFindingTemplate,
   buildAccountingPeriodClosedTemplate,
   buildAccountingJournalPostedHighValueTemplate,
+  buildSecurityBreakGlassActivatedTemplate,
   type RenderedTemplate,
 } from "./templates";
 
@@ -147,6 +149,8 @@ async function resolveRecipientsAndSeverity(
       return resolveAccountingPeriodClosed(parsed.payload, event.organizationId, prisma);
     case "accounting.journalPostedHighValue":
       return resolveAccountingJournalPostedHighValue(parsed.payload, event.organizationId, prisma);
+    case "security.breakGlass.activated":
+      return resolveSecurityBreakGlassActivated(parsed.payload, event.organizationId, prisma);
     default: {
       // HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42).
       // Se maneja fuera del switch tipado porque el eventType es nuevo y el
@@ -398,6 +402,48 @@ async function resolveAccountingJournalPostedHighValue(
 }
 
 // -----------------------------------------------------------------------------
+// CC-0017 F3 — security.breakGlass.activated
+// -----------------------------------------------------------------------------
+
+/**
+ * No existe rol "jefe de servicio" seedeado en el catálogo `Role` hoy (ver
+ * docs/CC/0017/REQ-SEC-BG-003-break-glass-funcional.md) — fallback documentado:
+ * notifica a TODOS los usuarios con membresía vigente en alguno de los roles
+ * de gobierno de la organización. Cualquiera de ellos puede/debe revisar un
+ * acceso de emergencia.
+ */
+const BREAK_GLASS_NOTIFY_ROLE_CODES = ["DIR", "DIRECTOR", "MEDICAL_DIRECTOR", "ADMIN"];
+
+async function resolveSecurityBreakGlassActivated(
+  payload: SecurityBreakGlassActivatedPayload,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const now = new Date();
+  const links = await prisma.userOrganizationRole.findMany({
+    where: {
+      organizationId,
+      validFrom: { lte: now },
+      OR: [{ validTo: null }, { validTo: { gte: now } }],
+      role: { code: { in: BREAK_GLASS_NOTIFY_ROLE_CODES } },
+    },
+    select: {
+      userId: true,
+      role: { select: { code: true } },
+      user: { select: { email: true, fullName: true } },
+    },
+    distinct: ["userId"],
+  });
+  return links.map((l) => ({
+    userId: l.userId,
+    email: l.user.email,
+    fullName: l.user.fullName,
+    roleCode: l.role.code,
+    severity: "CRITICAL" as Severity,
+  }));
+}
+
+// -----------------------------------------------------------------------------
 // HG-15 (Stream G, P2) — ECE Rectificaciones (NTEC Art. 42)
 // Notifica al solicitante cuando DIR aprueba o rechaza su rectificación.
 // Tipos inline para evitar dependencia de versión de @his/contracts en node_modules.
@@ -472,6 +518,8 @@ function renderTemplate(
       return buildAccountingPeriodClosedTemplate(event.payload as AccountingPeriodClosedPayload, ctx);
     case "accounting.journalPostedHighValue":
       return buildAccountingJournalPostedHighValueTemplate(event.payload as AccountingJournalPostedHighValuePayload, ctx);
+    case "security.breakGlass.activated":
+      return buildSecurityBreakGlassActivatedTemplate(event.payload as SecurityBreakGlassActivatedPayload, ctx);
     default:
       return null;
   }

@@ -1165,6 +1165,30 @@ export const jciIpsg2ReadbackRecordedPayloadSchema = z.object({
 export type JciIpsg2ReadbackRecordedPayload = z.infer<typeof jciIpsg2ReadbackRecordedPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// security.breakGlass.activated  (CC-0017 F3)
+// Emitido cuando se activa un acceso de emergencia (break-glass). Notifica a
+// los roles de gobierno de la organización (DIR/DIRECTOR/MEDICAL_DIRECTOR/
+// ADMIN) — no existe rol "jefe de servicio" seedeado en el catálogo hoy, ver
+// docs/CC/0017/REQ-SEC-BG-003-break-glass-funcional.md.
+// -----------------------------------------------------------------------------
+
+export const securityBreakGlassActivatedPayloadSchema = z.object({
+  /** id (BigInt→string) del AuditLog action=BREAK_GLASS de la activación. */
+  auditLogId: z.string().min(1),
+  userId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  establishmentId: z.string().uuid().nullable(),
+  justification: z.string().min(1).max(1000),
+  activatedAt: z.string().datetime(),
+  expiresAt: z.string().datetime(),
+});
+
+export type SecurityBreakGlassActivatedPayload = z.infer<
+  typeof securityBreakGlassActivatedPayloadSchema
+>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1611,6 +1635,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
       identifier2Kind: z.enum(["DUI", "NOMBRE_COMPLETO", "FECHA_NAC", "MRN"]),
       verifiedBy: z.string().uuid(),
     }),
+  }),
+  // CC-0017 F3 — Break-glass: notifica a DIR/ADMIN/MEDICAL_DIRECTOR de la org.
+  z.object({
+    eventType: z.literal("security.breakGlass.activated"),
+    payload: securityBreakGlassActivatedPayloadSchema,
   }),
 ]);
 

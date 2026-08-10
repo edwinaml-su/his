@@ -79,6 +79,17 @@ vi.mock("../../lib/trpc/react", () => ({
   },
 }));
 
+// CC-0017 F3 — AppShell renderiza BreakGlassBanner, que importa `clearBreakGlass`
+// desde el Server Action `@/app/actions/break-glass.ts`. Ese archivo importa
+// `@his/database` (Prisma real) y `@/lib/auth/session` (usa `cache()` de RSC,
+// no disponible en el build de `react` que resuelve jsdom/Vitest). En Next.js
+// real esto se stub-ea automáticamente al bundlear un Client Component que
+// referencia una Server Action; Vitest no hace esa transformación, así que lo
+// mockeamos explícitamente (mismo patrón que el mock de trpc arriba).
+vi.mock("@/app/actions/break-glass", () => ({
+  clearBreakGlass: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 import { AppShell } from "../app-shell";
 
 describe("<AppShell /> — skip link WCAG 2.4.1", () => {
