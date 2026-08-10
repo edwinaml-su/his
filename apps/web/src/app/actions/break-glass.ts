@@ -26,25 +26,28 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma, emitDomainEvent } from "@his/database";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
+// Un archivo "use server" solo puede EXPORTAR funciones async (regla de Next —
+// la valida el build de Next/SWC, no `tsc`). Las constantes y el schema del
+// cookie viven en el módulo puro `@/lib/auth/break-glass-cookie` y se importan
+// aquí; no se re-exportan desde este archivo.
+import { BREAK_GLASS_COOKIE_NAME, BREAK_GLASS_TTL_SECONDS } from "@/lib/auth/break-glass-cookie";
 
 // -----------------------------------------------------------------------------
-// Schemas locales — espejo del canónico en
-// `packages/contracts/src/schemas/break-glass.ts`. Replicados aquí porque la
+// Schema local — espejo del canónico en
+// `packages/contracts/src/schemas/break-glass.ts`. Replicado aquí porque la
 // barrel `@his/contracts/schemas/index.ts` está congelada en Sprint 1 y el
 // package.json no expone sub-paths individuales. Si divergen, prevalece el
-// archivo de contracts.
+// archivo de contracts. NO se exporta (regla "use server").
 // -----------------------------------------------------------------------------
 const MIN_JUSTIFICATION_LEN = 20;
 const MAX_JUSTIFICATION_LEN = 1000;
-export const BREAK_GLASS_COOKIE_NAME = "his.break_glass";
-export const BREAK_GLASS_TTL_SECONDS = 60 * 60;
 
 const breakGlassActivateInput = z.object({
   patientId: z.string().uuid(),
   justification: z.string().trim().min(MIN_JUSTIFICATION_LEN).max(MAX_JUSTIFICATION_LEN),
   chiefNotifiedAck: z.boolean().refine((v) => v === true),
 });
-export type BreakGlassActivateInput = z.infer<typeof breakGlassActivateInput>;
+type BreakGlassActivateInput = z.infer<typeof breakGlassActivateInput>;
 
 interface BreakGlassCookiePayload {
   patientId: string;
