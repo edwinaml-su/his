@@ -5,13 +5,26 @@
  * Mismo caveat que `rbac.ts`: la barrel está congelada, así que el router
  * importa este archivo por ruta relativa.
  *
- * Contrato del invitation flow (Sprint 1, MVP):
- *   `userAdmin.create` solo crea el registro local en `User` con
- *   `active=true, mfaEnabled=false`. NO crea Auth user en Supabase.
- *   El email queda registrado para que el flujo de invitación
- *   (Sprint 2 — magic-link) lo asocie.
+ * Invitation flow (CC-0019, funcional):
+ *   `userAdmin.create` crea la cuenta en Supabase Auth (`auth.users`, sin
+ *   password) Y el registro local en `User`, y envía un correo de
+ *   invitación con un enlace para que el usuario fije su propia contraseña.
+ *   `userAdmin.resendInvitation` reenvía el enlace (o provisiona la cuenta
+ *   Auth si faltaba — huérfanos detectados por `userAdmin.listSinCuentaAuth`).
+ *   Ver `packages/trpc/src/routers/user-admin.router.ts` y
+ *   `docs/CC/0019/REQ-SEC-USR-001-alta-usuario-auth.md`.
  */
 import { z } from "zod";
+
+/**
+ * Estado de la cuenta de autenticación (Supabase Auth) de un usuario local,
+ * derivado en el router (no persistido — ver `userAdmin.listAll`/`get`):
+ *   - SIN_CUENTA: no existe fila en `auth.users` para ese email.
+ *   - INVITADO:   existe la cuenta pero nunca completó login (`last_sign_in_at IS NULL`).
+ *   - ACTIVO:     ya inició sesión al menos una vez.
+ */
+export const userAuthStatusSchema = z.enum(["SIN_CUENTA", "INVITADO", "ACTIVO"]);
+export type UserAuthStatus = z.infer<typeof userAuthStatusSchema>;
 
 // -----------------------------------------------------------------------------
 // DTOs
@@ -66,6 +79,9 @@ export const userAdminUpdateInput = z.object({
 
 export const userAdminDeactivateInput = z.object({ id: z.string().uuid() });
 
+/** Reenvía (o provisiona si faltaba) la invitación de acceso de un usuario. */
+export const userAdminResendInvitationInput = z.object({ userId: z.string().uuid() });
+
 /**
  * Reset de password por ADMIN. Sustituye cualquier `UserCredential` activo
  * con método PASSWORD por uno nuevo (idempotente: cierra el viejo con
@@ -108,6 +124,8 @@ export const userAdminRevokeRoleInput = z.object({
 export const userListItemSchema = userAdminSchema.extend({
   /** Cantidad de UserOrganizationRole vigentes (no expiradas). */
   activeRoleCount: z.number().int().min(0),
+  /** CC-0019 — estado de la cuenta Supabase Auth asociada (por email). */
+  authStatus: userAuthStatusSchema,
 });
 
 export type UserAdminDTO = z.infer<typeof userAdminSchema>;
