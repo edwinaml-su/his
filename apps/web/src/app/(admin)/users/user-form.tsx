@@ -45,7 +45,8 @@ interface UserFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial?: UserInitial | null;
-  onSuccess?: () => void;
+  /** `info.invitationSent` solo aplica al alta (CC-0019) — ausente al editar. */
+  onSuccess?: (info?: { invitationSent: boolean }) => void;
 }
 
 type WizardStep = 1 | 2 | 3;
@@ -63,6 +64,7 @@ export function UserForm({ open, onOpenChange, initial, onSuccess }: UserFormPro
   // ── Estado del wizard (solo crear) ──────────────────────────────────────
   const [step, setStep] = React.useState<WizardStep>(1);
   const [createdUserId, setCreatedUserId] = React.useState<string | null>(null);
+  const [invitationSent, setInvitationSent] = React.useState<boolean | null>(null);
   const [orgId, setOrgId] = React.useState<string>("");
   const [roleId, setRoleId] = React.useState<string>("");
   const [selectedUnits, setSelectedUnits] = React.useState<Set<string>>(new Set());
@@ -79,6 +81,7 @@ export function UserForm({ open, onOpenChange, initial, onSuccess }: UserFormPro
       setServerError(null);
       setStep(1);
       setCreatedUserId(null);
+      setInvitationSent(null);
       setOrgId("");
       setRoleId("");
       setSelectedUnits(new Set());
@@ -89,8 +92,9 @@ export function UserForm({ open, onOpenChange, initial, onSuccess }: UserFormPro
   // ── Mutations ───────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const createMut = (trpc as any).userAdmin.create.useMutation({
-    onSuccess: (u: { id: string }) => {
+    onSuccess: (u: { id: string; invitationSent: boolean }) => {
       setCreatedUserId(u.id);
+      setInvitationSent(u.invitationSent);
       setStep(2); // avanza al paso de acceso (NO cierra)
     },
     onError: (err: { message: string }) => setServerError(err.message),
@@ -214,7 +218,7 @@ export function UserForm({ open, onOpenChange, initial, onSuccess }: UserFormPro
   function finishWizard() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (utils as any).userAdmin.listAll.invalidate();
-    onSuccess?.();
+    onSuccess?.(invitationSent === null ? undefined : { invitationSent });
     onOpenChange(false);
   }
 
@@ -309,6 +313,19 @@ export function UserForm({ open, onOpenChange, initial, onSuccess }: UserFormPro
         {/* ── PASO 2: org + rol ── */}
         {!isEdit && step === 2 && (
           <Form onSubmit={submitStep2}>
+            {invitationSent !== null ? (
+              <p
+                className={
+                  invitationSent
+                    ? "rounded-md border border-success/40 bg-success/10 p-2 text-xs text-success"
+                    : "rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-warning"
+                }
+              >
+                {invitationSent
+                  ? `Invitación enviada a ${email.trim().toLowerCase()} para que defina su contraseña.`
+                  : "El usuario se creó pero la invitación por email falló. Reenvíala desde la lista de usuarios."}
+              </p>
+            ) : null}
             <FormField>
               <Label htmlFor="orgId">
                 Organización <span className="text-destructive">*</span>

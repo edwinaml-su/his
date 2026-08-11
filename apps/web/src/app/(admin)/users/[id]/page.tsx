@@ -41,6 +41,8 @@ type RoleMembership = {
   organization: { id: string; tradeName: string | null; legalName: string };
 };
 
+type AuthStatus = "SIN_CUENTA" | "INVITADO" | "ACTIVO";
+
 type UserDetail = {
   id: string;
   email: string;
@@ -49,8 +51,15 @@ type UserDetail = {
   mfaEnabled: boolean;
   lastLoginAt: Date | null;
   createdAt: Date;
+  authStatus: AuthStatus;
   roles: RoleMembership[];
 };
+
+function authStatusLabel(status: AuthStatus): { text: string; variant: "success" | "info" | "destructive" } {
+  if (status === "ACTIVO") return { text: "Con acceso (ya inició sesión)", variant: "success" };
+  if (status === "INVITADO") return { text: "Invitado (aún no fija contraseña)", variant: "info" };
+  return { text: "Sin cuenta de acceso", variant: "destructive" };
+}
 
 export default function UserDetailPage() {
   const params = useParams<{ id: string }>();
@@ -104,6 +113,21 @@ export default function UserDetailPage() {
     },
     onError: (err: { message: string }) =>
       setToast({ title: "Error", description: err.message, variant: "destructive" }),
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resendMut = (trpc as any).userAdmin.resendInvitation.useMutation({
+    onSuccess: () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (utils as any).userAdmin.get.invalidate({ id });
+      setToast({ title: "Invitación enviada", variant: "success" });
+    },
+    onError: (err: { message: string }) =>
+      setToast({
+        title: "No se pudo enviar la invitación",
+        description: err.message,
+        variant: "destructive",
+      }),
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -171,6 +195,9 @@ export default function UserDetailPage() {
             ) : (
               <Badge variant="outline">Sin MFA</Badge>
             )}
+            <Badge variant={authStatusLabel(user.authStatus).variant}>
+              {authStatusLabel(user.authStatus).text}
+            </Badge>
           </div>
         ) : null}
       </div>
@@ -224,6 +251,40 @@ export default function UserDetailPage() {
                   </Button>
                 </div>
               </Form>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Cuenta de acceso</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm">
+                    Estado: <Badge variant={authStatusLabel(user.authStatus).variant}>
+                      {authStatusLabel(user.authStatus).text}
+                    </Badge>
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {user.authStatus === "SIN_CUENTA"
+                      ? "No tiene cuenta en el proveedor de autenticación. Provisiónala e invítalo."
+                      : "El enlace de invitación expira por tiempo — reenvía si el usuario lo perdió."}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => resendMut.mutate({ userId: user.id })}
+                  disabled={resendMut.isPending || !user.active}
+                >
+                  {resendMut.isPending ? "Enviando…" : "Reenviar invitación"}
+                </Button>
+              </div>
+              {!user.active ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  El usuario está inactivo — reactívalo para poder invitarlo.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 

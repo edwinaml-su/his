@@ -3,15 +3,19 @@
 /**
  * US-2.3 — Listado de usuarios + acciones administrativas.
  *
- * REEMPLAZA el placeholder previo (Sprint 1 stub).
+ * CC-0019: el alta de usuario ahora crea la cuenta en Supabase Auth y envía
+ * una invitación por email (enlace para fijar contraseña) — ver
+ * `packages/trpc/src/routers/user-admin.router.ts`. Esta página muestra el
+ * estado de esa cuenta (`authStatus`) por fila y ofrece "Reenviar invitación".
  *
  * UX:
  *  - Filtros: search (email/nombre), rol (code), estado (active/inactive/all).
- *  - Acciones: Ver detalle, Desactivar/Reactivar (toggle active), Nuevo usuario.
+ *  - Acciones: Ver detalle, Desactivar/Reactivar (toggle active), Nuevo usuario,
+ *    Reenviar invitación.
  *  - Paginado server-side (page, pageSize=20).
- *
- * El alta de usuario NO crea Auth user en Supabase aún (ver invitation-flow
- * stub en `user-admin.router.ts`). Sólo persiste el registro local.
+ *  - Sección "Sin cuenta de acceso" (`listSinCuentaAuth`): usuarios locales
+ *    activos sin fila en `auth.users` (huérfanos de un alta previa fallida) —
+ *    permite provisionar + invitar en un click (reusa `resendInvitation`).
  */
 import * as React from "react";
 import Link from "next/link";
@@ -33,6 +37,7 @@ import { trpc } from "@/lib/trpc/react";
 import { UserForm } from "./user-form";
 
 type StateFilter = "all" | "active" | "inactive";
+type AuthStatus = "SIN_CUENTA" | "INVITADO" | "ACTIVO";
 
 interface UserItem {
   id: string;
@@ -43,6 +48,13 @@ interface UserItem {
   lastLoginAt: Date | null;
   activeRoleCount: number;
   totalRoleCount: number;
+  authStatus: AuthStatus;
+}
+
+function AuthStatusBadge({ status }: { status: AuthStatus }) {
+  if (status === "ACTIVO") return <Badge variant="success">Con acceso</Badge>;
+  if (status === "INVITADO") return <Badge variant="info">Invitado</Badge>;
+  return <Badge variant="destructive">Sin cuenta</Badge>;
 }
 
 export default function UsersPage() {
@@ -80,6 +92,31 @@ export default function UsersPage() {
       setToast({ title: "Error", description: err.message, variant: "destructive" }),
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sinCuentaQuery = (trpc as any).userAdmin.listSinCuentaAuth.useQuery();
+  const sinCuenta = (sinCuentaQuery.data ?? []) as {
+    id: string;
+    email: string;
+    fullName: string;
+  }[];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resendMut = (trpc as any).userAdmin.resendInvitation.useMutation({
+    onSuccess: () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (utils as any).userAdmin.listAll.invalidate();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (utils as any).userAdmin.listSinCuentaAuth.invalidate();
+      setToast({ title: "Invitación enviada", variant: "success" });
+    },
+    onError: (err: { message: string }) =>
+      setToast({
+        title: "No se pudo enviar la invitación",
+        description: err.message,
+        variant: "destructive",
+      }),
+  });
+
   const items = (query.data?.items ?? []) as UserItem[];
   const total = (query.data?.total ?? 0) as number;
   const pageSize = 20;
@@ -91,8 +128,8 @@ export default function UsersPage() {
         <div>
           <h1 className="text-2xl font-bold">Usuarios</h1>
           <p className="text-sm text-muted-foreground">
-            Gestión de usuarios del sistema (TDR §6.1). El alta NO envía
-            invitación aún — magic-link queda para Sprint 2.
+            Gestión de usuarios del sistema (TDR §6.1). El alta crea la cuenta
+            de acceso y envía una invitación por email para fijar contraseña.
           </p>
         </div>
         <Button
@@ -149,6 +186,36 @@ export default function UsersPage() {
         />
       ) : null}
 
+      {sinCuenta.length > 0 ? (
+        <div className="rounded-md border border-warning/40 bg-warning/10 p-3">
+          <p className="text-sm font-medium">
+            {sinCuenta.length} usuario(s) sin cuenta de acceso
+          </p>
+          <p className="mb-2 text-xs text-muted-foreground">
+            Quedaron sin cuenta en el proveedor de autenticación (alta previa
+            incompleta). Provisiona la cuenta e invita en un click.
+          </p>
+          <ul className="space-y-1.5">
+            {sinCuenta.map((u) => (
+              <li key={u.id} className="flex items-center justify-between gap-2 text-sm">
+                <span>
+                  <span className="font-medium">{u.fullName}</span>{" "}
+                  <code className="text-xs text-muted-foreground">{u.email}</code>
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => resendMut.mutate({ userId: u.id })}
+                  disabled={resendMut.isPending}
+                >
+                  Crear cuenta e invitar
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="rounded-md border">
         <Table>
           <TableHeader>
@@ -159,13 +226,14 @@ export default function UsersPage() {
               <TableHead className="w-44">Último ingreso</TableHead>
               <TableHead className="w-24">MFA</TableHead>
               <TableHead className="w-24">Estado</TableHead>
-              <TableHead className="w-56 text-right">Acciones</TableHead>
+              <TableHead className="w-32">Cuenta acceso</TableHead>
+              <TableHead className="w-72 text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.length === 0 && !query.isLoading && !query.error ? (
               <TableRow>
-                <TableCell colSpan={7} className="p-0">
+                <TableCell colSpan={8} className="p-0">
                   <EmptyState
                     icon={Users}
                     title="Sin usuarios"
@@ -200,6 +268,9 @@ export default function UsersPage() {
                     <Badge variant="outline">Inactivo</Badge>
                   )}
                 </TableCell>
+                <TableCell>
+                  <AuthStatusBadge status={u.authStatus} />
+                </TableCell>
                 <TableCell className="text-right">
                   <div className="inline-flex gap-2">
                     <Button asChild size="sm" variant="outline">
@@ -223,6 +294,16 @@ export default function UsersPage() {
                     >
                       {u.active ? "Desactivar" : "Reactivar"}
                     </Button>
+                    {u.authStatus !== "ACTIVO" ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => resendMut.mutate({ userId: u.id })}
+                        disabled={resendMut.isPending}
+                      >
+                        Reenviar invitación
+                      </Button>
+                    ) : null}
                   </div>
                 </TableCell>
               </TableRow>
@@ -259,14 +340,18 @@ export default function UsersPage() {
         open={formOpen}
         onOpenChange={setFormOpen}
         initial={editing}
-        onSuccess={() => {
+        onSuccess={(info) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (utils as any).userAdmin.listAll.invalidate();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (utils as any).userAdmin.listSinCuentaAuth.invalidate();
           setToast({
             title: editing ? "Usuario actualizado" : "Usuario creado",
             description: editing
               ? undefined
-              : "Stub Sprint 1: no se envió invitación. Magic-link Sprint 2.",
+              : info?.invitationSent === false
+                ? "No se pudo enviar la invitación por email. Usa 'Reenviar invitación' en la lista."
+                : "Se envió una invitación por email para que el usuario defina su contraseña.",
             variant: "success",
           });
         }}
