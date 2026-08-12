@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body { margin: 0; background: #DCE8F5; }
+input, button { color-scheme: light; }
+input { background: #fff; color: #16204A; }
+input::placeholder { color: #9AA6C2; }
+a { color: #1D4F9C; text-decoration: none; }
+a:hover { color: #0C74C2; text-decoration: underline; }
+</style>
+<script>window.OM_SCENES = '[{"name":"Circuito","dur":2.4},{"name":"Cruz","dur":4},{"name":"Marca","dur":5.5}]';</script>
+<script>window.OM_PLAYBACK = '{"mode":"times","count":1}';</script>
+<script>window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "motionEditor": true,
+  "videoBg": "#DCE8F5"
+}/*EDITMODE-END*/;</script>
+</helmet>
+<div style="height:100vh;background:#DCE8F5;position:relative;overflow:hidden;font-family:'Sora',sans-serif;">
+  <section data-screen-label="Video AxisMed" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:40px;box-sizing:border-box;">
+    <div style="width:min(1280px,100%,calc((100vh - 80px)*1.7778));border-radius:18px;overflow:hidden;box-shadow:0 24px 60px rgba(22,60,58,0.22);border:1px solid rgba(22,60,58,0.1);">
+      <x-import component-from-global-scope="AxisMedVideo" from="./animations-v2.jsx ./tweaks-panel.jsx ./axismed-scenes.jsx" hint-size="100%,720px"></x-import>
+    </div>
+  </section>
+  <section data-screen-label="Login AxisMed" style="position:absolute;inset:0;display:flex;align-items:flex-start;justify-content:center;padding:{{loginPadTop}} 32px 20px;transition:padding 0.4s ease;box-sizing:border-box;overflow:auto;transition:opacity 0.9s ease,transform 0.9s ease;opacity:{{loginOp}};transform:{{loginTf}};pointer-events:{{loginPe}};">
+    <div style="width:430px;max-width:100%;">
+    <div style="background:#FFFFFF;border-radius:16px;padding:18px 28px;box-shadow:0 18px 48px rgba(22,60,58,0.24);box-sizing:border-box;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+        <p style="margin:0;font-size:15px;font-weight:600;color:#16204A;">{{sub}}</p>
+        <div style="display:flex;background:#EDF1F8;border-radius:999px;padding:3px;gap:2px;">
+          <button onClick="{{setEs}}" style="border:none;border-radius:999px;padding:5px 13px;font-size:12px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;background:{{esBg}};color:{{esCol}};">ES</button>
+          <button onClick="{{setEn}}" style="border:none;border-radius:999px;padding:5px 13px;font-size:12px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;background:{{enBg}};color:{{enCol}};">EN</button>
+        </div>
+      </div>
+      <sc-if value="{{isAuth}}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-direction:column;gap:11px;margin-top:14px;">
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;font-weight:600;color:#44506F;letter-spacing:0.04em;">{{lblUser}}</label>
+            <input type="text" placeholder="{{phUser}}" onChange="{{onUser}}" style="width:100%;box-sizing:border-box;padding:10px 14px;border:1.5px solid #D7DFEC;border-radius:10px;font-size:14px;font-family:'Sora',sans-serif;color:#16204A;" style-focus="border-color:#1D4F9C;outline:none;box-shadow:0 0 0 3px rgba(29,79,156,0.15);">
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;font-weight:600;color:#44506F;letter-spacing:0.04em;">{{lblPass}}</label>
+            <div style="position:relative;">
+              <input type="{{passType}}" placeholder="••••••••" onChange="{{onPass}}" style="width:100%;box-sizing:border-box;padding:10px 44px 10px 14px;border:1.5px solid #D7DFEC;border-radius:10px;font-size:14px;font-family:'Sora',sans-serif;color:#16204A;" style-focus="border-color:#1D4F9C;outline:none;box-shadow:0 0 0 3px rgba(29,79,156,0.15);">
+              <button onClick="{{togglePass}}" title="{{eyeTitle}}" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);border:none;background:none;padding:6px;cursor:pointer;color:#7A88AC;display:flex;align-items:center;" style-hover="color:#1D4F9C;">
+                <sc-if value="{{passHidden}}" hint-placeholder-val="{{ true }}">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"></path><circle cx="12" cy="12" r="2.8"></circle></svg>
+                </sc-if>
+                <sc-if value="{{passShown}}" hint-placeholder-val="{{ false }}">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12z"></path><circle cx="12" cy="12" r="2.8"></circle><path d="M4 4l16 16"></path></svg>
+                </sc-if>
+              </button>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#55617F;cursor:pointer;">
+              <input type="checkbox" checked="{{rememberChecked}}" onChange="{{toggleRemember}}" style="accent-color:#1D4F9C;width:16px;height:16px;margin:0;">
+              <span>{{remember}}</span>
+            </label>
+            <a href="#" style="font-size:13px;font-weight:600;">{{forgot}}</a>
+          </div>
+          <button onClick="{{submit}}" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,#1D4F9C,#0C74C2);color:#fff;font-size:15px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;" style-hover="filter:brightness(1.1);">{{btnLogin}}</button>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="flex:1;height:1px;background:#E3E9F2;"></div>
+            <span style="font-size:12px;color:#7A88AC;">{{orLbl}}</span>
+            <div style="flex:1;height:1px;background:#E3E9F2;"></div>
+          </div>
+          <button onClick="{{bio}}" style="width:100%;padding:11px;border:1.5px solid #1D4F9C;border-radius:10px;background:#fff;color:#1D4F9C;font-size:15px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;" style-hover="background:#F0F5FC;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 11c0 3.5-.5 6.5-1.5 9"></path><path d="M8.5 12a3.5 3.5 0 0 1 7 0c0 2.6-.3 5.1-1 7.5"></path><path d="M5.5 13.5C5.5 9.9 8.4 7 12 7s6.5 2.9 6.5 6.5c0 1.4-.1 2.8-.3 4.1"></path><path d="M3.6 10.5A9 9 0 0 1 12 4a9 9 0 0 1 8.4 6.5"></path></svg>
+            <span>{{btnBio}}</span>
+          </button>
+          <sc-if value="{{hasErr}}" hint-placeholder-val="{{ false }}">
+            <p style="margin:0;font-size:12px;font-weight:600;color:#D31E26;text-align:center;">{{errMsg}}</p>
+          </sc-if>
+        </div>
+      </sc-if>
+      <sc-if value="{{isSede}}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:14px;margin-top:16px;">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#EFF7EF;border:1.5px solid #BFDFC2;border-radius:10px;">
+            <span style="font-size:14px;color:#1E7A2E;font-weight:600;">✓</span>
+            <span style="font-size:13px;color:#1E7A2E;font-weight:600;">{{accessOk}}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            <label style="font-size:12px;font-weight:600;color:#44506F;letter-spacing:0.04em;">{{lblSede}}</label>
+            <select onChange="{{onSede}}" style="width:100%;box-sizing:border-box;padding:11px 14px;border:1.5px solid #D7DFEC;border-radius:10px;font-size:14px;font-family:'Sora',sans-serif;color:#16204A;background:#fff;cursor:pointer;" style-focus="border-color:#1D4F9C;outline:none;box-shadow:0 0 0 3px rgba(29,79,156,0.15);">
+              <option value="">{{phSede}}</option>
+              <option value="AVANTE Masferrer - Hospital Especializado">AVANTE Masferrer - Hospital Especializado</option>
+              <option value="AVANTE Beethoven - Centro Medico Especializado">AVANTE Beethoven - Centro Medico Especializado</option>
+              <option value="AVANTE Surf City - Unidad Médica Satelital">AVANTE Surf City - Unidad Médica Satelital</option>
+              <option value="AVANTE Colonia Médica - Hospital Especializado">AVANTE Colonia Médica - Hospital Especializado</option>
+            </select>
+          </div>
+          <button onClick="{{goSede}}" disabled="{{noSede}}" style="width:100%;padding:12px;border:none;border-radius:10px;background:linear-gradient(135deg,#1D4F9C,#0C74C2);color:#fff;font-size:15px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;opacity:{{sedeBtnOp}};" style-hover="filter:brightness(1.1);">{{btnSede}}</button>
+          <button onClick="{{backAuth}}" style="border:none;background:none;padding:4px;font-size:13px;font-weight:600;color:#1D4F9C;cursor:pointer;font-family:'Sora',sans-serif;" style-hover="text-decoration:underline;">{{backLbl}}</button>
+        </div>
+      </sc-if>
+      <p style="margin:10px 0 0;text-align:center;font-size:11px;color:#7A88AC;">© 2026 Avante · AxisMed</p>
+    </div>
+    </div>
+  </section>
+  <sc-if value="{{secModal}}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Modal dispositivo seguro" style="position:fixed;inset:0;background:rgba(10,20,40,0.45);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50;">
+      <div style="background:#fff;border-radius:14px;padding:28px;width:380px;max-width:100%;box-shadow:0 24px 64px rgba(10,20,40,0.35);box-sizing:border-box;">
+        <h3 style="margin:0 0 10px;font-size:17px;font-weight:700;color:#16204A;">{{secTitle}}</h3>
+        <p style="margin:0 0 22px;font-size:13px;line-height:1.55;color:#55617F;">{{secBody}}</p>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button onClick="{{cancelSec}}" style="padding:11px 18px;border:1.5px solid #D7DFEC;border-radius:10px;background:#fff;color:#55617F;font-size:13px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;" style-hover="background:#F4F7FB;">{{secNo}}</button>
+          <button onClick="{{confirmSec}}" style="padding:11px 18px;border:none;border-radius:10px;background:linear-gradient(135deg,#1D4F9C,#0C74C2);color:#fff;font-size:13px;font-weight:600;font-family:'Sora',sans-serif;cursor:pointer;" style-hover="filter:brightness(1.1);">{{secYes}}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { lang: 'es', flash: false, showLogin: false, remember: false, secModal: false, bioOk: false, step: 'auth', userVal: '', passVal: '', sede: '', sedeOk: false, err: false };
+  componentDidMount() {
+    this._onEnd = () => { this._lt = setTimeout(() => this.setState({ showLogin: true }), 700); };
+    this._onRew = () => { clearTimeout(this._lt); if (this.state.showLogin) this.setState({ showLogin: false }); };
+    window.addEventListener('axismed-video-end', this._onEnd);
+    window.addEventListener('axismed-video-rewind', this._onRew);
+  }
+  componentWillUnmount() {
+    window.removeEventListener('axismed-video-end', this._onEnd);
+    window.removeEventListener('axismed-video-rewind', this._onRew);
+    clearTimeout(this._lt); clearTimeout(this._to);
+  }
+  renderVals() {
+    const es = this.state.lang === 'es';
+    const L = es ? {
+      sub: 'Sistema de Información Hospitalaria',
+      lblUser: 'Usuario', phUser: 'usuario.avante',
+      lblPass: 'Contraseña', remember: 'Recordarme', forgot: '¿Olvidó su contraseña?',
+      enter: 'Ingresar al sistema',
+      flashLogin: '✓ Acceso concedido',
+      orLbl: 'o ingrese con', bioLbl: 'Ingreso biométrico', bioFlash: '✓ Huella verificada',
+      secTitle: 'Confirmar dispositivo seguro',
+      secBody: 'Al activar "Recordarme", sus credenciales se recordarán en este equipo. ¿Confirma que este es un dispositivo seguro y de uso personal?',
+      secYes: 'Sí, es seguro', secNo: 'Cancelar',
+    } : {
+      sub: 'Hospital Information System',
+      lblUser: 'Username', phUser: 'avante.user',
+      lblPass: 'Password', remember: 'Remember me', forgot: 'Forgot your password?',
+      enter: 'Enter the system',
+      flashLogin: '✓ Access granted',
+      orLbl: 'or sign in with', bioLbl: 'Biometric sign-in', bioFlash: '✓ Fingerprint verified',
+      secTitle: 'Confirm trusted device',
+      secBody: 'Turning on "Remember me" will keep your credentials on this device. Do you confirm this is a secure, personal device?',
+      secYes: 'Yes, it\'s secure', secNo: 'Cancel',
+    };
+    return {
+      ...L,
+      btnLogin: this.state.flash ? L.flashLogin : L.enter,
+      btnBio: this.state.bioOk ? L.bioFlash : L.bioLbl,
+      rememberChecked: this.state.remember,
+      lblSede: es ? 'Sede' : 'Site',
+      phSede: es ? 'Seleccione la sede' : 'Select a site',
+      accessOk: es ? 'Acceso concedido — seleccione su sede' : 'Access granted — select your site',
+      btnSede: this.state.sedeOk ? (es ? '✓ Ingresando…' : '✓ Entering…') : (es ? 'Ingresar a la sede' : 'Enter site'),
+      backLbl: es ? '← Volver al inicio de sesión' : '← Back to sign in',
+      errMsg: es ? 'Ingrese usuario y contraseña' : 'Enter username and password',
+      hasErr: !!this.state.err,
+      isAuth: this.state.step !== 'sede',
+      isSede: this.state.step === 'sede',
+      noSede: !this.state.sede,
+      sedeBtnOp: this.state.sede ? 1 : 0.5,
+      loginPadTop: '23vh',
+      onUser: (e) => this.setState({ userVal: e.target.value, err: false }),
+      onPass: (e) => this.setState({ passVal: e.target.value, err: false }),
+      onSede: (e) => this.setState({ sede: e.target.value }),
+      goSede: () => {
+        if (!this.state.sede) return;
+        this.setState({ sedeOk: true });
+        clearTimeout(this._st);
+        this._st = setTimeout(() => this.setState({ sedeOk: false }), 2200);
+      },
+      backAuth: () => this.setState({ step: 'auth', sede: '', err: false }),
+      passType: this.state.showPass ? 'text' : 'password',
+      passHidden: !this.state.showPass,
+      passShown: !!this.state.showPass,
+      eyeTitle: es ? (this.state.showPass ? 'Ocultar contraseña' : 'Ver contraseña') : (this.state.showPass ? 'Hide password' : 'Show password'),
+      togglePass: () => this.setState({ showPass: !this.state.showPass }),
+      secModal: this.state.secModal,
+      toggleRemember: () => {
+        if (this.state.remember) this.setState({ remember: false });
+        else this.setState({ secModal: true });
+      },
+      confirmSec: () => this.setState({ remember: true, secModal: false }),
+      cancelSec: () => this.setState({ secModal: false, remember: false }),
+      bio: () => {
+        this.setState({ bioOk: true, err: false });
+        clearTimeout(this._bt);
+        this._bt = setTimeout(() => this.setState({ bioOk: false, step: 'sede' }), 1100);
+      },
+      esBg: es ? '#1D4F9C' : 'transparent', esCol: es ? '#fff' : '#5B6B92',
+      enBg: !es ? '#1D4F9C' : 'transparent', enCol: !es ? '#fff' : '#5B6B92',
+      loginOp: this.state.showLogin ? 1 : 0,
+      loginPe: this.state.showLogin ? 'auto' : 'none',
+      loginTf: this.state.showLogin ? 'translateY(0px)' : 'translateY(24px)',
+      setEs: () => this.setState({ lang: 'es' }),
+      setEn: () => this.setState({ lang: 'en' }),
+      submit: () => {
+        if (!(this.state.userVal && this.state.userVal.trim()) || !(this.state.passVal && this.state.passVal.trim())) {
+          this.setState({ err: true });
+          return;
+        }
+        this.setState({ flash: true, err: false });
+        clearTimeout(this._to);
+        this._to = setTimeout(() => this.setState({ flash: false, step: 'sede' }), 900);
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

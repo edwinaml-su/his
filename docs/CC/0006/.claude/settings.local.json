@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/proyecto/HIS/docs/CC/**)",
+      "Read(//tmp/**)",
+      "Bash(diff /tmp/eng6.txt /tmp/eng7.txt)",
+      "Bash(echo \"exit=$?\")"
+    ]
+  }
+}
