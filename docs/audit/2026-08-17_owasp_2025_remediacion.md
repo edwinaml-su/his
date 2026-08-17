@@ -36,7 +36,7 @@ Este documento reaudita el HIS contra la lista 2025 y registra la remediación a
 | A03 Software Supply Chain | 🟡 | 🟡 | 88→39 vulns, 0 críticas en prod, SBOM + verificación de firmas. **Queda Next 14** |
 | A04 Cryptographic Failures | 🟢 | 🟢 | argon2, Vault MFA portal, sin secretos en repo (sin cambios) |
 | A05 Injection | 🟡 | 🟢 | Renderer del chat endurecido + allowlist en el motor de fórmulas |
-| A06 Insecure Design | 🟡 | 🟢 | Rate limit global en `/api/trpc` |
+| A06 Insecure Design | 🟡 | 🟢 | Rate limit global en `/api/trpc` — con cupo por procedure y tope de batch (ver §6, H1) |
 | A07 Authentication Failures | 🟡 | 🟢 | Enforcement MFA (apagado por defecto) + protección de contraseñas filtradas |
 | A08 Data Integrity | 🟢 | 🟢 | Cadena SHA-256 intacta; sin UPDATE/DELETE a `audit_log` desde la app |
 | A09 Logging and Alerting | 🟡 | 🟢 | Redacción de PHI en logs + auditoría del historial de IA |
@@ -241,6 +241,45 @@ detalle correlacionable va al log redactado + Sentry (que tiene el filtro de PII
 | 4 | Activar `SENTRY_DSN` en prod + DPA con Sentry (alerting de A09) | Vercel + legal | Config UI |
 | 5 | Pentest externo activo (ZAP/Burp) — el gate `US-21-E2` nunca se ejecutó | `docs/pentest/` | Contratación |
 | 6 | Reevaluar `expr-eval`: si aparece fork mantenido, migrar y quitar la allowlist | backlog | Ingeniería |
+
+---
+
+## 6. Ciclo de revisión SDLC (2026-08-17, post-remediación)
+
+La remediación se sometió al ciclo completo con @AE (gobernanza), @AS (arquitectura
+adversarial), @QA (calidad), @QAF (BDD), @PO (backlog) y @SRE (entrega). **Dos hallazgos P1
+invalidaban controles que las §2-§3 daban por cerrados** — corregidos en `c440473`:
+
+| # | Hallazgo | Cierre |
+|---|---|---|
+| H1 **P1** | El rate limit contaba 1 request HTTP = 1 hit, pero `httpBatchLink` empaqueta N procedures en un POST: un batch de 200 mutations ×60/min pasaba el límite de 60/min. El control A06 quedaba neutralizado por el propio transporte. | Cupo por procedure (`count`) + `TRPC_MAX_BATCH_SIZE=20` con 413 antes de tocar sesión/BD. Parser compartido con el gate de borde para que no diverjan. |
+| H2 **P1** | `miBandeja` retenía una conexión del pool (~15 en session mode) hasta 20 s con ~30 queries, y la página hacía `refetchOnWindowFocus`: un cambio de turno reproducía el `EMAXCONNSESSION` ya sufrido. | 6 bloques cortos (5-8 s) con el mapeo JS fuera de transacción; `contadorBadge` 20 s→5 s; `refetchOnWindowFocus` desactivado en esa query. |
+| H3 P2 | La marca de sesión MFA sobrevivía al logout y al reset de contraseña (estación clínica compartida). | Se limpia en logout manual, logout por inactividad y reset de contraseña. |
+| H4 P2 | El gate de MFA fallaba **abierto**: `mfaSatisfied === undefined` significaba "no bloquear", y un server action tenant-scoped que no lo evaluara bypaseaba la política en silencio. | Con la política activa, `undefined` + tenant presente ahora deniega. |
+| H5 P2 | El bucket anónimo se armaba con `x-forwarded-for`, que el cliente puede controlar: rotándolo se evadía el límite pre-auth. | `x-vercel-forwarded-for` → `x-real-ip` → `x-forwarded-for`. |
+| H6 P2 | Afirmación falsa en §3 A01 (corregida allí). | `SELECT ... FOR UPDATE` sobre el encounter. |
+| H7 | La allowlist de fórmulas filtraba caracteres pero no **nombres de función**: los built-ins de `expr-eval` fuera de `FUNCTION_NAMES` pasaban — que es justo GHSA-jc85-fpwf-qm7x. | Allowlist de funciones. Verificado contra las 176 fórmulas de producción: usan 8, todas permitidas. |
+| H8 | **LOPD (@AE):** el trigger de SQL 197 copiaba el prompt clínico y la respuesta del modelo a `AuditLog`, inmutable 10 años — incoherente con haber redactado PHI de los logs de consola en el mismo lote. | **SQL 198** (aplicado): trigger dedicado que audita metadatos (longitud, conteos, flags), no contenido. Residual: `chat_session.feedback_comment` sigue con el trigger genérico. |
+
+Validados como sólidos por @AS: `isPublicTrpcPath` y el fail-closed del middleware, el renderer
+del chat (probó breakout de atributos, inyección de tags y ReDoS) y el escape de prototipo del
+motor de fórmulas.
+
+**Cobertura añadida (@QA):** 51 tests en 9 archivos — el gate de MFA en `tenantProcedure` y
+`middleware.ts` no tenían ninguno. **BDD (@QAF):** 17 escenarios en
+`tests/features/02-seguridad/`. **Entrega (@SRE):** `docs/runbooks/owasp-2025-deploy.md` con
+rollback por control. **Backlog (@PO):** `docs/backlog/beta23_owasp2025_residual_risks.md`.
+
+### Hallazgos operativos del ciclo (no cerrados aquí)
+
+1. **El repositorio no tiene ningún secret de GitHub Actions** (`total_count: 0`). El alerting de
+   A09 queda cableado pero **inerte**, y `db-migrate`, `backup-drill`, `perf` y `perf-k6` llevan
+   tiempo referenciando secrets inexistentes.
+2. `npm run test:coverage` (agregado raíz) está roto de antes: el proyecto raíz glob-ea los tests
+   de `apps/web` sin su ambiente jsdom ni el alias `@/`. El gate real de CI —
+   `npx turbo run test -- --coverage` — está verde con 5.570 tests.
+3. `docs/15_production_runbook.md` §14.5 consulta una columna `chainHash` inexistente
+   (el schema usa `signatureHash`/`prevHash`). CLAUDE.md repite el mismo error.
 
 ---
 
