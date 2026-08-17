@@ -38,6 +38,13 @@
  */
 
 import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv, timingSafeEqual } from "node:crypto";
+import { cookies } from "next/headers";
+import {
+  MFA_COOKIE_NAME,
+  MFA_TTL_SECONDS,
+  issueMfaCookie,
+  readMfaPolicy,
+} from "@/lib/auth/mfa-session";
 import { prisma } from "@his/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -401,6 +408,22 @@ export async function enrollMfa(): Promise<
  *   `User.mfaEnabled = true`. Actualiza `validFrom` como "lastVerifiedAt"
  *   barato (no agregamos columna nueva — schema NO se toca).
  */
+/**
+ * A07:2025 — deja la marca de sesión firmada que prueba el segundo factor.
+ * Sin política configurada es un no-op (la cookie no se emite y nada la pide).
+ */
+function markMfaSession(userId: string): void {
+  const policy = readMfaPolicy();
+  if (policy.mode !== "enforced") return;
+  cookies().set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: MFA_TTL_SECONDS,
+  });
+}
+
 export async function verifyMfa(args: {
   token: string;
 }): Promise<TotpVerifyResult & { error?: string }> {
@@ -449,6 +472,7 @@ export async function verifyMfa(args: {
         data: { validFrom: new Date() },
       }),
     ]);
+    markMfaSession(user.id);
     return { ok: true, usedBackupCode: false };
   }
 
@@ -485,6 +509,7 @@ export async function verifyMfa(args: {
     }),
   ]);
 
+  markMfaSession(user.id);
   return {
     ok: true,
     usedBackupCode: true,

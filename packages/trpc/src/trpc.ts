@@ -85,6 +85,18 @@ export const tenantProcedure = protectedProcedure.use(async ({ ctx, next, path, 
     });
   }
   const tenant = ctx.tenant;
+
+  // OWASP A07:2025 — si la política de MFA aplica a los roles de este usuario
+  // y la sesión no la satisface, no hay acceso a datos del tenant. La política
+  // vive en la capa web (cookie firmada); aquí sólo se consume el veredicto.
+  // `undefined` = política apagada → sin cambio de comportamiento.
+  if (ctx.mfaSatisfied === false) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Verificación de segundo factor requerida. Vuelve a iniciar sesión en /mfa.",
+    });
+  }
+
   const result = await next({ ctx: { ...ctx, tenant } });
   if (tenant.breakGlass && result.ok) {
     await auditBreakGlassAccess(ctx, { path, type });

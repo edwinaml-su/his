@@ -7,11 +7,15 @@ import { DensityToggle } from "@/components/density-toggle";
 import { UserMenu } from "@/components/user-menu";
 import { PerfTracker } from "@/components/perf-tracker";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
+import { assertMfaOrRedirect } from "@/lib/auth/mfa-guard";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const tenant = await getTenantContext();
+  // OWASP A07:2025 — segundo factor para roles privilegiados (no-op si la
+  // política MFA_REQUIRED_ROLE_CODES está vacía).
+  assertMfaOrRedirect(user.id, tenant?.roleCodes ?? []);
 
   return (
     <AppShell

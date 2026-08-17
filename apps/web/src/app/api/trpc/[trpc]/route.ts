@@ -5,6 +5,8 @@ import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 import { resolvePortalContext } from "@/lib/portal-session";
 import { checkTrpcRateLimit } from "@/lib/trpc/rate-limit-global";
 import { redactPhi } from "@/lib/log-redact";
+import { cookies } from "next/headers";
+import { MFA_COOKIE_NAME, isMfaSatisfied } from "@/lib/auth/mfa-session";
 
 const handler = async (req: Request) => {
   // Resolvemos Supabase user + portal account en paralelo — son fuentes
@@ -51,6 +53,12 @@ const handler = async (req: Request) => {
         portalAccount,
         ip: ip ?? undefined,
         userAgent: req.headers.get("user-agent") ?? undefined,
+        // A07:2025 — veredicto de la política MFA para esta sesión.
+        mfaSatisfied: isMfaSatisfied({
+          userId: user?.id ?? null,
+          roleCodes: tenant?.roleCodes ?? [],
+          cookie: cookies().get(MFA_COOKIE_NAME)?.value,
+        }),
       }),
     onError({ error, path }) {
       // OWASP A09:2025 — el log NO debe volverse un almacén PHI: el mensaje de
