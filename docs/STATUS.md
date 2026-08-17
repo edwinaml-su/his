@@ -1,7 +1,7 @@
 # Estado del Proyecto — HIS Multipaís
 
 > **Documento vivo.** Refleja el estado actual del desarrollo para el equipo y stakeholders.
-> **Última actualización:** 2026-06-01 · **Mantener al cierre de cada sprint.**
+> **Última actualización:** 2026-08-17 · **Mantener al cierre de cada sprint.**
 
 ---
 
@@ -38,19 +38,24 @@ Multi-entity · Seguridad (Auth/RBAC/ABAC/RLS/audit inmutable) · Catálogos mae
 
 ---
 
-## 3. Postura de seguridad (Beta.21 + Beta.22 + Sprint 5)
+## 3. Postura de seguridad (Beta.21 + Beta.22 + Sprint 5 + OWASP 2025)
+
+Referencia vigente: **OWASP Top 10:2025**. Re-auditoría y remediación completas en
+`docs/audit/2026-08-17_owasp_2025_remediacion.md`.
 
 | Área | Estado |
 |---|---|
-| Multi-tenancy RLS por organización | ✅ |
-| Cadena de auditoría criptográfica (SHA-256, 10 años) | ✅ |
-| `anon` sin DML en tablas PHI (SQL 152) | ✅ |
-| `search_path` fijo en 64 funciones SECDEF/trigger | ✅ |
+| Multi-tenancy RLS por organización (incl. workflow-inbox / nutrition / census) | ✅ |
+| Cadena de auditoría criptográfica (SHA-256, 10 años) — incluye historial del copiloto | ✅ |
+| `anon` sin DML en tablas PHI (SQL 152) ni EXECUTE en RPC SECDEF (SQL 196) | ✅ |
+| `search_path` fijo en funciones SECDEF/trigger | ✅ |
 | MFA TOTP + Vault para secretos de portal | ✅ |
-| Rate-limit en endpoints auth (Postgres compartido) | ✅ |
+| MFA de personal: enforcement + marca de sesión firmada | ✅ código — **apagado** hasta enrolar roles privilegiados |
+| Rate-limit en endpoints auth + tope global en `/api/trpc` | ✅ |
 | Security headers HTTP + CSP enforce (`unsafe-inline`) | ✅ |
-| OWASP A06 (xlsx → write-excel-file) | ✅ |
-| Reset password admin → Supabase Auth (login dual SSO+password) | ✅ |
+| Fail-closed en middleware + logs sin PHI | ✅ |
+| Contraseñas filtradas (HaveIBeenPwned) en Supabase Auth | ✅ |
+| Supply chain: 88 → 39 vulns, 0 críticas en producción, SBOM + firmas en CI | ✅ parcial — ver gaps |
 | Sentry (observabilidad de errores + PII redact) | ✅ cableado — falta activar DSN en prod |
 | Pentest externo — preparación (scope, RoE, evidencia) | ✅ docs listos; engagement pendiente |
 
@@ -60,6 +65,7 @@ Multi-entity · Seguridad (Auth/RBAC/ABAC/RLS/audit inmutable) · Catálogos mae
 
 | Gap | Severidad | Nota |
 |---|---|---|
+| **Next.js 14 (supply chain)** | **Alta** | ~21 advisories corregidos en la línea 15.5.x: SSRF en Server Actions y rewrites, cache poisoning, bypass de middleware/proxy, XSS con nonces CSP, varios DoS. Requiere sprint de migración 14→15 con UAT (un salto automático 14→16 ya se revirtió en Beta.22). Es la mayor exposición abierta. |
 | **GS1 traslados clínicos de paciente** | Media | `encounter-transfer` no emite eventos EPCIS (arriving/departing por GLN). GS1 sí está completo en pacientes, medicamentos y traslados de **inventario**. |
 | **nonce-based CSP** | Baja | Intentado y revertido (rompe hidratación de páginas estáticas Next). Baseline = CSP `unsafe-inline`. Reintentar requiere `force-dynamic` (bajo ROI). |
 | **TipTap v3 / tiptap-markdown 0.9** | Baja | Pin en 0.8.10 (estable). Migración analizada: NO recomendada por ahora (riesgo serialización, bajo valor). |
@@ -83,7 +89,9 @@ Multi-entity · Seguridad (Auth/RBAC/ABAC/RLS/audit inmutable) · Catálogos mae
 ### Acciones de configuración UI (no requieren código — ~20 min)
 - [ ] Branch protection en `main` (GitHub Settings)
 - [ ] Supabase: SSL enforce + allowlist de IP admin
+- [ ] Supabase Auth: subir `password_min_length` (hoy 6) + exigir clases de caracteres
 - [ ] Activar `SENTRY_DSN` en Vercel + firmar DPA con Sentry (por PHI)
+- [ ] Enrolar DIR/ARCH/ADMIN en `/mfa/enroll` → definir `MFA_SESSION_SECRET` → activar `MFA_REQUIRED_ROLE_CODES`
 - [ ] Decisión gitleaks v3 (v2 funciona)
 
 ---
@@ -96,7 +104,7 @@ Multi-entity · Seguridad (Auth/RBAC/ABAC/RLS/audit inmutable) · Catálogos mae
 | Routers tRPC | ~145 |
 | Tablas BD (4NF) | ~231 |
 | Historias de usuario | ~580 (~1,005 SP) |
-| Pruebas automatizadas | 2,500+ |
+| Pruebas automatizadas | 3,500+ |
 | PRs mergeados | 440+ |
 
 ---
@@ -107,7 +115,7 @@ Multi-entity · Seguridad (Auth/RBAC/ABAC/RLS/audit inmutable) · Catálogos mae
 - Guía operativa para desarrolladores: `CLAUDE.md`
 - Business case / valuación: `docs/business/business_case_comercializacion.md`
 - Pentest engagement: `docs/pentest/`
-- Auditorías de seguridad: `docs/audit/`
+- Auditorías de seguridad: `docs/audit/` (última: `2026-08-17_owasp_2025_remediacion.md`)
 
 ---
 
