@@ -41,6 +41,8 @@ test-results/
 
 # Claude Code (local agent settings — machine/user specific, not project)
 .claude/settings.local.json
+# Worktrees efímeros de agentes: copias completas del repo, no versionables.
+.claude/worktrees/
 
 # Archivos temporales con credenciales para configuración manual de Vercel/etc.
 # (se generan con node, se copian al dashboard, y se borran)
