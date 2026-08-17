@@ -4,6 +4,7 @@ import { prisma } from "@his/database";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 import { resolvePortalContext } from "@/lib/portal-session";
 import { checkTrpcRateLimit } from "@/lib/trpc/rate-limit-global";
+import { redactPhi } from "@/lib/log-redact";
 
 const handler = async (req: Request) => {
   // Resolvemos Supabase user + portal account en paralelo — son fuentes
@@ -52,8 +53,16 @@ const handler = async (req: Request) => {
         userAgent: req.headers.get("user-agent") ?? undefined,
       }),
     onError({ error, path }) {
+      // OWASP A09:2025 — el log NO debe volverse un almacén PHI: el mensaje de
+      // un error puede arrastrar identificadores (uuid de paciente, expediente)
+      // y `error` completo incluye el input de la llamada. Loggeamos código +
+      // mensaje redactado + stack; el detalle correlacionable va a Sentry, que
+      // ya tiene el filtro de PII cableado (Beta.22).
       // eslint-disable-next-line no-console
-      console.error(`[tRPC] error in ${path ?? "<no-path>"}:`, error);
+      console.error(
+        `[tRPC] ${error.code} en ${path ?? "<sin-path>"}: ${redactPhi(error.message)}`,
+        error.cause instanceof Error ? redactPhi(error.cause.message) : "",
+      );
     },
   });
 };
