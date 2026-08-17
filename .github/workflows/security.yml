@@ -31,14 +31,20 @@ jobs:
       - name: Install (no audit during install)
         run: npm ci --no-audit
 
-      - name: Audit production deps (high severity)
-        run: npm audit --omit=dev --audit-level=high
-
       # OWASP A03:2025 — "prioritize signed packages to prevent malicious
       # modifications". Verifica firmas/attestations del registry contra el
       # lockfile: detecta un tarball alterado aunque la versión coincida.
+      #
+      # Va ANTES del audit de severidad alta a propósito: ese gate está en rojo
+      # deliberadamente por Next 14 (ver docs/audit/2026-08-17_owasp_2025_remediacion.md
+      # §3 A03) y así seguirá hasta el sprint de migración a Next 15.5.x. Si este
+      # paso quedara después, un job que ya falla por el audit nunca llegaría a
+      # ejecutar la verificación de firmas — quedaría cableada pero inerte.
       - name: Verify registry signatures
         run: npm audit signatures
+
+      - name: Audit production deps (high severity)
+        run: npm audit --omit=dev --audit-level=high
 
   sbom:
     name: SBOM (CycloneDX)
