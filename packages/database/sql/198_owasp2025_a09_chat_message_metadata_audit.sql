@@ -60,7 +60,12 @@ AS $$
     'created_at', msg.created_at,
     'content_redacted', true,
     'content_length', coalesce(length(msg.content), 0),
-    'tool_calls_count', coalesce(jsonb_array_length(msg.tool_calls), 0),
+    -- `jsonb_array_length` lanza si el valor no es un array, y un error aquí
+    -- aborta el INSERT del mensaje: el copiloto dejaría de funcionar. Hoy la
+    -- app siempre escribe array (`telemetry.ts`) y el default de la columna es
+    -- '[]', pero el trigger no puede depender de eso.
+    'tool_calls_count',
+    case when jsonb_typeof(msg.tool_calls) = 'array' then jsonb_array_length(msg.tool_calls) else 0 end,
     'retrieved_sources_count', coalesce(array_length(msg.retrieved_sources, 1), 0),
     'feedback_comment_redacted', (msg.feedback_comment IS NOT NULL)
   );
