@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { censusRouter } from "../census.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
 describe("censusRouter", () => {
@@ -18,6 +18,7 @@ describe("censusRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
   });
 
   describe("bedMap", () => {

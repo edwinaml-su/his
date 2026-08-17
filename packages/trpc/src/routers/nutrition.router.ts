@@ -30,6 +30,7 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -213,61 +214,67 @@ export const nutritionRouter = router({
     list: tenantProcedure
       .input(dietPlanListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.dietPlan.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.status && { status: input.status }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.dietPlan.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.status && { status: input.status }),
             },
-          },
-          orderBy: { startedAt: "desc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+            },
+            orderBy: { startedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
       .input(dietPlanCreateInput)
       .mutation(async ({ ctx, input }) => {
-        await ensureEncounterAndPatient(
-          ctx.prisma,
-          input.encounterId,
-          input.patientId,
-          ctx.tenant.organizationId,
-        );
-        return ctx.prisma.dietPlan.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            dietType: input.dietType,
-            caloriesTarget: input.caloriesTarget ?? null,
-            proteinTarget: input.proteinTarget ?? null,
-            compatibleWithDiagnoses: input.compatibleWithDiagnoses,
-            notes: input.notes ?? null,
-            createdBy: ctx.user.id,
-          },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          await ensureEncounterAndPatient(
+            tx,
+            input.encounterId,
+            input.patientId,
+            ctx.tenant.organizationId,
+          );
+          return tx.dietPlan.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              dietType: input.dietType,
+              caloriesTarget: input.caloriesTarget ?? null,
+              proteinTarget: input.proteinTarget ?? null,
+              compatibleWithDiagnoses: input.compatibleWithDiagnoses,
+              notes: input.notes ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
     discontinue: tenantProcedure
       .input(dietPlanDiscontinueInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.dietPlan.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "ACTIVE",
-          },
-          data: {
-            status: "DISCONTINUED",
-            endedAt: new Date(),
-          },
-        });
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.dietPlan.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "ACTIVE",
+            },
+            data: {
+              status: "DISCONTINUED",
+              endedAt: new Date(),
+            },
+          }),
+        );
         if (updated.count === 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -282,51 +289,57 @@ export const nutritionRouter = router({
     list: tenantProcedure
       .input(nutritionAssessmentListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.nutritionAssessment.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.malnutritionRisk && {
-              malnutritionRisk: input.malnutritionRisk,
-            }),
-          },
-          orderBy: { assessedAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.nutritionAssessment.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.malnutritionRisk && {
+                malnutritionRisk: input.malnutritionRisk,
+              }),
+            },
+            orderBy: { assessedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
       .input(nutritionAssessmentCreateInput)
       .mutation(async ({ ctx, input }) => {
-        await ensureEncounterAndPatient(
-          ctx.prisma,
-          input.encounterId,
-          input.patientId,
-          ctx.tenant.organizationId,
-        );
-        return ctx.prisma.nutritionAssessment.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            assessedById: input.assessedById,
-            weightKg: input.weightKg ?? null,
-            heightCm: input.heightCm ?? null,
-            bmi: input.bmi ?? null,
-            malnutritionRisk: input.malnutritionRisk ?? null,
-            targetCalories: input.targetCalories ?? null,
-            notes: input.notes ?? null,
-          },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          await ensureEncounterAndPatient(
+            tx,
+            input.encounterId,
+            input.patientId,
+            ctx.tenant.organizationId,
+          );
+          return tx.nutritionAssessment.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              assessedById: input.assessedById,
+              weightKg: input.weightKg ?? null,
+              heightCm: input.heightCm ?? null,
+              bmi: input.bmi ?? null,
+              malnutritionRisk: input.malnutritionRisk ?? null,
+              targetCalories: input.targetCalories ?? null,
+              notes: input.notes ?? null,
+            },
+          });
         });
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.nutritionAssessment.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.nutritionAssessment.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -338,22 +351,24 @@ export const nutritionRouter = router({
     sign: tenantProcedure
       .input(nutritionAssessmentSignInput)
       .mutation(async ({ ctx, input }) => {
-        const assessment = await ctx.prisma.nutritionAssessment.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, signedAt: true },
-        });
-        if (!assessment) {
-          throw new TRPCError({ code: "NOT_FOUND" });
-        }
-        if (assessment.signedAt !== null) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "Valoración ya firmada. No se puede modificar.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const assessment = await tx.nutritionAssessment.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { id: true, signedAt: true },
           });
-        }
-        return ctx.prisma.nutritionAssessment.update({
-          where: { id: input.id },
-          data: { signedAt: new Date() },
+          if (!assessment) {
+            throw new TRPCError({ code: "NOT_FOUND" });
+          }
+          if (assessment.signedAt !== null) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "Valoración ya firmada. No se puede modificar.",
+            });
+          }
+          return tx.nutritionAssessment.update({
+            where: { id: input.id },
+            data: { signedAt: new Date() },
+          });
         });
       }),
   }),
@@ -362,23 +377,25 @@ export const nutritionRouter = router({
     list: tenantProcedure
       .input(nutritionOrderListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.nutritionOrder.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.route && { route: input.route }),
-            ...(input.status && { status: input.status }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.nutritionOrder.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.route && { route: input.route }),
+              ...(input.status && { status: input.status }),
             },
-            prescriber: { select: { id: true, fullName: true } },
-          },
-          orderBy: { startedAt: "desc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              prescriber: { select: { id: true, fullName: true } },
+            },
+            orderBy: { startedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
@@ -388,73 +405,73 @@ export const nutritionRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        await ensureEncounterAndPatient(
-          ctx.prisma,
-          input.encounterId,
-          input.patientId,
-          ctx.tenant.organizationId,
-        );
-
-        // Exclusivity check: ENTERAL ↔ PARENTERAL cannot coexist in ORDERED|ACTIVE.
-        await assertEnteralParenteralExclusivity(
-          ctx.prisma,
-          input.encounterId,
-          ctx.tenant.organizationId,
-          input.route,
-        );
-
-        // Diet plan compatibility check.
-        if (input.dietPlanId) {
-          await validateDietCompatibility(
-            ctx.prisma,
-            input.dietPlanId,
-            ctx.tenant.organizationId,
-            input.encounterDiagnoses,
-          );
-        }
-
-        // UAT-BUG-02 — Allergy conflict check: alergenos del plan vs PatientAllergy activas.
-        let allergyConflicts: string[] = [];
-        if (input.dietPlanId) {
-          allergyConflicts = await findAllergyConflicts(
-            ctx.prisma,
+        // Toda la mutation corre en UNA transacción con contexto RLS: las
+        // validaciones previas y el create ven las mismas filas y el override
+        // de alergia sigue siendo atómico con su evento de dominio.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          await ensureEncounterAndPatient(
+            tx,
+            input.encounterId,
             input.patientId,
-            input.dietPlanId,
             ctx.tenant.organizationId,
           );
-        }
 
-        if (allergyConflicts.length > 0 && !input.overrideAllergy) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Conflicto de alergias: el plan dietético contiene ${allergyConflicts.join(", ")}. Paciente alérgico a: ${allergyConflicts.join(", ")}.`,
+          // Exclusivity check: ENTERAL ↔ PARENTERAL cannot coexist in ORDERED|ACTIVE.
+          await assertEnteralParenteralExclusivity(
+            tx,
+            input.encounterId,
+            ctx.tenant.organizationId,
+            input.route,
+          );
+
+          // Diet plan compatibility check.
+          if (input.dietPlanId) {
+            await validateDietCompatibility(
+              tx,
+              input.dietPlanId,
+              ctx.tenant.organizationId,
+              input.encounterDiagnoses,
+            );
+          }
+
+          // UAT-BUG-02 — Allergy conflict check: alergenos del plan vs PatientAllergy activas.
+          let allergyConflicts: string[] = [];
+          if (input.dietPlanId) {
+            allergyConflicts = await findAllergyConflicts(
+              tx,
+              input.patientId,
+              input.dietPlanId,
+              ctx.tenant.organizationId,
+            );
+          }
+
+          if (allergyConflicts.length > 0 && !input.overrideAllergy) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Conflicto de alergias: el plan dietético contiene ${allergyConflicts.join(", ")}. Paciente alérgico a: ${allergyConflicts.join(", ")}.`,
+            });
+          }
+
+          const created = await tx.nutritionOrder.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              prescriberId: input.prescriberId,
+              route: input.route,
+              status: "ORDERED" as const,
+              formula: input.formula ?? null,
+              ratePerHour: input.ratePerHour ?? null,
+              totalVolume: input.totalVolume ?? null,
+              caloriesPerDay: input.caloriesPerDay ?? null,
+              dietPlanId: input.dietPlanId ?? null,
+              notes: input.notes ?? null,
+              createdBy: ctx.user.id,
+            },
           });
-        }
 
-        const orderData = {
-          organizationId: ctx.tenant.organizationId,
-          encounterId: input.encounterId,
-          patientId: input.patientId,
-          prescriberId: input.prescriberId,
-          route: input.route,
-          status: "ORDERED" as const,
-          formula: input.formula ?? null,
-          ratePerHour: input.ratePerHour ?? null,
-          totalVolume: input.totalVolume ?? null,
-          caloriesPerDay: input.caloriesPerDay ?? null,
-          dietPlanId: input.dietPlanId ?? null,
-          notes: input.notes ?? null,
-          createdBy: ctx.user.id,
-        };
-
-        // Fast path: sin conflicto de alergia, no necesitamos transacción extra.
-        if (allergyConflicts.length === 0) {
-          return ctx.prisma.nutritionOrder.create({ data: orderData });
-        }
-
-        // Override clínico autorizado: create + emit evento dentro de tx atómica.
-        return ctx.prisma.$transaction(async (tx) => {
-          const created = await tx.nutritionOrder.create({ data: orderData });
+          // Sin conflicto de alergia no hay evento que emitir.
+          if (allergyConflicts.length === 0) return created;
 
           const payload: NutritionAllergyOverridePayload = {
             nutritionOrderId: created.id,
@@ -483,17 +500,19 @@ export const nutritionRouter = router({
     activate: tenantProcedure
       .input(nutritionOrderActivateInput)
       .mutation(async ({ ctx, input }) => {
-        const order = await ctx.prisma.nutritionOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, status: true },
-        });
-        if (!order) {
-          throw new TRPCError({ code: "NOT_FOUND" });
-        }
-        assertValidTransition(order.status as NutritionOrderStatus, "ACTIVE", order.id);
-        return ctx.prisma.nutritionOrder.update({
-          where: { id: input.id },
-          data: { status: "ACTIVE" },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.nutritionOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { id: true, status: true },
+          });
+          if (!order) {
+            throw new TRPCError({ code: "NOT_FOUND" });
+          }
+          assertValidTransition(order.status as NutritionOrderStatus, "ACTIVE", order.id);
+          return tx.nutritionOrder.update({
+            where: { id: input.id },
+            data: { status: "ACTIVE" },
+          });
         });
       }),
 
@@ -501,17 +520,19 @@ export const nutritionRouter = router({
     hold: tenantProcedure
       .input(nutritionOrderHoldInput)
       .mutation(async ({ ctx, input }) => {
-        const order = await ctx.prisma.nutritionOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, status: true },
-        });
-        if (!order) {
-          throw new TRPCError({ code: "NOT_FOUND" });
-        }
-        assertValidTransition(order.status as NutritionOrderStatus, "HELD", order.id);
-        return ctx.prisma.nutritionOrder.update({
-          where: { id: input.id },
-          data: { status: "HELD" },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.nutritionOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { id: true, status: true },
+          });
+          if (!order) {
+            throw new TRPCError({ code: "NOT_FOUND" });
+          }
+          assertValidTransition(order.status as NutritionOrderStatus, "HELD", order.id);
+          return tx.nutritionOrder.update({
+            where: { id: input.id },
+            data: { status: "HELD" },
+          });
         });
       }),
 
@@ -519,20 +540,22 @@ export const nutritionRouter = router({
     complete: tenantProcedure
       .input(nutritionOrderCompleteInput)
       .mutation(async ({ ctx, input }) => {
-        const order = await ctx.prisma.nutritionOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, status: true },
-        });
-        if (!order) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden no existe.",
+        await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.nutritionOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { id: true, status: true },
           });
-        }
-        assertValidTransition(order.status as NutritionOrderStatus, "COMPLETED", order.id);
-        await ctx.prisma.nutritionOrder.update({
-          where: { id: input.id },
-          data: { status: "COMPLETED", endedAt: new Date() },
+          if (!order) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden no existe.",
+            });
+          }
+          assertValidTransition(order.status as NutritionOrderStatus, "COMPLETED", order.id);
+          await tx.nutritionOrder.update({
+            where: { id: input.id },
+            data: { status: "COMPLETED", endedAt: new Date() },
+          });
         });
         return { ok: true as const };
       }),
@@ -541,20 +564,22 @@ export const nutritionRouter = router({
     cancel: tenantProcedure
       .input(nutritionOrderCancelInput)
       .mutation(async ({ ctx, input }) => {
-        const order = await ctx.prisma.nutritionOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          select: { id: true, status: true },
-        });
-        if (!order) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden no existe.",
+        await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.nutritionOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { id: true, status: true },
           });
-        }
-        assertValidTransition(order.status as NutritionOrderStatus, "CANCELLED", order.id);
-        await ctx.prisma.nutritionOrder.update({
-          where: { id: input.id },
-          data: { status: "CANCELLED", endedAt: new Date() },
+          if (!order) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden no existe.",
+            });
+          }
+          assertValidTransition(order.status as NutritionOrderStatus, "CANCELLED", order.id);
+          await tx.nutritionOrder.update({
+            where: { id: input.id },
+            data: { status: "CANCELLED", endedAt: new Date() },
+          });
         });
         return { ok: true as const };
       }),

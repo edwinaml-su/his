@@ -52,6 +52,15 @@ export interface RlsContextOptions {
    * tablas con grants restrictivos al rol authenticated (ej. seeders).
    */
   demoteRole?: boolean;
+  /**
+   * Timeout de la transacción interactiva en ms (default de Prisma: 5000).
+   * Subirlo es necesario en procedures que ejecutan decenas de queries dentro
+   * de un mismo contexto (ej. `workflowInbox.miBandeja`, ~30 fuentes BPM):
+   * con el default la transacción aborta a mitad de la bandeja.
+   */
+  timeout?: number;
+  /** Espera máxima para obtener conexión del pool en ms (default Prisma: 2000). */
+  maxWait?: number;
 }
 
 /**
@@ -129,10 +138,15 @@ export async function withTenantContext<T>(
   fn: (tx: PrismaClient) => Promise<T>,
   options: RlsContextOptions = {},
 ): Promise<T> {
-  return prisma.$transaction(async (tx) => {
-    await applyTenantContext(tx as unknown as PrismaClient, tenant, options);
-    return fn(tx as unknown as PrismaClient);
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      await applyTenantContext(tx as unknown as PrismaClient, tenant, options);
+      return fn(tx as unknown as PrismaClient);
+    },
+    options.timeout !== undefined || options.maxWait !== undefined
+      ? { timeout: options.timeout, maxWait: options.maxWait }
+      : undefined,
+  );
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   censusKpisByServiceSchema,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 /** [00:00, 24:00) UTC del día que contiene `at` (o hoy si no se da). */
 function dayBounds(at?: Date): { start: Date; end: Date } {
@@ -52,45 +53,47 @@ export const censusRouter = router({
       const establishmentId =
         input?.establishmentId ?? ctx.tenant.establishmentId ?? undefined;
 
-      const services = await ctx.prisma.serviceUnit.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          active: true,
-          ...(establishmentId ? { establishmentId } : {}),
-          ...(input?.serviceUnitId ? { id: input.serviceUnitId } : {}),
-        },
-        include: {
-          beds: {
-            where: { active: true },
-            include: {
-              assignments: {
-                where: { releasedAt: null },
-                include: {
-                  encounter: {
-                    select: {
-                      id: true,
-                      admittedAt: true,
-                      admissionType: true,
-                      primaryDiagnosisId: true,
-                      patient: {
-                        select: {
-                          id: true,
-                          mrn: true,
-                          firstName: true,
-                          lastName: true,
+      const services = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.serviceUnit.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            active: true,
+            ...(establishmentId ? { establishmentId } : {}),
+            ...(input?.serviceUnitId ? { id: input.serviceUnitId } : {}),
+          },
+          include: {
+            beds: {
+              where: { active: true },
+              include: {
+                assignments: {
+                  where: { releasedAt: null },
+                  include: {
+                    encounter: {
+                      select: {
+                        id: true,
+                        admittedAt: true,
+                        admissionType: true,
+                        primaryDiagnosisId: true,
+                        patient: {
+                          select: {
+                            id: true,
+                            mrn: true,
+                            firstName: true,
+                            lastName: true,
+                          },
                         },
                       },
                     },
                   },
+                  take: 1,
                 },
-                take: 1,
               },
+              orderBy: { code: "asc" },
             },
-            orderBy: { code: "asc" },
           },
-        },
-        orderBy: { code: "asc" },
-      });
+          orderBy: { code: "asc" },
+        }),
+      );
 
       return services.map((s) => ({
         serviceUnitId: s.id,
@@ -147,18 +150,35 @@ export const censusRouter = router({
         ...(input?.serviceUnitId ? { serviceUnitId: input.serviceUnitId } : {}),
       };
 
-      const [grouped, byService] = await Promise.all([
-        ctx.prisma.bed.groupBy({
-          by: ["status"],
-          where,
-          _count: { _all: true },
-        }),
-        ctx.prisma.bed.groupBy({
-          by: ["serviceUnitId", "status"],
-          where,
-          _count: { _all: true },
-        }),
-      ]);
+      // Una sola transacción con contexto RLS para las tres queries (el catálogo
+      // de servicios se adelanta aquí: es independiente del pivote de abajo).
+      const [grouped, byService, services] = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        (tx) =>
+          Promise.all([
+            tx.bed.groupBy({
+              by: ["status"],
+              where,
+              _count: { _all: true },
+            }),
+            tx.bed.groupBy({
+              by: ["serviceUnitId", "status"],
+              where,
+              _count: { _all: true },
+            }),
+            tx.serviceUnit.findMany({
+              where: {
+                organizationId: ctx.tenant.organizationId,
+                active: true,
+                ...(establishmentId ? { establishmentId } : {}),
+                ...(input?.serviceUnitId ? { id: input.serviceUnitId } : {}),
+              },
+              select: { id: true, code: true, name: true },
+              orderBy: { code: "asc" },
+            }),
+          ]),
+      );
 
       const counts = {
         FREE: 0,
@@ -192,17 +212,6 @@ export const censusRouter = router({
         bucket.total += row._count._all;
         serviceMap.set(key, bucket);
       }
-
-      const services = await ctx.prisma.serviceUnit.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          active: true,
-          ...(establishmentId ? { establishmentId } : {}),
-          ...(input?.serviceUnitId ? { id: input.serviceUnitId } : {}),
-        },
-        select: { id: true, code: true, name: true },
-        orderBy: { code: "asc" },
-      });
 
       const byServiceList = services.map((s) => {
         const b = serviceMap.get(s.id);
@@ -261,101 +270,103 @@ export const censusRouter = router({
       };
 
       const [admissions, discharges, transfers, deaths, absconded] =
-        await Promise.all([
-          ctx.prisma.encounter.findMany({
-            where: { ...orgFilter, admittedAt: { gte: start, lt: end } },
-            select: {
-              id: true,
-              encounterNumber: true,
-              admittedAt: true,
-              admissionType: true,
-              patient: {
-                select: { id: true, mrn: true, firstName: true, lastName: true },
+        await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          Promise.all([
+            tx.encounter.findMany({
+              where: { ...orgFilter, admittedAt: { gte: start, lt: end } },
+              select: {
+                id: true,
+                encounterNumber: true,
+                admittedAt: true,
+                admissionType: true,
+                patient: {
+                  select: { id: true, mrn: true, firstName: true, lastName: true },
+                },
+                serviceUnit: { select: { id: true, code: true, name: true } },
               },
-              serviceUnit: { select: { id: true, code: true, name: true } },
-            },
-            orderBy: { admittedAt: "desc" },
-            take: 50,
-          }),
-          ctx.prisma.encounter.findMany({
-            where: { ...orgFilter, dischargedAt: { gte: start, lt: end } },
-            select: {
-              id: true,
-              encounterNumber: true,
-              dischargedAt: true,
-              dischargeType: true,
-              patient: {
-                select: { id: true, mrn: true, firstName: true, lastName: true },
+              orderBy: { admittedAt: "desc" },
+              take: 50,
+            }),
+            tx.encounter.findMany({
+              where: { ...orgFilter, dischargedAt: { gte: start, lt: end } },
+              select: {
+                id: true,
+                encounterNumber: true,
+                dischargedAt: true,
+                dischargeType: true,
+                patient: {
+                  select: { id: true, mrn: true, firstName: true, lastName: true },
+                },
+                serviceUnit: { select: { id: true, code: true, name: true } },
               },
-              serviceUnit: { select: { id: true, code: true, name: true } },
-            },
-            orderBy: { dischargedAt: "desc" },
-            take: 50,
-          }),
-          ctx.prisma.encounterTransfer.findMany({
-            where: {
-              occurredAt: { gte: start, lt: end },
-              encounter: orgFilter,
-            },
-            select: {
-              id: true,
-              occurredAt: true,
-              reason: true,
-              fromServiceId: true,
-              toServiceId: true,
-              encounter: {
-                select: {
-                  id: true,
-                  encounterNumber: true,
-                  patient: {
-                    select: {
-                      id: true,
-                      mrn: true,
-                      firstName: true,
-                      lastName: true,
+              orderBy: { dischargedAt: "desc" },
+              take: 50,
+            }),
+            tx.encounterTransfer.findMany({
+              where: {
+                occurredAt: { gte: start, lt: end },
+                encounter: orgFilter,
+              },
+              select: {
+                id: true,
+                occurredAt: true,
+                reason: true,
+                fromServiceId: true,
+                toServiceId: true,
+                encounter: {
+                  select: {
+                    id: true,
+                    encounterNumber: true,
+                    patient: {
+                      select: {
+                        id: true,
+                        mrn: true,
+                        firstName: true,
+                        lastName: true,
+                      },
                     },
                   },
                 },
               },
-            },
-            orderBy: { occurredAt: "desc" },
-            take: 50,
-          }),
-          ctx.prisma.encounter.findMany({
-            where: {
-              ...orgFilter,
-              dischargedAt: { gte: start, lt: end },
-              dischargeType: "DEATH",
-            },
-            select: {
-              id: true,
-              encounterNumber: true,
-              dischargedAt: true,
-              patient: {
-                select: { id: true, mrn: true, firstName: true, lastName: true },
+              orderBy: { occurredAt: "desc" },
+              take: 50,
+            }),
+            tx.encounter.findMany({
+              where: {
+                ...orgFilter,
+                dischargedAt: { gte: start, lt: end },
+                dischargeType: "DEATH",
               },
-            },
-            orderBy: { dischargedAt: "desc" },
-            take: 50,
-          }),
-          ctx.prisma.encounter.findMany({
-            where: {
-              ...orgFilter,
-              dischargedAt: { gte: start, lt: end },
-              dischargeType: "ABSCONDED",
-            },
-            select: {
-              id: true,
-              encounterNumber: true,
-              dischargedAt: true,
-              patient: {
-                select: { id: true, mrn: true, firstName: true, lastName: true },
+              select: {
+                id: true,
+                encounterNumber: true,
+                dischargedAt: true,
+                patient: {
+                  select: { id: true, mrn: true, firstName: true, lastName: true },
+                },
               },
-            },
-            orderBy: { dischargedAt: "desc" },
-            take: 50,
-          }),
-        ]);
+              orderBy: { dischargedAt: "desc" },
+              take: 50,
+            }),
+            tx.encounter.findMany({
+              where: {
+                ...orgFilter,
+                dischargedAt: { gte: start, lt: end },
+                dischargeType: "ABSCONDED",
+              },
+              select: {
+                id: true,
+                encounterNumber: true,
+                dischargedAt: true,
+                patient: {
+                  select: { id: true, mrn: true, firstName: true, lastName: true },
+                },
+              },
+              orderBy: { dischargedAt: "desc" },
+              take: 50,
+            }),
+          ]),
+        );
 
       return {
         date: start,
@@ -381,50 +392,54 @@ export const censusRouter = router({
         now.getTime() - input.windowDays * 24 * 60 * 60 * 1000,
       );
 
-      const service = await ctx.prisma.serviceUnit.findFirst({
-        where: {
-          id: input.serviceUnitId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        select: { id: true, name: true },
-      });
-
-      const [bedTotal, bedOps, discharges, assignments] = await Promise.all([
-        ctx.prisma.bed.count({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            serviceUnitId: input.serviceUnitId,
-            active: true,
-          },
-        }),
-        ctx.prisma.bed.count({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            serviceUnitId: input.serviceUnitId,
-            active: true,
-            status: { notIn: ["BLOCKED", "MAINTENANCE"] },
-          },
-        }),
-        ctx.prisma.encounter.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            serviceUnitId: input.serviceUnitId,
-            dischargedAt: { gte: since, lte: now, not: null },
-          },
-          select: { admittedAt: true, dischargedAt: true },
-        }),
-        ctx.prisma.bedAssignment.findMany({
-          where: {
-            bed: {
-              serviceUnitId: input.serviceUnitId,
-              organizationId: ctx.tenant.organizationId,
-            },
-            assignedAt: { lte: now },
-            OR: [{ releasedAt: null }, { releasedAt: { gte: since } }],
-          },
-          select: { assignedAt: true, releasedAt: true },
-        }),
-      ]);
+      const [service, bedTotal, bedOps, discharges, assignments] = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        (tx) =>
+          Promise.all([
+            tx.serviceUnit.findFirst({
+              where: {
+                id: input.serviceUnitId,
+                organizationId: ctx.tenant.organizationId,
+              },
+              select: { id: true, name: true },
+            }),
+            tx.bed.count({
+              where: {
+                organizationId: ctx.tenant.organizationId,
+                serviceUnitId: input.serviceUnitId,
+                active: true,
+              },
+            }),
+            tx.bed.count({
+              where: {
+                organizationId: ctx.tenant.organizationId,
+                serviceUnitId: input.serviceUnitId,
+                active: true,
+                status: { notIn: ["BLOCKED", "MAINTENANCE"] },
+              },
+            }),
+            tx.encounter.findMany({
+              where: {
+                organizationId: ctx.tenant.organizationId,
+                serviceUnitId: input.serviceUnitId,
+                dischargedAt: { gte: since, lte: now, not: null },
+              },
+              select: { admittedAt: true, dischargedAt: true },
+            }),
+            tx.bedAssignment.findMany({
+              where: {
+                bed: {
+                  serviceUnitId: input.serviceUnitId,
+                  organizationId: ctx.tenant.organizationId,
+                },
+                assignedAt: { lte: now },
+                OR: [{ releasedAt: null }, { releasedAt: { gte: since } }],
+              },
+              select: { assignedAt: true, releasedAt: true },
+            }),
+          ]),
+      );
 
       const dayMs = 24 * 60 * 60 * 1000;
 
