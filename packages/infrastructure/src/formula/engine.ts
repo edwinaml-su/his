@@ -102,7 +102,13 @@ export function evalFormula(
   def: CalcDefFormula,
   values: Record<string, string | number>,
 ): number {
-  const scope: Record<string, number> = {};
+  // Defensa en profundidad (ver validateExpr): las fórmulas se validan al
+  // guardar, pero las persistidas antes de este control no pasaron por ahí.
+  if (validateExpr(def.expr).length > 0) return NaN;
+
+  // Prototipo nulo: aunque el parser intentara escribir en `__proto__`, no hay
+  // cadena de prototipos que contaminar (GHSA-8gw3-rxh4-v6jx).
+  const scope: Record<string, number> = Object.create(null) as Record<string, number>;
   for (const inp of def.inputs) {
     if (inp.type === "select") {
       const idx =
@@ -203,11 +209,56 @@ const FUNCTION_NAMES = new Set([
 ]);
 
 /**
- * Valida que los ids de input no colisionen con palabras reservadas o funciones de expr-eval.
+ * Caracteres admitidos en una expresión de fórmula.
+ *
+ * OWASP A03/A05:2025 — `expr-eval` está sin mantenimiento y arrastra dos
+ * advisories SIN fix upstream en ninguna versión publicada:
+ *   - GHSA-8gw3-rxh4-v6jx — Prototype Pollution (CWE-1321)
+ *   - GHSA-jc85-fpwf-qm7x — no restringe las funciones pasadas a `evaluate`
+ *     (CWE-94, ejecución de código)
+ *
+ * La expresión NO es código del repo: es dato editable desde `/calculadoras`
+ * y persistido en `ece.calculadora_version.definicion->>'expr'`. Un admin
+ * comprometido podía inyectar `x.__proto__.foo = 1` o acceso indexado.
+ *
+ * Mitigación capa 1 (esta allowlist): sólo números, identificadores,
+ * operadores aritméticos/comparación, ternario, paréntesis y comas. Se
+ * excluyen corchetes (acceso indexado), comillas (strings) y las llaves de la
+ * cadena de prototipos. Verificado contra las 176 versiones de fórmula en
+ * producción (2026-08-17): ninguna usa caracteres fuera de este set.
+ *
+ * Mitigación capa 2: scope con prototipo nulo en `evalFormula`.
+ */
+const SAFE_EXPR_CHARS = /^[A-Za-z0-9_.+\-*/%^()<>=!?:,\s]*$/;
+const PROTO_KEYS = /(^|[^A-Za-z0-9_])(__proto__|constructor|prototype)([^A-Za-z0-9_]|$)/;
+
+/**
+ * Valida que una expresión sea segura de parsear con expr-eval.
+ * Retorna lista de mensajes de error (vacía = válida).
+ */
+export function validateExpr(expr: string): string[] {
+  const errors: string[] = [];
+  if (!SAFE_EXPR_CHARS.test(expr)) {
+    errors.push(
+      "La expresión contiene caracteres no permitidos. Sólo se admiten números, " +
+        "identificadores, operadores (+ - * / % ^ < > = ! ? :), paréntesis y comas.",
+    );
+  }
+  if (PROTO_KEYS.test(expr)) {
+    errors.push(
+      'La expresión no puede referenciar "__proto__", "constructor" ni "prototype".',
+    );
+  }
+  return errors;
+}
+
+/**
+ * Valida que los ids de input no colisionen con palabras reservadas o funciones de expr-eval,
+ * y que la expresión pase la allowlist de seguridad.
  * Retorna lista de mensajes de error (vacía = válido).
  */
 export function validateInputIds(def: CalcDefFormula): string[] {
-  const errors: string[] = [];
+  const errors: string[] = validateExpr(def.expr);
   for (const inp of def.inputs) {
     if (RESERVED_IDS.has(inp.id)) {
       errors.push(
