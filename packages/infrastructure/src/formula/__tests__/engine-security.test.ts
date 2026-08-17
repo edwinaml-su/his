@@ -61,6 +61,46 @@ describe("validateExpr — allowlist", () => {
   });
 });
 
+describe("validateExpr — H7 (GHSA-jc85-fpwf-qm7x): allowlist de nombres de función", () => {
+  it("rechaza built-ins de expr-eval fuera de FUNCTION_NAMES (random, fac, pyt)", () => {
+    expect(validateExpr("random()").length).toBeGreaterThan(0);
+    expect(validateExpr("fac(a)").length).toBeGreaterThan(0);
+    expect(validateExpr("pyt(a, b)").length).toBeGreaterThan(0);
+  });
+
+  it("el mensaje de error nombra la función rechazada", () => {
+    const errs = validateExpr("random() + a");
+    expect(errs.some((e) => e.includes("random"))).toBe(true);
+  });
+
+  it("acepta las 8 funciones reales usadas por las 176 fórmulas de producción", () => {
+    const reales = [
+      "min(a, b)",
+      "max(a, b)",
+      "log(a)",
+      "log10(a)",
+      "exp(a)",
+      "sqrt(a)",
+      "round(a)",
+      "floor(a)",
+    ];
+    for (const expr of reales) {
+      expect(validateExpr(expr), expr).toEqual([]);
+    }
+  });
+
+  it("un paréntesis de agrupación puro (sin identificador antes) no se confunde con una llamada", () => {
+    expect(validateExpr("(a+b)")).toEqual([]);
+    expect(validateExpr("(a + b) * 2 - (a / b)")).toEqual([]);
+  });
+
+  it("detecta la función no permitida aunque esté mezclada con funciones sí permitidas", () => {
+    const errs = validateExpr("min(a, b) + random()");
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs.some((e) => e.includes("random"))).toBe(true);
+  });
+});
+
 describe("evalFormula — evaluación", () => {
   it("evalúa fórmulas válidas", () => {
     expect(evalFormula(def("a / (b * b)"), { a: 70, b: 1.75 })).toBeCloseTo(22.857, 3);

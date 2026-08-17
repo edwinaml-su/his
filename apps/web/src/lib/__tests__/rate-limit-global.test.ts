@@ -59,6 +59,33 @@ describe("checkInProcessLimit", () => {
     expect(checkInProcessLimit("a", 1, now).ok).toBe(true);
     expect(checkInProcessLimit("b", 1, now).ok).toBe(true);
   });
+
+  it("purga buckets vacíos al superar MAX_BUCKETS (cota dura anti-DoS de memoria)", () => {
+    // MAX_BUCKETS = 10_000 (no exportado). Llenamos el Map con buckets ya
+    // EXPIRADOS (fuera de la ventana de 60s) hasta superar la cota; el
+    // siguiente hit debe disparar `sweep()` internamente y seguir
+    // funcionando con normalidad — sin esto, un atacante que rote la key
+    // (ej. IP/user-agent falso) en cada request haría crecer el Map sin
+    // límite (memory-exhaustion DoS).
+    const staleNow = Date.now();
+    const freshNow = staleNow + 61_000; // fuera de la ventana de 60s de las cubetas stale.
+
+    for (let i = 0; i < 10_001; i++) {
+      expect(checkInProcessLimit(`stale-${i}`, 1, staleNow).ok).toBe(true);
+    }
+    // Tras el loop, buckets.size = 10_001 (> MAX_BUCKETS = 10_000). La
+    // siguiente llamada evalúa esa condición ANTES de insertar su propia
+    // key, así que es ESTA la que dispara `sweep(freshNow)`.
+    const verdict = checkInProcessLimit("fresh-key", 1, freshNow);
+    expect(verdict.ok).toBe(true);
+
+    // No hay API pública para inspeccionar `buckets.size` (deliberado — es
+    // estado interno), así que la evidencia observable de que `sweep()`
+    // corrió sin lanzar y sin romper el comportamiento normal es que el
+    // límite se sigue aplicando correctamente después de cruzar el umbral:
+    // una key nueva sigue teniendo cupo completo tras el sweep.
+    expect(checkInProcessLimit("fresh-key-2", 1, freshNow).ok).toBe(true);
+  });
 });
 
 describe("checkTrpcRateLimit", () => {

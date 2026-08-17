@@ -78,6 +78,27 @@ describe("workflowInboxRouter — contexto RLS", () => {
     expectRlsApplied();
   });
 
+  it("H2: miBandeja abre 6 transacciones cortas (no una sola de ~30 queries)", async () => {
+    // H2 (P1, pool exhaustion) — antes del fix, miBandeja retenía UNA conexión
+    // del pool (Supabase session mode, ~15 conexiones) hasta 20s corriendo
+    // sus ~30 queries dentro de un solo `withTenantContext`. Ahora se parte
+    // en 6 bloques cortos; cada bloque es su propio `prisma.$transaction`
+    // (ver `withTenantContext` en rls-context.ts). Verificamos el conteo de
+    // transacciones, no solo que "alguna" transacción se haya abierto.
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    await caller.miBandeja();
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(6);
+    // Cada una de las 6 transacciones debe demotar el rol — no basta con que
+    // la primera lo haga y las siguientes hereden el bypass.
+    const demotes = rawCalls.filter((s) => s.includes("SET LOCAL ROLE authenticated"));
+    expect(demotes.length).toBeGreaterThanOrEqual(6);
+    // Y cada bloque vuelve a setear el contexto tenant (set_tenant_context),
+    // no solo el primero — `SET LOCAL` es scoped a CADA transacción.
+    const contextSets = rawCalls.filter((s) => s.includes("set_tenant_context"));
+    expect(contextSets.length).toBeGreaterThanOrEqual(6);
+  });
+
   it("contadorBadge abre transacción y demota el rol", async () => {
     prisma.prescription.count.mockResolvedValue(0 as never);
     const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
@@ -105,6 +126,42 @@ describe("workflowInboxRouter — contexto RLS", () => {
     const demoteIdx = rawCalls.findIndex((s) => s.includes("SET LOCAL ROLE authenticated"));
     const insertIdx = rawCalls.findIndex((s) => s.includes("WorkflowTaskAction"));
     expect(insertIdx).toBeGreaterThan(demoteIdx);
+  });
+
+  it("escalar abre transacción y demota el rol", async () => {
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    await caller.escalar({
+      taskId: "PRESCRIPTION_TO_SIGN:abc",
+      taskType: "PRESCRIPTION_TO_SIGN",
+      reason: "carga desigual",
+    });
+    expectRlsApplied();
+  });
+
+  it("completar abre transacción y demota el rol", async () => {
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    await caller.completar({
+      taskId: "PRESCRIPTION_TO_SIGN:abc",
+      taskType: "PRESCRIPTION_TO_SIGN",
+      reason: "atendida fuera del flujo normal",
+    });
+    expectRlsApplied();
+  });
+
+  it("comentar abre transacción y demota el rol", async () => {
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    await caller.comentar({
+      taskId: "PRESCRIPTION_TO_SIGN:abc",
+      taskType: "PRESCRIPTION_TO_SIGN",
+      reason: "coordinando con turno entrante",
+    });
+    expectRlsApplied();
+  });
+
+  it("actividadEquipo abre transacción y demota el rol", async () => {
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    await caller.actividadEquipo({ days: 7 });
+    expectRlsApplied();
   });
 
   afterEach(() => {
