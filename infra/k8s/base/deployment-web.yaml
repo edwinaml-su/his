@@ -2,7 +2,7 @@
 # deployment-web.yaml — Next.js app (self-hosted, opción futura)
 #
 # Imagen: ghcr.io/edwinaml-su/his-web:<SHA> (construida por CI)
-# Runtime: node:20-alpine (non-root, uid 1001)
+# Runtime: node:24-alpine (non-root, uid 1001) — alineado con Dockerfile raíz
 # Resources: 256Mi-512Mi RAM, 250m-500m CPU por pod
 ################################################################################
 apiVersion: apps/v1
