@@ -15,6 +15,7 @@ import { cookies, headers } from "next/headers";
 import { TRPCError } from "@trpc/server";
 import { appRouter, createTRPCContext } from "@his/trpc";
 import { PORTAL_SESSION_COOKIE } from "@/lib/portal-session";
+import { getClientIp } from "@/lib/http/client-ip";
 
 export interface VerifyResult {
   status: "OK" | "MFA_REQUIRED" | "ERROR";
@@ -28,7 +29,8 @@ export async function verifyMagicLink(input: {
   totpCode?: string;
 }): Promise<VerifyResult> {
   const hdrs = headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined;
+  // H5: header autoritativo de Vercel — ver @/lib/http/client-ip.
+  const ip = getClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
 
   const ctx = createTRPCContext({

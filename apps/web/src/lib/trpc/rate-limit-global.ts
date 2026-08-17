@@ -23,6 +23,15 @@
  *
  * Los umbrales son deliberadamente altos: esto es un tope anti-bucle, no una
  * cuota de negocio. Si un usuario legítimo los toca, es un bug de la UI.
+ *
+ * H1 (2026-08-17): `httpBatchLink` empaqueta N procedures en un solo POST.
+ * Contar "1 request HTTP = 1 hit" dejaba pasar un batch de cientos de
+ * mutations por el límite de 60/min. Ahora `checkTrpcRateLimit` recibe
+ * `count` (nº de procedures del batch, parseado por `parse-batch.ts` en el
+ * route handler) y consume esa cantidad de cupo de una vez — un batch de 15
+ * procedures cuesta 15 hits, no 1. El tamaño del batch en sí está topado por
+ * `TRPC_MAX_BATCH_SIZE` (`batch-limit.ts`), validado en el route handler
+ * ANTES de llegar aquí.
  */
 import { checkRateLimit, normalizeIp, type RateLimitStore } from "@his/trpc/middleware/rate-limit";
 
@@ -55,20 +64,30 @@ export interface RateLimitVerdict {
   retryAfterSec?: number;
 }
 
-/** Ventana deslizante en memoria (por proceso). Usada para tráfico autenticado. */
-export function checkInProcessLimit(key: string, max: number, now = Date.now()): RateLimitVerdict {
+/**
+ * Ventana deslizante en memoria (por proceso). Usada para tráfico autenticado.
+ * `weight` (default 1) es cuántos hits registrar de una vez — ver nota H1
+ * arriba. `now` va ANTES de `weight` en la firma para no romper los call
+ * sites/tests existentes que pasan `now` como 3er argumento posicional.
+ */
+export function checkInProcessLimit(
+  key: string,
+  max: number,
+  now = Date.now(),
+  weight = 1,
+): RateLimitVerdict {
   if (buckets.size > MAX_BUCKETS) sweep(now);
 
   const bucket = buckets.get(key) ?? { hits: [] };
   bucket.hits = bucket.hits.filter((t) => now - t < WINDOW_MS);
 
-  if (bucket.hits.length >= max) {
+  if (bucket.hits.length + weight > max) {
     buckets.set(key, bucket);
-    const oldest = bucket.hits[0]!;
+    const oldest = bucket.hits[0] ?? now;
     return { ok: false, retryAfterSec: Math.max(1, Math.ceil((WINDOW_MS - (now - oldest)) / 1000)) };
   }
 
-  bucket.hits.push(now);
+  for (let i = 0; i < weight; i++) bucket.hits.push(now);
   buckets.set(key, bucket);
   return { ok: true };
 }
@@ -80,16 +99,21 @@ export function checkInProcessLimit(key: string, max: number, now = Date.now()):
  */
 export async function checkTrpcRateLimit(
   store: RateLimitStore,
-  { userId, ip }: { userId: string | null; ip: string | null | undefined },
+  {
+    userId,
+    ip,
+    count = 1,
+  }: { userId: string | null; ip: string | null | undefined; count?: number },
 ): Promise<RateLimitVerdict> {
   if (userId) {
-    return checkInProcessLimit(`trpc:user:${userId}`, AUTHED_MAX);
+    return checkInProcessLimit(`trpc:user:${userId}`, AUTHED_MAX, Date.now(), count);
   }
   try {
     const result = await checkRateLimit(store, {
       key: `trpc:anon:${normalizeIp(ip)}`,
       max: ANON_MAX,
       windowMs: WINDOW_MS,
+      weight: count,
     });
     return result;
   } catch {

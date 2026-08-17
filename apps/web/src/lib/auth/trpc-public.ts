@@ -12,8 +12,13 @@
  * (El `tenantProcedure` del router sigue siendo la defensa real; esto es el
  * gate de borde que debe ser correcto por sí mismo.)
  *
+ * El parseo del batch (`proc1,proc2` → `["proc1","proc2"]`) vive en
+ * `@/lib/trpc/parse-batch` — compartido con el rate limit global (H1), que
+ * necesita la MISMA lista de procedures para no divergir del gate de aquí.
+ *
  * Si se agrega un `publicProcedure` nuevo, añadir su prefijo aquí.
  */
+import { parseTrpcBatchPath } from "@/lib/trpc/parse-batch";
 
 /** Procedures (o prefijos de router) que usan `publicProcedure`. */
 export const TRPC_PUBLIC_PREFIXES = [
@@ -30,24 +35,8 @@ export const TRPC_PUBLIC_PREFIXES = [
  * menos un procedure no listado (fail-closed).
  */
 export function isPublicTrpcPath(pathname: string): boolean {
-  const PREFIX = "/api/trpc/";
-  if (!pathname.startsWith(PREFIX)) return false;
-
-  const raw = pathname.slice(PREFIX.length).split(",");
-  const procedures: string[] = [];
-  for (const segment of raw) {
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(segment).trim();
-    } catch {
-      // URI malformada: no se puede afirmar que el batch sea público.
-      return false;
-    }
-    if (decoded.length === 0) return false;
-    procedures.push(decoded);
-  }
-
-  if (procedures.length === 0) return false;
+  const procedures = parseTrpcBatchPath(pathname);
+  if (!procedures) return false;
 
   return procedures.every((proc) =>
     TRPC_PUBLIC_PREFIXES.some((prefix) => proc === prefix || proc.startsWith(prefix)),

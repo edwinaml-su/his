@@ -546,6 +546,28 @@ export async function disableMfa(): Promise<{ ok: boolean; error?: string }> {
 }
 
 /**
+ * `clearMfaSession()` — Borra la cookie `his.mfa` (H3, OWASP A07:2025).
+ *
+ * La marca de MFA es httpOnly: el cliente no puede leerla/borrarla con JS,
+ * así que `supabase.auth.signOut()` (que solo toca la cookie de Supabase) la
+ * deja viva. En una estación compartida, el mismo usuario reentra dentro de
+ * las 12h de TTL sin que se le vuelva a pedir el segundo factor. Se invoca
+ * desde el flujo de logout (`UserMenu.handleSignOut`).
+ *
+ * Sin auth-check deliberado: es una acción idempotente y sin efecto de
+ * negocio (solo expira una cookie del propio navegador que la llama).
+ */
+export async function clearMfaSession(): Promise<void> {
+  cookies().set(MFA_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+}
+
+/**
  * `getMfaStatus()` — Estado actual de MFA del usuario en sesión.
  * Lo usa el dashboard de cuenta y la página `/mfa` para decidir si redirigir
  * a `/mfa/enroll` cuando el rol exige MFA pero no está enrolado.

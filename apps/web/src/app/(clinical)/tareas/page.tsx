@@ -143,7 +143,16 @@ export default function TareasPage() {
       scope,
       limit: 200,
     },
-    { refetchInterval: 30_000, refetchOnWindowFocus: true },
+    {
+      refetchInterval: 30_000,
+      // H2 (OWASP 2025, P1 — pool exhaustion): con refetchOnWindowFocus=true,
+      // un cambio de turno con 15-20 clínicos enfocando esta pestaña a la vez
+      // multiplicaba la contención de conexiones del pool (cada refetch abre
+      // varias transacciones cortas en workflowInbox.miBandeja). El polling
+      // de 30s ya mantiene los datos razonablemente frescos sin depender del
+      // focus de la ventana.
+      refetchOnWindowFocus: false,
+    },
   );
 
   const data = (query.data ?? null) as InboxResponse | null;

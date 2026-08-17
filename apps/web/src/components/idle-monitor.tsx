@@ -39,6 +39,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearMfaSession } from "@/app/actions/mfa";
 import {
   ACTIVITY_EVENTS,
   ACTIVITY_THROTTLE_MS,
@@ -81,6 +82,14 @@ export function IdleMonitor({ enabled }: IdleMonitorProps) {
       // Si signOut falla (red caída) igual redirigimos: el middleware del
       // siguiente request va a forzar re-login. No bloquear UX.
       console.error("[IdleMonitor] signOut error", err);
+    }
+    try {
+      // H3 — OWASP A07:2025: el logout por idle es justo el escenario de
+      // estación compartida que motiva el hallazgo; `his.mfa` es httpOnly y
+      // sobrevive a `supabase.auth.signOut()`.
+      await clearMfaSession();
+    } catch (err) {
+      console.error("[IdleMonitor] clearMfaSession error", err);
     }
     router.replace(`/login?reason=${IDLE_LOGOUT_REASON}`);
   }, [router]);

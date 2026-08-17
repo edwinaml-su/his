@@ -19,6 +19,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import type { PrismaClient } from "@prisma/client";
 import {
   inboxFiltersSchema,
   reassignTaskInput,
@@ -94,45 +95,80 @@ export const workflowInboxRouter = router({
     .query(async ({ ctx, input }): Promise<InboxResponse> => {
       const filters = input ?? inboxFiltersSchema.parse({});
       const { tenant, user } = ctx;
-      // RLS: el rol de Supabase es BYPASSRLS; `withTenantContext` demota a
-      // `authenticated` + setea las GUC de tenant para que las policies apliquen.
-      return withTenantContext(
+      const userRoles = tenant.roleCodes;
+      const orgId = tenant.organizationId;
+      const now = new Date();
+
+      // RBAC enforcement de scope: ALL solo para admins/directivos. Chequeo
+      // puro en JS — se resuelve antes de abrir cualquier transacción (H2:
+      // evita retener una conexión del pool para requests que de todos modos
+      // van a ser rechazados).
+      if (
+        filters.scope === "ALL" &&
+        !userRoles.some((r) => ["ADMIN", "ADMIN_CLINICO", "DIR", "GERENTE"].includes(r))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Solo roles ADMIN/DIR pueden ver la cola completa.",
+        });
+      }
+
+      // Filtros que dependen del scope. MINE incluye prescriberId=user.id;
+      // TEAM/ALL lo dejan abierto a quien tenga el rol.
+      const isPersonalScope = filters.scope === "MINE";
+
+      function isEnabled(type: TaskType): boolean {
+        if (filters.types && filters.types.length > 0 && !filters.types.includes(type)) {
+          return false;
+        }
+        // En scope ALL, mostramos TODAS las fuentes; el usuario admin/DIR las ve aunque
+        // no tenga el rol clínico específico (vista supervisora).
+        if (filters.scope === "ALL") return true;
+        return userHasAnyRole(userRoles, TASK_REQUIRED_ROLES[type]);
+      }
+
+      // Wrapper NTEC — recibe `prisma` explícito porque ahora se invoca desde
+      // distintos bloques `withTenantContext` (cada uno con su propia
+      // transacción corta; ver nota H2 abajo).
+      const ntecQuery = async (
+        prisma: PrismaClient,
+        type: TaskType,
+        tipoCode: string,
+        estadoCode: string,
+      ): Promise<NtecDocRow[]> => {
+        if (!isEnabled(type)) return [];
+        return prisma.$queryRawUnsafe<NtecDocRow[]>(
+          buildNtecQuery(tipoCode, estadoCode),
+          tipoCode,
+          estadoCode,
+        );
+      };
+
+      // H2 (OWASP 2025, P1 — pool exhaustion): esta procedure hacía TODAS sus
+      // ~35 queries MÁS el mapeo/orden/filtrado en JS dentro de UNA sola
+      // `withTenantContext`, reteniendo una conexión del pool (Supabase
+      // session mode, ~15 conexiones) hasta 20s. Con polling de 30s en
+      // /tareas, un cambio de turno con 15-20 clínicos concurrentes saturaba
+      // el pool (EMAXCONNSESSION). Se parte en bloques cortos por sección
+      // lógica; el mapeo a Task[] (cómputo puro, sin BD) corre DESPUÉS de que
+      // todos los bloques resolvieron, sin retener conexión.
+
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 1 — BASE V1 (6 fuentes / 8 queries)
+      // ═══════════════════════════════════════════════════════════════════════
+      const {
+        rxToSign,
+        rxToDispense,
+        triages,
+        labs,
+        labsToValidate,
+        images,
+        imagesToValidate,
+        meds,
+      } = await withTenantContext(
         ctx.prisma,
         ctx.tenant,
         async (prisma) => {
-          const userRoles = tenant.roleCodes;
-          const orgId = tenant.organizationId;
-          const now = new Date();
-
-          // RBAC enforcement de scope: ALL solo para admins/directivos.
-          if (
-            filters.scope === "ALL" &&
-            !userRoles.some((r) => ["ADMIN", "ADMIN_CLINICO", "DIR", "GERENTE"].includes(r))
-          ) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "Solo roles ADMIN/DIR pueden ver la cola completa.",
-            });
-          }
-
-          // Filtros que dependen del scope. MINE incluye prescriberId=user.id;
-          // TEAM/ALL lo dejan abierto a quien tenga el rol.
-          const isPersonalScope = filters.scope === "MINE";
-
-          function isEnabled(type: TaskType): boolean {
-            if (filters.types && filters.types.length > 0 && !filters.types.includes(type)) {
-              return false;
-            }
-            // En scope ALL, mostramos TODAS las fuentes; el usuario admin/DIR las ve aunque
-            // no tenga el rol clínico específico (vista supervisora).
-            if (filters.scope === "ALL") return true;
-            return userHasAnyRole(userRoles, TASK_REQUIRED_ROLES[type]);
-          }
-
-          // ═══════════════════════════════════════════════════════════════════════
-          // BASE V1 (6 fuentes)
-          // ═══════════════════════════════════════════════════════════════════════
-
           const rxToSign = isEnabled("PRESCRIPTION_TO_SIGN")
             ? await prisma.prescription.findMany({
                 where: {
@@ -222,23 +258,40 @@ export const workflowInboxRouter = router({
               })
             : [];
 
-          // ═══════════════════════════════════════════════════════════════════════
-          // SPRINT A — Documentos NTEC (queries raw sobre schema `ece`)
-          // ═══════════════════════════════════════════════════════════════════════
-
-          const ntecQuery = async (
-            type: TaskType,
-            tipoCode: string,
-            estadoCode: string,
-          ): Promise<NtecDocRow[]> => {
-            if (!isEnabled(type)) return [];
-            return prisma.$queryRawUnsafe<NtecDocRow[]>(
-              buildNtecQuery(tipoCode, estadoCode),
-              tipoCode,
-              estadoCode,
-            );
+          return {
+            rxToSign,
+            rxToDispense,
+            triages,
+            labs,
+            labsToValidate,
+            images,
+            imagesToValidate,
+            meds,
           };
+        },
+        { timeout: 5_000, maxWait: 5_000 },
+      );
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 2 — SPRINT A: Documentos NTEC (12 queries, joins sobre `ece`)
+      // ═══════════════════════════════════════════════════════════════════════
+      const {
+        hcDocs,
+        epicrisisDocs,
+        consentMedDocs,
+        ordIngDocs,
+        atnEmergDocs,
+        rriDocs,
+        isssDocs,
+        consentQxDocs,
+        evolutionsPending,
+        valoracionPending,
+        rectifPending,
+        docsToCertify,
+      } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (prisma) => {
           const [
             hcDocs,
             epicrisisDocs,
@@ -249,14 +302,14 @@ export const workflowInboxRouter = router({
             isssDocs,
             consentQxDocs,
           ] = await Promise.all([
-            ntecQuery("HC_TO_SIGN", "HC", "borrador"),
-            ntecQuery("EPICRISIS_TO_SIGN", "EPICRISIS", "borrador"),
-            ntecQuery("MEDICAL_CONSENT_PENDING", "CONSENT_MED", "borrador"),
-            ntecQuery("ORDEN_INGRESO_PENDING", "ORD_ING", "borrador"),
-            ntecQuery("ATENCION_EMERGENCIA_PENDING", "ATN_EMERG", "borrador"),
-            ntecQuery("RRI_PENDING", "RRI", "pendiente_respuesta"),
-            ntecQuery("ISSS_CERT_PENDING", "CERT_INC", "borrador"),
-            ntecQuery("SURGERY_CONSENT_PENDING", "CONSENT_QX", "borrador"),
+            ntecQuery(prisma, "HC_TO_SIGN", "HC", "borrador"),
+            ntecQuery(prisma, "EPICRISIS_TO_SIGN", "EPICRISIS", "borrador"),
+            ntecQuery(prisma, "MEDICAL_CONSENT_PENDING", "CONSENT_MED", "borrador"),
+            ntecQuery(prisma, "ORDEN_INGRESO_PENDING", "ORD_ING", "borrador"),
+            ntecQuery(prisma, "ATENCION_EMERGENCIA_PENDING", "ATN_EMERG", "borrador"),
+            ntecQuery(prisma, "RRI_PENDING", "RRI", "pendiente_respuesta"),
+            ntecQuery(prisma, "ISSS_CERT_PENDING", "CERT_INC", "borrador"),
+            ntecQuery(prisma, "SURGERY_CONSENT_PENDING", "CONSENT_QX", "borrador"),
           ]);
 
           // EVOLUTION_TO_WRITE: encuentros INPATIENT activos >24h sin evolución del día
@@ -326,12 +379,41 @@ export const workflowInboxRouter = router({
               : [];
 
           // ECE_DOC_TO_CERTIFY: documentos en estado 'validado' que esperan certificación DIR
-          const docsToCertify = await ntecQuery("ECE_DOC_TO_CERTIFY", "HC", "validado");
+          const docsToCertify = await ntecQuery(prisma, "ECE_DOC_TO_CERTIFY", "HC", "validado");
 
-          // ═══════════════════════════════════════════════════════════════════════
-          // SPRINT B — JCI / Seguridad del paciente
-          // ═══════════════════════════════════════════════════════════════════════
+          return {
+            hcDocs,
+            epicrisisDocs,
+            consentMedDocs,
+            ordIngDocs,
+            atnEmergDocs,
+            rriDocs,
+            isssDocs,
+            consentQxDocs,
+            evolutionsPending,
+            valoracionPending,
+            rectifPending,
+            docsToCertify,
+          };
+        },
+        { timeout: 7_000, maxWait: 5_000 },
+      );
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 3 — SPRINT B: JCI / Seguridad del paciente (7 queries)
+      // ═══════════════════════════════════════════════════════════════════════
+      const {
+        verbalOrders,
+        criticalResults,
+        doubleCheck,
+        whoIncomplete,
+        fallsPending,
+        morseHigh,
+        wristbandMissing,
+      } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (prisma) => {
           // VERBAL_ORDER_TO_CONFIRM: ece.verbal_order estado='dictada' + confirmado_en NULL
           const verbalOrders: Array<{ id: string; dictado_en: Date; paciente_id: string }> =
             isEnabled("VERBAL_ORDER_TO_CONFIRM")
@@ -446,10 +528,34 @@ export const workflowInboxRouter = router({
               })
             : [];
 
-          // ═══════════════════════════════════════════════════════════════════════
-          // SPRINT C — Quirófano
-          // ═══════════════════════════════════════════════════════════════════════
+          return {
+            verbalOrders,
+            criticalResults,
+            doubleCheck,
+            whoIncomplete,
+            fallsPending,
+            morseHigh,
+            wristbandMissing,
+          };
+        },
+        { timeout: 5_000, maxWait: 5_000 },
+      );
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 4 — SPRINT C: Quirófano + OLA 2: Camas / Flujo (7 queries)
+      // ═══════════════════════════════════════════════════════════════════════
+      const {
+        preopPending,
+        anesthOpen,
+        urpaPending,
+        surgNotePending,
+        bedsToClean,
+        bedsToRelease,
+        admissionsNoVitals,
+      } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (prisma) => {
           // SURGERY_PREOP_PENDING: cirugía próximas 24h sin preopNotes
           const preopPending = isEnabled("SURGERY_PREOP_PENDING")
             ? await prisma.surgeryCase.findMany({
@@ -580,10 +686,61 @@ export const workflowInboxRouter = router({
               })
             : [];
 
-          // ═══════════════════════════════════════════════════════════════════════
-          // OLA 2 — Consulta externa (3)
-          // ═══════════════════════════════════════════════════════════════════════
+          return {
+            preopPending,
+            anesthOpen,
+            urpaPending,
+            surgNotePending,
+            bedsToClean,
+            bedsToRelease,
+            admissionsNoVitals,
+          };
+        },
+        { timeout: 5_000, maxWait: 5_000 },
+      );
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 5 — OLA 2 (resto) + OLA 3: Consulta externa / Estudios /
+      // Maternidad / Banco de sangre / MPI / Cold chain / Equipos /
+      // Inventario / GS1 / Defunciones / Reclamos (29 queries)
+      // ═══════════════════════════════════════════════════════════════════════
+      const {
+        appointmentsToCheckin,
+        consultsNoNote,
+        appointmentsNoShow,
+        respPending,
+        nutriPending,
+        studiesToSchedule,
+        partogramaOverdue,
+        rnApgarPending,
+        nrpPostevent,
+        bloodVerifyPending,
+        bloodReactPending,
+        nnToResolve,
+        arcoPending,
+        mpiMergePending,
+        adrPending,
+        incidentToReview,
+        coldChainBreach,
+        calibDue,
+        equipOutOfService,
+        maintDue,
+        lowStock,
+        expiringSoon,
+        gs1Inbound,
+        gs1Transfer,
+        gs1Return,
+        gs1Recall,
+        deathCertPending,
+        claimsRejected,
+        claimsPendingSubmission,
+      } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (prisma) => {
+          // ═══════════════════════════════════════════════════════════════════
+          // OLA 2 — Consulta externa (3)
+          // ═══════════════════════════════════════════════════════════════════
           // APPOINTMENT_TO_CHECKIN: cita próxima sin check-in (entre -30m y +120m)
           const appointmentsToCheckin = isEnabled("APPOINTMENT_TO_CHECKIN")
             ? await prisma.outpatientAppointment.findMany({
@@ -1111,11 +1268,47 @@ export const workflowInboxRouter = router({
               `, orgId) as Promise<ClaimPendingRow[]>).catch(() => [] as ClaimPendingRow[])
             : [];
 
-          // ═══════════════════════════════════════════════════════════════════════
-          // Enriquecer Patient en batch único
-          // ═══════════════════════════════════════════════════════════════════════
+          return {
+            appointmentsToCheckin,
+            consultsNoNote,
+            appointmentsNoShow,
+            respPending,
+            nutriPending,
+            studiesToSchedule,
+            partogramaOverdue,
+            rnApgarPending,
+            nrpPostevent,
+            bloodVerifyPending,
+            bloodReactPending,
+            nnToResolve,
+            arcoPending,
+            mpiMergePending,
+            adrPending,
+            incidentToReview,
+            coldChainBreach,
+            calibDue,
+            equipOutOfService,
+            maintDue,
+            lowStock,
+            expiringSoon,
+            gs1Inbound,
+            gs1Transfer,
+            gs1Return,
+            gs1Recall,
+            deathCertPending,
+            claimsRejected,
+            claimsPendingSubmission,
+          };
+        },
+        { timeout: 8_000, maxWait: 5_000 },
+      );
 
-          const patientIds = new Set<string>([
+      // ═══════════════════════════════════════════════════════════════════════
+      // Enriquecer Patient — cálculo de IDs es JS puro (no requiere conexión);
+      // las queries que dependen de estos IDs van en el BLOQUE 6.
+      // ═══════════════════════════════════════════════════════════════════════
+
+      const patientIds = new Set<string>([
             ...rxToSign.map((r) => r.patientId),
             ...rxToDispense.map((r) => r.patientId),
             ...triages.map((t) => t.patientId),
@@ -1169,6 +1362,14 @@ export const workflowInboxRouter = router({
           for (const v of verbalOrders) patientIds.add(v.paciente_id);
           for (const c of criticalResults) patientIds.add(c.paciente_id);
 
+      // ═══════════════════════════════════════════════════════════════════════
+      // BLOQUE 6 — Enrichment: medItemMap (batch prescriptionItem/drug/
+      // prescription) + patient.findMany (batch único)
+      // ═══════════════════════════════════════════════════════════════════════
+      const { medItemMap, patientsById } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (prisma) => {
           // MedAdmin batch enrichment
           let medItemMap = new Map<
             string,
@@ -1214,7 +1415,12 @@ export const workflowInboxRouter = router({
             for (const p of patients) patientsById.set(p.id, p);
           }
 
-          function getPatient(id: string | null | undefined): PatientMini | null {
+          return { medItemMap, patientsById };
+        },
+        { timeout: 4_000, maxWait: 5_000 },
+      );
+
+      function getPatient(id: string | null | undefined): PatientMini | null {
             if (!id) return null;
             return patientsById.get(id) ?? null;
           }
@@ -1953,16 +2159,13 @@ export const workflowInboxRouter = router({
             })
             .filter((c) => c.count > 0);
 
-          return {
-            serverNow: now,
-            totalTasks: tasks.length,
-            overdueTasks: tasks.filter((t) => t.isOverdue).length,
-            countsByType,
-            tasks: filtered.slice(0, filters.limit),
-          };
-        },
-        { timeout: 20_000, maxWait: 5_000 },
-      );
+      return {
+        serverNow: now,
+        totalTasks: tasks.length,
+        overdueTasks: tasks.filter((t) => t.isOverdue).length,
+        countsByType,
+        tasks: filtered.slice(0, filters.limit),
+      };
     }),
 
   /**
@@ -2063,7 +2266,9 @@ export const workflowInboxRouter = router({
           const overdue = overdueChecks.reduce((s, n) => s + n, 0);
           return { total, overdue };
         },
-        { timeout: 20_000, maxWait: 5_000 },
+        // H2 (OWASP 2025, P1 — pool exhaustion): 8 counts indexados — no
+        // necesita 20s de conexión retenida. Ver nota en `miBandeja`.
+        { timeout: 5_000, maxWait: 5_000 },
       );
     },
   ),

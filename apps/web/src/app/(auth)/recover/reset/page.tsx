@@ -27,6 +27,7 @@ import {
 } from "@his/ui/components/card";
 import { Alert, AlertDescription } from "@his/ui/components/alert";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearMfaSession } from "@/app/actions/mfa";
 
 const MIN_PASSWORD_LENGTH = 12;
 
@@ -82,6 +83,14 @@ export default function ResetPasswordPage() {
     // Cerramos la sesión transitoria de recovery y mandamos al login con
     // el flag que activa el banner verde "Contraseña actualizada".
     await supabase.auth.signOut();
+    // H3 — OWASP A07:2025: si la contraseña se resetea por sospecha de
+    // compromiso, la marca de MFA de la sesión anterior NO debe sobrevivir
+    // (httpOnly, `supabase.auth.signOut()` no la toca — ver mfa-session.ts).
+    try {
+      await clearMfaSession();
+    } catch (err) {
+      console.error("[recover/reset] clearMfaSession error", err);
+    }
     router.replace("/login?recovered=true");
     router.refresh();
   }

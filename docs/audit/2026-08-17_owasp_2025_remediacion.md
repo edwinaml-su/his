@@ -60,7 +60,14 @@ filtro JS `organizationId`; RLS de BD no se evaluaba.
 - `withTenantContext` acepta `timeout`/`maxWait`: `miBandeja` hace 30+ queries por request y
   con el default de Prisma (5 s) la transacción abortaba a mitad de bandeja.
 - `nutrition.order.create` pasa de dos transacciones a una: validaciones, `create` y evento de
-  dominio ven las mismas filas (cierra además un TOCTOU de exclusividad ENTERAL/PARENTERAL).
+  dominio ven las mismas filas. **Corrección (H6, revisión @QA):** unificar en una transacción
+  NO cierra un TOCTOU por sí solo — `withTenantContext` no fija `isolationLevel` (queda en READ
+  COMMITTED) y `assertEnteralParenteralExclusivity` seguía siendo un `findFirst` sin bloqueo; dos
+  `order.create` concurrentes para el mismo encounter podían leer "sin conflicto" ambos y crear
+  una orden ENTERAL y una PARENTERAL simultáneas. El cierre real es un `SELECT ... FOR UPDATE`
+  sobre la fila del encounter antes del chequeo de exclusividad (`lockEncounterRow` en
+  `nutrition.router.ts`), que serializa a las transacciones concurrentes. Un constraint de BD
+  sería más barato — queda propuesto para @DBA, no aplicado en este PR.
 - Regresión de seguridad en `workflow-inbox.rls.test.ts`: cada procedure debe abrir transacción
   y demotar el rol antes de tocar PHI.
 

@@ -123,6 +123,36 @@ async function validateDietCompatibility(
 }
 
 /**
+ * H6 — Adquiere un lock de fila (`SELECT ... FOR UPDATE`) sobre el encounter
+ * antes de evaluar la exclusividad enteral/parenteral.
+ *
+ * `withTenantContext` no fija `isolationLevel` (queda en READ COMMITTED, el
+ * default de Postgres/Prisma) y `assertEnteralParenteralExclusivity` es un
+ * `findFirst` sin bloqueo: dos `order.create` concurrentes para el MISMO
+ * encounter pueden ambos leer "sin conflicto" antes de que ninguno haya
+ * hecho commit, y crear una orden ENTERAL y una PARENTERAL simultáneas —
+ * unificar las validaciones en una transacción NO alcanza para serializar
+ * lecturas concurrentes (a diferencia de lo que decía el audit original).
+ *
+ * El lock serializa: la segunda transacción concurrente espera en este
+ * `SELECT FOR UPDATE` hasta que la primera libere (commit/rollback), y para
+ * entonces `assertEnteralParenteralExclusivity` sí ve la orden que la primera
+ * creó. No es una solución de esquema (un `CHECK`/constraint sería más barato
+ * y no requeriría este lock) — ese cambio de BD queda para @DBA.
+ */
+async function lockEncounterRow(
+  tx: { $queryRawUnsafe: (query: string, ...params: unknown[]) => Promise<unknown> },
+  encounterId: string,
+  organizationId: string,
+): Promise<void> {
+  await tx.$queryRawUnsafe(
+    `SELECT id FROM "Encounter" WHERE id = $1 AND "organizationId" = $2 FOR UPDATE`,
+    encounterId,
+    organizationId,
+  );
+}
+
+/**
  * Valida exclusividad enteral/parenteral: un encounter activo no puede tener
  * simultáneamente una orden ENTERAL y una PARENTERAL en estado ORDERED o ACTIVE.
  */
@@ -415,6 +445,9 @@ export const nutritionRouter = router({
             input.patientId,
             ctx.tenant.organizationId,
           );
+
+          // H6 — lock antes del chequeo de exclusividad (ver doc de la función).
+          await lockEncounterRow(tx, input.encounterId, ctx.tenant.organizationId);
 
           // Exclusivity check: ENTERAL ↔ PARENTERAL cannot coexist in ORDERED|ACTIVE.
           await assertEnteralParenteralExclusivity(

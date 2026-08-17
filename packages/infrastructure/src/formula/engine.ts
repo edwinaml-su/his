@@ -233,6 +233,19 @@ const SAFE_EXPR_CHARS = /^[A-Za-z0-9_.+\-*/%^()<>=!?:,\s]*$/;
 const PROTO_KEYS = /(^|[^A-Za-z0-9_])(__proto__|constructor|prototype)([^A-Za-z0-9_]|$)/;
 
 /**
+ * H7 (GHSA-jc85-fpwf-qm7x) — `expr-eval` "no restringe las funciones pasadas
+ * a `evaluate`": el charset de `SAFE_EXPR_CHARS` deja pasar cualquier
+ * identificador seguido de `(`, incluidos los built-ins de expr-eval que NO
+ * están en `FUNCTION_NAMES` (`random()`, `fac()`, `pyt()`, etc. — CWE-94).
+ *
+ * Detecta toda llamada `identificador(` en la expresión y exige que el
+ * identificador esté en `FUNCTION_NAMES`. Un paréntesis de agrupación puro
+ * (`(a+b)`) no matchea — el patrón exige un identificador inmediatamente
+ * antes del `(` (solo espacios de por medio) dentro del mismo match.
+ */
+const FUNCTION_CALL_PATTERN = /([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+
+/**
  * Valida que una expresión sea segura de parsear con expr-eval.
  * Retorna lista de mensajes de error (vacía = válida).
  */
@@ -249,6 +262,19 @@ export function validateExpr(expr: string): string[] {
       'La expresión no puede referenciar "__proto__", "constructor" ni "prototype".',
     );
   }
+
+  const disallowedFns = new Set<string>();
+  for (const match of expr.matchAll(FUNCTION_CALL_PATTERN)) {
+    const name = match[1]!;
+    if (!FUNCTION_NAMES.has(name)) disallowedFns.add(name);
+  }
+  if (disallowedFns.size > 0) {
+    errors.push(
+      `La expresión llama función(es) no permitida(s): ${[...disallowedFns].join(", ")}. ` +
+        `Funciones permitidas: ${[...FUNCTION_NAMES].join(", ")}.`,
+    );
+  }
+
   return errors;
 }
 
