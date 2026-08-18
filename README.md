@@ -2,7 +2,7 @@
 
 **Sistema de Información Hospitalaria** multi-país, multi-organización, multi-moneda y multi-libro contable, tropicalizado para El Salvador.
 
-> Estado: **MVP Fase 0 + Fase 1** en construcción. Documentación arquitectónica completa para los 30 módulos del TDR; código de los módulos restantes en fases posteriores.
+> Estado (2026-08-18): **el alcance del MVP está implementado**, junto con la mayor parte de los módulos originalmente diferidos a fases posteriores — 152 routers tRPC (102 raíz + 50 ECE) y ~50 áreas funcionales en la UI. Quedan fuera, por decisión de arquitectura, DTE Hacienda (ADR 0006) y HL7/FHIR/DICOM (TDR §28); y sigue pendiente la notificación epidemiológica obligatoria a MINSAL. Ver [Alcance MVP](#alcance-mvp-fase-0--fase-1) y [Conformidad regulatoria](#conformidad-regulatoria-el-salvador) para el detalle verificado.
 
 ---
 
@@ -10,16 +10,18 @@
 
 | Capa | Tecnología |
 |---|---|
-| Frontend | Next.js 14 (App Router, RSC), Tailwind CSS, Shadcn/ui, Lucide React |
-| Backend | Next.js Server Actions + tRPC (type-safe RPC) |
-| Validación | Zod |
-| ORM | Prisma 5 |
-| Base de datos | PostgreSQL 15+ (Supabase managed) — **normalización 4NF** |
+| Runtime | Node.js 24.x (fijo en `engines`), npm 11.9 |
+| Frontend | Next.js 16.3 (App Router, RSC) + React 19.2, Tailwind 3.4, Shadcn/ui, Lucide React |
+| Backend | Next.js Server Actions + tRPC 11 (type-safe RPC) |
+| Validación | Zod 3.25 |
+| ORM | Prisma 5.22 |
+| Base de datos | PostgreSQL 15 (Supabase managed) — **normalización 4NF** |
 | Auth & Storage | Supabase Auth + Supabase Storage |
 | Multi-tenancy | Row Level Security (RLS) por `organization_id` |
-| Monorepo | Turborepo + npm workspaces |
-| Testing | Vitest (unit), Playwright (E2E), axe-core (a11y) |
-| CI/CD | GitHub Actions |
+| Monorepo | Turborepo 2.9 + npm workspaces (9 workspaces) |
+| Testing | Vitest 2.1 (unit), Playwright 1.60 (E2E), axe-core (a11y) |
+| Observabilidad | Sentry 10 |
+| CI/CD | GitHub Actions (12 workflows) · Vercel · imagen OCI en GHCR |
 
 ---
 
@@ -103,9 +105,12 @@ La app estará disponible en `http://localhost:3000`.
 - ✅ MPI (Master Patient Index) con dedupe y validación DUI/NIT/NIE
 - ✅ ADT: admisión, traslados, altas, censo
 - ✅ Triage Manchester (5 niveles, 52 flujogramas parametrizables)
-- ⏳ Hospitalización, emergencias, quirófanos → **Fase 3** (blueprint listo)
-- ⏳ Farmacia/eMAR, LIS, RIS/PACS → **Fase 4** (blueprint listo)
-- ⏳ Cuentas hospitalarias, DTE, contabilidad multi-libro → **Fase 5** (blueprint listo)
+- ✅ Hospitalización, emergencias, quirófanos (`/inpatient`, `/beds`, `/census`, `/emergency`, `/surgery`)
+- ✅ Farmacia/eMAR y LIS (`/pharmacy`, `/emar`, `/bedside` BCMA, `/lis`)
+- ✅ RIS — solicitud y modalidades de imagen (`/imaging`)
+- ✅ Cuentas hospitalarias y contabilidad multi-libro (`/admin/finance`, `/admin/ledgers`, 6 reportes incl. consolidado MINSAL)
+- ⏳ **PACS/DICOM** — solo está el RIS. `imaging-request.router.ts` cubre la *solicitud*; el almacenamiento DICOM y la reportería del radiólogo quedan fuera. Ligado al diferimiento de HL7/FHIR/DICOM (TDR §28)
+- ⏳ **DTE Hacienda** — fuera del monolito **por decisión de arquitectura**, no por falta de tiempo: ADR 0006 lo define como servicio satélite separado (ver cabecera de `accounting.router.ts`)
 
 ---
 
@@ -114,10 +119,14 @@ La app estará disponible en `http://localhost:3000`.
 - ✅ Estructura para Ley de Protección de Datos Personales
 - ✅ Validación DUI/NIT con dígito verificador
 - ✅ Auditoría inmutable (10 años, hash chain SHA-256)
-- ⏳ Firma electrónica (DTE Hacienda) — Fase 5
-- ⏳ Notificación obligatoria MINSAL (vigilancia epidemiológica) — Fase 6
-- ⏳ Reportes ISSS — Fase 5
-- ⏳ Acreditación habilitación CSSP — al cierre
+- ✅ Firma electrónica **de documentos clínicos** (`firma-electronica.router.ts`, PIN + recuperación con rate limit)
+- ✅ Reportes ISSS — certificado de incapacidad (NTEC §22, Reglamento de Evaluación de Incapacidades)
+- ✅ Reportería MINSAL — consolidado en `/admin/finance/reportes`
+- ⏳ **Firma electrónica tributaria (DTE Hacienda)** — servicio satélite por ADR 0006 (ver §Alcance MVP). No confundir con la firma de documentos clínicos, que sí está
+- ❌ **Notificación obligatoria MINSAL (vigilancia epidemiológica)** — **hueco real, sin decisión documentada.** Lo único parecido es `farmacovigilancia.router.ts`, que es otra cosa: reacciones adversas a medicamentos, no enfermedades de notificación obligatoria. No hay VIGEPES ni catálogo de notificables
+- 🏛 Acreditación habilitación CSSP — trámite organizacional ante el Consejo Superior de Salud Pública, no una funcionalidad de software
+
+> **Alcance de esta verificación (2026-08-18):** se comprobó la **existencia y el alcance declarado** de cada módulo (routers, páginas, cabeceras de código), no el cumplimiento normativo completo de cada NTEC. "Hay router y página" no equivale a "certificable". La profundidad funcional de los reportes no fue auditada.
 
 ---
 
