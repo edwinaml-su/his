@@ -3,6 +3,7 @@
 ƒ /admission/[id]/confirm
 ƒ /admission/[id]/timeline
 ƒ /analytics
+ƒ /analytics/[kpi]
 ƒ /analytics/ejecutivo
 ƒ /api/admin/email/test
 ƒ /api/admin/odoo/introspect
@@ -310,4 +311,3 @@
 ○ /signup
 ○ /solicitudes-arco
 ○ /sso
-● /analytics/[kpi]
