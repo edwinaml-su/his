@@ -68,20 +68,19 @@ const handler = async (req: Request) => {
     endpoint: "/api/trpc",
     req,
     router: appRouter,
-    createContext: () =>
-      createTRPCContext({
-        user,
-        tenant,
-        portalAccount,
-        ip,
-        userAgent: req.headers.get("user-agent") ?? undefined,
-        // A07:2025 — veredicto de la política MFA para esta sesión.
-        mfaSatisfied: isMfaSatisfied({
-          userId: user?.id ?? null,
-          roleCodes: tenant?.roleCodes ?? [],
-          cookie: cookies().get(MFA_COOKIE_NAME)?.value,
-        }),
+    createContext: async () => createTRPCContext({
+      user,
+      tenant,
+      portalAccount,
+      ip,
+      userAgent: req.headers.get("user-agent") ?? undefined,
+      // A07:2025 — veredicto de la política MFA para esta sesión.
+      mfaSatisfied: isMfaSatisfied({
+        userId: user?.id ?? null,
+        roleCodes: tenant?.roleCodes ?? [],
+        cookie: (await cookies()).get(MFA_COOKIE_NAME)?.value,
       }),
+    }),
     onError({ error, path }) {
       // OWASP A09:2025 — el log NO debe volverse un almacén PHI: el mensaje de
       // un error puede arrastrar identificadores (uuid de paciente, expediente)

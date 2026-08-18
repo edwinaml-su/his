@@ -8,8 +8,8 @@ import { getSupabaseEnv } from "./env";
  *
  * Si las env vars faltan, `getSupabaseEnv()` lanza con mensaje accionable.
  */
-export function createSupabaseServerClient() {
-  const cookieStore = cookies();
+export async function createSupabaseServerClient() {
+  const cookieStore = await cookies();
   const { url, anonKey } = getSupabaseEnv();
   return createServerClient(
     url,

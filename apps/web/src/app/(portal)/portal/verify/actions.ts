@@ -28,7 +28,7 @@ export async function verifyMagicLink(input: {
   token: string;
   totpCode?: string;
 }): Promise<VerifyResult> {
-  const hdrs = headers();
+  const hdrs = await headers();
   // H5: header autoritativo de Vercel — ver @/lib/http/client-ip.
   const ip = getClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
@@ -50,7 +50,7 @@ export async function verifyMagicLink(input: {
 
     // El token llega solo a este server context. Lo movemos a cookie HttpOnly
     // y descartamos la referencia. El cliente recibe solo `{ status: "OK" }`.
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     cookieStore.set(PORTAL_SESSION_COOKIE, result.token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

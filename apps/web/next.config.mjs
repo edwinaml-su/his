@@ -9,14 +9,14 @@ const nextConfig = {
   // Salida standalone para contenedores (Docker/K8s): genera
   // apps/web/.next/standalone/apps/web/server.js con deps mínimas.
   output: "standalone",
+  typedRoutes: true,
+  // Monorepo: el trace de standalone debe arrancar en la raíz del repo
+  // para incluir los workspaces @his/* (sin esto server.js queda incompleto).
+  outputFileTracingRoot: path.join(__dirname, "../../"),
+  // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
+  serverExternalPackages: ["@node-rs/argon2"],
   experimental: {
-    typedRoutes: true,
-    // Monorepo: el trace de standalone debe arrancar en la raíz del repo
-    // para incluir los workspaces @his/* (sin esto server.js queda incompleto).
-    outputFileTracingRoot: path.join(__dirname, "../../"),
     optimizePackageImports: ["lucide-react", "@his/ui"],
-    // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
-    serverComponentsExternalPackages: ["@node-rs/argon2"],
     // Habilita la View Transitions API del navegador en navegaciones de ruta.
     // Degradación elegante: browsers sin soporte navegan instantáneamente.
     // Animaciones desactivadas con `prefers-reduced-motion` (ver globals.css Tarea 8).

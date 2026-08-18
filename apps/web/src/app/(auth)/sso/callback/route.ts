@@ -83,7 +83,7 @@ export async function GET(req: NextRequest) {
   }
 
   // 2.1) Intercambio code → session. Supabase setea cookies HTTP-only.
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const exchange = await supabase.auth.exchangeCodeForSession(code);
   if (exchange.error || !exchange.data.session) {
     console.warn("[SSO CALLBACK] exchangeCodeForSession failed", exchange.error?.message);

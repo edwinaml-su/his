@@ -15,7 +15,7 @@ export default async function ClinicalLayout({ children }: { children: React.Rea
   const tenant = await getTenantContext();
   // OWASP A07:2025 — segundo factor para roles privilegiados (no-op si la
   // política MFA_REQUIRED_ROLE_CODES está vacía).
-  assertMfaOrRedirect(user.id, tenant?.roleCodes ?? []);
+  await assertMfaOrRedirect(user.id, tenant?.roleCodes ?? []);
 
   return (
     <AppShell

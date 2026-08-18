@@ -310,7 +310,7 @@ async function getCurrentUser(): Promise<{
   fullName: string;
   mfaEnabled: boolean;
 } | null> {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -412,10 +412,11 @@ export async function enrollMfa(): Promise<
  * A07:2025 — deja la marca de sesión firmada que prueba el segundo factor.
  * Sin política configurada es un no-op (la cookie no se emite y nada la pide).
  */
-function markMfaSession(userId: string): void {
+async function markMfaSession(userId: string): Promise<void> {
   const policy = readMfaPolicy();
   if (policy.mode !== "enforced") return;
-  cookies().set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {
+  const cookieStore = await cookies();
+  cookieStore.set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
@@ -472,7 +473,7 @@ export async function verifyMfa(args: {
         data: { validFrom: new Date() },
       }),
     ]);
-    markMfaSession(user.id);
+    await markMfaSession(user.id);
     return { ok: true, usedBackupCode: false };
   }
 
@@ -509,7 +510,7 @@ export async function verifyMfa(args: {
     }),
   ]);
 
-  markMfaSession(user.id);
+  await markMfaSession(user.id);
   return {
     ok: true,
     usedBackupCode: true,
@@ -558,7 +559,7 @@ export async function disableMfa(): Promise<{ ok: boolean; error?: string }> {
  * negocio (solo expira una cookie del propio navegador que la llama).
  */
 export async function clearMfaSession(): Promise<void> {
-  cookies().set(MFA_COOKIE_NAME, "", {
+  (await cookies()).set(MFA_COOKIE_NAME, "", {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",

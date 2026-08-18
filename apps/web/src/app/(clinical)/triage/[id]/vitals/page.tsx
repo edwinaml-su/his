@@ -1,14 +1,15 @@
 import { VitalsForm } from "./vitals-form";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
  * US-6.2 — captura de signos vitales para una evaluación de triage
  * IN_PROGRESS. La id del path es `triageEvaluationId`.
  */
-export default function TriageVitalsPage({ params }: PageProps) {
+export default async function TriageVitalsPage(props: PageProps) {
+  const params = await props.params;
   return (
     <div className="space-y-4">
       <div>

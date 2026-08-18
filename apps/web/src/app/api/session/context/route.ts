@@ -63,7 +63,7 @@ export async function GET() {
     a.name.localeCompare(b.name, "es"),
   );
 
-  const store = cookies();
+  const store = await cookies();
   const activeOrgId  = store.get(HIS_COOKIES.ORG_COOKIE)?.value ?? organizations[0]?.id ?? null;
   const rolesCookie  = store.get(HIS_COOKIES.ROLES_COOKIE)?.value ?? "";
   const activeRoles  = rolesCookie ? rolesCookie.split(",").map((s) => s.trim()).filter(Boolean) : [];

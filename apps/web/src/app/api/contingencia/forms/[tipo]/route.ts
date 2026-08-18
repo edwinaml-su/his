@@ -19,10 +19,8 @@ function isTipoValido(tipo: string): tipo is TipoFormulario {
   return (TIPOS_VALIDOS as readonly string[]).includes(tipo);
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { tipo: string } },
-) {
+export async function GET(_req: NextRequest, props: { params: Promise<{ tipo: string }> }) {
+  const params = await props.params;
   // Normalizar: quitar .pdf si viene con extensión
   const tipo = params.tipo.replace(/\.pdf$/, "");
 

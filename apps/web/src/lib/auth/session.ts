@@ -43,7 +43,7 @@ export interface CurrentUser {
 }
 
 export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.getUser();
   const supaUser = data.user;
   if (!supaUser?.email) return null;
@@ -71,7 +71,7 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const orgCookie = cookieStore.get(ORG_COOKIE)?.value;
   const estabCookie = cookieStore.get(ESTAB_COOKIE)?.value;
 
@@ -209,7 +209,7 @@ export const getVisibleOrgIds = cache(async (): Promise<string[]> => {
   const user = await getCurrentUser();
   if (!user) return [];
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const orgCookie = cookieStore.get(ORG_COOKIE)?.value;
   const orgsCookie = cookieStore.get(ORGS_COOKIE)?.value ?? "";
 

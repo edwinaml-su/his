@@ -249,7 +249,7 @@ export function EvolucionDraftProvider({ episodeId, children }: Props) {
 
   // Guard para StrictMode: evita doble-create en el primer cambio
   const creatingRef = React.useRef(false);
-  const borradorIdRef = React.useRef<string | undefined>();
+  const borradorIdRef = React.useRef<string | undefined>(undefined);
 
   // Ref al debounce timer
   const debounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);

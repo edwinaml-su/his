@@ -15,11 +15,12 @@ import { OrientacionKiosko } from "@/components/orientacion-kiosko";
  */
 export const metadata = { title: "Orientación táctil — HIS Avante" };
 
-export default function OrientacionPage({
-  searchParams,
-}: {
-  searchParams: Record<string, string | undefined>;
-}) {
+export default async function OrientacionPage(
+  props: {
+    searchParams: Promise<Record<string, string | undefined>>;
+  }
+) {
+  const searchParams = await props.searchParams;
   return (
     <Suspense fallback={null}>
       <OrientacionKiosko

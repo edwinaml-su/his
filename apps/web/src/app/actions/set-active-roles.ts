@@ -37,7 +37,7 @@ export async function setActiveRoles(roleCodes: string[]): Promise<SetActiveRole
   const user = await getCurrentUser();
   if (!user) return { ok: false, error: "No autenticado" };
 
-  const store = cookies();
+  const store = await cookies();
   const organizationId = store.get(HIS_COOKIES.ORG_COOKIE)?.value;
   if (!organizationId) {
     // Caso esperado: usuario sin organización activa todavía. UI debe

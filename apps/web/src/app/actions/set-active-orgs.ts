@@ -45,7 +45,7 @@ export async function setActiveOrgs(organizationIds: string[]): Promise<SetActiv
   });
   const valid = Array.from(new Set(memberships.map((m) => m.organizationId)));
 
-  const store = cookies();
+  const store = await cookies();
   store.set(HIS_COOKIES.ORGS_COOKIE, valid.join(","), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

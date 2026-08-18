@@ -15,7 +15,7 @@ const mockCookieGet = vi.fn();
 const mockRedirect = vi.fn();
 
 vi.mock("next/headers", () => ({
-  cookies: () => ({ get: mockCookieGet }),
+  cookies: async () => ({ get: mockCookieGet }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -41,59 +41,59 @@ describe("assertMfaOrRedirect — OWASP A07:2025", () => {
     vi.unstubAllEnvs();
   });
 
-  it("política apagada (MFA_REQUIRED_ROLE_CODES vacía) → no redirige, ni siquiera lee la cookie", () => {
-    assertMfaOrRedirect(USER_ID, ["PHYSICIAN"]);
+  it("política apagada (MFA_REQUIRED_ROLE_CODES vacía) → no redirige, ni siquiera lee la cookie", async () => {
+    await assertMfaOrRedirect(USER_ID, ["PHYSICIAN"]);
 
     expect(mockRedirect).not.toHaveBeenCalled();
     expect(mockCookieGet).not.toHaveBeenCalled();
   });
 
-  it("política prendida pero el rol del usuario no está en la lista → no redirige", () => {
+  it("política prendida pero el rol del usuario no está en la lista → no redirige", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "DIR,ADMIN");
     vi.stubEnv("MFA_SESSION_SECRET", SECRET);
 
-    assertMfaOrRedirect(USER_ID, ["PHYSICIAN"]);
+    await assertMfaOrRedirect(USER_ID, ["PHYSICIAN"]);
 
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 
-  it("política satisfecha (cookie firmada, vigente, del mismo usuario) → no redirige", () => {
+  it("política satisfecha (cookie firmada, vigente, del mismo usuario) → no redirige", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "ADMIN");
     vi.stubEnv("MFA_SESSION_SECRET", SECRET);
     mockCookieGet.mockReturnValue({ value: issueMfaCookie(USER_ID, SECRET) });
 
-    assertMfaOrRedirect(USER_ID, ["ADMIN"]);
+    await assertMfaOrRedirect(USER_ID, ["ADMIN"]);
 
     expect(mockRedirect).not.toHaveBeenCalled();
   });
 
-  it("política no satisfecha (sin cookie) → redirige a /mfa", () => {
+  it("política no satisfecha (sin cookie) → redirige a /mfa", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "ADMIN");
     vi.stubEnv("MFA_SESSION_SECRET", SECRET);
     mockCookieGet.mockReturnValue(undefined);
 
-    assertMfaOrRedirect(USER_ID, ["ADMIN"]);
+    await assertMfaOrRedirect(USER_ID, ["ADMIN"]);
 
     expect(mockRedirect).toHaveBeenCalledWith("/mfa");
   });
 
-  it("política no satisfecha (cookie de OTRO usuario) → redirige a /mfa", () => {
+  it("política no satisfecha (cookie de OTRO usuario) → redirige a /mfa", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "ADMIN");
     vi.stubEnv("MFA_SESSION_SECRET", SECRET);
     const otroUsuario = "33333333-3333-4333-8333-333333333333";
     mockCookieGet.mockReturnValue({ value: issueMfaCookie(otroUsuario, SECRET) });
 
-    assertMfaOrRedirect(USER_ID, ["ADMIN"]);
+    await assertMfaOrRedirect(USER_ID, ["ADMIN"]);
 
     expect(mockRedirect).toHaveBeenCalledWith("/mfa");
   });
 
-  it("política mal configurada (roles exigidos pero sin MFA_SESSION_SECRET) → redirige a /mfa y loggea el error", () => {
+  it("política mal configurada (roles exigidos pero sin MFA_SESSION_SECRET) → redirige a /mfa y loggea el error", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "ADMIN");
     vi.stubEnv("MFA_SESSION_SECRET", "");
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    assertMfaOrRedirect(USER_ID, ["ADMIN"]);
+    await assertMfaOrRedirect(USER_ID, ["ADMIN"]);
 
     expect(mockRedirect).toHaveBeenCalledWith("/mfa");
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("mal configurada"));

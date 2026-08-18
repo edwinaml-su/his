@@ -12,15 +12,23 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { MFA_COOKIE_NAME, isMfaSatisfied, readMfaPolicy } from "./mfa-session";
 
-/** Redirige a `/mfa` si el usuario debe presentar el segundo factor. */
-export function assertMfaOrRedirect(userId: string, roleCodes: string[]): void {
+/**
+ * Redirige a `/mfa` si el usuario debe presentar el segundo factor.
+ *
+ * Es `async` desde Next 15: `cookies()` devuelve promesa. El codemod había
+ * dejado aquí `UnsafeUnwrappedCookies`, que preserva el acceso síncrono con un
+ * cast — funciona en 15 (deprecado) pero **desaparece en Next 16**, y esto es
+ * un gate de seguridad: no se deja como deuda.
+ */
+export async function assertMfaOrRedirect(userId: string, roleCodes: string[]): Promise<void> {
   const policy = readMfaPolicy();
   if (policy.mode === "off") return;
 
+  const cookieStore = await cookies();
   const satisfied = isMfaSatisfied({
     userId,
     roleCodes,
-    cookie: cookies().get(MFA_COOKIE_NAME)?.value,
+    cookie: cookieStore.get(MFA_COOKIE_NAME)?.value,
     policy,
   });
   if (satisfied) return;
