@@ -100,6 +100,12 @@ jobs:
           echo "::group::logs: gotrue"
           docker compose -f docker-compose.test.yml logs gotrue --no-color || true
           echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color || true
+          echo "::endgroup::"
+          echo "::group::docker inspect: healthcheck detail"
+          docker inspect his-postgres-test his-gotrue-test his-gotrue-gateway-test --format '{{.Name}}: {{json .State.Health}}' || true
+          echo "::endgroup::"
 
       - name: Install dependencies
         run: npm ci
