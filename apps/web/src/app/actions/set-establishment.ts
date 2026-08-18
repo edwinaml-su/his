@@ -59,7 +59,7 @@ export async function setEstablishment(establishmentId: string) {
     maxAge: ONE_WEEK_SECONDS,
   };
 
-  const store = cookies();
+  const store = await cookies();
   store.set(HIS_COOKIES.ORG_COOKIE, establishment.organizationId, cookieOpts);
   store.set(HIS_COOKIES.ESTAB_COOKIE, establishment.id, cookieOpts);
   store.delete(HIS_COOKIES.ROLES_COOKIE);

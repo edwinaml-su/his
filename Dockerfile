@@ -4,7 +4,9 @@
 # cloud-agnostic (@AT) para correr la app en K8s/ECS/on-prem si hace falta.
 # =============================================================================
 
-ARG NODE_VERSION=20-alpine
+# Alineado con engines.node ("24.x") en package.json raíz y con Next 16
+# (requiere Node >=20.9). Ver docs/runbooks/next-migration-deploy.md.
+ARG NODE_VERSION=24-alpine
 
 # -----------------------------------------------------------------------------
 # Stage 1: deps — instala dependencias del monorepo

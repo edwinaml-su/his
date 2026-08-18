@@ -60,3 +60,18 @@ export function installRateLimitMock(prisma: any): void {
     },
   };
 }
+
+/**
+ * Instala el passthrough de `$transaction` que necesita `withTenantContext`
+ * sobre un mock prisma (`mockDeep`). Sin esto, `$transaction` devuelve
+ * `undefined` y el router falla con "(intermediate value) is not iterable".
+ *
+ * El `tx` que recibe el callback es el MISMO mock, así que los tests siguen
+ * aseverando sobre `prisma.<model>.<método>.mock.calls` sin cambios.
+ * `$executeRawUnsafe` (el `SET LOCAL` + demote de rol) se resuelve a 0.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function installTenantContextMock(prisma: any): void {
+  prisma.$executeRawUnsafe = async () => 0;
+  prisma.$transaction = async (fn: (tx: unknown) => unknown) => fn(prisma);
+}

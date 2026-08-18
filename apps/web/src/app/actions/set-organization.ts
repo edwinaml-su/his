@@ -56,7 +56,7 @@ export async function setOrganization(organizationId: string) {
     maxAge: ONE_WEEK_SECONDS,
   };
 
-  const store = cookies();
+  const store = await cookies();
   store.set(HIS_COOKIES.ORG_COOKIE, organizationId, cookieOpts);
   if (firstEstab) {
     store.set(HIS_COOKIES.ESTAB_COOKIE, firstEstab.id, cookieOpts);

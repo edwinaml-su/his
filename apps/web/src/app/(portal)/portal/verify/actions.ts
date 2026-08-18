@@ -15,6 +15,7 @@ import { cookies, headers } from "next/headers";
 import { TRPCError } from "@trpc/server";
 import { appRouter, createTRPCContext } from "@his/trpc";
 import { PORTAL_SESSION_COOKIE } from "@/lib/portal-session";
+import { getClientIp } from "@/lib/http/client-ip";
 
 export interface VerifyResult {
   status: "OK" | "MFA_REQUIRED" | "ERROR";
@@ -27,8 +28,9 @@ export async function verifyMagicLink(input: {
   token: string;
   totpCode?: string;
 }): Promise<VerifyResult> {
-  const hdrs = headers();
-  const ip = hdrs.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined;
+  const hdrs = await headers();
+  // H5: header autoritativo de Vercel — ver @/lib/http/client-ip.
+  const ip = getClientIp(hdrs);
   const userAgent = hdrs.get("user-agent") ?? undefined;
 
   const ctx = createTRPCContext({
@@ -48,7 +50,7 @@ export async function verifyMagicLink(input: {
 
     // El token llega solo a este server context. Lo movemos a cookie HttpOnly
     // y descartamos la referencia. El cliente recibe solo `{ status: "OK" }`.
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     cookieStore.set(PORTAL_SESSION_COOKIE, result.token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

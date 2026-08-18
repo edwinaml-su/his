@@ -50,12 +50,21 @@ CUBEJS_DEV_MODE=true
 
 ### 2. Iniciar servidor
 
+Los paquetes `@cubejs-backend/*` **no están declarados** en `package.json`
+(OWASP A03:2025 — arrastran `decompress`/`extract-zip`/`request` con
+vulnerabilidades HIGH/CRITICAL sin fix upstream en todas sus versiones, y este
+workspace es config-only: nadie lo importa ni se despliega). Se instalan bajo
+demanda, fuera del lockfile del monorepo:
+
 ```bash
 cd packages/bi
-npm install
-npm run cube:dev
+npm install --no-save @cubejs-backend/server@latest @cubejs-backend/postgres-driver@latest
+npx cubejs-server
 # Cube Playground disponible en http://localhost:4000
 ```
+
+Cuando arranque formalmente la fase BI hay que reevaluar el estado de esas
+CVEs antes de volver a declararlos como dependencia del repo.
 
 ### 3. Validar schema
 

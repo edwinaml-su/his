@@ -1,0 +1,229 @@
+name: Security Alerts
+
+# OWASP A09:2025 (Security Logging AND Alerting Failures) — pieza de
+# "alerting" que faltaba: teníamos logging + auditoría criptográfica, pero
+# nada que empujara una señal cuando algo se sale de rango. Ver
+# docs/runbooks/owasp-2025-deploy.md §6 para el detalle de cada control,
+# umbrales y qué falta (lo que depende de activar SENTRY_DSN queda fuera de
+# este workflow y está documentado ahí, no aquí).
+#
+# No es tiempo real: un cron de GitHub Actions tiene retraso de hasta ~15 min
+# y esta corre cada 4h. Es el piso mínimo sin depender de Sentry/PagerDuty.
+
+on:
+  schedule:
+    # Cada 4 horas. Durante una ventana de despliegue de alto riesgo, correr
+    # manualmente con workflow_dispatch cada 15-30 min (ver runbook §5).
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Señal: advisors de seguridad de Supabase en CRITICAL.
+  # Reutiliza scripts/check-supabase-advisors.mjs (existía desde 2026-05-18,
+  # nunca se había cableado a un workflow — este job cierra ese gap).
+  # ---------------------------------------------------------------------------
+  supabase-advisors:
+    name: Supabase advisors (security)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Sin SUPABASE_ACCESS_TOKEN — control omitido
+        if: secrets.SUPABASE_ACCESS_TOKEN == ''
+        run: |
+          echo "::warning::SUPABASE_ACCESS_TOKEN no está configurado en los secrets del repo. Este control (advisors CRITICAL) no se ejecuta. Ver docs/runbooks/owasp-2025-deploy.md §6."
+
+      - name: Ejecutar chequeo de advisors
+        id: advisors
+        if: secrets.SUPABASE_ACCESS_TOKEN != ''
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: |
+          set +e
+          node scripts/check-supabase-advisors.mjs > advisors-report.json
+          CODE=$?
+          echo "exit_code=$CODE" >> "$GITHUB_OUTPUT"
+          # El script puede salir con exit 2 ANTES de escribir JSON a stdout (ej.
+          # error de red contra la Management API) — sin esto el step de abajo
+          # intenta parsear un archivo vacío y explota justo cuando más se
+          # necesita la alerta.
+          if [ ! -s advisors-report.json ]; then
+            printf '{"checkedAt":"%s","projectRef":"unknown","summary":{},"advisors":[],"error":"El script salió sin emitir JSON — ver logs de este step."}' \
+              "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > advisors-report.json
+          fi
+          exit 0
+
+      - name: Upload report
+        if: secrets.SUPABASE_ACCESS_TOKEN != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-advisors-report
+          path: advisors-report.json
+          retention-days: 30
+
+      # Umbral: CUALQUIER advisor CRITICAL (exit 2 del script). Los WARN (exit
+      # 1) NO abren issue — son la norma operativa (ver §5 audit report, quedan
+      # 5 WARN aceptados/justificados) y abrir issue por cada uno sería ruido
+      # que entrena a ignorar la alerta.
+      - name: Abrir/actualizar issue si hay CRITICAL
+        if: steps.advisors.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('advisors-report.json', 'utf8'));
+            const critical = report.advisors.filter((a) => a.level === 'CRITICAL');
+            const title = 'security-alert: Supabase advisors en CRITICAL';
+            const rows = critical
+              .map((a) => `| ${a.name} | ${a.category} | ${(a.description || '').slice(0, 200)} |`)
+              .join('\n');
+            const body = [
+              `Advisors CRITICAL detectados: ${report.checkedAt} (proyecto ${report.projectRef}).`,
+              '',
+              '| Advisor | Categoría | Descripción |',
+              '|---|---|---|',
+              rows,
+              '',
+              `Acción: ver docs/runbooks/owasp-2025-deploy.md §6 (tabla de alertas) y ` +
+                `docs/15_production_runbook.md §14.2. No considerar el sistema estable hasta resolver.`,
+              '',
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security-alert',
+            });
+            const existing = open.find((i) => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['security-alert', 'P1'],
+              });
+            }
+
+      - name: Notificar Slack (CRITICAL)
+        if: steps.advisors.outputs.exit_code == '2' && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \":rotating_light: HIS: advisors de seguridad Supabase en CRITICAL. <${RUN_URL}|Ver run>.\"}" \
+            || echo "WARN: Slack notification failed (webhook may not be configured)"
+
+  # ---------------------------------------------------------------------------
+  # Señales de BD: ruptura de la cadena de auditoría + picos de rate limit.
+  # Reutiliza el secret DIRECT_URL que ya existe para db-migrate.yml (misma
+  # credencial de migración; ambas consultas son SELECT, sin side effects).
+  # No se crea un secret nuevo — evita sprawl de credenciales para un job que
+  # solo lee.
+  # ---------------------------------------------------------------------------
+  db-signals:
+    name: Señales BD (audit chain + rate limit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Sin DIRECT_URL — controles omitidos
+        if: secrets.DIRECT_URL == ''
+        run: |
+          echo "::warning::DIRECT_URL no está configurado en los secrets del repo. Los controles de cadena de auditoría y picos de rate limit no se ejecutan. Ver docs/runbooks/owasp-2025-deploy.md §6."
+
+      - name: Instalar cliente psql 15
+        if: secrets.DIRECT_URL != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-15
+
+      # Señal de mayor severidad: una ruptura indica posible manipulación de
+      # datos (ver docs/15_production_runbook.md §14.5). Umbral: > 0 enlaces
+      # rotos en 24h → falla el job (P1).
+      - name: Verificar integridad de la cadena de auditoría (24h)
+        if: secrets.DIRECT_URL != ''
+        env:
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          BROKEN=$(psql "$DIRECT_URL" -t -A -c "
+            SELECT COUNT(*)
+            FROM audit.\"AuditLog\" a
+            WHERE a.\"occurredAt\" > now() - interval '24 hours'
+              AND a.\"prevHash\" IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM audit.\"AuditLog\" p
+                WHERE p.\"signatureHash\" = a.\"prevHash\"
+              );
+          ")
+          echo "Enlaces rotos (24h): $BROKEN"
+          if [ "$BROKEN" != "0" ]; then
+            echo "::error::Cadena de auditoría rota: $BROKEN enlace(s) en las últimas 24h. Escalar P1 — ver docs/15_production_runbook.md §6 y §14.5."
+            exit 1
+          fi
+
+      # Señal informativa (no falla el job): cubetas del rate limit global
+      # (OWASP A06:2025, `RateLimitHit`) cerca de su tope repetidamente en los
+      # últimos 5 min. Es una aproximación — la tabla registra hits aceptados,
+      # no los rechazados (ver packages/trpc/src/middleware/rate-limit.ts), así
+      # que una cubeta pegada al máximo sostenidamente es la mejor señal
+      # indirecta disponible sin instrumentación nueva en la app.
+      - name: Detectar picos de rate limit (5 min)
+        if: secrets.DIRECT_URL != ''
+        env:
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          psql "$DIRECT_URL" -c "
+            SELECT \"bucketKey\", count(*) AS hits
+            FROM \"RateLimitHit\"
+            WHERE \"occurredAt\" > now() - interval '5 minutes'
+            GROUP BY \"bucketKey\"
+            HAVING count(*) >= 55
+            ORDER BY hits DESC
+            LIMIT 20;
+          " | tee rate-limit-spike.txt
+          if ! grep -q '(0 rows)' rate-limit-spike.txt; then
+            echo "::warning::Cubetas de rate limit cerca del tope en los últimos 5 min — ver artifact rate-limit-spike-report. Umbral informativo, no bloqueante."
+          fi
+
+      - name: Upload rate-limit report
+        if: always() && secrets.DIRECT_URL != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: rate-limit-spike-report
+          path: rate-limit-spike.txt
+          retention-days: 14
+
+      - name: Notificar Slack (cadena de auditoría rota)
+        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -s -X POST "$SLACK_WEBHOOK" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\": \":rotating_light: HIS: posible ruptura de la cadena de auditoría (audit hash chain). <${RUN_URL}|Ver run>. Escalar P1.\"}" \
+            || echo "WARN: Slack notification failed (webhook may not be configured)"

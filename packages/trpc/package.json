@@ -10,7 +10,8 @@
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
     "./context": "./src/context.ts",
-    "./root": "./src/routers/_app.ts"
+    "./root": "./src/routers/_app.ts",
+    "./middleware/rate-limit": "./src/middleware/rate-limit.ts"
   },
   "scripts": {
     "lint": "echo 'no lint configured'",

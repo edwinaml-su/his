@@ -38,6 +38,13 @@
  */
 
 import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv, timingSafeEqual } from "node:crypto";
+import { cookies } from "next/headers";
+import {
+  MFA_COOKIE_NAME,
+  MFA_TTL_SECONDS,
+  issueMfaCookie,
+  readMfaPolicy,
+} from "@/lib/auth/mfa-session";
 import { prisma } from "@his/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
@@ -303,7 +310,7 @@ async function getCurrentUser(): Promise<{
   fullName: string;
   mfaEnabled: boolean;
 } | null> {
-  const supabase = createSupabaseServerClient();
+  const supabase = await createSupabaseServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -401,6 +408,23 @@ export async function enrollMfa(): Promise<
  *   `User.mfaEnabled = true`. Actualiza `validFrom` como "lastVerifiedAt"
  *   barato (no agregamos columna nueva — schema NO se toca).
  */
+/**
+ * A07:2025 — deja la marca de sesión firmada que prueba el segundo factor.
+ * Sin política configurada es un no-op (la cookie no se emite y nada la pide).
+ */
+async function markMfaSession(userId: string): Promise<void> {
+  const policy = readMfaPolicy();
+  if (policy.mode !== "enforced") return;
+  const cookieStore = await cookies();
+  cookieStore.set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: MFA_TTL_SECONDS,
+  });
+}
+
 export async function verifyMfa(args: {
   token: string;
 }): Promise<TotpVerifyResult & { error?: string }> {
@@ -449,6 +473,7 @@ export async function verifyMfa(args: {
         data: { validFrom: new Date() },
       }),
     ]);
+    await markMfaSession(user.id);
     return { ok: true, usedBackupCode: false };
   }
 
@@ -485,6 +510,7 @@ export async function verifyMfa(args: {
     }),
   ]);
 
+  await markMfaSession(user.id);
   return {
     ok: true,
     usedBackupCode: true,
@@ -518,6 +544,28 @@ export async function disableMfa(): Promise<{ ok: boolean; error?: string }> {
     console.error("[mfa.disable] error:", err);
     return { ok: false, error: "No se pudo deshabilitar MFA." };
   }
+}
+
+/**
+ * `clearMfaSession()` — Borra la cookie `his.mfa` (H3, OWASP A07:2025).
+ *
+ * La marca de MFA es httpOnly: el cliente no puede leerla/borrarla con JS,
+ * así que `supabase.auth.signOut()` (que solo toca la cookie de Supabase) la
+ * deja viva. En una estación compartida, el mismo usuario reentra dentro de
+ * las 12h de TTL sin que se le vuelva a pedir el segundo factor. Se invoca
+ * desde el flujo de logout (`UserMenu.handleSignOut`).
+ *
+ * Sin auth-check deliberado: es una acción idempotente y sin efecto de
+ * negocio (solo expira una cookie del propio navegador que la llama).
+ */
+export async function clearMfaSession(): Promise<void> {
+  (await cookies()).set(MFA_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
 }
 
 /**

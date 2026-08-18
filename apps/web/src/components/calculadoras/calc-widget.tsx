@@ -74,7 +74,7 @@ export function CalcWidget({ pacienteId }: { pacienteId?: string }) {
   const barRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const resultsRef = React.useRef<HTMLDivElement>(null);
-  const toastTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Recientes persistidos por usuario/navegador.
   React.useEffect(() => {

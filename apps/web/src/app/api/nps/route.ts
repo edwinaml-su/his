@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "score 0-10" }, { status: 400 });
   }
 
-  const orgId = cookies().get(HIS_COOKIES.ORG_COOKIE)?.value ?? null;
+  const orgId = (await cookies()).get(HIS_COOKIES.ORG_COOKIE)?.value ?? null;
   const comment = (body.comment ?? "").trim().slice(0, 1000) || null;
 
   try {

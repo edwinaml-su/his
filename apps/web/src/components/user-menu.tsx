@@ -22,6 +22,7 @@ import {
 } from "@his/ui/components/dropdown-menu";
 import { Button } from "@his/ui/components/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearMfaSession } from "@/app/actions/mfa";
 
 export interface UserMenuProps {
   fullName: string;
@@ -42,6 +43,15 @@ export function UserMenu({ fullName, email, noTenant }: UserMenuProps) {
       // Best-effort: incluso si Supabase falla (red), redirigimos al login;
       // el middleware se encarga de invalidar la cookie en el próximo fetch.
       console.error("[UserMenu] signOut error", err);
+    }
+    try {
+      // H3 — OWASP A07:2025: la cookie `his.mfa` es httpOnly y sobrevive a
+      // `supabase.auth.signOut()` (esa solo toca la cookie de Supabase). Sin
+      // esto, en una estación compartida el siguiente login del mismo
+      // usuario no vuelve a pedir el segundo factor dentro de las 12h de TTL.
+      await clearMfaSession();
+    } catch (err) {
+      console.error("[UserMenu] clearMfaSession error", err);
     }
     router.replace("/login");
     router.refresh();

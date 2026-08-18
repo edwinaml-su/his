@@ -6,6 +6,7 @@ import { httpBatchLink, loggerLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import superjson from "superjson";
 import type { AppRouter } from "@his/trpc";
+import { TRPC_MAX_BATCH_SIZE } from "./batch-limit";
 
 export const trpc = createTRPCReact<AppRouter>();
 
@@ -49,6 +50,12 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
         httpBatchLink({
           url: "/api/trpc",
           transformer: superjson,
+          // H1 — OWASP A06:2025: tope real del batch. El servidor valida lo
+          // mismo (ver `app/api/trpc/[trpc]/route.ts`) — este límite evita
+          // que el navegador arme un batch enorme en primer lugar.
+          // `maxItems`, no `maxBatchSize` — tRPC v11 renombró la opción
+          // (v10 usaba `maxBatchSize`).
+          maxItems: TRPC_MAX_BATCH_SIZE,
         }),
       ],
     }),

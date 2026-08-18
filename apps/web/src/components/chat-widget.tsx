@@ -522,17 +522,45 @@ function ToolCallChip({
  * NO usa una lib externa para mantener bundle pequeño. Es safe contra XSS
  * básico porque escapa HTML antes y luego inyecta solo tags conocidos.
  */
-function renderMarkdown(raw: string): string {
-  // 1. Escapar HTML.
-  let html = raw
+/** Escapa todo lo que puede iniciar markup o romper un atributo. */
+function escapeHtml(s: string): string {
+  return s
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Tags que este renderer puede emitir. Se usa como invariante de salida:
+ * si aparece cualquier otro `<`, es que una transformación futura dejó de
+ * escapar y devolvemos el texto plano escapado (fail-safe).
+ */
+const ALLOWED_TAGS_RE = /<\/?(?:a|strong|em|code|ol|ul|li)\b[^>]*>/g;
+
+/**
+ * OWASP A05:2025 (Injection) — el contenido llega del modelo, que a su vez
+ * puede citar chunks de la BD (RAG): es texto NO confiable inyectado en el DOM
+ * con `dangerouslySetInnerHTML`.
+ *
+ * Estrategia (sin dependencia externa de sanitización): escapar TODO primero
+ * y sólo después emitir markup propio, de modo que ningún dato del usuario
+ * pueda producir un tag o romper un atributo. La invariante de salida
+ * (`ALLOWED_TAGS_RE`) protege contra regresiones si alguien agrega una
+ * transformación nueva que olvide escapar.
+ *
+ * Exportado para tests (`__tests__/chat-widget-markdown.test.ts`).
+ */
+export function renderMarkdown(raw: string): string {
+  // 1. Escapar HTML.
+  let html = escapeHtml(raw);
 
   // 2. Links [texto](url) — solo http/https/rutas internas.
   html = html.replace(
-    /\[([^\]]+)\]\(((?:https?:\/\/|\/)[^)]+)\)/g,
+    // `/(?!\/)` excluye URLs protocol-relative (`//evil.com`), que parecen
+    // internas pero navegan fuera del dominio.
+    /\[([^\]]+)\]\(((?:https?:\/\/|\/(?!\/))[^)]+)\)/g,
     (_match, text, url) => {
       const isInternal = url.startsWith("/");
       const safeUrl = url.replace(/"/g, "&quot;");
@@ -581,6 +609,12 @@ function renderMarkdown(raw: string): string {
       return `<ul class="list-disc list-inside space-y-1 my-1">${items}</ul>`;
     },
   );
+
+  // Invariante de salida: sólo tags de la allowlist. Si algo más se coló,
+  // degradamos a texto plano escapado en vez de inyectarlo.
+  if (html.replace(ALLOWED_TAGS_RE, "").includes("<")) {
+    return escapeHtml(raw);
+  }
 
   return html;
 }

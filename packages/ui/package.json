@@ -25,8 +25,12 @@
   },
   "typesVersions": {
     "*": {
-      "components/*": ["./src/components/*.tsx"],
-      "lib/*": ["./src/lib/*.ts"]
+      "components/*": [
+        "./src/components/*.tsx"
+      ],
+      "lib/*": [
+        "./src/lib/*.ts"
+      ]
     }
   },
   "files": [
@@ -53,7 +57,7 @@
     "@tailwindcss/container-queries": "^0.1.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
-    "lucide-react": "^0.460.0",
+    "lucide-react": "^0.500.0",
     "tailwind-merge": "^2.5.4",
     "tailwindcss-animate": "^1.0.7"
   },
@@ -65,9 +69,11 @@
   "devDependencies": {
     "@his/eslint-config": "*",
     "@tailwindcss/typography": "^0.5.15",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "eslint": "^8.57.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3"
   }

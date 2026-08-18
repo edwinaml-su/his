@@ -32,6 +32,13 @@ export interface TRPCContext {
   ip?: string;
   userAgent?: string;
   /**
+   * OWASP A07:2025 — ¿la sesión satisface la política de MFA?
+   * Lo resuelve la capa web (`apps/web/src/lib/auth/mfa-session.ts`), que es
+   * quien ve la cookie firmada. `undefined` = política apagada o llamador que
+   * no la evalúa (server actions internas) → `tenantProcedure` no bloquea.
+   */
+  mfaSatisfied?: boolean;
+  /**
    * CC-0017 — roles efectivos (directos ∪ herencia ∪ alias) resueltos por
    * `requireRole`/`requirePermission`. Ausente hasta que uno de esos dos
    * middlewares corre; NO reemplaza `tenant.roleCodes` (que sigue siendo la
@@ -48,6 +55,8 @@ export interface CreateContextInput {
   portalAccount?: PortalAccountContext | null;
   ip?: string;
   userAgent?: string;
+  /** Ver `TRPCContext.mfaSatisfied`. */
+  mfaSatisfied?: boolean;
 }
 
 export function createTRPCContext(input: CreateContextInput): TRPCContext {
@@ -58,5 +67,6 @@ export function createTRPCContext(input: CreateContextInput): TRPCContext {
     portalAccount: input.portalAccount ?? null,
     ip: input.ip,
     userAgent: input.userAgent,
+    mfaSatisfied: input.mfaSatisfied,
   };
 }

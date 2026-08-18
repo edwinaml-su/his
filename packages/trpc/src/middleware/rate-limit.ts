@@ -30,6 +30,12 @@ interface RateLimitOptions {
   max: number;
   /** Ancho de la ventana deslizante en milisegundos. */
   windowMs: number;
+  /**
+   * Nº de hits a registrar de una sola vez (ej. un batch tRPC de N
+   * procedures = N hits reales, H1). Default 1 — comportamiento idéntico
+   * al de antes de este campo.
+   */
+  weight?: number;
 }
 
 interface RateLimitResult {
@@ -67,12 +73,13 @@ export async function checkRateLimit(
 ): Promise<RateLimitResult> {
   const now = Date.now();
   const since = new Date(now - opts.windowMs);
+  const weight = opts.weight ?? 1;
 
   const count = await store.rateLimitHit.count({
     where: { bucketKey: opts.key, occurredAt: { gte: since } },
   });
 
-  if (count >= opts.max) {
+  if (count + weight > opts.max) {
     const oldest = await store.rateLimitHit.findFirst({
       where: { bucketKey: opts.key, occurredAt: { gte: since } },
       orderBy: { occurredAt: "asc" },
@@ -85,7 +92,11 @@ export async function checkRateLimit(
     };
   }
 
-  await store.rateLimitHit.create({ data: { bucketKey: opts.key } });
+  // Registra los `weight` hits del batch. No es atómico entre sí (ver nota de
+  // clase arriba); benigno para rate-limiting igual que el count-luego-insert.
+  for (let i = 0; i < weight; i++) {
+    await store.rateLimitHit.create({ data: { bucketKey: opts.key } });
+  }
   return { ok: true };
 }
 

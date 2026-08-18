@@ -27,6 +27,19 @@ export const publicProcedure = t.procedure;
 /** Middleware standalone (no ligado a un procedure base) — para helpers como `abacGuard`. */
 export const middleware = t.middleware;
 
+/**
+ * H4 — OWASP A07:2025: espejo mínimo de `MFA_REQUIRED_ROLE_CODES` (la
+ * política completa, con roles y secreto, vive en
+ * `apps/web/src/lib/auth/mfa-session.ts`). Aquí solo nos importa "¿está la
+ * política prendida en absoluto?" para decidir si `mfaSatisfied === undefined`
+ * debe fail-closed (ver `tenantProcedure` abajo). Vacía = política apagada,
+ * comportamiento idéntico al de antes de este cambio.
+ */
+const MFA_POLICY_ENABLED = (process.env.MFA_REQUIRED_ROLE_CODES ?? "")
+  .split(",")
+  .map((r) => r.trim())
+  .filter(Boolean).length > 0;
+
 /** Requiere usuario autenticado. */
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.user) {
@@ -85,6 +98,30 @@ export const tenantProcedure = protectedProcedure.use(async ({ ctx, next, path, 
     });
   }
   const tenant = ctx.tenant;
+
+  // OWASP A07:2025 — si la política de MFA aplica a los roles de este usuario
+  // y la sesión no la satisface, no hay acceso a datos del tenant. La política
+  // vive en la capa web (cookie firmada); aquí sólo se consume el veredicto.
+  if (ctx.mfaSatisfied === false) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Verificación de segundo factor requerida. Vuelve a iniciar sesión en /mfa.",
+    });
+  }
+  // H4: `undefined` solía significar "no bloquear" incondicionalmente — un
+  // caller tenant-scoped que arme el contexto SIN evaluar `mfaSatisfied`
+  // (patrón ya visto en `apps/web/src/app/(portal)/portal/verify/actions.ts`,
+  // aunque ese caso concreto no llega aquí porque no tiene `tenant`) bypaseaba
+  // la política en silencio. Con la política prendida, `undefined` + tenant
+  // presente ahora falla cerrado. Con la política apagada (`MFA_POLICY_ENABLED
+  // = false`) el comportamiento es bit-idéntico al de antes.
+  if (ctx.mfaSatisfied === undefined && MFA_POLICY_ENABLED) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Verificación de segundo factor requerida. Vuelve a iniciar sesión en /mfa.",
+    });
+  }
+
   const result = await next({ ctx: { ...ctx, tenant } });
   if (tenant.breakGlass && result.ok) {
     await auditBreakGlassAccess(ctx, { path, type });

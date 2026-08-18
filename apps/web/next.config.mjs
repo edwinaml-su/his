@@ -9,30 +9,25 @@ const nextConfig = {
   // Salida standalone para contenedores (Docker/K8s): genera
   // apps/web/.next/standalone/apps/web/server.js con deps mínimas.
   output: "standalone",
+  typedRoutes: true,
+  // Monorepo: el trace de standalone debe arrancar en la raíz del repo
+  // para incluir los workspaces @his/* (sin esto server.js queda incompleto).
+  outputFileTracingRoot: path.join(__dirname, "../../"),
+  // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
+  serverExternalPackages: ["@node-rs/argon2"],
   experimental: {
-    typedRoutes: true,
-    // Monorepo: el trace de standalone debe arrancar en la raíz del repo
-    // para incluir los workspaces @his/* (sin esto server.js queda incompleto).
-    outputFileTracingRoot: path.join(__dirname, "../../"),
     optimizePackageImports: ["lucide-react", "@his/ui"],
-    // Native .node binaries — webpack no sabe bundlear @node-rs/argon2.
-    serverComponentsExternalPackages: ["@node-rs/argon2"],
-    // Habilita la View Transitions API del navegador en navegaciones de ruta.
-    // Degradación elegante: browsers sin soporte navegan instantáneamente.
-    // Animaciones desactivadas con `prefers-reduced-motion` (ver globals.css Tarea 8).
-    viewTransition: true,
+    // `experimental.viewTransition` ya NO existe en Next 16 — el build avisaba
+    // "Unrecognized key(s) in object: 'viewTransition'" y la ignoraba. React
+    // 19.2 (que Next 16 usa) trae `<ViewTransition>` de forma nativa, así que
+    // la degradación elegante y el respeto a `prefers-reduced-motion` que
+    // definimos en globals.css siguen aplicando sin esta bandera.
   },
   // Permitir importar paquetes del monorepo en src.
   transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database", "@his/infrastructure"],
-  // ESLint NO bloquea el build — typecheck es el gate de tipo.
-  // Lint se corre en CI separado (ver .github/workflows/ci.yml).
-  // Razón: agentes paralelos del Sprint 1 introdujeron `// eslint-disable-next-line
-  // @typescript-eslint/no-explicit-any` y el plugin TS no está cargado en nuestro
-  // preset 'next/core-web-vitals' minimal. Re-introducir en Sprint 2 con el
-  // shared @his/eslint-config completamente publicado.
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // La clave `eslint` fue ELIMINADA en Next 16: `next build` ya no lintea y el
+  // comando `next lint` no existe. El lint corre por su cuenta con el CLI de
+  // ESLint (`npm run lint`, ver package.json) y en CI (.github/workflows/ci.yml).
   // ─────────────────────────────────────────────────────────────────────────
   // Security Headers HTTP — OWASP A05
   //

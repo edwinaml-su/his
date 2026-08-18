@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="es-SV">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pre-registro · HIS Multipaís — AVANTE</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0B3D5C;
+    --navy-deep:#082E45;
+    --navy-700:#0E4A6E;
+    --teal:#00A8B5;
+    --teal-dark:#018592;
+    --blue-active:#1C6CE0;
+    --bg:#F4F7FA;
+    --card:#FFFFFF;
+    --field-bg:#F8FAFC;
+    --border:#DDE3EA;
+    --border-strong:#C6D0DB;
+    --text:#15212E;
+    --text-muted:#5B6B7B;
+    --required:#DC2626;
+    --captured-bg:#E6F7F8;
+    --captured-border:#00A8B5;
+    --radius:8px;
+    --shadow:0 1px 2px rgba(16,40,64,.06), 0 1px 3px rgba(16,40,64,.04);
+    --sidebar-w:248px;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:var(--bg);
+    color:var(--text);
+    font-size:14px;
+    line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+
+  .app{display:flex;min-height:100vh;}
+
+  /* ── Sidebar ─────────────────────────────── */
+  .sidebar{
+    width:var(--sidebar-w);
+    flex:0 0 var(--sidebar-w);
+    background:var(--navy);
+    color:#CFE0EC;
+    display:flex;flex-direction:column;
+    padding:0 0 24px;
+    position:sticky;top:0;height:100vh;overflow-y:auto;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:18px 18px 14px;}
+  .brand .cross{
+    width:30px;height:30px;border-radius:6px;
+    background:linear-gradient(135deg,var(--teal),#16C2CF);
+    display:grid;place-items:center;color:#fff;font-weight:700;flex:0 0 auto;
+  }
+  .brand .cross svg{width:18px;height:18px;}
+  .brand .name{font-weight:700;color:#fff;font-size:16px;letter-spacing:.3px;line-height:1;}
+  .brand .sub{font-size:10px;color:#9FBBD0;letter-spacing:.5px;}
+
+  .side-search{margin:4px 14px 16px;}
+  .side-search input{
+    width:100%;border:none;border-radius:6px;background:rgba(255,255,255,.10);
+    color:#DCEAF3;padding:9px 12px;font-size:13px;font-family:inherit;
+  }
+  .side-search input::placeholder{color:#8FAEC6;}
+
+  .nav-link{
+    display:flex;align-items:center;gap:12px;padding:9px 18px;margin:1px 10px;
+    border-radius:7px;color:#C2D6E6;text-decoration:none;font-size:13.5px;font-weight:500;
+  }
+  .nav-link svg{width:17px;height:17px;flex:0 0 auto;opacity:.85;}
+  .nav-link:hover{background:rgba(255,255,255,.07);color:#fff;}
+  .nav-link.active{background:var(--blue-active);color:#fff;box-shadow:0 1px 6px rgba(28,108,224,.4);}
+  .nav-link.active svg{opacity:1;}
+
+  .nav-section{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:16px 22px 6px;font-size:11px;font-weight:700;letter-spacing:1px;color:#7FA0BC;
+  }
+
+  /* ── Main ────────────────────────────────── */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;}
+
+  .topbar{
+    height:56px;background:#fff;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;gap:14px;padding:0 22px;position:sticky;top:0;z-index:5;
+  }
+  .topbar .tsearch{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--border);
+    border-radius:7px;padding:7px 12px;color:var(--text-muted);font-size:13px;min-width:230px;
+  }
+  .kbd{margin-left:auto;border:1px solid var(--border);border-radius:4px;padding:1px 6px;font-size:11px;color:var(--text-muted);}
+  .topbar .spacer{flex:1;}
+  .pill{
+    display:flex;align-items:center;gap:8px;border:1px solid var(--border);
+    border-radius:7px;padding:7px 12px;font-size:13px;color:var(--text);font-weight:500;background:#fff;
+  }
+  .pill svg{width:15px;height:15px;color:var(--text-muted);}
+  .icon-btn{width:34px;height:34px;border:1px solid var(--border);border-radius:7px;display:grid;place-items:center;color:var(--text-muted);background:#fff;}
+  .icon-btn svg{width:16px;height:16px;}
+
+  .breadcrumb{display:flex;align-items:center;gap:8px;padding:14px 28px 0;color:var(--text-muted);font-size:13px;}
+  .breadcrumb a{color:var(--text-muted);text-decoration:none;}
+  .breadcrumb .sep{opacity:.5;}
+  .breadcrumb .current{color:var(--text);font-weight:600;}
+
+  .page{padding:6px 28px 60px;max-width:920px;}
+  h1.page-title{font-size:26px;font-weight:700;color:var(--navy);margin:14px 0 18px;}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);padding:26px 28px 30px;}
+  .card-title{font-size:17px;font-weight:700;color:var(--text);margin:0 0 6px;}
+  .card-legend{font-size:12.5px;color:var(--text-muted);margin:0 0 22px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+  .legend-req{color:var(--required);font-weight:700;}
+
+  /* ── Toggle (trae documento) ─────────────── */
+  .doc-toggle{
+    display:flex;align-items:flex-start;gap:14px;
+    border:1px solid var(--border);background:var(--field-bg);border-radius:var(--radius);
+    padding:16px 18px;margin-bottom:24px;
+  }
+  .switch{position:relative;flex:0 0 auto;width:44px;height:26px;margin-top:1px;}
+  .switch input{opacity:0;width:0;height:0;position:absolute;}
+  .slider{
+    position:absolute;inset:0;background:#C6D0DB;border-radius:999px;transition:.18s;cursor:pointer;
+  }
+  .slider::before{content:"";position:absolute;height:20px;width:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 2px rgba(0,0,0,.25);}
+  .switch input:checked + .slider{background:var(--teal);}
+  .switch input:checked + .slider::before{transform:translateX(18px);}
+  .switch input:focus-visible + .slider{outline:2px solid var(--navy);outline-offset:2px;}
+  .toggle-text strong{display:block;font-size:14px;color:var(--text);font-weight:600;}
+  .toggle-text span{display:block;font-size:12.5px;color:var(--text-muted);margin-top:2px;}
+
+  /* ── Scan affordance ─────────────────────── */
+  .scan-row{display:flex;flex-direction:column;gap:10px;margin:4px 0 26px;}
+  .scan-btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    border:1.5px dashed var(--teal);background:var(--captured-bg);color:var(--teal-dark);
+    border-radius:var(--radius);padding:14px 18px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;
+    transition:.15s;
+  }
+  .scan-btn:hover{background:#D6F2F4;border-style:solid;}
+  .scan-btn:focus-visible{outline:2px solid var(--navy);outline-offset:2px;}
+  .scan-btn svg{width:20px;height:20px;}
+  .scan-status{
+    display:none;align-items:center;gap:8px;font-size:12.5px;color:var(--teal-dark);
+    background:var(--captured-bg);border:1px solid var(--captured-border);border-radius:6px;padding:9px 12px;font-weight:500;
+  }
+  .scan-status.show{display:flex;}
+  .scan-status svg{width:15px;height:15px;flex:0 0 auto;}
+
+  /* ── Form ────────────────────────────────── */
+  .section-head{
+    font-size:11.5px;font-weight:700;letter-spacing:1px;color:var(--text-muted);
+    text-transform:uppercase;padding:6px 0 0;margin:6px 0 14px;
+    border-top:1px solid var(--border);padding-top:20px;
+  }
+  .section-head:first-of-type{border-top:none;padding-top:0;}
+
+  .field{margin-bottom:18px;}
+  .field > label,.group-label{display:block;font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px;}
+  .req{color:var(--required);margin-left:2px;}
+  .opt{color:var(--text-muted);font-weight:500;font-size:12px;margin-left:4px;}
+
+  .input{
+    width:100%;border:1px solid var(--border-strong);background:var(--field-bg);
+    border-radius:var(--radius);padding:11px 13px;font-size:14px;color:var(--text);font-family:inherit;
+  }
+  .input::placeholder{color:#9AA8B6;}
+  .input:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px rgba(0,168,181,.16);background:#fff;}
+  .input.captured{background:var(--captured-bg);border-color:var(--captured-border);}
+  .input:disabled{background:#EDF1F5;color:#7A8794;opacity:.85;cursor:not-allowed;}
+
+  select.input{
+    appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:40px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='16' height='16' fill='none' stroke='%235B6B7B' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
+    background-repeat:no-repeat;background-position:right 13px center;background-size:16px;
+  }
+
+  /* Banner permanente de seguridad (estilo admisión: alergias / LGBTI+) */
+  .safety-banner{
+    display:flex;align-items:center;gap:12px;border:1px solid;border-radius:var(--radius);
+    padding:13px 16px;margin-bottom:22px;font-size:14px;font-weight:600;
+  }
+  .safety-banner .sb-icon{width:22px;height:22px;flex:0 0 auto;}
+  .safety-banner .sb-label{font-weight:700;}
+  .safety-banner.alert{background:#FDECEC;border-color:#E5484D;color:#B42318;}
+  .safety-banner.ok{background:#E7F6EC;border-color:#12B76A;color:#027A48;}
+
+  /* Switch de emergencia / deshabilitado */
+  .noid-toggle{margin-top:-12px;}
+  .switch input:checked + .slider-warn{background:#E8A317;}
+  .switch input:disabled + .slider{opacity:.4;cursor:not-allowed;}
+
+  /* Panel de identidad temporal (paciente no identificado) */
+  .noid-panel{background:#FFF7E8;border:1px solid #E8A317;border-radius:var(--radius);padding:16px 18px;margin-bottom:20px;}
+  .noid-title{display:flex;align-items:center;gap:9px;font-weight:700;color:#92520E;font-size:14px;margin-bottom:12px;}
+  .noid-title svg{width:20px;height:20px;flex:0 0 auto;}
+  .noid-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .noid-cell{display:flex;flex-direction:column;gap:4px;}
+  .noid-label{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#B07A2E;}
+  .noid-cell strong{font-size:16px;color:var(--navy);font-weight:700;}
+  .noid-note{font-size:12.5px;color:#92520E;margin:12px 0 0;line-height:1.5;}
+
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .sub-label{display:block;font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:6px;}
+
+  /* radios as chips */
+  .radio-group{display:flex;flex-wrap:wrap;gap:10px;}
+  .chip{
+    display:inline-flex;align-items:center;gap:9px;border:1px solid var(--border-strong);
+    background:#fff;border-radius:var(--radius);padding:11px 16px;cursor:pointer;font-size:14px;font-weight:500;color:var(--text);
+    transition:.12s;user-select:none;
+  }
+  .chip input{position:absolute;opacity:0;width:0;height:0;}
+  .chip .dot{width:16px;height:16px;border-radius:50%;border:2px solid var(--border-strong);flex:0 0 auto;display:grid;place-items:center;transition:.12s;}
+  .chip:hover{border-color:var(--teal);}
+  .chip:has(input:checked){border-color:var(--navy);background:#EEF5FA;color:var(--navy);font-weight:600;}
+  .chip:has(input:checked) .dot{border-color:var(--navy);}
+  .chip:has(input:checked) .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--navy);}
+  .chip:has(input:focus-visible){outline:2px solid var(--navy);outline-offset:2px;}
+
+  .hint{font-size:12px;color:var(--text-muted);margin-top:6px;display:flex;align-items:center;gap:6px;}
+  .hint svg{width:13px;height:13px;flex:0 0 auto;}
+
+  .fnac-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .edad-box{display:none;align-items:center;gap:10px;background:var(--captured-bg);border:1px solid var(--captured-border);border-radius:var(--radius);padding:9px 16px;}
+  .edad-label{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--teal-dark);}
+  .edad-box strong{font-size:18px;font-weight:700;color:var(--navy);line-height:1;}
+
+  .manual-note{
+    display:none;align-items:center;gap:9px;font-size:13px;color:#92520E;
+    background:#FEF6E7;border:1px solid #F4D9A6;border-radius:var(--radius);padding:12px 14px;margin-bottom:22px;
+  }
+  .manual-note.show{display:flex;}
+  .manual-note svg{width:16px;height:16px;flex:0 0 auto;}
+
+  #docBlock{transition:opacity .15s;}
+  #docBlock.hidden{display:none;}
+
+  .actions{display:flex;gap:12px;align-items:center;margin-top:26px;border-top:1px solid var(--border);padding-top:22px;}
+  .btn-primary{
+    background:var(--navy);color:#fff;border:none;border-radius:var(--radius);
+    padding:12px 26px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;transition:.15s;
+  }
+  .btn-primary:hover{background:var(--navy-700);}
+  .btn-primary:focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+  .btn-ghost{background:transparent;border:1px solid var(--border-strong);color:var(--text);border-radius:var(--radius);padding:12px 20px;font-size:14px;font-weight:500;font-family:inherit;cursor:pointer;}
+  .btn-ghost:hover{background:var(--field-bg);}
+
+  /* Orientación táctil — Triage hospitalario */
+  .triage-screen{position:fixed;inset:0;z-index:50;background:var(--bg);overflow-y:auto;flex-direction:column;}
+  .ts-top{display:flex;align-items:center;gap:16px;background:var(--navy);color:#fff;padding:14px 24px;}
+  .ts-brand{display:flex;align-items:center;gap:10px;}
+  .ts-cross{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--teal),#16C2CF);display:grid;place-items:center;flex:0 0 auto;}
+  .ts-cross svg{width:20px;height:20px;color:#fff;}
+  .ts-brand-name{font-weight:700;font-size:16px;line-height:1.1;}
+  .ts-brand-sub{font-size:12px;color:#9FBBD0;}
+  .ts-created{margin-left:auto;display:inline-flex;align-items:center;gap:7px;background:rgba(18,183,106,.18);color:#8FEBB8;border:1px solid #12B76A;border-radius:999px;padding:6px 14px;font-size:13px;font-weight:600;}
+  .ts-created svg{width:15px;height:15px;}
+  .ts-back{background:rgba(255,255,255,.12);color:#fff;border:none;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;}
+  .ts-back:hover{background:rgba(255,255,255,.2);}
+  .ts-patient{background:#fff;border-bottom:1px solid var(--border);padding:18px 28px;}
+  .ts-pname{font-size:22px;font-weight:700;color:var(--navy);}
+  .ts-pmeta{font-size:14px;color:var(--text-muted);margin-top:4px;}
+  .ts-pmeta i{margin:0 9px;color:var(--border-strong);font-style:normal;}
+  .ts-body{max-width:720px;width:100%;margin:0 auto;padding:28px 24px 48px;}
+  .ts-h{font-size:20px;font-weight:700;color:var(--text);margin:0 0 20px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
+  .ts-h span{font-size:13px;font-weight:600;color:var(--text-muted);}
+  .ts-breadcrumb{font-size:13px;color:var(--text-muted);margin-bottom:8px;}
+  .ts-breadcrumb i{font-style:normal;margin:0 6px;opacity:.55;}
+  .ts-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}
+  .ts-grid-one{grid-template-columns:1fr;}
+  .ts-grid-manch{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+  .tsn{position:relative;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--c);color:#fff;border:none;border-radius:20px;padding:26px 24px;min-height:104px;font-size:18px;font-weight:600;font-family:inherit;cursor:pointer;text-align:left;box-shadow:0 4px 14px rgba(16,40,64,.12);transition:.16s;}
+  .tsn:hover{transform:translateY(-4px);box-shadow:0 12px 26px color-mix(in srgb, var(--c) 42%, transparent);filter:brightness(1.07);}
+  .tsn:active{transform:translateY(-1px);}
+  .tsn-dark{color:#1A2733;}
+  .tsn-label{flex:1;line-height:1.25;}
+  .tsn-arrow{font-size:26px;font-weight:700;opacity:.9;}
+  .tsn-manch{flex-direction:column;align-items:flex-start;justify-content:center;gap:3px;min-height:118px;}
+  .tsn-manch.sel{outline:4px solid #fff;box-shadow:0 0 0 7px color-mix(in srgb, var(--c) 55%, transparent);}
+  .tsn-title{font-size:22px;font-weight:800;}
+  .tsn-desc{font-size:14px;font-weight:500;opacity:.95;}
+  .tsn-time{font-size:14px;font-weight:700;margin-top:3px;opacity:.95;}
+  .ts-endpoint{display:flex;align-items:center;gap:10px;background:#E7F6EC;border:1px solid #12B76A;color:#027A48;border-radius:14px;padding:20px;font-size:16px;font-weight:600;}
+  .ts-endpoint svg{width:20px;height:20px;flex:0 0 auto;}
+  .ts-confirm{margin-top:24px;width:100%;background:var(--navy);color:#fff;border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer;transition:.15s;}
+  .ts-confirm:disabled{opacity:.4;cursor:not-allowed;}
+  .ts-confirm:not(:disabled):hover{background:var(--navy-700);}
+  .ts-done{margin-top:18px;display:flex;align-items:center;gap:10px;background:#E7F6EC;border:1px solid #12B76A;color:#027A48;border-radius:12px;padding:16px;font-size:15px;font-weight:600;}
+
+  /* ── Responsive ──────────────────────────── */
+  @media (max-width:860px){
+    .sidebar{display:none;}
+    .ts-top{flex-wrap:wrap;gap:10px;}
+    .ts-created{margin-left:0;order:3;}
+    .ts-back{margin-left:auto;order:2;}
+    .ts-patient{padding:16px 18px;}
+    .ts-grid{grid-template-columns:1fr;}
+    .tsn{padding:22px 20px;min-height:88px;font-size:17px;}
+    .grid-3{grid-template-columns:1fr;}
+    .noid-grid{grid-template-columns:1fr;}
+    .topbar .tsearch{display:none;}
+    .page{padding:6px 16px 50px;}
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div class="tsearch">🔍 Buscar... <span class="kbd">Ctrl+K</span></div>
+      <div class="spacer"></div>
+      <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/></svg> Avante Holding ⌄</div>
+      <div class="pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 7h7l-5.5 4 2 7L12 17l-6.5 5 2-7L2 9h7z"/></svg> Todos los roles (12) ⌄</div>
+      <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/></svg></div>
+      <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4 4l1 1M19 19l1 1M1 12h2M21 12h2"/></svg></div>
+    </div>
+
+    <div class="breadcrumb">
+      <a>🏠</a><span class="sep">›</span>
+      <a>Patients</a><span class="sep">›</span>
+      <span class="current">Pre-registro</span>
+    </div>
+
+    <div class="page">
+      <h1 class="page-title">Pre-registro</h1>
+
+      <div class="card">
+        <h2 class="card-title">Datos básicos</h2>
+        <p class="card-legend">
+          Todos los campos son obligatorios.
+          <span class="legend-req">*</span> obligatorio · los campos sin marca aplican solo cuando corresponde.
+        </p>
+
+        <!-- Banner permanente de seguridad: tipo de sangre -->
+        <div class="safety-banner alert" id="bannerSangre" role="status" aria-live="polite"></div>
+
+        <!-- Trae documento -->
+        <div class="doc-toggle">
+          <label class="switch">
+            <input type="checkbox" id="trae" checked onchange="toggleDoc()">
+            <span class="slider"></span>
+          </label>
+          <div class="toggle-text">
+            <strong>El paciente trae documento de identidad</strong>
+            <span>Si está activo, escanea el QR o código de barras del documento para llenar el preregistro automáticamente.</span>
+          </div>
+        </div>
+
+        <!-- Paciente no identificado -->
+        <div class="doc-toggle noid-toggle">
+          <label class="switch">
+            <input type="checkbox" id="noId" onchange="toggleNoId()">
+            <span class="slider slider-warn"></span>
+          </label>
+          <div class="toggle-text">
+            <strong>Paciente no identificado</strong>
+            <span>Emergencia: paciente inconsciente, sin identificación y sin acompañante. Genera una identidad temporal (nombre + código de fecha y correlativo).</span>
+          </div>
+        </div>
+
+        <!-- Captura manual -->
+        <div class="manual-note" id="manualNote">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+          Captura manual — el paciente no presenta documento. Ingrese los datos de identificación a mano.
+        </div>
+
+        <!-- DOCUMENTO -->
+        <div id="docBlock">
+          <div class="section-head">Documento</div>
+
+          <div class="field">
+            <label>Tipo de documento <span class="req">*</span></label>
+            <div class="radio-group" id="tipoDoc">
+              <label class="chip"><input type="radio" name="tipoDoc" value="DUI" checked><span class="dot"></span> DUI</label>
+              <label class="chip"><input type="radio" name="tipoDoc" value="PAS"><span class="dot"></span> Pasaporte</label>
+              <label class="chip"><input type="radio" name="tipoDoc" value="RES"><span class="dot"></span> Carnet de Residente</label>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="numDoc">Número de Documento <span class="req">*</span></label>
+            <input class="input" id="numDoc" placeholder="Escanee o ingrese el número del documento">
+          </div>
+
+          <div class="scan-row">
+            <button type="button" class="scan-btn" onclick="simularEscaneo()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10M12 7v10"/></svg>
+              Escanear documento (QR / código de barras)
+            </button>
+            <div class="scan-status" id="scanStatus">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+              Datos obtenidos del documento. Verifique antes de continuar.
+            </div>
+          </div>
+        </div>
+
+        <!-- IDENTIFICACIÓN -->
+        <div class="section-head">Identificación del paciente</div>
+
+        <!-- Identidad temporal (paciente no identificado) -->
+        <div class="noid-panel" id="noIdPanel" style="display:none;">
+          <div class="noid-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+            Nombre asignado (paciente no identificado)
+          </div>
+          <div class="noid-grid">
+            <div class="noid-cell">
+              <span class="noid-label">Nombre</span>
+              <strong id="noIdNombre">Paciente no identificado 00000000-01</strong>
+            </div>
+            <div class="noid-cell">
+              <span class="noid-label">Código de fecha y correlativo</span>
+              <strong id="noIdCodigo">00000000-01</strong>
+            </div>
+          </div>
+          <p class="noid-note">El nombre se compone con la <b>fecha de hoy</b> (DDMMAAAA) y un <b>correlativo</b> del día, y se completa con el <b>sexo biológico</b> seleccionado abajo. La identidad real se captura después en <b>Admisión</b>.</p>
+        </div>
+
+        <div class="field" id="nombresBlock">
+          <span class="group-label">Nombres</span>
+          <div class="grid-3">
+            <div>
+              <span class="sub-label">Primer nombre <span class="req">*</span></span>
+              <input class="input" id="nom1" placeholder="Primer nombre">
+            </div>
+            <div>
+              <span class="sub-label">Segundo nombre <span class="opt">(opcional)</span></span>
+              <input class="input" id="nom2" placeholder="Segundo nombre">
+            </div>
+            <div>
+              <span class="sub-label">Tercer nombre <span class="opt">(opcional)</span></span>
+              <input class="input" id="nom3" placeholder="Tercer nombre">
+            </div>
+          </div>
+        </div>
+
+        <div class="field" id="apellidosBlock">
+          <span class="group-label">Apellidos</span>
+          <div class="grid-3">
+            <div>
+              <span class="sub-label">Primer apellido <span class="req">*</span></span>
+              <input class="input" id="ape1" placeholder="Primer apellido">
+            </div>
+            <div>
+              <span class="sub-label">Segundo apellido <span class="opt">(opcional)</span></span>
+              <input class="input" id="ape2" placeholder="Segundo apellido">
+            </div>
+            <div>
+              <span class="sub-label">Apellido de casada <span class="opt">(si aplica)</span></span>
+              <input class="input" id="apeC" placeholder="de…">
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="sangre">Tipo de sangre <span class="req">*</span></label>
+          <select class="input" id="sangre" style="max-width:460px;" onchange="actualizarBannerSangre()">
+            <option value="">Selecciona…</option>
+            <option value="A+">A+</option>
+            <option value="A-">A-</option>
+            <option value="A Du">A Du</option>
+            <option value="B+">B+</option>
+            <option value="B-">B-</option>
+            <option value="B Du">B Du</option>
+            <option value="AB+">AB+</option>
+            <option value="AB-">AB-</option>
+            <option value="AB Du">AB Du</option>
+            <option value="O+">O+</option>
+            <option value="O-">O-</option>
+            <option value="O Du">O Du</option>
+            <option value="NR">No reportado en documento de identificación</option>
+          </select>
+          <div class="hint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            Se obtiene del documento (DUI) al escanear. Si el documento no lo reporta, seleccione «No reportado en documento de identificación».
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Sexo biológico <span class="req">*</span></label>
+          <div class="radio-group" id="sexo">
+            <label class="chip"><input type="radio" name="sexo" value="M" onchange="actualizarNombreNoId()"><span class="dot"></span> Masculino</label>
+            <label class="chip"><input type="radio" name="sexo" value="F" onchange="actualizarNombreNoId()"><span class="dot"></span> Femenino</label>
+          </div>
+        </div>
+
+        <div class="field" id="fnacBlock">
+          <label for="fnac">Fecha de nacimiento <span class="req">*</span></label>
+          <div class="fnac-row">
+            <input class="input" type="text" id="fnac" style="max-width:200px;" inputmode="numeric" maxlength="10" placeholder="DD/MM/AAAA" oninput="mascaraFecha(this)">
+            <div class="edad-box" id="edadBox">
+              <span class="edad-label">Edad</span>
+              <strong id="edadVal">—</strong>
+            </div>
+          </div>
+          <div class="hint" id="fnacHint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            Formato DD/MM/AAAA. Se obtiene del documento al escanear; la edad se calcula automáticamente con la fecha de hoy.
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="profesion">Profesión u oficio <span class="req">*</span></label>
+          <input class="input" type="text" id="profesion" style="max-width:460px;" placeholder="Se obtiene del documento (DUI) al escanear">
+          <div class="hint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+            Se obtiene del documento (DUI). Sin documento se marca como «No encontrado en documento de identificación».
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn-primary" type="button" onclick="crearPreregistro()">Crear preregistro</button>
+          <button class="btn-ghost" type="button">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Orientación táctil — Triage hospitalario (aparece tras crear el pre-registro) -->
+<div id="triageDestino" class="triage-screen" style="display:none;">
+  <header class="ts-top">
+    <div class="ts-brand">
+      <div class="ts-cross"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 3h4v7h7v4h-7v7h-4v-7H3v-4h7z"/></svg></div>
+      <div>
+        <div class="ts-brand-name">Orientación táctil</div>
+        <div class="ts-brand-sub">Triage hospitalario</div>
+      </div>
+    </div>
+    <div class="ts-created"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Pre-registro creado</div>
+    <button class="ts-back" type="button" onclick="subirNivel()">← Volver</button>
+  </header>
+
+  <div class="ts-patient">
+    <div class="ts-pname" id="tpNombre">—</div>
+    <div class="ts-pmeta">
+      <span id="tpSexo">—</span><i>·</i><span id="tpEdad">—</span><i>·</i>Doc: <span id="tpDoc">—</span><i>·</i>Sangre: <span id="tpSangre">—</span>
+    </div>
+  </div>
+
+  <main class="ts-body">
+    <div class="ts-breadcrumb" id="tsBreadcrumb"></div>
+    <h2 class="ts-h" id="tsTitulo">—</h2>
+    <div id="tsNodes" class="ts-grid"></div>
+    <button class="ts-confirm" id="triageConfirm" type="button" style="display:none;" disabled onclick="confirmarTriage()">Confirmar triage</button>
+    <div class="ts-done" id="triageDone" style="display:none;"></div>
+  </main>
+</div>
+
+<script>
+  function toggleDoc(){
+    const noId = document.getElementById('noId').checked;
+    const traeChecked = document.getElementById('trae').checked;
+    const showDoc = traeChecked && !noId;
+    document.getElementById('docBlock').classList.toggle('hidden', !showDoc);
+    document.getElementById('manualNote').classList.toggle('show', !traeChecked && !noId);
+    document.getElementById('fnacHint').style.display = showDoc ? 'flex' : 'none';
+    if(!showDoc){ limpiarCaptura(); }
+    // El tipo de sangre proviene del documento: sin documento (o no identificado) → "No reportado" + alerta
+    const sangre = document.getElementById('sangre');
+    if(!traeChecked || noId){
+      sangre.value = 'NR';
+      sangre.disabled = true;
+    } else {
+      if(sangre.disabled){ sangre.value = ''; }
+      sangre.disabled = false;
+    }
+    // La profesión proviene del documento: sin documento (o no identificado) → "No encontrado" (bloqueado)
+    const prof = document.getElementById('profesion');
+    if(!traeChecked || noId){
+      prof.value = 'No encontrado en documento de identificación';
+      prof.disabled = true;
+    } else {
+      if(prof.disabled){ prof.value = ''; }
+      prof.disabled = false;
+    }
+    actualizarBannerSangre();
+  }
+
+  // Paciente no identificado (emergencia): genera el nombre con fecha + correlativo
+  function toggleNoId(){
+    const on = document.getElementById('noId').checked;
+    const trae = document.getElementById('trae');
+    trae.disabled = on;
+    if(on){ trae.checked = false; }
+    document.getElementById('noIdPanel').style.display = on ? 'block' : 'none';
+    document.getElementById('nombresBlock').style.display = on ? 'none' : 'block';
+    document.getElementById('apellidosBlock').style.display = on ? 'none' : 'block';
+    document.getElementById('fnacBlock').style.display = on ? 'none' : 'block'; // fecha de nacimiento desconocida
+    toggleDoc();
+    if(on){
+      document.getElementById('fnac').value = '';
+      document.getElementById('sangre').value = 'NR'; // sin documento: tipo de sangre no reportado
+      generarCodigoNoId();
+    }
+    actualizarBannerSangre();
+  }
+
+  // Máscara e interpretación de fecha DD/MM/AAAA
+  function mascaraFecha(el){
+    let v = el.value.replace(/\D/g,'').slice(0,8);
+    if(v.length >= 5) v = v.slice(0,2) + '/' + v.slice(2,4) + '/' + v.slice(4);
+    else if(v.length >= 3) v = v.slice(0,2) + '/' + v.slice(2);
+    el.value = v;
+    calcularEdad();
+  }
+
+  function parseFechaDDMMAAAA(v){
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v);
+    if(!m) return null;
+    const d = new Date(+m[3], +m[2]-1, +m[1]);
+    if(d.getFullYear() != +m[3] || d.getMonth() != +m[2]-1 || d.getDate() != +m[1]) return null; // fecha inexistente
+    return d;
+  }
+
+  function generarCodigoNoId(){
+    const d = new Date();
+    const fecha = String(d.getDate()).padStart(2,'0') + String(d.getMonth()+1).padStart(2,'0') + d.getFullYear(); // DDMMAAAA
+    const correlativo = '01'; // ilustrativo: en producción es la secuencia diaria desde la BD
+    const panel = document.getElementById('noIdPanel');
+    panel.dataset.fecha = fecha;
+    panel.dataset.correlativo = correlativo;
+    document.getElementById('noIdCodigo').textContent = `${fecha}-${correlativo}`;
+    actualizarNombreNoId();
+  }
+
+  function actualizarNombreNoId(){
+    const panel = document.getElementById('noIdPanel');
+    if(panel.style.display === 'none') return;
+    const sufijo = `${panel.dataset.fecha || '00000000'}-${panel.dataset.correlativo || '01'}`;
+    const sexo = document.querySelector('input[name="sexo"]:checked');
+    const genero = sexo ? (sexo.value === 'M' ? 'masculino' : 'femenino') : '';
+    document.getElementById('noIdNombre').textContent = genero
+      ? `Paciente ${genero} no identificado ${sufijo}`
+      : `Paciente no identificado ${sufijo} — seleccione sexo biológico`;
+  }
+
+  function setCaptured(id, val){
+    const el = document.getElementById(id);
+    el.value = val;
+    el.classList.add('captured');
+  }
+
+  function simularEscaneo(){
+    // Demostración: datos leídos del QR/código de barras del documento
+    setCaptured('numDoc','04829175-3');
+    setCaptured('nom1','María');
+    setCaptured('nom2','Fernanda');
+    setCaptured('ape1','Hernández');
+    setCaptured('ape2','Portillo');
+    setCaptured('apeC','de Castellanos');
+    setCaptured('fnac','14/07/1990');
+    setCaptured('profesion','Comerciante');
+    document.getElementById('sangre').value = 'O+';
+    actualizarBannerSangre();
+    document.querySelector('input[name="sexo"][value="F"]').checked = true;
+    document.querySelector('input[name="tipoDoc"][value="DUI"]').checked = true;
+    document.getElementById('scanStatus').classList.add('show');
+    calcularEdad();
+  }
+
+  function limpiarCaptura(){
+    ['numDoc','nom1','nom2','nom3','ape1','ape2','apeC','fnac','profesion'].forEach(id=>{
+      const el=document.getElementById(id); el.value=''; el.classList.remove('captured');
+    });
+    document.getElementById('scanStatus').classList.remove('show');
+    document.getElementById('sangre').value = '';
+    actualizarBannerSangre();
+    calcularEdad();
+  }
+
+  // Banner permanente de seguridad. Verde SOLO si hay documento presentado y un tipo concreto
+  // (el tipo confiable proviene del documento). Sin documento el paciente y su tipo están sin identificar.
+  function actualizarBannerSangre(){
+    const noId = document.getElementById('noId').checked;
+    const traeDoc = document.getElementById('trae').checked;
+    const v = document.getElementById('sangre').value;
+    const concreto = v && v !== 'NR';
+    const banner = document.getElementById('bannerSangre');
+    const iconGota = '<svg class="sb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/></svg>';
+    const iconAlerta = '<svg class="sb-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+    const ok = traeDoc && !noId && concreto;
+    if(ok){
+      banner.className = 'safety-banner ok';
+      banner.innerHTML = iconGota + '<span><span class="sb-label">Tipo de sangre:</span> ' + v + '</span>';
+    } else {
+      let txt;
+      if(noId)          txt = 'Paciente no identificado — tipo de sangre desconocido';
+      else if(!traeDoc) txt = 'Sin documento — tipo de sangre no identificado';
+      else if(v === 'NR') txt = 'No reportado en documento de identificación';
+      else              txt = 'Sin registrar';
+      banner.className = 'safety-banner alert';
+      banner.innerHTML = iconAlerta + '<span><span class="sb-label">Tipo de sangre:</span> ' + txt + '</span>';
+    }
+  }
+
+  // Edad calculada a partir de la fecha de nacimiento (DD/MM/AAAA) y la fecha actual
+  function calcularEdad(){
+    const box = document.getElementById('edadBox');
+    // En modo no identificado la fecha es provisional: no se muestra edad
+    if(document.getElementById('noId').checked){ box.style.display='none'; return; }
+    const nac = parseFechaDDMMAAAA(document.getElementById('fnac').value);
+    const hoy = new Date();
+    if(!nac || nac > hoy){ box.style.display='none'; return; }
+
+    let anios = hoy.getFullYear() - nac.getFullYear();
+    let meses = hoy.getMonth() - nac.getMonth();
+    let dias  = hoy.getDate()  - nac.getDate();
+    if(dias < 0){ meses--; dias += new Date(hoy.getFullYear(), hoy.getMonth(), 0).getDate(); }
+    if(meses < 0){ anios--; meses += 12; }
+
+    let texto;
+    if(anios >= 1)      texto = anios + (anios===1 ? ' año'  : ' años');
+    else if(meses >= 1) texto = meses + (meses===1 ? ' mes'  : ' meses');
+    else                texto = dias  + (dias===1  ? ' día'  : ' días');
+
+    document.getElementById('edadVal').textContent = texto;
+    box.style.display = 'flex';
+  }
+
+  // Árbol de "Orientación táctil"
+  const ORIENTACION = {
+    label:'Orientación táctil',
+    children:[
+      { label:'Servicios Hospitalarios', color:'#0891B2', children:[
+        { label:'Emergencia', color:'#DC2626', children:[
+          { label:'Triage de Manchester', color:'#B91C1C', manchester:true }
+        ]},
+        { label:'Ingreso Electivo', color:'#2563EB', children:[
+          { label:'Procedimiento Quirúrgico', color:'#0891B2' },
+          { label:'Manejo Médico', color:'#16A34A' }
+        ]}
+      ]},
+      { label:'Servicios Médicos Ambulatorio', color:'#7C3AED', children:[
+        { label:'Laboratorio', color:'#0891B2' },
+        { label:'Radiología e imágenes médicas', color:'#2563EB' },
+        { label:'Estudios Médicos Ambulatorios', color:'#7C3AED' },
+        { label:'Banco de Sangre', color:'#DC2626' },
+        { label:'Procedimientos', color:'#EA580C' },
+        { label:'Cirugía Ambulatoria', color:'#16A34A' }
+      ]}
+    ]
+  };
+  // Triage Manchester (colores internacionales)
+  const MANCHESTER = [
+    { label:'Rojo',     desc:'Emergencia — atención inmediata', time:'Inmediato', color:'#DC2626', dark:false },
+    { label:'Naranja',  desc:'Muy urgente', time:'10 min',  color:'#EA580C', dark:false },
+    { label:'Amarillo', desc:'Urgente',     time:'60 min',  color:'#EAB308', dark:true  },
+    { label:'Verde',    desc:'Estándar',    time:'120 min', color:'#16A34A', dark:false },
+    { label:'Azul',     desc:'No urgente',  time:'240 min', color:'#2563EB', dark:false }
+  ];
+  let ruta = [];
+
+  // Crear pre-registro → fluir a "Orientación táctil"
+  function crearPreregistro(){
+    let nombre;
+    if(document.getElementById('noId').checked){
+      nombre = document.getElementById('noIdNombre').textContent;
+    } else {
+      const partes = ['nom1','nom2','nom3','ape1','ape2','apeC']
+        .map(id => document.getElementById(id).value.trim()).filter(Boolean);
+      nombre = partes.join(' ') || 'Paciente';
+    }
+    const sexoR = document.querySelector('input[name="sexo"]:checked');
+    const sexo = sexoR ? (sexoR.value === 'M' ? 'Masculino' : 'Femenino') : '—';
+    const edadVisible = document.getElementById('edadBox').style.display !== 'none';
+    const edad = edadVisible ? document.getElementById('edadVal').textContent : '—';
+    let doc;
+    if(document.getElementById('noId').checked){
+      doc = 'Cód. ' + document.getElementById('noIdCodigo').textContent;
+    } else if(document.getElementById('trae').checked){
+      const t = document.querySelector('input[name="tipoDoc"]:checked');
+      const num = document.getElementById('numDoc').value.trim();
+      doc = (t && num) ? (t.value + ' ' + num) : 'Documento';
+    } else {
+      doc = 'Sin documento';
+    }
+    const sv = document.getElementById('sangre').value;
+    const sangre = (sv === '' || sv === 'NR') ? 'No reportado' : sv;
+
+    document.getElementById('tpNombre').textContent = nombre;
+    document.getElementById('tpSexo').textContent = sexo;
+    document.getElementById('tpEdad').textContent = edad;
+    document.getElementById('tpDoc').textContent = doc;
+    document.getElementById('tpSangre').textContent = sangre;
+
+    ruta = [];
+    document.getElementById('triageDestino').style.display = 'flex';
+    renderNivel();
+    window.scrollTo(0, 0);
+  }
+
+  function nodoActual(){ return ruta.length ? ruta[ruta.length-1] : ORIENTACION; }
+
+  function renderNivel(){
+    const cur = nodoActual();
+    const cont = document.getElementById('tsNodes');
+    const confirm = document.getElementById('triageConfirm');
+    const done = document.getElementById('triageDone');
+    document.getElementById('tsBreadcrumb').innerHTML =
+      ['Orientación táctil'].concat(ruta.map(n => n.label)).join(' <i>›</i> ');
+    cont.innerHTML = '';
+    confirm.style.display = 'none'; confirm.disabled = true; done.style.display = 'none';
+
+    if(cur.manchester){
+      document.getElementById('tsTitulo').textContent = 'Triage de Manchester — seleccione el nivel';
+      cont.className = 'ts-grid ts-grid-manch';
+      MANCHESTER.forEach(m => {
+        const b = document.createElement('button');
+        b.className = 'tsn tsn-manch' + (m.dark ? ' tsn-dark' : '');
+        b.style.setProperty('--c', m.color);
+        b.innerHTML = '<span class="tsn-title">'+m.label+'</span><span class="tsn-desc">'+m.desc+'</span><span class="tsn-time">'+m.time+'</span>';
+        b.onclick = () => seleccionarManchester(b, m.label + ' — ' + m.desc);
+        cont.appendChild(b);
+      });
+      confirm.style.display = 'block';
+      return;
+    }
+
+    if(cur.children){
+      document.getElementById('tsTitulo').textContent =
+        (cur === ORIENTACION) ? '¿A dónde se orienta al paciente?' : cur.label;
+      cont.className = 'ts-grid';
+      cur.children.forEach(n => {
+        const b = document.createElement('button');
+        b.className = 'tsn' + (n.dark ? ' tsn-dark' : '');
+        b.style.setProperty('--c', n.color);
+        const flecha = (n.children || n.manchester) ? '<span class="tsn-arrow">›</span>' : '';
+        b.innerHTML = '<span class="tsn-label">'+n.label+'</span>' + flecha;
+        b.onclick = () => entrarNodo(n);
+        cont.appendChild(b);
+      });
+    } else {
+      document.getElementById('tsTitulo').textContent = cur.label;
+      cont.className = 'ts-grid ts-grid-one';
+      const conf = document.createElement('div');
+      conf.className = 'ts-endpoint';
+      conf.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg> Paciente orientado a: <strong>' + ruta.map(n => n.label).join(' › ') + '</strong>';
+      cont.appendChild(conf);
+    }
+  }
+
+  function entrarNodo(n){ ruta.push(n); renderNivel(); window.scrollTo(0,0); }
+  function subirNivel(){ if(ruta.length){ ruta.pop(); renderNivel(); } else { volverPreregistro(); } }
+  function volverPreregistro(){ document.getElementById('triageDestino').style.display = 'none'; }
+
+  function seleccionarManchester(btn, nivel){
+    document.querySelectorAll('.tsn-manch.sel').forEach(b => b.classList.remove('sel'));
+    btn.classList.add('sel');
+    const c = document.getElementById('triageConfirm');
+    c.disabled = false; c.dataset.nivel = nivel;
+    document.getElementById('triageDone').style.display = 'none';
+  }
+
+  function confirmarTriage(){
+    const nivel = document.getElementById('triageConfirm').dataset.nivel || '';
+    const done = document.getElementById('triageDone');
+    done.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;flex:0 0 auto"><path d="M20 6 9 17l-5-5"/></svg> Triage asignado: ' + nivel + '. Paciente en cola de atención.';
+    done.style.display = 'flex';
+  }
+
+  // Estado inicial del banner de seguridad
+  actualizarBannerSangre();
+</script>
+</body>
+</html>

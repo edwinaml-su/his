@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modelador y Documentador de Procesos BPMN</title>
+    <!-- Tailwind CSS para un diseño moderno y limpio -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Bibliotecas externas para exportación -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.8.2/docx.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <style>
+        .grid-bg {
+            background-size: 20px 20px;
+            background-image: linear-gradient(to right, #f1f5f9 1px, transparent 1px), linear-gradient(to bottom, #f1f5f9 1px, transparent 1px);
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans min-h-screen flex flex-col">
+
+    <!-- Encabezado / Navbar -->
+    <header class="bg-slate-900 text-white p-4 shadow-md flex justify-between items-center">
+        <div>
+            <h1 class="text-xl font-bold flex items-center gap-2">
+                <span>🔄</span> BPMN Process Builder & Documenter
+            </h1>
+            <p class="text-xs text-slate-400">Diseña de forma visual y genera tu documentación bajo la estructura oficial</p>
+        </div>
+        <div class="flex gap-2">
+            <button onclick="exportarPDF()" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-semibold transition flex items-center gap-1 shadow">
+                📄 Exportar PDF
+            </button>
+            <button onclick="exportarDOCX()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-semibold transition flex items-center gap-1 shadow">
+                📝 Exportar DOCX
+            </button>
+        </div>
+    </header>
+
+    <!-- Contenedor Principal -->
+    <div class="flex-1 flex overflow-hidden">
+        
+        <!-- PANEL IZQUIERDO: Configuración del Marco del Proceso -->
+        <aside class="w-80 bg-white border-r border-slate-200 p-4 overflow-y-auto flex flex-col gap-4 shadow-sm">
+            <div class="border-b border-slate-100 pb-2">
+                <h2 class="font-bold text-slate-700 flex items-center gap-1">📋 1. Marco Contextual</h2>
+            </div>
+            
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Nombre del Proceso</label>
+                <input type="text" id="proc-nombre" value="Proceso de Gestión de Adquisiciones" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Propósito / Objetivo</label>
+                <textarea id="proc-objetivo" rows="3" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="¿Cuál es la finalidad del proceso? (Verbo en infinitivo)...">Garantizar el abastecimiento oportuno de bienes y servicios requeridos por las áreas operativas, asegurando la mejor relación costo-beneficio bajo políticas institucionales.</textarea>
+            </div>
+
+            <div>
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Alcance</label>
+                <textarea id="proc-alcance" rows="3" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="¿Dónde inicia y dónde termina?">Inicia con la recepción de la solicitud de compra por el área requirente y concluye con la entrega del bien al almacén y el archivo del expediente de pago.</textarea>
+            </div>
+
+            <div class="border-b border-slate-100 pb-2 mt-2">
+                <h2 class="font-bold text-slate-700 flex items-center gap-1">🛠️ 2. Estructura de Elementos</h2>
+            </div>
+
+            <div class="flex flex-col gap-2">
+                <button onclick="agregarFase()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3 py-2 rounded text-xs font-semibold flex items-center justify-center gap-1 transition">
+                    ➕ Añadir Fase (Hito de Tiempo)
+                </button>
+                <button onclick="agregarRol()" class="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 px-3 py-2 rounded text-xs font-semibold flex items-center justify-center gap-1 transition">
+                    ➕ Añadir Rol (Carril / Responsable)
+                </button>
+            </div>
+        </aside>
+
+        <!-- PANEL CENTRAL: Modelador Visual Estilo Bizagi -->
+        <main class="flex-1 bg-slate-100 p-6 overflow-auto grid-bg relative flex flex-col gap-6">
+            
+            <!-- Estructura Visual Dinámica del Mapa de Proceso -->
+            <div class="bg-white rounded-xl shadow-md border border-slate-200 p-6 min-w-[900px]">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <span class="p-1 bg-blue-100 text-blue-700 rounded-lg text-sm">📊</span> Diagrama Dinámico de Flujo de Trabajo
+                    </h2>
+                    <span class="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full font-medium">Modelado Lineal e Interactivo</span>
+                </div>
+
+                <!-- Cabecera de Fases -->
+                <div class="flex mb-2 pl-40" id="contenedor-fases">
+                    <!-- Las fases se renderizan dinámicamente aquí -->
+                </div>
+
+                <!-- Contenedor de Carriles (Roles) -->
+                <div class="border border-slate-300 rounded-lg overflow-hidden flex flex-col bg-white" id="contenedor-roles">
+                    <!-- Los roles y pasos se renderizan dinámicamente aquí -->
+                </div>
+            </div>
+
+            <!-- Previsualización en Vivo de la Tabla de Documentación -->
+            <div class="bg-white rounded-xl shadow-md border border-slate-200 p-6 min-w-[900px]" id="seccion-documentacion">
+                <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                    <span class="p-1 bg-emerald-100 text-emerald-700 rounded-lg text-sm">📝</span> 6. Descripción Narrativa por Fases y Pasos
+                </h2>
+                <div class="overflow-x-auto">
+                    <table class="w-full border-collapse border border-slate-200 text-sm">
+                        <thead>
+                            <tr class="bg-slate-900 text-white text-left">
+                                <th class="border border-slate-300 p-2 w-16 text-center">Paso</th>
+                                <th class="border border-slate-300 p-2 w-32">Fase</th>
+                                <th class="border border-slate-300 p-2 w-40">Rol Responsable</th>
+                                <th class="border border-slate-300 p-2">Descripción de la Actividad</th>
+                                <th class="border border-slate-300 p-2 w-48">Entradas y Salidas</th>
+                                <th class="border border-slate-300 p-2 w-48">Flujos Alternos / Reglas</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tabla-narrativa">
+                            <!-- Filas generadas reactivamente -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- JS de la Aplicación -->
+    <script>
+        // Datos Iniciales de la Aplicación (Estructura de Datos Reactiva)
+        let datosProceso = {
+            fases: ["Fase 1: Solicitud", "Fase 2: Evaluación", "Fase 3: Adjudicación"],
+            roles: [
+                { id: 1, nombre: "Área Requirente" },
+                { id: 2, nombre: "Departamento de Compras" },
+                { id: 3, nombre: "Dirección de Finanzas" }
+            ],
+            pasos: [
+                { id: 1, rolId: 1, faseIndex: 0, titulo: "Crear Requerimiento", desc: "El área requirente identifica la necesidad e ingresa la solicitud formal detallando especificaciones en el ERP de la empresa.", entradas: "Especificaciones técnicas", salidas: "Solicitud codificada", alterno: "Si el presupuesto no está aprobado, se rechaza inmediatamente." },
+                { id: 2, rolId: 2, faseIndex: 1, titulo: "Cotizar con Proveedores", desc: "El comprador asignado solicita y consolida un mínimo de tres cotizaciones de proveedores validados en el mercado.", entradas: "Solicitud aprobada", salidas: "Cuadro comparativo", alterno: "Si es proveedor único certificado, se omite la terna de cotización." },
+                { id: 3, rolId: 3, faseIndex: 2, titulo: "Autorizar el Gasto", desc: "La dirección revisa el cuadro comparativo y autoriza la liberación de fondos emitiendo la orden de compra oficial.", entradas: "Cuadro comparativo analizado", salidas: "Orden de compra firmada", alterno: "Si excede el presupuesto del área, requiere firma de Dirección General." }
+            ]
+        };
+
+        // Renderizar toda la interfaz basado en los datos
+        function renderizar() {
+            renderizarFases();
+            renderizarRolesYPasos();
+            renderizarTablaNarrativa();
+        }
+
+        function renderizarFases() {
+            const contenedor = document.getElementById('contenedor-fases');
+            contenedor.innerHTML = '';
+            datosProceso.fases.forEach((fase, idx) => {
+                contenedor.innerHTML += `
+                    <div class="flex-1 flex items-center justify-between bg-slate-700 text-white text-xs px-3 py-1.5 border-r border-slate-600 font-semibold uppercase tracking-wider">
+                        <input type="text" value="${fase}" onchange="actualizarFase(${idx}, this.value)" class="bg-transparent hover:bg-slate-600 focus:bg-slate-800 px-1 rounded w-full border-none focus:outline-none">
+                        <button onclick="eliminarFase(${idx})" class="text-red-400 hover:text-red-200 ml-1">×</button>
+                    </div>
+                `;
+            });
+        }
+
+        function renderizarRolesYPasos() {
+            const contenedor = document.getElementById('contenedor-roles');
+            contenedor.innerHTML = '';
+
+            if (datosProceso.roles.length === 0) {
+                contenedor.innerHTML = '<div class="p-6 text-center text-slate-400 text-sm">No hay carriles de roles asignados. Añada un rol en el panel izquierdo.</div>';
+                return;
+            }
+
+            datosProceso.roles.forEach(rol => {
+                let carrilFasesHtml = '';
+                
+                // Dividir el carril según las fases existentes
+                datosProceso.fases.forEach((fase, fIdx) => {
+                    // Filtrar pasos que caen en este rol y esta fase
+                    const pasosFiltrados = datosProceso.pasos.filter(p => p.rolId === rol.id && p.faseIndex === fIdx);
+                    let pasosHtml = '';
+                    
+                    pasosFiltrados.forEach(paso => {
+                        pasosHtml += `
+                            <div class="bg-amber-50 hover:bg-amber-100 border-2 border-amber-400 rounded-lg p-2 shadow-sm text-xs cursor-pointer transition relative group max-w-[180px] w-full" onclick="editarPasoEnVivo(${paso.id})">
+                                <div class="font-bold text-amber-900 mb-1 truncate">${paso.titulo}</div>
+                                <p class="text-[10px] text-amber-700 line-clamp-2">${paso.desc || 'Sin descripción...'}</p>
+                                <button onclick="event.stopPropagation(); eliminarPaso(${paso.id})" class="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] hidden group-hover:flex shadow">×</button>
+                            </div>
+                        `;
+                    });
+
+                    carrilFasesHtml += `
+                        <div class="flex-1 p-2 border-r border-slate-200 bg-slate-50/50 flex flex-wrap gap-2 items-center justify-center min-h-[90px] relative group/fase">
+                            ${pasosHtml}
+                            <button onclick="crearNuevoPaso(${rol.id}, ${fIdx})" class="hidden group-hover/fase:flex absolute bottom-1 right-1 bg-blue-500 text-white rounded-full px-1.5 py-0.5 text-[9px] font-bold shadow hover:bg-blue-600 transition">
+                                ➕ Añadir Paso
+                            </button>
+                        </div>
+                    `;
+                });
+
+                contenedor.innerHTML += `
+                    <div class="flex border-b border-slate-300 last:border-b-0">
+                        <!-- Etiqueta del Carril (Rol) -->
+                        <div class="w-40 bg-slate-100 border-r border-slate-300 p-3 flex items-center justify-between gap-2 shrink-0 font-medium text-xs text-slate-700">
+                            <input type="text" value="${rol.nombre}" onchange="actualizarRolName(${rol.id}, this.value)" class="bg-transparent hover:bg-slate-200 focus:bg-white font-bold p-1 rounded w-full border-none focus:outline-none">
+                            <button onclick="eliminarRol(${rol.id})" class="text-red-500 hover:text-red-700 font-bold">×</button>
+                        </div>
+                        <!-- Bloques por Fase -->
+                        <div class="flex-1 flex">
+                            ${carrilFasesHtml}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function renderizarTablaNarrativa() {
+            const tbody = document.getElementById('tabla-narrativa');
+            tbody.innerHTML = '';
+
+            if (datosProceso.pasos.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="p-4 text-center text-slate-400">No hay pasos agregados en el diagrama para documentar.</td></tr>`;
+                return;
+            }
+
+            // Ordenar pasos cronológicamente por índice de fase para mantener coherencia narrativa
+            const pasosOrdenados = [...datosProceso.pasos].sort((a, b) => a.faseIndex - b.faseIndex);
+
+            pasosOrdenados.forEach((paso, index) => {
+                const rolObj = datosProceso.roles.find(r => r.id === paso.rolId);
+                const rolNombre = rolObj ? rolObj.nombre : 'Sin asignar';
+                const faseNombre = datosProceso.fases[paso.faseIndex] || 'General';
+
+                tbody.innerHTML += `
+                    <tr class="hover:bg-slate-50 border-b border-slate-200 align-top">
+                        <td class="p-2 border border-slate-200 text-center font-bold text-slate-600">${index + 1}</td>
+                        <td class="p-2 border border-slate-200 font-medium text-xs text-slate-500">${faseNombre}</td>
+                        <td class="p-2 border border-slate-200 font-bold text-xs text-slate-700">${rolNombre}</td>
+                        <td class="p-2 border border-slate-200 space-y-1">
+                            <input type="text" value="${paso.titulo}" onchange="actualizarCampoPaso(${paso.id}, 'titulo', this.value)" class="w-full font-bold text-slate-800 border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:outline-none mb-1">
+                            <textarea onchange="actualizarCampoPaso(${paso.id}, 'desc', this.value)" class="w-full text-xs text-slate-600 border border-transparent hover:border-slate-200 focus:border-blue-500 focus:bg-white rounded p-1 resize-y" rows="2">${paso.desc}</textarea>
+                        </td>
+                        <td class="p-2 border border-slate-200 space-y-2">
+                            <div>
+                                <span class="text-[10px] font-bold text-blue-600 block uppercase">📥 Entradas:</span>
+                                <input type="text" value="${paso.entradas}" onchange="actualizarCampoPaso(${paso.id}, 'entradas', this.value)" class="w-full text-xs border border-transparent hover:border-slate-200 focus:border-blue-500 rounded p-0.5">
+                            </div>
+                            <div>
+                                <span class="text-[10px] font-bold text-emerald-600 block uppercase">📤 Salidas:</span>
+                                <input type="text" value="${paso.salidas}" onchange="actualizarCampoPaso(${paso.id}, 'salidas', this.value)" class="w-full text-xs border border-transparent hover:border-slate-200 focus:border-blue-500 rounded p-0.5">
+                            </div>
+                        </td>
+                        <td class="p-2 border border-slate-200">
+                            <span class="text-[10px] font-bold text-purple-600 block uppercase">🔀 Excepciones / Reglas:</span>
+                            <textarea onchange="actualizarCampoPaso(${paso.id}, 'alterno', this.value)" class="w-full text-xs text-slate-600 border border-transparent hover:border-slate-200 focus:border-blue-500 rounded p-0.5 resize-y" rows="2">${paso.alterno}</textarea>
+                        </td>
+                    </tr>
+                `;
+            });
+        }
+
+        // FUNCIONES DE MUTACIÓN DE DATOS (ESTADO DE LA APLICACIÓN)
+        function agregarFase() {
+            const nuevaFaseNum = datosProceso.fases.length + 1;
+            datosProceso.fases.push(`Fase ${nuevaFaseNum}: Nueva Fase`);
+            renderizar();
+        }
+        function actualizarFase(idx, val) { datosProceso.fases[idx] = val; renderizarTablaNarrativa(); }
+        function eliminarFase(idx) {
+            if(datosProceso.fases.length <= 1) return;
+            datosProceso.fases.splice(idx, 1);
+            // Reajustar pasos vinculados
+            datosProceso.pasos.forEach(p => { if(p.faseIndex >= datosProceso.fases.length) p.faseIndex = datosProceso.fases.length - 1; });
+            renderizar();
+        }
+
+        function agregarRol() {
+            const nuevoId = datosProceso.roles.length > 0 ? Math.max(...datosProceso.roles.map(r=>r.id)) + 1 : 1;
+            datosProceso.roles.push({ id: nuevoId, nombre: `Nuevo Rol Ejecutivo` });
+            renderizar();
+        }
+        function actualizarRolName(id, val) {
+            const rol = datosProceso.roles.find(r => r.id === id);
+            if(rol) rol.nombre = val;
+            renderizarTablaNarrativa();
+        }
+        function eliminarRol(id) {
+            datosProceso.roles = datosProceso.roles.filter(r => r.id !== id);
+            datosProceso.pasos = datosProceso.pasos.filter(p => p.rolId !== id); // Cascading delete
+            renderizar();
+        }
+
+        function crearNuevoPaso(rolId, faseIdx) {
+            const nuevoId = datosProceso.pasos.length > 0 ? Math.max(...datosProceso.pasos.map(p=>p.id)) + 1 : 1;
+            datosProceso.pasos.push({
+                id: nuevoId, rolId: rolId, faseIndex: faseIdx,
+                titulo: "Nueva Actividad", desc: "Describa detalladamente qué hace el rol...",
+                entradas: "Insumos", salidas: "Entregables", alterno: "N/A"
+            });
+            renderizar();
+        }
+        function actualizarCampoPaso(id, campo, valor) {
+            const paso = datosProceso.pasos.find(p => p.id === id);
+            if(paso) paso[campo] = valor;
+            if(campo === 'titulo' || campo === 'desc') renderizarRolesYPasos(); // Actualizar el diagrama visual
+        }
+        function eliminarPaso(id) {
+            datosProceso.pasos = datosProceso.pasos.filter(p => p.id !== id);
+            renderizar();
+        }
+
+        // CONTROLADORES DE EXPORTACIÓN (PDF & DOCX)
+        function exportarPDF() {
+            const element = document.getElementById('seccion-documentacion');
+            const tituloProceso = document.getElementById('proc-nombre').value;
+            const opt = {
+                margin:       10,
+                filename:     `Manual_Proceso_${tituloProceso.replace(/\s+/g, '_')}.pdf`,
+                image:        { type: 'jpeg', quality: 0.98 },
+                html2canvas:  { scale: 2 },
+                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape' }
+            };
+            html2pdf().set(opt).from(element).save();
+        }
+
+        function exportarDOCX() {
+            const { Document, Packer, Paragraph, TextRun, Table, TableRow, TableCell, HeadingLevel, WidthType, BorderStyle } = docx;
+
+            const nombreProc = document.getElementById('proc-nombre').value;
+            const objProc = document.getElementById('proc-objetivo').value;
+            const alcProc = document.getElementById('proc-alcance').value;
+
+            // Filas de cabecera de la tabla
+            const filasTabla = [
+                new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Paso", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Fase", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Rol Responsable", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Descripción de la Actividad", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Entradas / Salidas", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Flujos Alternos", bold: true, color: "FFFFFF" })] })], backgroundColor: "1E293B" })
+                    ]
+                })
+            ];
+
+            // Ordenar los pasos antes de volcar al DOCX
+            const pasosOrdenados = [...datosProceso.pasos].sort((a, b) => a.faseIndex - b.faseIndex);
+            pasosOrdenados.forEach((p, idx) => {
+                const rolObj = datosProceso.roles.find(r => r.id === p.rolId);
+                const rName = rolObj ? rolObj.nombre : 'N/A';
+                const fName = datosProceso.fases[p.faseIndex] || 'General';
+
+                filasTabla.push(new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph({ text: String(idx + 1) })] }),
+                        new TableCell({ children: [new Paragraph({ text: fName })] }),
+                        new TableCell({ children: [new Paragraph({ text: rName, bold: true })] }),
+                        new TableCell({ children: [new Paragraph({ text: p.titulo, bold: true }), new Paragraph({ text: p.desc })] }),
+                        new TableCell({ children: [new Paragraph({ text: "📥 IN: " + p.entradas }), new Paragraph({ text: "📤 OUT: " + p.salidas })] }),
+                        new TableCell({ children: [new Paragraph({ text: p.alterno })] })
+                    ]
+                }));
+            });
+
+            // Definición de Estructura de Documento Completo según Plantilla Oficial
+            const doc = new Document({
+                sections: [{
+                    properties: {},
+                    children: [
+                        new Paragraph({ text: "MANUAL DE PROCESOS INSTITUCIONAL", heading: HeadingLevel.HEADING_1 }),
+                        new Paragraph({ text: `Proceso: ${nombreProc}`, heading: HeadingLevel.HEADING_2 }),
+                        new Paragraph({ text: "" }),
+                        new Paragraph({ text: "2. MARCO CONTEXTUAL Y DE CONTROL", heading: HeadingLevel.HEADING_2 }),
+                        new Paragraph({ text: "2.1 Propósito u objetivo", heading: HeadingLevel.HEADING_3 }),
+                        new Paragraph({ text: objProc }),
+                        new Paragraph({ text: "" }),
+                        new Paragraph({ text: "2.2 Alcance", heading: HeadingLevel.HEADING_3 }),
+                        new Paragraph({ text: alcProc }),
+                        new Paragraph({ text: "" }),
+                        new Paragraph({ text: "6. DESCRIPCIÓN NARRATIVA POR FASES Y PASOS", heading: HeadingLevel.HEADING_2 }),
+                        new Paragraph({ text: "" }),
+                        new Table({
+                            width: { size: 100, type: WidthType.PERCENTAGE },
+                            rows: filasTabla
+                        })
+                    ]
+                }]
+            });
+
+            // Generación y descarga directa
+            Packer.toBlob(doc).then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Manual_Proceso_${nombreProc.replace(/\s+/g, '_')}.docx`;
+                a.click();
+            });
+        }
+
+        // Inicializar Interfaz al Cargar
+        renderizar();
+    </script>
+</body>
+</html>

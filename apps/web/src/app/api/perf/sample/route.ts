@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
     }
 
     const user = await getCurrentUser();
-    const orgId = cookies().get(HIS_COOKIES.ORG_COOKIE)?.value ?? null;
+    const orgId = (await cookies()).get(HIS_COOKIES.ORG_COOKIE)?.value ?? null;
 
     // Casts ::uuid explícitos: Postgres no infiere el tipo de los placeholders
     // de $executeRawUnsafe, y "userId"/"organizationId" son uuid columns.

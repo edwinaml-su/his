@@ -63,10 +63,11 @@ function isValidKpiId(value: string): value is KpiId {
 }
 
 interface KpiPageProps {
-  params: { kpi: string };
+  params: Promise<{ kpi: string }>;
 }
 
-export default function KpiDetailPage({ params }: KpiPageProps) {
+export default async function KpiDetailPage(props: KpiPageProps) {
+  const params = await props.params;
   const { kpi } = params;
 
   if (!isValidKpiId(kpi)) {

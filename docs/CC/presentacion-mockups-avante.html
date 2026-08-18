@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="es-SV">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HIS Avante · Últimas versiones de mockups (4 slides)</title>
+<style>
+  :root{
+    --navy:#0B3D5C; --navy-deep:#082E45; --slate:#0f172a; --slate-2:#1c2942;
+    --teal:#14b8a6; --teal-2:#00A8B5; --line:#22314c;
+    --ink:#e8eef6; --ink-muted:#93a3bb; --ink-faint:#64748b;
+    --chip:#13233d; --chip-bd:#263a5c;
+    --stage:#eef2f7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--slate); color:var(--ink);
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .deck{display:flex; flex-direction:column; height:100vh}
+
+  /* ── Top bar ─────────────────────────────────────────────── */
+  .topbar{
+    height:58px; flex-shrink:0; display:flex; align-items:center; gap:14px;
+    padding:0 18px; background:linear-gradient(180deg,#0f1c33,#0b1526);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex; align-items:center; gap:10px; min-width:0}
+  .logo{
+    width:32px; height:32px; border-radius:8px; flex-shrink:0;
+    background:var(--teal); display:grid; place-items:center;
+    color:#04211d; font-weight:800; font-size:15px;
+  }
+  .brand b{font-size:14px; font-weight:700; letter-spacing:.2px; white-space:nowrap}
+  .brand span{display:block; font-size:11px; color:var(--ink-muted); white-space:nowrap}
+  .spacer{flex:1}
+  .counter{font-size:12px; color:var(--ink-muted); font-variant-numeric:tabular-nums}
+  .navbtn{
+    width:34px; height:34px; border-radius:8px; border:1px solid var(--chip-bd);
+    background:var(--chip); color:var(--ink); font-size:16px; cursor:pointer;
+    display:grid; place-items:center; transition:.15s;
+  }
+  .navbtn:hover{background:#1b2f4f; border-color:#39527d}
+  .navbtn:active{transform:translateY(1px)}
+  .zoom{
+    height:34px; border-radius:8px; border:1px solid var(--chip-bd);
+    background:var(--chip); color:var(--ink); font-size:12px; cursor:pointer;
+    padding:0 12px; transition:.15s;
+  }
+  .zoom:hover{background:#1b2f4f}
+
+  /* ── Stage / slides ─────────────────────────────────────── */
+  .stage{position:relative; flex:1; overflow:hidden}
+  .slide{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    padding:18px 22px 14px; opacity:0; visibility:hidden;
+    transform:translateY(8px); transition:opacity .28s ease, transform .28s ease;
+  }
+  .slide.active{opacity:1; visibility:visible; transform:none}
+
+  .slide-head{display:flex; align-items:flex-start; gap:16px; margin-bottom:12px}
+  .idx{
+    width:44px; height:44px; flex-shrink:0; border-radius:11px;
+    background:linear-gradient(150deg,var(--teal),#0d9488);
+    color:#04211d; font-weight:800; font-size:20px; display:grid; place-items:center;
+    box-shadow:0 6px 18px -6px rgba(20,184,166,.6);
+  }
+  .head-txt{min-width:0; flex:1}
+  .title-row{display:flex; align-items:center; gap:10px; flex-wrap:wrap}
+  .slide-title{font-size:20px; font-weight:800; letter-spacing:-.2px; color:#fff}
+  .chip{
+    font-size:11px; font-weight:600; padding:3px 9px; border-radius:999px;
+    background:var(--chip); border:1px solid var(--chip-bd); color:var(--ink-muted);
+    white-space:nowrap;
+  }
+  .chip.ver{background:#0d2b26; border-color:#1c5049; color:#5eead4}
+  .slide-desc{margin-top:5px; font-size:13px; line-height:1.5; color:var(--ink-muted); max-width:1100px}
+  .open{
+    flex-shrink:0; align-self:center; text-decoration:none;
+    font-size:12.5px; font-weight:600; color:#04211d; background:var(--teal);
+    padding:9px 14px; border-radius:9px; white-space:nowrap; transition:.15s;
+    display:inline-flex; align-items:center; gap:7px;
+  }
+  .open:hover{background:#2dd4bf}
+
+  /* ── Browser frame + iframe ─────────────────────────────── */
+  .browser{
+    flex:1; min-height:0; border-radius:12px; overflow:hidden;
+    border:1px solid #2a3a57; background:#fff;
+    box-shadow:0 24px 60px -24px rgba(0,0,0,.65);
+    display:flex; flex-direction:column;
+  }
+  .chrome{
+    height:34px; flex-shrink:0; display:flex; align-items:center; gap:8px;
+    padding:0 12px; background:#e8edf3; border-bottom:1px solid #d5deea;
+  }
+  .dots{display:flex; gap:6px}
+  .dots i{width:11px; height:11px; border-radius:50%; display:block}
+  .dots i:nth-child(1){background:#ff5f57}
+  .dots i:nth-child(2){background:#febc2e}
+  .dots i:nth-child(3){background:#28c840}
+  .url{
+    flex:1; height:21px; border-radius:6px; background:#fff; border:1px solid #d5deea;
+    display:flex; align-items:center; padding:0 10px; gap:7px;
+    font-size:11.5px; color:#5b6b7b; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+  }
+  .url b{color:#15212e; font-weight:600}
+  .screen{position:relative; flex:1; min-height:0; overflow:hidden; background:#f4f7fa}
+  .screen iframe{position:absolute; top:0; left:0; border:0; background:#fff}
+
+  /* ── Bottom dots nav ────────────────────────────────────── */
+  .footer{
+    height:46px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+    gap:9px; background:#0b1526; border-top:1px solid var(--line);
+  }
+  .pager{display:flex; gap:9px; align-items:center}
+  .pg{
+    height:8px; width:8px; border-radius:999px; border:0; cursor:pointer;
+    background:#33415c; transition:.2s; padding:0;
+  }
+  .pg.on{width:26px; background:var(--teal)}
+  .hint{position:absolute; left:18px; font-size:11px; color:var(--ink-faint)}
+</style>
+</head>
+<body>
+<div class="deck">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div>
+        <b>HIS Avante · Últimas versiones de mockups</b>
+        <span>Prototipos HTML del Expediente Clínico Electrónico — Inversiones Avante</span>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <button class="zoom" id="zoomBtn" title="Alternar entre vista ajustada y tamaño real">Vista: Ajustada</button>
+    <button class="navbtn" id="prev" title="Anterior (←)">‹</button>
+    <span class="counter"><b id="cur">1</b> / 4</span>
+    <button class="navbtn" id="next" title="Siguiente (→)">›</button>
+  </div>
+
+  <!-- Slides -->
+  <div class="stage" id="stage">
+
+    <!-- 1 · Historia Clínica -->
+    <section class="slide active" data-src="0007/historia-clinica-avante4.html" data-file="0007/historia-clinica-avante4.html">
+      <div class="slide-head">
+        <div class="idx">1</div>
+        <div class="head-txt">
+          <div class="title-row">
+            <div class="slide-title">Historia Clínica</div>
+            <span class="chip">REQ-ECE-HC-001</span>
+            <span class="chip ver">v4 · última</span>
+          </div>
+          <div class="slide-desc">Historia clínica electrónica del modelo Avante: captura de texto por modales, diagnósticos <b>CIE-11</b> en grid, procedimientos CPT, banners inamovibles de alergias y nombre de pila (LGBTIQ+), signos vitales y examen físico por aparatos.</div>
+        </div>
+        <a class="open" href="0007/historia-clinica-avante4.html" target="_blank" rel="noopener">Abrir a pantalla completa ↗</a>
+      </div>
+      <div class="browser">
+        <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>/ece/historia-clinica/nueva</b> · historia-clinica-avante4.html</div></div>
+        <div class="screen"></div>
+      </div>
+    </section>
+
+    <!-- 2 · Evolución Médica -->
+    <section class="slide" data-src="0006/evolucion-medica-avante5.html" data-file="0006/evolucion-medica-avante5.html">
+      <div class="slide-head">
+        <div class="idx">2</div>
+        <div class="head-txt">
+          <div class="title-row">
+            <div class="slide-title">Evolución Médica (SOAP)</div>
+            <span class="chip">REQ-ECE-EVO-001</span>
+            <span class="chip ver">v5 · última</span>
+          </div>
+          <div class="slide-desc">Evolución médica SOAP dirigida por modales: agrupación de problemas bajo un <b>“problema sindrómico”</b>, signos vitales en sección propia sobre Objetivo con alertas críticas, Plan ítem a ítem, todos los campos obligatorios para firmar e inmutabilidad post-firma.</div>
+        </div>
+        <a class="open" href="0006/evolucion-medica-avante5.html" target="_blank" rel="noopener">Abrir a pantalla completa ↗</a>
+      </div>
+      <div class="browser">
+        <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>/ece/evolucion-medica</b> · evolucion-medica-avante5.html</div></div>
+        <div class="screen"></div>
+      </div>
+    </section>
+
+    <!-- 3 · Pre-Registro -->
+    <section class="slide" data-src="0008/preregistro.html" data-file="0008/preregistro.html">
+      <div class="slide-head">
+        <div class="idx">3</div>
+        <div class="head-txt">
+          <div class="title-row">
+            <div class="slide-title">Pre-Registro de Paciente</div>
+            <span class="chip">REQ-ECE-PRE-001</span>
+            <span class="chip ver">única</span>
+          </div>
+          <div class="slide-desc">Pre-registro / admisión de paciente: identificación por <b>tipo y número de documento</b> (DUI / NIT / NIE), datos de filiación y contacto, campos requeridos marcados y resaltado visual de los datos ya capturados.</div>
+        </div>
+        <a class="open" href="0008/preregistro.html" target="_blank" rel="noopener">Abrir a pantalla completa ↗</a>
+      </div>
+      <div class="browser">
+        <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>/ece/pre-registro</b> · preregistro.html</div></div>
+        <div class="screen"></div>
+      </div>
+    </section>
+
+    <!-- 4 · Calculadoras Clínicas -->
+    <section class="slide" data-src="0009/calculadoras-clinicas.html" data-file="0009/calculadoras-clinicas.html">
+      <div class="slide-head">
+        <div class="idx">4</div>
+        <div class="head-txt">
+          <div class="title-row">
+            <div class="slide-title">Calculadoras Clínicas</div>
+            <span class="chip">REQ-ECE-CALC-001</span>
+            <span class="chip ver">única</span>
+          </div>
+          <div class="slide-desc">Widget flotante de calculadoras clínicas dentro del ECE (incluye <b>PREVENT</b>): entradas, resultados y niveles de riesgo (normal / advertencia / crítico) sobre el expediente del paciente.</div>
+        </div>
+        <a class="open" href="0009/calculadoras-clinicas.html" target="_blank" rel="noopener">Abrir a pantalla completa ↗</a>
+      </div>
+      <div class="browser">
+        <div class="chrome"><div class="dots"><i></i><i></i><i></i></div><div class="url"><b>/ece/calculadoras</b> · calculadoras-clinicas.html</div></div>
+        <div class="screen"></div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Footer pager -->
+  <div class="footer">
+    <span class="hint">Usa ← → o clic en los puntos · “Abrir a pantalla completa” para interactuar sin límites</span>
+    <div class="pager" id="pager"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var n = slides.length, i = 0;
+  var LOGICAL = 1440;      // ancho lógico de escritorio
+  var fitMode = true;      // true = ajustada (scale), false = tamaño real
+  var loaded = [];
+
+  // Crear paginación
+  var pager = document.getElementById('pager');
+  slides.forEach(function(s, k){
+    var b = document.createElement('button');
+    b.className = 'pg' + (k===0?' on':'');
+    b.addEventListener('click', function(){ go(k); });
+    pager.appendChild(b);
+  });
+  var pgs = Array.prototype.slice.call(pager.children);
+
+  // Cargar el iframe de un slide (perezoso)
+  function ensureFrame(k){
+    if(loaded[k]) return;
+    var s = slides[k];
+    var screen = s.querySelector('.screen');
+    var f = document.createElement('iframe');
+    f.setAttribute('title', s.querySelector('.slide-title').textContent);
+    f.setAttribute('loading', 'lazy');
+    f.src = s.getAttribute('data-src');
+    screen.appendChild(f);
+    loaded[k] = f;
+    f.addEventListener('load', function(){ sizeFrame(k); });
+    sizeFrame(k);
+  }
+
+  // Dimensionar/escala del iframe según modo
+  function sizeFrame(k){
+    var f = loaded[k]; if(!f) return;
+    var screen = slides[k].querySelector('.screen');
+    var W = screen.clientWidth, H = screen.clientHeight;
+    if(!W || !H) return;
+    if(fitMode){
+      var scale = W / LOGICAL;
+      f.style.width = LOGICAL + 'px';
+      f.style.height = (H / scale) + 'px';
+      f.style.transform = 'scale(' + scale + ')';
+      f.style.transformOrigin = 'top left';
+    } else {
+      f.style.transform = 'none';
+      f.style.width = '100%';
+      f.style.height = '100%';
+    }
+  }
+
+  function go(k){
+    if(k<0) k=n-1; if(k>=n) k=0;
+    slides[i].classList.remove('active');
+    pgs[i].classList.remove('on');
+    i = k;
+    slides[i].classList.add('active');
+    pgs[i].classList.add('on');
+    document.getElementById('cur').textContent = (i+1);
+    ensureFrame(i);
+    // precargar el siguiente para transiciones fluidas
+    ensureFrame((i+1)%n);
+    requestAnimationFrame(function(){ sizeFrame(i); });
+  }
+
+  document.getElementById('next').addEventListener('click', function(){ go(i+1); });
+  document.getElementById('prev').addEventListener('click', function(){ go(i-1); });
+  document.getElementById('zoomBtn').addEventListener('click', function(){
+    fitMode = !fitMode;
+    this.textContent = 'Vista: ' + (fitMode ? 'Ajustada' : 'Tamaño real');
+    loaded.forEach(function(_, k){ sizeFrame(k); });
+  });
+
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'ArrowRight' || e.key === 'PageDown'){ go(i+1); }
+    else if(e.key === 'ArrowLeft' || e.key === 'PageUp'){ go(i-1); }
+  });
+
+  window.addEventListener('resize', function(){
+    loaded.forEach(function(_, k){ sizeFrame(k); });
+  });
+
+  // init
+  ensureFrame(0);
+  ensureFrame(1);
+})();
+</script>
+</body>
+</html>

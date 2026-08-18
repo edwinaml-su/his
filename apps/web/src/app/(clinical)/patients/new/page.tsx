@@ -200,19 +200,22 @@ export default function PreRegistroPage() {
   React.useEffect(() => {
     if (!created) return;
     setOrientacionEn(ORIENTACION_DELAY_S);
+    // El updater debe ser PURO: React puede re-ejecutarlo (y en StrictMode lo
+    // hace dos veces). Antes el `router.push` vivía aquí dentro y funcionaba
+    // por casualidad en React 18; con React 19 dejó de dispararse de forma
+    // fiable y el paciente se quedaba atrapado en el panel de éxito. La
+    // navegación pasa al efecto de abajo, que reacciona al estado.
     const iv = setInterval(() => {
-      setOrientacionEn((s) => {
-        if (s <= 1) {
-          clearInterval(iv);
-          router.push("/orientacion");
-          return 0;
-        }
-        return s - 1;
-      });
+      setOrientacionEn((s) => (s <= 1 ? 0 : s - 1));
     }, 1000);
     return () => clearInterval(iv);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [created]);
+
+  React.useEffect(() => {
+    if (!created || orientacionEn !== 0) return;
+    router.push("/orientacion");
+  }, [created, orientacionEn, router]);
 
   const [form, setForm] = React.useState({
     traeDocumento: true,

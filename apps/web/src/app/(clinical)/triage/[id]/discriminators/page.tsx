@@ -1,7 +1,7 @@
 import { DiscriminatorList } from "./discriminator-list";
 
 interface PageProps {
-  params: { id: string };
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -15,7 +15,8 @@ interface PageProps {
  *  - El triagista puede confirmar el nivel (override-able por Sierra desde
  *    triage.router → setAssignedLevel).
  */
-export default function DiscriminatorsPage({ params }: PageProps) {
+export default async function DiscriminatorsPage(props: PageProps) {
+  const params = await props.params;
   return (
     <div className="space-y-4">
       <div>

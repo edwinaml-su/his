@@ -1,0 +1,10 @@
+{
+  "pkg": "@his/ui",
+  "globalName": "HisUi",
+  "projectId": "aad211e6-87e3-4ddb-8d8f-742e39fa0dff",
+  "shape": "package",
+  "srcDir": "src",
+  "tsconfig": "packages/ui/tsconfig.json",
+  "buildCmd": "npx tailwindcss -c .design-sync/tailwind.build.ts -i packages/ui/src/styles/globals.css -o .design-sync/.cache/compiled.css",
+  "cssEntry": ".design-sync/.cache/compiled.css"
+}

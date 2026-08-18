@@ -68,7 +68,7 @@ export default function CalculadorasAdminPage() {
   const [pantallasModal, setPantallasModal] = React.useState<Row | null>(null);
   const [gestionId, setGestionId] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<{ msg: string; shown: boolean }>({ msg: "", shown: false });
-  const toastTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const utils = trpc.useUtils();
   const listQuery = trpc.calculadoras.list.useQuery({});

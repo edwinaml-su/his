@@ -28,7 +28,7 @@
     "@his/contracts": "*",
     "@node-rs/argon2": "^2.0.2",
     "expr-eval": "^2.0.2",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^9.0.5",
     "pino": "^9.5.0"
   },
   "devDependencies": {

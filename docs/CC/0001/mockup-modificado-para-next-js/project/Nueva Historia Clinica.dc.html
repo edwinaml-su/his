@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+  body{margin:0;background:#eef2f7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;-webkit-font-smoothing:antialiased;color:#1e293b}
+  *{box-sizing:border-box}
+  ::placeholder{color:#9aa7b8}
+</style>
+</helmet>
+
+<div style="max-width:1180px;margin:0 auto;padding:32px 24px 64px">
+
+  <!-- Page header -->
+  <div style="margin-bottom:24px">
+    <h1 style="font-size:22px;font-weight:700;color:#0f2742;margin:0 0 4px">Nueva Historia Clínica</h1>
+    <p style="font-size:13px;color:#5b7aa8;margin:0">Registra la Historia Clínica Electrónica del paciente — NTEC Art. 7.</p>
+  </div>
+
+  <!-- 1. Datos del episodio -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Datos del episodio</h2>
+
+    <div style="margin-bottom:18px">
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Episodio (ID)<span style="color:#dc2626;margin-left:3px">*</span></label>
+      <input value="{{ v.episodio }}" onChange="{{ on.episodio }}" placeholder="UUID del episodio de atención" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)" />
+      <p style="font-size:11.5px;color:#5b7aa8;margin:6px 0 0">UUID del episodio_atencion al que pertenece esta HC.</p>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Tipo de consulta<span style="color:#dc2626;margin-left:3px">*</span></label>
+      <select value="{{ v.tipoConsulta }}" onChange="{{ on.tipoConsulta }}" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)">
+        <option value="">Seleccione tipo de consulta</option>
+        <option value="PRIMERA_VEZ">Primera vez</option>
+        <option value="SUBSECUENTE">Subsecuente</option>
+        <option value="CONTROL">Control</option>
+        <option value="URGENCIA">Urgencia</option>
+        <option value="INTERCONSULTA">Interconsulta</option>
+      </select>
+    </div>
+
+    <div style="margin-bottom:18px">
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Motivo de consulta</label>
+      <textarea value="{{ v.motivo }}" onChange="{{ on.motivo }}" placeholder="Motivo principal de la consulta" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:72px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+    </div>
+
+    <div>
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Enfermedad actual</label>
+      <textarea value="{{ v.enfermedad }}" onChange="{{ on.enfermedad }}" placeholder="Descripción cronológica de la enfermedad actual..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:92px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+    </div>
+  </section>
+
+  <!-- 2. Antecedentes -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 6px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Antecedentes</h2>
+
+    <!-- Patológicos -->
+    <div style="margin-top:16px;border:1px solid #e6ebf2;border-radius:9px;background:#fff;overflow:hidden">
+      <div onClick="{{ togglePat }}" style="display:flex;align-items:center;gap:8px;padding:13px 16px;cursor:pointer;background:#eef3fa;user-select:none">
+        <sc-if value="{{ showPat }}" hint-placeholder-val="{{ true }}"><span style="color:#2563eb;font-size:11px">▾</span></sc-if>
+        <sc-if value="{{ patClosed }}" hint-placeholder-val="{{ false }}"><span style="color:#2563eb;font-size:11px">▸</span></sc-if>
+        <span style="font-size:13.5px;font-weight:700;color:#1e3a5f">Antecedentes Patológicos</span>
+        <span style="font-size:11.5px;color:#7c91ad;font-weight:500">· Alergias · Personales · Familiares</span>
+      </div>
+      <sc-if value="{{ showPat }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px;padding:18px 16px">
+          <div>
+            <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Alergias</label>
+            <textarea value="{{ v.alergias }}" onChange="{{ on.alergias }}" placeholder="Medicamentos, alimentos, látex..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:84px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Personales</label>
+            <textarea value="{{ v.personales }}" onChange="{{ on.personales }}" placeholder="Enfermedades previas, cirugías..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:84px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+          </div>
+          <div>
+            <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Familiares</label>
+            <textarea value="{{ v.familiares }}" onChange="{{ on.familiares }}" placeholder="Diabetes, HTA, cáncer familiar..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:84px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <!-- No Patológicos -->
+    <div style="margin-top:14px;border:1px solid #e6ebf2;border-radius:9px;background:#fff;overflow:hidden">
+      <div onClick="{{ toggleNoPat }}" style="display:flex;align-items:center;gap:8px;padding:13px 16px;cursor:pointer;background:#eef3fa;user-select:none">
+        <sc-if value="{{ showNoPat }}" hint-placeholder-val="{{ true }}"><span style="color:#2563eb;font-size:11px">▾</span></sc-if>
+        <sc-if value="{{ noPatClosed }}" hint-placeholder-val="{{ false }}"><span style="color:#2563eb;font-size:11px">▸</span></sc-if>
+        <span style="font-size:13.5px;font-weight:700;color:#1e3a5f">Antecedentes No Patológicos</span>
+        <span style="font-size:11.5px;color:#7c91ad;font-weight:500">· Ocupación · Hábitos Personales · Obstétricos</span>
+      </div>
+      <sc-if value="{{ showNoPat }}" hint-placeholder-val="{{ true }}">
+        <div style="padding:18px 16px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Ocupación</label>
+              <input value="{{ v.ocupacion }}" onChange="{{ on.ocupacion }}" placeholder="Ocupación / actividad laboral" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)" />
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Hábitos Personales</label>
+              <textarea value="{{ v.habitos }}" onChange="{{ on.habitos }}" placeholder="Tabaquismo, alcohol, actividad física..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:64px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+            </div>
+          </div>
+
+          <div>
+            <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Obstétricos</label>
+            <textarea value="{{ v.obstetricos }}" onChange="{{ on.obstetricos }}" placeholder="Gestas, partos, abortos, cesáreas..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:64px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+
+            <!-- FPP block -->
+            <div style="margin-top:14px;background:#f3f8ff;border:1px solid #d9e6f7;border-radius:8px;padding:14px 16px">
+              <label style="display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none">
+                <input type="checkbox" checked="{{ calcularFpp }}" onChange="{{ toggleFpp }}" style="width:16px;height:16px;accent-color:#2563eb;cursor:pointer" />
+                <span style="font-size:13px;font-weight:600;color:#1e3a5f">¿Desea calcular fecha probable de parto?</span>
+              </label>
+              <sc-if value="{{ calcularFpp }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:14px">
+                  <div>
+                    <label style="display:block;font-size:11.5px;font-weight:700;color:#274060;margin-bottom:6px">FUM (Fecha de Última Menstruación)</label>
+                    <input type="date" value="{{ v.fum }}" onChange="{{ onFum }}" style="width:100%;padding:9px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13px;color:#1e293b;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)" />
+                  </div>
+                  <div>
+                    <label style="display:block;font-size:11.5px;font-weight:700;color:#274060;margin-bottom:6px">FPP (Fecha Probable de Parto)</label>
+                    <input value="{{ fppTxt }}" readonly="{{ true }}" placeholder="—" style="width:100%;padding:9px 12px;border:1px solid #e1e8f0;border-radius:7px;font-size:13px;color:#0f2742;background:#eef3fa;outline:none;font-family:inherit;font-weight:600" />
+                  </div>
+                  <div>
+                    <label style="display:block;font-size:11.5px;font-weight:700;color:#274060;margin-bottom:6px">Edad gestacional</label>
+                    <input value="{{ egTxt }}" readonly="{{ true }}" placeholder="—" style="width:100%;padding:9px 12px;border:1px solid #e1e8f0;border-radius:7px;font-size:13px;color:#0f2742;background:#eef3fa;outline:none;font-family:inherit;font-weight:600" />
+                  </div>
+                </div>
+                <p style="font-size:11px;color:#5b7aa8;margin:10px 0 0">Regla de Naegele (FUM + 280 días). FUM válida entre hoy − 300 días y hoy.</p>
+                <sc-if value="{{ fumError }}" hint-placeholder-val="{{ false }}">
+                  <p style="font-size:11.5px;color:#dc2626;margin:6px 0 0;font-weight:600">⚠ FUM fuera de rango: debe estar entre hoy − 300 días y hoy.</p>
+                </sc-if>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </section>
+
+  <!-- 3. Signos vitales -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 4px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">
+      <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0">Signos vitales</h2>
+      <button onClick="{{ toggleTomaForm }}" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#2563eb;color:#fff;border:none;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" style-hover="background:#1d4ed8">
+        <span style="font-size:15px;line-height:1">+</span> Agregar toma
+      </button>
+    </div>
+    <p style="font-size:11.5px;color:#5b7aa8;margin:0 0 14px">Las tomas se acumulan por admisión (episodio). Orden descendente por fecha-hora.</p>
+
+    <!-- Toma form -->
+    <sc-if value="{{ showTomaForm }}" hint-placeholder-val="{{ false }}">
+      <div style="background:#fff;border:1px solid #d9e6f7;border-radius:9px;padding:18px;margin-bottom:16px">
+        <p style="font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 14px">Nueva toma de signos vitales</p>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">PA sistólica <span style="color:#7c91ad;font-weight:500">mmHg</span></label><input type="number" value="{{ vt.pas }}" onChange="{{ onT.pas }}" placeholder="120" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">PA diastólica <span style="color:#7c91ad;font-weight:500">mmHg</span></label><input type="number" value="{{ vt.pad }}" onChange="{{ onT.pad }}" placeholder="80" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Frec. cardíaca <span style="color:#7c91ad;font-weight:500">lpm</span></label><input type="number" value="{{ vt.fc }}" onChange="{{ onT.fc }}" placeholder="72" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Frec. respiratoria <span style="color:#7c91ad;font-weight:500">rpm</span></label><input type="number" value="{{ vt.fr }}" onChange="{{ onT.fr }}" placeholder="16" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Temperatura <span style="color:#7c91ad;font-weight:500">°C</span></label><input type="number" step="0.1" value="{{ vt.temp }}" onChange="{{ onT.temp }}" placeholder="36.5" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">SpO₂ <span style="color:#7c91ad;font-weight:500">%</span></label><input type="number" min="0" max="100" value="{{ vt.spo2 }}" onChange="{{ onT.spo2 }}" placeholder="98" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Peso <span style="color:#7c91ad;font-weight:500">kg</span></label><input type="number" step="0.01" value="{{ vt.peso }}" onChange="{{ onT.peso }}" placeholder="70.0" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Talla <span style="color:#7c91ad;font-weight:500">cm</span></label><input type="number" step="0.1" value="{{ vt.talla }}" onChange="{{ onT.talla }}" placeholder="170.0" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">IMC <span style="color:#7c91ad;font-weight:500">kg/m² · auto</span></label><input value="{{ tomaImc }}" readonly="{{ true }}" placeholder="—" style="width:100%;padding:8px 10px;border:1px solid #e1e8f0;border-radius:6px;font-size:13px;background:#eef3fa;color:#0f2742;font-weight:600;outline:none;font-family:inherit" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Dolor (EVA) <span style="color:#7c91ad;font-weight:500">0–10</span></label><input type="number" min="0" max="10" value="{{ vt.dolor }}" onChange="{{ onT.dolor }}" placeholder="0" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Glucemia <span style="color:#7c91ad;font-weight:500">mg/dL</span></label><input type="number" value="{{ vt.glucemia }}" onChange="{{ onT.glucemia }}" placeholder="90" style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+          <div style="grid-column:span 2"><label style="display:block;font-size:11px;font-weight:700;color:#274060;margin-bottom:5px">Observaciones</label><input value="{{ vt.obs }}" onChange="{{ onT.obs }}" placeholder="Notas de la toma..." style="width:100%;padding:8px 10px;border:1px solid #d4dde8;border-radius:6px;font-size:13px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb" /></div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+          <button onClick="{{ toggleTomaForm }}" style="padding:8px 16px;background:#fff;color:#475569;border:1px solid #d4dde8;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">Cancelar</button>
+          <button onClick="{{ saveToma }}" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit" style-hover="background:#1d4ed8">Guardar toma</button>
+        </div>
+      </div>
+    </sc-if>
+
+    <!-- Tomas table -->
+    <sc-if value="{{ hasTomas }}" hint-placeholder-val="{{ false }}">
+      <div style="overflow-x:auto;border:1px solid #e6ebf2;border-radius:8px;background:#fff">
+        <table style="width:100%;border-collapse:collapse;font-size:12px;white-space:nowrap">
+          <thead>
+            <tr style="background:#eef3fa;color:#1e3a5f;text-align:left">
+              <th style="padding:10px 12px;font-weight:700">Fecha-hora</th>
+              <th style="padding:10px 12px;font-weight:700">PA</th>
+              <th style="padding:10px 12px;font-weight:700">FC</th>
+              <th style="padding:10px 12px;font-weight:700">FR</th>
+              <th style="padding:10px 12px;font-weight:700">T °C</th>
+              <th style="padding:10px 12px;font-weight:700">SpO₂</th>
+              <th style="padding:10px 12px;font-weight:700">Peso</th>
+              <th style="padding:10px 12px;font-weight:700">Talla</th>
+              <th style="padding:10px 12px;font-weight:700">IMC</th>
+              <th style="padding:10px 12px;font-weight:700">Dolor</th>
+              <th style="padding:10px 12px;font-weight:700">Glucemia</th>
+              <th style="padding:10px 12px;font-weight:700">Registrado por</th>
+              <th style="padding:10px 12px;font-weight:700"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <sc-for list="{{ tomas }}" as="t" hint-placeholder-count="1">
+              <tr style="border-top:1px solid #eef2f7">
+                <td style="padding:10px 12px;color:#0f2742;font-weight:600">{{ t.fechaTxt }}</td>
+                <td style="padding:10px 12px">{{ t.paTxt }}</td>
+                <td style="padding:10px 12px">{{ t.fc }}</td>
+                <td style="padding:10px 12px">{{ t.fr }}</td>
+                <td style="padding:10px 12px">{{ t.temp }}</td>
+                <td style="padding:10px 12px">{{ t.spo2 }}</td>
+                <td style="padding:10px 12px">{{ t.peso }}</td>
+                <td style="padding:10px 12px">{{ t.talla }}</td>
+                <td style="padding:10px 12px;font-weight:700;color:#1d4ed8">{{ t.imcTxt }}</td>
+                <td style="padding:10px 12px">{{ t.dolor }}</td>
+                <td style="padding:10px 12px">{{ t.glucemia }}</td>
+                <td style="padding:10px 12px;color:#5b7aa8">{{ t.usuario }}</td>
+                <td style="padding:10px 12px"><button onClick="{{ t.onRemove }}" style="background:none;border:none;color:#dc2626;font-size:12px;cursor:pointer;font-weight:600;font-family:inherit">Eliminar</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </sc-if>
+    <sc-if value="{{ noTomas }}" hint-placeholder-val="{{ true }}">
+      <div style="border:1px dashed #d4dde8;border-radius:8px;padding:22px;text-align:center;color:#7c91ad;font-size:12.5px;background:#fbfcfe">Aún no hay tomas registradas en esta admisión.</div>
+    </sc-if>
+  </section>
+
+  <!-- 4. Examen físico -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Examen físico</h2>
+    <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Hallazgos por aparato</label>
+    <textarea value="{{ v.examen }}" onChange="{{ on.examen }}" placeholder="Cardiovascular, respiratorio, digestivo, neurológico..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:96px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+  </section>
+
+  <!-- 5. Diagnósticos CIE-11 -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Diagnósticos (CIE-11)</h2>
+
+    <div style="display:grid;grid-template-columns:160px 1fr 180px auto;gap:14px;align-items:end">
+      <div>
+        <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Código CIE-11</label>
+        <input value="{{ vdx.codigo }}" onChange="{{ onDx.codigo }}" placeholder="Ej. CA40.0" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)" />
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Descripción</label>
+        <input value="{{ vdx.descripcion }}" onChange="{{ onDx.descripcion }}" placeholder="Neumonía bacteriana, no especificada..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)" />
+      </div>
+      <div>
+        <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Tipo de diagnóstico</label>
+        <select value="{{ vdx.tipo }}" onChange="{{ onDx.tipo }}" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)">
+          <option value="PRESUNTIVO">Presuntivo</option>
+          <option value="DEFINITIVO">Definitivo</option>
+          <option value="COMPLEMENTARIO">Complementario</option>
+        </select>
+      </div>
+      <button onClick="{{ addDx }}" style="padding:10px 18px;background:#2563eb;color:#fff;border:none;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;height:38px" style-hover="background:#1d4ed8">Agregar</button>
+    </div>
+    <p style="font-size:11.5px;color:#5b7aa8;margin:10px 0 0">Búsqueda/validación contra catálogo CIE-11 (OMS, linealización MMS). Mínimo un diagnóstico; al menos uno de tipo Complementario.</p>
+
+    <!-- Diagnósticos list -->
+    <sc-if value="{{ hasDx }}" hint-placeholder-val="{{ false }}">
+      <div style="margin-top:16px;border:1px solid #e6ebf2;border-radius:8px;background:#fff;overflow:hidden">
+        <sc-for list="{{ diagnosticos }}" as="d" hint-placeholder-count="1">
+          <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid #eef2f7">
+            <span style="font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:700;color:#1d4ed8;min-width:78px">{{ d.codigo }}</span>
+            <span style="flex:1;font-size:13px;color:#1e293b">{{ d.descripcion }}</span>
+            <span style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:99px;background:{{ d.badgeBg }};color:{{ d.badgeColor }}">{{ d.tipoLabel }}</span>
+            <button onClick="{{ d.onRemove }}" style="background:none;border:none;color:#dc2626;font-size:12px;cursor:pointer;font-weight:600;font-family:inherit">Eliminar</button>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ dxFalta }}" hint-placeholder-val="{{ false }}">
+      <p style="font-size:12px;color:#b45309;background:#fef3e2;border:1px solid #fadca8;border-radius:7px;padding:9px 12px;margin:12px 0 0;font-weight:600">⚠ {{ dxFaltaMsg }}</p>
+    </sc-if>
+  </section>
+
+  <!-- 6. Análisis clínico -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Análisis clínico</h2>
+    <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Razonamiento / correlación clínica</label>
+    <textarea value="{{ v.analisis }}" onChange="{{ on.analisis }}" placeholder="Correlación de hallazgos, impresión diagnóstica, razonamiento clínico..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:96px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+  </section>
+
+  <!-- 7. Plan -->
+  <section style="background:#f7f9fc;border:1px solid #e6ebf2;border-radius:10px;padding:24px 28px;margin-bottom:20px">
+    <h2 style="font-size:16px;font-weight:700;color:#1e293b;margin:0 0 18px;padding-bottom:12px;border-bottom:1px solid #e6ebf2">Plan</h2>
+    <div style="margin-bottom:18px">
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Plan de manejo</label>
+      <textarea value="{{ v.plan }}" onChange="{{ on.plan }}" placeholder="Medicamentos, procedimientos, indicaciones, seguimiento..." style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;color:#1e293b;background:#fff;outline:none;font-family:inherit;resize:vertical;min-height:92px;line-height:1.5" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)"></textarea>
+    </div>
+    <div>
+      <label style="display:block;font-size:12px;font-weight:700;color:#274060;margin-bottom:6px">Destino</label>
+      <select value="{{ v.destino }}" onChange="{{ on.destino }}" style="width:100%;padding:10px 12px;border:1px solid #d4dde8;border-radius:7px;font-size:13.5px;background:#fff;outline:none;font-family:inherit" style-focus="border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)">
+        <option value="">Seleccione destino</option>
+        <option value="INGRESO">Ingreso</option>
+        <option value="ALTA_MEDICA">Alta médica</option>
+        <option value="ALTA_VOLUNTARIA">Alta voluntaria</option>
+        <option value="SEGUIMIENTO">Seguimiento</option>
+        <option value="OBSERVACION">Observación</option>
+        <option value="PROCEDIMIENTO_AMBULATORIO">Procedimiento ambulatorio</option>
+        <option value="REFERENCIA">Referencia</option>
+        <option value="REMISION">Remisión</option>
+      </select>
+    </div>
+  </section>
+
+  <!-- Footer actions -->
+  <div style="display:flex;justify-content:flex-end;gap:12px">
+    <button style="padding:11px 22px;background:#fff;color:#475569;border:1px solid #d4dde8;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Cancelar</button>
+    <button style="padding:11px 22px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit" style-hover="background:#15803d">Guardar Historia Clínica</button>
+  </div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    episodio:'', tipoConsulta:'', motivo:'', enfermedad:'',
+    showPat:true, showNoPat:true,
+    alergias:'', personales:'', familiares:'',
+    ocupacion:'', habitos:'', obstetricos:'',
+    calcularFpp:false, fum:'',
+    tomas:[], showTomaForm:false,
+    tomaPas:'', tomaPad:'', tomaFc:'', tomaFr:'', tomaTemp:'', tomaSpo2:'',
+    tomaPeso:'', tomaTalla:'', tomaDolor:'', tomaGlucemia:'', tomaObs:'',
+    examen:'',
+    diagnosticos:[], dxCodigo:'', dxDescripcion:'', dxTipo:'PRESUNTIVO',
+    analisis:'', plan:'', destino:''
+  };
+
+  set = (k) => (e) => this.setState({ [k]: e.target.value });
+
+  pad2(n){ return String(n).padStart(2,'0'); }
+  fmtDate(d){ return this.pad2(d.getDate())+'/'+this.pad2(d.getMonth()+1)+'/'+d.getFullYear(); }
+  fmtDateTime(d){ return this.fmtDate(d)+' '+this.pad2(d.getHours())+':'+this.pad2(d.getMinutes()); }
+
+  computeImc(peso, talla){
+    const p = parseFloat(peso), t = parseFloat(talla);
+    if(p>0 && t>0){ return (p/Math.pow(t/100,2)).toFixed(1); }
+    return '';
+  }
+
+  renderVals(){
+    const s = this.state;
+    const v = {
+      episodio:s.episodio, tipoConsulta:s.tipoConsulta, motivo:s.motivo, enfermedad:s.enfermedad,
+      alergias:s.alergias, personales:s.personales, familiares:s.familiares,
+      ocupacion:s.ocupacion, habitos:s.habitos, obstetricos:s.obstetricos,
+      fum:s.fum, examen:s.examen, analisis:s.analisis, plan:s.plan, destino:s.destino
+    };
+    const on = {
+      episodio:this.set('episodio'), tipoConsulta:this.set('tipoConsulta'), motivo:this.set('motivo'),
+      enfermedad:this.set('enfermedad'), alergias:this.set('alergias'), personales:this.set('personales'),
+      familiares:this.set('familiares'), ocupacion:this.set('ocupacion'), habitos:this.set('habitos'),
+      obstetricos:this.set('obstetricos'), examen:this.set('examen'), analisis:this.set('analisis'),
+      plan:this.set('plan'), destino:this.set('destino')
+    };
+
+    // FPP / Naegele
+    let fppTxt='', egTxt='', fumError=false;
+    if(s.calcularFpp && s.fum){
+      const fum = new Date(s.fum+'T00:00:00');
+      const today = new Date(); today.setHours(0,0,0,0);
+      const diffDays = Math.floor((today - fum)/86400000);
+      if(diffDays < 0 || diffDays > 300){ fumError=true; }
+      else {
+        const fpp = new Date(fum.getTime() + 280*86400000);
+        fppTxt = this.fmtDate(fpp);
+        const w = Math.floor(diffDays/7), r = diffDays%7;
+        egTxt = w+' sem '+r+' d';
+      }
+    }
+
+    // Vitals — sorted desc, with display + remove handler
+    const tomas = [...s.tomas].sort((a,b)=>b.fecha - a.fecha).map(t => ({
+      ...t,
+      fechaTxt: this.fmtDateTime(t.fecha),
+      paTxt: (t.pas||'—')+'/'+(t.pad||'—'),
+      imcTxt: t.imc || '—',
+      temp: t.temp||'—', spo2: t.spo2||'—', fc: t.fc||'—', fr: t.fr||'—',
+      peso: t.peso||'—', talla: t.talla||'—', dolor: t.dolor||'—', glucemia: t.glucemia||'—',
+      onRemove: () => this.setState(st => ({ tomas: st.tomas.filter(x => x.id !== t.id) }))
+    }));
+
+    // Diagnoses
+    const tipoMeta = {
+      PRESUNTIVO:{label:'Presuntivo', bg:'#eef3fa', color:'#1e3a8a'},
+      DEFINITIVO:{label:'Definitivo', bg:'#e7f6ed', color:'#15803d'},
+      COMPLEMENTARIO:{label:'Complementario', bg:'#f3eafc', color:'#7c3aed'}
+    };
+    const diagnosticos = s.diagnosticos.map(d => {
+      const m = tipoMeta[d.tipo] || tipoMeta.PRESUNTIVO;
+      return { ...d, tipoLabel:m.label, badgeBg:m.bg, badgeColor:m.color,
+        onRemove: () => this.setState(st => ({ diagnosticos: st.diagnosticos.filter(x => x.id !== d.id) })) };
+    });
+    const hasComplementario = s.diagnosticos.some(d => d.tipo === 'COMPLEMENTARIO');
+    let dxFalta=false, dxFaltaMsg='';
+    if(s.diagnosticos.length === 0){ dxFalta=true; dxFaltaMsg='Debe registrar al menos un diagnóstico.'; }
+    else if(!hasComplementario){ dxFalta=true; dxFaltaMsg='Falta un diagnóstico de tipo Complementario (obligatorio).'; }
+
+    return {
+      v, on,
+      showPat:s.showPat, patClosed:!s.showPat, togglePat:()=>this.setState(st=>({showPat:!st.showPat})),
+      showNoPat:s.showNoPat, noPatClosed:!s.showNoPat, toggleNoPat:()=>this.setState(st=>({showNoPat:!st.showNoPat})),
+
+      calcularFpp:s.calcularFpp,
+      toggleFpp:()=>this.setState(st=>st.calcularFpp ? {calcularFpp:false, fum:''} : {calcularFpp:true}),
+      onFum:this.set('fum'), fppTxt, egTxt, fumError,
+
+      showTomaForm:s.showTomaForm,
+      toggleTomaForm:()=>this.setState(st=>({showTomaForm:!st.showTomaForm})),
+      vt:{ pas:s.tomaPas, pad:s.tomaPad, fc:s.tomaFc, fr:s.tomaFr, temp:s.tomaTemp, spo2:s.tomaSpo2,
+           peso:s.tomaPeso, talla:s.tomaTalla, dolor:s.tomaDolor, glucemia:s.tomaGlucemia, obs:s.tomaObs },
+      onT:{ pas:this.set('tomaPas'), pad:this.set('tomaPad'), fc:this.set('tomaFc'), fr:this.set('tomaFr'),
+            temp:this.set('tomaTemp'), spo2:this.set('tomaSpo2'), peso:this.set('tomaPeso'),
+            talla:this.set('tomaTalla'), dolor:this.set('tomaDolor'), glucemia:this.set('tomaGlucemia'), obs:this.set('tomaObs') },
+      tomaImc: this.computeImc(s.tomaPeso, s.tomaTalla) || '',
+      saveToma: () => {
+        const imc = this.computeImc(s.tomaPeso, s.tomaTalla);
+        const toma = { id:Date.now(), fecha:new Date(), usuario:'Dr. Registrante',
+          pas:s.tomaPas, pad:s.tomaPad, fc:s.tomaFc, fr:s.tomaFr, temp:s.tomaTemp, spo2:s.tomaSpo2,
+          peso:s.tomaPeso, talla:s.tomaTalla, imc, dolor:s.tomaDolor, glucemia:s.tomaGlucemia, obs:s.tomaObs };
+        this.setState(st => ({ tomas:[toma, ...st.tomas], showTomaForm:false,
+          tomaPas:'', tomaPad:'', tomaFc:'', tomaFr:'', tomaTemp:'', tomaSpo2:'',
+          tomaPeso:'', tomaTalla:'', tomaDolor:'', tomaGlucemia:'', tomaObs:'' }));
+      },
+      tomas, hasTomas:tomas.length>0, noTomas:tomas.length===0,
+
+      vdx:{ codigo:s.dxCodigo, descripcion:s.dxDescripcion, tipo:s.dxTipo },
+      onDx:{ codigo:this.set('dxCodigo'), descripcion:this.set('dxDescripcion'), tipo:this.set('dxTipo') },
+      addDx: () => {
+        const c=s.dxCodigo.trim(), d=s.dxDescripcion.trim();
+        if(!c || !d) return;
+        const dx={ id:Date.now(), codigo:c, descripcion:d, tipo:s.dxTipo };
+        this.setState(st => ({ diagnosticos:[...st.diagnosticos, dx], dxCodigo:'', dxDescripcion:'', dxTipo:'PRESUNTIVO' }));
+      },
+      diagnosticos, hasDx:diagnosticos.length>0, dxFalta, dxFaltaMsg
+    };
+  }
+}
+</script>
+</body>
+</html>

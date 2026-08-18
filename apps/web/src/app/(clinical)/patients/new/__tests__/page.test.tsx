@@ -15,7 +15,7 @@
  */
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 const mockPush = vi.fn();
@@ -220,11 +220,26 @@ describe("PreRegistroPage", () => {
     });
 
     it("al agotarse la cuenta regresiva navega automáticamente a /orientacion", async () => {
-      vi.useFakeTimers();
+      // `shouldAdvanceTime` deja correr el reloj real en paralelo: sin esto, en
+      // React 19 el scheduler interno (que se apoya en `setTimeout`) queda
+      // congelado y el panel de éxito nunca llega a montarse.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
+        // React 19 es estricto con las actualizaciones de estado fuera de `act`:
+        // `capturedOnSuccess` (dentro de renderYCrear) monta el panel de éxito y,
+        // sin `act`, ese update no se vacía con timers falsos — el efecto del
+        // countdown nunca llegaba a montarse. El comportamiento de producción no
+        // cambió: el test hermano, que hace click en el botón, sigue pasando.
+        // Sin envolver en `act`: igual que los tests hermanos. Envolver el
+        // render en act hace que React 19 difiera el montaje, y entonces el
+        // `capturedOnSuccess?.()` que va justo después queda `undefined` — la
+        // llamada opcional no hace nada y el panel nunca aparece.
         renderYCrear();
-        // El panel se pinta en el siguiente tick de React; avanza los 6s del countdown.
-        await vi.advanceTimersByTimeAsync(6100);
+        // El panel debe estar montado ANTES de avanzar la cuenta regresiva.
+        await screen.findByText(/Abriendo la orientación táctil en/);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(6100);
+        });
         expect(mockPush).toHaveBeenCalledWith("/orientacion");
       } finally {
         vi.useRealTimers();

@@ -146,7 +146,7 @@ export async function activateBreakGlass(
     console.error("[break-glass] error encolando notificación al jefe de servicio:", err);
   }
 
-  cookies().set(BREAK_GLASS_COOKIE_NAME, JSON.stringify(payload), {
+  (await cookies()).set(BREAK_GLASS_COOKIE_NAME, JSON.stringify(payload), {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -172,8 +172,8 @@ export async function activateBreakGlass(
  * sesión de emergencia.
  */
 export async function clearBreakGlass(): Promise<{ ok: true }> {
-  const raw = cookies().get(BREAK_GLASS_COOKIE_NAME)?.value;
-  cookies().delete(BREAK_GLASS_COOKIE_NAME);
+  const raw = (await cookies()).get(BREAK_GLASS_COOKIE_NAME)?.value;
+  (await cookies()).delete(BREAK_GLASS_COOKIE_NAME);
 
   if (raw) {
     try {

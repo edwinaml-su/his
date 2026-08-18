@@ -69,6 +69,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+      # Tras la migración manual 14→16 (feat/next16-migration, 2026-08):
+      # el ignore global de majors (arriba) ya bloquea el próximo salto mayor
+      # (16→17, 19→20) — eso NO cambia. Lo que sí se relaja: una vez estable
+      # en la nueva baseline, los minor de next/react/react-dom (ej. 16.3→16.4)
+      # se agrupan igual que dev-tools en vez de generar PRs individuales.
       next-ecosystem:
         patterns:
           - "next"
@@ -76,6 +81,7 @@ updates:
           - "react-dom"
           - "@next*"
         update-types:
+          - "minor"
           - "patch"
 
   # GitHub Actions — mantener actions actualizadas con SHA pinning

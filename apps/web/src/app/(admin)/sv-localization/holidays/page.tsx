@@ -20,11 +20,12 @@ import { formatDateSV } from "@/lib/i18n/sv";
 
 export const dynamic = "force-dynamic";
 
-export default async function SvHolidaysPage({
-  searchParams,
-}: {
-  searchParams?: { year?: string };
-}) {
+export default async function SvHolidaysPage(
+  props: {
+    searchParams?: Promise<{ year?: string }>;
+  }
+) {
+  const searchParams = await props.searchParams;
   const yearParam = Number(searchParams?.year);
   const year = Number.isFinite(yearParam) && yearParam > 2000 ? yearParam : 2026;
 

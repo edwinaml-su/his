@@ -18,7 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  # Alineado con engines.node ("24.x") en package.json raíz — requerido por
+  # Next 16 (Node >=20.9) y por consistencia con Vercel/Dockerfile/K8s.
+  NODE_VERSION: '24'
   TURBO_TELEMETRY_DISABLED: 1
 
 jobs:

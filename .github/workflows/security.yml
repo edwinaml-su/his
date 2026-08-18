@@ -25,14 +25,53 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install (no audit during install)
         run: npm ci --no-audit
 
+      # OWASP A03:2025 — "prioritize signed packages to prevent malicious
+      # modifications". Verifica firmas/attestations del registry contra el
+      # lockfile: detecta un tarball alterado aunque la versión coincida.
+      #
+      # Va ANTES del audit de severidad alta a propósito: ese gate está en rojo
+      # deliberadamente por Next 14 (ver docs/audit/2026-08-17_owasp_2025_remediacion.md
+      # §3 A03) y así seguirá hasta el sprint de migración a Next 15.5.x. Si este
+      # paso quedara después, un job que ya falla por el audit nunca llegaría a
+      # ejecutar la verificación de firmas — quedaría cableada pero inerte.
+      - name: Verify registry signatures
+        run: npm audit signatures
+
       - name: Audit production deps (high severity)
         run: npm audit --omit=dev --audit-level=high
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci --no-audit --ignore-scripts
+
+      # OWASP A03:2025 — inventario centralizado de dependencias directas y
+      # transitivas. Sin SBOM no hay forma de responder "¿nos afecta esta CVE?"
+      # sin reinstalar el árbol completo.
+      - name: Generate SBOM
+        run: npx --yes @cyclonedx/cyclonedx-npm@latest --output-file sbom.cdx.json --output-format JSON
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 90
 
   gitleaks:
     name: Gitleaks (secret scan)

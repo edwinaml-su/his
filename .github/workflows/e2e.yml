@@ -15,7 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  # Alineado con engines.node ("24.x") en package.json raíz — ver ci.yml.
+  NODE_VERSION: '24'
 
 jobs:
   e2e:
