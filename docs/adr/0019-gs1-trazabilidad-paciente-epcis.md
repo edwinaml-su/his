@@ -1,19 +1,29 @@
 # ADR 0019 — GS1: Trazabilidad EPCIS del Movimiento Físico del Paciente
 
-- **Estado:** Propuesto
-- **Fecha:** 2026-08-18
-- **Decisores:** @AS (proponente), @DBA, @Dev, @AE (dictamen normativo paralelo), @QA
+- **Estado:** Aceptado (revisado post-dictamen @AE)
+- **Fecha:** 2026-08-18 (revisión sobre versión inicial del mismo día)
+- **Decisores:** @AS (proponente), @DBA, @Dev, @AE (dictamen normativo — condiciones incorporadas), @QA, @Orq (resolución del conflicto D5)
 - **Fase:** Fase 3+ — extensión GS1 sobre Fase 2 cerrada (F2-S6/S7)
 - **Dependencias:**
-  - ADR 0017 — GS1 EPCIS Event Sourcing (decisión base: tabla dedicada, inmutable, misma transacción)
+  - ADR 0017 — GS1 EPCIS Event Sourcing (decisión base para farmacia; **no aplicable sin más** al stream de paciente, ver D5)
   - ADR 0012 — Estrategia RLS ECE (`withTenantContext`)
   - CLAUDE.md §"Motor de workflow ECE" — JCI IPSG.1 wristband GSRN
-  - `packages/database/sql/94_farmacovigilancia_epcis.sql` — tabla `ece.gs1_epcis_event`
+  - `packages/database/sql/94_farmacovigilancia_epcis.sql` — tabla `ece.gs1_epcis_event` (farmacia — ya no target de este ADR, ver D5)
   - `packages/database/sql/111_ipsg1_wristband_trigger.sql` — GSRN obligatorio antes de IND_MED
   - `packages/database/sql/168_gs1_gln_jerarquia.sql` — jerarquía GLN
-  - `packages/database/sql/173_epcis_logistica_subtipos.sql` — patrón de extensión de subtipos
+  - `packages/database/sql/173_epcis_logistica_subtipos.sql` — patrón de extensión de subtipos (usado como referencia de estilo, no de destino)
   - `packages/trpc/src/lib/epcis-builder.ts` — constructores de eventos existentes
-  - **Dictamen normativo @AE (paralelo, pendiente)** — retención, base legal LPDP, DPIA. Este ADR deja placeholders explícitos donde ese dictamen es la autoridad.
+  - **`docs/audit/2026-08-18_dictamen_ae_epcis_trazabilidad_paciente.md`** (commit `c8adfa6`) — dictamen de cumplimiento @AE, entrada de gate no negociable. Este ADR fue revisado para satisfacer sus 11 restricciones (§4 de ese documento); ver sección "Cumplimiento" al final.
+
+**Nota de revisión:** la versión inicial de este ADR (misma fecha) proponía reutilizar
+`ece.gs1_epcis_event` (D5 original) para el stream de paciente. El dictamen de @AE, producido en
+paralelo, estableció como condición no negociable que el stream de ubicación de paciente **no**
+puede heredar el trigger de inmutabilidad `BEFORE UPDATE OR DELETE` de ADR 0017 (incompatible con
+ARCO/supresión bajo la LPDP). Como ese trigger es a nivel de tabla y no se puede exceptuar por
+subtipo sin debilitarlo para farmacia, @Orq resolvió el conflicto ordenando tabla separada. D5 fue
+reescrita en consecuencia; D6-D8 se ajustaron donde correspondía. D1-D4 (GSRN como EPC, alcance
+admisión→traslado→alta, ObjectEvent, bizStep/disposition) no cambiaron — fueron aprobadas sin
+observaciones.
 
 ---
 
@@ -62,18 +72,26 @@ tipo de duplicado que este ADR debe evitar repetir, pero **su corrección queda 
 (no es una decisión de arquitectura, es un fix de una línea de router). Se reporta como hallazgo
 independiente al cierre de esta tarea.
 
-**Ninguna de las tres tablas es apta para trazabilidad de paciente sin modificación**, pero
-`ece.gs1_epcis_event` es la única con la estructura completa EPCIS (WHAT/WHERE/WHEN/WHY/WHO,
-`tipo_evento` con los 5 tipos EPCIS 2.0, hash de inmutabilidad, RLS activo) — es la que se
-extiende en este ADR.
+**Para cuando @Orq empaquete el fix junto con la implementación de este ADR** (instrucción
+explícita, no se corrige aquí): el fix correcto es repuntar las 4 queries de `epcis-query.router.ts`
+de `ece.epcis_event` → `ece.epcis_event_equipment` (mismo shape de columnas, es el reemplazo
+directo). **No** extender ese mismo router para cubrir el stream de paciente de este ADR — ver D5
+para la razón (tabla y control de acceso distintos).
+
+**Ninguna de las tres tablas es apta para trazabilidad de paciente sin modificación** — y, como
+establece el dictamen @AE §1 (Application Architecture) y §3.5, **tampoco es correcto extender
+`ece.gs1_epcis_event`** aunque sea la única con el shape EPCIS completo: mezclaría, bajo el mismo
+trigger de inmutabilidad, un stream de producto (base de licitud RTCA, sin necesidad de erasure) con
+un stream de personas (LPDP, con derecho de supresión). Ver D5 para la tabla nueva.
 
 ---
 
 ## Decisión
 
-**Reutilizar `ece.gs1_epcis_event` emitiendo `ObjectEvent` con el GSRN del paciente como EPC en
-`what.epcList`, en tres puntos del ciclo de encuentro (admisión, traslado, alta), con 4 subtipos
-nuevos y builders dedicados en `epcis-builder.ts`.**
+**Tabla nueva `ece.gs1_epcis_patient_event` (no `ece.gs1_epcis_event`), emitiendo `ObjectEvent` con
+el GSRN del paciente como EPC en `what.epcList`, en tres puntos del ciclo de encuentro (admisión,
+traslado, alta), con builders dedicados en `epcis-builder.ts`. Sin trigger de inmutabilidad ni
+cadena hash — purgable/anonimizable bajo un proceso administrativo controlado (dictamen @AE §3.5).**
 
 ### D1. GSRN como EPC en `what`, no solo en `who`
 
@@ -195,56 +213,190 @@ Los 4 usan **ObjectEvent** (no AggregationEvent/TransactionEvent/TransformationE
   correcto — pero es un caso de uso distinto (equipo↔paciente, no paciente↔ubicación) y queda
   fuera de este ADR.
 
-### D5. Tabla: `ece.gs1_epcis_event` (extender, no crear)
+### D5. Tabla: `ece.gs1_epcis_patient_event` (nueva, separada de farmacia) — REVISADA por dictamen @AE
 
-Se reutiliza `ece.gs1_epcis_event` por las razones ya cubiertas en ADR 0017 (inmutabilidad,
-RLS, índices GIN, patrón de extensión de subtipo ya probado en SQL 173) y porque es la única de
-las tres tablas EPCIS existentes con el shape completo. No se crea tabla nueva.
+**Esta decisión cambió respecto a la versión inicial del ADR.** El razonamiento original
+("reutilizar antes que crear", ADR 0017 ya resolvió cómo persistir eventos EPCIS inmutables) sigue
+siendo válido *como principio general* — pero el dictamen @AE (§1 Data/Application Architecture,
+§3.5) identificó una incompatibilidad de cumplimiento que ese principio no puede resolver por sí
+solo: `ece.gs1_epcis_event` tiene un trigger `BEFORE UPDATE OR DELETE ... RAISE EXCEPTION`
+(`ece.fn_gs1_epcis_event_immutable`, SQL 94) que existe **correctamente** para farmacia — cadena de
+custodia de medicamentos, recall regulatorio, base de licitud RTCA que no contempla erasure — pero
+que convertiría el rastro de ubicación de una persona identificable en algo que **ni siquiera una
+orden de la Agencia de Ciberseguridad del Estado (autoridad LPDP) podría hacer cumplir**: no hay
+forma de purgar o anonimizar una fila protegida por ese trigger sin alterar la función del trigger
+mismo, lo cual debilitaría la garantía para farmacia. Un `CASE WHEN subtipo NOT LIKE 'PATIENT_%'`
+dentro del trigger fue considerado y descartado — condicionar la inmutabilidad de una tabla
+regulatoria por el valor de una columna es frágil (un subtipo mal escrito en un INSERT futuro
+degradaría silenciosamente la garantía de farmacia) y no es lo que @AE pidió: la condición es
+"tabla propia", no "excepción dentro de la tabla existente" (dictamen §4, restricción 2).
 
-**DDL — nuevo archivo `packages/database/sql/199_epcis_patient_movement.sql`** (idempotente,
-seguir el patrón exacto de `173_epcis_logistica_subtipos.sql`):
+**Decisión:** tabla nueva `ece.gs1_epcis_patient_event`. Mismo shape de 5 dimensiones
+(`what`/`where_data`/`why`/`who`, `event_time`/`record_time`, `establecimiento_id`) que
+`ece.gs1_epcis_event` — la estructura EPCIS de ADR 0017 sigue siendo correcta y se reutiliza — pero
+**sin** el trigger de inmutabilidad y **sin** encadenamiento con `audit.audit_log`. Se agrega
+`status` con un tercer valor (`SUPPRESSED`, además de `COMMITTED`/`VOIDED`) para representar el
+resultado de una solicitud ARCO de supresión aprobada.
+
+`payload_hash` se conserva — pero con un propósito distinto y así se documenta explícitamente:
+**detección de corrupción de una fila individual, no cadena de inmutabilidad.** No hay
+`prev_hash`/`chain_hash` (eso es exclusivo de `audit.audit_log`, SQL 05, y nunca aplicó aquí ni en
+`ece.gs1_epcis_event`); conservar el hash de contenido no crea ningún compromiso de inmutabilidad
+y no impide `UPDATE`/purga.
+
+**DDL — nuevo archivo `packages/database/sql/199_epcis_patient_movement.sql`** (idempotente;
+reutiliza el shape de columnas de `94_farmacovigilancia_epcis.sql` pero **sin** el bloque de
+trigger de inmutabilidad de ese archivo):
 
 ```sql
 -- =====================================================================
 -- 199_epcis_patient_movement.sql
 -- EPCIS de movimiento de paciente — admisión, traslado, alta.
 --
--- Amplía los subtipos de ece.gs1_epcis_event para cubrir el ciclo de
--- encuentro clínico donde el paciente (GSRN) es el EPC del evento, no
--- solo un actor en who. Ver ADR 0019.
+-- Tabla SEPARADA de ece.gs1_epcis_event (farmacia) por mandato del
+-- dictamen @AE (docs/audit/2026-08-18_dictamen_ae_epcis_trazabilidad_paciente.md,
+-- §3.5, restricción 2): el stream de ubicación de un paciente identificable
+-- no puede heredar el trigger de inmutabilidad hash de ADR 0017 — debe ser
+-- purgable/anonimizable ante una solicitud ARCO de supresión (SolicitudArco,
+-- portal-arco.router.ts). Los registros fuente (Encounter, EncounterTransfer,
+-- BedAssignment) NO se tocan — siguen protegidos por retención NTEC Art. 6.
+-- Esta tabla es una PROYECCIÓN DERIVADA de esos registros, no la fuente legal.
+--
+-- Ver ADR 0019 (revisión post-dictamen) para el razonamiento completo.
 --
 -- Idempotente. Aplicar vía mcp__supabase__apply_migration en transacción.
 -- =====================================================================
 
-ALTER TABLE ece.gs1_epcis_event DROP CONSTRAINT IF EXISTS gs1_epcis_event_subtipo_check;
-ALTER TABLE ece.gs1_epcis_event
-  ADD CONSTRAINT gs1_epcis_event_subtipo_check
-  CHECK (subtipo IN (
-    -- Procesos D/E (farmacia + bedside)
-    'BEDSIDE_ADMIN', 'PHARMACY_DISPENSE', 'RESERVATION', 'SUBSTITUTION', 'RETURN',
-    -- Procesos logísticos A/B/C (Nivel 3 GS1 El Salvador)
-    'RECEPTION', 'QUARANTINE', 'STORAGE', 'FRACTIONATION',
-    -- Movimiento de paciente (ADR 0019)
-    'PATIENT_ADMISSION', 'PATIENT_TRANSFER_DEPARTURE',
-    'PATIENT_TRANSFER_ARRIVAL', 'PATIENT_DISCHARGE'
-  ));
+CREATE TABLE IF NOT EXISTS ece.gs1_epcis_patient_event (
+  id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  -- Todos los subtipos de este stream son ObjectEvent (ver D3/D4) — el CHECK
+  -- no necesita la lista de 5 tipos EPCIS completa que sí requiere farmacia.
+  tipo_evento        text        NOT NULL DEFAULT 'ObjectEvent'
+                       CHECK (tipo_evento = 'ObjectEvent'),
+  subtipo            text        NOT NULL
+                       CHECK (subtipo IN (
+                         'PATIENT_ADMISSION', 'PATIENT_TRANSFER_DEPARTURE',
+                         'PATIENT_TRANSFER_ARRIVAL', 'PATIENT_DISCHARGE'
+                       )),
+  -- WHAT: EPC del paciente (GSRN). Ver D5 "forma exacta de los jsonb".
+  what               jsonb       NOT NULL,
+  -- WHERE: readPoint/bizLocation GLN (nullable, ver D8) + internalRef.
+  where_data         jsonb       NOT NULL,
+  event_time         timestamptz NOT NULL,
+  record_time        timestamptz NOT NULL DEFAULT now(),
+  -- WHY: businessStep + disposition + referencias a Encounter/EncounterTransfer (solo IDs).
+  why                jsonb       NOT NULL,
+  -- WHO: identificadores opacos únicamente (GSRN paciente, userId que registró). Cero PHI.
+  who                jsonb       NOT NULL,
+  -- Hash de integridad de una fila — NO cadena. Ver nota arriba.
+  payload_hash       char(64)    NOT NULL,
+  establecimiento_id uuid        NOT NULL REFERENCES ece.establecimiento(id) ON DELETE RESTRICT,
+  -- COMMITTED (normal) | VOIDED (corrección operativa) | SUPPRESSED (ARCO aprobada — anonimizado).
+  status             text        NOT NULL DEFAULT 'COMMITTED'
+                       CHECK (status IN ('COMMITTED', 'VOIDED', 'SUPPRESSED')),
+  -- Trazabilidad de la propia supresión (cuándo/por qué solicitud ARCO, si aplica).
+  suppressed_at      timestamptz,
+  suppressed_by_arco_request_id uuid,
+  creado_en          timestamptz NOT NULL DEFAULT now()
+);
 
-COMMENT ON COLUMN ece.gs1_epcis_event.subtipo IS
-  'Subtipo operacional. Farmacia/bedside: BEDSIDE_ADMIN|PHARMACY_DISPENSE|RESERVATION|'
-  'SUBSTITUTION|RETURN. Logística: RECEPTION|QUARANTINE|STORAGE|FRACTIONATION. '
-  'Paciente: PATIENT_ADMISSION|PATIENT_TRANSFER_DEPARTURE|PATIENT_TRANSFER_ARRIVAL|'
-  'PATIENT_DISCHARGE.';
+CREATE INDEX IF NOT EXISTS idx_gs1_epcis_patient_event_what
+  ON ece.gs1_epcis_patient_event USING GIN (what);
+CREATE INDEX IF NOT EXISTS idx_gs1_epcis_patient_event_establecimiento
+  ON ece.gs1_epcis_patient_event (establecimiento_id);
+CREATE INDEX IF NOT EXISTS idx_gs1_epcis_patient_event_event_time
+  ON ece.gs1_epcis_patient_event (event_time DESC);
+CREATE INDEX IF NOT EXISTS idx_gs1_epcis_patient_event_subtipo
+  ON ece.gs1_epcis_patient_event (subtipo);
+-- Índice funcional para el patrón de consulta "cadena de custodia de un paciente" por GSRN.
+CREATE INDEX IF NOT EXISTS idx_gs1_epcis_patient_event_epc
+  ON ece.gs1_epcis_patient_event ((what->'epcList'));
 
--- Índice para trazabilidad "cadena de custodia de un paciente" — filtrar
--- eventos PATIENT_* por GSRN dentro de what.epcList (GIN ya existe sobre what,
--- pero se agrega un índice funcional para el patrón de consulta más frecuente).
-CREATE INDEX IF NOT EXISTS idx_gs1_epcis_event_patient_epc
-  ON ece.gs1_epcis_event ((what->'epcList'))
-  WHERE subtipo IN (
-    'PATIENT_ADMISSION', 'PATIENT_TRANSFER_DEPARTURE',
-    'PATIENT_TRANSFER_ARRIVAL', 'PATIENT_DISCHARGE'
-  );
+COMMENT ON TABLE ece.gs1_epcis_patient_event IS
+  'Proyección derivada, purgable/anonimizable, de eventos ObjectEvent de movimiento de paciente '
+  '(admisión/traslado/alta). NO es fuente de verdad legal (esa es Encounter/EncounterTransfer/'
+  'BedAssignment) y NO tiene trigger de inmutabilidad — a diferencia de ece.gs1_epcis_event '
+  '(farmacia). Ver ADR 0019 y dictamen @AE 2026-08-18.';
+
+-- ---------------------------------------------------------------------------
+-- RLS — mismo patrón tenant-scoped que ece.gs1_epcis_event (SQL 94), pero
+-- SIN grant de UPDATE/DELETE a `authenticated`: la única vía de mutación de
+-- una fila ya insertada es la función SECURITY DEFINER de anonimización/
+-- corrección de abajo, invocada desde un flujo administrativo controlado
+-- (portal-arco.router.ts al resolver una SUPRESION APROBADA), nunca desde
+-- un router de escritura de uso general. Esto evita crear un segundo camino
+-- de escritura paralelo al ya aceptado para ARCO (dictamen §3.5 punto 3).
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE ece.gs1_epcis_patient_event ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS gs1_epcis_patient_event_select ON ece.gs1_epcis_patient_event;
+CREATE POLICY gs1_epcis_patient_event_select ON ece.gs1_epcis_patient_event
+  FOR SELECT
+  TO authenticated
+  USING (establecimiento_id = ece.current_establecimiento_id_safe());
+
+DROP POLICY IF EXISTS gs1_epcis_patient_event_insert ON ece.gs1_epcis_patient_event;
+CREATE POLICY gs1_epcis_patient_event_insert ON ece.gs1_epcis_patient_event
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (establecimiento_id = ece.current_establecimiento_id_safe());
+
+-- Sin policy de UPDATE/DELETE para `authenticated` — ver comentario arriba.
+GRANT SELECT, INSERT ON ece.gs1_epcis_patient_event TO authenticated;
+GRANT ALL ON ece.gs1_epcis_patient_event TO service_role;
+
+-- ---------------------------------------------------------------------------
+-- Anonimización ARCO — única vía de mutación post-insert. SECURITY DEFINER
+-- con search_path fijo (patrón obligatorio del proyecto, CLAUDE.md §Patrones
+-- de seguridad establecidos). Sustituye el GSRN por un token no reversible
+-- dentro de what/who y marca status=SUPPRESSED. No borra la fila (se
+-- conserva el conteo/estructura del evento para auditoría de que "algo
+-- ocurrió aquí", solo se despersonaliza) — ruta equivalente al "bloqueo"
+-- que los marcos tipo RGPD usan para datos con retención legal del registro
+-- fuente pero sin obligación de retener la proyección derivada.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION ece.fn_gs1_epcis_patient_event_anonymize(
+  p_gsrn_paciente text,
+  p_arco_request_id uuid
+)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ece, public, pg_catalog
+AS $$
+DECLARE
+  v_count integer;
+BEGIN
+  UPDATE ece.gs1_epcis_patient_event
+     SET what = jsonb_set(jsonb_set(what, '{gsrn}', 'null'::jsonb), '{epcList}', '[]'::jsonb),
+         who  = jsonb_set(who, '{sourceList}', '[]'::jsonb),
+         status = 'SUPPRESSED',
+         suppressed_at = now(),
+         suppressed_by_arco_request_id = p_arco_request_id
+   WHERE what->>'gsrn' = p_gsrn_paciente
+     AND status <> 'SUPPRESSED';
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+ALTER FUNCTION ece.fn_gs1_epcis_patient_event_anonymize(text, uuid) OWNER TO postgres;
+
+COMMENT ON FUNCTION ece.fn_gs1_epcis_patient_event_anonymize IS
+  'Ejecuta la porción "capa EPCIS derivada" de una SUPRESION ARCO aprobada '
+  '(SolicitudArco, portal-arco.router.ts). Anonimiza, no borra. No toca '
+  'Encounter/EncounterTransfer/BedAssignment (retención NTEC Art. 6 intacta). '
+  'Ver dictamen @AE 2026-08-18 §3.5 punto 5 y ADR 0019.';
 ```
+
+**Nota de integración pendiente para @Dev (fuera de este ADR, pero requerida por el dictamen §4
+restricción 11):** `portal-arco.router.ts`, al resolver una `SUPRESION` como `APROBADA`, debe
+invocar `SELECT ece.fn_gs1_epcis_patient_event_anonymize($gsrn, $solicitudId)` como parte del mismo
+flujo de ejecución manual que ya describe el comentario de línea 161 de ese archivo
+(*"la ejecución real es manual vía flujo US.F2.7.8/US.F2.7.10"*). Este ADR fija la función; cablearla
+en el flujo ARCO es implementación.
 
 **Forma exacta de los jsonb** (contrato para el builder, ver D6):
 
@@ -291,10 +443,18 @@ para pulsera) y IDs internos (`Encounter.id`, `EncounterTransfer.id`) que requie
 adicional autorizada para resolver a un paciente. Esto es consistente con el pedido explícito
 del encargo.
 
-### D6. Firmas nuevas en `packages/trpc/src/lib/epcis-builder.ts`
+### D6. Firmas nuevas en `packages/trpc/src/lib/epcis-builder.ts` — REVISADA (tipo de salida propio)
 
-Se añade un input type y un builder, siguiendo exactamente el patrón de `buildLogisticsEvent`
-(tabla de bizStep/disposition por subtipo + una función):
+Se añade un input type y un builder, siguiendo el patrón de `buildLogisticsEvent` (tabla de
+bizStep/disposition por subtipo + una función) — **con un ajuste respecto a la versión inicial**:
+el builder ya **no** devuelve `EpcisEventRow` ni extiende `EpcisSubtipo`. Esa unión (`BedsideEventType
+| LogisticsSubtipo`) describe filas destinadas a `ece.gs1_epcis_event` (farmacia); mezclar
+`PatientMovementSubtipo` ahí sería type-level una mentira ahora que van a una tabla distinta con su
+propio CHECK — exactamente la clase de deriva que ya se encontró en este mismo archivo (el
+docstring de cabecera dice "listo para INSERT en `ece.gs1_epcis_event`", el comentario de
+`EpcisEventRow` dice "listo para INSERT en `ece.epcis_event`" — dos nombres de tabla distintos para
+el mismo tipo, ninguno señalando la tabla real `ece.gs1_epcis_event`). Se define un tipo de salida
+independiente para no repetir ese patrón:
 
 ```ts
 export type PatientMovementSubtipo =
@@ -303,8 +463,19 @@ export type PatientMovementSubtipo =
   | "PATIENT_TRANSFER_ARRIVAL"
   | "PATIENT_DISCHARGE";
 
-// Extender la unión existente:
-// export type EpcisSubtipo = BedsideEventType | LogisticsSubtipo | PatientMovementSubtipo;
+/** Shape de salida — listo para INSERT en ece.gs1_epcis_patient_event (NO ece.gs1_epcis_event). */
+export interface EpcisPatientEventRow {
+  tipo_evento: "ObjectEvent";
+  subtipo: PatientMovementSubtipo;
+  what: object;
+  where_data: object;
+  event_time: Date;
+  why: object;
+  who: object;
+  payload_hash: string;
+  establecimiento_id: string;
+  status: "COMMITTED";
+}
 
 export interface EpcisPatientMovementInput {
   type: PatientMovementSubtipo;
@@ -343,7 +514,7 @@ const PATIENT_MOVEMENT_STEP: Record<
 
 export function buildPatientMovementEvent(
   input: EpcisPatientMovementInput,
-): EpcisEventRow {
+): EpcisPatientEventRow {
   const gsrnUrn = buildGsrnUrn(input.gsrnPaciente, input.companyPrefixLength);
 
   const what = {
@@ -389,15 +560,21 @@ export function buildPatientMovementEvent(
     why,
     who,
     payload_hash: computeHash(fullPayload),
-    indication_id: null,
     establecimiento_id: input.establecimientoId,
+    status: "COMMITTED",
   };
 }
 ```
 
-Nota de tipos: `EpcisEventRow.subtipo` está tipado `EpcisSubtipo` — hay que extender esa unión
-(`BedsideEventType | LogisticsSubtipo | PatientMovementSubtipo`) en el mismo archivo. Sin este
-cambio el compilador rechaza el `subtipo: input.type` de arriba.
+Nota de tipos: al no reutilizar `EpcisEventRow`/`EpcisSubtipo`, no hace falta tocar los tipos de
+`buildBedsideEvent`/`buildDispensationEvent`/`buildLogisticsEvent` existentes — `buildPatientMovementEvent`
+es aditivo y aislado. `computeHash`/`glnUrn` sí se reutilizan (son funciones puras sin acoplamiento
+a un tipo de fila).
+
+**Router de INSERT — nota para @Dev:** el resultado de `buildPatientMovementEvent` se inserta con
+`INSERT INTO ece.gs1_epcis_patient_event (...)`, **no** `ece.gs1_epcis_event`. La columna
+`indication_id` de la tabla de farmacia no existe en la tabla nueva — no debe copiarse por
+costumbre del patrón de `bedside.router.ts`.
 
 ### D7. Puntos de integración exactos y transaccionalidad
 
@@ -441,6 +618,27 @@ por eso. Se registra el evento EPCIS igual, pero con `what.epcList: []` y `what.
 se dejan las columnas de auditoría (`AuditLog`, outbox) como único rastro. Esta es una decisión
 de compromiso: prioriza no bloquear la operación clínica por un gap del programa de pulseras.
 Documentado como riesgo aceptado, no oculto.
+
+**Sin cambios por la revisión de tabla (D5):** el razonamiento de bloqueante/no-bloqueante de esta
+sección es sobre disponibilidad del GSRN, no sobre qué tabla recibe el INSERT — se mantiene igual,
+solo cambia el destino (`ece.gs1_epcis_patient_event` en vez de `ece.gs1_epcis_event`). Una
+consecuencia favorable de D5 que sí vale anotar: al no tener trigger de inmutabilidad, una
+corrección operativa (ej. traslado registrado con la cama equivocada) ya no necesita el patrón
+"evento void que referencia al original" que ADR 0017 exige para farmacia — puede corregirse con
+un `UPDATE status='VOIDED'` directo. Por consistencia con la restricción de acceso de D5 (ninguna
+mutación post-insert vía `authenticated`), esa corrección debe pasar por una función `SECURITY
+DEFINER` equivalente a `fn_gs1_epcis_patient_event_anonymize` (mismo mecanismo, motivo distinto) —
+no se especifica su firma aquí porque no fue pedida por el encargo; se deja como nota de diseño
+para @Dev si surge la necesidad operativa.
+
+**Pendiente de implementación fuera de este ADR (dictamen §4, restricción 9):** consultar el
+recorrido histórico completo de un paciente por GSRN (todos sus eventos `PATIENT_*`) es una
+operación de sensibilidad equivalente a exportar el expediente — el router de consulta que @Dev
+construya sobre esta tabla debe registrar un `AuditLog` propio (`action: "READ"`,
+`entity: "PatientLocationTrace"`, patrón ya usado en `encounter-discharge.router.ts` línea 137 para
+`entity: "Encounter.epicrisis"`) cada vez que se ejecute, distinguible de una consulta operativa de
+"ubicación actual" (menor sensibilidad, no reconstruye patrón histórico). No se diseña el router
+completo aquí — se fija el requisito.
 
 ### D8. Resolución de GLN de servicio/cama — gap real, sin datos de precedente
 
@@ -512,32 +710,74 @@ WHERE parcial) — no se sacrifica todo el trazado por falta de un catálogo que
 **Se marca como prerequisito operacional para conformidad GS1 completa**, no como bloqueante de
 esta implementación.
 
+**Cumple restricción 8 del dictamen @AE por construcción, sin cambio adicional:** `internalRef`
+lleva únicamente `bedId`/`serviceUnitId`/`establishmentId` (UUIDs opacos) — nunca el nombre de la
+unidad. El nombre human-readable ("Unidad de Aislamiento TB", "Psiquiatría") se resuelve en la
+capa de presentación (UI), para la misma audiencia con RBAC sobre el episodio — nunca se persiste
+enriquecido dentro del jsonb. Esto ya estaba así en la versión inicial de este ADR; se confirma
+explícitamente aquí porque es exactamente el tipo de condición que el dictamen pidió declarar
+satisfecha, no asumida.
+
 ---
 
-## Consideraciones de privacidad (puntos de control que este diseño requiere — no resuelve)
+## Consideraciones de privacidad — resueltas por el dictamen @AE, ya no placeholders
 
-Este ADR es de diseño técnico; la base legal, retención y DPIA son responsabilidad del dictamen
-paralelo de @AE bajo la Ley de Protección de Datos Personales de El Salvador. Puntos de control
-que el diseño **deja explícitos** para que ese dictamen los fije:
+La versión inicial de este ADR dejaba estos puntos como preguntas abiertas para el dictamen
+paralelo. El dictamen (commit `c8adfa6`) ya los resolvió; se transcriben aquí como decisiones
+fijas, no como sugerencias:
 
-1. **RLS:** no requiere policy nueva — se hereda `gs1_epcis_event_select`/`_insert`
-   (tenant-scoped por `establecimiento_id`, SQL 94). Suficiente para aislamiento entre
-   organizaciones, **no** para restringir *quién dentro de la organización* puede reconstruir el
-   recorrido físico de un paciente específico — eso requiere autorización a nivel de aplicación
-   (ver punto 3).
-2. **Retención:** `ece.gs1_epcis_event` no tiene política de retención/purga definida hoy (es
-   inmutable indefinidamente, igual que el resto de eventos EPCIS). Trazar ubicación+tiempo de
-   una persona identificable puede requerir una retención **distinta** (probablemente más corta)
-   que la de trazabilidad de producto — **placeholder explícito**: este ADR no fija un número de
-   días/años; lo fija el dictamen de @AE.
-3. **Quién consulta:** se recomienda que el router de consulta nuevo (`gs1PatientTrace.router.ts`
-   o similar, no construido en este ADR) use `requireRole` con un set de roles **más restrictivo**
-   que el `["DIR","ARCH","ADMIN"]` de `epcisQueryRouter` (pensado para trazabilidad de *equipos*,
-   no de personas) — candidato natural: agregar el propio equipo tratante del episodio activo, no
-   solo roles administrativos. La lista exacta de roles la debe fijar @AE/@PO junto con Seguridad
-   (ver `CC-0017` — el proyecto ya tiene un sistema RBAC/ABAC parametrizable donde esto encaja).
-4. **Minimización:** ya aplicada en el shape de D5 — solo GSRN + IDs internos, cero PHI directa
-   en los jsonb.
+1. **Base de licitud:** el evento encaja en el consentimiento `data-processing` ya existente
+   (`CONSENT_TEMPLATES.SLV`), ampliado — **no** requiere un propósito nuevo en
+   `consentPurposeEnum`. La base primaria es ejecución de la prestación asistencial + obligación
+   legal (Código de Salud/NTEC), no consentimiento revocable independiente. Lo que sí cambia es el
+   **deber de información**: el texto de la plantilla debe mencionar explícitamente la trazabilidad
+   de ubicación intramuros vía GSRN. **Condición de implementación** (dictamen §4 restricción 7,
+   no ejecutada en este ADR — es diseño, no código): el PR que implemente este stream debe tocar
+   `packages/trpc/src/routers/consent.router.ts` en el mismo commit que el código, no como follow-up.
+2. **RLS:** sin policy nueva más allá de la ya especificada en D5 (`gs1_epcis_patient_event_select`/
+   `_insert`, tenant-scoped por `establecimiento_id`). Es suficiente para aislamiento entre
+   organizaciones, tal como en `ece.gs1_epcis_event`.
+3. **Retención:** 10 años — **mismo plazo** que `Encounter` (su padre lógico), pero con
+   **fundamento distinto**: NTEC Art. 6 (retención de expediente clínico), no el fundamento RTCA
+   que justifica la retención de `ece.gs1_epcis_event` (farmacia). **Condición de implementación**
+   (restricción 6, no ejecutada aquí): documentar como categoría propia — "Trazabilidad de
+   ubicación de paciente — GS1 EPCIS" — en `docs/39_sla_retencion_datos.md`, distinta de la fila
+   "Trazabilidad GS1 EPCIS" actual (que es de medicamentos).
+4. **Quién consulta:** **no** un rol nuevo tipo "logística/GS1" ni el `requireRole(["DIR","ARCH","ADMIN"])`
+   de `epcisQueryRouter` (pensado para equipos). El criterio fijado es: la misma población que hoy
+   accede al episodio/expediente bajo RLS `organizationId` + `withTenantContext` — es decir, el
+   router de consulta nuevo debe usar **`tenantProcedure`** (verificado: es exactamente lo que usan
+   hoy `admit`/`transfer`/`discharge`/`list`/`getCensus` en `encounter.router.ts`, sin `requireRole`
+   adicional), no una lista de roles administrativos separada. Break-glass reutiliza el mecanismo
+   ya funcional de CC-0017 Fase 3 — no se diseña uno paralelo aquí.
+5. **Consultar el historial completo de ubicación de un paciente** es sensibilidad equivalente a
+   exportar el expediente — requiere su propio evento de auditoría (ver D7, nota de restricción 9),
+   distinguible de una consulta de "ubicación actual" en un dashboard operativo de camas.
+6. **Minimización:** ya aplicada en el shape de D5/D6 — solo GSRN + IDs internos opacos, cero PHI,
+   cero texto libre (`EncounterTransfer.reason` no se duplica dentro del evento — el `why` solo
+   referencia el `id` de la fila fuente, nunca su contenido). Confirmado explícitamente contra la
+   restricción 4 del dictamen.
+
+---
+
+## Cumplimiento — mapeo a las 11 restricciones del dictamen @AE (§4)
+
+El dictamen exige (restricción 11) que el diseño técnico declare, restricción por restricción,
+cómo se satisface. Tabla de cierre:
+
+| # | Restricción (resumen) | Estado en este ADR |
+|---|---|---|
+| 1 | Solo eventos discretos ADT (admisión/traslado/alta); nada de RTLS/geolocalización continua | **Cumple** — D2, alcance sin cambios respecto a la versión aprobada; no hay tracking continuo en ningún punto del diseño |
+| 2 | Tabla propia, no mezclar con `ece.gs1_epcis_event` ni `audit.audit_log` | **Cumple** — D5 revisada: `ece.gs1_epcis_patient_event`, tabla nueva |
+| 3 | Sin trigger de inmutabilidad hash-chain; si se insiste en inmutabilidad, requiere anonimización | **Cumple** — D5: sin trigger; se optó directamente por la ruta de anonimización (`fn_gs1_epcis_patient_event_anonymize`), no se insistió en inmutabilidad fuerte |
+| 4 | Payload limitado a identificadores opacos, cero texto libre, Zod-enforced | **Cumple el shape** (D5/D6) — el enforcement Zod en `@his/contracts` es responsabilidad de implementación, no de este ADR; recomendado revisión de @AE/@DevSec antes de merge del PR de código, como pide el dictamen |
+| 5 | Mismo RBAC/ABAC/RLS que `Encounter`, sin rol nuevo; break-glass reutiliza CC-0017 | **Cumple** — privacidad punto 4: `tenantProcedure`, sin `requireRole` nuevo |
+| 6 | Retención 10 años, fundamento NTEC Art. 6, categoría propia en `docs/39` | **Cumple la decisión**; la actualización del documento queda como tarea de implementación (privacidad punto 3) |
+| 7 | Actualizar plantilla de consentimiento, mismo PR que el código | **Cumple la decisión**; ejecución queda para el PR de implementación (privacidad punto 1) |
+| 8 | Nombre human-readable de unidad no se persiste enriquecido en el jsonb | **Cumple por construcción** — D8, `internalRef` solo UUIDs |
+| 9 | Consulta de historial completo = evento de auditoría propio | **Cumple la decisión** — D7, requisito fijado para el router de consulta que construya @Dev |
+| 10 | Corregir cita "Decreto 594" → Decreto Legislativo N.° 144 en `docs/39_sla_retencion_datos.md` | **Fuera de alcance de este ADR** — hallazgo secundario del propio dictamen, housekeeping documental no arquitectónico; se señala aquí para que no se pierda |
+| 11 | El PR de implementación debe referenciar el dictamen y marcar cada restricción cumplida/no-aplica | **N/A a este ADR** (es de diseño) — condición que hereda el PR de código que construya @Dev, referenciando tanto el dictamen (`c8adfa6`) como este ADR |
 
 ---
 
@@ -588,11 +828,25 @@ que el diseño **deja explícitos** para que ese dictamen los fije:
   de `buildBedsideEvent`). Este ADR no lo corrige — lo señala para que @Dev decida si consolida
   al implementar los builders nuevos (sería el momento natural de alinear ambos).
 - **Bug preexistente en `epcis-query.router.ts`** (apunta a la tabla huérfana `ece.epcis_event`,
-  siempre vacía) — reportado como hallazgo independiente, no corregido aquí.
-- **Consulta/UI de trazabilidad de paciente** (`gs1PatientTrace.router.ts`, pantalla admin) no se
-  diseña en detalle en este ADR más allá del contrato de datos (D5) y la restricción de roles
-  (privacidad, punto 3) — es responsabilidad de implementación de @Dev/@UIUX.
-- **Retención y base legal** — explícitamente delegado al dictamen de @AE, no decidido aquí.
+  siempre vacía) — reportado como hallazgo independiente, no corregido aquí. Nota agregada en esta
+  revisión: el fix correcto es repuntar a `ece.epcis_event_equipment` (no a la tabla de paciente
+  nueva — ver Contexto).
+- **Consulta/UI de trazabilidad de paciente** (router nuevo, pantalla admin) no se diseña en
+  detalle en este ADR más allá del contrato de datos (D5), el requisito de auditoría de consulta
+  histórica (D7) y el criterio de acceso `tenantProcedure` sin rol nuevo (privacidad punto 4) — es
+  responsabilidad de implementación de @Dev/@UIUX.
+- **Anonimización parcial vs. supresión total.** `fn_gs1_epcis_patient_event_anonymize` (D5)
+  despersonaliza `what`/`who` pero conserva la fila (con `status='SUPPRESSED'`) para preservar
+  metadatos de auditoría no personales (cuándo ocurrió algo, en qué establecimiento). Si un futuro
+  dictamen legal exige borrado físico en vez de anonimización, la función cambia de `UPDATE` a
+  `DELETE` — cambio de una función, no de la tabla ni del RLS. Se documenta como decisión reversible.
+- **Tareas de implementación condicionadas por el dictamen, no ejecutadas en este ADR de diseño:**
+  actualizar `docs/39_sla_retencion_datos.md` (categoría de retención propia + corrección de la
+  cita "Decreto 594"→144), actualizar `CONSENT_TEMPLATES.SLV["data-processing"]` en
+  `consent.router.ts`, y cablear `fn_gs1_epcis_patient_event_anonymize` en el flujo de resolución
+  de `portal-arco.router.ts`. Las tres son condiciones explícitas del dictamen (§4, restricciones
+  6/7/3) que el PR de implementación debe cerrar en el mismo commit que el código, no como
+  follow-up — ver sección "Cumplimiento" arriba.
 
 ---
 
@@ -600,6 +854,7 @@ que el diseño **deja explícitos** para que ese dictamen los fije:
 
 - ADR 0017 — GS1 EPCIS Event Sourcing
 - ADR 0012 — Estrategia RLS ECE
+- `docs/audit/2026-08-18_dictamen_ae_epcis_trazabilidad_paciente.md` (commit `c8adfa6`) — dictamen de cumplimiento @AE que motivó la revisión de D5
 - `packages/database/sql/94_farmacovigilancia_epcis.sql`
 - `packages/database/sql/111_ipsg1_wristband_trigger.sql`
 - `packages/database/sql/168_gs1_gln_jerarquia.sql`
@@ -610,6 +865,9 @@ que el diseño **deja explícitos** para que ese dictamen los fije:
 - `packages/trpc/src/routers/encounter-transfer.router.ts`
 - `packages/trpc/src/routers/encounter-discharge.router.ts`
 - `packages/trpc/src/routers/epcis-query.router.ts`
+- `packages/trpc/src/routers/portal-arco.router.ts`
+- `packages/trpc/src/routers/consent.router.ts`
+- `docs/39_sla_retencion_datos.md`
 - `packages/trpc/src/lib/ece-hooks.ts` (`resolveEceEstablecimientoId`)
 - GS1 EPC Tag Data Standard — sintaxis EPC pure-identity URI
 - GS1 Core Business Vocabulary (CBV) — bizStep/disposition (verificación parcial, ver sección de fuentes)
