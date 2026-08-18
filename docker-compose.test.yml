@@ -77,8 +77,10 @@ services:
       GOTRUE_DISABLE_SIGNUP: 'false'
       GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
       GOTRUE_LOG_LEVEL: info
-    ports:
-      - '9999:9999'
+    # Sin publicar puerto al host: GoTrue solo se alcanza dentro de la red del
+    # compose, en `gotrue:9999`. El puerto 9999 del HOST lo publica
+    # `gotrue-gateway` (ver abajo) — GoTrue no entiende el prefijo `/auth/v1`
+    # que la app y seed-test-users.mjs sí usan (ver comentario del gateway).
     healthcheck:
       # Mismo comando que usa el docker-compose.yml oficial de self-hosting
       # de Supabase para este servicio.
@@ -87,3 +89,28 @@ services:
       timeout: 3s
       retries: 15
       start_period: 10s
+
+  gotrue-gateway:
+    # nginx:1.27.4-alpine verificado en Docker Hub 2026-08-18. Reemplaza el
+    # server block por defecto — ver scripts/gotrue-test-gateway.conf para la
+    # causa raíz completa (confirmada con logs reales de CI, run
+    # 32161787085: seed-test-users.mjs y, por extensión, el propio
+    # @supabase/supabase-js de la app reciben 404 de GoTrue porque este NO
+    # implementa el prefijo `/auth/v1` — eso es una convención de Kong que
+    # el stack de self-hosting de Supabase completo agrega, y este stack de
+    # test no tiene Kong). Este gateway hace ese único rewrite.
+    image: nginx:1.27.4-alpine
+    container_name: his-gotrue-gateway-test
+    depends_on:
+      gotrue:
+        condition: service_healthy
+    volumes:
+      - ./scripts/gotrue-test-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '9999:9999'
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/auth/v1/health']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
