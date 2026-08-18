@@ -210,6 +210,31 @@ export const portalArcoRouter = router({
         },
       });
 
+      // ADR 0019 §"Cumplimiento" #3 / dictamen @AE 2026-08-18 §3.5 punto 5:
+      // una SUPRESION aprobada anonimiza la capa EPCIS derivada de movimiento
+      // del paciente (ece.gs1_epcis_patient_event) — Encounter/EncounterTransfer/
+      // BedAssignment (fuente legal, retención NTEC Art. 6) no se tocan.
+      //
+      // ece.fn_gs1_epcis_patient_event_anonymize es SECURITY DEFINER, owner
+      // `postgres` (BYPASSRLS): su UPDATE interno corre con los privilegios del
+      // owner sin importar el rol demotado de esta tx, así que NO necesita el
+      // GUC ece-specific (app.ece_establecimiento_id) que sí exige
+      // epcis-patient-persist.ts para el INSERT directo — solo requiere EXECUTE,
+      // ya otorgado a `authenticated` vía default privileges del schema `ece`
+      // (58_ece_schema_grants.sql). Se invoca aquí, dentro del mismo
+      // withTenantContext ya demotado, sin contexto adicional.
+      if (input.decision === "APROBADA" && solicitud.tipo === "SUPRESION") {
+        const paciente = await tx.patient.findUnique({
+          where: { id: solicitud.pacienteId },
+          select: { gsrn: true },
+        });
+        if (paciente?.gsrn) {
+          await tx.$queryRaw<{ fn_gs1_epcis_patient_event_anonymize: number }[]>`
+            SELECT ece.fn_gs1_epcis_patient_event_anonymize(${paciente.gsrn}::text, ${input.solicitudId}::uuid)
+          `;
+        }
+      }
+
       return updated;
     });
   }),

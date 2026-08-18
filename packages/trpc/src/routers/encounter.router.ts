@@ -22,6 +22,9 @@ import {
   hookEceEpisodioAfterAdmit,
   resolveEceEstablecimientoId,
 } from "../lib/ece-hooks";
+import { buildPatientMovementEvent } from "../lib/epcis-builder";
+import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
+import { resolveLocationGln } from "../lib/gln-resolver";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -277,6 +280,45 @@ export const encounterRouter = router({
           where: { id: patient.id },
           data: { gsrn },
         });
+
+        // ADR 0019 D7 — PATIENT_ADMISSION EPCIS, best-effort (mismo criterio
+        // que la asignación de GSRN: si algo falla aquí, revierte esta TX
+        // separada, no la admisión). resolveEceEstablecimientoId usa
+        // ctx.prisma (rol ambiente BYPASSRLS) porque ece.establecimiento
+        // tiene su propia RLS (ece.current_establecimiento_id_safe()) que
+        // aún no está seteada dentro de este `tx` ya demotado — ver
+        // packages/trpc/src/ece/rls-context.ts.
+        const eceEstablecimientoId = await resolveEceEstablecimientoId(
+          ctx.prisma,
+          ctx.tenant.establishmentId!,
+        );
+        if (eceEstablecimientoId) {
+          const glnReadPoint = await resolveLocationGln(ctx.prisma, {
+            bedId: input.bedId ?? null,
+            serviceUnitId: input.serviceUnitId ?? null,
+          });
+          const row = buildPatientMovementEvent({
+            type: "PATIENT_ADMISSION",
+            gsrnPaciente: gsrn,
+            companyPrefixLength: prefix.length,
+            glnReadPoint,
+            glnBizLocation: null,
+            internalRef: {
+              bedId: input.bedId ?? null,
+              serviceUnitId: input.serviceUnitId ?? null,
+              establishmentId: ctx.tenant.establishmentId!,
+            },
+            encounterId: encounter.id,
+            recordedById: ctx.user.id,
+            timestamp: encounter.admittedAt,
+            establecimientoId: eceEstablecimientoId,
+          });
+          await persistPatientMovementEvent(tx, ctx.user.id, eceEstablecimientoId, row);
+        } else {
+          console.warn(
+            `[EPCIS] ece.establecimiento no resuelto para estab=${ctx.tenant.establishmentId} — se omite evento PATIENT_ADMISSION (encounter=${encounter.id}).`,
+          );
+        }
       }).catch(() => {
         // GSRN assignment failure es non-fatal para la creación del encuentro.
       });

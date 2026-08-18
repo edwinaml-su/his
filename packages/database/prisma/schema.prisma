@@ -1069,6 +1069,9 @@ model ServiceUnit {
   active          Boolean  @default(true)
   createdAt       DateTime @default(now()) @db.Timestamptz()
   updatedAt       DateTime @updatedAt @db.Timestamptz()
+  /// GLN (GS1 Global Location Number) de la unidad — ADR 0019 D8. FK a ece.gs1_gln(codigo),
+  /// sql/199_epcis_patient_movement.sql. Nullable mientras el catálogo no esté sembrado.
+  glnCodigo       String?  @db.VarChar(13)
 
   organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   establishment Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
@@ -1597,6 +1600,9 @@ model Bed {
   active          Boolean   @default(true)
   createdAt       DateTime  @default(now()) @db.Timestamptz()
   updatedAt       DateTime  @updatedAt @db.Timestamptz()
+  /// GLN (GS1 Global Location Number) de la cama — ADR 0019 D8. FK a ece.gs1_gln(codigo),
+  /// sql/199_epcis_patient_movement.sql. Nullable mientras el catálogo no esté sembrado.
+  glnCodigo       String?   @db.VarChar(13)
 
   organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   establishment Establishment   @relation(fields: [establishmentId], references: [id], onDelete: Cascade)

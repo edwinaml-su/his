@@ -47,6 +47,8 @@ describe("encounterTransferRouter", () => {
         dischargedAt: null,
         serviceUnitId: svcOld,
         bedAssignments: [],
+        // ADR 0019 — sin GSRN, el router omite el evento EPCIS (rama defensiva).
+        patient: { gsrn: null },
       } as never);
       prisma.encounterTransfer.create.mockResolvedValue({
         id: transferId,
@@ -88,6 +90,82 @@ describe("encounterTransferRouter", () => {
           reason: "",
         }),
       ).rejects.toThrow();
+    });
+
+    // Gap detectado por @QA: la única cobertura previa de la rama EPCIS de
+    // ADR 0019 usaba `patient.gsrn: null` (rama defensiva de "omitir
+    // evento"). Nada ejercitaba el camino donde el paciente SÍ tiene GSRN —
+    // es decir, la construcción real de PATIENT_TRANSFER_DEPARTURE y su
+    // persistencia dentro de la misma tx (D7, transaccional estricto).
+    it("con GSRN asignado: construye y persiste PATIENT_TRANSFER_DEPARTURE en la misma tx", async () => {
+      const encId = "00000000-0000-0000-0000-000000000e01";
+      const transferId = "00000000-0000-0000-0000-000000000111";
+      const patientId = "00000000-0000-0000-0000-000000000aaa";
+      const svcOld = "00000000-0000-0000-0000-000000000030";
+      const establishmentId = "00000000-0000-0000-0000-0000000000ee";
+      const eceEstablecimientoId = "00000000-0000-0000-0000-0000000000e9";
+      const gsrn = "750300000000001234";
+
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: encId,
+        patientId,
+        dischargedAt: null,
+        serviceUnitId: svcOld,
+        establishmentId,
+        bedAssignments: [],
+        patient: { gsrn },
+      } as never);
+      prisma.encounterTransfer.create.mockResolvedValue({
+        id: transferId,
+        occurredAt: new Date("2026-05-27T10:00:00Z"),
+      } as never);
+      prisma.encounter.update.mockResolvedValue({ id: encId } as never);
+      // resolveEceEstablecimientoId → SELECT id FROM ece.establecimiento.
+      prisma.$queryRaw.mockResolvedValue([{ id: eceEstablecimientoId }] as never);
+      prisma.organization.findUnique.mockResolvedValue({
+        gs1CompanyPrefix: "7503000",
+      } as never);
+      // resolveLocationGln: cama/servicio sin GLN sembrado (D8) → null.
+      prisma.bed.findUnique.mockResolvedValue(null as never);
+      prisma.serviceUnit.findUnique.mockResolvedValue(null as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const executeRawUnsafe = vi.fn().mockResolvedValue(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma as any).$executeRawUnsafe = executeRawUnsafe;
+      // persistPatientMovementEvent captura `current_user` ANTES de demotar
+      // (fix Defecto A — RESET ROLE no es un pop de stack, ver
+      // epcis-patient-persist.ts). Esta tx corre en $transaction plano
+      // (nunca demotada), así que el rol "de sesión" simulado aquí es el
+      // que debe restaurarse al final — no "authenticated".
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        { current_user: "postgres_test_session_role" },
+      ] as never);
+
+      const caller = encounterTransferRouter.createCaller(makeCtx({ prisma }));
+      await caller.transferEncounter({
+        encounterId: "00000000-0000-0000-0000-000000000010",
+        toServiceUnitId: "00000000-0000-0000-0000-000000000020",
+        reason: "Cambio a UCI por deterioro",
+      });
+
+      // El INSERT en ece.gs1_epcis_patient_event ocurrió (persistPatientMovementEvent).
+      const insertCall = executeRawUnsafe.mock.calls.find((c) =>
+        String(c[0]).includes("INSERT INTO ece.gs1_epcis_patient_event"),
+      );
+      expect(insertCall).toBeDefined();
+      const [, tipoEvento, subtipo, what] = insertCall!;
+      expect(tipoEvento).toBe("ObjectEvent");
+      expect(subtipo).toBe("PATIENT_TRANSFER_DEPARTURE");
+      expect(JSON.parse(what as string)).toMatchObject({ gsrn });
+
+      // El demote ocurrió alrededor del INSERT (epcis-patient-persist.ts) y el
+      // rol se restaura al capturado por `current_user` — NUNCA `RESET ROLE`
+      // (Defecto A: RESET ROLE no es un pop de stack, ver epcis-patient-persist.ts).
+      expect(executeRawUnsafe).toHaveBeenCalledWith("SET LOCAL ROLE authenticated");
+      expect(executeRawUnsafe).toHaveBeenCalledWith(
+        'SET LOCAL ROLE "postgres_test_session_role"',
+      );
+      expect(executeRawUnsafe).not.toHaveBeenCalledWith("RESET ROLE");
     });
   });
 
@@ -149,7 +227,8 @@ describe("encounterTransferRouter", () => {
         reason: "Pase a quirófano",
         occurredAt: new Date("2026-05-27T10:00:00Z"),
         createdBy: USER_ORIGEN,
-        encounter: { patientId: PATIENT_ID },
+        // ADR 0019 — sin GSRN, el router omite el evento EPCIS (rama defensiva).
+        encounter: { patientId: PATIENT_ID, establishmentId: "estab-1", patient: { gsrn: null } },
       } as never);
       prisma.encounterTransfer.update.mockResolvedValue({
         id: TRANSFER_ID,

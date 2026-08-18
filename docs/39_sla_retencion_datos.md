@@ -1,8 +1,9 @@
 # SLA Retención y Eliminación de Datos
 
 **HG-26 / HG-27 — Stream G (P2)**
-Versión: 1.0 | Fecha: 2026-05-28
-Referencia: NTEC Art. 6, TDR §6.3, LOPD El Salvador (Decreto 594), RNPN
+Versión: 1.1 | Fecha: 2026-08-18
+Referencia: NTEC Art. 6, TDR §6.3, Ley de Protección de Datos Personales de El Salvador
+(Decreto Legislativo N.° 144, 2024), RNPN
 
 ---
 
@@ -36,6 +37,25 @@ Referencia: NTEC Art. 6, TDR §6.3, LOPD El Salvador (Decreto 594), RNPN
 | Trazabilidad GS1 EPCIS | `gs1.epcis_event` | 10 años (RTCA) |
 | Administraciones BCMA | `"MedicationAdministration"` | 10 años |
 | Reservas lógicas vencidas | `gs1.reservation` | 3 años post-expiración |
+
+### Trazabilidad de ubicación de paciente (GS1 EPCIS) — categoría propia
+
+ADR 0019 (trazabilidad EPCIS del movimiento del paciente, GSRN) y dictamen @AE
+2026-08-18 (`docs/audit/2026-08-18_dictamen_ae_epcis_trazabilidad_paciente.md`, §3.3).
+Esta categoría es distinta de "Trazabilidad GS1 EPCIS" (farmacia, arriba): traza
+personas, no producto, y **no** hereda el fundamento RTCA de esa fila.
+
+| Categoría | Tabla(s) | Retención | Fundamento |
+|---|---|---|---|
+| Trazabilidad de movimiento de paciente (admisión/traslado/alta) | `ece.gs1_epcis_patient_event` | 10 años (mismo plazo que `Encounter`, su padre lógico) | **NTEC Art. 6** (retención de expediente clínico) — no el RTCA de medicamentos |
+
+**Notas:**
+- La tabla es una proyección/índice derivado de `Encounter`/`EncounterTransfer`/`BedAssignment`
+  (fuente legal de retención) — no participa en la cadena hash de `audit.audit_log` (dictamen §3.5).
+- Ante una `SolicitudArco` de tipo `SUPRESION` aprobada, esta capa se anonimiza vía
+  `ece.fn_gs1_epcis_patient_event_anonymize` (marca `status='SUPPRESSED'`); los registros
+  fuente (`Encounter`/`EncounterTransfer`/`BedAssignment`) no se tocan y conservan su
+  retención NTEC Art. 6 intacta.
 
 ---
 
@@ -134,7 +154,7 @@ Los backups de Supabase se retienen 30 días (Point-in-Time Recovery). Para dato
 
 - NTEC Art. 6: Retención de expedientes clínicos (10 años mínimo)
 - TDR §6.3: Audit log inmutable y hash chain
-- LOPD El Salvador (Decreto 594): Derechos ARCO
+- Ley de Protección de Datos Personales de El Salvador (Decreto Legislativo N.° 144, 2024): Derechos ARCO
 - `docs/28_infra_runbook.md`: Operaciones de infraestructura y backups
 - `docs/15_production_runbook.md`: Runbook de producción general
 - `packages/database/sql/05_audit_hash_chain.sql`: Implementación hash chain

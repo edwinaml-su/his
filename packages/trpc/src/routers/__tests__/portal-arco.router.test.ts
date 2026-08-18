@@ -341,6 +341,84 @@ describe("portalArcoRouter", () => {
       );
     });
 
+    it("aprueba SUPRESION: invoca ece.fn_gs1_epcis_patient_event_anonymize con el GSRN del paciente", async () => {
+      prisma.solicitudArco.findUnique.mockResolvedValue(
+        makeSolicitud({ tipo: "SUPRESION" }) as never,
+      );
+      prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+
+      const updated = makeSolicitud({
+        tipo: "SUPRESION",
+        estado: "APROBADA",
+        fechaRespuesta: new Date(),
+      });
+      prisma.solicitudArco.update.mockResolvedValue(updated as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: "evt-resp-supresion" } as never);
+      prisma.patient.findUnique.mockResolvedValue({ gsrn: "123456789012345675" } as never);
+      prisma.$queryRaw.mockResolvedValue([{ fn_gs1_epcis_patient_event_anonymize: 2 }] as never);
+
+      const caller = portalArcoRouter.createCaller(makeTenantCtx({ prisma }));
+      const result = await caller.responder({
+        solicitudId: SOLICITUD_ID,
+        decision: "APROBADA",
+        motivoRespuesta: "Solicitud de supresión procedente conforme a la LPDP.",
+      });
+
+      expect(result.estado).toBe("APROBADA");
+      expect(prisma.patient.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: PATIENT_ID } }),
+      );
+      expect(prisma.$queryRaw).toHaveBeenCalledOnce();
+      const [sqlFragments, ...values] = prisma.$queryRaw.mock.calls[0] as unknown as [
+        TemplateStringsArray,
+        ...unknown[],
+      ];
+      expect(sqlFragments.join("")).toContain("ece.fn_gs1_epcis_patient_event_anonymize");
+      expect(values).toEqual(["123456789012345675", SOLICITUD_ID]);
+    });
+
+    it("aprueba SUPRESION sin GSRN asignado: no invoca la anonimización", async () => {
+      prisma.solicitudArco.findUnique.mockResolvedValue(
+        makeSolicitud({ tipo: "SUPRESION" }) as never,
+      );
+      prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+      prisma.solicitudArco.update.mockResolvedValue(
+        makeSolicitud({ tipo: "SUPRESION", estado: "APROBADA" }) as never,
+      );
+      prisma.domainEvent.create.mockResolvedValue({ id: "evt-resp-sin-gsrn" } as never);
+      prisma.patient.findUnique.mockResolvedValue({ gsrn: null } as never);
+
+      const caller = portalArcoRouter.createCaller(makeTenantCtx({ prisma }));
+      await caller.responder({
+        solicitudId: SOLICITUD_ID,
+        decision: "APROBADA",
+        motivoRespuesta: "Solicitud de supresión procedente; paciente sin pulsera GSRN.",
+      });
+
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it("rechaza SUPRESION: no invoca la anonimización", async () => {
+      prisma.solicitudArco.findUnique.mockResolvedValue(
+        makeSolicitud({ tipo: "SUPRESION" }) as never,
+      );
+      prisma.$transaction.mockImplementation(async (fn) => fn(prisma));
+      prisma.solicitudArco.update.mockResolvedValue(
+        makeSolicitud({ tipo: "SUPRESION", estado: "RECHAZADA" }) as never,
+      );
+      prisma.domainEvent.create.mockResolvedValue({ id: "evt-resp-rechazo" } as never);
+
+      const caller = portalArcoRouter.createCaller(makeTenantCtx({ prisma }));
+      await caller.responder({
+        solicitudId: SOLICITUD_ID,
+        decision: "RECHAZADA",
+        motivoRespuesta: "No procede: hay una investigación epidemiológica en curso.",
+      });
+
+      expect(prisma.patient.findUnique).not.toHaveBeenCalled();
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
     it("rechaza: actualiza estado a RECHAZADA y emite DomainEvent", async () => {
       prisma.solicitudArco.findUnique.mockResolvedValue(makeSolicitud() as never);
       prisma.$transaction.mockImplementation(async (fn) => fn(prisma));

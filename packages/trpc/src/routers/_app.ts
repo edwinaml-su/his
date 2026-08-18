@@ -124,8 +124,10 @@ import { gs1ProcesoBRouter } from "./gs1-proceso-b.router";
 import { gs1ProcesoCRouter } from "./gs1-proceso-c.router";
 // GS1 — Proceso F: Logística inversa devoluciones
 import { gs1ProcesoFRouter } from "./gs1-proceso-f.router";
-// GS1 Logística — EPCIS Query Layer (schema legacy)
+// GS1 Logística — EPCIS Query Layer (schema legacy, equipos)
 import { epcisQueryRouter } from "./epcis-query.router";
+// ADR 0019 — EPCIS trazabilidad de movimiento de paciente (stream separado)
+import { gs1PatientTraceRouter } from "./gs1-patient-trace.router";
 // F2-S15 placeholder — Cold Chain Monitoring
 import { coldChainRouter } from "./cold-chain.router";
 // GS1 Healthcare Standards
@@ -358,6 +360,7 @@ export const appRouter = router({
   gs1ProcesoF: gs1ProcesoFRouter,
   // GS1 Logística — EPCIS Query Layer
   epcisQuery: epcisQueryRouter,
+  gs1PatientTrace: gs1PatientTraceRouter,
   // F2-S15 placeholder — Cold Chain Monitoring
   coldChain: coldChainRouter,
   // GS1 Healthcare Standards

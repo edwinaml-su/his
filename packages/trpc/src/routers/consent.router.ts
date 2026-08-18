@@ -44,14 +44,26 @@ export const CONSENT_TEMPLATES: Record<string, CountryTemplates> = {
   // El Salvador — Ley de Protección de Datos Personales (LEPDP).
   SLV: {
     "data-processing": {
-      version: 1,
+      // ADR 0019 §"Cumplimiento" #7 / dictamen @AE 2026-08-18 §3.1 y §4
+      // restricción 7: deber de información ampliado — el paciente debe saber
+      // que su ubicación intramuros queda registrada vía GSRN. No es un
+      // propósito nuevo (encaja en la base de licitud ya existente de este
+      // consentimiento); solo cambia el texto informativo. Versión bump 1→2
+      // para forzar re-render del texto vigente en el cliente.
+      version: 2,
       title: "Consentimiento de tratamiento de datos personales (SV)",
       text:
         "Autorizo a la institución prestadora de salud a recopilar, almacenar y " +
         "tratar mis datos personales y de salud con fines asistenciales, de " +
         "facturación y de cumplimiento normativo, conforme a la Ley de Protección " +
-        "de Datos Personales de El Salvador. Reconozco que puedo ejercer mis " +
-        "derechos ARCO en cualquier momento.",
+        "de Datos Personales de El Salvador. Esto incluye el registro de mis " +
+        "movimientos dentro del establecimiento (admisión, traslados de servicio " +
+        "o cama, y alta) mediante un identificador GS1 (GSRN), con el fin de " +
+        "garantizar la continuidad de mi atención, la correcta identificación " +
+        "durante mi estancia y la trazabilidad epidemiológica intrahospitalaria; " +
+        "este registro se conserva por el mismo plazo que mi expediente clínico " +
+        "(10 años). Reconozco que puedo ejercer mis derechos ARCO en cualquier " +
+        "momento.",
       validForDays: null,
     },
     "mpi-cross-org": {
@@ -74,22 +86,36 @@ export const CONSENT_TEMPLATES: Record<string, CountryTemplates> = {
   // Guatemala
   GTM: {
     "data-processing": {
-      version: 1,
+      // Ver nota en SLV["data-processing"] — mismo deber de información, sin
+      // gating por país en el código (encounter.router.ts / -transfer / -discharge).
+      version: 2,
       title: "Consentimiento de tratamiento de datos personales (GT)",
       text:
         "Autorizo el tratamiento de mis datos personales y sensibles de salud por " +
-        "el prestador, conforme a la normativa vigente en la República de Guatemala.",
+        "el prestador, conforme a la normativa vigente en la República de Guatemala. " +
+        "Esto incluye el registro de mis movimientos dentro del establecimiento " +
+        "(admisión, traslados de servicio o cama, y alta) mediante un identificador " +
+        "GS1 (GSRN), con el fin de garantizar la continuidad de mi atención y la " +
+        "trazabilidad epidemiológica intrahospitalaria; este registro se conserva " +
+        "por el mismo plazo que mi expediente clínico (10 años).",
       validForDays: null,
     },
   },
   // Honduras
   HND: {
     "data-processing": {
-      version: 1,
+      // Ver nota en SLV["data-processing"] — mismo deber de información, sin
+      // gating por país en el código (encounter.router.ts / -transfer / -discharge).
+      version: 2,
       title: "Consentimiento de tratamiento de datos personales (HN)",
       text:
         "Autorizo el tratamiento de mis datos personales y de salud por el " +
-        "prestador, conforme a la normativa vigente en Honduras.",
+        "prestador, conforme a la normativa vigente en Honduras. Esto incluye el " +
+        "registro de mis movimientos dentro del establecimiento (admisión, " +
+        "traslados de servicio o cama, y alta) mediante un identificador GS1 " +
+        "(GSRN), con el fin de garantizar la continuidad de mi atención y la " +
+        "trazabilidad epidemiológica intrahospitalaria; este registro se conserva " +
+        "por el mismo plazo que mi expediente clínico (10 años).",
       validForDays: null,
     },
   },

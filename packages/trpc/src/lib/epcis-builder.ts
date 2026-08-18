@@ -246,6 +246,145 @@ export function buildSubstitutionEvent(input: EpcisSubstitutionInput): EpcisEven
 }
 
 // ---------------------------------------------------------------------------
+// buildPatientMovementEvent — PATIENT_ADMISSION / PATIENT_TRANSFER_* / PATIENT_DISCHARGE
+// (ADR 0019 — trazabilidad EPCIS del movimiento físico del paciente)
+//
+// Stream separado de EpcisEventRow/EpcisSubtipo (que describen filas para
+// ece.gs1_epcis_event, farmacia): estos eventos van a ece.gs1_epcis_patient_event
+// (ADR 0019 D5, SQL 199) — tabla nueva, sin trigger de inmutabilidad, con su propio
+// CHECK de subtipo. Mezclar los tipos sería type-level una mentira — ver ADR 0019 D6.
+// ---------------------------------------------------------------------------
+
+export type PatientMovementSubtipo =
+  | "PATIENT_ADMISSION"
+  | "PATIENT_TRANSFER_DEPARTURE"
+  | "PATIENT_TRANSFER_ARRIVAL"
+  | "PATIENT_DISCHARGE";
+
+/** Shape de salida — listo para INSERT en ece.gs1_epcis_patient_event (NO ece.gs1_epcis_event). */
+export interface EpcisPatientEventRow {
+  tipo_evento: "ObjectEvent";
+  subtipo: PatientMovementSubtipo;
+  what: object;
+  where_data: object;
+  event_time: Date;
+  why: object;
+  who: object;
+  payload_hash: string;
+  establecimiento_id: string;
+  status: "COMMITTED";
+}
+
+export interface EpcisPatientMovementInput {
+  type: PatientMovementSubtipo;
+  /** GSRN-18 completo (con check digit) del paciente. */
+  gsrnPaciente: string;
+  /** Longitud del CompanyPrefix de la organización (7-9) — para construir la URN EPC. */
+  companyPrefixLength: number;
+  /** GLN-13 del punto donde se registra el evento. Null si no resuelto (ver ADR 0019 D8). */
+  glnReadPoint: string | null;
+  /** GLN-13 de la ubicación lógica de destino tras el evento. Null si no resuelto. */
+  glnBizLocation: string | null;
+  /** Fallback no-GS1 mientras el catálogo GLN de cama/servicio no está sembrado. */
+  internalRef: {
+    bedId: string | null;
+    serviceUnitId: string | null;
+    establishmentId: string; // public.Establishment.id (NO ece.establecimiento.id)
+  };
+  encounterId: string;
+  /** Solo para PATIENT_TRANSFER_DEPARTURE / PATIENT_TRANSFER_ARRIVAL. */
+  transferId?: string;
+  recordedById: string;
+  timestamp: Date;
+  /** ece.establecimiento.id (tenant EPCIS) — resolver con resolveEceEstablecimientoId antes de llamar. */
+  establecimientoId: string;
+}
+
+const PATIENT_MOVEMENT_STEP: Record<
+  PatientMovementSubtipo,
+  { businessStep: string; disposition: string }
+> = {
+  PATIENT_ADMISSION:           { businessStep: "arriving",  disposition: "active" },
+  PATIENT_TRANSFER_DEPARTURE:  { businessStep: "departing", disposition: "in_transit" },
+  PATIENT_TRANSFER_ARRIVAL:    { businessStep: "arriving",  disposition: "active" },
+  PATIENT_DISCHARGE:           { businessStep: "departing", disposition: "inactive" },
+};
+
+/**
+ * Convierte un GSRN-18 (con check digit) a su forma EPC pure-identity URI.
+ * El check digit se descarta — no forma parte de la URI EPC (igual que SGTIN
+ * descarta el check digit de GTIN). Ref: GS1 EPC Tag Data Standard.
+ *
+ * @param gsrn18 - 18 dígitos: CompanyPrefix + ServiceReference + CheckDigit
+ * @param companyPrefixLength - longitud del CompanyPrefix de la organización (7-9)
+ */
+export function buildGsrnUrn(gsrn18: string, companyPrefixLength: number): string {
+  if (!/^\d{18}$/.test(gsrn18)) {
+    throw new Error(`GSRN debe ser 18 dígitos numéricos (recibido: ${gsrn18})`);
+  }
+  if (companyPrefixLength < 7 || companyPrefixLength > 9) {
+    throw new Error(`companyPrefixLength fuera de rango 7-9 (recibido: ${companyPrefixLength})`);
+  }
+  const body = gsrn18.slice(0, 17); // descarta el check digit (posición 18)
+  const companyPrefix = body.slice(0, companyPrefixLength);
+  const serviceReference = body.slice(companyPrefixLength);
+  return `urn:epc:id:gsrn:${companyPrefix}.${serviceReference}`;
+}
+
+export function buildPatientMovementEvent(
+  input: EpcisPatientMovementInput,
+): EpcisPatientEventRow {
+  const gsrnUrn = buildGsrnUrn(input.gsrnPaciente, input.companyPrefixLength);
+
+  const what = {
+    epcList: [gsrnUrn],
+    gsrn: input.gsrnPaciente,
+  };
+
+  const whereData = {
+    readPoint: input.glnReadPoint ? glnUrn(input.glnReadPoint) : null,
+    bizLocation: input.glnBizLocation ? glnUrn(input.glnBizLocation) : null,
+    internalRef: input.internalRef,
+  };
+
+  const step = PATIENT_MOVEMENT_STEP[input.type];
+  const bizTransactionList: { type: string; id: string }[] = [
+    { type: "encounter", id: input.encounterId },
+  ];
+  if (input.transferId) {
+    bizTransactionList.push({ type: "transfer", id: input.transferId });
+  }
+
+  const why = {
+    businessStep: step.businessStep,
+    disposition: step.disposition,
+    bizTransactionList,
+  };
+
+  const who = {
+    sourceList: [
+      { type: "urn:epcglobal:cbv:sdt:possessing_party", gsrn: input.gsrnPaciente },
+    ],
+    recordedById: input.recordedById,
+  };
+
+  const fullPayload = { what, whereData, why, who };
+
+  return {
+    tipo_evento: "ObjectEvent",
+    subtipo: input.type,
+    what,
+    where_data: whereData,
+    event_time: input.timestamp,
+    why,
+    who,
+    payload_hash: computeHash(fullPayload),
+    establecimiento_id: input.establecimientoId,
+    status: "COMMITTED",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // buildLogisticsEvent — RECEPTION / QUARANTINE / STORAGE / FRACTIONATION
 // (Procesos logísticos A/B/C, guía GS1 El Salvador Nivel 3)
 // ---------------------------------------------------------------------------
