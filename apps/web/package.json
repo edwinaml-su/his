@@ -5,7 +5,7 @@
   "description": "Aplicación Next.js 14 (App Router) — HIS Multipaís Avante",
   "license": "UNLICENSED",
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "next dev -p 3000",
