@@ -152,4 +152,31 @@ describe('health-check', () => {
     expect(result.rls).toBe('fail');
     expect(result.timestamp).toBeTruthy();
   });
+
+  /**
+   * Regresión: `$queryRaw` desligado del cliente Prisma.
+   *
+   * `checkRls` asignaba `prisma.$queryRaw` a una variable antes de aplicar el
+   * tagged template, con lo que perdía el `this` y la llamada lanzaba. El catch
+   * lo traducía a `rls: 'fail'` y `/api/health` devolvía 503 permanente en
+   * producción desde 2026-05-18 — sin que fallara nada de RLS.
+   *
+   * Los mocks anteriores no lo detectaban porque son funciones sueltas a las
+   * que el `this` les da igual. Este doble exige el binding, como el Prisma real.
+   */
+  it('11. checkRls invoca $queryRaw ligado al cliente (regresión 503 permanente)', async () => {
+    const prisma = {
+      marcaDeCliente: true,
+      $queryRaw(this: unknown) {
+        if (!this || (this as { marcaDeCliente?: boolean }).marcaDeCliente !== true) {
+          throw new TypeError('$queryRaw invocado sin el contexto del cliente Prisma');
+        }
+        return Promise.resolve([{ v: null }]);
+      },
+    };
+
+    const result = await runHealthChecks({ prisma: prisma as never });
+    expect(result.db).toBe('ok');
+    expect(result.rls).toBe('ok');
+  });
 });
