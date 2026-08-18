@@ -45,6 +45,7 @@ Referencia vigente: **OWASP Top 10:2025**. Re-auditoría y remediación completa
 
 | Área | Estado |
 |---|---|
+| Next.js 16.3.1 + React 19.2.8 (migración por etapas verificada) | ✅ |
 | Multi-tenancy RLS por organización (incl. workflow-inbox / nutrition / census) | ✅ |
 | Cadena de auditoría criptográfica (SHA-256, 10 años) — incluye historial del copiloto | ✅ |
 | `anon` sin DML en tablas PHI (SQL 152) ni EXECUTE en RPC SECDEF (SQL 196) | ✅ |
@@ -55,7 +56,7 @@ Referencia vigente: **OWASP Top 10:2025**. Re-auditoría y remediación completa
 | Security headers HTTP + CSP enforce (`unsafe-inline`) | ✅ |
 | Fail-closed en middleware + logs sin PHI | ✅ |
 | Contraseñas filtradas (HaveIBeenPwned) en Supabase Auth | ✅ |
-| Supply chain: 88 → 39 vulns, 0 críticas en producción, SBOM + firmas en CI | ✅ parcial — ver gaps |
+| Supply chain: 1 sola vulnerabilidad en producción (expr-eval, sin fix upstream, mitigada) | ✅ |
 | Sentry (observabilidad de errores + PII redact) | ✅ cableado — falta activar DSN en prod |
 | Pentest externo — preparación (scope, RoE, evidencia) | ✅ docs listos; engagement pendiente |
 
@@ -65,7 +66,8 @@ Referencia vigente: **OWASP Top 10:2025**. Re-auditoría y remediación completa
 
 | Gap | Severidad | Nota |
 |---|---|---|
-| **Next.js 14 (supply chain)** | **Alta** | ~21 advisories corregidos en la línea 15.5.x: SSRF en Server Actions y rewrites, cache poisoning, bypass de middleware/proxy, XSS con nonces CSP, varios DoS. Requiere sprint de migración 14→15 con UAT (un salto automático 14→16 ya se revirtió en Beta.22). Es la mayor exposición abierta. |
+| **`middleware.ts` → `proxy.ts`** | Baja | Next 16 deprecó el nombre `middleware` (el build ya lo reporta como "Proxy"). El rename cambia el runtime de Edge a Node y toca el gate fail-closed de A10, así que se dejó fuera del bump para hacerlo con verificación propia. Funciona tal cual. |
+| **ESLint 9 + flat config** | Baja | `eslint-config-next` se quedó en 15.5.23 porque la 16 exige ESLint ≥9. El lint funciona (0 errores). Propuesta de config generada en `docs/migracion/eslint.config.flat.propuesta.cjs`. |
 | **GS1 traslados clínicos de paciente** | Media | `encounter-transfer` no emite eventos EPCIS (arriving/departing por GLN). GS1 sí está completo en pacientes, medicamentos y traslados de **inventario**. |
 | **nonce-based CSP** | Baja | Intentado y revertido (rompe hidratación de páginas estáticas Next). Baseline = CSP `unsafe-inline`. Reintentar requiere `force-dynamic` (bajo ROI). |
 | **TipTap v3 / tiptap-markdown 0.9** | Baja | Pin en 0.8.10 (estable). Migración analizada: NO recomendada por ahora (riesgo serialización, bajo valor). |

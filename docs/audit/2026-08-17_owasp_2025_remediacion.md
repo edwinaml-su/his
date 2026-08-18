@@ -33,7 +33,7 @@ Este documento reaudita el HIS contra la lista 2025 y registra la remediación a
 |---|---|---|---|
 | A01 Broken Access Control | 🟡 | 🟢 | `withTenantContext` en los 3 routers PHI que faltaban + gate de borde del batch tRPC |
 | A02 Security Misconfiguration | 🔴→🟢 | 🟢 | Headers/CSP ya cerrados en Beta.21; SQL 196 cierra las RPC SECDEF expuestas a `anon` |
-| A03 Software Supply Chain | 🟡 | 🟡 | 88→39 vulns, 0 críticas en prod, SBOM + verificación de firmas. **Queda Next 14** |
+| A03 Software Supply Chain | 🟡 | 🟢 | **1 sola vulnerabilidad en producción** (`expr-eval`, sin fix upstream, mitigada — ver §6 H7). Next 16.3.1 + React 19.2.8 cierran los ~21 advisories de Next 14. SBOM + verificación de firmas en CI |
 | A04 Cryptographic Failures | 🟢 | 🟢 | argon2, Vault MFA portal, sin secretos en repo (sin cambios) |
 | A05 Injection | 🟡 | 🟢 | Renderer del chat endurecido + allowlist en el motor de fórmulas |
 | A06 Insecure Design | 🟡 | 🟢 | Rate limit global en `/api/trpc` — con cupo por procedure y tope de batch (ver §6, H1) |
@@ -118,13 +118,12 @@ Era la peor del proyecto: **88 vulnerabilidades (6 críticas, 24 high)**, y el g
 **Resultado: 39 vulnerabilidades totales, 26 en dependencias de producción, 0 críticas en
 producción.**
 
-> **Abierto — decisión de Avante:** el proyecto corre **Next 14**, con ~21 advisories corregidos
-> en la línea 15.5.x (SSRF en Server Actions y rewrites, cache poisoning, bypass de
-> middleware/proxy, XSS con nonces CSP, varios DoS). Es hoy la mayor exposición de cadena de
-> suministro y no se toca aquí: 14→15 es una migración con su propio UAT, y ya hubo un incidente
-> por un salto 14→16 automático (Beta.22, revertido). **Recomendación: sprint dedicado a Next
-> 15.5.x.** Mientras tanto el gate semanal seguirá en rojo — es la señal correcta, no se bajó el
-> umbral para pintarlo verde.
+> **CERRADO el mismo día.** Lo anterior era: "el proyecto corre Next 14, con ~21 advisories
+> corregidos en la línea 15.5.x — es la mayor exposición de cadena de suministro". La migración
+> se ejecutó por etapas verificadas (14.2.35 → 15.5.23 + React 19.2.8 → 16.3.1), cada una con
+> `scripts/verify-migration.sh` en PASS: typecheck, lint, 5.570 tests, build y diff de tipos de
+> ruta contra baseline. **La auditoría de dependencias de producción pasó de 26 vulnerabilidades
+> (5 high) a 1** — `expr-eval`, sin fix upstream y ya mitigada. Detalle en §7.
 
 Resto de mayores no tomados, por política de `dependabot.yml` (`ignore: semver-major`):
 `vitest`/`@vitest/coverage-v8` 4 (dev, 2 críticas), `@sentry/nextjs` 10, `eslint-config-next` 16.
@@ -280,6 +279,60 @@ rollback por control. **Backlog (@PO):** `docs/backlog/beta23_owasp2025_residual
    `npx turbo run test -- --coverage` — está verde con 5.570 tests.
 3. `docs/15_production_runbook.md` §14.5 consulta una columna `chainHash` inexistente
    (el schema usa `signatureHash`/`prevHash`). CLAUDE.md repite el mismo error.
+
+---
+
+## 7. Migración Next 14 → 16 (cierre de A03)
+
+Ejecutada el mismo día, por etapas verificadas, en la rama `feat/next16-migration`.
+**14.2.35 → 15.5.23 (+ React 18.3.1 → 19.2.8) → 16.3.1.** Nunca de un salto: el salto directo
+14→16 es exactamente lo que rompió el build en Beta.22.
+
+**Resultado en cadena de suministro:** dependencias de producción **de 26 vulnerabilidades
+(5 high) a 1** — `expr-eval`, sin fix upstream, mitigada por allowlist (§6 H7).
+
+### Arnés de verificación
+
+`scripts/verify-migration.sh` corre typecheck, lint, tests, build y —lo más importante— un
+**diff del tipo de renderizado de las 313 rutas** contra un baseline capturado antes de tocar
+nada (`docs/migracion/next15-baseline.md`). Ese diff es el detector de regresión silenciosa: en
+este repo ya hubo una app con build verde, axe verde e hidratación muerta bajo CSP (#440).
+
+### Fallos silenciosos encontrados (ninguno detectable por build ni typecheck)
+
+| # | Hallazgo | Por qué importaba |
+|---|---|---|
+| 1 | **Dos copias de React en el árbol.** `apps/web` resolvía 19.2.8 pero la raíz mantenía 18.3.1, anclada por `lucide-react@0.460` (su peer acepta `^19.0.0-rc`, NO la 19 estable). | `packages/ui` se transpila dentro del bundle de la app: habría corrido con React 18 mientras la app usaba 19 → *Invalid hook call* en producción. Cerrado con `lucide-react ^0.500` + anclaje explícito en la raíz + `overrides`. |
+| 2 | **Lo mismo en los tipos**: `@types/react` 18.3.28 en la raíz (peer opcional de una transitiva de Radix) contra 19.2.18 en los workspaces. | 296 errores `TS2786` "cannot be used as a JSX component". Tras anclar: 3. |
+| 3 | **`router.push()` dentro del updater de `setState`** (`patients/new`). Los updaters deben ser puros —React puede re-ejecutarlos— y dejó de dispararse de forma fiable. | Defecto REAL de producto que React 19 destapó: el paciente quedaba atrapado en el panel de éxito sin ir a orientación táctil. Con React 18 funcionaba por casualidad. |
+| 4 | El codemod dejó `UnsafeUnwrappedCookies` en `mfa-guard.ts` y `actions/mfa.ts`: preserva acceso síncrono con un cast. | Funciona en 15 y **desaparece en 16**. Siendo el gate de MFA, se resolvió de raíz (async + `await cookies()`), no se dejó como deuda. |
+| 5 | Envolver `render()` en `act()` hace que React 19 **difiera el montaje**: el `capturedOnSuccess?.()` siguiente quedaba `undefined` → no-op silencioso. | El test parecía fallar por timers falsos; la causa era otra. Sin entenderlo se habría "arreglado" el test enmascarando el defecto nº 3. |
+
+### Cambios de comportamiento aceptados
+
+- `/analytics/[kpi]`: de ● (SSG) a ƒ (dinámica). **No es regresión** — la página declara
+  `generateStaticParams` pero su layout `(admin)` llama `getCurrentUser()` → `cookies()`, que
+  fuerza render dinámico de todo el segmento. Nunca se prerenderizó de verdad; Next 15 la
+  etiquetaba mal. Las otras 292 rutas bajo esos layouts ya eran ƒ por lo mismo, y **las 20
+  estáticas —incluidas `/login` y las 9 del portal— siguen estáticas**.
+- 4 anclas `<a href>` a rutas internas convertidas a `<Link>` (dashboard, admisión, bedside,
+  censo): errores reales que `next lint` no reportaba y que causaban recarga completa de página.
+
+### Fuera de alcance, deliberadamente
+
+| Qué | Por qué |
+|---|---|
+| `middleware.ts` → `proxy.ts` | Next 16 acepta el nombre viejo (deprecado; el build ya lo reporta como "Proxy"). El rename cambia el runtime de Edge a **Node** y toca el gate fail-closed de A10 — merece etapa propia con verificación propia, no ir de polizón en el bump. |
+| ESLint 9 + flat config | `eslint-config-next@16` exige ESLint ≥9, pero **no es requisito del framework**: lo que Next 16 elimina es el comando `next lint`, no el formato de config. Arrastraría a `packages/ui` por el hoisting. Config propuesta guardada en `docs/migracion/`. |
+| `@trpc/*` RC → estable | La 11.18 exige TypeScript ≥5.7.2 (el repo está en 5.6.3): arrastraría un bump de TS sobre ~160 routers. |
+| `reactflow` → `@xyflow/react` | Paquete abandonado (última publicación 2024-06) con peer permisivo; instala con React 19 pero nunca se probó contra él. Riesgo acotado al grafo del workflow-designer. |
+
+### Pendiente
+
+**UAT manual en browser real** — es el único gate que queda y no lo cubre ninguna prueba
+automática: consola sin errores de hidratación ni `Refused to execute inline script`, y los 6
+flujos sin cobertura que identificó @QA (login, portal, `/tareas`, Server Actions de
+organización/roles, streaming del chat).
 
 ---
 
