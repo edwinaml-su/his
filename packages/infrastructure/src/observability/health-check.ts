@@ -77,11 +77,13 @@ function checkAuth(): CheckResult {
 async function checkRls(prismaClient?: PrismaLike): Promise<CheckResult> {
   try {
     const prisma = await getPrisma(prismaClient);
+    // El tagged template DEBE aplicarse sobre `prisma.$queryRaw` directamente,
+    // como en checkDb. Asignarlo antes a una variable lo desliga del cliente
+    // Prisma (`this` se pierde) y la llamada lanza — el catch lo convertía en
+    // 'fail' y este endpoint devolvía 503 de forma permanente desde el
+    // 2026-05-18, sin que fallara nada real de RLS.
     await withTimeout(
-      (async () => {
-        const fn = prisma.$queryRaw as (s: TemplateStringsArray) => Promise<unknown>;
-        await fn`SELECT current_setting('app.current_org_id', true) AS v`;
-      })(),
+      (prisma.$queryRaw as (s: TemplateStringsArray) => Promise<unknown>)`SELECT current_setting('app.current_org_id', true) AS v`,
       'rls',
     );
     return 'ok';
