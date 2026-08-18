@@ -54,6 +54,28 @@ const nextConfig = {
   async headers() {
     const isDev = process.env.NODE_ENV === "development";
 
+    // E2E CI (docker-compose.test.yml): GoTrue local corre en su propio
+    // origen (http://localhost:9999), fuera de *.supabase.co. Sin esto el
+    // browser del test bloquea el fetch de supabase-js con "Refused to
+    // connect" (CSP connect-src) y login() (e2e/_helpers/auth.ts) nunca
+    // redirige — ver .github/workflows/e2e-smoke.yml.
+    // No-op en Vercel: ahí NEXT_PUBLIC_SUPABASE_URL siempre es *.supabase.co,
+    // ya cubierto por el allowlist de abajo, así que este bloque no agrega
+    // nada. Solo se activa cuando el host NO es *.supabase.co.
+    let extraConnectSrc = "";
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    if (supabaseUrl) {
+      try {
+        const { origin, hostname } = new URL(supabaseUrl);
+        if (hostname !== "supabase.co" && !hostname.endsWith(".supabase.co")) {
+          extraConnectSrc = ` ${origin}`;
+        }
+      } catch {
+        // URL inválida — connect-src se queda como está, getSupabaseEnv()
+        // ya falla con mensaje accionable en runtime para ese caso.
+      }
+    }
+
     // Enforce CSP — aplicado en producción y preview
     const cspEnforce = [
       "default-src 'self'",
@@ -64,7 +86,7 @@ const nextConfig = {
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https://*.supabase.co",
       "font-src 'self' data:",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io",
+      `connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.vercel-insights.com https://*.ingest.sentry.io${extraConnectSrc}`,
       "frame-src 'self' https://*.supabase.co",
       "frame-ancestors 'none'",
       "object-src 'none'",

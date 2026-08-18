@@ -31,6 +31,14 @@ jobs:
     name: Supabase advisors (security)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # El contexto `secrets` no es válido en `if:` de un step (GitHub lo
+      # rechaza como "Unrecognized named-value: 'secrets'" y el workflow
+      # falla en 0s sin correr ni un job). Se declaran aquí a nivel de job y
+      # los steps evalúan `env.X` en sus `if:` en lugar de `secrets.X`.
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v6
 
@@ -39,16 +47,13 @@ jobs:
           node-version: '24'
 
       - name: Sin SUPABASE_ACCESS_TOKEN — control omitido
-        if: secrets.SUPABASE_ACCESS_TOKEN == ''
+        if: env.SUPABASE_ACCESS_TOKEN == ''
         run: |
           echo "::warning::SUPABASE_ACCESS_TOKEN no está configurado en los secrets del repo. Este control (advisors CRITICAL) no se ejecuta. Ver docs/runbooks/owasp-2025-deploy.md §6."
 
       - name: Ejecutar chequeo de advisors
         id: advisors
-        if: secrets.SUPABASE_ACCESS_TOKEN != ''
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        if: env.SUPABASE_ACCESS_TOKEN != ''
         run: |
           set +e
           node scripts/check-supabase-advisors.mjs > advisors-report.json
@@ -65,7 +70,7 @@ jobs:
           exit 0
 
       - name: Upload report
-        if: secrets.SUPABASE_ACCESS_TOKEN != ''
+        if: env.SUPABASE_ACCESS_TOKEN != ''
         uses: actions/upload-artifact@v4
         with:
           name: supabase-advisors-report
@@ -126,7 +131,7 @@ jobs:
             }
 
       - name: Notificar Slack (CRITICAL)
-        if: steps.advisors.outputs.exit_code == '2' && secrets.SLACK_WEBHOOK_URL != ''
+        if: steps.advisors.outputs.exit_code == '2' && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -147,16 +152,23 @@ jobs:
     name: Señales BD (audit chain + rate limit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # El contexto `secrets` no es válido en `if:` de un step (GitHub lo
+      # rechaza como "Unrecognized named-value: 'secrets'" y el workflow
+      # falla en 0s sin correr ni un job). Se declaran aquí a nivel de job y
+      # los steps evalúan `env.X` en sus `if:` en lugar de `secrets.X`.
+      DIRECT_URL: ${{ secrets.DIRECT_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Sin DIRECT_URL — controles omitidos
-        if: secrets.DIRECT_URL == ''
+        if: env.DIRECT_URL == ''
         run: |
           echo "::warning::DIRECT_URL no está configurado en los secrets del repo. Los controles de cadena de auditoría y picos de rate limit no se ejecutan. Ver docs/runbooks/owasp-2025-deploy.md §6."
 
       - name: Instalar cliente psql 15
-        if: secrets.DIRECT_URL != ''
+        if: env.DIRECT_URL != ''
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client-15
@@ -165,9 +177,7 @@ jobs:
       # datos (ver docs/15_production_runbook.md §14.5). Umbral: > 0 enlaces
       # rotos en 24h → falla el job (P1).
       - name: Verificar integridad de la cadena de auditoría (24h)
-        if: secrets.DIRECT_URL != ''
-        env:
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        if: env.DIRECT_URL != ''
         run: |
           BROKEN=$(psql "$DIRECT_URL" -t -A -c "
             SELECT COUNT(*)
@@ -192,9 +202,7 @@ jobs:
       # que una cubeta pegada al máximo sostenidamente es la mejor señal
       # indirecta disponible sin instrumentación nueva en la app.
       - name: Detectar picos de rate limit (5 min)
-        if: secrets.DIRECT_URL != ''
-        env:
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        if: env.DIRECT_URL != ''
         run: |
           psql "$DIRECT_URL" -c "
             SELECT \"bucketKey\", count(*) AS hits
@@ -210,7 +218,7 @@ jobs:
           fi
 
       - name: Upload rate-limit report
-        if: always() && secrets.DIRECT_URL != ''
+        if: always() && env.DIRECT_URL != ''
         uses: actions/upload-artifact@v4
         with:
           name: rate-limit-spike-report
@@ -218,7 +226,7 @@ jobs:
           retention-days: 14
 
       - name: Notificar Slack (cadena de auditoría rota)
-        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

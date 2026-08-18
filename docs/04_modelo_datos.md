@@ -812,3 +812,9 @@ Adicionalmente, `InpatientAdmission` y `Prescription` tienen triggers de state m
    estrategia con @SRE.
 8. **Extensión a §10–§14** (atención ambulatoria, hospitalización,
    emergencia, quirófano, HCE) — siguiente iteración del schema.
+
+## Portabilidad fuera de Supabase
+
+Diagnóstico cuantificado del corpus `packages/database/sql/` (227 archivos), estrategia de baseline
+evaluada y descartada/elegida, y resultado real de una prueba de reconstrucción desde cero contra un
+Postgres ajeno a Supabase: `docs/runbooks/db-reconstruccion-fuera-de-supabase.md`.

@@ -41,7 +41,16 @@ WORKDIR /repo
 
 RUN apk add --no-cache libc6-compat openssl
 
-COPY --from=deps /repo/node_modules ./node_modules
+# Todo /repo del stage deps, no solo node_modules raíz: con workspaces npm
+# puede anidar cualquier dependencia (conflicto de versión, alias
+# "npm:pkg@ver", entrada en "overrides") en packages/<x>/node_modules o
+# apps/web/node_modules en vez de hoistearla a la raíz — un COPY puntual del
+# node_modules raíz deja esas carpetas afuera y webpack no resuelve el import
+# (caso real: expr-eval -> npm:expr-eval-fork@3.0.3 terminó anidado en
+# packages/infrastructure/node_modules, no en la raíz). .dockerignore excluye
+# **/node_modules del build context, así que el COPY . . de abajo no toca ni
+# pisa ningún node_modules copiado acá — solo trae código fuente encima.
+COPY --from=deps /repo ./
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1

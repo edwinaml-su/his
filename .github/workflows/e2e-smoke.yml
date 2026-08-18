@@ -26,17 +26,35 @@ jobs:
   smoke:
     name: Playwright Smoke (@smoke)
     runs-on: ubuntu-latest
-    # setup (~1.7m) + build (~2.5m) + e2e (boot webServer ≤2m + specs + retry)
-    # superaba los 10m → timeout determinista. 20m da headroom y deja que el
-    # webServer-timeout propio de Playwright (120s) vuelque el error real si cuelga.
+    # Causa raíz del cuelgue a 20m (10/10 runs cancelados, ver investigación
+    # 2026-08-18): CADA spec @smoke llama a e2e/_helpers/auth.ts#login(), que
+    # depende de Supabase Auth real — pero NEXT_PUBLIC_SUPABASE_URL acá era un
+    # host que no resolvía (e2e-dummy.supabase.co) y packages/database/scripts/
+    # seed-test-users.mjs (que crea los usuarios qa.*@his.test) nunca se
+    # invocaba en este workflow. Login fallaba siempre, de forma determinística.
+    #
+    # Arreglo de fondo (@SRE, este mismo cambio): GoTrue real corre en
+    # docker-compose.test.yml (servicio `gotrue`) y este workflow lo levanta +
+    # siembra los test users contra él (pasos "Generar API keys de test" y
+    # "Seed usuarios de test E2E" más abajo) — login() ahora tiene contra qué
+    # autenticar de verdad. maxFailures + reporter "line" + webServer stdout
+    # piped (playwright.config.ts) siguen como red de seguridad para fallar
+    # rápido y con evidencia si algo más se rompe. 20m: el cálculo original de
+    # setup(~1.7m)+build(~2.5m)+e2e ya no puede apoyarse en el fast-fail del
+    # circuit breaker (los tests corren su curso real, no fallan todos en el
+    # primer segundo) — volvemos al headroom pre-incidente.
     timeout-minutes: 20
 
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
       DIRECT_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
-      NEXT_PUBLIC_SUPABASE_URL: https://e2e-dummy.supabase.co
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-dummy-anon
-      SUPABASE_SERVICE_ROLE_KEY: e2e-dummy-service-role
+      # GoTrue local (docker-compose.test.yml, servicio `gotrue`) — backend
+      # real de Supabase Auth para el stack de test, NO un mock. ANON_KEY y
+      # SERVICE_ROLE_KEY se derivan de GOTRUE_JWT_SECRET en el paso "Generar
+      # API keys de test (GoTrue)" — deben firmarse con el MISMO secreto que
+      # consume el contenedor `gotrue`, así que no se hardcodean acá.
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:9999
+      GOTRUE_JWT_SECRET: e2e-gotrue-test-secret-do-not-use-in-prod-only
       AUTH_SECRET: e2e-dummy-secret
       NODE_ENV: test
       # Activa el filtro de tags en playwright.config.ts:
@@ -53,8 +71,41 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Boot test stack (Postgres efímero)
+      - name: Generar API keys de test (GoTrue)
+        # ANON_KEY/SERVICE_ROLE_KEY son JWTs HS256 firmados con
+        # GOTRUE_JWT_SECRET — ver scripts/gotrue-test-jwt.mjs. Deben existir
+        # ANTES de "Build app": NEXT_PUBLIC_SUPABASE_ANON_KEY se inlinea en
+        # el bundle cliente en build time (Next.js), no en runtime.
+        run: |
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$(node scripts/gotrue-test-jwt.mjs anon)" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(node scripts/gotrue-test-jwt.mjs service_role)" >> "$GITHUB_ENV"
+
+      - name: Boot test stack (Postgres + GoTrue efímeros)
         run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Dump logs del stack (si el boot falló)
+        # Sin esto, un fallo acá es "exited (1)" sin más — el mismo tipo de
+        # fallo opaco que esta tanda de trabajo vino a eliminar. Vuelca ps -a
+        # (para ver exit codes de cada servicio) + logs completos de cada
+        # contenedor del compose, agrupados para que sea legible en el log
+        # del job de GitHub Actions.
+        if: failure()
+        run: |
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color || true
+          echo "::endgroup::"
+          echo "::group::docker inspect: healthcheck detail"
+          docker inspect his-postgres-test his-gotrue-test his-gotrue-gateway-test --format '{{.Name}}: {{json .State.Health}}' || true
+          echo "::endgroup::"
 
       - name: Install dependencies
         run: npm ci
@@ -73,6 +124,13 @@ jobs:
       - name: Seed minimal data
         run: npm run db:seed
         continue-on-error: true
+
+      - name: Seed usuarios de test E2E (GoTrue)
+        # Crea qa.admin@his.test / qa.triagist@his.test / etc. en el GoTrue
+        # local + su fila espejo en public."User" (mismo id). Sin
+        # continue-on-error: si esto falla, login() va a fallar para TODAS
+        # las specs @smoke y eso debe ser visible, no silencioso.
+        run: node packages/database/scripts/seed-test-users.mjs
 
       - name: Build app
         run: npm run build

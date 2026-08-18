@@ -35,11 +35,19 @@ jobs:
       # modifications". Verifica firmas/attestations del registry contra el
       # lockfile: detecta un tarball alterado aunque la versión coincida.
       #
-      # Va ANTES del audit de severidad alta a propósito: ese gate está en rojo
-      # deliberadamente por Next 14 (ver docs/audit/2026-08-17_owasp_2025_remediacion.md
-      # §3 A03) y así seguirá hasta el sprint de migración a Next 15.5.x. Si este
-      # paso quedara después, un job que ya falla por el audit nunca llegaría a
-      # ejecutar la verificación de firmas — quedaría cableada pero inerte.
+      # Va ANTES del audit de severidad alta a propósito: si este paso quedara
+      # después, cualquier corrida en que el audit falle nunca llegaría a ejecutar
+      # la verificación de firmas — quedaría cableada pero inerte.
+      #
+      # Histórico: el gate de audit estuvo rojo de forma sostenida (2026-07-27 a
+      # 2026-08-18) por `expr-eval` (GHSA-8gw3-rxh4-v6jx prototype pollution +
+      # GHSA-jc85-fpwf-qm7x CWE-94), paquete sin mantenimiento y SIN fix upstream
+      # en ninguna versión publicada. Cerrado 2026-08-18 aliasando la dependencia
+      # al fork parchado `expr-eval-fork@3.0.3` — la remediación que indican ambos
+      # advisories. Ver `overrides` en el package.json raíz y §3 A03 de
+      # docs/audit/2026-08-17_owasp_2025_remediacion.md.
+      # NOTA: la causa NO era Next 14. La migración a Next 16.3.1 (PR #534,
+      # 2026-08-17) es un asunto aparte y ya está hecha.
       - name: Verify registry signatures
         run: npm audit signatures
 

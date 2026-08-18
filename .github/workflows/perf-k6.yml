@@ -54,6 +54,11 @@ jobs:
       # Credenciales de usuario de prueba — nunca hardcodear en scripts.
       K6_USER_EMAIL:    ${{ secrets.E2E_ADMIN_EMAIL }}
       K6_USER_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
+      # El contexto `secrets` no es válido en `if:` de un step (GitHub lo
+      # rechaza como "Unrecognized named-value: 'secrets'" y el workflow
+      # falla en 0s sin correr ni un job). Se declara aquí a nivel de job y
+      # el step de abajo evalúa `env.SLACK_WEBHOOK_URL` en su lugar.
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 
     steps:
       - name: Checkout
@@ -147,7 +152,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Notificar regresión en Slack (opcional)
-        if: failure() && secrets.SLACK_WEBHOOK_URL != ''
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
         uses: slackapi/slack-github-action@45a88b9581bfab2566dc881e2cd66d334e621e2c # v3.0.3
         with:
           payload: |

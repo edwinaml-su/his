@@ -20,6 +20,13 @@ export const TEST_CREDENTIALS = {
   director:  { email: "qa.director@his.test",  password: "TestPass123!" },
 };
 
+// Sin timeout explícito, `waitForURL` usa el default de Playwright (30s) por
+// intento. En CI eso es puro tiempo perdido: si el login falla, falla
+// determinísticamente (credencial inexistente, backend de auth caído, etc.),
+// no por lentitud transitoria. Acotamos a 10s en CI para fallar rápido y
+// dejamos el default en local (dev cold-compile puede tardar más).
+const LOGIN_REDIRECT_TIMEOUT = process.env.CI ? 10_000 : 30_000;
+
 export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "admin") {
   const creds = TEST_CREDENTIALS[who];
   // ?skipIntro=1 salta la animación AxisMed (CC-0010) — la tarjeta de login
@@ -29,7 +36,27 @@ export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "ad
   await page.getByLabel(/contraseña|password/i).fill(creds.password);
   await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
   await maybeSelectSede(page);
-  await page.waitForURL(/\/(dashboard|patients|beds|triage|admission)/);
+  try {
+    await page.waitForURL(/\/(dashboard|patients|beds|triage|admission)/, {
+      timeout: LOGIN_REDIRECT_TIMEOUT,
+    });
+  } catch (err) {
+    // El timeout default de Playwright ("Timeout 10000ms exceeded") no dice
+    // NADA sobre la causa. Adjuntamos el estado real de la página para que
+    // el fallo sea diagnosticable desde el log de CI sin descargar el trace.
+    const currentUrl = page.url();
+    const visibleError = await page
+      .locator('[role="alert"], .error, [data-testid="login-error"]')
+      .first()
+      .innerText()
+      .catch(() => null);
+    throw new Error(
+      `login("${who}") no redirigió tras ${LOGIN_REDIRECT_TIMEOUT}ms. ` +
+        `URL actual: ${currentUrl}. ` +
+        `Mensaje de error visible: ${visibleError ?? "(ninguno)"}. ` +
+        `Causa original: ${(err as Error).message}`,
+    );
+  }
 }
 
 /**

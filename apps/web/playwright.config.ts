@@ -30,8 +30,15 @@ export default defineConfig({
   ...(grepFilter ? { retries: isCI ? 1 : 0 } : {}),
   // Filtrado por tag (E2E_GREP=@smoke selecciona solo tests cuyo nombre contiene @smoke).
   ...(grepFilter ? { grep: grepFilter } : {}),
+  // Circuit breaker: si el ambiente está roto (ej. auth backend no disponible),
+  // cada test falla igual pero de forma determinística — no tiene sentido agotar
+  // los 60s×retries de las ~80 specs una por una hasta chocar con timeout-minutes
+  // del workflow. Cortamos temprano y dejamos evidencia clara en el reporter.
+  // Smoke (PR, grep @smoke): corta rápido, es un gate de PR. Nightly: margen mayor
+  // porque busca cobertura de reporte, pero sigue acotado (no corre indefinido).
+  maxFailures: isCI ? (grepFilter ? 8 : 25) : undefined,
   reporter: isCI
-    ? [["html", { open: "never" }], ["junit", { outputFile: "playwright-report/results.xml" }]]
+    ? [["line"], ["html", { open: "never" }], ["junit", { outputFile: "playwright-report/results.xml" }]]
     : [["list"], ["html", { open: "never" }]],
   use: {
     baseURL: process.env.E2E_BASE_URL ?? "http://localhost:3000",
@@ -52,6 +59,13 @@ export default defineConfig({
     url: "http://localhost:3000",
     reuseExistingServer: !isCI,
     timeout: 120_000,
+    // Por defecto Playwright IGNORA el stdout/stderr del webServer. En CI eso
+    // significa que si `next start` cuelga o tarda, el log del job queda en
+    // silencio total (sin evidencia) hasta el timeout — confirmado en el run
+    // 32093103211 (2026-08-18): 16m22s sin una sola línea entre "Running
+    // test:e2e" y la cancelación. Con esto el boot del server queda visible.
+    stdout: isCI ? "pipe" : "ignore",
+    stderr: "pipe",
     env: {
       NODE_ENV: "test",
       DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://postgres:postgres@localhost:5432/his_test",

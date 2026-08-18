@@ -1,6 +1,19 @@
 # =============================================================================
 # HIS Multipaís - Stack de testing E2E (efímero, usado por CI)
 # tmpfs en lugar de volumes → BD se destruye al bajar el stack
+#
+# gotrue: backend real de Supabase Auth para el stack de test. Necesario
+# porque TODAS las specs @smoke pasan por e2e/_helpers/auth.ts#login(), que
+# llama a supabase.auth.signInWithPassword() — sin un backend de auth real
+# alcanzable, ese login falla siempre (ver investigación 2026-08-18,
+# comentario en .github/workflows/e2e-smoke.yml). Mismo servicio (GoTrue) que
+# corre en Supabase real, no un mock/bypass.
+#
+# GOTRUE_JWT_SECRET se toma del entorno (shell/CI), NO se hardcodea acá, para
+# que sea la MISMA fuente de verdad que consume `scripts/gotrue-test-jwt.mjs`
+# al derivar ANON_KEY/SERVICE_ROLE_KEY (ver ese script y los workflows E2E).
+# El default solo cubre `docker compose up` manual en una máquina de
+# desarrollo — es un secreto de un stack tmpfs efímero, no un secreto real.
 # =============================================================================
 
 services:
@@ -15,8 +28,89 @@ services:
       - '5432:5432'
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      # docker-entrypoint-initdb.d: corre en cada boot porque el data dir es
+      # tmpfs (nunca "ya inicializado"). Crea el schema `auth` + rol
+      # `postgres` que GoTrue necesita y NO crea solo — ver
+      # scripts/gotrue-test-init.sql para la causa raíz completa (confirmada
+      # con logs reales de CI, run 32159780220: GoTrue moría con
+      # "schema \"auth\" does not exist" sin esto).
+      - ./scripts/gotrue-test-init.sql:/docker-entrypoint-initdb.d/00-gotrue-test-init.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U his -d his_e2e']
       interval: 5s
       timeout: 3s
       retries: 10
+
+  gotrue:
+    # Pin de versión (sin `latest`, disciplina del repo — ver CLAUDE.md).
+    # v2.189.0 verificado en Docker Hub (supabase/gotrue) 2026-08-18.
+    image: supabase/gotrue:v2.189.0
+    container_name: his-gotrue-test
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: '9999'
+      API_EXTERNAL_URL: http://localhost:9999
+      GOTRUE_JWT_ISSUER: http://localhost:9999
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_URI_ALLOW_LIST: http://localhost:3000/**
+      GOTRUE_DB_DRIVER: postgres
+      # Misma BD que usa Prisma (his_e2e), schema `auth` propio de GoTrue
+      # (namespace separado de `public`). packages/database/scripts/
+      # seed-test-users.mjs inserta en public."User" con el MISMO id (uuid)
+      # que auth.users — por eso comparten instancia de Postgres.
+      GOTRUE_DB_DATABASE_URL: postgres://his:his@postgres-test:5432/his_e2e?sslmode=disable
+      GOTRUE_DB_NAMESPACE: auth
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:-e2e-gotrue-test-secret-do-not-use-in-prod-only}
+      GOTRUE_JWT_EXP: '3600'
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      # Autoconfirmar email: sin esto, signInWithPassword devuelve "Email not
+      # confirmed". seed-test-users.mjs ya crea los usuarios con
+      # email_confirm:true, pero autoconfirm además cubre cualquier signup
+      # público que corra alguna spec @smoke (ej. registro de portal).
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
+      GOTRUE_DISABLE_SIGNUP: 'false'
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_LOG_LEVEL: info
+    # Sin publicar puerto al host: GoTrue solo se alcanza dentro de la red del
+    # compose, en `gotrue:9999`. El puerto 9999 del HOST lo publica
+    # `gotrue-gateway` (ver abajo) — GoTrue no entiende el prefijo `/auth/v1`
+    # que la app y seed-test-users.mjs sí usan (ver comentario del gateway).
+    healthcheck:
+      # Mismo comando que usa el docker-compose.yml oficial de self-hosting
+      # de Supabase para este servicio.
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/health']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+
+  gotrue-gateway:
+    # nginx:1.27.4-alpine verificado en Docker Hub 2026-08-18. Reemplaza el
+    # server block por defecto — ver scripts/gotrue-test-gateway.conf para la
+    # causa raíz completa (confirmada con logs reales de CI, run
+    # 32161787085: seed-test-users.mjs y, por extensión, el propio
+    # @supabase/supabase-js de la app reciben 404 de GoTrue porque este NO
+    # implementa el prefijo `/auth/v1` — eso es una convención de Kong que
+    # el stack de self-hosting de Supabase completo agrega, y este stack de
+    # test no tiene Kong). Este gateway hace ese único rewrite.
+    image: nginx:1.27.4-alpine
+    container_name: his-gotrue-gateway-test
+    depends_on:
+      gotrue:
+        condition: service_healthy
+    volumes:
+      - ./scripts/gotrue-test-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '9999:9999'
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/auth/v1/health']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s

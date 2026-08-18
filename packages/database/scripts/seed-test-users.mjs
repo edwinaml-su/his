@@ -55,8 +55,23 @@ async function ensureAuthUser({ email, password }) {
   throw new Error(`Error inesperado ${create.status}: ${await create.text()}`);
 }
 
+// Contra Supabase real (o cualquier host remoto) TLS es obligatorio — para
+// eso está `ssl: { rejectUnauthorized: false }`. Pero contra el Postgres
+// efímero de CI (docker-compose.test.yml, sin TLS) no hay downgrade posible:
+// node-postgres con `ssl` truthy exige el handshake y aborta con "The server
+// does not support SSL connections" si el server no lo soporta. En vez de
+// una env var nueva (fácil de dejar mal puesta), lo derivamos de la propia
+// DIRECT_URL: localhost/127.0.0.1 (nunca es Supabase) o `sslmode=disable`
+// explícito desactivan TLS; cualquier otro host lo sigue exigiendo.
+const dbUrl = new URL(db);
+const isLocalNoSsl =
+  ['localhost', '127.0.0.1'].includes(dbUrl.hostname) || /[?&]sslmode=disable\b/.test(db);
+
 const cleanUrl = db.replace(/[?&]sslmode=[^&]*/g, '').replace('?&', '?').replace(/[?&]$/, '');
-const client = new pg.Client({ connectionString: cleanUrl, ssl: { rejectUnauthorized: false } });
+const client = new pg.Client({
+  connectionString: cleanUrl,
+  ...(isLocalNoSsl ? {} : { ssl: { rejectUnauthorized: false } }),
+});
 await client.connect();
 
 try {

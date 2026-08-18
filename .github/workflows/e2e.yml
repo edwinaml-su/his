@@ -27,9 +27,13 @@ jobs:
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
       DIRECT_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
-      NEXT_PUBLIC_SUPABASE_URL: https://e2e-dummy.supabase.co
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-dummy-anon
-      SUPABASE_SERVICE_ROLE_KEY: e2e-dummy-service-role
+      # GoTrue local (docker-compose.test.yml, servicio `gotrue`) — backend
+      # real de Supabase Auth para el stack de test, NO un mock. ANON_KEY y
+      # SERVICE_ROLE_KEY se derivan de GOTRUE_JWT_SECRET en el paso "Generar
+      # API keys de test (GoTrue)" — deben firmarse con el MISMO secreto que
+      # consume el contenedor `gotrue`, así que no se hardcodean acá.
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:9999
+      GOTRUE_JWT_SECRET: e2e-gotrue-test-secret-do-not-use-in-prod-only
       AUTH_SECRET: e2e-dummy-secret
       NODE_ENV: test
 
@@ -43,8 +47,41 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Boot test stack (Postgres + Redis efímeros)
+      - name: Generar API keys de test (GoTrue)
+        # ANON_KEY/SERVICE_ROLE_KEY son JWTs HS256 firmados con
+        # GOTRUE_JWT_SECRET — ver scripts/gotrue-test-jwt.mjs. Deben existir
+        # ANTES de "Build app": NEXT_PUBLIC_SUPABASE_ANON_KEY se inlinea en
+        # el bundle cliente en build time (Next.js), no en runtime.
+        run: |
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$(node scripts/gotrue-test-jwt.mjs anon)" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(node scripts/gotrue-test-jwt.mjs service_role)" >> "$GITHUB_ENV"
+
+      - name: Boot test stack (Postgres + GoTrue efímeros)
         run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Dump logs del stack (si el boot falló)
+        # Sin esto, un fallo acá es "exited (1)" sin más — el mismo tipo de
+        # fallo opaco que esta tanda de trabajo vino a eliminar. Vuelca ps -a
+        # (para ver exit codes de cada servicio) + logs completos de cada
+        # contenedor del compose, agrupados para que sea legible en el log
+        # del job de GitHub Actions.
+        if: failure()
+        run: |
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color || true
+          echo "::endgroup::"
+          echo "::group::docker inspect: healthcheck detail"
+          docker inspect his-postgres-test his-gotrue-test his-gotrue-gateway-test --format '{{.Name}}: {{json .State.Health}}' || true
+          echo "::endgroup::"
 
       - name: Install dependencies
         run: npm ci
@@ -63,6 +100,12 @@ jobs:
       - name: Seed minimal data
         run: npm run db:seed
         continue-on-error: true
+
+      - name: Seed usuarios de test E2E (GoTrue)
+        # Crea qa.admin@his.test / qa.triagist@his.test / etc. en el GoTrue
+        # local + su fila espejo en public."User" (mismo id). Sin
+        # continue-on-error: si esto falla, login() falla para TODA la suite.
+        run: node packages/database/scripts/seed-test-users.mjs
 
       - name: Build app
         run: npm run build
