@@ -82,12 +82,27 @@ COMMENT ON TABLE ece.gs1_epcis_patient_event IS
 
 -- ---------------------------------------------------------------------------
 -- 2. RLS — mismo patrón tenant-scoped que ece.gs1_epcis_event (SQL 94), pero
--- SIN grant de UPDATE/DELETE a `authenticated`: la única vía de mutación de
--- una fila ya insertada es la función SECURITY DEFINER de anonimización de
--- abajo, invocada desde un flujo administrativo controlado
+-- SIN policy de UPDATE/DELETE para `authenticated`: la única vía de mutación
+-- de una fila ya insertada es la función SECURITY DEFINER de anonimización
+-- de abajo, invocada desde un flujo administrativo controlado
 -- (portal-arco.router.ts al resolver una SUPRESION APROBADA), nunca desde
 -- un router de escritura de uso general. Esto evita crear un segundo camino
 -- de escritura paralelo al ya aceptado para ARCO (dictamen §3.5 punto 3).
+--
+-- Con RLS activo y sin policy para UPDATE/DELETE, Postgres deniega por
+-- defecto esos comandos para CUALQUIER fila (afectan 0 filas, sin error) —
+-- verificado empíricamente contra Postgres 18 nativo. Esa es la garantía
+-- real. El REVOKE explícito de abajo es defensa en profundidad, NO la
+-- garantía en sí: `ALTER DEFAULT PRIVILEGES IN SCHEMA ece GRANT SELECT,
+-- INSERT, UPDATE, DELETE ON TABLES TO authenticated` (58_ece_schema_grants.sql
+-- §5) inyecta UPDATE/DELETE a `authenticated` en toda tabla nueva del schema
+-- `ece` en el momento de CREATE TABLE, sin importar qué GRANT declare este
+-- archivo — confirmado contra prod vía information_schema.role_table_grants
+-- en ece.gs1_epcis_event/ece.gs1_gtin/ece.epcis_event_equipment, que tienen
+-- el mismo patrón "solo declara SELECT, INSERT" y terminan con las 4
+-- privilegios igual. El REVOKE deja el estado de grants coherente con lo que
+-- este comentario declara, y cierra el margen si algún día se agrega una
+-- policy de UPDATE/DELETE por error en otro archivo.
 -- ---------------------------------------------------------------------------
 
 ALTER TABLE ece.gs1_epcis_patient_event ENABLE ROW LEVEL SECURITY;
@@ -107,6 +122,15 @@ CREATE POLICY gs1_epcis_patient_event_insert ON ece.gs1_epcis_patient_event
 -- Sin policy de UPDATE/DELETE para `authenticated` — ver comentario arriba.
 GRANT SELECT, INSERT ON ece.gs1_epcis_patient_event TO authenticated;
 GRANT ALL ON ece.gs1_epcis_patient_event TO service_role;
+
+-- REVOKE explícito: ALTER DEFAULT PRIVILEGES IN SCHEMA ece (58_ece_schema_grants.sql
+-- §5) ya inyectó UPDATE/DELETE a `authenticated` en el CREATE TABLE de arriba
+-- (afecta a toda tabla nueva del schema, no solo a esta). Sin este REVOKE el
+-- GRANT de la línea de arriba mentiría sobre el estado real de privilegios.
+-- `service_role` NO se toca: es rol administrativo con BYPASSRLS (convención
+-- Supabase) usado por flujos de servidor/seed confiables — el GRANT ALL de
+-- arriba es intencional, no el mismo problema.
+REVOKE UPDATE, DELETE ON ece.gs1_epcis_patient_event FROM authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. Anonimización ARCO — única vía de mutación post-insert. SECURITY DEFINER
