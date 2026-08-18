@@ -1,5 +1,14 @@
 name: DB Migrate (Prisma deploy)
 
+# ⚠️ Workflow inerte por ahora: el proyecto NO usa el flujo estándar de
+# Prisma Migrate (no existe packages/database/prisma/migrations/). El flujo
+# real, documentado en CLAUDE.md, es schema.prisma + archivos SQL numerados
+# en packages/database/sql/ aplicados vía Supabase MCP / SQL Editor. Sin un
+# guard, `prisma migrate deploy` corría sobre 0 migraciones trackeadas: podía
+# "tener éxito" sin aplicar nada (falsa sensación de BD sincronizada) o
+# fallar de forma opaca. El primer step aborta explícito en ese caso — ver
+# @DBA para el baseline de migraciones Prisma en curso, que reactivará este
+# workflow.
 on:
   workflow_dispatch:
     inputs:
@@ -43,6 +52,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Verificar prerequisitos (fail-fast)
+        run: |
+          # 1) Este proyecto no trackea migraciones Prisma — abortar explícito
+          #    en vez de dejar que `prisma migrate deploy` corra sobre 0
+          #    migraciones y reporte éxito engañoso, o falle de forma opaca.
+          if [ ! -d "packages/database/prisma/migrations" ] || [ -z "$(ls -A packages/database/prisma/migrations 2>/dev/null)" ]; then
+            echo "::error::No existe packages/database/prisma/migrations/ (o está vacío). Este proyecto NO usa 'prisma migrate deploy' — el flujo real es schema.prisma + SQL numerados en packages/database/sql/ aplicados vía Supabase MCP/SQL Editor (ver CLAUDE.md). Este workflow queda deshabilitado hasta que exista un baseline real de migraciones Prisma."
+            exit 1
+          fi
+
+          # 2) Sin credenciales del ambiente, `prisma migrate deploy` falla con
+          #    un error de conexión difícil de diagnosticar. Fallar antes, con
+          #    un mensaje que apunte a la causa real.
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL vacío para el ambiente '${{ github.event.inputs.environment }}'. Configura el secret en Settings → Environments → ${{ github.event.inputs.environment }} antes de correr este workflow."
+            exit 1
+          fi
+          if [ -z "$DIRECT_URL" ]; then
+            echo "::error::DIRECT_URL vacío para el ambiente '${{ github.event.inputs.environment }}'. Configura el secret en Settings → Environments → ${{ github.event.inputs.environment }} antes de correr este workflow."
+            exit 1
+          fi
 
       - name: Setup Node 24
         uses: actions/setup-node@v6

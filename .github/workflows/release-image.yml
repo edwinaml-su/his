@@ -13,11 +13,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# packages: write para publicar en GHCR; contents: read para checkout.
+# packages: write para publicar en GHCR; contents: read para checkout;
+# security-events: write para subir el SARIF de Trivy a code scanning.
 # Scope mínimo (mismo criterio que ci.yml [infra-P1-3]).
 permissions:
   contents: read
   packages: write
+  security-events: write
 
 concurrency:
   group: release-image-${{ github.ref }}
@@ -32,10 +34,23 @@ jobs:
   build-push:
     name: Build & push (GHCR)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 min alcanzaba solo para amd64 (~5-9 min con caché). Con arm64 bajo QEMU
+    # en tags v*/workflow_dispatch (ver step "Build & push") el build del stage
+    # builder (npm ci + prisma generate + next build) corre emulado y es
+    # sensiblemente más lento — 45 min da margen sin dejar el job crónicamente
+    # al límite. push a main normal sigue siendo solo amd64 nativo, mismo tiempo de antes.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Solo se registra QEMU cuando de verdad se va a construir arm64 (evita
+      # el overhead en cada push normal a main, que sigue siendo amd64-only).
+      - name: Set up QEMU (para build arm64 emulado)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
@@ -64,12 +79,19 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build & push
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ./Dockerfile
-          # arm64 diferido hasta decidir cluster (Blocker 3). amd64 cubre EKS/GKE/on-prem x86.
-          platforms: linux/amd64
+          # arm64 (Graviton/Ampere/Mac M-series) solo en tags v* y workflow_dispatch:
+          # bajo QEMU el build completo (npm ci + prisma generate + next build) del
+          # stage builder es varias veces más lento que nativo, y correrlo en cada
+          # push a main arriesgaría timeout crónico. Los pushes normales a main
+          # (la mayoría del tráfico de este workflow) siguen en amd64 nativo, mismo
+          # tiempo que antes. Revisar si conviene runner arm64 nativo (GH-hosted o
+          # self-hosted) cuando el volumen de releases lo justifique.
+          platforms: ${{ (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -82,6 +104,83 @@ jobs:
             APP_VERSION=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # provenance/SBOM attestation genera un manifest-list que algunos runtimes
-          # (y el HEALTHCHECK simple) no esperan; se omite por compatibilidad.
-          provenance: false
+          # Reactivado: la justificación previa (manifest-list que "algunos runtimes
+          # no esperan") ya no aplica — con arm64 (arriba) el resultado es un
+          # manifest-list/index de todos modos aunque provenance esté apagado, y
+          # GHCR + containerd/EKS/GKE (destino real de esta imagen) soportan OCI
+          # image index sin problema. HEALTHCHECK no se ve afectado: vive en la
+          # config de cada imagen de plataforma, no en el índice que las agrupa.
+          # mode=min (no max): atestación SLSA básica (builder id, materials, digest)
+          # sin volcar el build config completo — menos superficie para un sistema
+          # con requisitos JCI/pentest en curso.
+          provenance: mode=min
+
+      # Solo cuando se publica: en pull_request no hay push (push: false arriba),
+      # así que el digest recién construido no existe todavía en el registry.
+      # steps.build.outputs.digest es el digest del manifest-list/index cuando
+      # hay multi-arch (tags v*/workflow_dispatch); Trivy resuelve automáticamente
+      # la variante linux/amd64 (misma plataforma del runner) para escanearla —
+      # suficiente para el propósito de este gate (paquetes OS/lib son los mismos
+      # entre arquitecturas salvo casos puntuales).
+      - name: Scan image for vulnerabilities (Trivy)
+        # id necesario para que los dos steps de upload puedan chequear
+        # steps.trivy.outcome (ver comentario de continue-on-error abajo).
+        id: trivy
+        if: github.event_name != 'pull_request'
+        # El paquete ghcr.io/edwinaml-su/his-web es privado: el pull que hace
+        # Trivy corre en su propio contenedor y NO hereda las credenciales que
+        # docker/login-action dejó en el docker config del runner. Se le pasan
+        # por su propio mecanismo documentado (README de trivy-action, sección
+        # "Using Trivy to scan your private registry"): env TRIVY_USERNAME/
+        # TRIVY_PASSWORD, mismas credenciales que ya usa el login a GHCR arriba.
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        # Fallo del scanner en sí (pull, descarga de DB de vulnerabilidades, etc.)
+        # no debe tumbar un job cuya imagen ya se construyó y publicó bien —
+        # por eso continue-on-error. Los CVEs encontrados NO entran por acá:
+        # ese caso ya lo cubre exit-code:'0' abajo (Trivy sale 0 aunque haya
+        # hallazgos). continue-on-error es la red para errores de herramienta
+        # (auth, red, DB), no para hallazgos de severidad.
+        # OJO al ejecutar el TODO de abajo (pasar exit-code a 1): ese cambio por
+        # sí solo NO vuelve bloqueante el step mientras continue-on-error siga
+        # en true — hay que quitar o condicionar continue-on-error en el mismo PR
+        # que active el bloqueo, si no el "gate" nunca bloquea nada.
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          # No pude ejecutar Trivy localmente contra la imagen real (Docker Desktop
+          # sin daemon corriendo en esta máquina) para medir el ruido real de CVEs
+          # de la base node:24-alpine + deps. Arrancar en modo no bloqueante evita
+          # que el gate quede rojo el día uno por CVEs heredados de la imagen base
+          # y se vuelva ruido que el equipo ignora (mismo error que estamos
+          # cerrando en otros workflows). El reporte igual se sube como artifact +
+          # SARIF a code scanning para visibilidad inmediata.
+          # TODO(2026-09-18): revisar el acumulado de hallazgos de un mes en code
+          # scanning y decidir si exit-code pasa a 1 (bloqueante) para CRITICAL,HIGH.
+          exit-code: '0'
+
+      # Gateado también a steps.trivy.outcome == 'success': si Trivy falló como
+      # herramienta (ver continue-on-error arriba), no hay trivy-results.sarif
+      # que subir — sin este chequeo, if-no-files-found: error fallaría este step
+      # en cascada por una razón que no es la que le importa a nadie (el scanner
+      # se cayó, no que la imagen tenga CVEs), y arrastraría el job entero al rojo
+      # pese a que build+push de la imagen ya salieron bien.
+      - name: Upload Trivy report (artifact)
+        if: github.event_name != 'pull_request' && steps.trivy.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-results-${{ github.sha }}
+          path: trivy-results.sarif
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload Trivy SARIF to code scanning
+        if: github.event_name != 'pull_request' && steps.trivy.outcome == 'success'
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        with:
+          sarif_file: trivy-results.sarif

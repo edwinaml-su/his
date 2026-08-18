@@ -1,6 +1,19 @@
 # =============================================================================
 # HIS Multipaís - Stack de testing E2E (efímero, usado por CI)
 # tmpfs en lugar de volumes → BD se destruye al bajar el stack
+#
+# gotrue: backend real de Supabase Auth para el stack de test. Necesario
+# porque TODAS las specs @smoke pasan por e2e/_helpers/auth.ts#login(), que
+# llama a supabase.auth.signInWithPassword() — sin un backend de auth real
+# alcanzable, ese login falla siempre (ver investigación 2026-08-18,
+# comentario en .github/workflows/e2e-smoke.yml). Mismo servicio (GoTrue) que
+# corre en Supabase real, no un mock/bypass.
+#
+# GOTRUE_JWT_SECRET se toma del entorno (shell/CI), NO se hardcodea acá, para
+# que sea la MISMA fuente de verdad que consume `scripts/gotrue-test-jwt.mjs`
+# al derivar ANON_KEY/SERVICE_ROLE_KEY (ver ese script y los workflows E2E).
+# El default solo cubre `docker compose up` manual en una máquina de
+# desarrollo — es un secreto de un stack tmpfs efímero, no un secreto real.
 # =============================================================================
 
 services:
@@ -20,3 +33,49 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  gotrue:
+    # Pin de versión (sin `latest`, disciplina del repo — ver CLAUDE.md).
+    # v2.189.0 verificado en Docker Hub (supabase/gotrue) 2026-08-18.
+    image: supabase/gotrue:v2.189.0
+    container_name: his-gotrue-test
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: '9999'
+      API_EXTERNAL_URL: http://localhost:9999
+      GOTRUE_JWT_ISSUER: http://localhost:9999
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_URI_ALLOW_LIST: http://localhost:3000/**
+      GOTRUE_DB_DRIVER: postgres
+      # Misma BD que usa Prisma (his_e2e), schema `auth` propio de GoTrue
+      # (namespace separado de `public`). packages/database/scripts/
+      # seed-test-users.mjs inserta en public."User" con el MISMO id (uuid)
+      # que auth.users — por eso comparten instancia de Postgres.
+      GOTRUE_DB_DATABASE_URL: postgres://his:his@postgres-test:5432/his_e2e?sslmode=disable
+      GOTRUE_DB_NAMESPACE: auth
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:-e2e-gotrue-test-secret-do-not-use-in-prod-only}
+      GOTRUE_JWT_EXP: '3600'
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      # Autoconfirmar email: sin esto, signInWithPassword devuelve "Email not
+      # confirmed". seed-test-users.mjs ya crea los usuarios con
+      # email_confirm:true, pero autoconfirm además cubre cualquier signup
+      # público que corra alguna spec @smoke (ej. registro de portal).
+      GOTRUE_MAILER_AUTOCONFIRM: 'true'
+      GOTRUE_DISABLE_SIGNUP: 'false'
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_LOG_LEVEL: info
+    ports:
+      - '9999:9999'
+    healthcheck:
+      # Mismo comando que usa el docker-compose.yml oficial de self-hosting
+      # de Supabase para este servicio.
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/health']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
