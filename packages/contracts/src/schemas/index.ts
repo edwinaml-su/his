@@ -48,6 +48,7 @@ export * from "./ece-workflow";
 export * from "./gs1-devoluciones";
 export * from "./gs1-inbound";
 export * from "./gs1-proceso-c";
+export * from "./gs1-epcis-patient-event";
 export * from "./ehr-notes";
 export * from "./emergency";
 export * from "./encounter";

@@ -132,6 +132,14 @@ describe("encounterTransferRouter", () => {
       const executeRawUnsafe = vi.fn().mockResolvedValue(1);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma as any).$executeRawUnsafe = executeRawUnsafe;
+      // persistPatientMovementEvent captura `current_user` ANTES de demotar
+      // (fix Defecto A — RESET ROLE no es un pop de stack, ver
+      // epcis-patient-persist.ts). Esta tx corre en $transaction plano
+      // (nunca demotada), así que el rol "de sesión" simulado aquí es el
+      // que debe restaurarse al final — no "authenticated".
+      prisma.$queryRawUnsafe.mockResolvedValue([
+        { current_user: "postgres_test_session_role" },
+      ] as never);
 
       const caller = encounterTransferRouter.createCaller(makeCtx({ prisma }));
       await caller.transferEncounter({
@@ -150,9 +158,14 @@ describe("encounterTransferRouter", () => {
       expect(subtipo).toBe("PATIENT_TRANSFER_DEPARTURE");
       expect(JSON.parse(what as string)).toMatchObject({ gsrn });
 
-      // El demote/reset de rol ocurrió alrededor del INSERT (epcis-patient-persist.ts).
+      // El demote ocurrió alrededor del INSERT (epcis-patient-persist.ts) y el
+      // rol se restaura al capturado por `current_user` — NUNCA `RESET ROLE`
+      // (Defecto A: RESET ROLE no es un pop de stack, ver epcis-patient-persist.ts).
       expect(executeRawUnsafe).toHaveBeenCalledWith("SET LOCAL ROLE authenticated");
-      expect(executeRawUnsafe).toHaveBeenCalledWith("RESET ROLE");
+      expect(executeRawUnsafe).toHaveBeenCalledWith(
+        'SET LOCAL ROLE "postgres_test_session_role"',
+      );
+      expect(executeRawUnsafe).not.toHaveBeenCalledWith("RESET ROLE");
     });
   });
 
