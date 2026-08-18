@@ -8,7 +8,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Stack y comandos esenciales
 
-Turborepo + npm workspaces. Node ≥ 20, npm ≥ 10. Stack: Next.js 14 App Router + tRPC v11 + Prisma 5 + Postgres 15 (Supabase) + Tailwind/Shadcn.
+Turborepo + npm workspaces. **Node 24.x** (`engines` lo fija exacto, no es un mínimo), npm ≥ 10 (`packageManager: npm@11.9.0`). Stack: **Next.js 16 App Router + React 19** + tRPC v11 + Prisma 5 + Postgres 15 (Supabase) + Tailwind/Shadcn.
+
+Versiones instaladas (verificado 2026-08-18 — si tocás una, actualizá esta tabla en el mismo PR):
+
+| Pieza | Versión | Nota |
+|---|---|---|
+| Node / npm | 24.x / 11.9.0 | Alineado en `engines`, `ci.yml`, `Dockerfile` y K8s. Next 16 exige ≥ 20.9 |
+| Next.js | 16.3.1 | Migrado desde 14 en #534 (2026-08-17). `headers()` es **async** |
+| React / React DOM | 19.2.8 | Pineado exacto vía `overrides` en la raíz |
+| TypeScript | 5.9.3 | Declarado `^5.6.3`; Dependabot ignora el mayor a 6 |
+| Turborepo | 2.9.16 | |
+| tRPC | 11.17.0 | El `package.json` aún declara `^11.0.0-rc.660`, pero resuelve a estable |
+| Prisma / @prisma/client | 5.22.0 | `prisma generate` obligatorio en `installCommand` de Vercel |
+| Postgres | 15 (Supabase) | 227 SQL numerados en `packages/database/sql/` — ver §Motor de workflow |
+| Tailwind | 3.4.19 | + Shadcn en `@his/ui` |
+| Zod | 3.25.76 | Base de `@his/contracts` |
+| Supabase JS / SSR | 2.108 / 0.5.2 | Auth vía `signInWithPassword`, no credenciales locales |
+| Vitest | 2.1.9 | Dependabot ignora el mayor a 4 |
+| Playwright | 1.60 | `workers: 1`, BD compartida |
+| Sentry | 10.70 | Requiere `SENTRY_DSN` para activarse |
+
+**Cuidado con los bumps mayores:** `.github/dependabot.yml` ignora `semver-major` global y `semver-minor` en 13 librerías 0.x, por historia pagada (Next 14→16, TS 5→6, Vitest 2→4, Prisma 5→7, tiptap-markdown 0.8→0.9). Si un bump rompe CI: revertir y cerrar el PR de Dependabot, no arreglar el breaking en caliente.
 
 ```bash
 # raíz (turbo orquesta los workspaces)
@@ -46,16 +67,19 @@ apps/web/                  # Next.js App Router. Rutas en grupos: (admin) / (aut
 packages/
   database/                # schema.prisma (4NF) + sql/ (RLS + hardening + workflow seed) + seeds
   contracts/               # Zod schemas (ECE+GS1 re-exportados), validadores SV (DUI/NIT/NIE), eventos
-  trpc/                    # ~120 routers (83 raíz + 38 en routers/ece/), trpc.ts, rls-context.ts ⚠ §RLS
-  infrastructure/          # observability (slo-checks), firma/argon2, adaptadores externos
-  ui/                      # design system Shadcn/Tailwind compartido
+  trpc/                    # 152 routers (102 raíz + 50 en routers/ece/), trpc.ts, rls-context.ts ⚠ §RLS
+  infrastructure/          # observability (slo-checks), firma/argon2, motor de fórmulas clínicas, adaptadores externos
+  ui/                      # design system Shadcn/Tailwind compartido ⚠ sin script `test`: sus tests NO corren en CI
+  bi/                      # capa analítica (dashboards/KPIs)
   test-utils/              # fixtures (DUI válidos, pacientes, encounters), mock-session
   config/eslint/           # config compartida
 tests/features/            # Gherkin (.feature) — BDD de @QAF, no ejecutables, son spec
-docs/                      # 33 docs numerados + flujos/ (30 fichas NTEC) + adr/ + blueprints/ + uat/
-infra/terraform/           # placeholder (BI/data fase posterior)
-scripts/                   # diagnose-supabase-env.mjs, db-reset, setup, golive-checklist
+docs/                      # docs numerados + flujos/ (30 fichas NTEC) + adr/ + blueprints/ + runbooks/ + uat/ + CC/
+infra/                     # k8s/ (base + overlays), k6/ (perf), observability/, docker/, terraform/ (placeholder)
+scripts/                   # diagnose-supabase-env.mjs, db-reset, setup, golive-checklist, gotrue-test-* (E2E)
 ```
+
+Los 9 workspaces (`apps/web` + los 8 `packages/*`) deben estar espejados en el stage `deps` del `Dockerfile`: `npm ci` con workspaces exige que cada `package.json` del lockfile esté presente.
 
 **Sin carpeta `prisma/migrations`.** El flujo es **schema.prisma + SQL files numerados en `packages/database/sql/`** aplicados vía Supabase SQL Editor / MCP. Es deliberado. No corras `prisma migrate dev` contra el proyecto Supabase de producción.
 
@@ -150,21 +174,39 @@ CI ejecuta `npx turbo run test -- --coverage`. El `--` es necesario o turbo inte
 
 - `fullyParallel: false`, `workers: 1` — los specs comparten BD efímera, no paralelizar.
 - `locale: "es-SV"`, `timezoneId: "America/El_Salvador"` — fijos.
-- Test users en `apps/web/e2e/_helpers`: `qa.admin@his.test`, `qa.triagist@his.test` (password `TestPass123!`). Se siembran desde `packages/database/scripts/seed-test-users.mjs`.
-- Workflow `.github/workflows/e2e.yml` corre nightly + workflow_dispatch (no en cada PR).
+- Test users en `apps/web/e2e/_helpers`: `qa.admin@his.test`, `qa.triagist@his.test` (password `TestPass123!`). Se siembran desde `packages/database/scripts/seed-test-users.mjs` **contra un backend de auth**, no en la BD local: el login de la app usa `supabase.auth.signInWithPassword`, no `UserCredential`.
+- **El stack de test levanta su propio Supabase Auth** (`docker-compose.test.yml`): Postgres + GoTrue + un gateway nginx. El gateway es obligatorio: GoTrue monta sus rutas en la raíz (`/admin/users`, `/token`), mientras que `supabase-js` siempre construye `${url}/auth/v1/...` — ese prefijo lo sirve Kong en Supabase real. Sin el gateway, todo da 404.
+- `.github/workflows/e2e.yml` corre nightly + workflow_dispatch; `e2e-smoke.yml` corre el subconjunto `@smoke` en cada PR.
+- ⚠️ **`@smoke` sigue rojo**: el stack levanta healthy pero el seed falla con `500 Database error checking email`, y las 77 specs nunca corrieron contra auth real (esperar fallos de producto acumulados). Detalle completo en `docs/runbooks/e2e-gotrue-auth.md`.
 
 ---
 
 ## CI/CD
 
+12 workflows. Los marcados **[req]** son *required status checks* de `main` (ver §Convenciones):
+
 | workflow | trigger | qué hace |
 |---|---|---|
-| `ci.yml` | push/PR a `main`/`develop` | typecheck + lint + test (coverage) + build + a11y placeholder |
-| `e2e.yml` | nightly + manual | Playwright contra Postgres efímero |
-| `db-migrate.yml` | manual (`workflow_dispatch`) | `prisma migrate deploy` con env protection |
-| `security.yml` | semanal + push a `main` | npm audit (high+) + gitleaks |
+| `ci.yml` **[req]** | push/PR a `main`/`develop` | typecheck + lint + test (coverage) + build + a11y placeholder |
+| `release-image.yml` **[req]** | push a `main`, tags `v*`, PR, manual | build imagen → GHCR (`ghcr.io/edwinaml-su/his-web`) + escaneo Trivy. arm64 solo en tags `v*`/manual (QEMU es lento) |
+| `a11y.yml` **[req]** | push/PR + nightly | axe-core WCAG 2.1 AA sobre 5 páginas baseline |
+| `e2e-smoke.yml` | PR a `main`/`develop` | Playwright `@smoke` contra stack efímero (Postgres + GoTrue + gateway nginx) |
+| `e2e.yml` | nightly + manual | suite Playwright completa |
+| `security.yml` | semanal + push que toque deps | `npm audit signatures` + audit high+ + SBOM CycloneDX + gitleaks |
+| `security-alerts.yml` | cada 4 h + manual | OWASP A09: advisors Supabase CRITICAL + cadena de auditoría + rate limit |
+| `compliance.yml` | nightly | suite JCI |
+| `backup-drill.yml` | programado | simulacro de restore (DR) |
+| `perf.yml` | nightly + manual | Lighthouse contra producción ⚠ consume credenciales de prod **sin `environment:` protegido** |
+| `perf-k6.yml` | manual | carga k6; `base_url` es `required` sin default, a propósito |
+| `db-migrate.yml` | manual | **inerte**: aborta fail-fast porque no existe `prisma/migrations` (ver abajo) |
+
+**El contexto `secrets` NO es válido en `if:` de un step.** GitHub rechaza el archivo entero y el workflow falla en 0 s sin correr nada — `perf.yml`, `perf-k6.yml` y `security-alerts.yml` estuvieron así, inertes y sin que nadie lo notara, desde #534 hasta el 2026-08-18. Declará el secret en el `env:` del job y evaluá `if: env.X != ''`. Señal de diagnóstico: si `gh workflow list` muestra el **path del archivo** en vez del `name:`, GitHub no logra parsearlo.
+
+Antes de afirmar que un workflow protege algo, comprobá que **haya corrido**: `gh run list --workflow=<archivo>`.
 
 Deploy app: **Vercel** (`vercel.json`). `installCommand: "npm ci && npm run -w @his/database generate"` — sin el `prisma generate` el build falla porque el client tipado no existe.
+
+**Alternativa cloud-agnostic:** `Dockerfile` multi-stage (Node 24-alpine, non-root uid 1001, `tini`, standalone) + manifiestos en `infra/k8s/` (base + overlays staging/prod, HPA, PDB, las 3 probes). La app **es** portable; la base de datos **no** (ver `docs/runbooks/db-reconstruccion-fuera-de-supabase.md`: 77 de 227 SQL fallan sobre un Postgres limpio).
 
 ---
 
@@ -246,9 +288,12 @@ Antes de aplicar la regla, hacer diff funcional real — palabras compartidas no
 - **Squash-merge puede descartar commits intermedios (lección Beta.21 #377):** un PR con N commits squasheado a veces conserva solo el primero si la estrategia colapsa mal — el mock tRPC de `app-shell.test.tsx` se perdió y reapareció como regresión CI semanas después. Para PRs con commits de fix de tests críticos, verifica el diff post-merge o usa `--rebase`.
 - **`payloads.ts` discriminated union es punto caliente de conflicto:** múltiples PRs que agregan `eventType` al `domainEventPayloadSchema` colisionan en merge auto-resuelto, dejando `z.object` sin cerrar (TS1005/TS1136). Si dos features tocan `packages/contracts/src/events/payloads.ts`, mergea secuencial y verifica `npm -w @his/contracts run typecheck` post-merge.
 - **Worktrees paralelos cruzan archivos untracked:** lanzar varios `Agent` con `isolation: worktree` aísla el git tree pero los archivos **untracked** (e.g. `instrumentation.ts`, nuevos tests) pueden bleed al working tree del padre y aparecer en el commit equivocado de otro agente (incidente Beta.22: rate-limit commiteó archivos del agente Vault). Si un agente reporta archivos ajenos staged, autorízale `git reset HEAD~1` + re-stage selectivo. Limpia worktrees huérfanos con `git worktree remove <path> -f -f` (doble `-f` para los locked por agente).
-- **Playwright Smoke (@smoke) es flaky en PRs** — el e2e real corre nightly (`e2e.yml`), no per-PR. Un `Playwright Smoke` rojo aislado (con Build/Lint/Test/Typecheck/Vercel/axe verdes) no es bloqueante de merge; investiga solo si falla en varios PRs simultáneos (puede indicar regresión real en `main`).
-- **nonce-based CSP NO sirve con páginas estáticas de Next (incidente Beta.22 #440, revertido):** un CSP `script-src 'nonce-{nonce}' 'strict-dynamic'` generado per-request en el middleware **bloquea los scripts inline de hidratación** en páginas prerendered/estáticas (ej. `/login`) — el HTML estático trae scripts sin el nonce per-request → mismatch → "The action has been blocked" → hidratación muerta. Next 14 solo auto-inyecta el nonce en páginas **dinámicas**. Para nonce CSP habría que forzar `dynamic = "force-dynamic"` en todas las páginas, lo cual mata el prerender. **El CSP seguro es el de #427: `script-src 'self' 'unsafe-inline'` estático en `next.config.mjs`** (HSTS + frame-ancestors + object-src none dan el grueso del valor). No reintentes nonce CSP sin resolver el render estático primero.
+- **Playwright Smoke (@smoke) NO estaba flaky — estaba muerto (diagnóstico 2026-08-18).** Llevaba 10/10 runs cancelados por timeout de 20 min. Causa real: el **100 %** de las specs `@smoke` pasa por `login()`, que llama a `supabase.auth.signInWithPassword()`, y CI apuntaba a `e2e-dummy.supabase.co` (host inexistente) mientras `seed-test-users.mjs` **no se invocaba en ningún workflow**. Eran ~77 tests fallando en serie, sin una línea de output durante 16 min. En junio se había "arreglado" subiendo el timeout de 10 a 20 min sin diagnosticar el silencio — no repitas ese parche. Estado actual y próximos pasos: `docs/runbooks/e2e-gotrue-auth.md`.
+- **nonce-based CSP NO sirve con páginas estáticas de Next (incidente Beta.22 #440, revertido):** un CSP `script-src 'nonce-{nonce}' 'strict-dynamic'` generado per-request en el middleware **bloquea los scripts inline de hidratación** en páginas prerendered/estáticas (ej. `/login`) — el HTML estático trae scripts sin el nonce per-request → mismatch → "The action has been blocked" → hidratación muerta. Next 14 solo auto-inyectaba el nonce en páginas **dinámicas** (comportamiento observado en el incidente; **no reverificado tras la migración a Next 16** — si vas a reintentarlo, confirmá primero cómo se comporta en 16). Para nonce CSP habría que forzar `dynamic = "force-dynamic"` en todas las páginas, lo cual mata el prerender. **El CSP seguro es el de #427: `script-src 'self' 'unsafe-inline'` estático en `next.config.mjs`** (HSTS + frame-ancestors + object-src none dan el grueso del valor). No reintentes nonce CSP sin resolver el render estático primero.
 - **A11y Baseline (axe-core) verde NO valida hidratación bajo CSP:** axe inspecciona el **DOM renderizado por SSR** (que carga aunque el CSP bloquee los scripts cliente). En el incidente #440, A11y pasó verde mientras la app estaba **rota** (sin interactividad). Lección: cambios a CSP/middleware/auth **requieren UAT manual en browser real** (consola sin `Refused to execute inline script` + interactividad) antes de mergear a prod — el build verde + A11y verde dan falsa confianza.
+- **El `Dockerfile` debe copiar TODO el árbol del stage `deps`, no solo `/repo/node_modules`:** npm puede anidar una dependencia en `packages/<x>/node_modules` en lugar de hoistearla (conflicto de versiones, alias `npm:`, entrada en `overrides`). Como `.dockerignore` excluye `**/node_modules`, esas carpetas no llegan por `COPY . .` tampoco → `Module not found` **solo dentro de Docker**, con el build fuera de Docker en verde. Lo destapó el alias `expr-eval` → `expr-eval-fork@3.0.3`. Por eso es `COPY --from=deps /repo ./`.
+- **Un `vitest.config.ts` con `include` estrecho esconde tests sin avisar:** `@his/infrastructure` incluía solo `src/**/__tests__/**`, así que `engine.test.ts` y `prevent.test.ts` (24 golden clínicos tipo Cockcroft-Gault + AHA PREVENT) **nunca corrieron en CI** — el motor de dosis y scores se validaba a ciegas. Al agregar tests, verificá que aparezcan en la salida de la corrida, no solo que el workspace dé verde. `packages/ui` tiene hoy el mismo problema, agravado: no tiene script `test`, así que `turbo run test` lo omite en silencio.
+- **Aliasar una dependencia con `npm:` es una salida válida cuando no hay parche:** `expr-eval@2.0.2` (prototype pollution CVSS 7.3 + CWE-94, sin versión corregida, sin mantenimiento desde 2022) se cerró con `"expr-eval": "npm:expr-eval-fork@3.0.3"` — el `import` no cambia. Pineado **exacto** a propósito: es un fork con bus factor de 1 en un motor de cálculo clínico, no queremos que un `npm install` arrastre un 3.x nuevo sin revisión.
 - **Carpetas `_foo` en App Router son private folders (excluidas del routing):** `app/api/_sentry-check/route.ts` da 404 porque `_sentry-check` no se rutea. Si necesitas un endpoint, NO uses prefijo `_` en el segmento de ruta.
 
 ### Patrones de seguridad establecidos (Beta.21/22)
@@ -298,7 +343,7 @@ Cuando exista un mockup HTML/CSS entregado, es la **ÚNICA fuente de verdad visu
 
 - Estilo conventional commits en español: `feat(beta15): ...`, `fix(db): ...`, `chore(mcp): ...`, `docs(beta15): ...`.
 - Cada PR mergeado lleva firma Co-Authored-By cuando lo crea Claude.
-- Trunk-based: PRs cortos contra `main`. Branch protection en `main` está bloqueada (requiere GitHub Pro en repos privados) — convivimos sin ella; la disciplina es manual + CI.
+- Trunk-based: PRs cortos contra `main`. **Branch protection ACTIVA** (desde 2026-08-18) con 3 required status checks: `Build, Lint, Test, Typecheck` · `Build & push (GHCR)` · `axe-core WCAG 2.1 AA — 5 páginas baseline`. `enforce_admins: false` → `gh pr merge --admin` sigue disponible; `strict: false` → no exige rama al día con `main`. `Playwright Smoke (@smoke)` **no** es requerido a propósito (ver §E2E). Verificá el estado real con `gh api repos/edwinaml-su/his/branches/main/protection` antes de asumir que algo bloquea: entre 2026-06-30 y 2026-08-18 la protección existía pero `contexts` estaba **vacío**, o sea que se podía mergear con el CI en rojo.
 
 ---
 
