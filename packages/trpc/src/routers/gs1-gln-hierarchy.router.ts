@@ -10,13 +10,23 @@
  * Seguridad:
  *   Lectura:   tenantProcedure (cualquier usuario autenticado del tenant).
  *   Escritura: requireRole(["ADMIN","LOGISTIC"]).
- *   Todas las queries usan withTenantContext — RLS `authenticated` aplica.
+ *
+ *   `ece.gs1_gln` tiene RLS propia (SQL 200_ece_gs1_gln_rls.sql), NO la de
+ *   `withTenantContext` — sus policies leen el GUC `app.ece_establecimiento_id`
+ *   (namespace `ece`, ver packages/trpc/src/ece/rls-context.ts), distinto del
+ *   `app.current_org_id` que setea `withTenantContext` (packages/trpc/src/rls-context.ts).
+ *   Por eso todas las queries corren bajo `withEceContext`, con el
+ *   `ece.establecimiento.id` resuelto desde `ctx.tenant.establishmentId` vía
+ *   `resolveEceEstablecimientoId`. La raíz corporativa (`establecimiento_id
+ *   IS NULL`) es visible a cualquier establecimiento (policy de SELECT); la
+ *   escritura exige que el nodo pertenezca al establecimiento activo.
  */
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
-import { withTenantContext } from "../rls-context";
+import { withEceContext } from "../ece/rls-context";
+import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
 
 // ---------------------------------------------------------------------------
 // Validación dígito verificador GS1 Módulo-10 (espeja gs1-catalogos.router.ts)
@@ -113,7 +123,24 @@ export const glnHierarchyRouter = router({
   tree: tenantProcedure
     .input(z.object({ rootId: z.string().uuid().optional() }))
     .query(async ({ ctx, input }) => {
-      const rows = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Selecciona un establecimiento activo para ver la jerarquía GLN.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        ctx.tenant.establishmentId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ECE no inicializado para este establecimiento.",
+        });
+      }
+
+      const rows = await withEceContext(ctx.prisma, ctx.user.id, eceEstablecimientoId, async (tx) => {
         if (input.rootId) {
           // Subárbol desde un nodo raíz específico.
           return tx.$queryRawUnsafe<GlnFlatRow[]>(
@@ -169,27 +196,51 @@ export const glnHierarchyRouter = router({
       type IdRow = { id: string };
       type CountRow = { count: string };
 
-      const id = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        // Unicidad del código GLN dentro del tenant.
-        const existing = await tx.$queryRawUnsafe<CountRow[]>(
-          `SELECT COUNT(*)::text AS count FROM ece.gs1_gln WHERE codigo = $1`,
-          input.codigo,
-        );
-        if (parseInt(existing[0]?.count ?? "0", 10) > 0) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `El código GLN ${input.codigo} ya existe en esta organización`,
-          });
-        }
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Selecciona un establecimiento activo para dar de alta un GLN.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        ctx.tenant.establishmentId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ECE no inicializado para este establecimiento.",
+        });
+      }
 
+      // Unicidad del código GLN cross-org (codigo es PK global, GS1 exige GLN
+      // único por prefijo de compañía) — se verifica ANTES de entrar al
+      // contexto RLS del establecimiento, porque la policy de SELECT solo deja
+      // ver la raíz corporativa + los GLN del establecimiento activo; un
+      // duplicado creado por OTRO establecimiento quedaría invisible bajo RLS
+      // y el check daría falso negativo (dejando que el INSERT reviente con un
+      // error crudo de violación de PK en vez del CONFLICT limpio de abajo).
+      const existing = await ctx.prisma.$queryRawUnsafe<CountRow[]>(
+        `SELECT COUNT(*)::text AS count FROM ece.gs1_gln WHERE codigo = $1`,
+        input.codigo,
+      );
+      if (parseInt(existing[0]?.count ?? "0", 10) > 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `El código GLN ${input.codigo} ya existe en esta organización`,
+        });
+      }
+
+      const id = await withEceContext(ctx.prisma, ctx.user.id, eceEstablecimientoId, async (tx) => {
         const rows = await tx.$queryRawUnsafe<IdRow[]>(
-          `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo, parent_id)
-           VALUES ($1, $2, $3, $4::uuid)
+          `INSERT INTO ece.gs1_gln (codigo, descripcion, tipo, parent_id, establecimiento_id)
+           VALUES ($1, $2, $3, $4::uuid, $5::uuid)
            RETURNING id`,
           input.codigo,
           input.descripcion,
           input.tipo,
           input.parentGlnId ?? null,
+          eceEstablecimientoId,
         );
         return rows[0]!.id;
       });
