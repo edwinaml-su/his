@@ -28,6 +28,14 @@ services:
       - '5432:5432'
     tmpfs:
       - /var/lib/postgresql/data
+    volumes:
+      # docker-entrypoint-initdb.d: corre en cada boot porque el data dir es
+      # tmpfs (nunca "ya inicializado"). Crea el schema `auth` + rol
+      # `postgres` que GoTrue necesita y NO crea solo — ver
+      # scripts/gotrue-test-init.sql para la causa raíz completa (confirmada
+      # con logs reales de CI, run 32159780220: GoTrue moría con
+      # "schema \"auth\" does not exist" sin esto).
+      - ./scripts/gotrue-test-init.sql:/docker-entrypoint-initdb.d/00-gotrue-test-init.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U his -d his_e2e']
       interval: 5s
