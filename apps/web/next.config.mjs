@@ -17,10 +17,11 @@ const nextConfig = {
   serverExternalPackages: ["@node-rs/argon2"],
   experimental: {
     optimizePackageImports: ["lucide-react", "@his/ui"],
-    // Habilita la View Transitions API del navegador en navegaciones de ruta.
-    // Degradación elegante: browsers sin soporte navegan instantáneamente.
-    // Animaciones desactivadas con `prefers-reduced-motion` (ver globals.css Tarea 8).
-    viewTransition: true,
+    // `experimental.viewTransition` ya NO existe en Next 16 — el build avisaba
+    // "Unrecognized key(s) in object: 'viewTransition'" y la ignoraba. React
+    // 19.2 (que Next 16 usa) trae `<ViewTransition>` de forma nativa, así que
+    // la degradación elegante y el respeto a `prefers-reduced-motion` que
+    // definimos en globals.css siguen aplicando sin esta bandera.
   },
   // Permitir importar paquetes del monorepo en src.
   transpilePackages: ["@his/ui", "@his/contracts", "@his/trpc", "@his/database", "@his/infrastructure"],
