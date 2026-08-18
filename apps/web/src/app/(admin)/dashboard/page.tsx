@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 import { KioskAutoRedirect } from "@/components/kiosk-auto-redirect";
@@ -37,9 +38,9 @@ export default async function DashboardPage() {
             <CardTitle>Atajos</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <a className="block text-primary underline-offset-4 hover:underline" href="/patients">Buscar paciente</a>
-            <a className="block text-primary underline-offset-4 hover:underline" href="/admission">Nueva admisión</a>
-            <a className="block text-primary underline-offset-4 hover:underline" href="/triage">Cola de triage</a>
+            <Link className="block text-primary underline-offset-4 hover:underline" href="/patients">Buscar paciente</Link>
+            <Link className="block text-primary underline-offset-4 hover:underline" href="/admission">Nueva admisión</Link>
+            <Link className="block text-primary underline-offset-4 hover:underline" href="/triage">Cola de triage</Link>
             <a className="block text-primary underline-offset-4 hover:underline" href="/beds">Mapa de camas</a>
           </CardContent>
         </Card>

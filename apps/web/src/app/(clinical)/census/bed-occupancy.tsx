@@ -100,9 +100,9 @@ export function BedOccupancy({ serviceUnitId, establishmentId }: BedOccupancyPro
           <p className="text-sm text-muted-foreground">
             No hay camas configuradas para esta organización. Pídale al
             administrador que registre el inventario en{" "}
-            <a className="text-primary underline" href="/catalogs">
+            <Link className="text-primary underline" href="/catalogs">
               catálogos
-            </a>
+            </Link>
             .
           </p>
         </CardContent>

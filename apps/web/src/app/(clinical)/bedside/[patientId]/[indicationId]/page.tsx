@@ -13,6 +13,7 @@
  * DoD §4.2 anti-manual-entry: ScanStep rechaza tipeo humano.
  */
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 import { AdministrationWizard } from "../../_components/administration-wizard";
@@ -41,14 +42,14 @@ export default async function AdministrationPage({ params }: PageProps) {
     <div className="mx-auto max-w-2xl px-4 py-6">
       {/* Header */}
       <div className="mb-6">
-        <a
+        <Link
           href="/bedside"
           className="mb-3 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
           aria-label="Volver a la cola de turno"
         >
           <ChevronLeftIcon />
           Volver a la cola
-        </a>
+        </Link>
         <h1 className="text-2xl font-bold text-gray-900">Administración Bedside</h1>
         <p className="mt-1 text-sm text-gray-500">
           Flujo GS1 — Regla de los 5 Correctos

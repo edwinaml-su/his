@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -192,12 +193,12 @@ export default function AdmissionPage() {
               {patients.data && patients.data.length === 0 && search.length >= 2 && (
                 <p className="text-sm text-muted-foreground">
                   Sin resultados.{" "}
-                  <a
+                  <Link
                     href="/patients/new"
                     className="text-primary underline underline-offset-4"
                   >
                     Registrar nuevo paciente
-                  </a>
+                  </Link>
                 </p>
               )}
               <ul className="divide-y rounded-md border">
