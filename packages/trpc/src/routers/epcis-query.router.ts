@@ -1,9 +1,15 @@
 /**
- * EPCIS Query Layer — trazabilidad sobre ece.epcis_event (schema legacy).
+ * EPCIS Query Layer — trazabilidad sobre ece.epcis_event_equipment (equipos).
  *
- * La tabla ece.epcis_event tiene schema de movimientos de equipo (legacy),
- * no EPCIS 2.0 completo. Las queries se adaptan a las columnas disponibles:
- *   equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
+ * Fix (ADR 0019, hallazgo colateral "tabla ece.epcis_event duplicada y router
+ * roto"): este router apuntaba a `ece.epcis_event`, una tabla huérfana sin
+ * `CREATE TABLE` en ningún SQL numerado del repo (0 filas en producción,
+ * verificado 2026-08-18) — `/admin/gs1/trazabilidad` devolvía siempre vacío.
+ * La tabla real con datos es `ece.epcis_event_equipment` (82_equipment_gs1_extension.sql),
+ * mismo shape de columnas (equipment_id, gln_destino, gln_origen, registrado_por,
+ * registrado_en, notas) — reemplazo directo. NO extender este router al stream
+ * de paciente de ADR 0019 (ece.gs1_epcis_patient_event): criterio de acceso y
+ * shape de columnas distintos — ver gs1-patient-trace.router.ts.
  *
  * No hay GTIN, lote ni GSRN de paciente — las queries queryByGtin/queryByPatient
  * del spec original se reemplazan por queryByEquipment y queryByOrigin.
@@ -78,7 +84,7 @@ export const epcisQueryRouter = router({
 
     const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
       `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event
+       FROM ece.epcis_event_equipment
        WHERE ${conditions.join(" AND ")}
        ORDER BY registrado_en DESC
        LIMIT 200`,
@@ -107,7 +113,7 @@ export const epcisQueryRouter = router({
 
     const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
       `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event
+       FROM ece.epcis_event_equipment
        WHERE ${conditions.join(" AND ")}
        ORDER BY registrado_en DESC
        LIMIT 200`,
@@ -147,7 +153,7 @@ export const epcisQueryRouter = router({
 
     const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
       `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event
+       FROM ece.epcis_event_equipment
        ${where}
        ORDER BY registrado_en DESC
        LIMIT 200`,
@@ -178,7 +184,7 @@ export const epcisQueryRouter = router({
 
     const rows = await ctx.prisma.$queryRawUnsafe<EpcisEventRow[]>(
       `SELECT id, equipment_id, gln_destino, gln_origen, registrado_por, registrado_en, notas
-       FROM ece.epcis_event
+       FROM ece.epcis_event_equipment
        ${where}
        ORDER BY registrado_en DESC
        LIMIT $${idx}`,

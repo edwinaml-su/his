@@ -62,6 +62,8 @@ describe("encounterDischargeRouter", () => {
         organizationId: "org",
         dischargedAt: null,
         bedAssignments: [],
+        // ADR 0019 — sin GSRN, el router omite el evento EPCIS (rama defensiva).
+        patient: { gsrn: null },
       } as never);
       prisma.clinicalConcept.findFirst.mockResolvedValue({
         id: "concept-1",

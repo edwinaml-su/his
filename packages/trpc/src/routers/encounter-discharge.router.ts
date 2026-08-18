@@ -30,12 +30,19 @@ import {
   type EpicrisisDoc,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { buildPatientMovementEvent } from "../lib/epcis-builder";
+import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
+import { resolveLocationGln } from "../lib/gln-resolver";
+import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
 
 /**
  * Heurística para identificar el sistema CIE-10 entre los CodeSystem
  * disponibles. Aceptamos varias convenciones de código.
  */
 const CIE10_CODES = ["CIE-10", "CIE10", "ICD-10", "ICD10"] as const;
+
+/** Prefijo GS1 de fallback cuando la organización no tiene uno configurado (ADR 0019 D1/D6, mismo valor que encounter.router.ts). */
+const FALLBACK_GS1_PREFIX = "7503000";
 
 export const encounterDischargeRouter = router({
   dischargeEncounter: tenantProcedure
@@ -61,6 +68,7 @@ export const encounterDischargeRouter = router({
               where: { releasedAt: null },
               take: 1,
             },
+            patient: { select: { gsrn: true } },
           },
         });
         if (!enc) {
@@ -113,6 +121,51 @@ export const encounterDischargeRouter = router({
             updatedBy: ctx.user.id,
           },
         });
+
+        // 4.epcis) ADR 0019 D7 — PATIENT_DISCHARGE, transaccional estricto.
+        // Excepción defensiva: sin GSRN, se omite el evento sin fallar el alta.
+        if (!enc.patient.gsrn) {
+          console.warn(
+            `[EPCIS] paciente sin GSRN — se omite evento PATIENT_DISCHARGE (encounter=${enc.id}).`,
+          );
+        } else {
+          const eceEstablecimientoId = await resolveEceEstablecimientoId(
+            tx,
+            enc.establishmentId,
+          );
+          if (!eceEstablecimientoId) {
+            console.warn(
+              `[EPCIS] ece.establecimiento no resuelto para estab=${enc.establishmentId} — se omite evento PATIENT_DISCHARGE (encounter=${enc.id}).`,
+            );
+          } else {
+            const org = await tx.organization.findUnique({
+              where: { id: ctx.tenant.organizationId },
+              select: { gs1CompanyPrefix: true },
+            });
+            const companyPrefixLength = (org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX).length;
+            const glnReadPoint = await resolveLocationGln(tx, {
+              bedId: active?.bedId ?? null,
+              serviceUnitId: enc.serviceUnitId,
+            });
+            const row = buildPatientMovementEvent({
+              type: "PATIENT_DISCHARGE",
+              gsrnPaciente: enc.patient.gsrn,
+              companyPrefixLength,
+              glnReadPoint,
+              glnBizLocation: null,
+              internalRef: {
+                bedId: active?.bedId ?? null,
+                serviceUnitId: enc.serviceUnitId,
+                establishmentId: enc.establishmentId,
+              },
+              encounterId: enc.id,
+              recordedById: ctx.user.id,
+              timestamp: dischargedAt,
+              establecimientoId: eceEstablecimientoId,
+            });
+            await persistPatientMovementEvent(tx, ctx.user.id, eceEstablecimientoId, row);
+          }
+        }
 
         // 5) Persistir epicrisis en AuditLog.afterJson (provisional).
         const epicrisis: EpicrisisDoc = {

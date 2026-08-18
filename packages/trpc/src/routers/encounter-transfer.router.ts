@@ -31,6 +31,13 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { buildPatientMovementEvent } from "../lib/epcis-builder";
+import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
+import { resolveLocationGln } from "../lib/gln-resolver";
+import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
+
+/** Prefijo GS1 de fallback cuando la organización no tiene uno configurado (ADR 0019 D1/D6, mismo valor que encounter.router.ts). */
+const FALLBACK_GS1_PREFIX = "7503000";
 
 export const encounterTransferRouter = router({
   /**
@@ -53,6 +60,7 @@ export const encounterTransferRouter = router({
               include: { bed: true },
               take: 1,
             },
+            patient: { select: { gsrn: true } },
           },
         });
         if (!enc) {
@@ -137,6 +145,58 @@ export const encounterTransferRouter = router({
             createdBy: ctx.user.id,
           },
         });
+
+        // 4.epcis) ADR 0019 D7 — PATIENT_TRANSFER_DEPARTURE, transaccional
+        // estricto (misma tx que el traslado clínico). Excepción defensiva:
+        // si el paciente no tiene GSRN todavía (gap del programa de pulseras,
+        // ver ADR 0019 riesgos), se omite el evento con un warning — el
+        // traslado clínico NO debe fallar por esto.
+        if (!enc.patient.gsrn) {
+          console.warn(
+            `[EPCIS] paciente sin GSRN — se omite evento PATIENT_TRANSFER_DEPARTURE (encounter=${enc.id}).`,
+          );
+        } else {
+          const eceEstablecimientoId = await resolveEceEstablecimientoId(
+            tx,
+            enc.establishmentId,
+          );
+          if (!eceEstablecimientoId) {
+            console.warn(
+              `[EPCIS] ece.establecimiento no resuelto para estab=${enc.establishmentId} — se omite evento PATIENT_TRANSFER_DEPARTURE (encounter=${enc.id}).`,
+            );
+          } else {
+            const org = await tx.organization.findUnique({
+              where: { id: ctx.tenant.organizationId },
+              select: { gs1CompanyPrefix: true },
+            });
+            const companyPrefixLength = (org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX).length;
+            const [glnReadPoint, glnBizLocation] = await Promise.all([
+              resolveLocationGln(tx, { bedId: fromBedId, serviceUnitId: fromServiceId }),
+              resolveLocationGln(tx, {
+                bedId: input.toBedId ?? null,
+                serviceUnitId: input.toServiceUnitId,
+              }),
+            ]);
+            const row = buildPatientMovementEvent({
+              type: "PATIENT_TRANSFER_DEPARTURE",
+              gsrnPaciente: enc.patient.gsrn,
+              companyPrefixLength,
+              glnReadPoint,
+              glnBizLocation,
+              internalRef: {
+                bedId: fromBedId,
+                serviceUnitId: fromServiceId,
+                establishmentId: enc.establishmentId,
+              },
+              encounterId: enc.id,
+              transferId: transfer.id,
+              recordedById: ctx.user.id,
+              timestamp: transfer.occurredAt,
+              establecimientoId: eceEstablecimientoId,
+            });
+            await persistPatientMovementEvent(tx, ctx.user.id, eceEstablecimientoId, row);
+          }
+        }
 
         // 4.bis) Outbox sql/56 — evento patient.transfer.sent.
         // Permite a la bandeja del servicio destino mostrar el paciente
@@ -319,7 +379,13 @@ export const encounterTransferRouter = router({
             encounter: { organizationId: ctx.tenant.organizationId },
           },
           include: {
-            encounter: { select: { patientId: true } },
+            encounter: {
+              select: {
+                patientId: true,
+                establishmentId: true,
+                patient: { select: { gsrn: true } },
+              },
+            },
           },
         });
         if (!transfer) {
@@ -348,6 +414,54 @@ export const encounterTransferRouter = router({
             receivedNote: input.note ?? null,
           },
         });
+
+        // 3.epcis) ADR 0019 D7 — PATIENT_TRANSFER_ARRIVAL, transaccional
+        // estricto. Misma excepción defensiva que en transferEncounter: sin
+        // GSRN, se omite el evento sin fallar la confirmación de recepción.
+        if (!transfer.encounter.patient.gsrn) {
+          console.warn(
+            `[EPCIS] paciente sin GSRN — se omite evento PATIENT_TRANSFER_ARRIVAL (transfer=${updated.id}).`,
+          );
+        } else {
+          const eceEstablecimientoId = await resolveEceEstablecimientoId(
+            tx,
+            transfer.encounter.establishmentId,
+          );
+          if (!eceEstablecimientoId) {
+            console.warn(
+              `[EPCIS] ece.establecimiento no resuelto para estab=${transfer.encounter.establishmentId} — se omite evento PATIENT_TRANSFER_ARRIVAL (transfer=${updated.id}).`,
+            );
+          } else {
+            const org = await tx.organization.findUnique({
+              where: { id: ctx.tenant.organizationId },
+              select: { gs1CompanyPrefix: true },
+            });
+            const companyPrefixLength = (org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX).length;
+            const glnReadPoint = await resolveLocationGln(tx, {
+              bedId: updated.toBedId,
+              serviceUnitId: updated.toServiceId,
+            });
+            const row = buildPatientMovementEvent({
+              type: "PATIENT_TRANSFER_ARRIVAL",
+              gsrnPaciente: transfer.encounter.patient.gsrn,
+              companyPrefixLength,
+              glnReadPoint,
+              glnBizLocation: null,
+              internalRef: {
+                bedId: updated.toBedId,
+                serviceUnitId: updated.toServiceId,
+                establishmentId: transfer.encounter.establishmentId,
+              },
+              encounterId: updated.encounterId,
+              transferId: updated.id,
+              recordedById: ctx.user.id,
+              timestamp: updated.receivedAt!,
+              establecimientoId: eceEstablecimientoId,
+            });
+            await persistPatientMovementEvent(tx, ctx.user.id, eceEstablecimientoId, row);
+          }
+        }
+
         await emitDomainEvent(tx, {
           organizationId: ctx.tenant.organizationId,
           eventType: "patient.transfer.confirmed",

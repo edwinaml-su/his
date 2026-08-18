@@ -47,6 +47,8 @@ describe("encounterTransferRouter", () => {
         dischargedAt: null,
         serviceUnitId: svcOld,
         bedAssignments: [],
+        // ADR 0019 — sin GSRN, el router omite el evento EPCIS (rama defensiva).
+        patient: { gsrn: null },
       } as never);
       prisma.encounterTransfer.create.mockResolvedValue({
         id: transferId,
@@ -149,7 +151,8 @@ describe("encounterTransferRouter", () => {
         reason: "Pase a quirófano",
         occurredAt: new Date("2026-05-27T10:00:00Z"),
         createdBy: USER_ORIGEN,
-        encounter: { patientId: PATIENT_ID },
+        // ADR 0019 — sin GSRN, el router omite el evento EPCIS (rama defensiva).
+        encounter: { patientId: PATIENT_ID, establishmentId: "estab-1", patient: { gsrn: null } },
       } as never);
       prisma.encounterTransfer.update.mockResolvedValue({
         id: TRANSFER_ID,
