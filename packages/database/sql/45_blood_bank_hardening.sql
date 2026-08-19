@@ -564,39 +564,47 @@ GRANT SELECT, INSERT, UPDATE ON public."Transfusion"        TO authenticated;
 -- =============================================================================
 -- 7. AUDIT TRIGGERS (extiende 02_audit_triggers.sql)
 --
--- La función audit.fn_audit_log_insert() ya existe (instalada por 02_audit_triggers.sql).
+-- La función audit.fn_audit_row() ya existe (instalada por 02_audit_triggers.sql).
 -- Solo necesitamos asociarla a las tablas nuevas.
+--
+-- NOTA @DBA (categoría D, feat/db-portable, 2026-08-19): este archivo llamaba
+-- a `audit.fn_audit_log_insert()`, que nunca existió — ni en el corpus SQL ni
+-- en prod (verificado por introspección: audit.* solo tiene fn_audit_row,
+-- fn_audit_log_chain, fn_audit_log_immutable, fn_audit_row). El nombre
+-- correcto, usado consistentemente en el resto del repo (02_audit_triggers.sql,
+-- 22_audit_triggers_phase2.sql, 185_calculadoras_clinicas.sql,
+-- 197_owasp2025_a09_chat_audit.sql), es `audit.fn_audit_row()`. Se corrige.
 -- =============================================================================
 
 -- BloodBank
 DROP TRIGGER IF EXISTS audit_blood_bank ON public."BloodBank";
 CREATE TRIGGER audit_blood_bank
   AFTER INSERT OR UPDATE OR DELETE ON public."BloodBank"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_insert();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- BloodUnit
 DROP TRIGGER IF EXISTS audit_blood_unit ON public."BloodUnit";
 CREATE TRIGGER audit_blood_unit
   AFTER INSERT OR UPDATE OR DELETE ON public."BloodUnit"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_insert();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- TransfusionRequest
 DROP TRIGGER IF EXISTS audit_transfusion_request ON public."TransfusionRequest";
 CREATE TRIGGER audit_transfusion_request
   AFTER INSERT OR UPDATE OR DELETE ON public."TransfusionRequest"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_insert();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- CrossMatch
 DROP TRIGGER IF EXISTS audit_cross_match ON public."CrossMatch";
 CREATE TRIGGER audit_cross_match
   AFTER INSERT OR UPDATE OR DELETE ON public."CrossMatch"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_insert();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- Transfusion
 DROP TRIGGER IF EXISTS audit_transfusion ON public."Transfusion";
 CREATE TRIGGER audit_transfusion
   AFTER INSERT OR UPDATE OR DELETE ON public."Transfusion"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_insert();
+  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- =============================================================================
 -- 8. HASH CHAIN (extiende 05_audit_hash_chain.sql)

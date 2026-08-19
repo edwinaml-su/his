@@ -79,8 +79,18 @@ ALTER TABLE ece.episodio_atencion
   ADD COLUMN IF NOT EXISTS estado_conservacion   ece.estado_conservacion NOT NULL DEFAULT 'ACTIVO',
   ADD COLUMN IF NOT EXISTS fecha_vencimiento_retencion TIMESTAMPTZ;
 
+-- Nota @DBA (feat/db-portable): ece.episodio_atencion NO tiene columna
+-- organization_id (confirmado por introspección de prod, ejacvsgbewcerxtjtwto)
+-- — solo establecimiento_id. Llegar a organization_id requiere 2 saltos
+-- (establecimiento_id → ece.establecimiento.institucion_id →
+-- ece.institucion.organization_id), lo cual no es expresable como índice
+-- plano sobre esta tabla. Se usa establecimiento_id: es la columna de
+-- partición tenant que sí existe en la tabla y es el mismo patrón ya
+-- usado para RLS sobre episodio_atencion en 113_verbal_order.sql (policies
+-- por establecimiento_id vía GUC app.establecimiento_id). Esto NO es una
+-- policy RLS — es un índice de performance, no altera control de acceso.
 CREATE INDEX IF NOT EXISTS idx_episodio_conservacion
-  ON ece.episodio_atencion (organization_id, estado_conservacion);
+  ON ece.episodio_atencion (establecimiento_id, estado_conservacion);
 CREATE INDEX IF NOT EXISTS idx_episodio_vencimiento
   ON ece.episodio_atencion (fecha_vencimiento_retencion)
   WHERE fecha_vencimiento_retencion IS NOT NULL;
@@ -174,17 +184,22 @@ ALTER TABLE ece.regla_retencion     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ece.eliminacion_supervisada ENABLE ROW LEVEL SECURITY;
 
 -- Políticas básicas tenant-scoped (lectura autenticada por org)
-CREATE POLICY IF NOT EXISTS "contingencia_org_isolation"
+-- Nota: CREATE POLICY no soporta IF NOT EXISTS en PostgreSQL — se usa el
+-- patrón idempotente estándar del resto del corpus (DROP IF EXISTS + CREATE).
+DROP POLICY IF EXISTS "contingencia_org_isolation" ON ece.contingencia_evento;
+CREATE POLICY "contingencia_org_isolation"
   ON ece.contingencia_evento
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
 
-CREATE POLICY IF NOT EXISTS "regla_retencion_org_isolation"
+DROP POLICY IF EXISTS "regla_retencion_org_isolation" ON ece.regla_retencion;
+CREATE POLICY "regla_retencion_org_isolation"
   ON ece.regla_retencion
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
 
-CREATE POLICY IF NOT EXISTS "eliminacion_org_isolation"
+DROP POLICY IF EXISTS "eliminacion_org_isolation" ON ece.eliminacion_supervisada;
+CREATE POLICY "eliminacion_org_isolation"
   ON ece.eliminacion_supervisada
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
@@ -196,6 +211,9 @@ CREATE POLICY IF NOT EXISTS "eliminacion_org_isolation"
 -- Nota: pg_cron en Supabase requiere extensión habilitada.
 -- Si no está disponible, usar Edge Function programada.
 
+-- Nota: `ON CONFLICT` no es válido sobre un `SELECT` (solo aplica a INSERT) —
+-- era un bug de sintaxis, no un problema de portabilidad. cron.schedule() ya
+-- actualiza el job in-place cuando el jobname coincide, no hace falta upsert.
 SELECT cron.schedule(
   'his-retencion-pasivo-nightly',
   '0 2 * * *',
@@ -203,11 +221,13 @@ SELECT cron.schedule(
   UPDATE ece.episodio_atencion
   SET estado_conservacion = 'PASIVO'
   WHERE estado_conservacion = 'ACTIVO'
-    AND fecha_cierre < now() - INTERVAL '5 years'
+    -- Nota @DBA: la columna real es fecha_hora_cierre, no fecha_cierre
+    -- (confirmado contra 59_ece_04_episodios.sql y prod).
+    AND fecha_hora_cierre < now() - INTERVAL '5 years'
     AND id NOT IN (
       -- Episodios con eliminación en curso
       SELECT episodio_id FROM ece.eliminacion_supervisada
       WHERE estado IN ('SOLICITADA', 'APROBADA')
     );
   $$
-) ON CONFLICT (jobname) DO UPDATE SET schedule = '0 2 * * *';
+);

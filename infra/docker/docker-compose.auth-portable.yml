@@ -1,0 +1,147 @@
+################################################################################
+# docker-compose.auth-portable.yml — GoTrue self-hosted, PUNTO DE PARTIDA para
+# un proveedor de auth fuera de Supabase (ADR 0020).
+#
+# ESTADO: referencia derivada de `docker-compose.test.yml` (stack real de E2E,
+# probado en CI — ver docs/runbooks/e2e-gotrue-auth.md). Este archivo agrega los
+# TODO de producción que el stack de test no necesita (persistencia, secretos,
+# correo, HA). NO se levantó ni se probó en esta sesión — Docker Desktop no
+# respondía en esta máquina (mismo bloqueo que documenta
+# docs/runbooks/e2e-gotrue-auth.md). Lo que SÍ se verificó por separado, contra
+# un Postgres 18.4 nativo sin Docker, fue el bootstrap SQL (schema `auth` + rol
+# `postgres`) — ver docs/runbooks/db-reconstruccion-fuera-de-supabase.md §3.1/§3.3.
+#
+# NO USAR TAL CUAL EN PRODUCCIÓN. Cada bloque "# TODO producción" es un punto
+# de la brecha de madurez documentada en el ADR 0020 §Opción A — resolver antes
+# de depender de este stack para login real:
+#   1. Bloqueo funcional abierto sin diagnosticar (500 al crear usuario) — ver
+#      docs/runbooks/e2e-gotrue-auth.md §2. Este compose NO lo resuelve.
+#   2. Persistencia (abajo: volumen real en vez de tmpfs).
+#   3. Secretos gestionados (abajo: sin default hardcodeado).
+#   4. Correo real (abajo: SMTP en vez de autoconfirm).
+#   5. HA / múltiples réplicas — fuera del alcance de un docker-compose de un
+#      solo nodo; si el target es K8s, esto se traduce a un Deployment con
+#      >=2 réplicas + PodDisruptionBudget, no a este archivo.
+#   6. Verificación end-to-end de sesión real (browser → login → cookie →
+#      getUser() en middleware) — no se hizo, requiere el stack corriendo.
+#
+# USO (una vez resueltos los puntos de arriba):
+#   docker compose -f infra/docker/docker-compose.auth-portable.yml up -d
+################################################################################
+
+services:
+  # ----------------------------------------------------------------------------
+  # Postgres — mismo cluster puede alojar `auth` + `public`/`ece`/`audit`/
+  # `analytics` (GoTrue solo necesita su propio schema, namespace separado).
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: his-postgres-auth-portable
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: his
+      # TODO producción: reemplazar por secret manager (K8s Secret / SSM /
+      # Vault externo). Sin default de ejemplo acá a propósito — a diferencia
+      # del compose de test (efímero), este archivo apunta a un uso real.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?debe setearse — ver TODO producción arriba}
+      POSTGRES_DB: his
+    ports:
+      - '5432:5432'
+    volumes:
+      # TODO producción: este es el punto que en docker-compose.test.yml es
+      # `tmpfs` (deliberado ahí, catastrófico acá). Volumen nombrado como
+      # mínimo; en K8s esto es un PersistentVolumeClaim con StorageClass y
+      # snapshot/backup real (PITR), no un volumen local de Docker.
+      - postgres_auth_data:/var/lib/postgresql/data
+      # Bootstrap: mismo archivo que usa el stack de E2E, verificado contra el
+      # código real de supabase/auth (crea schema `auth` + rol `postgres`).
+      - ../../scripts/gotrue-test-init.sql:/docker-entrypoint-initdb.d/00-gotrue-init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U his -d his']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ----------------------------------------------------------------------------
+  # GoTrue — mismo binario que Supabase Auth managed.
+  # ----------------------------------------------------------------------------
+  gotrue:
+    image: supabase/gotrue:v2.189.0
+    container_name: his-gotrue-auth-portable
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: '9999'
+      # TODO producción: reemplazar por el dominio público real (API_EXTERNAL_URL
+      # y GOTRUE_SITE_URL deben coincidir con el origen desde donde el navegador
+      # llama — GoTrue valida redirects contra GOTRUE_URI_ALLOW_LIST).
+      API_EXTERNAL_URL: ${AUTH_EXTERNAL_URL:?debe setearse}
+      GOTRUE_JWT_ISSUER: ${AUTH_EXTERNAL_URL:?debe setearse}
+      GOTRUE_SITE_URL: ${APP_URL:?debe setearse}
+      GOTRUE_URI_ALLOW_LIST: ${APP_URL:?debe setearse}/**
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://his:${POSTGRES_PASSWORD:?debe setearse}@postgres:5432/his?sslmode=disable
+      GOTRUE_DB_NAMESPACE: auth
+      # TODO producción: secreto real desde secret manager, NUNCA con default
+      # de ejemplo (a diferencia de docker-compose.test.yml, que sí lo permite
+      # por ser un stack efímero de CI). Debe ser el MISMO secreto que valida
+      # el middleware de apps/web (hoy SUPABASE_JWT_SECRET/equivalente).
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?debe setearse desde secret manager}
+      GOTRUE_JWT_EXP: '3600'
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      # TODO producción: false + SMTP real (GOTRUE_SMTP_HOST/PORT/USER/PASS/
+      # ADMIN_EMAIL) para magic-link/recovery/invitación. El stack de test usa
+      # `true` porque no hay usuarios reales ni bandeja de correo — en
+      # producción esto permitiría crear cuentas con email no verificado.
+      GOTRUE_MAILER_AUTOCONFIRM: 'false'
+      GOTRUE_DISABLE_SIGNUP: 'true' # alta de usuarios vía admin API, no self-signup público
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
+      GOTRUE_LOG_LEVEL: info
+      # TODO producción: si se mantiene SSO Azure (apps/web/src/app/(auth)/sso),
+      # agregar GOTRUE_EXTERNAL_AZURE_ENABLED + CLIENT_ID/SECRET/URL — no
+      # incluido acá porque no se verificó contra este stack en esta sesión.
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/health']
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+    # TODO producción (HA, punto 5 del encabezado): un solo contenedor es punto
+    # único de falla para todo login de la aplicación. `deploy.replicas` no
+    # aplica fuera de Swarm/K8s — si el target es K8s, este service se traduce
+    # a un Deployment con >=2 réplicas + readiness probe (mismo healthcheck).
+
+  # ----------------------------------------------------------------------------
+  # Gateway — GoTrue no implementa el prefijo /auth/v1 (convención de Kong que
+  # supabase-js siempre asume). Mismo mecanismo que docker-compose.test.yml.
+  # ----------------------------------------------------------------------------
+  gotrue-gateway:
+    image: nginx:1.27.4-alpine
+    container_name: his-gotrue-gateway-auth-portable
+    restart: unless-stopped
+    depends_on:
+      gotrue:
+        condition: service_healthy
+    volumes:
+      - ../../scripts/gotrue-test-gateway.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - '9999:9999'
+    healthcheck:
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:9999/auth/v1/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    # TODO producción: en un despliegue real este gateway lo reemplaza el
+    # ingress/API Gateway del target (ALB+regla de path, K8s Ingress, etc.) en
+    # vez de un nginx dedicado — se mantiene acá por ser el mecanismo ya
+    # probado en CI, no como recomendación final de topología.
+
+volumes:
+  postgres_auth_data:
+    driver: local

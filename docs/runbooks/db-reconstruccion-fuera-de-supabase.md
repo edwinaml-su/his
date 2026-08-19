@@ -150,24 +150,296 @@ producción tal cual está.
 
 ## 3. Prerrequisitos — qué es de Supabase y qué es portable
 
-| Objeto | ¿Lo requiere Postgres estándar? | ¿Qué hace falta fuera de Supabase? |
-|---|---|---|
-| Roles `authenticated`, `anon`, `service_role` | No — son solo roles de Postgres (`CREATE ROLE ... NOLOGIN`, `service_role` con `BYPASSRLS`) | Crearlos a mano una vez por cluster. 73/30/9 archivos del corpus referencian `authenticated`/`service_role`/`anon` respectivamente — sin los 3 roles, la fase RLS del corpus falla desde el primer archivo. |
-| Extensiones `pgcrypto`, `citext`, `uuid-ossp`, `pg_trgm` | Sí, son contrib estándar de Postgres | Nada especial — `CREATE EXTENSION IF NOT EXISTS` funciona igual en RDS/Cloud SQL/on-prem. |
-| Schema `extensions` | **No** — es una convención de organización de Supabase (mueve extensiones fuera de `public` por higiene) | `24_security_hardening.sql` asume que el schema `extensions` ya existe (lo provee la plataforma Supabase). Fuera de Supabase: `CREATE SCHEMA IF NOT EXISTS extensions;` antes de aplicar ese archivo, o editar el archivo para no mover las extensiones. |
-| Schema/funciones `auth.*` (`auth.uid()`, `auth.jwt()`, `auth.users`, `auth.identities`) | **No** — es el schema que gestiona GoTrue (el servicio de Auth de Supabase) | **No hay sustituto directo out-of-the-box.** 9 archivos referencian `auth.*` directamente. El diseño del proyecto ya mitiga la mayor parte de esto — `withTenantContext` (`packages/trpc/src/rls-context.ts`) hace `SET LOCAL app.current_user_id/org_id` y las políticas RLS (`01_rls_policies.sql`) leen primero `current_setting('request.jwt.claim.*')` con fallback — pero los **9 archivos que llaman `auth.*` directamente** (ej. `119_fall_event.sql`, `24_security_hardening.sql`) necesitan reescritura para no depender de GoTrue. Fuera de Supabase hace falta un proveedor de auth propio (ej. NextAuth/Auth.js contra la misma tabla `User`) que resuelva `org_id`/`user_id` en los mismos GUCs que ya usa `withTenantContext` — el patrón de sesión ya es portable, lo que no es portable es la fuente (GoTrue). |
-| Supabase Vault (`vault.create_secret`, `vault.decrypted_secrets`, `vault.secrets`) | **No** — extensión propietaria de Supabase | `161_portal_mfa_secret_encryption.sql` y `196_owasp2025_a02_secdef_hardening.sql` la usan para el TOTP secret de portal (`PortalAccount`). **Hallazgo importante (§5.3): estos archivos "aplican OK" en una reconstrucción fuera de Supabase** porque las llamadas a `vault.*` viven dentro de cuerpos `plpgsql` que Postgres no valida en `CREATE FUNCTION` — el error solo aparece en **runtime**, al ejecutar la función. Sustituto fuera de Supabase: cifrado a nivel de aplicación (AES) — el propio router ya tiene un *fallback* app-layer para cuentas pre-Vault (`CLAUDE.md` § patrones de seguridad), habría que promoverlo a mecanismo único. |
-| `extensions.crypt` / `extensions.gen_salt` (bcrypt vía pgcrypto) | Sí, si se crea `pgcrypto` en un schema propio — el algoritmo es estándar | El único uso productivo detectado es en `packages/trpc/src/routers/user-admin.router.ts:471` (`resetPassword`, escribe a `auth.users.encrypted_password`) — que de por sí **depende de la tabla `auth.users` de GoTrue**, no solo de `pgcrypto`. Fuera de Supabase, ese flujo de reset debe reescribirse contra la tabla de usuarios del proveedor de auth que se elija. |
-| `pg_cron` | **No en RDS/Cloud SQL estándar** (RDS lo soporta desde Postgres 12+ con flag habilitado; Cloud SQL no lo soporta; on-prem requiere compilar la extensión) | 6 archivos lo requieren (`44`, `51`, `89`, `120`, y el poller de notificaciones). Sustituto portable: mover esos jobs a un scheduler externo (cron de K8s / GitHub Actions schedule / Vercel Cron) que llame un endpoint interno — patrón que el proyecto **ya usa en otros lados** (`db-migrate.yml` es `workflow_dispatch`; hay precedente de jobs por HTTP). |
-| Schema `analytics` / `accounting` | No son de Supabase — son schemas propios del proyecto (BI, finance) | Ninguno — se crean igual en cualquier Postgres. Aparecen como fallo en la prueba de §5 solo porque son consecuencia en cascada de otro archivo que falló antes en la misma corrida (ver §5.2), no por dependencia de plataforma. |
+> **Nota de autoría (2026-08-19, @AT):** esta sección se reescribió y se amplió a partir de una
+> evaluación dedicada a las 6 dependencias reales de plataforma (extensiones/schema `extensions`,
+> `pg_cron`, schema `auth`/GoTrue, Vault, roles, `extensions.crypt`). Los hallazgos de §3.1–§3.4 están
+> **verificados**, no solo leídos: introspección real de extensiones instaladas en prod
+> (`ejacvsgbewcerxtjtwto`, vía `mcp__supabase__list_extensions`, solo lectura) + una prueba end-to-end
+> contra un Postgres 18.4 nativo efímero (`scoop`, sin Docker — Docker seguía caído en esta sesión) que
+> reproduce RLS multi-tenant completo **sin que exista el schema `auth` en absoluto**. El resto del
+> documento (§0, §1, §2, §4, §5, §6, §7, §8, secciones de otros dos agentes en la misma tarea) no se
+> tocó — solo esta sección.
 
-**Resumen de honestidad:** de las 6 categorías realmente Supabase-only (roles, schema `extensions`,
-`auth.*`, Vault, `pg_cron`, y el flujo de reset de password que depende de `auth.users`), **4 tienen
-sustituto documentado y portable** (roles, schema `extensions`, `pg_cron`→scheduler externo, Vault→AES
-app-layer ya semi-existente). **`auth.*`/GoTrue no tiene sustituto implementado hoy** — es el gap real
-más grande de todos, y requeriría escoger e implementar un proveedor de auth alternativo antes de que
-una migración fuera de Supabase sea viable. Eso es trabajo de arquitectura (@AS/@AT), no algo que este
-runbook pueda resolver con SQL.
+### 3.0 Resumen ejecutivo (antes de entrar al detalle)
+
+El runbook original trataba `auth.*`/GoTrue como "el gap más grande, sin sustituto". Eso **sobre-estima
+el problema real**. Desagregando qué depende de qué:
+
+| Depende de Supabase de verdad | Sustituto | Costo/riesgo |
+|---|---|---|
+| Roles `anon`/`authenticated`/`service_role` + `bi_reader` (propio) | `CREATE ROLE` una vez por cluster | **Ninguno** — probado |
+| Schema `extensions` + `pgcrypto`/`citext`/`uuid-ossp`/`pg_trgm`/`pg_stat_statements` | `CREATE SCHEMA` + `CREATE EXTENSION` (contrib estándar) | **Ninguno** — probado |
+| **RLS multi-tenant en sí** (`current_org_id()`, `withTenantContext`, políticas) | Nada — **ya no depende de `auth.*`** | **Ninguno** — probado, ver §3.3.1 |
+| `pg_net` (HTTP async desde Postgres, usado por el poller de outbox) | No es contrib; no está en RDS/Cloud SQL; requiere compilar/instalar el proyecto `supabase/pg_net` o rediseñar sin él | Medio — ver §3.2 |
+| `pg_cron` (15 jobs reales en 4 archivos) | Scheduler externo (K8s CronJob / GH Actions schedule) llamando un endpoint interno | Bajo-medio — ver §3.2 |
+| Supabase Edge Function `notifications-dispatch` (destino del poller de outbox) | Cualquier endpoint HTTP interno (ya existe el patrón de router tRPC) | Bajo — ver §3.2 |
+| Supabase Vault (`vault.*`, pgsodium) | Cifrado app-layer AES-256-GCM (ya existe como fallback, hay que promoverlo a único) | Bajo — ver §3.4 |
+| **Login/sesión real** (`supabase.auth.signInWithPassword`, SSO Azure, MFA, `resetPassword` admin) | GoTrue self-hosted (stack de E2E, con brecha de madurez — ver §3.3.2/3.3.3) o reescritura a un proveedor propio | **Alto** — la única decisión de arquitectura real que queda abierta |
+
+La distinción que importa: **"RLS deja de aplicar sin Supabase" es falso** — se probó lo contrario en
+§3.3.1. Lo que sí es cierto es que **el login deja de funcionar** sin un backend compatible con
+`supabase-js`, porque 17 archivos de `apps/web` llaman `supabase.auth.*` directamente. Son dos
+problemas de tamaño muy distinto que el documento original mezclaba en una sola fila de tabla.
+
+---
+
+### 3.1 (A1) Schema `extensions` y extensiones — verificado, sin gap real
+
+Introspección real de prod (`ejacvsgbewcerxtjtwto`, Postgres 17.6.1, solo lectura vía
+`mcp__supabase__list_extensions`): de ~80 extensiones *disponibles* en la imagen de Supabase, las
+**instaladas** son 10: `pgcrypto`, `pg_net`, `plpgsql` (siempre presente), `vector` (pgvector 0.8.0),
+`supabase_vault`, `pg_cron`, `uuid-ossp`, `citext`, `pg_trgm`, `pg_stat_statements`. De esas, **6 viven
+en el schema `extensions`** (`pgcrypto`, `pg_net`, `uuid-ossp`, `citext`, `pg_trgm`,
+`pg_stat_statements`) y **3 no** (`pg_cron` → `pg_catalog`, `supabase_vault` → schema propio `vault`,
+`plpgsql` → `pg_catalog` siempre).
+
+Prueba local (Postgres 18.4 nativo, sin Docker, sin nada de Supabase instalado):
+
+```sql
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto           WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS citext             WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp"        WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pg_trgm            WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements WITH SCHEMA extensions;
+```
+
+**Aplicó limpio, las 5 quedaron en `extensions`** (`pg_stat_statements` no está en `24_security_hardening.sql`
+pero se agregó a la prueba porque Prisma no la declara y sin embargo vive ahí en prod — dato nuevo, no
+estaba en el diagnóstico original). Estas 5 son contrib estándar — vienen con **cualquier** distribución
+de Postgres (apt/yum, la imagen oficial de Docker, RDS, Cloud SQL, y hasta el build de Windows de scoop
+usado en esta prueba). Cero riesgo, cero costo. `24_security_hardening.sql` solo necesita que exista el
+schema antes de aplicarse — un `CREATE SCHEMA IF NOT EXISTS extensions;` al inicio del procedimiento de
+reconstrucción (§4) es suficiente; no hace falta editar el archivo.
+
+**`pg_net` y `pg_cron` NO son contrib** — se confirmó negativamente: en el Postgres 18.4 nativo de la
+prueba, `SELECT * FROM pg_available_extensions WHERE name IN ('pg_cron','pg_net','vector','supabase_vault')`
+devuelve **cero filas** para las 4. No es una cuestión de dónde crear el schema — son extensiones que
+Supabase compila y empaqueta para su propia imagen; fuera de esa imagen hay que compilarlas o usar un
+Postgres que ya las incluya (ver §3.2 y §3.4). Esto es una corrección al diagnóstico original, que
+trataba "extensiones" como una sola fila homogénea.
+
+---
+
+### 3.2 (A2) `pg_cron` — 4 archivos, **15 jobs reales** (no 6), dos dependencias adicionales ocultas
+
+Los 4 archivos (`44`, `51`, `89`, `120`) registran, contados uno por uno en el código:
+
+| Archivo | Jobs `cron.schedule(...)` | Qué hace | Cadencia |
+|---|---|---|---|
+| `44_notifications_outbox_poller.sql` | 1 (`notifications-poll-outbox`) | Lee `DomainEvent` sin publicar (`publishedAt IS NULL`), llama vía **`pg_net`** (`net.http_post`) a una **Supabase Edge Function** (`app.notifications_dispatch_url`) con backoff exponencial (`FOR UPDATE SKIP LOCKED`) | cada 1 min |
+| `51_bi_pg_cron_refresh.sql` | 12 (`bi_refresh_dim_*` ×6, `bi_refresh_fact_*` ×5, `bi_purge_refresh_log` ×1) | `REFRESH MATERIALIZED VIEW CONCURRENTLY` de las matviews de `analytics.*` (BI) con logging en `analytics.bi_refresh_log`; el job de purga borra logs >90 días | diario 03:00–03:15 UTC (dims SCD1), horario (dims frecuentes + facts clínicos), cada 4h (facts financieros), semanal (purga) |
+| `89_pharmacy_reservation_expire_cron.sql` | 1 (`his-expire-pharmacy-reservations`) | Expira `PharmacyReservation` vencidas y encola notificación al farmacéutico | cada 5 min |
+| `120_morse_sla_watchdog.sql` | 1 (`morse_sla_watchdog`) | JCI IPSG.6 — emite `DomainEvent` si un episodio hospitalario activo lleva >12h sin reevaluación de escala Morse | cada hora |
+
+**Total: 15**, no 6 — el número "6 jobs" del encargo original subestima el corpus real (probablemente
+contaba archivos, no `cron.schedule()` calls; el propio runbook original también decía "6 archivos" en
+un punto y "6 jobs" en otro, mezclando ambos). Los 12 jobs de `51` son el volumen dominante pero también
+el más simple de migrar: son *puro scheduling* sobre una función SQL ya existente
+(`analytics.fn_refresh_matview`), sin dependencias de red.
+
+**Hallazgo no capturado en el diagnóstico original:** `44` no depende solo de `pg_cron` — depende
+**además** de `pg_net` (extensión de HTTP asíncrono, tampoco contrib — ver §3.1) y de una **Supabase Edge
+Function** (`notifications-dispatch`, runtime Deno propietario de Supabase, no existe fuera de la
+plataforma). Migrar ese job específico no es "cambiar el scheduler" — es rediseñar el mecanismo de
+disparo completo.
+
+**Decisión recomendada (@AT, Well-Architected: *Operational Excellence* + *Reliability* — evitar un
+componente de infraestructura que no está disponible de forma uniforme entre RDS/Cloud SQL/on-prem):**
+
+1. **`51` (12 jobs de refresh BI) y `89`/`120` (2 jobs de dominio)** → mover a **scheduler externo**
+   llamando un endpoint HTTP interno (K8s `CronJob` si el target es K8s; `workflow_dispatch`/schedule de
+   GitHub Actions si se prefiere reusar el patrón que el repo ya tiene en `db-migrate.yml`). Estos 14
+   jobs son triviales de portar: cada uno ya es una llamada a una función SQL única
+   (`analytics.fn_refresh_matview`, `public.expire_pharmacy_reservations`, el `INSERT` del watchdog) —
+   el endpoint solo necesita ejecutar `SELECT <función>()` con el rol correcto. Costo: bajo (una función
+   Edge/Lambda/CronJob delgada por job, o un único endpoint parametrizado).
+2. **`44` (outbox poller)** → **no reemplazar pg_net + Edge Function 1:1**. Reemplazar el patrón entero
+   por un worker HTTP normal (K8s `CronJob` o proceso long-running) que hace el `SELECT ... FOR UPDATE
+   SKIP LOCKED` vía conexión Postgres normal (no `pg_net`) y llama al endpoint de notificaciones
+   directamente desde el propio worker — es estrictamente más simple que reproducir `pg_net` fuera de
+   Supabase, y el proyecto ya tiene el precedente arquitectónico (ADR 0008, outbox pattern) sin atarlo a
+   `pg_net` específicamente en su diseño conceptual, solo en la implementación SQL actual.
+3. **No vale la pena instalar `pg_cron` compilado a mano en RDS/on-prem** solo para estos 15 jobs —
+   RDS sí lo soporta (parameter group `shared_preload_libraries=pg_cron` desde Postgres 12), pero
+   Cloud SQL no, y on-prem requiere compilar y mantener el `.so` — un costo operativo recurrente
+   (parchear con cada minor de Postgres) por un beneficio que un `CronJob` de K8s da gratis y sin
+   atar el destino de la migración a "debe ser RDS". Este punto **queda abierto para @SRE/@BID** (dueños
+   operacionales de los jobs) — no lo decido unilateralmente, ver ADR 0020 (§3.3.3) para el paralelo con
+   la decisión de auth.
+
+---
+
+### 3.3 (A3) Schema `auth`/GoTrue — el gap se reduce, pero no desaparece
+
+#### 3.3.1 Lo que se pensaba que dependía de `auth.*` y **no depende** (probado)
+
+`docs/runbooks/e2e-gotrue-auth.md` ya documenta que `withTenantContext`
+(`packages/trpc/src/rls-context.ts`) setea GUCs (`app.current_user_id`/`app.current_org_id`) en vez de
+depender de `auth.jwt()`. Lo que el runbook original **no verificaba** es si eso es cierto en la
+práctica o si sigue habiendo una dependencia indirecta. Se probó de punta a punta:
+
+1. Postgres 18.4 nativo, **sin crear el schema `auth` en ningún momento** (`SELECT nspname FROM
+   pg_namespace WHERE nspname = 'auth'` devuelve 0 filas durante toda la prueba).
+2. Se aplicaron únicamente las funciones helper reales de `04_rls_session_helpers.sql`
+   (`current_org_id()`, `set_tenant_context()`) y una tabla `Patient` con la misma política RLS que usa
+   el proyecto (`organizationId = public.current_org_id()`).
+3. `SELECT public.set_tenant_context(...)` + `SET LOCAL ROLE authenticated` dentro de una transacción,
+   exactamente el patrón de `applyTenantContext()` → **RLS filtró correctamente por organización**
+   (1 fila visible de Org A con contexto Org A, 1 fila de Org B con contexto Org B, cero cross-tenant
+   leak) sin que `auth.*` existiera.
+
+**Conclusión dura:** la ruta de producción real (`withTenantContext`, usada en ~150+ call sites de
+routers tRPC) **no tiene ninguna dependencia runtime de GoTrue/`auth.*`**. La fila única que el runbook
+original dedicaba a "`auth.*`: no hay sustituto, gap más grande" describía un problema más grande del
+que existe.
+
+#### 3.3.2 Lo que sí depende de `auth.*` — acotado a 6 FK + 17 call sites de `supabase-js`
+
+**A nivel SQL**, de los 8 archivos que matchean `auth\.(uid|jwt|users|identities)`, **solo 6 tienen una
+dependencia real** (los otros 2 son comentarios: `01_rls_policies.sql:3` menciona `auth.jwt()` en un
+comentario de intención, no en código; `62_ece_07_rls.sql:75` nombra una columna `auth_user_id` con un
+comentario, no una FK). Los 6 reales son, en todos los casos, **una FK `REFERENCES auth.users(id)`**,
+nunca una llamada a `auth.uid()`/`auth.jwt()` en lógica de policy o de función:
+
+| Archivo | Columna | Semántica |
+|---|---|---|
+| `119_fall_event.sql:69` | `reportado_por` | quién reportó la caída (JCI IPSG.6) |
+| `57_ece_02_seguridad.sql:41` | `ece.personal_salud.auth_user_id` (FK opcional) | vínculo directorio de personal ↔ cuenta Supabase |
+| `78_proceso_b_transfers.sql:35,37` | `registrado_por`, `verificado_por` | trazabilidad GS1 de transferencias |
+| `83_inventory_thresholds.sql:31` | `configurado_por` | quién configuró el umbral de inventario |
+| `99_certificado_defuncion_workflow.sql:13` | `medico_firmante_id` | firmante del certificado de defunción |
+| (`80_proceso_f_devoluciones.sql:47`) | `created_by` | **ya no tiene FK explícita** — el propio comentario del archivo dice "no FK explícita para evitar cross-schema", confirmando que el equipo ya identificó y evitó este problema una vez |
+
+**Sustituto probado:** apuntar la FK a `public."User"(id)` en vez de `auth.users(id)`. Se probó (mismo
+Postgres 18.4, sin `auth.*`): `CREATE TABLE fall_event_test (... reportado_por uuid REFERENCES
+public."User"(id) ...)` — aplica limpio, mismo comportamiento (`ON DELETE SET NULL`/`RESTRICT` no cambia
+de semántica). Esto **no es un cambio de arquitectura** — es una sustitución de columna referenciada, 6
+archivos, bajo riesgo. La razón por la que **no lo hice** en este sprint: estos 6 archivos ya están
+aplicados contra prod (Supabase real, con `auth.users` vivo) — reescribir el archivo numerado
+existente rompería la disciplina "forward-only" del corpus (§2.3) y generaría drift entre lo aplicado
+en prod y lo que el archivo dice. El camino correcto es un **archivo nuevo, numerado, que se aplique
+condicionalmente** (o vive en un overlay `sql/portable/` separado que sustituye estos 6 `ALTER
+TABLE ... DROP CONSTRAINT / ADD CONSTRAINT ... REFERENCES public."User"(id)` solo cuando el target no es
+Supabase) — no lo escribí porque toca la disciplina de numeración que dos agentes en paralelo (categorías
+C/E y D) también están tocando esta misma tarea; lo dejo como recomendación concreta, no como archivo
+nuevo, para no colisionar.
+
+**A nivel aplicación**, la dependencia real de GoTrue está en:
+
+- **17 archivos de `apps/web`/`packages/trpc`** llaman `supabase.auth.*` directamente (`getUser`,
+  `getSession`, `signInWithPassword` vía los helpers de `apps/web/src/lib/supabase/{client,middleware}.ts`
+  y `apps/web/src/lib/auth/session.ts`, más flujos de MFA/SSO/recovery/idle-monitor). **Esto es lo que
+  realmente no funciona sin un backend compatible con `supabase-js`** — no RLS.
+- `packages/trpc/src/routers/user-admin.router.ts` (`resetPassword`, ~línea 471): hace `$queryRaw`
+  contra `auth.users`/`auth.identities` directamente (no vía `supabase-js`) para setear
+  `encrypted_password` con `extensions.crypt(...)` y asegurar una identidad `email`. Depende de:
+  (a) la tabla `auth.users` de GoTrue existiendo con ese schema exacto, (b) `extensions.crypt`/`gen_salt`
+  (pgcrypto — portable, ver §3.1). Fuera de Supabase esto se reescribe contra la tabla de usuarios del
+  proveedor de auth que se elija — no hay forma de portarlo 1:1 sin decidir primero el proveedor.
+
+#### 3.3.3 Veredicto sobre reusar el stack GoTrue de E2E para producción
+
+El stack de `docker-compose.test.yml` (postgres + `supabase/gotrue:v2.189.0` + gateway nginx que
+traduce `/auth/v1/*`) es **el punto de partida correcto, no un stack de producción**. Es el mismo
+binario que corre en Supabase real — reusarlo evita reescribir los 17 call sites de `supabase-js` y el
+flujo de SSO/MFA, que es exactamente el trabajo caro que un reemplazo (NextAuth/Auth.js) sí exigiría.
+Lo reutilizable de verdad:
+
+- El **bootstrap de schema** (`scripts/gotrue-test-init.sql`: `CREATE SCHEMA auth` + `CREATE ROLE
+  postgres`) — investigado contra el código real de `supabase/auth`, no adivinado. Aplica igual en
+  cualquier Postgres.
+- El **gateway `/auth/v1/*` → raíz** (`scripts/gotrue-test-gateway.conf`) — necesario porque
+  `supabase-js` siempre arma esa ruta y GoTrue no la entiende sin Kong. Portable tal cual.
+- Las **variables de configuración de GoTrue** (`GOTRUE_JWT_*`, `GOTRUE_DB_*`) — verificadas contra
+  `internal/conf/configuration.go` del repo real, no inventadas.
+
+Lo que le falta para ser producción — ninguno de estos puntos es opcional, y ninguno se cerró en esta
+sesión (Docker seguía caído; solo se pudo verificar la parte de schema/roles contra Postgres nativo,
+sin GoTrue):
+
+1. **El bloqueo abierto documentado en `e2e-gotrue-auth.md` §2**: `500 Database error checking email` al
+   crear el primer usuario vía `POST /admin/users`. Sin resolver esto, el stack no crea usuarios — es
+   un bloqueo de funcionalidad básica, no de hardening. Las hipótesis documentadas (orden de arranque
+   Prisma vs GoTrue, locale `text_pattern_ops`) no se investigaron más en esta sesión — sigue siendo el
+   primer paso de cualquiera que retome esto.
+2. **Persistencia real.** El compose de test usa `tmpfs` (se destruye el data dir al bajar el stack) —
+   deliberado para CI, catastrófico para prod. Prod necesita volumen persistente + backup/PITR del
+   propio Postgres que aloja `auth.*` (puede ser el mismo cluster que aloja `public`/`ece`, ya que GoTrue
+   solo necesita su propio schema en la misma base).
+3. **Gestión de secretos.** `GOTRUE_JWT_SECRET` tiene un default hardcodeado en el compose
+   ("`e2e-gotrue-test-secret-do-not-use-in-prod-only`" — el propio nombre lo dice). Prod necesita el
+   secreto en un secret manager (K8s `Secret`/Vault externo/SSM), rotación, y el mismo secreto
+   sincronizado con `NEXT_PUBLIC_SUPABASE_ANON_KEY`/`SUPABASE_SERVICE_ROLE_KEY` que hoy Vercel inyecta
+   como env vars de Supabase real.
+4. **Correo real.** `GOTRUE_MAILER_AUTOCONFIRM=true` autoconfirma todo email en el stack de test — en
+   prod hace falta un SMTP real (`GOTRUE_SMTP_*`) para magic-link, recovery, invitaciones — ninguna de
+   esas variables está en el compose actual.
+5. **HA / disponibilidad.** El compose de test es un único contenedor de GoTrue sin réplicas, sin
+   health-based failover, sin balanceo. Si GoTrue es el único backend de login, es un **punto único de
+   falla para toda la aplicación** (nadie inicia sesión sin él) — en Supabase managed esto lo resuelve la
+   plataforma; self-hosted es responsabilidad de @SRE (réplicas + readiness probes + `PodDisruptionBudget`
+   si el target es K8s).
+6. **`service_role`/RLS con JWT real.** Como se probó en §3.3.1, RLS **no** necesita que GoTrue emita el
+   JWT — pero **la sesión de usuario en el navegador sí** (`supabase.auth.getUser()` valida el JWT
+   contra el `GOTRUE_JWT_SECRET`). Falta verificar en runtime real (no se pudo, sin Docker) que un login
+   completo (`signInWithPassword` → cookie de sesión → `getUser()` en el middleware) funciona end-to-end
+   contra GoTrue self-hosted — el stack de E2E nunca llegó a probar esto (bloqueado en el punto 1).
+7. **Superficie de parcheo propia.** Operar GoTrue self-hosted significa que el equipo pasa a ser
+   responsable de sus CVEs y de sus upgrades — hoy Supabase lo hace de forma transparente. Es un costo
+   operativo permanente, no un costo de una sola vez.
+
+**Veredicto (@AT):** reusar GoTrue **es la opción correcta si el objetivo es portar el motor de datos sin
+reescribir la capa de auth** — evita el mayor costo de ingeniería (17 call sites + SSO + MFA). Pero
+**"reutilizable" no significa "listo"**: hay un bloqueo funcional sin diagnosticar y 6 brechas de
+madurez de producción (persistencia, secretos, correo, HA, verificación end-to-end, parcheo) que
+representan más trabajo que el stack de test en sí. Ver ADR 0020 para el marco de decisión completo
+(incluye la alternativa B: reescribir contra un proveedor propio) — **esta es la decisión de arquitectura
+que queda abierta para Edwin/@AS**, no algo que este runbook cierre.
+
+Referencia ejecutable: `infra/docker/auth-portable/docker-compose.yml` (nuevo, este PR) — es el mismo
+stack de `docker-compose.test.yml` con las brechas 2-4 marcadas explícitamente como
+`# TODO producción` en el propio archivo (persistencia, secretos, SMTP), **no** una solución a los 7
+puntos de arriba. No se pudo levantar ni probar (Docker caído en esta máquina, igual que en el resto de
+la sesión) — se declara así, sin maquillar el estado.
+
+---
+
+### 3.4 (A4) Vault, `service_role`/`authenticated`/`anon`, `extensions.crypt`
+
+**Roles.** Verificado (Postgres 18.4 nativo): `CREATE ROLE anon NOLOGIN`, `CREATE ROLE authenticated
+NOLOGIN`, `CREATE ROLE service_role NOLOGIN BYPASSRLS` aplican sin fricción — son primitivas de Postgres,
+no de Supabase. El único rol **adicional** que el corpus crea (fuera de los 3 de Supabase) es
+`bi_reader` (`48_bi_analytics_schema.sql`) — también un `CREATE ROLE` plano, cero dependencia de
+plataforma. No hay más roles Supabase-específicos en el corpus (`service_role` es el único con
+`BYPASSRLS`; no hay uso de roles reservados como `supabase_admin`/`supabase_auth_admin` en el código de
+aplicación, solo en la infraestructura interna de GoTrue).
+
+**Supabase Vault.** Confirmado con `pg_available_extensions` en Postgres 18.4 nativo: `supabase_vault`
+no está disponible (0 filas). A diferencia de `pgcrypto`/`citext`/etc., Vault no es "una extensión que
+falta instalar" — es una extensión que depende de `pgsodium` (bindings de libsodium) **y** de gestión de
+claves a nivel de proyecto que Supabase resuelve en su control plane (la clave raíz de cifrado de
+`pgsodium` no vive en una tabla portable). Aunque el código fuente de Vault/pgsodium es público,
+replicar su modelo de gestión de claves fuera de Supabase es un proyecto en sí mismo, no una instalación
+de paquete — por eso §5.3 del runbook ya documentaba que `161_portal_mfa_secret_encryption.sql` "aplica
+OK" pero fallaría en runtime. **Sustituto recomendado (ya semi-implementado):** el propio archivo 161
+documenta la estrategia doble capa — AES-256-GCM app-layer (`PortalAccount.mfaSecret`, ya activo, key en
+`PORTAL_SECRET`/`AUTH_SECRET`) es el mecanismo actual y el fallback documentado en `CLAUDE.md` §"Patrones
+de seguridad establecidos". Fuera de Supabase, promover ese fallback a **único** mecanismo (retirar la
+rama Vault de `get_portal_mfa_secret`/`set_portal_mfa_secret_vault`, o dejarla como no-op que siempre
+retorna vía la rama app-layer) cierra el gap sin trabajo nuevo — es una decisión de "dejar de intentar
+usar Vault", no de construir un reemplazo.
+
+**`extensions.crypt`/`extensions.gen_salt` (bcrypt).** Portable — es `pgcrypto`, contrib estándar,
+probado en §3.1. El único uso productivo (`user-admin.router.ts` `resetPassword`) no depende del
+algoritmo sino de la tabla `auth.users` que recibe el hash — ver §3.3.2. Una vez resuelto el proveedor de
+auth (GoTrue self-hosted o reemplazo), este punto se resuelve solo (bcrypt vía pgcrypto contra la tabla
+de usuarios que corresponda).
+
+**Resumen A4:** de las 4 sub-dependencias de este punto, **3 son triviales y probadas** (roles,
+`bi_reader`, `pgcrypto`/`crypt`). **Vault es la única con costo real** — pero el costo es cero si se
+decide (como recomiendo) no perseguir un sustituto de Vault y en cambio consolidar en el mecanismo
+app-layer que el proyecto ya usa como fallback desde el día uno.
 
 ---
 

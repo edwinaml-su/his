@@ -12,19 +12,42 @@
 
 -- ---------------------------------------------------------------------------
 -- 1. Catálogo de salas quirúrgicas por establecimiento
+--
+-- NOTA (@DBA, segunda pasada db-portable, 2026-08-19): `ece.sala_qx` está
+-- MODELADA en schema.prisma (`model EceSalaQx`, agregado después de este
+-- archivo — ver el comentario en el propio schema.prisma que referencia
+-- esta ruta como origen). En una reconstrucción desde cero, Fase 1
+-- (`prisma db push`) ya crea la tabla ANTES de que este archivo corra en
+-- Fase 2 → el `CREATE TABLE` original (sin IF NOT EXISTS) fallaba con
+-- 42P07 "la relación sala_qx ya existe". Se agrega IF NOT EXISTS +, más
+-- abajo, los CHECK constraints como ALTER TABLE idempotentes — porque un
+-- CREATE TABLE IF NOT EXISTS que no ejecuta NO aplica tampoco sus
+-- constraints inline, y el shape de Prisma no los modela (Prisma no tiene
+-- CHECK constraints en este schema). Sin este segundo paso, la
+-- reconstrucción "aplicaba" pero perdía silenciosamente 4 reglas de
+-- integridad. No se toca el resto del archivo.
 -- ---------------------------------------------------------------------------
-CREATE TABLE ece.sala_qx (
+CREATE TABLE IF NOT EXISTS ece.sala_qx (
   id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   establecimiento_id uuid        NOT NULL
     REFERENCES ece.establecimiento(id) ON DELETE RESTRICT,
   codigo             text        NOT NULL,
   nombre             text        NOT NULL,
   tipo               text        NOT NULL
-    CHECK (tipo IN ('mayor', 'menor', 'ambulatoria')),
+    CONSTRAINT sala_qx_tipo_check CHECK (tipo IN ('mayor', 'menor', 'ambulatoria')),
   activa             boolean     NOT NULL DEFAULT true,
   registrado_en      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (establecimiento_id, codigo)
 );
+
+-- Idempotente: aplica el CHECK si la tabla ya existía (creada por Prisma en
+-- Fase 1, sin este constraint) y el CREATE TABLE IF NOT EXISTS de arriba no
+-- corrió. Si la tabla se creó recién arriba, el constraint ya existe con el
+-- mismo nombre y el ALTER falla con duplicate_object, que se descarta.
+DO $$ BEGIN
+  ALTER TABLE ece.sala_qx
+    ADD CONSTRAINT sala_qx_tipo_check CHECK (tipo IN ('mayor', 'menor', 'ambulatoria'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 COMMENT ON TABLE ece.sala_qx IS
   'Catálogo de salas quirúrgicas por establecimiento. Usada por ece.reserva_sala_qx.';
@@ -41,8 +64,13 @@ GRANT SELECT, INSERT, UPDATE ON ece.sala_qx TO authenticated;
 -- ---------------------------------------------------------------------------
 -- 2. Reservas de sala quirúrgica
 --    Columnas derivadas del INSERT/SELECT/UPDATE en bridge-cirugia.router.ts
+--
+-- NOTA (@DBA, segunda pasada db-portable): mismo caso que ece.sala_qx
+-- arriba — `model EceReservaSalaQx` también está en schema.prisma y ya
+-- existe tras Fase 1. IF NOT EXISTS + constraints idempotentes por la
+-- misma razón.
 -- ---------------------------------------------------------------------------
-CREATE TABLE ece.reserva_sala_qx (
+CREATE TABLE IF NOT EXISTS ece.reserva_sala_qx (
   id                    uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   -- FK lógica a ece.orden_ingreso (sin FK estructural hasta que exista la columna)
   orden_qx_id           uuid        NOT NULL,
@@ -54,10 +82,11 @@ CREATE TABLE ece.reserva_sala_qx (
   anestesiologo_id      uuid,                   -- nullable: cirugías sin anestesiología
   fecha_inicio          timestamptz NOT NULL,
   fecha_fin             timestamptz NOT NULL,
-  duracion_estimada_min integer     NOT NULL CHECK (duracion_estimada_min BETWEEN 1 AND 1440),
+  duracion_estimada_min integer     NOT NULL
+    CONSTRAINT reserva_sala_qx_duracion_check CHECK (duracion_estimada_min BETWEEN 1 AND 1440),
   procedimiento_cie10   text        NOT NULL,
   estado                text        NOT NULL DEFAULT 'programado'
-    CHECK (estado IN ('programado', 'confirmado', 'en_curso', 'cancelado')),
+    CONSTRAINT reserva_sala_qx_estado_check CHECK (estado IN ('programado', 'confirmado', 'en_curso', 'cancelado')),
   reservado_por         uuid        NOT NULL,   -- ece.personal_salud.id
   reservado_en          timestamptz NOT NULL DEFAULT now(),
   motivo_cancelacion    text,
@@ -66,22 +95,37 @@ CREATE TABLE ece.reserva_sala_qx (
   CONSTRAINT chk_fecha_coherente CHECK (fecha_fin > fecha_inicio)
 );
 
+DO $$ BEGIN
+  ALTER TABLE ece.reserva_sala_qx
+    ADD CONSTRAINT reserva_sala_qx_duracion_check CHECK (duracion_estimada_min BETWEEN 1 AND 1440);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE ece.reserva_sala_qx
+    ADD CONSTRAINT reserva_sala_qx_estado_check CHECK (estado IN ('programado', 'confirmado', 'en_curso', 'cancelado'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  ALTER TABLE ece.reserva_sala_qx
+    ADD CONSTRAINT chk_fecha_coherente CHECK (fecha_fin > fecha_inicio);
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 COMMENT ON TABLE ece.reserva_sala_qx IS
   'Reserva de sala quirúrgica para una cirugía programada. '
   'Una sala no puede tener dos reservas activas con overlap de horario (validado en router).';
 
 -- Índice principal: detección de conflictos de horario (detectarConflictoSala)
-CREATE INDEX idx_reserva_sala_qx_overlap
+CREATE INDEX IF NOT EXISTS idx_reserva_sala_qx_overlap
   ON ece.reserva_sala_qx (sala_qx_id, fecha_inicio, fecha_fin)
   WHERE estado IN ('programado', 'confirmado', 'en_curso');
 
 -- Índice para listProgramacionDia (filtro por fecha)
-CREATE INDEX idx_reserva_sala_qx_fecha_inicio
+CREATE INDEX IF NOT EXISTS idx_reserva_sala_qx_fecha_inicio
   ON ece.reserva_sala_qx (fecha_inicio)
   WHERE estado <> 'cancelado';
 
 -- Índice para lookups por episodio
-CREATE INDEX idx_reserva_sala_qx_episodio
+CREATE INDEX IF NOT EXISTS idx_reserva_sala_qx_episodio
   ON ece.reserva_sala_qx (episodio_id);
 
 -- RLS: reserva visible si la sala pertenece al establecimiento del usuario

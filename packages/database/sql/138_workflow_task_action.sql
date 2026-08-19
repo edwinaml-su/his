@@ -19,9 +19,9 @@
 CREATE TABLE IF NOT EXISTS "WorkflowTaskAction" (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "organizationId" uuid NOT NULL REFERENCES "Organization"(id) ON DELETE RESTRICT,
-  "taskId"        varchar(120) NOT NULL, /// Compuesto: "<TaskType>:<sourceUUID>"
-  "taskType"      varchar(60) NOT NULL,  /// TaskType enum (denormalizado para queries)
-  action          varchar(40) NOT NULL,  /// REASSIGN | ESCALATE | COMPLETE | COMMENT | CANCEL
+  "taskId"        varchar(120) NOT NULL, -- Compuesto: "<TaskType>:<sourceUUID>"
+  "taskType"      varchar(60) NOT NULL,  -- TaskType enum (denormalizado para queries)
+  action          varchar(40) NOT NULL,  -- REASSIGN | ESCALATE | COMPLETE | COMMENT | CANCEL
   "actorId"       uuid NOT NULL REFERENCES "User"(id) ON DELETE RESTRICT,
   "targetUserId"  uuid REFERENCES "User"(id) ON DELETE SET NULL,
   reason          text NOT NULL,
