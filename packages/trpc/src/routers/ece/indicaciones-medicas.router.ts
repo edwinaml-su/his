@@ -26,7 +26,14 @@
  * ---------------------------------------------------------------------------
  *   'ece.indicaciones.firmadas'  — emitido en firmar().
  *     Payload: { indicacionId, episodioId, medicoId, itemCount, organizationId }
- *     Consumido por motor MAR (Stream 30) para crear líneas de admin pendientes.
+ *     Consumido SÍNCRONAMENTE (misma transacción) por
+ *     `materializeIndicacionFirmadaToFarmacia` (../../ece/mar-consumer.ts):
+ *     copia los ítems tipo=medicamento, verbatim, a la cola de conciliación
+ *     `ece.indicacion_farmacia_pendiente` (packages/database/sql/
+ *     201_ece_indicacion_farmacia_pendiente.sql — NO aplicado a prod aún).
+ *     Ver mar-consumer.ts para el porqué de este destino (no
+ *     PrescriptionItem/MedicationAdministration ni administracion_medicamento)
+ *     y el contrato de fallo (si falla, la firma completa revierte).
  *
  * ---------------------------------------------------------------------------
  * ROLES
@@ -46,12 +53,31 @@
  *   IND-002 [P1] Columnas estructuradas dosis_valor/dosis_unidad/via_codigo
  *   IND-003 [P1] Trigger inmutabilidad post-ADMINISTRADO en administracion_medicamento
  *   IND-004 [P2] CHECK condicional motivo_omision NOT NULL cuando estado OMITIDA|RECHAZADA
+ *
+ * HALLAZGOS NUEVOS (sprint remediación críticos, 2026-08-19 — NO corregidos
+ * aquí, fuera de alcance; ver reporte del sprint):
+ *   - `ece.indicacion_item.tipo` en prod solo acepta
+ *     {medicamento,dieta,cuidado,estudio,reposo} (CHECK
+ *     `indicacion_item_tipo_check`); el Zod `tipoIndicacionEnum` de este
+ *     archivo envía {MEDICAMENTO,PROCEDIMIENTO,DIETA,CUIDADO_GENERAL,
+ *     ESTUDIO}. Ningún valor coincide → `create()` viola el CHECK en prod
+ *     hoy. Tabla confirmada vacía (0 filas) — nadie ha creado una indicación
+ *     exitosamente todavía.
+ *   - `ece.administracion_medicamento.estado` en prod solo acepta
+ *     {administrado,omitido,diferido} (CHECK
+ *     `administracion_medicamento_estado_check`); `estadoAdminEnum` de este
+ *     archivo envía {PROGRAMADA,ADMINISTRADO,OMITIDA,RECHAZADA}. Ningún
+ *     valor coincide → `registrarAdministracion()` viola el CHECK en prod
+ *     hoy.
+ *   Ambos ocultos a los tests existentes porque `emitDomainEvent`/Prisma
+ *   están 100% mockeados (nunca tocan Postgres real).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
+import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
 import {
@@ -568,7 +594,7 @@ export const indicacionesMedicasRouter = router({
           `;
           const itemCount = countRows[0]?.cnt ?? 0;
 
-          await emitDomainEvent(tx, {
+          const domainEvent = await emitDomainEvent(tx, {
             organizationId: ctx.tenant.organizationId,
             eventType: "ece.indicaciones.firmadas",
             aggregateType: "IndicacionMedica",
@@ -582,6 +608,29 @@ export const indicacionesMedicasRouter = router({
               organizationId: ctx.tenant.organizationId,
             },
           });
+
+          // R04 — materializa los ítems tipo=medicamento a la cola de
+          // conciliación farmacia/eMAR (ece.indicacion_farmacia_pendiente).
+          // Corre en la MISMA transacción que la firma: si falla, la firma
+          // completa revierte (ver contrato de fallo en mar-consumer.ts) —
+          // nunca queda una indicación "firmada" sin que farmacia se entere.
+          try {
+            await materializeIndicacionFirmadaToFarmacia(tx, {
+              indicacionId: input.id,
+              episodioId: indicacion.episodio_id,
+              medicoPrescriptorId: indicacion.medico_prescriptor,
+              domainEventId: domainEvent.id,
+            });
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló la materialización a " +
+                "farmacia/eMAR. La firma no se aplicó — reintente; si persiste, " +
+                "contacte soporte.",
+              cause: err,
+            });
+          }
 
           return {
             id: input.id,
