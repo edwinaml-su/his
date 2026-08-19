@@ -14,7 +14,14 @@
 --   ece.episodio_hospitalario (PK: episodio_id) → ece.episodio_atencion(id)
 --   ece.valoracion_inicial_enfermeria.episodio_hospitalario_id
 --     FK → ece.episodio_hospitalario.episodio_id
---   ece.episodio_atencion.establecimiento_id → ece.institucion(id).organization_id
+--   ece.episodio_atencion.establecimiento_id
+--     FK → ece.establecimiento(id)
+--   ece.establecimiento.institucion_id
+--     FK → ece.institucion(id) → institucion.organization_id
+--   (corregido 2026-08-19: el join iba directo a ece.institucion, comparando
+--    establecimiento.id contra institucion.id — espacios de UUID disjuntos.
+--    0/30 episodios activos en prod hacian match, la alerta IPSG.6 nunca
+--    podia emitirse. Fix verificado via MCP 2026-08-19.)
 --
 -- DomainEvent columnas (camelCase, verificadas via MCP):
 --   "organizationId", "eventType", "aggregateType", "aggregateId",
@@ -65,8 +72,10 @@ SELECT cron.schedule(
     FROM ece.episodio_hospitalario eh
     JOIN ece.episodio_atencion ea
       ON ea.id = eh.episodio_id
+    JOIN ece.establecimiento est
+      ON est.id = ea.establecimiento_id
     JOIN ece.institucion inst
-      ON inst.id = ea.establecimiento_id
+      ON inst.id = est.institucion_id
     LEFT JOIN LATERAL (
       SELECT MAX(vie.registrado_en) AS registrado_en
       FROM ece.valoracion_inicial_enfermeria vie
