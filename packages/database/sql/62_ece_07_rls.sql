@@ -345,7 +345,11 @@ CREATE OR REPLACE FUNCTION ece.fn_check_dir_certificar()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$
 BEGIN
   -- Solo aplica cuando el nuevo estado es 'certificado'
-  IF NEW.estado = 'certificado' AND (OLD.estado IS DISTINCT FROM 'certificado') THEN
+  -- Nota @DBA (feat/db-portable): la columna real en ece.documento_instancia
+  -- es `estado_registro`, no `estado` (confirmado por introspección de prod,
+  -- ejacvsgbewcerxtjtwto) — `estado` nunca existió, este trigger nunca llegó
+  -- a aplicarse (ni la función ni el trigger existen en prod).
+  IF NEW.estado_registro = 'certificado' AND (OLD.estado_registro IS DISTINCT FROM 'certificado') THEN
     -- Verificar que el personal en contexto tenga rol DIR vigente
     IF NOT EXISTS (
       SELECT 1
@@ -390,7 +394,7 @@ BEGIN
   ) THEN
     DROP TRIGGER IF EXISTS trg_dir_certificar ON ece.documento_instancia;
     CREATE TRIGGER trg_dir_certificar
-      BEFORE UPDATE OF estado ON ece.documento_instancia
+      BEFORE UPDATE OF estado_registro ON ece.documento_instancia
       FOR EACH ROW
       EXECUTE FUNCTION ece.fn_check_dir_certificar();
   END IF;

@@ -79,8 +79,18 @@ ALTER TABLE ece.episodio_atencion
   ADD COLUMN IF NOT EXISTS estado_conservacion   ece.estado_conservacion NOT NULL DEFAULT 'ACTIVO',
   ADD COLUMN IF NOT EXISTS fecha_vencimiento_retencion TIMESTAMPTZ;
 
+-- Nota @DBA (feat/db-portable): ece.episodio_atencion NO tiene columna
+-- organization_id (confirmado por introspección de prod, ejacvsgbewcerxtjtwto)
+-- — solo establecimiento_id. Llegar a organization_id requiere 2 saltos
+-- (establecimiento_id → ece.establecimiento.institucion_id →
+-- ece.institucion.organization_id), lo cual no es expresable como índice
+-- plano sobre esta tabla. Se usa establecimiento_id: es la columna de
+-- partición tenant que sí existe en la tabla y es el mismo patrón ya
+-- usado para RLS sobre episodio_atencion en 113_verbal_order.sql (policies
+-- por establecimiento_id vía GUC app.establecimiento_id). Esto NO es una
+-- policy RLS — es un índice de performance, no altera control de acceso.
 CREATE INDEX IF NOT EXISTS idx_episodio_conservacion
-  ON ece.episodio_atencion (organization_id, estado_conservacion);
+  ON ece.episodio_atencion (establecimiento_id, estado_conservacion);
 CREATE INDEX IF NOT EXISTS idx_episodio_vencimiento
   ON ece.episodio_atencion (fecha_vencimiento_retencion)
   WHERE fecha_vencimiento_retencion IS NOT NULL;
@@ -211,7 +221,9 @@ SELECT cron.schedule(
   UPDATE ece.episodio_atencion
   SET estado_conservacion = 'PASIVO'
   WHERE estado_conservacion = 'ACTIVO'
-    AND fecha_cierre < now() - INTERVAL '5 years'
+    -- Nota @DBA: la columna real es fecha_hora_cierre, no fecha_cierre
+    -- (confirmado contra 59_ece_04_episodios.sql y prod).
+    AND fecha_hora_cierre < now() - INTERVAL '5 years'
     AND id NOT IN (
       -- Episodios con eliminación en curso
       SELECT episodio_id FROM ece.eliminacion_supervisada
