@@ -106,6 +106,9 @@ END $$;
 -- con schedule en cron.yaml. Documentado en TODO del router.
 -- ============================================================
 
+-- Nota: `ON CONFLICT` no es válido sobre un `SELECT` (solo aplica a INSERT) —
+-- era un bug de sintaxis, no un problema de portabilidad. cron.schedule() ya
+-- actualiza el job in-place cuando el jobname coincide, no hace falta upsert.
 SELECT cron.schedule(
   'critical_result_sla_watchdog',  -- nombre único del job
   '*/5 * * * *',                   -- cada 5 minutos
@@ -192,7 +195,4 @@ SELECT cron.schedule(
       NOW()
     FROM exceeded e;
   $$
-) ON CONFLICT (jobname) DO UPDATE
-  SET schedule  = EXCLUDED.schedule,
-      command   = EXCLUDED.command,
-      active    = true;
+);

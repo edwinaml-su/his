@@ -174,17 +174,22 @@ ALTER TABLE ece.regla_retencion     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ece.eliminacion_supervisada ENABLE ROW LEVEL SECURITY;
 
 -- Políticas básicas tenant-scoped (lectura autenticada por org)
-CREATE POLICY IF NOT EXISTS "contingencia_org_isolation"
+-- Nota: CREATE POLICY no soporta IF NOT EXISTS en PostgreSQL — se usa el
+-- patrón idempotente estándar del resto del corpus (DROP IF EXISTS + CREATE).
+DROP POLICY IF EXISTS "contingencia_org_isolation" ON ece.contingencia_evento;
+CREATE POLICY "contingencia_org_isolation"
   ON ece.contingencia_evento
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
 
-CREATE POLICY IF NOT EXISTS "regla_retencion_org_isolation"
+DROP POLICY IF EXISTS "regla_retencion_org_isolation" ON ece.regla_retencion;
+CREATE POLICY "regla_retencion_org_isolation"
   ON ece.regla_retencion
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
 
-CREATE POLICY IF NOT EXISTS "eliminacion_org_isolation"
+DROP POLICY IF EXISTS "eliminacion_org_isolation" ON ece.eliminacion_supervisada;
+CREATE POLICY "eliminacion_org_isolation"
   ON ece.eliminacion_supervisada
   FOR ALL TO authenticated
   USING (organization_id::text = current_setting('app.current_org_id', true));
@@ -196,6 +201,9 @@ CREATE POLICY IF NOT EXISTS "eliminacion_org_isolation"
 -- Nota: pg_cron en Supabase requiere extensión habilitada.
 -- Si no está disponible, usar Edge Function programada.
 
+-- Nota: `ON CONFLICT` no es válido sobre un `SELECT` (solo aplica a INSERT) —
+-- era un bug de sintaxis, no un problema de portabilidad. cron.schedule() ya
+-- actualiza el job in-place cuando el jobname coincide, no hace falta upsert.
 SELECT cron.schedule(
   'his-retencion-pasivo-nightly',
   '0 2 * * *',
@@ -210,4 +218,4 @@ SELECT cron.schedule(
       WHERE estado IN ('SOLICITADA', 'APROBADA')
     );
   $$
-) ON CONFLICT (jobname) DO UPDATE SET schedule = '0 2 * * *';
+);

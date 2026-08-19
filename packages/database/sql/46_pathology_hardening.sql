@@ -196,13 +196,13 @@ DECLARE
 BEGIN
   FOREACH t IN ARRAY tables LOOP
     EXECUTE format(
-      'DROP TRIGGER IF EXISTS trg_audit_%I ON public."%I";', t, t
+      'DROP TRIGGER IF EXISTS %I ON public.%I;', 'trg_audit_' || t, t
     );
     EXECUTE format(
-      'CREATE TRIGGER trg_audit_%I
-         AFTER INSERT OR UPDATE OR DELETE ON public."%I"
+      'CREATE TRIGGER %I
+         AFTER INSERT OR UPDATE OR DELETE ON public.%I
          FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();',
-      t, t
+      'trg_audit_' || t, t
     );
   END LOOP;
 END;
