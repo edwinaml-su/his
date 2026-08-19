@@ -92,6 +92,57 @@ describe("encounterTransferRouter", () => {
       ).rejects.toThrow();
     });
 
+    // Caso borde antes solo mencionado en el legacy (que ni siquiera lo
+    // validaba): un encuentro con alta ya registrada no debe poder
+    // trasladarse.
+    it("rechaza traslado de un encuentro ya dado de alta (CONFLICT)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        dischargedAt: new Date("2026-05-20T10:00:00Z"),
+        serviceUnitId: "svc-old",
+        bedAssignments: [],
+        patient: { gsrn: null },
+      } as never);
+
+      const caller = encounterTransferRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.transferEncounter({
+          encounterId: "00000000-0000-0000-0000-000000000010",
+          toServiceUnitId: "00000000-0000-0000-0000-000000000020",
+          reason: "Cambio a UCI",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(prisma.encounterTransfer.create).not.toHaveBeenCalled();
+    });
+
+    it("rechaza si la cama destino no está libre (CONFLICT)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        dischargedAt: null,
+        serviceUnitId: "svc-old",
+        bedAssignments: [],
+        patient: { gsrn: null },
+      } as never);
+      const bedDestId = "00000000-0000-0000-0000-000000000bed";
+      prisma.bed.findFirst.mockResolvedValue({
+        id: bedDestId,
+        code: "C-02",
+        status: "OCCUPIED",
+        serviceUnitId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      const caller = encounterTransferRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.transferEncounter({
+          encounterId: "00000000-0000-0000-0000-000000000010",
+          toServiceUnitId: "00000000-0000-0000-0000-000000000020",
+          toBedId: bedDestId,
+          reason: "Cambio a UCI",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(prisma.encounterTransfer.create).not.toHaveBeenCalled();
+    });
+
     // Gap detectado por @QA: la única cobertura previa de la rama EPCIS de
     // ADR 0019 usaba `patient.gsrn: null` (rama defensiva de "omitir
     // evento"). Nada ejercitaba el camino donde el paciente SÍ tiene GSRN —

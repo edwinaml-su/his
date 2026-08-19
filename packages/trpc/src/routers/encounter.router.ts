@@ -2,8 +2,6 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   admitSchema,
-  transferSchema,
-  dischargeSchema,
   encounterListSchema,
   encounterListOpenByOrgSchema,
   encounterCensusSchema,
@@ -324,32 +322,6 @@ export const encounterRouter = router({
       });
 
       return encounter;
-    });
-  }),
-
-  transfer: tenantProcedure.input(transferSchema).mutation(async ({ ctx, input }) => {
-    return ctx.prisma.encounterTransfer.create({
-      data: {
-        encounterId: input.encounterId,
-        fromServiceId: input.fromServiceId,
-        toServiceId: input.toServiceId,
-        fromBedId: input.fromBedId,
-        toBedId: input.toBedId,
-        reason: input.reason,
-        createdBy: ctx.user.id,
-      },
-    });
-  }),
-
-  discharge: tenantProcedure.input(dischargeSchema).mutation(async ({ ctx, input }) => {
-    return ctx.prisma.encounter.update({
-      where: { id: input.encounterId },
-      data: {
-        dischargeType: input.dischargeType,
-        dischargedAt: input.dischargedAt ?? new Date(),
-        primaryDiagnosisId: input.primaryDiagnosisId,
-        updatedBy: ctx.user.id,
-      },
     });
   }),
 
