@@ -9,12 +9,28 @@
  * confían al cliente). El campo gs1Raw se incluye para auditoría.
  *
  * Hard stops server-side:
- *   SIN_RECETA_ACTIVA      : no existe indicación activa para el paciente/encuentro
- *   RECETA_SUSPENDIDA      : indicación encontrada pero no está en estado dispensable
- *   MEDICAMENTO_VENCIDO    : fecha de vencimiento AI(17) en el pasado
- *   LOTE_EN_RECALL         : lote tiene recallStatus != null en MedicationGtin
+ *   SIN_RECETA_ACTIVA             : no existe indicación activa para el paciente/encuentro
+ *   RECETA_SUSPENDIDA             : indicación encontrada pero no está en estado dispensable
+ *   MEDICAMENTO_VENCIDO           : fecha de vencimiento AI(17) en el pasado
+ *   LOTE_EN_RECALL                : lote tiene recallStatus != null en MedicationGtin
+ *   LOTE_NO_EXISTE_EN_INVENTARIO  : R07 — el GTIN está en el catálogo (StockItem) pero
+ *                                   el lote escaneado nunca ingresó a StockLot.
+ *   LOTE_NO_DISPONIBLE_INVENTARIO : R07 — StockLot.qualityStatus != AVAILABLE.
+ *   STOCK_INSUFICIENTE            : R07 — StockLot.quantityOnHand < 1 al momento del scan.
  *
  * Emite evento Beta.15 outbox `pharmacy.expired-attempt` en MEDICAMENTO_VENCIDO.
+ *
+ * R07 (remediación crítico, 2026-08-19) — validación de inventario real:
+ *   scanItem validaba GTIN/lote/vencimiento/recall pero nunca consultaba stock
+ *   físico ("disponibilidad virtualmente ilimitada"). Ahora, si el GTIN+lote
+ *   tiene un StockItem/StockLot cargado (§19), se valida disponibilidad y se
+ *   descuenta 1 unidad atómicamente en la misma transacción que el resto del
+ *   scan. El enforcement es data-driven (no un flag): si el catálogo de
+ *   inventario todavía no tiene ese ítem cargado, no bloquea (StockItem/
+ *   StockLot están en 0 filas en prod al momento de este cambio) — bloquear
+ *   el 100% de las dispensaciones por falta de carga de catálogo sería peor
+ *   que el hallazgo original. `stockValidated` en la respuesta indica si el
+ *   descuento ocurrió contra inventario real.
  *
  * Dependencia @DBA (bloqueante para GTIN_NO_COINCIDE_CON_RECETA completo):
  *   - Drug.gtin (campo GTIN-14 en catálogo) → cuando exista, se valida coincidencia.
@@ -272,6 +288,109 @@ export const dispensationRouter = router({
             }
           }
 
+          // Paso 3.5 — R07: validar inventario real (StockItem/StockLot,
+          // fuente de verdad de §19). Sin esto, scanItem podía autorizar
+          // dispensación con "disponibilidad virtualmente ilimitada".
+          //
+          // Enforcement DATA-DRIVEN, no un flag global: al 2026-08-19,
+          // StockItem/StockLot tienen 0 filas en prod (introspección MCP
+          // Supabase, solo lectura) — el catálogo de inventario todavía no
+          // se cargó. Bloquear el 100% de las dispensaciones hasta que se
+          // cargue sería peor que el hallazgo original (faltante a pie de
+          // cama por outage total del módulo). Por eso:
+          //   - GTIN sin StockItem → ítem aún no incorporado al inventario.
+          //     No bloquea; se marca stockValidated=false.
+          //   - StockItem sin input.lot → no se puede ubicar el StockLot
+          //     exacto (único por org+establecimiento+item+lote). No bloquea.
+          //   - StockItem + lote pero sin StockLot para ese lote/bodega →
+          //     el lote nunca ingresó físicamente. Hard stop — este es el
+          //     caso concreto de "medicamento que no existe físicamente".
+          //   - StockLot con qualityStatus != AVAILABLE → hard stop.
+          //   - StockLot con quantityOnHand < 1 → hard stop.
+          // Caso feliz: descuenta 1 unidad (cada scan = 1 unidad física,
+          // modelo unit-dose bedside) con guard atómico en el WHERE del
+          // updateMany (evita TOCTOU entre dos scans concurrentes del mismo
+          // lote) + registra StockMovement OUT. Todo dentro de la misma
+          // transacción que el resto de scanItem (withTenantContext ya la
+          // abre) → atómico con el resultado de la dispensación por
+          // construcción: si algo más adelante en este callback falla, la
+          // transacción completa hace rollback, incluido el descuento.
+          let stockValidated = false;
+          if (ctx.tenant.establishmentId && input.lot) {
+            const stockItem = await tx.stockItem.findFirst({
+              where: {
+                gtin: input.gtin,
+                OR: [
+                  { organizationId: null },
+                  { organizationId: ctx.tenant.organizationId },
+                ],
+              },
+              select: { id: true },
+            });
+
+            if (stockItem) {
+              const lot = await tx.stockLot.findFirst({
+                where: {
+                  organizationId: ctx.tenant.organizationId,
+                  establishmentId: ctx.tenant.establishmentId,
+                  itemId: stockItem.id,
+                  lotNumber: input.lot,
+                },
+                select: { id: true, qualityStatus: true },
+              });
+
+              if (!lot) {
+                return {
+                  hardStop: "LOTE_NO_EXISTE_EN_INVENTARIO" as const,
+                  gtin: input.gtin,
+                  lot: input.lot,
+                };
+              }
+
+              if (lot.qualityStatus !== "AVAILABLE") {
+                return {
+                  hardStop: "LOTE_NO_DISPONIBLE_INVENTARIO" as const,
+                  lot: input.lot,
+                  qualityStatus: lot.qualityStatus,
+                };
+              }
+
+              // Descuento atómico: el WHERE exige quantityOnHand >= 1, así
+              // que un `count === 0` significa "otro scan concurrente ya
+              // agotó el lote" o "no había stock" — ambos son
+              // STOCK_INSUFICIENTE, sin necesidad de leer-y-comparar.
+              const decremented = await tx.stockLot.updateMany({
+                where: { id: lot.id, quantityOnHand: { gte: 1 } },
+                data: { quantityOnHand: { decrement: 1 } },
+              });
+
+              if (decremented.count === 0) {
+                return {
+                  hardStop: "STOCK_INSUFICIENTE" as const,
+                  gtin: input.gtin,
+                  lot: input.lot,
+                };
+              }
+
+              await tx.stockMovement.create({
+                data: {
+                  organizationId: ctx.tenant.organizationId,
+                  establishmentId: ctx.tenant.establishmentId,
+                  itemId: stockItem.id,
+                  lotId: lot.id,
+                  type: "OUT",
+                  quantity: 1,
+                  reason: "Dispensación GS1 bedside (dispensation.scanItem)",
+                  referenceCode: prescription.id,
+                  gtinFisico: input.gtin,
+                  performedById: ctx.user.id,
+                },
+              });
+
+              stockValidated = true;
+            }
+          }
+
           // Paso 4: Identificar el ítem de la orden.
           // Con Drug.gtin disponible (futura dependencia @DBA):
           //   Buscar el item cuyo drug.gtin === input.gtin.
@@ -295,6 +414,8 @@ export const dispensationRouter = router({
               expiry: input.expiry ?? null,
               serial: input.serial ?? null,
             },
+            /** true si se validó y descontó contra StockLot real (§19). */
+            stockValidated,
           };
         },
       );

@@ -221,3 +221,154 @@ describe("dispensationRouter.scanItem", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// R07 — validación de inventario real (StockItem/StockLot)
+// ---------------------------------------------------------------------------
+
+const STOCK_ITEM_ID = "00000000-0000-0000-0000-0000000000si";
+const STOCK_LOT_ID = "00000000-0000-0000-0000-0000000000sl";
+
+describe("dispensationRouter.scanItem — R07 validación de inventario", () => {
+  it("stockValidated:false cuando el GTIN no tiene StockItem (catálogo sin cargar)", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue(null as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+      lot: "L2024A",
+    });
+
+    expect(res).toMatchObject({ ok: true, stockValidated: false });
+    expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("stockValidated:false cuando no se escanea lote (no se puede ubicar el StockLot)", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+    });
+
+    expect(res).toMatchObject({ ok: true, stockValidated: false });
+    expect(prisma.stockItem.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("LOTE_NO_EXISTE_EN_INVENTARIO cuando el StockItem existe pero el lote nunca ingresó", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue(null as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+      lot: "L-FANTASMA",
+    });
+
+    expect(res).toMatchObject({ hardStop: "LOTE_NO_EXISTE_EN_INVENTARIO", lot: "L-FANTASMA" });
+    expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("LOTE_NO_DISPONIBLE_INVENTARIO cuando el lote está en cuarentena/recall", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue({
+      id: STOCK_LOT_ID,
+      qualityStatus: "QUARANTINE",
+    } as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+      lot: "L2024A",
+    });
+
+    expect(res).toMatchObject({
+      hardStop: "LOTE_NO_DISPONIBLE_INVENTARIO",
+      qualityStatus: "QUARANTINE",
+    });
+    expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("STOCK_INSUFICIENTE cuando quantityOnHand < 1 (updateMany no afecta filas)", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue({
+      id: STOCK_LOT_ID,
+      qualityStatus: "AVAILABLE",
+    } as never);
+    prisma.stockLot.updateMany.mockResolvedValue({ count: 0 } as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+      lot: "L2024A",
+    });
+
+    expect(res).toMatchObject({ hardStop: "STOCK_INSUFICIENTE" });
+    expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it("happy path — descuenta 1 unidad y registra StockMovement OUT atómicamente", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue({
+      id: STOCK_LOT_ID,
+      qualityStatus: "AVAILABLE",
+    } as never);
+    prisma.stockLot.updateMany.mockResolvedValue({ count: 1 } as never);
+    prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    const res = await caller.scanItem({
+      pharmacyOrderId: PRESCRIPTION,
+      gtin: VALID_GTIN,
+      lot: "L2024A",
+      expiry: FUTURE_EXPIRY,
+    });
+
+    expect(res).toMatchObject({ ok: true, stockValidated: true });
+    expect(prisma.stockLot.updateMany).toHaveBeenCalledWith({
+      where: { id: STOCK_LOT_ID, quantityOnHand: { gte: 1 } },
+      data: { quantityOnHand: { decrement: 1 } },
+    });
+    expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "OUT",
+          quantity: 1,
+          itemId: STOCK_ITEM_ID,
+          lotId: STOCK_LOT_ID,
+          gtinFisico: VALID_GTIN,
+        }),
+      }),
+    );
+  });
+
+  it("atomicidad — si el StockMovement falla, la mutación completa se rechaza (no queda descuento huérfano)", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue({
+      id: STOCK_LOT_ID,
+      qualityStatus: "AVAILABLE",
+    } as never);
+    prisma.stockLot.updateMany.mockResolvedValue({ count: 1 } as never);
+    prisma.stockMovement.create.mockRejectedValue(new Error("DB down") as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+    await expect(
+      caller.scanItem({
+        pharmacyOrderId: PRESCRIPTION,
+        gtin: VALID_GTIN,
+        lot: "L2024A",
+      }),
+    ).rejects.toThrow("DB down");
+  });
+});
