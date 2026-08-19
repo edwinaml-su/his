@@ -1,8 +1,15 @@
 /**
  * Tests unitarios: glnHierarchyRouter — US.F2.6.3.
  *
- * Estrategia: mock de Prisma + mock de withTenantContext.
- * Valida: CTE tree query, alta hijo, unicidad, validación GLN-13.
+ * Estrategia: mock de Prisma con `withEceContext` REAL (no se mockea el
+ * módulo — mismo patrón que gs1-patient-trace.router.test.ts), porque el
+ * router corre bajo el contexto RLS `ece` (GUC `app.ece_establecimiento_id`),
+ * no `withTenantContext`. Se mockean `$transaction` (passthrough), `$executeRaw`
+ * / `$executeRawUnsafe` (SET LOCAL del contexto ECE) y `$queryRaw` (usado por
+ * `resolveEceEstablecimientoId`, que corre FUERA de la tx, sobre `ctx.prisma`
+ * directo con rol bypass).
+ * Valida: CTE tree query, alta hijo, unicidad, validación GLN-13, guard de
+ * establecimiento activo, y que el INSERT setea `establecimiento_id`.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -10,13 +17,9 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { glnHierarchyRouter } from "../gs1-gln-hierarchy.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
 
-// Mock de withTenantContext — en tests unitarios no queremos la transacción real.
-vi.mock("../../rls-context", () => ({
-  withTenantContext: vi.fn(async (_prisma: unknown, _tenant: unknown, fn: (tx: unknown) => Promise<unknown>) => {
-    return fn(_prisma);
-  }),
-}));
+const ECE_ESTABLECIMIENTO_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +52,22 @@ function mockQuery<T>(value: T) {
 beforeEach(() => {
   prisma = mockDeep<PrismaClient>();
   vi.clearAllMocks();
+
+  // withEceContext real envuelve en $transaction e invoca SET LOCAL — mock
+  // passthrough para que `tx` sea el mismo mock que `prisma` (igual que
+  // gs1-patient-trace.router.test.ts).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$transaction = vi.fn((fn: (tx: unknown) => unknown) => fn(prisma));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$executeRaw = vi.fn().mockResolvedValue(1);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$executeRawUnsafe = vi.fn().mockResolvedValue(1);
+  // resolveEceEstablecimientoId corre sobre ctx.prisma directo (bypass, fuera
+  // de la tx) vía $queryRaw (tagged template) — default: establecimiento ECE
+  // ya inicializado. Tests que necesiten el caso "no inicializado" lo
+  // sobrescriben con `[]`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$queryRaw = vi.fn().mockResolvedValue([{ id: ECE_ESTABLECIMIENTO_ID }]);
 });
 
 // ---------------------------------------------------------------------------
@@ -104,6 +123,22 @@ describe("glnHierarchy.tree", () => {
     expect(tree).toHaveLength(1);
     expect(tree[0]!.id).toBe(UUID_B);
   });
+
+  it("sin establecimiento activo: BAD_REQUEST, no toca prisma", async () => {
+    const caller = glnHierarchyRouter.createCaller(
+      makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+    );
+    await expect(caller.tree({})).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("ECE no inicializado para el establecimiento: PRECONDITION_FAILED", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRaw = vi.fn().mockResolvedValue([]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(caller.tree({})).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -154,6 +189,47 @@ describe("glnHierarchy.createChild", () => {
 
     expect(result.id).toBe(UUID_A);
     expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+  });
+
+  it("el INSERT setea establecimiento_id al resuelto para el establecimiento activo", async () => {
+    let callCount = 0;
+    prisma.$queryRawUnsafe = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return callCount === 1 ? [{ count: "0" }] : [{ id: UUID_A }];
+    });
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await caller.createChild({
+      codigo: GLN_ZERO,
+      descripcion: "Farmacia Nueva",
+      tipo: "farmacia",
+      parentGlnId: UUID_B,
+    });
+
+    const insertCall = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[1];
+    const [sql, , , , , establecimientoIdParam] = insertCall as [string, ...unknown[]];
+    expect(sql).toContain("establecimiento_id");
+    expect(establecimientoIdParam).toBe(ECE_ESTABLECIMIENTO_ID);
+  });
+
+  it("sin establecimiento activo: BAD_REQUEST, no toca prisma", async () => {
+    const caller = glnHierarchyRouter.createCaller(
+      makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+    );
+    await expect(
+      caller.createChild({ codigo: GLN_ZERO, descripcion: "X", tipo: "deposito" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("ECE no inicializado para el establecimiento: PRECONDITION_FAILED", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRaw = vi.fn().mockResolvedValue([]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.createChild({ codigo: GLN_ZERO, descripcion: "X", tipo: "deposito" }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
   it("rechaza tipo no permitido (Zod)", async () => {
