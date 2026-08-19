@@ -22,6 +22,8 @@ import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { computeScheduledSlot } from "../utils/medication-slot";
+import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
+import { persistGs1EpcisEvent } from "../lib/epcis-event-persist";
 
 // ---------------------------------------------------------------------------
 // GS1 DataMatrix parser (AI 01 / 10 / 17 / 21)
@@ -498,6 +500,32 @@ const administrationRouter = router({
         doubleCheckPinHash = await argon2.hash(input.doubleCheckPin);
       }
 
+      // EPCIS bedside — el evento va a ece.gs1_epcis_event, cuya RLS lee el GUC
+      // `app.ece_establecimiento_id` (namespace ECE) y cuya FK apunta a
+      // ece.establecimiento(id) — NO a public."Establishment"(id). Ambas cosas se
+      // resuelven acá, FUERA de withTenantContext: dentro la transacción ya está
+      // demotada a `authenticated` y la policy de ece.establecimiento (GUC ECE, aún
+      // sin setear) ocultaría la fila. Mismo patrón que gs1-gln-hierarchy.router.ts.
+      const establecimientoId = ctx.tenant.establishmentId;
+      if (!establecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        establecimientoId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "El establecimiento activo no tiene registro en ece.establecimiento; " +
+            "no puede registrarse el evento EPCIS de administración (GS1/NTEC).",
+        });
+      }
+
       const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Crear MedicationAdministration con flags BCMA activos
         const admin = await tx.medicationAdministration.create({
@@ -538,40 +566,31 @@ const administrationRouter = router({
         const payloadHash = createHash("sha256")
           .update(JSON.stringify({ epcisEventId, gtin: input.medicamentoGtin, lote: input.lote, indicationId: input.indicationId }))
           .digest("hex");
-        // establecimientoId FK → ece.establecimiento; requiere tenant.establishmentId.
-        const establecimientoId = ctx.tenant.establishmentId;
-        if (!establecimientoId) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
-          });
-        }
-
-        await tx.$executeRawUnsafe(
-          `INSERT INTO ece.gs1_epcis_event
-             (tipo_evento, subtipo, what, where_data, event_time, record_time,
-              why, who, payload_hash, indication_id, establecimiento_id, status)
-           VALUES ('ObjectEvent', 'BEDSIDE_ADMIN', $1::jsonb, $2::jsonb, $3, $3,
-                   $4::jsonb, $5::jsonb, $6, $7::uuid, $8::uuid, 'COMMITTED')`,
-          JSON.stringify({
+        // INSERT vía helper: demota→set_ece_context→INSERT→restaura el rol EXACTO
+        // capturado (nunca RESET ROLE, que desharía el demote de withTenantContext).
+        await persistGs1EpcisEvent(tx, ctx.user.id, eceEstablecimientoId, {
+          tipoEvento: "ObjectEvent",
+          subtipo: "BEDSIDE_ADMIN",
+          what: {
             gtin:        input.medicamentoGtin,
             lote:        input.lote,
             serie:       input.serie ?? null,
             epcisEventId,
             adminId:     admin.id,
             lasaAlert,
-          }),
-          JSON.stringify({ readPoint: "0000000000000" }),
-          now.toISOString(),
-          JSON.stringify({ businessStep: "administering", disposition: "consumed" }),
-          JSON.stringify({
+          },
+          whereData: { readPoint: "0000000000000" },
+          eventTime: now,
+          why: { businessStep: "administering", disposition: "consumed" },
+          who: {
             gsrnProfesional: input.staffGsrn,
             gsrnPaciente:    input.patientGsrn,
-          }),
+          },
           payloadHash,
-          input.indicationId,
-          establecimientoId,
-        );
+          indicationId: input.indicationId,
+          establecimientoId: eceEstablecimientoId,
+          status: "COMMITTED",
+        });
 
         return admin;
       });
@@ -928,6 +947,27 @@ async function runValidate5Correctos(
       }
 
       // ── Todos correctos → persistir OK y EPCIS ─────────────────────────
+      // Ver nota del sitio BCMA: resolución fuera del contexto demotado.
+      const establecimientoId = ctx.tenant.establishmentId;
+      if (!establecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        establecimientoId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "El establecimiento activo no tiene registro en ece.establecimiento; " +
+            "no puede registrarse el evento EPCIS de validación 5 correctos (GS1/NTEC).",
+        });
+      }
+
       const validationId = await withTenantContext(
         ctx.prisma,
         ctx.tenant,
@@ -957,37 +997,27 @@ async function runValidate5Correctos(
           const epcisHash = createHash("sha256")
             .update(JSON.stringify({ gtin: gs1.gtin, lote: gs1.lote, indicationId: input.indicationId }))
             .digest("hex");
-          // establecimientoId FK → ece.establecimiento; requiere tenant.establishmentId.
-        const establecimientoId = ctx.tenant.establishmentId;
-        if (!establecimientoId) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "Se requiere establecimiento activo en la sesión para registrar eventos EPCIS.",
-          });
-        }
-          await tx.$executeRawUnsafe(
-            `INSERT INTO ece.gs1_epcis_event
-               (tipo_evento, subtipo, what, where_data, event_time, record_time,
-                why, who, payload_hash, indication_id, establecimiento_id, status)
-             VALUES ('ObjectEvent', 'BEDSIDE_ADMIN', $1::jsonb, $2::jsonb, $3, $3,
-                     $4::jsonb, $5::jsonb, $6, $7::uuid, $8::uuid, 'COMMITTED')`,
-            JSON.stringify({
-              gtin:      gs1.gtin,
-              lote:      gs1.lote,
-              serie:     gs1.serie,
+          await persistGs1EpcisEvent(tx, ctx.tenant.userId, eceEstablecimientoId, {
+            tipoEvento: "ObjectEvent",
+            subtipo: "BEDSIDE_ADMIN",
+            what: {
+              gtin:       gs1.gtin,
+              lote:       gs1.lote,
+              serie:      gs1.serie,
               fechaVence: gs1.fechaVence,
-            }),
-            JSON.stringify({ gln: input.glnUbicacion ?? null }),
-            input.timestamp.toISOString(),
-            JSON.stringify({ businessStep: "administering", disposition: "in_progress" }),
-            JSON.stringify({
+            },
+            whereData: { gln: input.glnUbicacion ?? null },
+            eventTime: input.timestamp,
+            why: { businessStep: "administering", disposition: "in_progress" },
+            who: {
               gsrnEnfermera: input.gsrnEnfermera,
               gsrnPaciente:  input.gsrnPaciente,
-            }),
-            epcisHash,
-            input.indicationId,
-            establecimientoId,
-          );
+            },
+            payloadHash: epcisHash,
+            indicationId: input.indicationId,
+            establecimientoId: eceEstablecimientoId,
+            status: "COMMITTED",
+          });
 
           return rows[0]!.id;
         },
