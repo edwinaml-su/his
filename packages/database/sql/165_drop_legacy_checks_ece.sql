@@ -26,3 +26,24 @@ ALTER TABLE ece.administracion_medicamento
 
 -- Permanecen (correctos): chk_hc_estado_registro, chk_ind_estado_registro,
 -- chk_ind_vigencia, administracion_medicamento_estado_check.
+
+-- ---------------------------------------------------------------------------
+-- SEGUIMIENTO (2026-08-20) — el DROP de la linea 25 fue en la direccion
+-- equivocada.
+--
+-- La premisa "los routers + tests usan el vocabulario de workflow" es cierta
+-- para historia_clinica e indicaciones_medicas, pero NO para
+-- administracion_medicamento: ahi el router de escritura
+-- (indicaciones-medicas.router.ts) usa MAYUSCULAS, o sea justo el CHECK que
+-- este archivo dropeo como "legacy". Al conservar
+-- administracion_medicamento_estado_check ({administrado,omitido,diferido})
+-- la columna dejo de estar bloqueada por contradiccion, pero quedo
+-- inescribible para el router principal, y ademas dejo inertes el CHECK de
+-- 146 y el trigger de 142 (ambos escritos contra los valores en MAYUSCULAS).
+--
+-- Corregido en 202_ece_indicacion_vocabulario_estados.sql, que fija el
+-- vocabulario canonico en MAYUSCULAS para la columna. Este archivo se deja
+-- intacto: ya se aplico a prod y sigue siendo correcto para las otras 3
+-- columnas. En una reconstruccion desde cero el orden 98 → 146 → 165 → 202
+-- converge al estado correcto.
+-- ---------------------------------------------------------------------------

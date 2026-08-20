@@ -5,7 +5,7 @@
  * withEceContext mockeado para ejecutar el callback con el prisma mock.
  * emitDomainEvent mockeado para evitar side effects.
  *
- * Casos cubiertos (10 tests):
+ * Casos cubiertos (13 tests):
  *   1. create — happy path multi-item retorna id + estadoRegistro=borrador
  *   2. create — rechaza items vacíos (Zod min(1))
  *   3. create — rechaza cuando no hay establishmentId en tenant
@@ -16,6 +16,13 @@
  *   8. suspender — ACTIVA → SUSPENDIDA
  *   9. cancelar — rechaza si vigencia ya es CANCELADA
  *  10. list — RLS demote: withEceContext recibe personalId correcto
+ *  11. list — rechaza con PRECONDITION_FAILED si ECE no está inicializado
+ *      para el establecimiento (resolveEceEstablecimientoId devuelve null)
+ *  12. list — CONTROL NEGATIVO: withEceContext debe recibir el id resuelto
+ *      en el espacio `ece.establecimiento` (ECE_ESTABLECIMIENTO_ID), nunca
+ *      `ctx.tenant.establishmentId` (ESTAB_ID, espacio public) sin resolver
+ *      — ver eceIds() en indicaciones-medicas.router.ts.
+ *  13. create — misma aserción de control negativo que #12, en una mutation.
  *
  * @QA E2E pendiente:
  *   - PHYSICIAN crea indicación y la firma; NURSE la visualiza y registra admin.
@@ -29,7 +36,7 @@ import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 
 // Mock withEceContext para ejecutar callback directamente con prisma mock
-vi.mock("../../ece/rls-context", () => ({
+vi.mock("../../../ece/rls-context", () => ({
   withEceContext: vi.fn(async (
     prisma: PrismaClient,
     _personalId: string,
@@ -49,7 +56,7 @@ vi.mock("@his/database", async (importOriginal) => {
 
 import { indicacionesMedicasRouter } from "../indicaciones-medicas.router";
 import { emitDomainEvent } from "@his/database";
-import { withEceContext } from "../../ece/rls-context";
+import { withEceContext } from "../../../ece/rls-context";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -60,7 +67,13 @@ const EP_ID = "00000000-0000-4000-8001-000000000004";
 const MEDICO_ID = "00000000-0000-4000-8001-000000000005";
 const ENF_ID = "00000000-0000-4000-8001-000000000006";
 const ORG_ID = "00000000-0000-4000-8001-000000000007";
+// ESTAB_ID = espacio public."Establishment" (ctx.tenant.establishmentId).
 const ESTAB_ID = "00000000-0000-4000-8001-000000000008";
+// ECE_ESTABLECIMIENTO_ID = espacio ece.establecimiento (lo que devuelve
+// resolveEceEstablecimientoId). Deliberadamente distinto de ESTAB_ID: si
+// eceIds() volviera a pasar ctx.tenant.establishmentId sin resolver, las
+// aserciones de "CONTROL NEGATIVO" abajo fallarían.
+const ECE_ESTABLECIMIENTO_ID = "00000000-0000-4000-8001-000000000009";
 
 function buildCtx(
   roleCodes: string[] = ["PHYSICIAN"],
@@ -104,6 +117,18 @@ function baseIndicacion(
   };
 }
 
+/**
+ * eceIds() llama a resolveEceEstablecimientoId ANTES de cualquier query del
+ * propio router — y ambas usan prisma.$queryRaw (tagged template). Hay que
+ * primar esta respuesta como la primera de la cadena mockResolvedValueOnce
+ * en todo test que llegue a un procedure con establishmentId definido.
+ */
+function primeEceResolve(ctx: ReturnType<typeof buildCtx>) {
+  (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    { id: ECE_ESTABLECIMIENTO_ID },
+  ]);
+}
+
 // ─── Caller helpers ───────────────────────────────────────────────────────────
 
 function caller(ctx: ReturnType<typeof buildCtx>) {
@@ -118,6 +143,7 @@ describe("indicacionesMedicasRouter", () => {
     it("happy path multi-item retorna id + estadoRegistro=borrador", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 
+      primeEceResolve(ctx);
       // Mock INSERT encabezado → RETURNING id
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         { id: IND_ID },
@@ -139,6 +165,17 @@ describe("indicacionesMedicasRouter", () => {
       expect(result.id).toBe(IND_ID);
       expect(result.estadoRegistro).toBe("borrador");
       expect(result.vigencia).toBe("ACTIVA");
+
+      // CONTROL NEGATIVO (misma aserción que list, ver describe "list — RLS
+      // demote" al final del archivo): withEceContext debe recibir el id
+      // resuelto en espacio ece.establecimiento, nunca ESTAB_ID sin resolver.
+      expect(ECE_ESTABLECIMIENTO_ID).not.toBe(ESTAB_ID);
+      expect(withEceContext).toHaveBeenCalledWith(
+        ctx.prisma,
+        MEDICO_ID,
+        ECE_ESTABLECIMIENTO_ID,
+        expect.any(Function),
+      );
     });
 
     it("rechaza items vacíos (Zod min(1))", async () => {
@@ -170,6 +207,7 @@ describe("indicacionesMedicasRouter", () => {
     it("transición borrador→firmado + llama emitDomainEvent", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 
+      primeEceResolve(ctx);
       // Mock getIndicacionOrThrow
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
@@ -195,6 +233,7 @@ describe("indicacionesMedicasRouter", () => {
     it("rechaza si estado_registro no es borrador", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 
+      primeEceResolve(ctx);
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ estado_registro: "firmado" }),
       ]);
@@ -209,6 +248,7 @@ describe("indicacionesMedicasRouter", () => {
     it("happy path ADMINISTRADO inserta y retorna id + estado", async () => {
       const ctx = buildCtx(["NURSE"]);
 
+      primeEceResolve(ctx);
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         { id: ADMIN_ID },
       ]);
@@ -245,6 +285,7 @@ describe("indicacionesMedicasRouter", () => {
     it("ACTIVA → SUSPENDIDA retorna nuevo estado", async () => {
       const ctx = buildCtx(["NURSE"]);
 
+      primeEceResolve(ctx);
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ vigencia: "ACTIVA" }),
       ]);
@@ -263,6 +304,7 @@ describe("indicacionesMedicasRouter", () => {
     it("rechaza si vigencia ya es CANCELADA", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 
+      primeEceResolve(ctx);
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ vigencia: "CANCELADA" }),
       ]);
@@ -290,6 +332,7 @@ describe("indicacionesMedicasRouter", () => {
     it("list ejecuta query y retorna items + nextCursor", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 
+      primeEceResolve(ctx);
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion(),
       ]);
@@ -299,5 +342,41 @@ describe("indicacionesMedicasRouter", () => {
       expect(result.items).toHaveLength(1);
       expect(result.nextCursor).toBeNull();
     });
+
+    it("lanza PRECONDITION_FAILED si ECE no está inicializado para el establecimiento", async () => {
+      // resolveEceEstablecimientoId no encuentra fila en ece.establecimiento
+      // (establishmentId existe en public pero nunca se corrió backfill-ece.mjs).
+      const ctx = buildCtx(["PHYSICIAN"]);
+      (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+      await expect(
+        caller(ctx).list({ episodioId: EP_ID, limit: 10 }),
+      ).rejects.toThrow(TRPCError);
+    });
+
+    it("CONTROL NEGATIVO: withEceContext recibe el establecimiento resuelto " +
+      "(espacio ece), nunca ctx.tenant.establishmentId (espacio public) sin resolver",
+      async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+          baseIndicacion(),
+        ]);
+
+        await caller(ctx).list({ episodioId: EP_ID, limit: 10 });
+
+        // Si eceIds() volviera a hacer `establecimientoId: ctx.tenant.establishmentId`
+        // (regresión al bug original), withEceContext se llamaría con ESTAB_ID
+        // en vez de ECE_ESTABLECIMIENTO_ID y esta aserción fallaría.
+        expect(ECE_ESTABLECIMIENTO_ID).not.toBe(ESTAB_ID);
+        expect(withEceContext).toHaveBeenCalledWith(
+          ctx.prisma,
+          MEDICO_ID,
+          ECE_ESTABLECIMIENTO_ID,
+          expect.any(Function),
+        );
+      },
+    );
   });
 });

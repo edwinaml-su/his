@@ -54,23 +54,22 @@
  *   IND-003 [P1] Trigger inmutabilidad post-ADMINISTRADO en administracion_medicamento
  *   IND-004 [P2] CHECK condicional motivo_omision NOT NULL cuando estado OMITIDA|RECHAZADA
  *
- * HALLAZGOS NUEVOS (sprint remediación críticos, 2026-08-19 — NO corregidos
- * aquí, fuera de alcance; ver reporte del sprint):
- *   - `ece.indicacion_item.tipo` en prod solo acepta
- *     {medicamento,dieta,cuidado,estudio,reposo} (CHECK
- *     `indicacion_item_tipo_check`); el Zod `tipoIndicacionEnum` de este
- *     archivo envía {MEDICAMENTO,PROCEDIMIENTO,DIETA,CUIDADO_GENERAL,
- *     ESTUDIO}. Ningún valor coincide → `create()` viola el CHECK en prod
- *     hoy. Tabla confirmada vacía (0 filas) — nadie ha creado una indicación
- *     exitosamente todavía.
- *   - `ece.administracion_medicamento.estado` en prod solo acepta
- *     {administrado,omitido,diferido} (CHECK
- *     `administracion_medicamento_estado_check`); `estadoAdminEnum` de este
- *     archivo envía {PROGRAMADA,ADMINISTRADO,OMITIDA,RECHAZADA}. Ningún
- *     valor coincide → `registrarAdministracion()` viola el CHECK en prod
- *     hoy.
- *   Ambos ocultos a los tests existentes porque `emitDomainEvent`/Prisma
- *   están 100% mockeados (nunca tocan Postgres real).
+ * ---------------------------------------------------------------------------
+ * DRIFT CHECK-vs-Zod (detectado 2026-08-19, corregido 2026-08-20)
+ * ---------------------------------------------------------------------------
+ *   `tipoIndicacionEnum` y `estadoAdminEnum` de este archivo no coincidían en
+ *   NINGÚN valor con los CHECK que tenía prod (minúsculas en español, del DDL
+ *   original 61_ece_06_documentos.sql): `create()` y
+ *   `registrarAdministracion()` violaban el constraint en cada llamada real
+ *   contra Postgres. Confirmado con las tablas vacías (0 filas) — nadie logró
+ *   escribir una indicación nunca. Los tests unitarios no lo veían porque
+ *   Prisma está 100% mockeado y jamás toca un CHECK real.
+ *
+ *   Resuelto alineando la BD a este vocabulario en
+ *   `packages/database/sql/202_ece_indicacion_vocabulario_estados.sql` (ahí
+ *   está el porqué de la decisión y el efecto sobre 98/142/146/165).
+ *   `__tests__/vocabulario-bd-drift.test.ts` compara estos enums contra el SQL
+ *   de 202 para que un cambio futuro en cualquiera de los dos lados falle CI.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -78,6 +77,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
+import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
 import {
@@ -88,7 +88,8 @@ import {
 // ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
 // La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
 
-const tipoIndicacionEnum = z.enum([
+/** Espejo de chk_ind_item_tipo (SQL 202). Ver __tests__/vocabulario-bd-drift.test.ts. */
+export const tipoIndicacionEnum = z.enum([
   "MEDICAMENTO",
   "PROCEDIMIENTO",
   "DIETA",
@@ -126,7 +127,11 @@ const frecuenciaEnum = z.enum([
 
 const vigenciaEnum = z.enum(["ACTIVA", "SUSPENDIDA", "CANCELADA"]);
 
-const estadoAdminEnum = z.enum([
+/**
+ * Subconjunto de chk_admin_med_estado_v2 (SQL 202). DIFERIDA es parte del CHECK
+ * pero la expone `registro-enfermeria.router.ts`, no este router.
+ */
+export const estadoAdminEnum = z.enum([
   "PROGRAMADA",
   "ADMINISTRADO",
   "OMITIDA",
@@ -287,19 +292,40 @@ async function getIndicacionOrThrow(
 
 // ─── Helper: armar contexto ECE desde ctx tRPC ───────────────────────────────
 
-function eceIds(ctx: {
+/**
+ * Resuelve el establecimiento al espacio `ece.establecimiento` (no
+ * `public."Establishment"` — son PKs distintas, ver `resolveEceEstablecimientoId`
+ * en lib/ece-hooks.ts). Las policies RLS de `indicaciones_medicas`,
+ * `indicacion_item` e `indicacion_farmacia_pendiente` comparan todas contra el
+ * espacio `ece` (vía episodio → `ece.episodio_atencion.establecimiento_id`),
+ * así que pasar `ctx.tenant.establishmentId` (espacio public) directo a
+ * `withEceContext` hace que la policy nunca matchee — mismo patrón de guard
+ * que gs1-patient-trace.router.ts / gs1-gln-hierarchy.router.ts.
+ */
+async function eceIds(ctx: {
   user: { id: string };
   tenant: { establishmentId?: string };
-}): { personalId: string; establecimientoId: string } {
+  prisma: PrismaClient;
+}): Promise<{ personalId: string; establecimientoId: string }> {
   if (!ctx.tenant.establishmentId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Se requiere un establecimiento activo para operar indicaciones ECE.",
     });
   }
+  const establecimientoId = await resolveEceEstablecimientoId(
+    ctx.prisma,
+    ctx.tenant.establishmentId,
+  );
+  if (!establecimientoId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "ECE no inicializado para este establecimiento.",
+    });
+  }
   return {
     personalId: ctx.user.id,
-    establecimientoId: ctx.tenant.establishmentId,
+    establecimientoId,
   };
 }
 
@@ -316,7 +342,7 @@ export const indicacionesMedicasRouter = router({
    * Lista indicaciones de un episodio. Agrupa por vigencia (ACTIVA/SUSPENDIDA/CANCELADA).
    */
   list: clinicalProcedure.input(listSchema).query(async ({ ctx, input }) => {
-    const { personalId, establecimientoId } = eceIds(ctx);
+    const { personalId, establecimientoId } = await eceIds(ctx);
 
     return withEceContext(
       ctx.prisma,
@@ -354,7 +380,7 @@ export const indicacionesMedicasRouter = router({
    * Detalle de indicación: encabezado + items.
    */
   get: clinicalProcedure.input(idSchema).query(async ({ ctx, input }) => {
-    const { personalId, establecimientoId } = eceIds(ctx);
+    const { personalId, establecimientoId } = await eceIds(ctx);
 
     return withEceContext(
       ctx.prisma,
@@ -389,7 +415,7 @@ export const indicacionesMedicasRouter = router({
     // MVP replica el comportamiento actual) → ALLOW, no rompe nada existente.
     .use(abacGuard("prescription", "prescribe"))
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       // Resolver médico prescriptor: si no vino del cliente, usar el usuario
       // autenticado (caso 99%). Override server-side blanqueado para evitar
@@ -467,7 +493,7 @@ export const indicacionesMedicasRouter = router({
   update: physicianProcedure
     .input(updateSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -540,7 +566,7 @@ export const indicacionesMedicasRouter = router({
   firmar: physicianProcedure
     .input(idSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -648,7 +674,7 @@ export const indicacionesMedicasRouter = router({
   suspender: clinicalProcedure
     .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -681,7 +707,7 @@ export const indicacionesMedicasRouter = router({
   cancelar: physicianProcedure
     .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -716,7 +742,7 @@ export const indicacionesMedicasRouter = router({
   registrarAdministracion: nurseProcedure
     .input(administracionSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -750,7 +776,7 @@ export const indicacionesMedicasRouter = router({
   listAdministraciones: clinicalProcedure
     .input(listAdminSchema)
     .query(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,

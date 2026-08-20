@@ -25,6 +25,13 @@ ALTER TABLE ece.indicaciones_medicas
 
 -- ─── ece.administracion_medicamento.estado ───────────────────────────────────
 
+-- SEGUIMIENTO (2026-08-20): este CHECK tenía el vocabulario correcto (es el
+-- que usan los routers de escritura) pero convivía con
+-- administracion_medicamento_estado_check ({administrado,omitido,diferido}) del
+-- DDL original — dos CHECK que ningún valor satisface a la vez. 165 resolvió la
+-- contradicción dropeando ESTE en vez del otro; 202 lo repone bajo el nombre
+-- chk_admin_med_estado_v2 (con DIFERIDA añadido) y dropea el del DDL original.
+-- Ver 202_ece_indicacion_vocabulario_estados.sql.
 ALTER TABLE ece.administracion_medicamento
   ADD CONSTRAINT chk_admin_med_estado
   CHECK (estado IN ('PROGRAMADA', 'ADMINISTRADO', 'OMITIDA', 'RECHAZADA'));

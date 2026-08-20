@@ -2,8 +2,25 @@
 -- §15 Banco de Sangre / Hemoterapia — Hardening Layer 1 (Beta.16, 2026-05-16)
 --
 -- Owner : @DBA (revisar) + @SRE (aplicar via Supabase MCP / SQL Editor)
--- Estado: Pendiente de aplicación. Documentado para apply post-G8 o en
---         ventana de mantenimiento coordinada con Edwin.
+-- Estado: APLICADO A PROD 2026-08-20 vía MCP apply_migration. NO re-aplicar.
+--         Verificado post-apply: 5 tablas, RLS ON con 1 policy c/u, 9 triggers
+--         (audit + dominio), 22 índices, 5 CHECK.
+--
+--         Llevaba ~3 meses sin aplicarse mientras blood-bank.router.ts (641
+--         líneas, cableado en _app.ts como `bloodBank`) apuntaba a 5 tablas que
+--         no existían en prod. Los tests estaban verdes porque mockean Prisma.
+--
+--         Antes de aplicar se corrigieron TRES defectos que lo habrían dejado
+--         "aplicado y roto" (ninguno detectable sin un Postgres real):
+--           1. Las 4 funciones trigger de §5 no declaraban SET search_path
+--              (advisor `function_search_path_mutable`; SQL 162 cerró 58 de
+--              ésas, no reintroducir).
+--           2. §8 colgaba audit.fn_audit_log_chain() de CrossMatch/Transfusion
+--              — función exclusiva de audit."AuditLog". Sección eliminada; ver
+--              el bloque §8 para el detalle.
+--           3. Los dos state machines comparaban un enum contra text[]
+--              (`OLD.status = ANY(v_terminal)`) → sin operador, error en cada
+--              UPDATE. Corregido a `OLD.status::text`.
 --
 -- Cambios:
 --   1. Tipos ENUM nuevos (BloodType, RhFactor, BloodComponent, BloodUnitStatus,
@@ -353,6 +370,7 @@ END $$;
 CREATE OR REPLACE FUNCTION public.fn_transfusion_require_compatible_crossmatch()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
   v_result text;
@@ -392,6 +410,7 @@ CREATE TRIGGER trg_transfusion_require_compatible_crossmatch
 CREATE OR REPLACE FUNCTION public.fn_transfusion_block_expired_unit()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
   v_expiration timestamptz;
@@ -429,6 +448,7 @@ CREATE TRIGGER trg_transfusion_block_expired_unit
 CREATE OR REPLACE FUNCTION public.fn_transfusion_request_state_machine()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
   v_terminal text[] := ARRAY['CANCELLED', 'FULFILLED'];
@@ -441,7 +461,9 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF OLD.status = ANY(v_terminal) THEN
+  -- ::text obligatorio: OLD.status es enum y v_terminal es text[]; sin el cast
+  -- Postgres no encuentra operador y el UPDATE falla en runtime.
+  IF OLD.status::text = ANY(v_terminal) THEN
     RAISE EXCEPTION
       'transfusion_request_immutable: status % es terminal para id=%.',
       OLD.status, OLD.id
@@ -479,6 +501,7 @@ CREATE TRIGGER trg_transfusion_request_state_machine
 CREATE OR REPLACE FUNCTION public.fn_blood_unit_state_machine()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SET search_path = public, pg_catalog
 AS $$
 DECLARE
   v_terminal text[] := ARRAY['TRANSFUSED', 'DISCARDED', 'EXPIRED'];
@@ -491,7 +514,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF OLD.status = ANY(v_terminal) THEN
+  -- ::text obligatorio — ver nota en fn_transfusion_request_state_machine.
+  IF OLD.status::text = ANY(v_terminal) THEN
     RAISE EXCEPTION
       'blood_unit_immutable: status % es terminal para id=%.',
       OLD.status, OLD.id
@@ -607,25 +631,42 @@ CREATE TRIGGER audit_transfusion
   FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_row();
 
 -- =============================================================================
--- 8. HASH CHAIN (extiende 05_audit_hash_chain.sql)
+-- 8. HASH CHAIN — SECCIÓN ELIMINADA (2026-08-20, antes del primer apply)
 --
--- La función audit.fn_audit_log_chain() encadena hashes por (entity, entityId).
--- Se aplica a CrossMatch y Transfusion: registros críticos de trazabilidad clínica.
--- BloodBank y TransfusionRequest tienen audit_triggers pero no hash chain
--- (menor criticidad regulatoria; tradeoff: write amplification vs trazabilidad).
+-- Este archivo declaraba:
+--
+--   CREATE TRIGGER audit_chain_cross_match
+--     AFTER INSERT ON public."CrossMatch"
+--     FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_chain();
+--   CREATE TRIGGER audit_chain_transfusion
+--     AFTER INSERT OR UPDATE ON public."Transfusion" ...
+--
+-- Eso es incorrecto y habría roto ambas tablas en runtime:
+--
+--   1. audit.fn_audit_log_chain() (05_audit_hash_chain.sql:56) está escrita
+--      EXCLUSIVAMENTE para audit."AuditLog": hace
+--      `NEW."prevHash" := ...; NEW."signatureHash" := ...`. Esas columnas no
+--      existen en CrossMatch ni en Transfusion → cada INSERT fallaría con
+--      `record "new" has no field "prevHash"`. plpgsql resuelve los campos en
+--      runtime, así que el CREATE TRIGGER habría pasado limpio y el error solo
+--      aparecería con tráfico real.
+--   2. Además es BEFORE INSERT por diseño (setea NEW antes de escribir); aquí
+--      se colgaba como AFTER, donde mutar NEW no tiene efecto.
+--   3. Y hace `LOCK TABLE audit."AuditLog" IN EXCLUSIVE MODE`, que se habría
+--      tomado en cada INSERT de unidades/transfusiones.
+--
+-- La sección era además REDUNDANTE: el hash chain ya cubre estas tablas de
+-- forma transitiva. Los audit triggers de la sección 7 escriben a
+-- audit."AuditLog", y trg_auditlog_chain (05_audit_hash_chain.sql:84) encadena
+-- CADA fila que entra ahí. La trazabilidad criptográfica del TDR §6.3 queda
+-- satisfecha sin tocar las tablas de dominio.
+--
+-- Es el mismo error que la nota de la sección 7 documenta para
+-- `audit.fn_audit_log_insert()` (nombre inventado, nunca existió): quien
+-- escribió este archivo asumió una API de audit que no es la real. La pasada
+-- de feat/db-portable corrigió una de las dos ocurrencias y no vio ésta,
+-- porque el archivo nunca se había aplicado contra un Postgres.
 -- =============================================================================
-
--- CrossMatch — hash chain (resultados de compatibilidad son inmutables post-insert)
-DROP TRIGGER IF EXISTS audit_chain_cross_match ON public."CrossMatch";
-CREATE TRIGGER audit_chain_cross_match
-  AFTER INSERT ON public."CrossMatch"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_chain();
-
--- Transfusion — hash chain (registro de administración crítico, TDR §6.3)
-DROP TRIGGER IF EXISTS audit_chain_transfusion ON public."Transfusion";
-CREATE TRIGGER audit_chain_transfusion
-  AFTER INSERT OR UPDATE ON public."Transfusion"
-  FOR EACH ROW EXECUTE FUNCTION audit.fn_audit_log_chain();
 
 -- =============================================================================
 -- FIN 45_blood_bank_hardening.sql

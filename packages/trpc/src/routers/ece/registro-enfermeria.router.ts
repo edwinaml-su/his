@@ -72,20 +72,29 @@ const eceRegistroCreateSchema = z.object({
   valoracionEnf: z.record(z.unknown()).optional(),
 });
 
+/**
+ * Subconjunto de chk_admin_med_estado_v2
+ * (packages/database/sql/202_ece_indicacion_vocabulario_estados.sql).
+ * PROGRAMADA y RECHAZADA existen en el CHECK pero las expone
+ * `indicaciones-medicas.router.ts`, no este router.
+ *
+ * Histórico: este schema usaba minúsculas ('administrado'|'omitido'|'diferido')
+ * porque era lo que aceptaba el CHECK del DDL original. 202 alineó la BD al
+ * vocabulario en MAYUSCULAS que usa el resto del dominio — ver ahí el porqué.
+ * ('pospuesto', que todavía aparecía en @his/contracts, nunca fue un valor
+ * válido en ningún CHECK.)
+ */
+export const estadoAdminMedEnum = z.enum([
+  "ADMINISTRADO",
+  "OMITIDA",
+  "DIFERIDA",
+]);
+
 const eceAdministracionSchema = z.object({
   registroEnfId: z.string().uuid(),
   indicacionItemId: z.string().uuid(),
   horaAplicada: z.coerce.date(),
-  /**
-   * CHECK administracion_medicamento_estado_check (oid 23408): administrado|omitido|diferido.
-   * 'pospuesto' NO existe en ningún CHECK del DDL — se eliminó. 'diferido' es el valor correcto.
-   *
-   * NOTA @DBA: existe un segundo CHECK (chk_admin_med_estado, oid 26582) que exige
-   * mayúsculas PROGRAMADA|ADMINISTRADO|OMITIDA|RECHAZADA — contradict al constraint original.
-   * La tabla es literalmente inescribible en prod hasta que se elimine ese constraint.
-   * Pending: DROP CONSTRAINT chk_admin_med_estado ON ece.administracion_medicamento.
-   */
-  estado: z.enum(["administrado", "omitido", "diferido"]).default("administrado"),
+  estado: estadoAdminMedEnum.default("ADMINISTRADO"),
   motivoOmision: z.string().trim().max(500).optional(),
   gs1: z.object({
     gtin: z.string().min(8).max(14),
@@ -97,6 +106,19 @@ const eceAdministracionSchema = z.object({
     dosis: z.string().min(1).max(100).optional(),
     via: z.string().min(1).max(80).optional(),
   }).optional(),
+}).superRefine((val, ctx) => {
+  // Espejo del CHECK chk_motivo_omision_requerido
+  // (146_indicacion_motivo_omision_check.sql), que pasa a ser efectivo con el
+  // vocabulario de 202. Sin esto, una omisión sin motivo llega a Postgres y
+  // vuelve como error crudo de constraint en vez de un BAD_REQUEST legible.
+  if (val.estado === "OMITIDA" && !val.motivoOmision) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["motivoOmision"],
+      message:
+        "motivoOmision es obligatorio cuando estado es OMITIDA (NTEC §3.7).",
+    });
+  }
 });
 
 const eceRegistroListSchema = z.object({
