@@ -77,6 +77,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
+import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
 import {
@@ -291,19 +292,40 @@ async function getIndicacionOrThrow(
 
 // ─── Helper: armar contexto ECE desde ctx tRPC ───────────────────────────────
 
-function eceIds(ctx: {
+/**
+ * Resuelve el establecimiento al espacio `ece.establecimiento` (no
+ * `public."Establishment"` — son PKs distintas, ver `resolveEceEstablecimientoId`
+ * en lib/ece-hooks.ts). Las policies RLS de `indicaciones_medicas`,
+ * `indicacion_item` e `indicacion_farmacia_pendiente` comparan todas contra el
+ * espacio `ece` (vía episodio → `ece.episodio_atencion.establecimiento_id`),
+ * así que pasar `ctx.tenant.establishmentId` (espacio public) directo a
+ * `withEceContext` hace que la policy nunca matchee — mismo patrón de guard
+ * que gs1-patient-trace.router.ts / gs1-gln-hierarchy.router.ts.
+ */
+async function eceIds(ctx: {
   user: { id: string };
   tenant: { establishmentId?: string };
-}): { personalId: string; establecimientoId: string } {
+  prisma: PrismaClient;
+}): Promise<{ personalId: string; establecimientoId: string }> {
   if (!ctx.tenant.establishmentId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: "Se requiere un establecimiento activo para operar indicaciones ECE.",
     });
   }
+  const establecimientoId = await resolveEceEstablecimientoId(
+    ctx.prisma,
+    ctx.tenant.establishmentId,
+  );
+  if (!establecimientoId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "ECE no inicializado para este establecimiento.",
+    });
+  }
   return {
     personalId: ctx.user.id,
-    establecimientoId: ctx.tenant.establishmentId,
+    establecimientoId,
   };
 }
 
@@ -320,7 +342,7 @@ export const indicacionesMedicasRouter = router({
    * Lista indicaciones de un episodio. Agrupa por vigencia (ACTIVA/SUSPENDIDA/CANCELADA).
    */
   list: clinicalProcedure.input(listSchema).query(async ({ ctx, input }) => {
-    const { personalId, establecimientoId } = eceIds(ctx);
+    const { personalId, establecimientoId } = await eceIds(ctx);
 
     return withEceContext(
       ctx.prisma,
@@ -358,7 +380,7 @@ export const indicacionesMedicasRouter = router({
    * Detalle de indicación: encabezado + items.
    */
   get: clinicalProcedure.input(idSchema).query(async ({ ctx, input }) => {
-    const { personalId, establecimientoId } = eceIds(ctx);
+    const { personalId, establecimientoId } = await eceIds(ctx);
 
     return withEceContext(
       ctx.prisma,
@@ -393,7 +415,7 @@ export const indicacionesMedicasRouter = router({
     // MVP replica el comportamiento actual) → ALLOW, no rompe nada existente.
     .use(abacGuard("prescription", "prescribe"))
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       // Resolver médico prescriptor: si no vino del cliente, usar el usuario
       // autenticado (caso 99%). Override server-side blanqueado para evitar
@@ -471,7 +493,7 @@ export const indicacionesMedicasRouter = router({
   update: physicianProcedure
     .input(updateSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -544,7 +566,7 @@ export const indicacionesMedicasRouter = router({
   firmar: physicianProcedure
     .input(idSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -652,7 +674,7 @@ export const indicacionesMedicasRouter = router({
   suspender: clinicalProcedure
     .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -685,7 +707,7 @@ export const indicacionesMedicasRouter = router({
   cancelar: physicianProcedure
     .input(suspenderSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -720,7 +742,7 @@ export const indicacionesMedicasRouter = router({
   registrarAdministracion: nurseProcedure
     .input(administracionSchema)
     .mutation(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,
@@ -754,7 +776,7 @@ export const indicacionesMedicasRouter = router({
   listAdministraciones: clinicalProcedure
     .input(listAdminSchema)
     .query(async ({ ctx, input }) => {
-      const { personalId, establecimientoId } = eceIds(ctx);
+      const { personalId, establecimientoId } = await eceIds(ctx);
 
       return withEceContext(
         ctx.prisma,

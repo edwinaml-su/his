@@ -51,6 +51,9 @@ const EPISODIO_ID  = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const ITEM_ID      = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const MEDICO_ID    = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const ENF_ID       = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+// Espacio ece.establecimiento — lo que devuelve resolveEceEstablecimientoId,
+// distinto del establishmentId (espacio public) de MC_TENANT/ENF_TENANT.
+const ECE_ESTAB_ID = "00000000-0000-0000-0000-0000000000ee";
 
 const MC_TENANT = {
   ...MOCK_TENANT,
@@ -96,6 +99,19 @@ function makePrisma(): DeepMockProxy<PrismaClient> {
   return prisma;
 }
 
+/**
+ * eceIds() (indicaciones-medicas.router.ts) resuelve el establecimiento al
+ * espacio ece.establecimiento vía resolveEceEstablecimientoId ANTES de
+ * cualquier query propia del router — y ambas usan prisma.$queryRaw. Hay
+ * que primar esta respuesta como la primera de cada cadena
+ * mockResolvedValueOnce.
+ */
+function primeEceResolve(prisma: DeepMockProxy<PrismaClient>) {
+  (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+    { id: ECE_ESTAB_ID },
+  ]);
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("indicacionesMedicasRouter", () => {
@@ -110,6 +126,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("create", () => {
     it("1. crea encabezado + ítems y retorna id con estadoRegistro borrador", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: IND_ID }]);
       prisma.$executeRaw.mockResolvedValue(1 as never);
 
@@ -128,6 +145,7 @@ describe("indicacionesMedicasRouter", () => {
     });
 
     it("2. propaga error de BD cuando hay conflicto de ítem duplicado", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{ id: IND_ID }]);
       prisma.$executeRaw.mockRejectedValueOnce(
         Object.assign(new Error("unique constraint violation"), { code: "23505" }),
@@ -150,6 +168,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("list", () => {
     it("3. retorna items y nextCursor cuando hay más resultados", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion(),
         baseIndicacion({ id: "ffffffff-ffff-ffff-ffff-ffffffffffff" }),
@@ -169,6 +188,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("get", () => {
     it("4. lanza NOT_FOUND cuando la indicación no existe", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([]) // encabezado vacío
         .mockResolvedValueOnce([]); // ítems vacíos
@@ -186,6 +206,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("firmar", () => {
     it("7. MC firma correctamente y emite evento ece.indicaciones.firmadas", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
         // itemTexts para IPSG.2 forbidden-abbreviations check
@@ -211,6 +232,7 @@ describe("indicacionesMedicasRouter", () => {
     });
 
     it("8. lanza CONFLICT si la indicación ya está firmada", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ estado_registro: "firmado" }),
       ]);
@@ -228,6 +250,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("suspender", () => {
     it("9. ACTIVA → SUSPENDIDA retorna nuevo estado", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ vigencia: "ACTIVA" }),
       ]);
@@ -249,6 +272,7 @@ describe("indicacionesMedicasRouter", () => {
 
   describe("cancelar", () => {
     it("10. lanza CONFLICT si la vigencia ya es CANCELADA", async () => {
+      primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         baseIndicacion({ vigencia: "CANCELADA" }),
       ]);
