@@ -91,6 +91,29 @@ describe("encounterDischargeRouter", () => {
       expect(auditArgs.data.action).toBe("SIGN");
     });
 
+    // Caso borde antes solo mencionado en el legacy (que ni siquiera lo
+    // validaba): no se puede dar de alta dos veces al mismo encuentro.
+    it("rechaza egreso duplicado si el encuentro ya tiene alta (CONFLICT)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        organizationId: "org",
+        dischargedAt: new Date("2026-05-20T10:00:00Z"),
+        bedAssignments: [],
+        patient: { gsrn: null },
+      } as never);
+
+      const caller = encounterDischargeRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.dischargeEncounter({
+          encounterId: "00000000-0000-0000-0000-000000000010",
+          dischargeType: "MEDICAL",
+          primaryDiagnosisCode: "I50.9",
+          primaryDiagnosisDesc: "ICC",
+        }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(prisma.encounter.update).not.toHaveBeenCalled();
+    });
+
     it("retorna NOT_FOUND si el encuentro no existe en el tenant", async () => {
       prisma.encounter.findFirst.mockResolvedValue(null as never);
 

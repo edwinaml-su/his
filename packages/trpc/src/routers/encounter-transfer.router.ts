@@ -2,9 +2,10 @@
  * US-5.3 — Traslados internos (equipo Lima · Sprint 3).
  *
  * Router dedicado para mover un encuentro abierto entre servicios y/o
- * camas. Coexiste con el legacy `encounter.router.transfer` (que hoy
- * sólo registra el evento sin mover camas). Cuando otros equipos
- * eliminen el legacy, este router queda como única fuente de verdad.
+ * camas. Única fuente de verdad para traslados — el legacy
+ * `encounter.router.transfer` (que sólo registraba el evento sin mover
+ * camas, sin filtro de tenant, sin eventos EPCIS/outbox) fue eliminado
+ * (remediación R01, sin consumidores UI activos).
  *
  * Reglas de negocio (DoR/DoD US-5.3):
  *   1. Encuentro debe estar abierto (`dischargedAt IS NULL`).

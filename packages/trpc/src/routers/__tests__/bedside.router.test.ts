@@ -115,6 +115,13 @@ function baseInput() {
 
 beforeEach(() => {
   prisma = mockDeep<PrismaClient>();
+  // resolveEceEstablecimientoId() corre sobre ctx.prisma (fuera de la tx
+  // demotada) vía $queryRaw tagged-template: mapea public.Establishment.id →
+  // ece.establecimiento.id, que es lo que exige la FK de ece.gs1_epcis_event.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$queryRaw = vi
+    .fn()
+    .mockResolvedValue([{ id: "eeeeeeee-0000-0000-0000-00000000000e" }]);
   // Default: EPCIS insert es no-op
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (prisma as any).$executeRawUnsafe = vi.fn().mockResolvedValue(1);
@@ -236,7 +243,10 @@ function setupHappyPath() {
     // 4. Última administración (ventana terapéutica) — sin admin previa
     .mockResolvedValueOnce([])
     // 5. INSERT bedside_validation RETURNING id
-    .mockResolvedValueOnce([{ id: "valid-uuid-1234" }]);
+    .mockResolvedValueOnce([{ id: "valid-uuid-1234" }])
+    // 6. `SELECT current_user` del helper de persistencia EPCIS (captura del
+    //    rol antes de demotar para el contexto RLS del schema ece).
+    .mockResolvedValue([{ current_user: "authenticated" }]);
 }
 
 describe("validate5Correctos — happy paths", () => {
@@ -275,7 +285,9 @@ describe("validate5Correctos — happy paths", () => {
       .mockResolvedValueOnce([{ ...MOCK_INDICATION_ACTIVA, gtin: null }])
       .mockResolvedValueOnce([MOCK_GTIN_AMOXICILINA_500])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ id: "valid-uuid-hp4" }]);
+      .mockResolvedValueOnce([{ id: "valid-uuid-hp4" }])
+      // `SELECT current_user` del helper de persistencia EPCIS.
+      .mockResolvedValue([{ current_user: "authenticated" }]);
     const caller = makeCaller();
     const result = await caller.validate5Correctos(baseInput());
     expect(result.ok).toBe(true);
@@ -289,7 +301,9 @@ describe("validate5Correctos — happy paths", () => {
       .mockResolvedValueOnce([MOCK_INDICATION_ACTIVA])
       .mockResolvedValueOnce([MOCK_GTIN_AMOXICILINA_500])
       .mockResolvedValueOnce([mockLastAdminRow(new Date(Date.now() - 8 * 60 * 60_000))])
-      .mockResolvedValueOnce([{ id: "valid-uuid-hp5" }]);
+      .mockResolvedValueOnce([{ id: "valid-uuid-hp5" }])
+      // `SELECT current_user` del helper de persistencia EPCIS.
+      .mockResolvedValue([{ current_user: "authenticated" }]);
     const caller = makeCaller();
     const result = await caller.validate5Correctos(baseInput());
     expect(result.ok).toBe(true);

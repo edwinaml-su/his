@@ -68,6 +68,13 @@ function baseAdminInput() {
 
 beforeEach(() => {
   prisma = mockDeep<PrismaClient>();
+  // resolveEceEstablecimientoId() corre sobre ctx.prisma (fuera de la tx
+  // demotada) vía $queryRaw tagged-template: mapea public.Establishment.id →
+  // ece.establecimiento.id, que es lo que exige la FK de ece.gs1_epcis_event.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (prisma as any).$queryRaw = vi
+    .fn()
+    .mockResolvedValue([{ id: "eeeeeeee-0000-0000-0000-00000000000e" }]);
   // $executeRawUnsafe es no-op por defecto
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (prisma as any).$executeRawUnsafe = vi.fn().mockResolvedValue(1);
@@ -92,7 +99,10 @@ describe("bedside.administration.record", () => {
     (prisma as any).$queryRawUnsafe
       .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])   // gs1_gsrn
       .mockResolvedValueOnce([{ user_id: UUID_USER }])            // StaffGsrn
-      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }]); // indicaciones_medicas
+      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }]) // indicaciones_medicas
+      // `SELECT current_user` del helper que persiste el evento EPCIS bajo el
+      // contexto RLS del schema ece (captura del rol antes de demotar).
+      .mockResolvedValue([{ current_user: "authenticated" }]);
 
     prisma.medicationAdministration.create.mockResolvedValue({
       id: UUID_ADMIN,

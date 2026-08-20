@@ -2,8 +2,10 @@
  * US-5.5 — Alta + epicrisis (equipo Lima · Sprint 3).
  *
  * Router dedicado para egresar un encuentro y persistir la epicrisis.
- * Coexiste con el legacy `encounter.router.discharge` (mutation
- * minimalista). Reglas de negocio (DoR/DoD US-5.5):
+ * Única fuente de verdad para altas — el legacy `encounter.router.discharge`
+ * (mutation minimalista sin filtro de tenant, sin liberar cama, sin bloqueo
+ * DEATH, sin EPCIS) fue eliminado (remediación R01, sin consumidores UI
+ * activos). Reglas de negocio (DoR/DoD US-5.5):
  *
  *   1. Encuentro debe estar abierto.
  *   2. `DEATH` se bloquea: el flujo de defunción lo gestiona otro

@@ -251,14 +251,25 @@ export const eceTriajeFirmadoPayloadSchema = z.object({
 
 export type EceTriajeFirmadoPayload = z.infer<typeof eceTriajeFirmadoPayloadSchema>;
 // ece.indicaciones.firmadas  (Fase 2 — IND_MED ECE)
-// Emitido cuando MC firma una indicación médica (borrador|en_revision → firmado).
+// Emitido cuando MC firma una indicación médica (borrador → firmado).
+//
+// R04 (sprint remediación críticos, 2026-08-19): este schema estaba
+// desalineado del payload real emitido por
+// `indicaciones-medicas.router.ts::firmar()` (usaba `firmadoPor` +
+// `estadoAnterior`, que el router nunca envía) — `domainEventPayloadSchema`
+// es un discriminated union con `.parse()` estricto en campos requeridos,
+// así que TODA llamada a `emitDomainEvent` con eventType
+// 'ece.indicaciones.firmadas' lanzaba ZodError y abortaba la transacción de
+// firma. Corregido para reflejar el payload real: { indicacionId,
+// episodioId, medicoId, itemCount, organizationId }.
 // -----------------------------------------------------------------------------
 
 export const eceIndicacionesFirmadasPayloadSchema = z.object({
   indicacionId: z.string().uuid(),
   episodioId: z.string().uuid(),
-  firmadoPor: z.string().uuid(),
-  estadoAnterior: z.string().min(1).max(50),
+  medicoId: z.string().uuid(),
+  itemCount: z.number().int().min(0),
+  organizationId: z.string().uuid(),
 });
 
 export type EceIndicacionesFirmadasPayload = z.infer<

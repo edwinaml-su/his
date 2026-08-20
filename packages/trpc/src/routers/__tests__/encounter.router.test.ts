@@ -1,6 +1,8 @@
 /**
- * Tests del encounter router — admit, transfer, discharge.
+ * Tests del encounter router — admit, list, censo.
  * Incluye verificación del hook automático ECE (ece.episodio_atencion).
+ * `transfer`/`discharge` legacy fueron eliminados (remediación R01);
+ * ver encounter-transfer.router.test.ts y encounter-discharge.router.test.ts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -139,43 +141,6 @@ describe("encounterRouter", () => {
           currencyId: "00000000-0000-0000-0000-000000000020",
         } as never),
       ).rejects.toBeInstanceOf(TRPCError);
-    });
-  });
-
-  describe("transfer", () => {
-    it("crea EncounterTransfer con razón y bedIds", async () => {
-      prisma.encounterTransfer.create.mockResolvedValue({ id: "t1" } as never);
-
-      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
-      await caller.transfer({
-        encounterId: "00000000-0000-0000-0000-000000000030",
-        toServiceId: "00000000-0000-0000-0000-000000000031",
-        fromBedId: "00000000-0000-0000-0000-000000000040",
-        toBedId: "00000000-0000-0000-0000-000000000041",
-        reason: "Cambio a UCI",
-      });
-
-      const args = prisma.encounterTransfer.create.mock.calls[0]![0];
-      expect(args.data).toMatchObject({
-        toBedId: "00000000-0000-0000-0000-000000000041",
-        reason: "Cambio a UCI",
-      });
-    });
-  });
-
-  describe("discharge", () => {
-    it("cierra encounter con dischargedAt y dischargeType", async () => {
-      prisma.encounter.update.mockResolvedValue({ id: "e3" } as never);
-
-      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
-      await caller.discharge({
-        encounterId: "00000000-0000-0000-0000-000000000050",
-        dischargeType: "MEDICAL",
-      });
-
-      const args = prisma.encounter.update.mock.calls[0]![0];
-      expect(args.data.dischargeType).toBe("MEDICAL");
-      expect(args.data.dischargedAt).toBeInstanceOf(Date);
     });
   });
 

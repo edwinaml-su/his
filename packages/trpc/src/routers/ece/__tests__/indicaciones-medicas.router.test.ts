@@ -43,7 +43,7 @@ vi.mock("@his/database", async (importOriginal) => {
   const original = await importOriginal<typeof import("@his/database")>();
   return {
     ...original,
-    emitDomainEvent: vi.fn().mockResolvedValue(undefined),
+    emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-id" }),
   };
 });
 
