@@ -183,7 +183,7 @@ describe("registroEnfermeriaRouter (HD-22/23/24)", () => {
       registroEnfId: REGISTRO_ID,
       indicacionItemId: INDICACION_ID,
       horaAplicada: new Date("2026-05-17T14:30:00Z"),
-      estado: "administrado" as const,
+      estado: "ADMINISTRADO" as const,
     };
 
     // 6 — 1 withEceContext: findRegistro[0] + findIndicacion[1] → anulada

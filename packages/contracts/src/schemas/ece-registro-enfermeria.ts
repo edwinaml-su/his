@@ -19,6 +19,23 @@ import { z } from "zod";
 export const turnoEnum = z.enum(["matutino", "vespertino", "nocturno"]);
 export type Turno = z.infer<typeof turnoEnum>;
 
+/**
+ * Subconjunto de chk_admin_med_estado_v2
+ * (packages/database/sql/202_ece_indicacion_vocabulario_estados.sql).
+ * PROGRAMADA y RECHAZADA están en el CHECK pero pertenecen al flujo médico
+ * (`estadoAdminEnum` de ece-indicaciones.ts), no al de enfermería.
+ *
+ * Este enum decía ["administrado","omitido","pospuesto"]: minúsculas por el
+ * CHECK del DDL original — que 202 reemplazó — y 'pospuesto' nunca existió en
+ * ningún CHECK (el valor real es DIFERIDA).
+ */
+export const estadoAdminMedEnum = z.enum([
+  "ADMINISTRADO",
+  "OMITIDA",
+  "DIFERIDA",
+]);
+export type EstadoAdminMed = z.infer<typeof estadoAdminMedEnum>;
+
 /** Crea la cabecera del registro de jornada de enfermería. */
 export const eceRegistroCreateSchema = z.object({
   episodioId: z.string().uuid(),
@@ -39,7 +56,7 @@ export const eceAdministracionSchema = z.object({
   indicacionItemId: z.string().uuid(),
   // hora_aplicada en BD (antes: horaAdministrada → hora_administrada — columna inexistente)
   horaAplicada: z.coerce.date(),
-  estado: z.enum(["administrado", "omitido", "pospuesto"]).default("administrado"),
+  estado: estadoAdminMedEnum.default("ADMINISTRADO"),
   motivoOmision: z.string().trim().max(500).optional(),
   // Campos GS1 opcionales — cuando presentes activan validación 5 correctos obligatoria
   gs1: z.object({

@@ -54,23 +54,22 @@
  *   IND-003 [P1] Trigger inmutabilidad post-ADMINISTRADO en administracion_medicamento
  *   IND-004 [P2] CHECK condicional motivo_omision NOT NULL cuando estado OMITIDA|RECHAZADA
  *
- * HALLAZGOS NUEVOS (sprint remediación críticos, 2026-08-19 — NO corregidos
- * aquí, fuera de alcance; ver reporte del sprint):
- *   - `ece.indicacion_item.tipo` en prod solo acepta
- *     {medicamento,dieta,cuidado,estudio,reposo} (CHECK
- *     `indicacion_item_tipo_check`); el Zod `tipoIndicacionEnum` de este
- *     archivo envía {MEDICAMENTO,PROCEDIMIENTO,DIETA,CUIDADO_GENERAL,
- *     ESTUDIO}. Ningún valor coincide → `create()` viola el CHECK en prod
- *     hoy. Tabla confirmada vacía (0 filas) — nadie ha creado una indicación
- *     exitosamente todavía.
- *   - `ece.administracion_medicamento.estado` en prod solo acepta
- *     {administrado,omitido,diferido} (CHECK
- *     `administracion_medicamento_estado_check`); `estadoAdminEnum` de este
- *     archivo envía {PROGRAMADA,ADMINISTRADO,OMITIDA,RECHAZADA}. Ningún
- *     valor coincide → `registrarAdministracion()` viola el CHECK en prod
- *     hoy.
- *   Ambos ocultos a los tests existentes porque `emitDomainEvent`/Prisma
- *   están 100% mockeados (nunca tocan Postgres real).
+ * ---------------------------------------------------------------------------
+ * DRIFT CHECK-vs-Zod (detectado 2026-08-19, corregido 2026-08-20)
+ * ---------------------------------------------------------------------------
+ *   `tipoIndicacionEnum` y `estadoAdminEnum` de este archivo no coincidían en
+ *   NINGÚN valor con los CHECK que tenía prod (minúsculas en español, del DDL
+ *   original 61_ece_06_documentos.sql): `create()` y
+ *   `registrarAdministracion()` violaban el constraint en cada llamada real
+ *   contra Postgres. Confirmado con las tablas vacías (0 filas) — nadie logró
+ *   escribir una indicación nunca. Los tests unitarios no lo veían porque
+ *   Prisma está 100% mockeado y jamás toca un CHECK real.
+ *
+ *   Resuelto alineando la BD a este vocabulario en
+ *   `packages/database/sql/202_ece_indicacion_vocabulario_estados.sql` (ahí
+ *   está el porqué de la decisión y el efecto sobre 98/142/146/165).
+ *   `__tests__/vocabulario-bd-drift.test.ts` compara estos enums contra el SQL
+ *   de 202 para que un cambio futuro en cualquiera de los dos lados falle CI.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -88,7 +87,8 @@ import {
 // ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
 // La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
 
-const tipoIndicacionEnum = z.enum([
+/** Espejo de chk_ind_item_tipo (SQL 202). Ver __tests__/vocabulario-bd-drift.test.ts. */
+export const tipoIndicacionEnum = z.enum([
   "MEDICAMENTO",
   "PROCEDIMIENTO",
   "DIETA",
@@ -126,7 +126,11 @@ const frecuenciaEnum = z.enum([
 
 const vigenciaEnum = z.enum(["ACTIVA", "SUSPENDIDA", "CANCELADA"]);
 
-const estadoAdminEnum = z.enum([
+/**
+ * Subconjunto de chk_admin_med_estado_v2 (SQL 202). DIFERIDA es parte del CHECK
+ * pero la expone `registro-enfermeria.router.ts`, no este router.
+ */
+export const estadoAdminEnum = z.enum([
   "PROGRAMADA",
   "ADMINISTRADO",
   "OMITIDA",
