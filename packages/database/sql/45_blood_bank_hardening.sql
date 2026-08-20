@@ -2,11 +2,13 @@
 -- §15 Banco de Sangre / Hemoterapia — Hardening Layer 1 (Beta.16, 2026-05-16)
 --
 -- Owner : @DBA (revisar) + @SRE (aplicar via Supabase MCP / SQL Editor)
--- Estado: REVISADO Y CORREGIDO 2026-08-20, PENDIENTE DE APPLY.
---         Lleva ~3 meses sin aplicarse mientras blood-bank.router.ts (641
---         líneas, cableado en _app.ts como `bloodBank`) apunta a 5 tablas que
---         NO existen en prod. Los tests están verdes porque mockean Prisma.
---         Verificado 2026-08-20: ninguna de las 5 tablas existe en prod.
+-- Estado: APLICADO A PROD 2026-08-20 vía MCP apply_migration. NO re-aplicar.
+--         Verificado post-apply: 5 tablas, RLS ON con 1 policy c/u, 9 triggers
+--         (audit + dominio), 22 índices, 5 CHECK.
+--
+--         Llevaba ~3 meses sin aplicarse mientras blood-bank.router.ts (641
+--         líneas, cableado en _app.ts como `bloodBank`) apuntaba a 5 tablas que
+--         no existían en prod. Los tests estaban verdes porque mockean Prisma.
 --
 --         Antes de aplicar se corrigieron TRES defectos que lo habrían dejado
 --         "aplicado y roto" (ninguno detectable sin un Postgres real):
