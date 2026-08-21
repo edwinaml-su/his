@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { ReglasCard } from "./_components/reglas-card";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
@@ -398,6 +399,9 @@ export default function PriceListDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* CC-0021 — reglas de precio + probador */}
+      <ReglasCard priceListId={pl.id} />
     </div>
   );
 }

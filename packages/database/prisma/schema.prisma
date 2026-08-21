@@ -2314,6 +2314,11 @@ model LabTest {
   /// tarifario ServicePriceListItem (SQL 133) sigue siendo el override de
   /// facturación cuando existe fila por code; este campo es el default.
   standardPrice  Decimal?     @db.Decimal(12, 2)
+  /// CC-0021 — categoría de servicio del examen/estudio. FK lógica a
+  /// "ServiceCategory" (sql/204) — sin relación Prisma, igual que
+  /// TipoCuenta.priceListId, porque el tarifario vive fuera de schema.prisma.
+  /// La usan las reglas de precio con appliedOn = 'category'.
+  categoryId     String?      @db.Uuid
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now()) @db.Timestamptz()
   updatedAt      DateTime     @updatedAt @db.Timestamptz()

@@ -14,9 +14,19 @@
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import {
+  serviceCategoryListInput,
+  serviceCategoryCreateInput,
+  serviceCategoryUpdateInput,
+  priceRuleListInput,
+  priceRuleCreateInput,
+  priceRuleUpdateInput,
+  priceRuleSetActiveInput,
+  priceRuleSimularInput,
+} from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
-import { resolverPrecio } from "../lib/price-resolver";
+import { resolverPrecio, resolverPrecioEnLista } from "../lib/price-resolver";
 
 // ---------------------------------------------------------------------------
 // Tipos raw
@@ -56,6 +66,79 @@ interface PriceListItemRow {
 interface PriceListItemWithCC extends PriceListItemRow {
   costCenterCode: string | null;
   costCenterName: string | null;
+}
+
+/** CC-0021 — fila de "ServiceCategory" con datos derivados para el admin. */
+interface CategoryRow {
+  id: string;
+  code: string;
+  nombre: string;
+  parentId: string | null;
+  parentNombre: string | null;
+  active: boolean;
+  ruleCount: number;
+}
+
+/** CC-0021 — fila de "ServicePriceRule" con los nombres de sus referencias. */
+interface PriceRuleRow {
+  id: string;
+  priceListId: string;
+  appliedOn: "item" | "category" | "global";
+  itemCode: string | null;
+  categoryId: string | null;
+  categoryNombre: string | null;
+  minQuantity: string;
+  dateStart: Date | null;
+  dateEnd: Date | null;
+  computePrice: "fixed" | "percentage" | "formula";
+  fixedPrice: string | null;
+  percentPrice: string;
+  base: "list_price" | "standard_cost" | "pricelist";
+  basePriceListId: string | null;
+  basePriceListName: string | null;
+  priceDiscount: string;
+  priceSurcharge: string;
+  priceRound: string;
+  priceMinMargin: string;
+  priceMaxMargin: string;
+  sequence: number;
+  notes: string | null;
+  odooItemId: number | null;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Tipo mínimo del cliente de transacción que necesitan las guardas de tenant. */
+type TxForGuards = { $queryRawUnsafe: <T>(query: string, ...values: unknown[]) => Promise<T> };
+
+async function assertListaDelTenant(tx: TxForGuards, id: string, organizationId: string): Promise<void> {
+  const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+    id,
+    organizationId,
+  );
+  if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Tarifario no encontrado." });
+}
+
+async function assertCategoriaDelTenant(tx: TxForGuards, id: string, organizationId: string): Promise<void> {
+  const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM "ServiceCategory" WHERE id = $1 AND "organizationId" = $2`,
+    id,
+    organizationId,
+  );
+  if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Categoría no encontrada." });
+}
+
+async function assertReglaDelTenant(tx: TxForGuards, id: string, organizationId: string): Promise<void> {
+  const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT r.id FROM "ServicePriceRule" r
+       JOIN "ServicePriceList" pl ON pl.id = r."priceListId"
+      WHERE r.id = $1 AND pl."organizationId" = $2`,
+    id,
+    organizationId,
+  );
+  if (!rows[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Regla no encontrada." });
 }
 
 // ---------------------------------------------------------------------------
@@ -122,9 +205,11 @@ const listActiveItemsInput = z
   .optional();
 
 // CC-0015 — resolución de precios por cuenta de paciente (pivote tipoCuenta → lista).
+// CC-0021 — `cantidad` activa los tramos por cantidad mínima de las reglas.
 const resolverPorCuentaInput = z.object({
   cuentaId: z.string().uuid(),
   codes: z.array(z.string().trim().min(1)).min(1).max(200),
+  cantidad: z.number().min(0).optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -271,8 +356,9 @@ export const servicePriceListRouter = router({
             organizationId: tenant.organizationId,
             cuentaId: input.cuentaId,
             code,
+            cantidad: input.cantidad,
           });
-          return { code, precio: r.precio, fuente: r.fuente };
+          return { code, precio: r.precio, fuente: r.fuente, reglaId: r.reglaId };
         }),
       );
       return resultados;
@@ -483,6 +569,249 @@ export const servicePriceListRouter = router({
       );
 
       return { id: input.id, active: input.active };
+    });
+  }),
+
+  // ===========================================================================
+  // CC-0021 — Categorías de servicio (product.category de Odoo)
+  // ===========================================================================
+
+  /** Categorías de la org, con el nombre de la categoría padre. */
+  listCategories: readerProc.input(serviceCategoryListInput).query(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      const filtro = input?.activeOnly ? `AND sc.active = true` : "";
+      return tx.$queryRawUnsafe<CategoryRow[]>(
+        `SELECT sc.id, sc.code, sc.nombre, sc."parentId", sc.active,
+                p.nombre AS "parentNombre",
+                (SELECT COUNT(*) FROM "ServicePriceRule" r
+                  WHERE r."categoryId" = sc.id AND r.active = true)::int AS "ruleCount"
+           FROM "ServiceCategory" sc
+           LEFT JOIN "ServiceCategory" p ON p.id = sc."parentId"
+          WHERE sc."organizationId" = $1 ${filtro}
+          ORDER BY sc.code`,
+        tenant.organizationId,
+      );
+    });
+  }),
+
+  createCategory: writerProc.input(serviceCategoryCreateInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      if (input.parentId) await assertCategoriaDelTenant(tx, input.parentId, tenant.organizationId);
+
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `INSERT INTO "ServiceCategory" ("organizationId", code, nombre, "parentId")
+         VALUES ($1::uuid, $2, $3, $4::uuid)
+         RETURNING id`,
+        tenant.organizationId,
+        input.code,
+        input.nombre,
+        input.parentId ?? null,
+      );
+
+      const id = rows[0]?.id;
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al crear la categoría." });
+      return { id };
+    });
+  }),
+
+  updateCategory: writerProc.input(serviceCategoryUpdateInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertCategoriaDelTenant(tx, input.id, tenant.organizationId);
+      if (input.parentId) {
+        if (input.parentId === input.id) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Una categoría no puede ser su propia padre." });
+        }
+        await assertCategoriaDelTenant(tx, input.parentId, tenant.organizationId);
+      }
+
+      const sets: string[] = [`"updatedAt" = now()`];
+      const params: unknown[] = [];
+      let idx = 1;
+
+      if (input.code !== undefined) { sets.push(`code = $${idx++}`); params.push(input.code); }
+      if (input.nombre !== undefined) { sets.push(`nombre = $${idx++}`); params.push(input.nombre); }
+      if (input.parentId !== undefined) { sets.push(`"parentId" = $${idx++}::uuid`); params.push(input.parentId); }
+      if (input.active !== undefined) { sets.push(`active = $${idx++}`); params.push(input.active); }
+
+      params.push(input.id);
+      await tx.$queryRawUnsafe(`UPDATE "ServiceCategory" SET ${sets.join(", ")} WHERE id = $${idx}`, ...params);
+
+      return { id: input.id };
+    });
+  }),
+
+  // ===========================================================================
+  // CC-0021 — Reglas de precio (product.pricelist.item de Odoo)
+  // ===========================================================================
+
+  /** Reglas de una lista, en el mismo orden en que las evalúa el motor. */
+  listRules: readerProc.input(priceRuleListInput).query(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertListaDelTenant(tx, input.priceListId, tenant.organizationId);
+
+      const filtro = input.activeOnly ? `AND r.active = true` : "";
+      return tx.$queryRawUnsafe<PriceRuleRow[]>(
+        `SELECT r.id, r."priceListId", r."appliedOn", r."itemCode", r."categoryId",
+                r."minQuantity", r."dateStart", r."dateEnd", r."computePrice",
+                r."fixedPrice", r."percentPrice", r.base, r."basePriceListId",
+                r."priceDiscount", r."priceSurcharge", r."priceRound",
+                r."priceMinMargin", r."priceMaxMargin", r.sequence, r.notes,
+                r."odooItemId", r.active, r."createdAt", r."updatedAt",
+                sc.nombre AS "categoryNombre",
+                bl.name   AS "basePriceListName"
+           FROM "ServicePriceRule" r
+           LEFT JOIN "ServiceCategory" sc ON sc.id = r."categoryId"
+           LEFT JOIN "ServicePriceList" bl ON bl.id = r."basePriceListId"
+          WHERE r."priceListId" = $1 ${filtro}
+          ORDER BY CASE r."appliedOn" WHEN 'item' THEN 0 WHEN 'category' THEN 1 ELSE 2 END,
+                   r."minQuantity" DESC, r.sequence DESC, r."createdAt" DESC`,
+        input.priceListId,
+      );
+    });
+  }),
+
+  addRule: writerProc.input(priceRuleCreateInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertListaDelTenant(tx, input.priceListId, tenant.organizationId);
+      if (input.categoryId) await assertCategoriaDelTenant(tx, input.categoryId, tenant.organizationId);
+      if (input.basePriceListId) await assertListaDelTenant(tx, input.basePriceListId, tenant.organizationId);
+
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+        `INSERT INTO "ServicePriceRule"
+           ("priceListId", "appliedOn", "itemCode", "categoryId", "minQuantity",
+            "dateStart", "dateEnd", "computePrice", "fixedPrice", "percentPrice",
+            base, "basePriceListId", "priceDiscount", "priceSurcharge", "priceRound",
+            "priceMinMargin", "priceMaxMargin", sequence, notes, "createdBy")
+         VALUES ($1::uuid, $2, $3, $4::uuid, $5::numeric, $6::timestamptz, $7::timestamptz,
+                 $8, $9::numeric, $10::numeric, $11, $12::uuid, $13::numeric, $14::numeric,
+                 $15::numeric, $16::numeric, $17::numeric, $18::int, $19, $20::uuid)
+         RETURNING id`,
+        input.priceListId,
+        input.appliedOn,
+        input.itemCode ?? null,
+        input.categoryId ?? null,
+        input.minQuantity,
+        input.dateStart ?? null,
+        input.dateEnd ?? null,
+        input.computePrice,
+        input.fixedPrice ?? null,
+        input.percentPrice,
+        input.base,
+        input.basePriceListId ?? null,
+        input.priceDiscount,
+        input.priceSurcharge,
+        input.priceRound,
+        input.priceMinMargin,
+        input.priceMaxMargin,
+        input.sequence,
+        input.notes ?? null,
+        ctx.user?.id ?? null,
+      );
+
+      const id = rows[0]?.id;
+      if (!id) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al crear la regla." });
+      return { id };
+    });
+  }),
+
+  updateRule: writerProc.input(priceRuleUpdateInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertReglaDelTenant(tx, input.id, tenant.organizationId);
+      if (input.categoryId) await assertCategoriaDelTenant(tx, input.categoryId, tenant.organizationId);
+      if (input.basePriceListId) await assertListaDelTenant(tx, input.basePriceListId, tenant.organizationId);
+
+      const sets: string[] = [`"updatedAt" = now()`];
+      const params: unknown[] = [];
+      let idx = 1;
+
+      const asignar = (columna: string, valor: unknown, cast = "") => {
+        sets.push(`"${columna}" = $${idx++}${cast}`);
+        params.push(valor);
+      };
+
+      if (input.appliedOn !== undefined) asignar("appliedOn", input.appliedOn);
+      if (input.itemCode !== undefined) asignar("itemCode", input.itemCode);
+      if (input.categoryId !== undefined) asignar("categoryId", input.categoryId, "::uuid");
+      if (input.minQuantity !== undefined) asignar("minQuantity", input.minQuantity, "::numeric");
+      if (input.dateStart !== undefined) asignar("dateStart", input.dateStart, "::timestamptz");
+      if (input.dateEnd !== undefined) asignar("dateEnd", input.dateEnd, "::timestamptz");
+      if (input.computePrice !== undefined) asignar("computePrice", input.computePrice);
+      if (input.fixedPrice !== undefined) asignar("fixedPrice", input.fixedPrice, "::numeric");
+      if (input.percentPrice !== undefined) asignar("percentPrice", input.percentPrice, "::numeric");
+      if (input.base !== undefined) asignar("base", input.base);
+      if (input.basePriceListId !== undefined) asignar("basePriceListId", input.basePriceListId, "::uuid");
+      if (input.priceDiscount !== undefined) asignar("priceDiscount", input.priceDiscount, "::numeric");
+      if (input.priceSurcharge !== undefined) asignar("priceSurcharge", input.priceSurcharge, "::numeric");
+      if (input.priceRound !== undefined) asignar("priceRound", input.priceRound, "::numeric");
+      if (input.priceMinMargin !== undefined) asignar("priceMinMargin", input.priceMinMargin, "::numeric");
+      if (input.priceMaxMargin !== undefined) asignar("priceMaxMargin", input.priceMaxMargin, "::numeric");
+      if (input.sequence !== undefined) asignar("sequence", input.sequence, "::int");
+      if (input.notes !== undefined) asignar("notes", input.notes);
+
+      asignar("updatedBy", ctx.user?.id ?? null, "::uuid");
+
+      params.push(input.id);
+      await tx.$queryRawUnsafe(`UPDATE "ServicePriceRule" SET ${sets.join(", ")} WHERE id = $${idx}`, ...params);
+
+      return { id: input.id };
+    });
+  }),
+
+  setRuleActive: writerProc.input(priceRuleSetActiveInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertReglaDelTenant(tx, input.id, tenant.organizationId);
+
+      await tx.$queryRawUnsafe(
+        `UPDATE "ServicePriceRule" SET active = $1, "updatedAt" = now() WHERE id = $2`,
+        input.active,
+        input.id,
+      );
+
+      return { id: input.id, active: input.active };
+    });
+  }),
+
+  deleteRule: writerProc.input(getInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertReglaDelTenant(tx, input.id, tenant.organizationId);
+      await tx.$queryRawUnsafe(`DELETE FROM "ServicePriceRule" WHERE id = $1`, input.id);
+      return { id: input.id };
+    });
+  }),
+
+  /**
+   * Probador de reglas: qué precio saldría para un código en una lista, sin
+   * pasar por una cuenta ni tocar la factura.
+   */
+  simularPrecio: readerProc.input(priceRuleSimularInput).query(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      await assertListaDelTenant(tx, input.priceListId, tenant.organizationId);
+
+      return resolverPrecioEnLista(tx, {
+        organizationId: tenant.organizationId,
+        priceListId: input.priceListId,
+        code: input.code,
+        cantidad: input.cantidad,
+        fecha: input.fecha ? new Date(input.fecha) : undefined,
+      });
     });
   }),
 });
