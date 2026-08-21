@@ -33,7 +33,8 @@
 --   filas ni se rompe ningún consumidor existente del tarifario.
 --
 -- Idempotente: reejecutable sin duplicar filas ni perder datos.
--- Aplicar vía: Supabase SQL Editor o MCP execute_sql / apply_migration.
+-- APLICADO A PROD el 2026-08-21 vía MCP (migración cc0021_motor_reglas_precios).
+-- NO RE-APLICAR salvo para reconstruir la BD desde cero.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -331,10 +332,10 @@ CREATE TRIGGER trg_spr_cascada_sin_ciclo
 -- =============================================================================
 -- Verificación post-aplicación (ejecutar aparte):
 --
---   SELECT COUNT(*) FROM "ServiceCategory";      -- 0 hasta correr el importador
---   SELECT COUNT(*) FROM "ServicePriceRule";     -- 0 hasta correr el importador
+--   SELECT COUNT(*) FROM "ServiceCategory";      -- 42 tras el importador (14 x 3 orgs)
+--   SELECT COUNT(*) FROM "ServicePriceRule";     -- 999 tras el importador (333 x 3 orgs)
 --   SELECT conname FROM pg_constraint
---    WHERE conrelid = '"ServicePriceRule"'::regclass ORDER BY conname;  -- 8 CHECK
+--    WHERE conrelid = '"ServicePriceRule"'::regclass ORDER BY conname;  -- 9 CHECK
 --   SELECT tgname FROM pg_trigger
 --    WHERE tgrelid = '"ServicePriceRule"'::regclass AND NOT tgisinternal; -- 2
 -- =============================================================================

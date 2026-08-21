@@ -6,8 +6,8 @@
 | Fecha | 2026-08-21 |
 | Solicitante | Edwin Martínez (Inversiones Avante) |
 | Rama | `feat/cc-0021-motor-reglas-precios` |
-| SQL | `packages/database/sql/204_cc0021_motor_reglas_precios.sql` — **PENDIENTE de aplicar a prod** |
-| Datos | `docs/CC/0021/sql/*.sql` (emitidos, idempotentes) — **PENDIENTES de aplicar** |
+| SQL | `packages/database/sql/204_cc0021_motor_reglas_precios.sql` — **APLICADO a prod 2026-08-21 (no re-aplicar)** |
+| Datos | `docs/CC/0021/sql/*.sql` (idempotentes) — **APLICADOS a prod 2026-08-21**: 42 categorías, 10,847 ítems (9,810 clasificados), 999 reglas |
 | Insumo | `docs/CC/0021/odoo-pricelists-dump.json` — extracción read-only de odoo.complejoavante.com (Odoo 18.0), 2026-08-21 |
 | Antecedente | CC-0015 (tipo de cuenta → lista de precios) |
 
@@ -91,9 +91,34 @@ Resultado de la corrida del 2026-08-21: **14 categorías**, **3,270 ítems plano
 | Base no calculable | asume 0 | la regla se ignora y se pasa al siguiente eslabón | Cobrar $0 por no poder calcular es peor que pedir precio manual. |
 | `price_markup` | campo espejo almacenado | no se persiste | Es el negativo del descuento; persistirlo invita a contarlo dos veces. |
 
-## 5. Pendiente / seguimiento
+## 5. Estado en producción (2026-08-21)
 
-- **Aplicar `sql/204` a prod** y luego `docs/CC/0021/sql/*.sql` en orden alfabético (`000_categorias` → `1NNN_items_*` → `900_reglas`). Verificación posterior: `packages/database/sql/__tests__/204_motor_precios_smoke.sql`.
+Aplicado en este orden: `sql/204` (vía MCP) → `000_categorias` → `1NNN_items_*` → `900_reglas` (vía psql).
+
+| Objeto | Resultado |
+|---|---|
+| `ServiceCategory` | 42 filas (14 categorías × 3 orgs) |
+| `ServicePriceListItem` | 10,619 → **10,847** (+228 de la deriva), 9,810 clasificados |
+| `ServicePriceRule` | **999** (333 × 3 orgs): 993 de ítem con precio fijo + 6 de categoría con fórmula |
+| CHECK / triggers / policies | 9 CHECK, 2 triggers, 2 policies RLS |
+| Advisor de seguridad | sin hallazgos nuevos |
+
+Verificaciones funcionales corridas contra prod:
+- El smoke de ordenamiento (`sql/__tests__/204_motor_precios_smoke.sql`, en transacción con ROLLBACK) devuelve lo esperado: con cantidad 1 gana la regla de ítem sin tramo, con cantidad 10 gana el tramo, y sin reglas de ítem gana la categoría más específica.
+- La consulta real del resolver, ejecutada literal sobre prod para `10130101` (RESONANCIA MAGNETICA CABEZA, TARIFARIO DRSV 2026), elige la regla de tramo correcta: **$166.90**.
+
+### Lo que todavía NO produce precio: «DrSV - IMAGENES»
+
+La regla de esa lista **ya está almacenada** (1 por org, categoría IMAGENES, `base + $0.70`, vigente desde 2026-06-29) — es decir, el hueco de modelo quedó cerrado. Pero la regla aún no puede calcular, porque le falta el precio base sobre el que aplicar el margen:
+
+1. La lista sigue teniendo **0 ítems** (así viene de Odoo).
+2. `LabTest.categoryId` está sin poblar, así que ningún código resuelve a la categoría IMAGENES.
+3. **Las 1,440 filas de `LabTest` tienen `standardPrice` NULL** — el catálogo de precios estándar de CC-0013 está vacío en prod.
+
+En Odoo el base es `product.list_price`, que allá sí existe. Cerrar el caso requiere dos tareas de datos, no de código: clasificar los estudios de imagen en la categoría IMAGENES y cargarles precio de catálogo. Mientras tanto el motor hace lo correcto — la regla se ignora por no poder calcular y el precio cae al siguiente eslabón o se pide manual, en vez de cobrar $0.
+
+## 6. Seguimiento
+
 - Al re-sincronizar quedan en el tarifario los ítems planos que CC-0015 creó para las 331 reglas con `min_quantity = 1`; ahora esas reglas existen además como `ServicePriceRule` y ganan para cualquier cantidad ≥ 1, con el mismo precio. No hay cambio de comportamiento, pero conviene depurarlos en una pasada posterior.
 - Clasificar el catálogo propio del HIS (`LabTest.categoryId`, ítems `PORT-*`/`AVT-*`) para que las reglas de categoría alcancen también a los servicios que no vienen de Odoo. Hoy solo quedan clasificados los códigos importados.
 - Sincronización periódica: el importador sigue siendo a demanda. La deriva medida en 17 días fue de +64 reglas (MAPFRE 1→47, ISBM +11, ABANK +5, Farmacia Casa Matriz +2).
