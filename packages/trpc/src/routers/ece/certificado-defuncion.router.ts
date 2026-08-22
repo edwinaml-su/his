@@ -71,6 +71,7 @@ import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
 import { argon2 } from "@his/infrastructure";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Schemas Zod
@@ -433,19 +434,12 @@ export const eceCertDefRouter = router({
 
     return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       // 1. Resolver personal_salud vinculado al usuario HIS.
-      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
-        SELECT id::text
-        FROM ece.personal_salud
-        WHERE his_user_id = ${ece.personalId}::uuid AND activo = true
-        LIMIT 1
-      `;
-      if (!personalRows[0]) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "El usuario no tiene un registro de personal de salud activo en ECE.",
-        });
-      }
-      const medicoPersonalId = personalRows[0].id;
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const medico = await requirePersonalSalud(tx, ece.personalId, {
+        action: "crear un certificado de defunción",
+      });
+      const medicoPersonalId = medico.id;
 
       // 2. B-04: verificar que la epicrisis tenga tipo_egreso = 'fallecido'.
       const epicrisisRows = await tx.$queryRaw<[{ tipo_egreso: string }?]>`

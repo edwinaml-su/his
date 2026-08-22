@@ -36,16 +36,16 @@
  * INSERT por completo. `personalId` de `withEceContext` se pasa como
  * `ctx.user.id` (auth user) porque NINGUNA policy de esta tabla depende de
  * `app.ece_personal_id` — mismo patrón ya usado en gs1-proceso-c.router.ts.
- * ⚠️ Hallazgo tangencial (fuera de scope R02, NO corregido aquí — requiere
- * decisión de producto, no es un fix de RLS): `autorizado_por` tiene FK a
- * `ece.personal_salud(id)`, pero `autorizarDevolucion` le pasa `ctx.user.id`
- * (el id de `auth.users`/`public."User"`, un espacio de ids DISTINTO). Esto
- * es un bug preexistente independiente de RLS/BYPASSRLS (las FK se validan
- * siempre) — `autorizarDevolucion` probablemente ya falla hoy en prod con
- * violación de FK salvo que el `ctx.user.id` del caller coincida por
- * casualidad con un `ece.personal_salud.id`. Ver el mismo caveat ya
- * documentado en personal-salud.router.ts (ADMIN/ARCH sin fila propia en
- * `ece.personal_salud`).
+ *
+ * R03 (assessment externo, riesgo Alto, 2026-08-22) — FIX: `autorizado_por`
+ * tiene FK a `ece.personal_salud(id)`, pero `autorizarDevolucion` le pasaba
+ * `ctx.user.id` directo (el id de `public."User"`, un espacio de ids
+ * DISTINTO al de `ece.personal_salud`). El UPDATE fallaba con violación de
+ * FK siempre — no "salvo casualidad": `ece.personal_salud` tiene 0 filas en
+ * prod (verificado 2026-08-22), así que ninguna coincidencia era posible.
+ * Corregido resolviendo el `ece.personal_salud.id` real vía
+ * `requirePersonalSalud` (`packages/trpc/src/lib/identity-resolver.ts`, el
+ * resolver canónico introducido por R03) antes del UPDATE.
  */
 import { TRPCError } from "@trpc/server";
 import {
@@ -57,6 +57,7 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withEceContext } from "../ece/rls-context";
+import { requirePersonalSalud } from "../lib/identity-resolver";
 
 // ece.devolucion_inventario no está en schema.prisma — usamos $queryRawUnsafe
 // con parámetros posicionales para evitar inyección SQL.
@@ -139,8 +140,12 @@ export const gs1ProcesoFRouter = router({
         ctx.prisma,
         ctx.user.id,
         establecimientoId,
-        (tx) =>
-          tx.$queryRawUnsafe<{ id: string; estado: string }[]>(
+        async (tx) => {
+          // R03: autorizado_por exige ece.personal_salud.id, no ctx.user.id.
+          const personal = await requirePersonalSalud(tx, ctx.user.id, {
+            action: "autorizar una devolución de inventario",
+          });
+          return tx.$queryRawUnsafe<{ id: string; estado: string }[]>(
             `UPDATE ece.devolucion_inventario
                 SET estado = 'autorizado',
                     autorizado_por = $1,
@@ -149,10 +154,11 @@ export const gs1ProcesoFRouter = router({
               WHERE id = $3
                 AND estado = 'solicitado'
              RETURNING id, estado`,
-            ctx.user.id,
+            personal.id,
             input.notas ?? null,
             input.devolucionId,
-          ),
+          );
+        },
       );
 
       if (rows.length === 0) {
