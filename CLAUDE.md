@@ -221,7 +221,7 @@ Para aplicar SQL hardening / RLS al proyecto Supabase remoto: `mcp__supabase__ap
 
 ## Framework de trabajo (mandatorio — directiva permanente)
 
-**1. SDLC autónomo @Orq** — todo trabajo respeta el framework descrito en `C:\proyecto\knowledge\sdlc_system_prompt.md` (14 agentes, 6 fases, gates G0–G8). Roles: `@Orq` orquesta y NO escribe código; `@Dev` implementa; `@AE/@AS/@AT/@DA/@DBA` arquitectura; `@PO` backlog; `@UIUX` interfaz; `@QA/@QAF` calidad; `@SRE` ops; `@DA/@DE/@BIA/@BID` BI. Invoca al rol vía `Skill(<nombre>)` o `Agent(subagent_type=<nombre>)`. Solo `@Orq` declara "Project Completed" — y solo post-G8 con firmas de @AE/@QA/@QAF/@SRE.
+**1. SDLC autónomo @Orq** — todo trabajo respeta el framework descrito en `C:\proyecto\knowledge\sdlc_system_prompt.md` (14 agentes, 6 fases, gates G0–G8). Roles: `@Orq` orquesta y NO escribe código; `@Dev` implementa; `@AE/@AS/@AT/@DA/@DBA` arquitectura; `@PO` backlog; `@UIUX` interfaz; `@QA/@QAF` calidad; `@DrHIS` tester funcional clínico y de cumplimiento SV (ver `.claude/agents/drhis.md` + `docs/qa/drhis/`); `@SRE` ops; `@DA/@DE/@BIA/@BID` BI. Invoca al rol vía `Skill(<nombre>)` o `Agent(subagent_type=<nombre>)`. Solo `@Orq` declara "Project Completed" — y solo post-G8 con firmas de @AE/@QA/@QAF/@SRE.
 
 **2. `careful-coding` obligatorio** — invoca `Skill(anthropic-skills:careful-coding)` al inicio de CUALQUIER tarea que toque código (escribir/editar/revisar/refactorizar). Al delegar a sub-agentes, incluye en el briefing: "sigue los principios de /careful-coding". Solo skipear en one-liners triviales o preguntas puramente conversacionales.
 
