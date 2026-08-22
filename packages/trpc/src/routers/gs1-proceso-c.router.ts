@@ -12,6 +12,27 @@
  *
  * RLS Cat-E: withWorkflowContext demota a rol `authenticated`; las
  * políticas filtran por establecimiento via JOIN ece.paciente.
+ *
+ * R02 (auditoría RLS externa) — decisión (b), evidencia 2026-08-22 (psql
+ * read-only vía DIRECT_URL prod): `ece.preparacion_unidosis` tiene RLS activo
+ * con policies `unidosis_insert`/`unidosis_select` que leen
+ * `current_setting('app.ece_establecimiento_id')` (vía JOIN ece.paciente) —
+ * el espacio de GUC ECE, NO el de `withTenantContext`. Este router YA estaba
+ * migrado correctamente antes de esta auditoría: los 3 procedures pasan por
+ * `withWorkflowContext` (packages/trpc/src/workflow/context.ts), que setea
+ * los MISMOS GUC que `withEceContext` (`app.ece_personal_id` +
+ * `app.ece_establecimiento_id`) y demota a `authenticated` por default — no
+ * requirió cambios. `authenticated` tiene grants INSERT/SELECT (verificado).
+ * `buildEceCtx` usa `personalId: ctx.user.id` (auth user, no
+ * `ece.personal_salud.id`) — no es un bug: ninguna policy de esta tabla
+ * filtra por `personal_id`, solo por `establecimiento_id`, así que el valor
+ * no afecta el enforcement RLS.
+ * ⚠️ Hallazgo tangencial (fuera de scope R02, no corregido aquí):
+ * `preparacion_unidosis` NO tiene policy de UPDATE — bajo el rol demotado,
+ * el `UPDATE ... SET etiqueta_qr_generada` dentro de `prepararUnidosis`
+ * afecta 0 filas silenciosamente (sin error) porque no hay policy aplicable
+ * para el comando UPDATE. El INSERT sí persiste; solo el campo de la
+ * etiqueta QR queda sin guardar en BD aunque el response lo incluya.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

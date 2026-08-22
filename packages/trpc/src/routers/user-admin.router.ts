@@ -35,6 +35,33 @@
  *
  * El schema Prisma NO se modifica (sin columnas nuevas — `authStatus` se
  * deriva en cada query, no se persiste).
+ *
+ * R02 (auditoría RLS externa) — decisión (c) para TODO el router, NO usa
+ * `withTenantContext`. Verificado en prod (2026-08-22, psql read-only vía
+ * DIRECT_URL) antes de decidir:
+ *   1) `auth.users` / `auth.identities` NO tienen NINGÚN grant para el rol
+ *      `authenticated` (ni SELECT). `listAll`, `get`, `create`,
+ *      `resetPassword`, `resendInvitation` y `listSinCuentaAuth` leen o
+ *      escriben esas tablas por SQL crudo — demotar el rol haría fallar esas
+ *      queries con "permission denied", tumbando la administración de
+ *      usuarios completa (incluida la única vía de recuperación de acceso).
+ *   2) La policy RLS `user_self_modify` de `public."User"` es
+ *      `id = current_user_id()` para TODOS los comandos (`*`) — diseñada
+ *      para autoservicio de perfil, no para administración. Bajo rol
+ *      demotado, `update`/`deactivate`/`create` (INSERT de un usuario nuevo,
+ *      distinto de `current_user_id()`) fallarían el `WITH CHECK` siempre
+ *      que el admin edite a OTRO usuario, que es el caso de uso normal de
+ *      este router.
+ *   3) La policy `tenant_isolation_select` de `public."Role"` es
+ *      `organizationId = current_org_id()` sin cláusula para roles globales
+ *      (`organizationId IS NULL`) — `assignRole` soporta explícitamente
+ *      roles globales (línea ~625), y quedarían invisibles bajo RLS.
+ *   Conclusión: este router es estructuralmente incompatible con la
+ *   democión de rol tal como están diseñadas hoy las policies de `User` y
+ *   `Role`. Cerrar esto requiere una policy nueva tipo "ADMIN con
+ *   user.manage puede tocar cualquier fila de su org" (@DBA/@AS), no un
+ *   cambio unilateral de @Dev — se documenta como pendiente en el reporte
+ *   de este lote, no se fuerza aquí.
  */
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";

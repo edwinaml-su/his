@@ -33,6 +33,10 @@ describe("encounterTransferRouter", () => {
     // El emit cablea domainEvent.create + auditLog.create — mock genérico.
     prisma.domainEvent.create.mockResolvedValue({ id: "evt-1" } as never);
     prisma.auditLog.create.mockResolvedValue({ id: "audit-1" } as never);
+    // R02 — withTenantContext (queries de solo lectura) hace SET LOCAL vía
+    // $executeRawUnsafe. transferEncounter/confirmReceipt NO se migraron
+    // (ver comentario en el router) y siguen sin pasar por aquí.
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   describe("transferEncounter", () => {

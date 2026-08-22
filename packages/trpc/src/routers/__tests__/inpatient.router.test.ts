@@ -33,6 +33,9 @@ function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
     }
     return cb;
   });
+  // R02 — withTenantContext hace SET LOCAL vía $executeRawUnsafe antes de
+  // invocar el callback; mockDeep no resuelve promesas por defecto.
+  prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
 }
 
 describe("inpatientRouter", () => {

@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { ehrNotesRouter } from "../ehr-notes.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -21,6 +21,7 @@ describe("ehrNotesRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
   });
 
   describe("note.list", () => {

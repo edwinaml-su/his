@@ -15,6 +15,37 @@
  * RLS: la tabla ece.devolucion_inventario usa Cat-E (establecimiento_id).
  * El router escribe directamente con prisma.$executeRaw dentro del contexto
  * de la sesión — el campo establecimiento_id se resuelve desde ctx.tenant.
+ *
+ * R02 (auditoría RLS externa) — decisión (a-ECE), evidencia 2026-08-22 (psql
+ * read-only vía DIRECT_URL prod): `ece.devolucion_inventario` tiene RLS
+ * activo con una única policy `devolucion_by_establecimiento` (polcmd='*',
+ * cubre SELECT/INSERT/UPDATE/DELETE) `USING (establecimiento_id =
+ * ece.current_establecimiento_id_safe())`, que lee el GUC ECE
+ * `app.ece_establecimiento_id` — NO el de `withTenantContext`. `authenticated`
+ * tiene INSERT/SELECT/UPDATE/DELETE (verificado). Antes de este cambio
+ * NINGÚN procedure filtraba por establecimiento en JS —
+ * `listSolicitudesPendientes`/`get` exponían devoluciones de CUALQUIER
+ * establecimiento, y `solicitarDevolucion` dejaba `establecimiento_id` en
+ * NULL si el tenant no tenía uno resuelto (comentario original: "RLS lo
+ * gestionará" — falso, porque RLS nunca corría). Migrado a `withEceContext`
+ * (packages/trpc/src/ece/rls-context.ts) en los 5 procedures, con
+ * `establecimientoId` ahora REQUERIDO (antes opcional/NULL) porque la policy
+ * es `establecimiento_id = current_establecimiento_id_safe()` — un NULL en
+ * cualquiera de los dos lados nunca satisface el predicado (NULL = x es
+ * NULL), así que dejar la columna en NULL bajo RLS real habría bloqueado el
+ * INSERT por completo. `personalId` de `withEceContext` se pasa como
+ * `ctx.user.id` (auth user) porque NINGUNA policy de esta tabla depende de
+ * `app.ece_personal_id` — mismo patrón ya usado en gs1-proceso-c.router.ts.
+ * ⚠️ Hallazgo tangencial (fuera de scope R02, NO corregido aquí — requiere
+ * decisión de producto, no es un fix de RLS): `autorizado_por` tiene FK a
+ * `ece.personal_salud(id)`, pero `autorizarDevolucion` le pasa `ctx.user.id`
+ * (el id de `auth.users`/`public."User"`, un espacio de ids DISTINTO). Esto
+ * es un bug preexistente independiente de RLS/BYPASSRLS (las FK se validan
+ * siempre) — `autorizarDevolucion` probablemente ya falla hoy en prod con
+ * violación de FK salvo que el `ctx.user.id` del caller coincida por
+ * casualidad con un `ece.personal_salud.id`. Ver el mismo caveat ya
+ * documentado en personal-salud.router.ts (ADMIN/ARCH sin fila propia en
+ * `ece.personal_salud`).
  */
 import { TRPCError } from "@trpc/server";
 import {
@@ -25,45 +56,58 @@ import {
   gs1DevolucionGetSchema,
 } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
+import { withEceContext } from "../ece/rls-context";
 
 // ece.devolucion_inventario no está en schema.prisma — usamos $queryRawUnsafe
 // con parámetros posicionales para evitar inyección SQL.
 // Decisión: no añadir al schema.prisma en este PR para no generar un generate
 // costoso; la tabla existe en BD y se accede via raw.
 
+/** R02: exige establecimiento activo — la policy RLS de devolucion_inventario lo requiere no-NULL. */
+function resolveEstablecimientoId(ctx: { tenant: { establishmentId?: string } }): string {
+  if (!ctx.tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo en la sesión.",
+    });
+  }
+  return ctx.tenant.establishmentId;
+}
+
 export const gs1ProcesoFRouter = router({
   /**
    * Solicitar una devolución de inventario.
    * Cualquier usuario con sesión tenant puede solicitar.
-   * El establecimiento se obtiene de ctx.tenant.establishmentId cuando existe,
-   * o queda NULL (el router de UI deberá proveerlo si aplica multi-establecimiento).
+   * El establecimiento se obtiene de ctx.tenant.establishmentId — requerido
+   * (R02: la policy RLS de ece.devolucion_inventario exige establecimiento_id
+   * no-NULL, ver comentario de cabecera del archivo).
    */
   solicitarDevolucion: tenantProcedure
     .input(gs1DevolucionSolicitarSchema)
     .mutation(async ({ ctx, input }) => {
       const fechaDev = input.fechaDevolucion ?? new Date();
+      const establecimientoId = resolveEstablecimientoId(ctx);
 
-      // Resolución de establecimiento_id: si el tenant tiene un establishment
-      // único, úsalo; si no, dejamos NULL y RLS lo gestionará.
-      const establecimientoId =
-        "establishmentId" in ctx.tenant && typeof ctx.tenant.establishmentId === "string"
-          ? ctx.tenant.establishmentId
-          : null;
-
-      const rows = await ctx.prisma.$queryRawUnsafe<{ id: string }[]>(
-        `INSERT INTO ece.devolucion_inventario
-           (origen_gln, destino_gln, motivo, productos, fecha_devolucion,
-            establecimiento_id, estado, notas, created_by)
-         VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'solicitado', $7, $8)
-         RETURNING id`,
-        input.origenGln,
-        input.destinoGln,
-        input.motivo,
-        JSON.stringify(input.productos),
-        fechaDev,
-        establecimientoId,
-        input.notas ?? null,
+      const rows = await withEceContext(
+        ctx.prisma,
         ctx.user.id,
+        establecimientoId,
+        (tx) =>
+          tx.$queryRawUnsafe<{ id: string }[]>(
+            `INSERT INTO ece.devolucion_inventario
+               (origen_gln, destino_gln, motivo, productos, fecha_devolucion,
+                establecimiento_id, estado, notas, created_by)
+             VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'solicitado', $7, $8)
+             RETURNING id`,
+            input.origenGln,
+            input.destinoGln,
+            input.motivo,
+            JSON.stringify(input.productos),
+            fechaDev,
+            establecimientoId,
+            input.notas ?? null,
+            ctx.user.id,
+          ),
       );
 
       const devolucionId = rows[0]?.id;
@@ -90,18 +134,25 @@ export const gs1ProcesoFRouter = router({
   autorizarDevolucion: requireRole(["ARCH", "ADMIN"])
     .input(gs1DevolucionAutorizarSchema)
     .mutation(async ({ ctx, input }) => {
-      const rows = await ctx.prisma.$queryRawUnsafe<{ id: string; estado: string }[]>(
-        `UPDATE ece.devolucion_inventario
-            SET estado = 'autorizado',
-                autorizado_por = $1,
-                notas = COALESCE($2, notas),
-                updated_at = now()
-          WHERE id = $3
-            AND estado = 'solicitado'
-         RETURNING id, estado`,
+      const establecimientoId = resolveEstablecimientoId(ctx);
+      const rows = await withEceContext(
+        ctx.prisma,
         ctx.user.id,
-        input.notas ?? null,
-        input.devolucionId,
+        establecimientoId,
+        (tx) =>
+          tx.$queryRawUnsafe<{ id: string; estado: string }[]>(
+            `UPDATE ece.devolucion_inventario
+                SET estado = 'autorizado',
+                    autorizado_por = $1,
+                    notas = COALESCE($2, notas),
+                    updated_at = now()
+              WHERE id = $3
+                AND estado = 'solicitado'
+             RETURNING id, estado`,
+            ctx.user.id,
+            input.notas ?? null,
+            input.devolucionId,
+          ),
       );
 
       if (rows.length === 0) {
@@ -129,18 +180,25 @@ export const gs1ProcesoFRouter = router({
     .input(gs1DevolucionRecepcionSchema)
     .mutation(async ({ ctx, input }) => {
       const nuevoEstado = input.recibidoConforme ? "recibido" : "rechazado";
+      const establecimientoId = resolveEstablecimientoId(ctx);
 
-      const rows = await ctx.prisma.$queryRawUnsafe<{ id: string; estado: string }[]>(
-        `UPDATE ece.devolucion_inventario
-            SET estado = $1,
-                notas = COALESCE($2, notas),
-                updated_at = now()
-          WHERE id = $3
-            AND estado IN ('autorizado', 'en_transito')
-         RETURNING id, estado`,
-        nuevoEstado,
-        input.notas ?? null,
-        input.devolucionId,
+      const rows = await withEceContext(
+        ctx.prisma,
+        ctx.user.id,
+        establecimientoId,
+        (tx) =>
+          tx.$queryRawUnsafe<{ id: string; estado: string }[]>(
+            `UPDATE ece.devolucion_inventario
+                SET estado = $1,
+                    notas = COALESCE($2, notas),
+                    updated_at = now()
+              WHERE id = $3
+                AND estado IN ('autorizado', 'en_transito')
+             RETURNING id, estado`,
+            nuevoEstado,
+            input.notas ?? null,
+            input.devolucionId,
+          ),
       );
 
       if (rows.length === 0) {
@@ -167,6 +225,8 @@ export const gs1ProcesoFRouter = router({
   listSolicitudesPendientes: tenantProcedure
     .input(gs1DevolucionListSchema)
     .query(async ({ ctx, input }) => {
+      const establecimientoId = resolveEstablecimientoId(ctx);
+
       // Construimos la WHERE dinámicamente pero con params posicionales.
       const conditions: string[] = [];
       const params: unknown[] = [];
@@ -191,31 +251,37 @@ export const gs1ProcesoFRouter = router({
       params.push(input.limit + 1); // +1 para saber si hay nextCursor
       const limitParam = `$${paramIdx}`;
 
-      const rows = await ctx.prisma.$queryRawUnsafe<
-        {
-          id: string;
-          origen_gln: string;
-          destino_gln: string;
-          motivo: string;
-          productos: unknown;
-          fecha_devolucion: string;
-          autorizado_por: string | null;
-          establecimiento_id: string | null;
-          estado: string;
-          notas: string | null;
-          created_at: string;
-          updated_at: string;
-          created_by: string;
-        }[]
-      >(
-        `SELECT id, origen_gln, destino_gln, motivo, productos,
-                fecha_devolucion, autorizado_por, establecimiento_id,
-                estado, notas, created_at, updated_at, created_by
-           FROM ece.devolucion_inventario
-           ${where}
-          ORDER BY created_at DESC, id DESC
-          LIMIT ${limitParam}`,
-        ...params,
+      const rows = await withEceContext(
+        ctx.prisma,
+        ctx.user.id,
+        establecimientoId,
+        (tx) =>
+          tx.$queryRawUnsafe<
+            {
+              id: string;
+              origen_gln: string;
+              destino_gln: string;
+              motivo: string;
+              productos: unknown;
+              fecha_devolucion: string;
+              autorizado_por: string | null;
+              establecimiento_id: string | null;
+              estado: string;
+              notas: string | null;
+              created_at: string;
+              updated_at: string;
+              created_by: string;
+            }[]
+          >(
+            `SELECT id, origen_gln, destino_gln, motivo, productos,
+                    fecha_devolucion, autorizado_por, establecimiento_id,
+                    estado, notas, created_at, updated_at, created_by
+               FROM ece.devolucion_inventario
+               ${where}
+              ORDER BY created_at DESC, id DESC
+              LIMIT ${limitParam}`,
+            ...params,
+          ),
       );
 
       const hasMore = rows.length > input.limit;
@@ -229,29 +295,36 @@ export const gs1ProcesoFRouter = router({
   get: tenantProcedure
     .input(gs1DevolucionGetSchema)
     .query(async ({ ctx, input }) => {
-      const rows = await ctx.prisma.$queryRawUnsafe<
-        {
-          id: string;
-          origen_gln: string;
-          destino_gln: string;
-          motivo: string;
-          productos: unknown;
-          fecha_devolucion: string;
-          autorizado_por: string | null;
-          establecimiento_id: string | null;
-          estado: string;
-          notas: string | null;
-          created_at: string;
-          updated_at: string;
-          created_by: string;
-        }[]
-      >(
-        `SELECT id, origen_gln, destino_gln, motivo, productos,
-                fecha_devolucion, autorizado_por, establecimiento_id,
-                estado, notas, created_at, updated_at, created_by
-           FROM ece.devolucion_inventario
-          WHERE id = $1`,
-        input.id,
+      const establecimientoId = resolveEstablecimientoId(ctx);
+      const rows = await withEceContext(
+        ctx.prisma,
+        ctx.user.id,
+        establecimientoId,
+        (tx) =>
+          tx.$queryRawUnsafe<
+            {
+              id: string;
+              origen_gln: string;
+              destino_gln: string;
+              motivo: string;
+              productos: unknown;
+              fecha_devolucion: string;
+              autorizado_por: string | null;
+              establecimiento_id: string | null;
+              estado: string;
+              notas: string | null;
+              created_at: string;
+              updated_at: string;
+              created_by: string;
+            }[]
+          >(
+            `SELECT id, origen_gln, destino_gln, motivo, productos,
+                    fecha_devolucion, autorizado_por, establecimiento_id,
+                    estado, notas, created_at, updated_at, created_by
+               FROM ece.devolucion_inventario
+              WHERE id = $1`,
+            input.id,
+          ),
       );
 
       const row = rows[0];

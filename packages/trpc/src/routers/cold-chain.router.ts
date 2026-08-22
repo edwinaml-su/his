@@ -11,13 +11,20 @@
  * Nota: usa raw SQL porque las tablas viven en schema `ece` y no están
  * mapeadas en schema.prisma (placeholder pattern del codebase).
  *
- * RLS Cat-E aplicado en BD; el router filtra por organizationId en JS
- * como defensa adicional (patrón establecido para tablas ece.*).
+ * R02 (auditoría RLS externa, 2026-08-22): a pesar de vivir en schema `ece`,
+ * las policies de `cold_chain_*` usan el GUC estándar `app.current_org_id`
+ * (vía `BiomedicalEquipment.organizationId`), NO el GUC ECE
+ * (`app.ece_personal_id`/`app.ece_establecimiento_id`) — `withTenantContext`
+ * es el helper correcto aquí, no `withEceContext`. Decisión por procedure
+ * (ver comentarios inline): (a) demote completo donde las policies cubren el
+ * comando, (b) GUC seteado sin demote en `registrarLectura` porque
+ * `cold_chain_alerta` no tiene policy de INSERT.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../trpc";
 import { emitDomainEvent } from "@his/database";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas locales
@@ -104,6 +111,19 @@ export const coldChainRouter = router({
   /**
    * Registra una lectura de temperatura/humedad.
    * Si fuera de rango → INSERT alerta + emit cold_chain.excursion.
+   *
+   * R02 (auditoría RLS externa) — decisión (b), demoteRole:false: verificado
+   * en prod 2026-08-22 que `ece.cold_chain_alerta` SOLO tiene policies
+   * `cold_chain_alerta_select`/`_update` — NO existe policy de INSERT. Demotar
+   * el rol aquí bloquearía TODA inserción de alertas cuando la lectura sale de
+   * rango (el flujo central de este procedure), a diferencia de
+   * `cold_chain_lectura` (tiene `cold_chain_lectura_insert`) y `DomainEvent`
+   * (tiene `domain_event_tenant_insert`), que sí soportan demote completo.
+   * Dejamos el GUC `app.current_org_id` seteado (vía `set_tenant_context`)
+   * para trazabilidad sin romper la funcionalidad — mismo patrón que
+   * `gs1-proceso-a.router.ts`. El chequeo de tenant en JS sobre
+   * `BiomedicalEquipment` (abajo) sigue siendo la defensa real de boundary
+   * para este procedure.
    */
   registrarLectura: base
     .input(registrarLecturaInput)
@@ -142,7 +162,10 @@ export const coldChainRouter = router({
         input.humedadPct
       );
 
-      return ctx.prisma.$transaction(async (tx) => {
+      return withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (tx) => {
         // INSERT lectura
         const lecturaRows = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.cold_chain_lectura
@@ -192,111 +215,136 @@ export const coldChainRouter = router({
         }
 
         return { lecturaId, dentroRango, severidad };
-      });
+        },
+        { demoteRole: false },
+      );
     }),
 
-  /** Alertas pendientes (no atendidas) de un equipo. */
+  /**
+   * Alertas pendientes (no atendidas) de un equipo.
+   *
+   * R02 — decisión (a): `cold_chain_alerta_select` y `biomedical_equipment_tenant_select`
+   * cubren SELECT (verificado en prod 2026-08-22); solo-lectura, sin el gap de
+   * INSERT que bloquea `registrarLectura`.
+   */
   listAlertas: base
     .input(listEquipInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      // Verificar tenant
-      const equipo = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM public."BiomedicalEquipment"
-        WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
-        LIMIT 1
-      `;
-      if (equipo.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
-      }
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Verificar tenant
+        const equipo = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM public."BiomedicalEquipment"
+          WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
+          LIMIT 1
+        `;
+        if (equipo.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+        }
 
-      return ctx.prisma.$queryRaw<{
-        id: string;
-        lectura_id: string;
-        severidad: string;
-        mensaje: string;
-        creada_en: Date;
-      }[]>`
-        SELECT id, lectura_id, severidad, mensaje, creada_en
-        FROM ece.cold_chain_alerta
-        WHERE equipment_id = ${input.equipmentId}::uuid
-          AND atendida_en IS NULL
-        ORDER BY creada_en DESC
-        LIMIT 50
-      `;
+        return tx.$queryRaw<{
+          id: string;
+          lectura_id: string;
+          severidad: string;
+          mensaje: string;
+          creada_en: Date;
+        }[]>`
+          SELECT id, lectura_id, severidad, mensaje, creada_en
+          FROM ece.cold_chain_alerta
+          WHERE equipment_id = ${input.equipmentId}::uuid
+            AND atendida_en IS NULL
+          ORDER BY creada_en DESC
+          LIMIT 50
+        `;
+      });
     }),
 
-  /** Upsert de configuración de rangos para el equipo. */
+  /**
+   * Upsert de configuración de rangos para el equipo.
+   *
+   * R02 — decisión (a): `cold_chain_config_write` es polcmd='*' (cubre
+   * INSERT+UPDATE, a diferencia de `cold_chain_alerta`), verificado en prod
+   * 2026-08-22 — demote completo no rompe el upsert.
+   */
   configurarRangoEquipo: base
     .input(configurarRangoInput)
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
       const userId = ctx.user.id;
 
-      // Verificar tenant
-      const equipo = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM public."BiomedicalEquipment"
-        WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
-        LIMIT 1
-      `;
-      if (equipo.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
-      }
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Verificar tenant
+        const equipo = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM public."BiomedicalEquipment"
+          WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
+          LIMIT 1
+        `;
+        if (equipo.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+        }
 
-      await ctx.prisma.$queryRaw`
-        INSERT INTO ece.cold_chain_config_equipo
-          (equipment_id, temp_min_c, temp_max_c, humedad_min_pct, humedad_max_pct, actualizado_en, actualizado_por)
-        VALUES (
-          ${input.equipmentId}::uuid,
-          ${input.tempMinC},
-          ${input.tempMaxC},
-          ${input.humedadMinPct ?? null},
-          ${input.humedadMaxPct ?? null},
-          now(),
-          ${userId}::uuid
-        )
-        ON CONFLICT (equipment_id) DO UPDATE SET
-          temp_min_c      = EXCLUDED.temp_min_c,
-          temp_max_c      = EXCLUDED.temp_max_c,
-          humedad_min_pct = EXCLUDED.humedad_min_pct,
-          humedad_max_pct = EXCLUDED.humedad_max_pct,
-          actualizado_en  = now(),
-          actualizado_por = EXCLUDED.actualizado_por
-      `;
+        await tx.$queryRaw`
+          INSERT INTO ece.cold_chain_config_equipo
+            (equipment_id, temp_min_c, temp_max_c, humedad_min_pct, humedad_max_pct, actualizado_en, actualizado_por)
+          VALUES (
+            ${input.equipmentId}::uuid,
+            ${input.tempMinC},
+            ${input.tempMaxC},
+            ${input.humedadMinPct ?? null},
+            ${input.humedadMaxPct ?? null},
+            now(),
+            ${userId}::uuid
+          )
+          ON CONFLICT (equipment_id) DO UPDATE SET
+            temp_min_c      = EXCLUDED.temp_min_c,
+            temp_max_c      = EXCLUDED.temp_max_c,
+            humedad_min_pct = EXCLUDED.humedad_min_pct,
+            humedad_max_pct = EXCLUDED.humedad_max_pct,
+            actualizado_en  = now(),
+            actualizado_por = EXCLUDED.actualizado_por
+        `;
 
-      return { ok: true };
+        return { ok: true };
+      });
     }),
 
-  /** Últimas 24 h de lecturas de un equipo. */
+  /**
+   * Últimas 24 h de lecturas de un equipo.
+   *
+   * R02 — decisión (a): `cold_chain_lectura_select` cubre SELECT (verificado
+   * en prod 2026-08-22); solo-lectura.
+   */
   listLecturasHistorial: base
     .input(listEquipInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      const equipo = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id FROM public."BiomedicalEquipment"
-        WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
-        LIMIT 1
-      `;
-      if (equipo.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
-      }
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const equipo = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM public."BiomedicalEquipment"
+          WHERE id = ${input.equipmentId}::uuid AND "organizationId" = ${orgId}::uuid
+          LIMIT 1
+        `;
+        if (equipo.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+        }
 
-      return ctx.prisma.$queryRaw<{
-        id: string;
-        temperatura_c: number;
-        humedad_pct: number | null;
-        registrado_en: Date;
-        dentro_rango: boolean;
-        fuente: string;
-      }[]>`
-        SELECT id, temperatura_c, humedad_pct, registrado_en, dentro_rango, fuente
-        FROM ece.cold_chain_lectura
+        return tx.$queryRaw<{
+          id: string;
+          temperatura_c: number;
+          humedad_pct: number | null;
+          registrado_en: Date;
+          dentro_rango: boolean;
+          fuente: string;
+        }[]>`
+          SELECT id, temperatura_c, humedad_pct, registrado_en, dentro_rango, fuente
+          FROM ece.cold_chain_lectura
         WHERE equipment_id = ${input.equipmentId}::uuid
           AND registrado_en >= now() - INTERVAL '24 hours'
         ORDER BY registrado_en ASC
         LIMIT 1440
       `;
+      });
     }),
 });

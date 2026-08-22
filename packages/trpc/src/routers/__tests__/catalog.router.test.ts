@@ -17,6 +17,18 @@ describe("catalogRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02: list/get (y update/deactivate/reactivate de serviceUnit) ahora
+    // pasan por withTenantContext ($transaction + SET LOCAL). El mock invoca
+    // el callback con el mismo `prisma` mockeado para que las aserciones
+    // sobre `(prisma as any).<modelo>.<method>` sigan viendo las llamadas.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.$transaction.mockImplementation(async (cb: any) => {
+      if (typeof cb === "function") {
+        return cb(prisma);
+      }
+      return Promise.all(cb);
+    });
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   it("list aplica filter active=true cuando activeOnly=true se pasa explícito", async () => {

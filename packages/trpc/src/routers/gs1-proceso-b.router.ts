@@ -12,6 +12,20 @@
  *   rechazarTransferencia (via recibirTransferencia con rechazar:true) → gs1.transfer.rechazada
  *
  * Roles: INVENTORY_MANAGER | PHARMACIST | NURSE (Cat-E — filtro por GLNs del tenant)
+ *
+ * R02 (auditoría RLS externa) — decisión (a), evidencia 2026-08-22 (psql
+ * read-only vía DIRECT_URL prod): aunque la tabla vive en el schema `ece`,
+ * sus 4 policies (`transferencia_inventario_select_tenant` / `_insert_tenant`
+ * / `_update_tenant` / `_delete_tenant`, `polcmd` r/a/w/d) NO usan el espacio
+ * de GUC ECE (`app.ece_establecimiento_id`) — usan `current_org_id()`, el
+ * MISMO GUC que setea `withTenantContext` (`app.current_org_id`), vía
+ * `origen_gln LIKE (Organization.gs1CompanyPrefix || '%') WHERE
+ * Organization.id = current_org_id()`. Es decir: esta tabla ECE es en
+ * realidad tenant-scoped por el mecanismo estándar, no por establecimiento.
+ * `authenticated` tiene INSERT/SELECT/UPDATE/DELETE (verificado). Antes de
+ * este cambio NINGÚN procedure filtraba por organización/prefijo GS1 en JS
+ * — `listPendientes`/`listEnTransito`/`get` exponían transferencias de
+ * CUALQUIER organización. `withTenantContext` cierra la fuga real.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -19,6 +33,7 @@ import { router, requireRole } from "../trpc";
 import { emitDomainEvent } from "@his/database";
 import { gs1CheckDigitValid } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -139,22 +154,24 @@ export const gs1ProcesoBRouter = router({
       const fechaEnvio = input.fechaEnvio ?? new Date();
       const productosJson = JSON.stringify(input.productos);
 
-      const rows = await (ctx.prisma.$queryRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<Array<{ id: string }>>)`
-        INSERT INTO ece.transferencia_inventario
-          (origen_gln, destino_gln, sscc_pallet, productos,
-           fecha_envio, estado, registrado_por)
-        VALUES
-          (${input.origenGln}, ${input.destinoGln},
-           ${input.ssccPallet ?? null},
-           ${productosJson}::jsonb,
-           ${fechaEnvio}::timestamptz,
-           'en_transito',
-           ${userId}::uuid)
-        RETURNING id
-      `;
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        (tx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          INSERT INTO ece.transferencia_inventario
+            (origen_gln, destino_gln, sscc_pallet, productos,
+             fecha_envio, estado, registrado_por)
+          VALUES
+            (${input.origenGln}, ${input.destinoGln},
+             ${input.ssccPallet ?? null},
+             ${productosJson}::jsonb,
+             ${fechaEnvio}::timestamptz,
+             'en_transito',
+             ${userId}::uuid)
+          RETURNING id
+        `,
+      );
       const created = rows[0];
       if (!created) {
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "No se pudo crear la transferencia." });
@@ -194,7 +211,9 @@ export const gs1ProcesoBRouter = router({
       const userId = ctx.user.id;
       const orgId = ctx.tenant.organizationId;
 
-      const row = await findTransferencia(ctx.prisma, input.id);
+      const row = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        findTransferencia(tx, input.id),
+      );
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
 
       if (row.estado !== "en_transito") {
@@ -214,17 +233,19 @@ export const gs1ProcesoBRouter = router({
       const nuevoEstado = input.rechazar ? "rechazado" : "recibido";
       const eventType = input.rechazar ? "gs1.transfer.rechazada" : "gs1.transfer.recibida";
 
-      await (ctx.prisma.$executeRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<number>)`
-        UPDATE ece.transferencia_inventario
-           SET estado          = ${nuevoEstado},
-               fecha_recepcion = now(),
-               verificado_por  = ${userId}::uuid,
-               motivo_rechazo  = ${input.motivoRechazo ?? null}
-         WHERE id = ${input.id}::uuid
-      `;
+      await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        (tx.$executeRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<number>)`
+          UPDATE ece.transferencia_inventario
+             SET estado          = ${nuevoEstado},
+                 fecha_recepcion = now(),
+                 verificado_por  = ${userId}::uuid,
+                 motivo_rechazo  = ${input.motivoRechazo ?? null}
+           WHERE id = ${input.id}::uuid
+        `,
+      );
 
       await emitDomainEvent(ctx.prisma as unknown as PrismaClient, {
         organizationId: orgId,
@@ -248,49 +269,55 @@ export const gs1ProcesoBRouter = router({
   listPendientes: inventoryRole
     .input(listInput.omit({ estado: true }))
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<TransferenciaInventarioRow[]>)`
-        SELECT id, origen_gln, destino_gln, sscc_pallet,
-               productos, fecha_envio, fecha_recepcion, estado,
-               registrado_por, verificado_por, motivo_rechazo,
-               created_at, updated_at
-          FROM ece.transferencia_inventario
-         WHERE estado = 'programado'
-           AND (${input.origenGln ?? null}::text IS NULL OR origen_gln = ${input.origenGln ?? null})
-           AND (${input.destinoGln ?? null}::text IS NULL OR destino_gln = ${input.destinoGln ?? null})
-         ORDER BY created_at DESC
-         LIMIT ${input.limit}
-      `;
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        (tx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<TransferenciaInventarioRow[]>)`
+          SELECT id, origen_gln, destino_gln, sscc_pallet,
+                 productos, fecha_envio, fecha_recepcion, estado,
+                 registrado_por, verificado_por, motivo_rechazo,
+                 created_at, updated_at
+            FROM ece.transferencia_inventario
+           WHERE estado = 'programado'
+             AND (${input.origenGln ?? null}::text IS NULL OR origen_gln = ${input.origenGln ?? null})
+             AND (${input.destinoGln ?? null}::text IS NULL OR destino_gln = ${input.destinoGln ?? null})
+           ORDER BY created_at DESC
+           LIMIT ${input.limit}
+        `,
+      );
     }),
 
   /** Lista transferencias en tránsito (estado = en_transito). */
   listEnTransito: inventoryRole
     .input(listInput.omit({ estado: true }))
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<TransferenciaInventarioRow[]>)`
-        SELECT id, origen_gln, destino_gln, sscc_pallet,
-               productos, fecha_envio, fecha_recepcion, estado,
-               registrado_por, verificado_por, motivo_rechazo,
-               created_at, updated_at
-          FROM ece.transferencia_inventario
-         WHERE estado = 'en_transito'
-           AND (${input.origenGln ?? null}::text IS NULL OR origen_gln = ${input.origenGln ?? null})
-           AND (${input.destinoGln ?? null}::text IS NULL OR destino_gln = ${input.destinoGln ?? null})
-         ORDER BY fecha_envio ASC
-         LIMIT ${input.limit}
-      `;
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        (tx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<TransferenciaInventarioRow[]>)`
+          SELECT id, origen_gln, destino_gln, sscc_pallet,
+                 productos, fecha_envio, fecha_recepcion, estado,
+                 registrado_por, verificado_por, motivo_rechazo,
+                 created_at, updated_at
+            FROM ece.transferencia_inventario
+           WHERE estado = 'en_transito'
+             AND (${input.origenGln ?? null}::text IS NULL OR origen_gln = ${input.origenGln ?? null})
+             AND (${input.destinoGln ?? null}::text IS NULL OR destino_gln = ${input.destinoGln ?? null})
+           ORDER BY fecha_envio ASC
+           LIMIT ${input.limit}
+        `,
+      );
     }),
 
   /** Obtiene una transferencia por id. */
   get: inventoryRole
     .input(idInput)
     .query(async ({ ctx, input }) => {
-      const row = await findTransferencia(ctx.prisma, input.id);
+      const row = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        findTransferencia(tx, input.id),
+      );
       if (!row) throw new TRPCError({ code: "NOT_FOUND" });
       return row;
     }),

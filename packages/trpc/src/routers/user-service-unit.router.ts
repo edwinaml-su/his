@@ -18,6 +18,40 @@
  *
  * Auditoría: la tabla está cubierta por triggers genéricos de `audit.audit_log`
  * (hash chain). No requiere lógica adicional aquí.
+ *
+ * R02 (auditoría RLS externa) — decisión (c) para LOS 4 procedures,
+ * evidencia 2026-08-22 (psql read-only vía DIRECT_URL prod), confirma
+ * literalmente lo que ya decía el comentario de cabecera de este archivo
+ * ("RLS: SELECT propia o break-glass; insert/update/delete a service_role +
+ * ADMIN"): `UserServiceUnitAssignment` tiene UNA sola policy,
+ * `user_service_unit_own_or_admin` (polcmd='r', SOLO SELECT) `USING
+ * (userId = current_user_id() OR is_break_glass())` — NO existe policy de
+ * INSERT/UPDATE/DELETE. Bajo Postgres RLS, un comando sin policy aplicable
+ * se deniega por completo (no hay default-allow parcial):
+ *   - `assign`/`revoke` (INSERT/UPDATE): demotar a `authenticated` rompería
+ *     TODA escritura con "new row violates row-level security policy" —
+ *     estas mutaciones dependen de que el rol de servicio (BYPASSRLS) las
+ *     ejecute; están restringidas a ADMIN_ROLES a nivel tRPC y ya verifican
+ *     `svc.organizationId === ctx.tenant.organizationId` /
+ *     `existing.serviceUnit.organizationId === ctx.tenant.organizationId`
+ *     en JS antes de escribir — es la defensa real hoy y debe seguir siendo
+ *     BYPASSRLS.
+ *   - `listByUser`/`listByService` (SELECT): la policy solo permite ver la
+ *     PROPIA fila (`userId = current_user_id()`). Ambos procedures existen
+ *     precisamente para que un ADMIN/DIR consulte asignaciones de OTROS
+ *     usuarios (staffing de un servicio) — demotar el rol dejaría esas
+ *     consultas viendo 0 filas para cualquier caller que no sea el propio
+ *     `userId`/`user` de la fila, rompiendo la feature. El filtro
+ *     `serviceUnit: { organizationId: ctx.tenant.organizationId }` en JS ya
+ *     acota correctamente por tenant (verificado línea por línea) — es la
+ *     defensa real para estos dos también.
+ * Cerrar esto bien (si se quisiera RLS real en vez de JS) requeriría una
+ * policy de SELECT nueva basada en rol ADMIN/DIR del tenant — cambio de BD,
+ * fuera de este scope (no se toca BD en esta tarea). `ServiceUnit` (usada
+ * en la validación cross-tenant de `assign`) SÍ tiene RLS completo
+ * (`tenant_isolation_modify`/`_select`, ambas `organizationId =
+ * current_org_id()`) pero no se usó aquí porque el `findUnique` sobre
+ * ServiceUnit es solo lectura de validación, no el punto de fuga.
  */
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";

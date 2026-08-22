@@ -20,6 +20,35 @@
  *   eceRectificacion.aprobar   — APROBADA + INSERT ece.rectificacion + domainEvent (DIR)
  *   eceRectificacion.rechazar  — RECHAZADA + domainEvent (DIR)
  *   eceRectificacion.firmar    — EJECUTADA / cierre por autor (PHYSICIAN/NURSE)
+ *
+ * ===========================================================================
+ * R02 (remediación multi-tenant) — auditado, NO migrado a `withTenantContext`
+ * ===========================================================================
+ *
+ * Todo el router usa `ctx.prisma.$queryRaw`/`$executeRaw` directo (rol
+ * bypass BYPASSRLS) — el filtro tenant vive solo en `organizacion_id`/`WHERE`
+ * de las queries raw. Auditado explícitamente para R02; no se migró por:
+ *
+ * 1. Doble espacio de GUC. `ece.solicitud_arco` se rige por `app.current_org_id`
+ *    (tabla `tenant_staff_solicitud_arco`, igual que `withTenantContext`),
+ *    pero `ece.rectificacion`/`ece.personal_salud`/`ece.firma_electronica`
+ *    exigen `ece.current_establecimiento_id()`/`app.ece_personal_id`
+ *    (espacio de `withWorkflowContext`) — verificado con `pg_policies` contra
+ *    prod. Migrar correctamente requiere aplicar AMBOS contextos en la misma
+ *    transacción (viable, pero no se implementó por el punto 2).
+ * 2. `aprobar`/`rechazar` emiten `emitDomainEvent`, que escribe AuditLog sin
+ *    GRANT INSERT para `authenticated` (igual que en el resto del lote) —
+ *    demotar rompería la transacción completa.
+ * 3. Hallazgo operativo: `ece.personal_salud` está VACÍA en prod (verificado
+ *    2026-08-22) — `loadFirmaDir()` (usado por aprobar/rechazar/firmar)
+ *    SIEMPRE lanza `PRECONDITION_FAILED` antes de tocar ninguna tabla. Esos
+ *    3 procedures no son alcanzables hoy en producción; solo `list` y
+ *    `solicitar` son rutas activas reales.
+ *
+ * `list` no filtra por organización en absoluto (ni JS ni RLS) — lee
+ * `ece.solicitud_arco` por `documentoInstanciaId`/`episodioId` sin scoping
+ * de tenant. Es el hueco más concreto de este router; corregirlo bien
+ * requiere el mismo contexto dual del punto 1. Documentado, no forzado.
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";

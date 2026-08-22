@@ -33,6 +33,7 @@ import {
   type PatientHistory,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 /** Default vacío para pacientes sin historia previa. */
 function emptyHistory(): PatientHistory {
@@ -64,24 +65,29 @@ export const patientHistoryRouter = router({
   get: tenantProcedure.input(patientHistoryGetInput).query(async ({ ctx, input }) => {
     const orgId = ctx.tenant.organizationId;
 
-    // Verifica acceso al paciente (tenant scoping).
-    const patient = await ctx.prisma.patient.findFirst({
-      where: { id: input.patientId, organizationId: orgId, deletedAt: null },
-      select: { id: true },
+    // R02 — solo lectura (Patient.SELECT + AuditLog.SELECT tienen policy RLS
+    // para `authenticated`), así que ambas queries corren demotadas.
+    const { patient, last } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const patient = await tx.patient.findFirst({
+        where: { id: input.patientId, organizationId: orgId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!patient) return { patient: null, last: null };
+
+      const last = await tx.auditLog.findFirst({
+        where: {
+          entity: PATIENT_HISTORY_ENTITY,
+          entityId: input.patientId,
+          organizationId: orgId,
+        },
+        orderBy: { occurredAt: "desc" },
+        select: { afterJson: true, occurredAt: true, userId: true },
+      });
+      return { patient, last };
     });
     if (!patient) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
     }
-
-    const last = await ctx.prisma.auditLog.findFirst({
-      where: {
-        entity: PATIENT_HISTORY_ENTITY,
-        entityId: input.patientId,
-        organizationId: orgId,
-      },
-      orderBy: { occurredAt: "desc" },
-      select: { afterJson: true, occurredAt: true, userId: true },
-    });
 
     if (!last?.afterJson) {
       return {
@@ -124,9 +130,25 @@ export const patientHistoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      const patient = await ctx.prisma.patient.findFirst({
-        where: { id: input.patientId, organizationId: orgId, deletedAt: null },
-        include: { biologicalSex: true },
+      // R02 — lecturas (Patient + AuditLog.SELECT) demotadas vía withTenantContext.
+      const { patient, prev } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: orgId, deletedAt: null },
+          include: { biologicalSex: true },
+        });
+        if (!patient) return { patient: null, prev: null };
+
+        // Lectura del snapshot anterior (para beforeJson en audit).
+        const prev = await tx.auditLog.findFirst({
+          where: {
+            entity: PATIENT_HISTORY_ENTITY,
+            entityId: input.patientId,
+            organizationId: orgId,
+          },
+          orderBy: { occurredAt: "desc" },
+          select: { afterJson: true },
+        });
+        return { patient, prev };
       });
       if (!patient) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
@@ -140,17 +162,13 @@ export const patientHistoryRouter = router({
         });
       }
 
-      // Lectura del snapshot anterior (para beforeJson en audit).
-      const prev = await ctx.prisma.auditLog.findFirst({
-        where: {
-          entity: PATIENT_HISTORY_ENTITY,
-          entityId: input.patientId,
-          organizationId: orgId,
-        },
-        orderBy: { occurredAt: "desc" },
-        select: { afterJson: true },
-      });
-
+      // NO migrar este INSERT a withTenantContext: `authenticated` NO tiene GRANT
+      // INSERT sobre AuditLog en absoluto (verificado en prod — solo SELECT). El
+      // rol demotado lo rechazaría con permission denied, no con 0 filas. Los
+      // audit writes manuales quedan bajo el rol bypass (mismo patrón que
+      // `emitDomainEvent` en @his/database/outbox/emit.ts). El filtro tenant de
+      // este INSERT vive solo en `organizationId: orgId` (JS) — riesgo aceptado
+      // y documentado, no defensa en profundidad real.
       await ctx.prisma.auditLog.create({
         data: {
           userId: ctx.user.id,

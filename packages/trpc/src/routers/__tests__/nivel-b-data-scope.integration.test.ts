@@ -27,7 +27,7 @@ import { encounterRouter } from "../encounter.router";
 import { triageRouter } from "../triage.router";
 import { emergencyRouter } from "../emergency.router";
 import { inpatientRouter } from "../inpatient.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import type { TenantContext } from "@his/contracts";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,7 @@ describe("Suite 1: bedRouter.list — Nivel B scope (campo directo, required)", 
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
     prisma.bed.findMany.mockResolvedValue([] as never);
   });
 
@@ -256,6 +257,7 @@ describe("Suite 4: emergencyRouter.visit.list — Nivel B scope (via relacion en
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
     prisma.emergencyVisit.findMany.mockResolvedValue([] as never);
   });
 
@@ -314,6 +316,7 @@ describe("Suite 5: inpatientRouter.admission.list — Nivel B scope (via relacio
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
     prisma.inpatientAdmission.findMany.mockResolvedValue([] as never);
   });
 

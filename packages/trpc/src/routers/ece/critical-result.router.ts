@@ -49,6 +49,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
+import { applyTenantContext } from "../../rls-context";
 import { emitDomainEvent } from "@his/database";
 
 // ---------------------------------------------------------------------------
@@ -239,11 +240,21 @@ export const criticalResultRouter = router({
     const valorJson = JSON.stringify(input.valorCritico);
 
     const rows = await ctx.prisma.$transaction(async (tx) => {
-      await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-        SET LOCAL app.current_org_id = ${orgId};
-        SET LOCAL app.current_user_id = ${ctx.user.id};
-        SET LOCAL ROLE authenticated;
-      `;
+      // R02 — El contexto RLS se aplica con applyTenantContext (`$executeRawUnsafe`).
+      // El bloque anterior usaba `$executeRaw` con template + 3 sentencias, y
+      // Postgres rechaza ambas cosas: `SET` no admite bind params ni forma parte
+      // de un prepared statement multi-comando (SQLSTATE 42601). Es decir, este
+      // endpoint abortaba SIEMPRE antes de llegar al INSERT/UPDATE.
+      //
+      // `demoteRole: false` es DELIBERADO y temporal: este procedure llama a
+      // emitDomainEvent(), que hace `tx.auditLog.create` sobre audit."AuditLog".
+      // Ese objeto sólo concede SELECT al rol `authenticated` y su RLS no tiene
+      // policy de INSERT, así que al demotar el INSERT falla con
+      // `permission denied for table AuditLog` (42501) y revierte la mutación
+      // completa. Verificado contra la BD: has_table_privilege('authenticated',
+      // 'audit."AuditLog"','INSERT') = false y public."DomainEvent" tiene 0 filas.
+      // Quitar este opt-out en cuanto exista GRANT INSERT + policy de INSERT.
+      await applyTenantContext(tx, ctx.tenant, { demoteRole: false });
 
       const inserted = await (tx.$queryRaw as (
         q: TemplateStringsArray,
@@ -303,11 +314,21 @@ export const criticalResultRouter = router({
     const orgId = ctx.tenant.organizationId;
 
     return ctx.prisma.$transaction(async (tx) => {
-      await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-        SET LOCAL app.current_org_id = ${orgId};
-        SET LOCAL app.current_user_id = ${ctx.user.id};
-        SET LOCAL ROLE authenticated;
-      `;
+      // R02 — El contexto RLS se aplica con applyTenantContext (`$executeRawUnsafe`).
+      // El bloque anterior usaba `$executeRaw` con template + 3 sentencias, y
+      // Postgres rechaza ambas cosas: `SET` no admite bind params ni forma parte
+      // de un prepared statement multi-comando (SQLSTATE 42601). Es decir, este
+      // endpoint abortaba SIEMPRE antes de llegar al INSERT/UPDATE.
+      //
+      // `demoteRole: false` es DELIBERADO y temporal: este procedure llama a
+      // emitDomainEvent(), que hace `tx.auditLog.create` sobre audit."AuditLog".
+      // Ese objeto sólo concede SELECT al rol `authenticated` y su RLS no tiene
+      // policy de INSERT, así que al demotar el INSERT falla con
+      // `permission denied for table AuditLog` (42501) y revierte la mutación
+      // completa. Verificado contra la BD: has_table_privilege('authenticated',
+      // 'audit."AuditLog"','INSERT') = false y public."DomainEvent" tiene 0 filas.
+      // Quitar este opt-out en cuanto exista GRANT INSERT + policy de INSERT.
+      await applyTenantContext(tx, ctx.tenant, { demoteRole: false });
 
       const notif = await findNotification(tx, input.notificationId, orgId);
       if (!notif) {
@@ -392,11 +413,25 @@ export const criticalResultRouter = router({
       : ctx.user.id;
 
     const rows = await ctx.prisma.$transaction(async (tx) => {
-      await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-        SET LOCAL app.current_org_id = ${orgId};
-        SET LOCAL app.current_user_id = ${ctx.user.id};
-        SET LOCAL ROLE authenticated;
-      `;
+      // R02 — El contexto RLS se aplica con applyTenantContext (`$executeRawUnsafe`).
+      // El bloque anterior usaba `$executeRaw` con template + 3 sentencias, y
+      // Postgres rechaza ambas cosas: `SET` no admite bind params ni forma parte
+      // de un prepared statement multi-comando (SQLSTATE 42601). Es decir, este
+      // endpoint abortaba SIEMPRE antes de llegar a la consulta.
+      // Aquí sí se demota a `authenticated`: es una lectura, no escribe auditoría,
+      // así que la policy crn_tenant_isolation (organization_id = app.current_org_id)
+      // pasa a aplicarse de verdad en vez de depender del WHERE de la consulta.
+      //
+      // OJO (riesgo conocido, no introducido aquí): la consulta hace JOIN con
+      // ece.personal_salud, cuya policy compara establecimiento_id contra
+      // ece.current_establecimiento_id() — el GUC `app.ece_establecimiento_id`,
+      // que este contexto no setea. Mientras ese GUC falte, el JOIN no devuelve
+      // filas y la bandeja saldría vacía en silencio, que en IPSG.2 es peor que
+      // un error. Hoy no se manifiesta porque el endpoint entero abortaba con
+      // 42601 y ece.personal_salud está vacío, pero debe resolverse junto con el
+      // desalineamiento de dominio del establecimiento ECE antes de habilitar
+      // el wiring LIS→emit.
+      await applyTenantContext(tx, ctx.tenant);
 
       return (tx.$queryRaw as (
         q: TemplateStringsArray,
@@ -451,11 +486,21 @@ export const criticalResultRouter = router({
     const orgId = ctx.tenant.organizationId;
 
     return ctx.prisma.$transaction(async (tx) => {
-      await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-        SET LOCAL app.current_org_id = ${orgId};
-        SET LOCAL app.current_user_id = ${ctx.user.id};
-        SET LOCAL ROLE authenticated;
-      `;
+      // R02 — El contexto RLS se aplica con applyTenantContext (`$executeRawUnsafe`).
+      // El bloque anterior usaba `$executeRaw` con template + 3 sentencias, y
+      // Postgres rechaza ambas cosas: `SET` no admite bind params ni forma parte
+      // de un prepared statement multi-comando (SQLSTATE 42601). Es decir, este
+      // endpoint abortaba SIEMPRE antes de llegar al INSERT/UPDATE.
+      //
+      // `demoteRole: false` es DELIBERADO y temporal: este procedure llama a
+      // emitDomainEvent(), que hace `tx.auditLog.create` sobre audit."AuditLog".
+      // Ese objeto sólo concede SELECT al rol `authenticated` y su RLS no tiene
+      // policy de INSERT, así que al demotar el INSERT falla con
+      // `permission denied for table AuditLog` (42501) y revierte la mutación
+      // completa. Verificado contra la BD: has_table_privilege('authenticated',
+      // 'audit."AuditLog"','INSERT') = false y public."DomainEvent" tiene 0 filas.
+      // Quitar este opt-out en cuanto exista GRANT INSERT + policy de INSERT.
+      await applyTenantContext(tx, ctx.tenant, { demoteRole: false });
 
       const notif = await findNotification(tx, input.notificationId, orgId);
       if (!notif) {

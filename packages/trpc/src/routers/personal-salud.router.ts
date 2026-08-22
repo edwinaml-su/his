@@ -20,11 +20,44 @@
  *   - listRoles({ kind })   catálogo filtrado para selectors del form
  *
  * Aislamiento: la tabla `ece.personal_salud` se filtra por `establecimiento_id`
- * del tenant. RLS aplica vía `withWorkflowContext`.
+ * del tenant.
+ *
+ * R02 (auditoría RLS externa) — decisión (c) para el grueso del router,
+ * documentado con evidencia (2026-08-22, psql read-only vía DIRECT_URL prod):
+ * el comentario original de este bloque decía "RLS aplica vía
+ * withWorkflowContext" — ESO ERA FALSO, ese helper no existe/no se llama en
+ * ningún lado de este archivo (drift de doc, corregido aquí). Las policies
+ * RLS reales de `ece.personal_salud`/`asignacion_rol`/`establecimiento` son
+ * `establecimiento_id = ece.current_establecimiento_id_safe()`, que lee el
+ * GUC `app.ece_establecimiento_id` — un espacio de GUC DISTINTO al de
+ * `withTenantContext` (`app.current_org_id`, ver packages/trpc/src/rls-context.ts).
+ * Envolver este router en `withTenantContext` sería un fix cosmético: seteas
+ * el GUC equivocado y las policies ECE lo ignoran — cero protección real.
+ * El helper correcto es `withEceContext(prisma, personalId, establecimientoId, fn)`
+ * (packages/trpc/src/ece/rls-context.ts), pero requiere el `personal_id`
+ * ECE del USUARIO QUE LLAMA (no del registro que se está gestionando) — y
+ * este router lo usan ADMIN/DIR para dar de alta/gestionar personal, un rol
+ * administrativo que con frecuencia NO tiene fila propia en
+ * `ece.personal_salud` (huevo-gallina: no puede haber creado la primera fila
+ * si `withEceContext` exige tener una fila ya). Forzarlo rompería el flujo
+ * de administración de personal para cualquier ADMIN no-clínico. Además la
+ * policy de `firma_electronica` SÍ depende de `app.ece_personal_id`
+ * (`personal_id = current_setting(...)`) — bajo demote, el chequeo
+ * `firma_activa` de `get()` pasaría a ser un falso-negativo para cualquier
+ * caller sin personal_id propio (peligroso: sugiere "sin firma activa"
+ * cuando en realidad no se pudo verificar). El filtro `establecimiento_id`
+ * en JS SÍ está aplicado consistentemente en TODOS los procedures de este
+ * archivo (verificado línea por línea) — es la defensa primaria hoy.
+ * Cerrar esto bien requiere una policy ECE nueva (@DBA/@AS) que no dependa
+ * de `personal_id` para operaciones administrativas — no un workaround
+ * aquí. Ver excepciones puntuales abajo (`getPacientesReferidos` /
+ * `getReporteMedico`), que SÍ migran a `withTenantContext` para su tramo de
+ * queries sobre `public.*` (espacio de GUC correcto ahí).
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, tenantProcedure, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Constantes — clasificación de roles ECE por tipo de personal
@@ -494,7 +527,12 @@ export const personalSaludRouter = router({
       const desde = input.fechaDesde ?? null;
       const hasta = input.fechaHasta ?? null;
 
-      const pacientes = await ctx.prisma.$queryRaw<PacienteRow[]>`
+      // R02: este tramo consulta exclusivamente tablas `public.*`
+      // (InpatientAdmission/SurgeryCase/OutpatientAppointment/EmergencyVisit/
+      // Patient), gobernadas por RLS `organizationId = current_org_id()` —
+      // el espacio de GUC de `withTenantContext` sí aplica aquí (a
+      // diferencia del resto del archivo, ver comentario de cabecera).
+      const pacientes = await withTenantContext(ctx.prisma, ctx.tenant, (tx) => tx.$queryRaw<PacienteRow[]>`
         WITH eventos AS (
           SELECT ia."patientId" AS patient_id,
                  ia."admittedAt"::timestamptz AS fecha,
@@ -546,7 +584,7 @@ export const personalSaludRouter = router({
         GROUP BY p.id, p.mrn, p."firstName", p."lastName", bs.code, p."birthDate"
         ORDER BY ultima_atencion DESC NULLS LAST
         LIMIT ${input.limit}
-      `;
+      `);
 
       const totalEncuentros = pacientes.reduce(
         (sum, r) => sum + r.n_inpatient + r.n_surgery + r.n_outpatient + r.n_emergency,
@@ -697,16 +735,23 @@ export const personalSaludRouter = router({
       const desde = input.fechaDesde ?? null;
       const hasta = input.fechaHasta ?? null;
 
-      // Conteos consolidados.
-      const [totalRow] = await ctx.prisma.$queryRaw<
-        Array<{
-          pacientes_unicos: number;
-          n_cirugia: number;
-          n_hospitalizacion: number;
-          n_ambulatorio: number;
-          n_emergencia: number;
-        }>
-      >`
+      // R02: igual que getPacientesReferidos — este tramo solo toca
+      // `public.*` (organizationId = current_org_id()), espacio de GUC
+      // correcto para withTenantContext (ver comentario de cabecera).
+      const { totalRow, factRow, mensual } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (tx) => {
+          // Conteos consolidados.
+          const [totalRow] = await tx.$queryRaw<
+            Array<{
+              pacientes_unicos: number;
+              n_cirugia: number;
+              n_hospitalizacion: number;
+              n_ambulatorio: number;
+              n_emergencia: number;
+            }>
+          >`
         WITH eventos AS (
           SELECT ia."patientId" AS patient_id, 'hospitalizacion'::text AS tipo
           FROM public."InpatientAdmission" ia
@@ -742,7 +787,7 @@ export const personalSaludRouter = router({
       `;
 
       // Facturación: Invoice cuyo encounterId pertenece a un episodio del médico.
-      const [factRow] = await ctx.prisma.$queryRaw<
+      const [factRow] = await tx.$queryRaw<
         Array<{ facturado_total: string; facturado_cobrado: string }>
       >`
         WITH encuentros_medico AS (
@@ -774,7 +819,7 @@ export const personalSaludRouter = router({
       `;
 
       // Productividad mensual: 12 meses retrocedidos.
-      const mensual = await ctx.prisma.$queryRaw<
+      const mensual = await tx.$queryRaw<
         Array<{ mes: string; cirugia: number; otros: number }>
       >`
         WITH meses AS (
@@ -810,6 +855,10 @@ export const personalSaludRouter = router({
         GROUP BY m.mes
         ORDER BY m.mes ASC
       `;
+
+          return { totalRow, factRow, mensual };
+        },
+      );
 
       return {
         authUserLinked: true as const,

@@ -32,6 +32,7 @@ import {
   type EpicrisisDoc,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
@@ -58,7 +59,21 @@ export const encounterDischargeRouter = router({
         });
       }
 
-      return ctx.prisma.$transaction(async (tx) => {
+      // R02 — la transacción corre demotada (RLS aplica sobre Encounter/
+      // BedAssignment/Bed/ClinicalConcept/Organization, todas con policy que
+      // cubren organizationId = current_org_id()). `persistPatientMovementEvent`
+      // ya gestiona su propia demote/restore de rol + contexto ECE internamente
+      // (captura `current_user`, demota, hace SET ece.set_ece_context, inserta,
+      // restaura) — es seguro llamarla tanto desde tx bypass como demotada, así
+      // que se mantiene DENTRO de la transacción para preservar el "transaccional
+      // estricto" de ADR 0019 D7. El único INSERT que NO puede ir aquí es
+      // `auditLog.create`: `authenticated` no tiene GRANT INSERT sobre AuditLog
+      // en absoluto (verificado en prod) — se escribe después, bajo el rol
+      // bypass (mismo patrón que patient-history/death-certificate/newborn).
+      // Efecto: la epicrisis en AuditLog pasa de "atómica con el alta" a
+      // "best-effort inmediatamente después" — el alta en sí (Encounter +
+      // BedAssignment + EPCIS) sigue siendo una sola transacción atómica.
+      const { updated, epicrisis } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // 1) Encuentro abierto.
         const enc = await tx.encounter.findFirst({
           where: {
@@ -189,20 +204,23 @@ export const encounterDischargeRouter = router({
           generatedBy: ctx.user.id,
         };
 
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            action: "SIGN",
-            entity: "Encounter.epicrisis",
-            entityId: enc.id,
-            afterJson: epicrisis,
-          },
-        });
-
-        return updated;
+        return { updated, epicrisis };
       });
+
+      // auditLog.create corre fuera del contexto demotado (ver comentario arriba).
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: ctx.tenant.organizationId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          action: "SIGN",
+          entity: "Encounter.epicrisis",
+          entityId: updated.id,
+          afterJson: epicrisis,
+        },
+      });
+
+      return updated;
     }),
 
   /**
@@ -213,22 +231,36 @@ export const encounterDischargeRouter = router({
   epicrisis: tenantProcedure
     .input(epicrisisInput)
     .query(async ({ ctx, input }) => {
-      const enc = await ctx.prisma.encounter.findFirst({
-        where: {
-          id: input.encounterId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        include: {
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              mrn: true,
-              birthDate: true,
+      // R02 — solo lectura (Encounter + AuditLog.SELECT tienen policy RLS
+      // para `authenticated`), corre demotada.
+      const { enc, auditEntry } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const enc = await tx.encounter.findFirst({
+          where: {
+            id: input.encounterId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          include: {
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+                birthDate: true,
+              },
             },
           },
-        },
+        });
+        if (!enc) return { enc: null, auditEntry: null };
+
+        const auditEntry = await tx.auditLog.findFirst({
+          where: {
+            entity: "Encounter.epicrisis",
+            entityId: enc.id,
+          },
+          orderBy: { occurredAt: "desc" },
+        });
+        return { enc, auditEntry };
       });
       if (!enc) {
         throw new TRPCError({
@@ -242,14 +274,6 @@ export const encounterDischargeRouter = router({
           message: "El encuentro aún no tiene egreso registrado.",
         });
       }
-
-      const auditEntry = await ctx.prisma.auditLog.findFirst({
-        where: {
-          entity: "Encounter.epicrisis",
-          entityId: enc.id,
-        },
-        orderBy: { occurredAt: "desc" },
-      });
 
       const doc =
         (auditEntry?.afterJson as EpicrisisDoc | null) ?? null;

@@ -27,6 +27,23 @@ import {
   type CatalogKey,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
+
+/**
+ * R02 (auditoría RLS externa) — de los 14 catálogos que sirve este router,
+ * `serviceUnit` es el ÚNICO con `organizationId` (verificado en
+ * `schema.prisma` + prod, 2026-08-22): los otros 13 son catálogos GLOBALES
+ * (BiologicalSex, Gender, MaritalStatus, etc. — comparten valores entre
+ * todas las orgs a propósito, ej. "Femenino"/"Masculino" no varía por
+ * tenant). Confirmado en prod que las policies RLS de esos 13 son
+ * `SELECT ... USING (true)` SIN policy de escritura — es decir, bajo rol
+ * demotado el INSERT/UPDATE se deniega por completo (RLS default-deny sin
+ * policy aplicable), rompiendo el mantenimiento de catálogos globales. Por
+ * eso el defense-in-depth con `withTenantContext` sólo aplica al camino de
+ * `serviceUnit`, que sí tiene policies `tenant_isolation_select/_modify`
+ * completas (`organizationId = current_org_id()`).
+ */
+const TENANT_SCOPED_CATALOGS: ReadonlySet<CatalogKey> = new Set(["serviceUnit"]);
 
 /**
  * Mapa catalog → modelo Prisma. Se usa indirectamente vía `(ctx.prisma as any)[model]`
@@ -167,18 +184,36 @@ function buildWhere(catalog: CatalogKey, activeOnly: boolean, search?: string) {
 }
 
 export const catalogRouter = router({
-  /** Listado plano con búsqueda básica. */
+  /**
+   * Listado plano con búsqueda básica.
+   *
+   * R02: antes de este cambio, `list` NO filtraba `serviceUnit` por
+   * organización en JS — cualquier usuario autenticado veía las unidades de
+   * servicio de TODAS las orgs. `withTenantContext` cierra la fuga (RLS
+   * `tenant_isolation_select` de ServiceUnit) sin afectar a los 13 catálogos
+   * globales (su policy de SELECT es `true`).
+   */
   list: tenantProcedure.input(catalogListInput).query(async ({ ctx, input }) => {
-    return model(ctx.prisma, input.catalog).findMany({
-      where: buildWhere(input.catalog, input.activeOnly, input.search),
-      orderBy: { name: "asc" },
-    });
+    // El tipo de retorno se anota explícitamente porque `model()` devuelve
+    // `any` (el modelo Prisma se resuelve por clave en runtime): sin la
+    // anotación, el genérico de `withTenantContext` infiere `{}` y los
+    // consumidores del cliente tRPC pierden el tipo de fila.
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      model(tx, input.catalog).findMany({
+        where: buildWhere(input.catalog, input.activeOnly, input.search),
+        orderBy: { name: "asc" },
+      }) as Promise<any[]>,
+    );
   }),
 
   get: tenantProcedure.input(catalogGetInput).query(async ({ ctx, input }) => {
-    const item = await model(ctx.prisma, input.catalog).findUnique({
-      where: { id: input.id },
-    });
+    const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      model(tx, input.catalog).findUnique({
+        where: { id: input.id },
+      }) as Promise<any>,
+    );
     if (!item) throw new TRPCError({ code: "NOT_FOUND" });
     return item;
   }),
@@ -187,6 +222,12 @@ export const catalogRouter = router({
     const data = validateData(input.catalog, input.data);
     await validateCatalogReferences(ctx.prisma, input.catalog, data);
     // serviceUnit es tenant-scoped: inyectar organizationId desde el contexto.
+    // R02 — decisión (c) para `create`: a diferencia de update/deactivate/
+    // reactivate, aquí NO hay IDOR porque `organizationId` SIEMPRE se
+    // sobreescribe desde `ctx.tenant` (el cliente no puede inyectar uno
+    // distinto). No hay boundary que reforzar con withTenantContext, y
+    // envolverlo rompería el INSERT de los 13 catálogos globales (sin
+    // policy de escritura, ver comentario de `TENANT_SCOPED_CATALOGS`).
     if (input.catalog === "serviceUnit") {
       data.organizationId = ctx.tenant.organizationId;
     }
@@ -200,8 +241,21 @@ export const catalogRouter = router({
   update: tenantProcedure.input(catalogUpdateInput).mutation(async ({ ctx, input }) => {
     const data = validateData(input.catalog, input.data);
     await validateCatalogReferences(ctx.prisma, input.catalog, data, input.id);
-    // organizationId no se modifica en update (RLS protege cross-tenant edits).
+    // R02: `update` no verificaba (ni en JS ni en RLS bypassed) que el
+    // `id` recibido perteneciera a la org del caller — para `serviceUnit`
+    // eso era un IDOR (cualquier usuario podía editar la unidad de servicio
+    // de OTRA org adivinando su UUID). Para los 13 catálogos globales NO
+    // aplica tenant boundary (no tienen organizationId) y ADEMÁS sus
+    // policies RLS no traen INSERT/UPDATE, así que demotar rompería la
+    // edición — por eso el fix es condicional a `TENANT_SCOPED_CATALOGS`.
+    // organizationId en sí no se modifica en el `data` (no viene en el
+    // payload validado por `catalogDataSchemas`).
     try {
+      if (TENANT_SCOPED_CATALOGS.has(input.catalog)) {
+        return await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          model(tx, input.catalog).update({ where: { id: input.id }, data }),
+        );
+      }
       return await model(ctx.prisma, input.catalog).update({
         where: { id: input.id },
         data,
@@ -214,6 +268,12 @@ export const catalogRouter = router({
   /** Soft-disable: marca active=false. NO borra físicamente. */
   deactivate: tenantProcedure.input(catalogToggleInput).mutation(async ({ ctx, input }) => {
     try {
+      // R02: mismo IDOR que `update` para serviceUnit — ver comentario ahí.
+      if (TENANT_SCOPED_CATALOGS.has(input.catalog)) {
+        return await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          model(tx, input.catalog).update({ where: { id: input.id }, data: { active: false } }),
+        );
+      }
       return await model(ctx.prisma, input.catalog).update({
         where: { id: input.id },
         data: { active: false },
@@ -226,6 +286,12 @@ export const catalogRouter = router({
   /** Re-activa un registro previamente desactivado. */
   reactivate: tenantProcedure.input(catalogToggleInput).mutation(async ({ ctx, input }) => {
     try {
+      // R02: mismo IDOR que `update` para serviceUnit — ver comentario ahí.
+      if (TENANT_SCOPED_CATALOGS.has(input.catalog)) {
+        return await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          model(tx, input.catalog).update({ where: { id: input.id }, data: { active: true } }),
+        );
+      }
       return await model(ctx.prisma, input.catalog).update({
         where: { id: input.id },
         data: { active: true },

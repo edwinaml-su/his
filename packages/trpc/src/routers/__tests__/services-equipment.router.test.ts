@@ -15,6 +15,15 @@ describe("servicesEquipmentRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02: todos los procedures ahora pasan por withTenantContext ($transaction
+    // + SET LOCAL). El mock invoca el callback con el mismo `prisma` mockeado
+    // para que las aserciones sobre `prisma.<modelo>.<method>` sigan viendo
+    // las llamadas (mira catalog.router.test.ts / audit.router.test.ts).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.$transaction.mockImplementation(async (cb: any) => {
+      if (typeof cb === "function") return cb(prisma);
+      return Promise.all(cb);
+    });
   });
 
   // ---------------------------------------------------------------------------

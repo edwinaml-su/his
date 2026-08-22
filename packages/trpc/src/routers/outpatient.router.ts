@@ -21,6 +21,7 @@ import {
   type AppointmentStatusType,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import type { PrismaClient } from "@prisma/client";
 import {
   isOutOfServiceUnitScope,
@@ -83,43 +84,47 @@ export const outpatientRouter = router({
     list: tenantProcedure
       .input(outpatientAppointmentListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.outpatientAppointment.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-            // Nivel B — restringe a citas del servicio del usuario; incluye
-            // nulls porque appointment.serviceUnitId todavía no se popula
-            // siempre desde la UI (es opcional al crear).
-            ...serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", {
-              includeNullable: true,
-            }),
-            ...(input.providerId && { providerId: input.providerId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.status && { status: input.status }),
-            ...(input.fromDate || input.toDate
-              ? {
-                  scheduledAt: {
-                    ...(input.fromDate && { gte: input.fromDate }),
-                    ...(input.toDate && { lte: input.toDate }),
-                  },
-                }
-              : {}),
-          },
-          include: {
-            patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
-            provider: { select: { id: true, fullName: true, email: true } },
-          },
-          orderBy: { scheduledAt: "asc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outpatientAppointment.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+              // Nivel B — restringe a citas del servicio del usuario; incluye
+              // nulls porque appointment.serviceUnitId todavía no se popula
+              // siempre desde la UI (es opcional al crear).
+              ...serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", {
+                includeNullable: true,
+              }),
+              ...(input.providerId && { providerId: input.providerId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.status && { status: input.status }),
+              ...(input.fromDate || input.toDate
+                ? {
+                    scheduledAt: {
+                      ...(input.fromDate && { gte: input.fromDate }),
+                      ...(input.toDate && { lte: input.toDate }),
+                    },
+                  }
+                : {}),
+            },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              provider: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { scheduledAt: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.outpatientAppointment.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outpatientAppointment.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -134,34 +139,36 @@ export const outpatientRouter = router({
             message: "El servicio seleccionado no está en tus asignaciones.",
           });
         }
-        const hasConflict = await detectAppointmentConflict(
-          ctx.prisma,
-          ctx.tenant.organizationId,
-          input.providerId,
-          input.scheduledAt,
-          input.durationMinutes,
-        );
-        if (hasConflict) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "El proveedor ya tiene una cita en ese intervalo de tiempo.",
-          });
-        }
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const hasConflict = await detectAppointmentConflict(
+            tx,
+            ctx.tenant.organizationId,
+            input.providerId,
+            input.scheduledAt,
+            input.durationMinutes,
+          );
+          if (hasConflict) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "El proveedor ya tiene una cita en ese intervalo de tiempo.",
+            });
+          }
 
-        return ctx.prisma.outpatientAppointment.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            patientId: input.patientId,
-            providerId: input.providerId,
-            specialtyId: input.specialtyId ?? null,
-            serviceUnitId: input.serviceUnitId ?? null,
-            scheduledAt: input.scheduledAt,
-            durationMinutes: input.durationMinutes,
-            reason: input.reason ?? null,
-            reasonCategory: input.reasonCategory ?? null,
-            createdBy: ctx.user.id,
-          },
+          return tx.outpatientAppointment.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              patientId: input.patientId,
+              providerId: input.providerId,
+              specialtyId: input.specialtyId ?? null,
+              serviceUnitId: input.serviceUnitId ?? null,
+              scheduledAt: input.scheduledAt,
+              durationMinutes: input.durationMinutes,
+              reason: input.reason ?? null,
+              reasonCategory: input.reasonCategory ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -170,26 +177,46 @@ export const outpatientRouter = router({
       .mutation(async ({ ctx, input }) => {
         const { id, status: newStatus, scheduledAt, durationMinutes, ...rest } = input;
 
-        if (newStatus !== undefined) {
-          const current = await ctx.prisma.outpatientAppointment.findFirst({
-            where: { id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-            select: { status: true, providerId: true, scheduledAt: true, durationMinutes: true },
-          });
-          if (!current) throw new TRPCError({ code: "NOT_FOUND" });
-
-          const allowed = ALLOWED_TRANSITIONS[current.status as AppointmentStatusType];
-          if (!allowed.includes(newStatus)) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `Transicion invalida: ${current.status} -> ${newStatus}. Permitidas: ${allowed.join(", ") || "ninguna (estado terminal)"}`,
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          if (newStatus !== undefined) {
+            const current = await tx.outpatientAppointment.findFirst({
+              where: { id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+              select: { status: true, providerId: true, scheduledAt: true, durationMinutes: true },
             });
-          }
+            if (!current) throw new TRPCError({ code: "NOT_FOUND" });
 
-          if (scheduledAt !== undefined || durationMinutes !== undefined) {
+            const allowed = ALLOWED_TRANSITIONS[current.status as AppointmentStatusType];
+            if (!allowed.includes(newStatus)) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `Transicion invalida: ${current.status} -> ${newStatus}. Permitidas: ${allowed.join(", ") || "ninguna (estado terminal)"}`,
+              });
+            }
+
+            if (scheduledAt !== undefined || durationMinutes !== undefined) {
+              const eff = scheduledAt ?? current.scheduledAt;
+              const dur = durationMinutes ?? current.durationMinutes;
+              const hasConflict = await detectAppointmentConflict(
+                tx, ctx.tenant.organizationId, current.providerId, eff, dur, id,
+              );
+              if (hasConflict) {
+                throw new TRPCError({
+                  code: "CONFLICT",
+                  message: "El proveedor ya tiene una cita en ese intervalo de tiempo.",
+                });
+              }
+            }
+          } else if (scheduledAt !== undefined || durationMinutes !== undefined) {
+            const current = await tx.outpatientAppointment.findFirst({
+              where: { id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+              select: { providerId: true, scheduledAt: true, durationMinutes: true },
+            });
+            if (!current) throw new TRPCError({ code: "NOT_FOUND" });
+
             const eff = scheduledAt ?? current.scheduledAt;
             const dur = durationMinutes ?? current.durationMinutes;
             const hasConflict = await detectAppointmentConflict(
-              ctx.prisma, ctx.tenant.organizationId, current.providerId, eff, dur, id,
+              tx, ctx.tenant.organizationId, current.providerId, eff, dur, id,
             );
             if (hasConflict) {
               throw new TRPCError({
@@ -198,89 +225,75 @@ export const outpatientRouter = router({
               });
             }
           }
-        } else if (scheduledAt !== undefined || durationMinutes !== undefined) {
-          const current = await ctx.prisma.outpatientAppointment.findFirst({
+
+          const updated = await tx.outpatientAppointment.updateMany({
             where: { id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-            select: { providerId: true, scheduledAt: true, durationMinutes: true },
+            data: {
+              ...(newStatus !== undefined && { status: newStatus }),
+              ...(scheduledAt !== undefined && { scheduledAt }),
+              ...(durationMinutes !== undefined && { durationMinutes }),
+              ...rest,
+              updatedBy: ctx.user.id,
+            },
           });
-          if (!current) throw new TRPCError({ code: "NOT_FOUND" });
-
-          const eff = scheduledAt ?? current.scheduledAt;
-          const dur = durationMinutes ?? current.durationMinutes;
-          const hasConflict = await detectAppointmentConflict(
-            ctx.prisma, ctx.tenant.organizationId, current.providerId, eff, dur, id,
-          );
-          if (hasConflict) {
-            throw new TRPCError({
-              code: "CONFLICT",
-              message: "El proveedor ya tiene una cita en ese intervalo de tiempo.",
-            });
-          }
-        }
-
-        const updated = await ctx.prisma.outpatientAppointment.updateMany({
-          where: { id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          data: {
-            ...(newStatus !== undefined && { status: newStatus }),
-            ...(scheduledAt !== undefined && { scheduledAt }),
-            ...(durationMinutes !== undefined && { durationMinutes }),
-            ...rest,
-            updatedBy: ctx.user.id,
-          },
+          if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+          return { ok: true as const };
         });
-        if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
-        return { ok: true as const };
       }),
 
     cancel: tenantProcedure
       .input(outpatientAppointmentCancelInput)
       .mutation(async ({ ctx, input }) => {
-        const current = await ctx.prisma.outpatientAppointment.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: { status: true },
-        });
-        if (!current) throw new TRPCError({ code: "NOT_FOUND" });
-
-        const allowed = ALLOWED_TRANSITIONS[current.status as AppointmentStatusType];
-        if (!allowed.includes("CANCELLED")) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `No se puede cancelar una cita en estado ${current.status}.`,
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const current = await tx.outpatientAppointment.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: { status: true },
           });
-        }
+          if (!current) throw new TRPCError({ code: "NOT_FOUND" });
 
-        const updated = await ctx.prisma.outpatientAppointment.updateMany({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          data: { status: "CANCELLED", notes: input.reason, updatedBy: ctx.user.id },
+          const allowed = ALLOWED_TRANSITIONS[current.status as AppointmentStatusType];
+          if (!allowed.includes("CANCELLED")) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `No se puede cancelar una cita en estado ${current.status}.`,
+            });
+          }
+
+          const updated = await tx.outpatientAppointment.updateMany({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            data: { status: "CANCELLED", notes: input.reason, updatedBy: ctx.user.id },
+          });
+          if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+          return { ok: true as const };
         });
-        if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
-        return { ok: true as const };
       }),
 
     detectNoShows: tenantProcedure
       .input(noShowDetectInput)
       .mutation(async ({ ctx, input }) => {
-        const candidates = await detectNoShowCandidates(
-          ctx.prisma,
-          ctx.tenant.organizationId,
-          input.thresholdMinutes,
-        );
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const candidates = await detectNoShowCandidates(
+            tx,
+            ctx.tenant.organizationId,
+            input.thresholdMinutes,
+          );
 
-        if (!input.commit) {
-          return { count: candidates.length, candidates, committed: false };
-        }
+          if (!input.commit) {
+            return { count: candidates.length, candidates, committed: false };
+          }
 
-        if (candidates.length > 0) {
-          await ctx.prisma.outpatientAppointment.updateMany({
-            where: {
-              id: { in: candidates.map((c) => c.id) },
-              organizationId: ctx.tenant.organizationId,
-            },
-            data: { status: "NO_SHOW", updatedBy: ctx.user.id },
-          });
-        }
+          if (candidates.length > 0) {
+            await tx.outpatientAppointment.updateMany({
+              where: {
+                id: { in: candidates.map((c) => c.id) },
+                organizationId: ctx.tenant.organizationId,
+              },
+              data: { status: "NO_SHOW", updatedBy: ctx.user.id },
+            });
+          }
 
-        return { count: candidates.length, candidates, committed: true };
+          return { count: candidates.length, candidates, committed: true };
+        });
       }),
   }),
 
@@ -288,45 +301,47 @@ export const outpatientRouter = router({
     create: tenantProcedure
       .input(outpatientConsultationCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-          select: { id: true },
-        });
-        if (!enc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organizacion." });
-        }
-
-        if (input.appointmentId !== undefined) {
-          const appt = await ctx.prisma.outpatientAppointment.findFirst({
-            where: {
-              id: input.appointmentId,
-              organizationId: ctx.tenant.organizationId,
-              deletedAt: null,
-            },
-            select: { status: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
+            select: { id: true },
           });
-          if (!appt) {
-            throw new TRPCError({ code: "NOT_FOUND", message: "Cita no encontrada." });
+          if (!enc) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organizacion." });
           }
-          if (appt.status !== "CHECKED_IN" && appt.status !== "COMPLETED") {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: `La consulta solo puede crearse cuando la cita esta en CHECKED_IN o COMPLETED. Estado actual: ${appt.status}`,
-            });
-          }
-        }
 
-        return ctx.prisma.outpatientConsultation.create({
-          data: {
-            appointmentId: input.appointmentId ?? null,
-            encounterId: input.encounterId,
-            reasonOfVisit: input.reasonOfVisit,
-            reasonCategory: input.reasonCategory ?? null,
-            subjective: input.subjective ?? null,
-            objective: input.objective ?? null,
-            assessment: input.assessment ?? null,
-            plan: input.plan ?? null,
-          },
+          if (input.appointmentId !== undefined) {
+            const appt = await tx.outpatientAppointment.findFirst({
+              where: {
+                id: input.appointmentId,
+                organizationId: ctx.tenant.organizationId,
+                deletedAt: null,
+              },
+              select: { status: true },
+            });
+            if (!appt) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Cita no encontrada." });
+            }
+            if (appt.status !== "CHECKED_IN" && appt.status !== "COMPLETED") {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: `La consulta solo puede crearse cuando la cita esta en CHECKED_IN o COMPLETED. Estado actual: ${appt.status}`,
+              });
+            }
+          }
+
+          return tx.outpatientConsultation.create({
+            data: {
+              appointmentId: input.appointmentId ?? null,
+              encounterId: input.encounterId,
+              reasonOfVisit: input.reasonOfVisit,
+              reasonCategory: input.reasonCategory ?? null,
+              subjective: input.subjective ?? null,
+              objective: input.objective ?? null,
+              assessment: input.assessment ?? null,
+              plan: input.plan ?? null,
+            },
+          });
         });
       }),
   }),

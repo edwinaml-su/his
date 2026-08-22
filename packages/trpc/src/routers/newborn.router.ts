@@ -27,6 +27,7 @@ import {
   NEWBORN_MAX_CHILDREN_PER_MOTHER,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 const MS_PER_DAY = 86400000;
 
@@ -60,92 +61,97 @@ export const newbornRouter = router({
         });
       }
 
-      const [newborn, mother] = await Promise.all([
-        ctx.prisma.patient.findFirst({
-          where: { id: input.newbornId, organizationId: orgId, deletedAt: null },
-          include: { biologicalSex: true },
-        }),
-        ctx.prisma.patient.findFirst({
-          where: { id: input.motherId, organizationId: orgId, deletedAt: null },
-          include: { biologicalSex: true },
-        }),
-      ]);
-      if (!newborn) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Recién-nacido no encontrado." });
-      }
-      if (!mother) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Madre no encontrada." });
-      }
+      // R02 — lecturas + el UPDATE de Patient corren demotadas (policy ALL
+      // cubre organizationId = current_org_id()). El `auditLog.create` NO se
+      // incluye aquí: `authenticated` no tiene GRANT INSERT sobre AuditLog en
+      // absoluto (verificado en prod) — se escribe después, bajo el rol
+      // bypass, mismo patrón que en `emitDomainEvent`.
+      const { newborn, mother, ageDays } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [newborn, mother] = await Promise.all([
+          tx.patient.findFirst({
+            where: { id: input.newbornId, organizationId: orgId, deletedAt: null },
+            include: { biologicalSex: true },
+          }),
+          tx.patient.findFirst({
+            where: { id: input.motherId, organizationId: orgId, deletedAt: null },
+            include: { biologicalSex: true },
+          }),
+        ]);
+        if (!newborn) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Recién-nacido no encontrado." });
+        }
+        if (!mother) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Madre no encontrada." });
+        }
 
-      // Edad RN < 28 días.
-      const ageDays = ageInDays(newborn.birthDate);
-      if (ageDays === null) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "El paciente no tiene fecha de nacimiento; no puede declararse neonato.",
-        });
-      }
-      if (ageDays > NEWBORN_MAX_AGE_DAYS) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Edad ${ageDays} días excede el límite neonatal (${NEWBORN_MAX_AGE_DAYS}). Use vínculo no-neonatal en Sprint 4.`,
-        });
-      }
+        // Edad RN < 28 días.
+        const ageDays = ageInDays(newborn.birthDate);
+        if (ageDays === null) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "El paciente no tiene fecha de nacimiento; no puede declararse neonato.",
+          });
+        }
+        if (ageDays > NEWBORN_MAX_AGE_DAYS) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Edad ${ageDays} días excede el límite neonatal (${NEWBORN_MAX_AGE_DAYS}). Use vínculo no-neonatal en Sprint 4.`,
+          });
+        }
 
-      // Madre con biologicalSex.code === "F".
-      if (mother.biologicalSex?.code !== "F") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "La madre debe tener sexo biológico femenino.",
-        });
-      }
+        // Madre con biologicalSex.code === "F".
+        if (mother.biologicalSex?.code !== "F") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La madre debe tener sexo biológico femenino.",
+          });
+        }
 
-      // Cap de hijos neonatos vivos vinculados.
-      const recentCutoff = new Date(Date.now() - NEWBORN_MAX_AGE_DAYS * MS_PER_DAY);
-      const currentChildren = await ctx.prisma.patient.count({
-        where: {
-          motherPatientId: mother.id,
-          deletedAt: null,
-          birthDate: { gte: recentCutoff },
-        },
-      });
-      if (currentChildren >= NEWBORN_MAX_CHILDREN_PER_MOTHER) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `La madre ya tiene ${currentChildren} RN vinculados (cap MVP=${NEWBORN_MAX_CHILDREN_PER_MOTHER}). TODO Sprint 4 multi-births.`,
+        // Cap de hijos neonatos vivos vinculados.
+        const recentCutoff = new Date(Date.now() - NEWBORN_MAX_AGE_DAYS * MS_PER_DAY);
+        const currentChildren = await tx.patient.count({
+          where: {
+            motherPatientId: mother.id,
+            deletedAt: null,
+            birthDate: { gte: recentCutoff },
+          },
         });
-      }
+        if (currentChildren >= NEWBORN_MAX_CHILDREN_PER_MOTHER) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `La madre ya tiene ${currentChildren} RN vinculados (cap MVP=${NEWBORN_MAX_CHILDREN_PER_MOTHER}). TODO Sprint 4 multi-births.`,
+          });
+        }
 
-      // Update + audit.
-      const before = { motherPatientId: newborn.motherPatientId };
-      const updated = await ctx.prisma.$transaction(async (tx) => {
-        const u = await tx.patient.update({
+        await tx.patient.update({
           where: { id: newborn.id },
           data: { motherPatientId: mother.id, updatedBy: ctx.user.id },
         });
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: orgId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "UPDATE",
-            entity: "Patient",
-            entityId: newborn.id,
-            beforeJson: before,
-            afterJson: {
-              op: "LINK_NEWBORN_MOTHER",
-              newbornId: newborn.id,
-              motherId: mother.id,
-              ageDays,
-            },
-          },
-        });
-        return u;
+
+        return { newborn, mother, ageDays };
       });
 
-      return { ok: true as const, newbornId: updated.id, motherId: mother.id };
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: orgId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "UPDATE",
+          entity: "Patient",
+          entityId: newborn.id,
+          beforeJson: { motherPatientId: newborn.motherPatientId },
+          afterJson: {
+            op: "LINK_NEWBORN_MOTHER",
+            newbornId: newborn.id,
+            motherId: mother.id,
+            ageDays,
+          },
+        },
+      });
+
+      return { ok: true as const, newbornId: newborn.id, motherId: mother.id };
     }),
 
   // ===========================================================================
@@ -155,43 +161,45 @@ export const newbornRouter = router({
     .input(unlinkNewbornMotherInput)
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
-      const newborn = await ctx.prisma.patient.findFirst({
-        where: { id: input.newbornId, organizationId: orgId, deletedAt: null },
-      });
-      if (!newborn) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Recién-nacido no encontrado." });
-      }
-      if (!newborn.motherPatientId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "El paciente no tiene madre vinculada.",
+      const newborn = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const newborn = await tx.patient.findFirst({
+          where: { id: input.newbornId, organizationId: orgId, deletedAt: null },
         });
-      }
-
-      const before = { motherPatientId: newborn.motherPatientId };
-      await ctx.prisma.$transaction(async (tx) => {
+        if (!newborn) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Recién-nacido no encontrado." });
+        }
+        if (!newborn.motherPatientId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "El paciente no tiene madre vinculada.",
+          });
+        }
         await tx.patient.update({
           where: { id: newborn.id },
           data: { motherPatientId: null, updatedBy: ctx.user.id },
         });
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: orgId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "UPDATE",
-            entity: "Patient",
-            entityId: newborn.id,
-            beforeJson: before,
-            afterJson: {
-              op: "UNLINK_NEWBORN_MOTHER",
-              newbornId: newborn.id,
-              previousMotherId: before.motherPatientId,
-            },
+        return newborn;
+      });
+
+      // Ver comentario en linkMother: auditLog.create corre fuera del contexto
+      // demotado (sin GRANT INSERT para `authenticated`).
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: orgId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "UPDATE",
+          entity: "Patient",
+          entityId: newborn.id,
+          beforeJson: { motherPatientId: newborn.motherPatientId },
+          afterJson: {
+            op: "UNLINK_NEWBORN_MOTHER",
+            newbornId: newborn.id,
+            previousMotherId: newborn.motherPatientId,
           },
-        });
+        },
       });
 
       return { ok: true as const, newbornId: newborn.id };
@@ -205,52 +213,52 @@ export const newbornRouter = router({
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      const mother = await ctx.prisma.patient.findFirst({
-        where: { id: input.motherId, organizationId: orgId, deletedAt: null },
-        include: { biologicalSex: true },
-      });
-      if (!mother) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Madre no encontrada." });
-      }
-      if (mother.biologicalSex?.code !== "F") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "La madre debe tener sexo biológico femenino.",
+      const created = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const mother = await tx.patient.findFirst({
+          where: { id: input.motherId, organizationId: orgId, deletedAt: null },
+          include: { biologicalSex: true },
         });
-      }
+        if (!mother) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Madre no encontrada." });
+        }
+        if (mother.biologicalSex?.code !== "F") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La madre debe tener sexo biológico femenino.",
+          });
+        }
 
-      const ageDays = ageInDays(input.birthDate);
-      if (ageDays === null || ageDays > NEWBORN_MAX_AGE_DAYS) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Fecha de nacimiento debe ser dentro de ${NEWBORN_MAX_AGE_DAYS} días.`,
-        });
-      }
-      if (ageDays < 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "La fecha de nacimiento no puede ser futura.",
-        });
-      }
+        const ageDays = ageInDays(input.birthDate);
+        if (ageDays === null || ageDays > NEWBORN_MAX_AGE_DAYS) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Fecha de nacimiento debe ser dentro de ${NEWBORN_MAX_AGE_DAYS} días.`,
+          });
+        }
+        if (ageDays < 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La fecha de nacimiento no puede ser futura.",
+          });
+        }
 
-      // Cap por madre.
-      const recentCutoff = new Date(Date.now() - NEWBORN_MAX_AGE_DAYS * MS_PER_DAY);
-      const currentChildren = await ctx.prisma.patient.count({
-        where: {
-          motherPatientId: mother.id,
-          deletedAt: null,
-          birthDate: { gte: recentCutoff },
-        },
-      });
-      if (currentChildren >= NEWBORN_MAX_CHILDREN_PER_MOTHER) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `La madre ya tiene ${currentChildren} RN vinculados (cap MVP=${NEWBORN_MAX_CHILDREN_PER_MOTHER}).`,
+        // Cap por madre.
+        const recentCutoff = new Date(Date.now() - NEWBORN_MAX_AGE_DAYS * MS_PER_DAY);
+        const currentChildren = await tx.patient.count({
+          where: {
+            motherPatientId: mother.id,
+            deletedAt: null,
+            birthDate: { gte: recentCutoff },
+          },
         });
-      }
+        if (currentChildren >= NEWBORN_MAX_CHILDREN_PER_MOTHER) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `La madre ya tiene ${currentChildren} RN vinculados (cap MVP=${NEWBORN_MAX_CHILDREN_PER_MOTHER}).`,
+          });
+        }
 
-      const result = await ctx.prisma.$transaction(async (tx) => {
-        const created = await tx.patient.create({
+        const patient = await tx.patient.create({
           data: {
             organizationId: orgId,
             mrn: generateNewbornMrn(),
@@ -265,32 +273,40 @@ export const newbornRouter = router({
             createdBy: ctx.user.id,
           },
         });
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: orgId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "CREATE",
-            entity: "Patient",
-            entityId: created.id,
-            afterJson: {
-              op: "CREATE_NEWBORN",
-              newbornId: created.id,
-              motherId: mother.id,
-              perinatal: {
-                weightGrams: input.weightGrams ?? null,
-                lengthCm: input.lengthCm ?? null,
-                apgar1: input.apgar1 ?? null,
-                apgar5: input.apgar5 ?? null,
-              },
-            },
-          },
-        });
-        return created;
+        return { patient, motherId: mother.id };
       });
 
-      return { ok: true as const, newbornId: result.id, motherId: mother.id, mrn: result.mrn };
+      // Ver comentario en linkMother: auditLog.create corre fuera del contexto
+      // demotado (sin GRANT INSERT para `authenticated`).
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: orgId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "CREATE",
+          entity: "Patient",
+          entityId: created.patient.id,
+          afterJson: {
+            op: "CREATE_NEWBORN",
+            newbornId: created.patient.id,
+            motherId: created.motherId,
+            perinatal: {
+              weightGrams: input.weightGrams ?? null,
+              lengthCm: input.lengthCm ?? null,
+              apgar1: input.apgar1 ?? null,
+              apgar5: input.apgar5 ?? null,
+            },
+          },
+        },
+      });
+
+      return {
+        ok: true as const,
+        newbornId: created.patient.id,
+        motherId: created.motherId,
+        mrn: created.patient.mrn,
+      };
     }),
 });

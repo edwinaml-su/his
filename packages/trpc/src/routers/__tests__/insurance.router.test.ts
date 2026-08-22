@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { insuranceRouter } from "../insurance.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const from = new Date("2026-01-01");
@@ -25,6 +25,10 @@ describe("insuranceRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02: todos los procedures ahora pasan por withTenantContext (SET LOCAL +
+    // $transaction). tx === prisma, así que las assertions sobre
+    // prisma.<model>.<método> siguen funcionando sin cambios.
+    installTenantContextMock(prisma);
   });
 
   // -------------------------------------------------------------------------

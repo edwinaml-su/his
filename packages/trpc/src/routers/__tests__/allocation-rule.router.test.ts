@@ -22,22 +22,24 @@ const RULE_ID = "00000000-0000-0000-0000-000000000030";
 
 function makePrisma(queryResults: unknown[][] = [], executeOk = true) {
   let queryCallIdx = 0;
-  return {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const prisma: any = {
     $queryRawUnsafe: vi.fn().mockImplementation(() => {
       const res = queryResults[queryCallIdx] ?? [];
       queryCallIdx++;
       return Promise.resolve(res);
     }),
     $executeRawUnsafe: vi.fn().mockResolvedValue(executeOk ? 1 : 0),
-    $transaction: vi.fn().mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => {
-      // En tx, usamos el mismo mock para que los INSERTs funcionen
-      const tx = {
-        $queryRawUnsafe: vi.fn().mockResolvedValue([{ id: RULE_ID }]),
-        $executeRawUnsafe: vi.fn().mockResolvedValue(1),
-      };
-      return fn(tx);
-    }),
   };
+  // R02: list/get/create/update/deactivate/runProration ahora pasan por
+  // withTenantContext (SET LOCAL + $transaction). El mock invoca el callback
+  // con el MISMO objeto `prisma` como `tx`, así que la secuencia de
+  // `queryResults` (y las assertions sobre `$executeRawUnsafe`) siguen
+  // aplicando sin duplicar mocks — ver audit.router.test.ts / catalog.router.test.ts.
+  prisma.$transaction = vi
+    .fn()
+    .mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) => fn(prisma));
+  return prisma;
 }
 
 describe("allocationRuleRouter", () => {
@@ -148,8 +150,8 @@ describe("allocationRuleRouter", () => {
       const prisma = makePrisma([
         [{ tipo: "apoyo" }],         // assertSourceIsApoyo
         [{ id: TARGET_A, tipo: "productivo" }], // assertTargetsAreValid
+        [{ id: RULE_ID }],           // INSERT ... RETURNING id (dentro de withTenantContext)
       ]);
-      // $transaction mock ya retorna { id: RULE_ID }
       const caller = allocationRuleRouter.createCaller(makeCtx({ prisma: prisma as never }));
       const result = await caller.create({
         name: "Regla Lavandería",

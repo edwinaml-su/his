@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { coldChainRouter } from "../cold-chain.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 
 // emitDomainEvent se importa en el router desde @his/database.
 // El alias vitest.config lo resuelve al stub, que re-exporta el fuente real.
@@ -54,6 +54,11 @@ describe("coldChainRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02: listAlertas/configurarRangoEquipo/listLecturasHistorial ahora pasan
+    // por withTenantContext (SET LOCAL + $transaction con tx===prisma). Los
+    // tests de registrarLectura sobreescriben $transaction con su propio
+    // txMock más abajo.
+    installTenantContextMock(prisma);
   });
 
   // -------------------------------------------------------------------------
@@ -68,13 +73,18 @@ describe("coldChainRouter", () => {
         .mockResolvedValueOnce([RANGE_CONFIG] as never);               // 2. config
 
       // La transacción devuelve la lectura insertada
+      // $executeRawUnsafe: withTenantContext (demoteRole:false) llama SET LOCAL
+      // app.current_org_id antes de correr el callback (ver rls-context.ts).
       const txMock = {
         $queryRaw: vi.fn()
           .mockResolvedValueOnce([{ id: LECTURA_ID }] as never),      // INSERT lectura
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
-      prisma.$transaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) =>
-        fn(txMock)
-      );
+      // Reasignamos $transaction a un vi.fn() propio: installTenantContextMock
+      // (beforeEach) lo deja como función plana, sin .mockImplementation.
+      prisma.$transaction = vi.fn().mockImplementation(
+        async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock),
+      ) as never;
 
       const caller = coldChainRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.registrarLectura({
@@ -107,10 +117,13 @@ describe("coldChainRouter", () => {
         $queryRaw: vi.fn()
           .mockResolvedValueOnce([{ id: LECTURA_ID }] as never)  // INSERT lectura
           .mockResolvedValueOnce([{}] as never),                  // INSERT alerta
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
-      prisma.$transaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) =>
-        fn(txMock)
-      );
+      // Reasignamos $transaction a un vi.fn() propio: installTenantContextMock
+      // (beforeEach) lo deja como función plana, sin .mockImplementation.
+      prisma.$transaction = vi.fn().mockImplementation(
+        async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock),
+      ) as never;
 
       const caller = coldChainRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.registrarLectura({
@@ -138,10 +151,11 @@ describe("coldChainRouter", () => {
         $queryRaw: vi.fn()
           .mockResolvedValueOnce([{ id: LECTURA_ID }] as never)
           .mockResolvedValueOnce([{}] as never),
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
-      prisma.$transaction.mockImplementation(async (fn: (tx: typeof txMock2) => Promise<unknown>) =>
-        fn(txMock2)
-      );
+      prisma.$transaction = vi.fn().mockImplementation(
+        async (fn: (tx: typeof txMock2) => Promise<unknown>) => fn(txMock2),
+      ) as never;
 
       const caller = coldChainRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.registrarLectura({
@@ -246,10 +260,13 @@ describe("coldChainRouter", () => {
 
       const txMock = {
         $queryRaw: vi.fn().mockResolvedValueOnce([{ id: LECTURA_ID }] as never),
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
       };
-      prisma.$transaction.mockImplementation(async (fn: (tx: typeof txMock) => Promise<unknown>) =>
-        fn(txMock)
-      );
+      // Reasignamos $transaction a un vi.fn() propio: installTenantContextMock
+      // (beforeEach) lo deja como función plana, sin .mockImplementation.
+      prisma.$transaction = vi.fn().mockImplementation(
+        async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock),
+      ) as never;
 
       const caller = coldChainRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.registrarLectura({

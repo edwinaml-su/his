@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@his/database";
 import { router, tenantProcedure, protectedProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import {
   listOrgChangesInputSchema,
   type AuditLogEntryDTO,
@@ -52,15 +53,22 @@ export const auditRouter = router({
         entityId: input.entityId,
         organizationId: ctx.tenant.organizationId,
       };
-      const [items, total] = await Promise.all([
-        ctx.prisma.auditLog.findMany({
-          where,
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-          orderBy: { occurredAt: "desc" },
-        }),
-        ctx.prisma.auditLog.count({ where }),
-      ]);
+      // Solo lectura, single-org: `authenticated` tiene grant SELECT sobre
+      // audit."AuditLog" + policy auditlog_tenant_select
+      // (organizationId = current_org_id() OR is_break_glass()) — no rompe
+      // la cadena de hash (no hay escritura aquí), solo agrega defensa RLS
+      // real sobre el filtro JS existente.
+      const [items, total] = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        Promise.all([
+          tx.auditLog.findMany({
+            where,
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { occurredAt: "desc" },
+          }),
+          tx.auditLog.count({ where }),
+        ]),
+      );
       return { items, total, page: input.page, pageSize: input.pageSize };
     }),
 
@@ -87,15 +95,18 @@ export const auditRouter = router({
             }
           : {}),
       };
-      const [items, total] = await Promise.all([
-        ctx.prisma.auditLog.findMany({
-          where,
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-          orderBy: { occurredAt: "desc" },
-        }),
-        ctx.prisma.auditLog.count({ where }),
-      ]);
+      // Idem listByEntity: solo lectura, defensa RLS real via demote.
+      const [items, total] = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        Promise.all([
+          tx.auditLog.findMany({
+            where,
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { occurredAt: "desc" },
+          }),
+          tx.auditLog.count({ where }),
+        ]),
+      );
       return { items, total, page: input.page, pageSize: input.pageSize };
     }),
 
@@ -112,6 +123,17 @@ export const auditRouter = router({
    *   - action: CREATE/UPDATE/DELETE etc.
    *   - userId: actor que originó el cambio.
    *   - from/to: rango de fechas (ISO).
+   *
+   * R02 — decisión (c), NO usa withTenantContext a propósito: la query es
+   * intencionalmente multi-org (`organizationId IN allowedOrgIds`, todas las
+   * orgs donde el usuario tiene rol vigente). La policy
+   * `auditlog_tenant_select` solo evalúa `organizationId = current_org_id()`
+   * (un solo GUC, un solo valor) — aplicar tenant context aquí colapsaría el
+   * visor a una sola org y rompería el caso de uso (holding root con
+   * jerarquía completa). El filtro `allowedOrgIds` ya deriva de
+   * `userOrganizationRole` con `userId = ctx.user.id`, así que no hay fuga:
+   * el boundary es "orgs donde el usuario tiene membership", no un tenant
+   * único.
    */
   listOrgChanges: protectedProcedure
     .input(listOrgChangesInputSchema)

@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { triageFlowchartRouter } from "../triage-flowchart.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
 function fn<T>(returnValue: T) {
@@ -23,6 +23,7 @@ describe("triageFlowchartRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
   });
 
   describe("list", () => {

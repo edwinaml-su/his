@@ -30,6 +30,18 @@ describe("auditRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // R02: listByEntity/listByUser ahora usan withTenantContext (SELECT LOCAL
+    // + $transaction). El mock debe invocar el callback con el mismo prisma
+    // mockeado para que las expectativas sobre prisma.auditLog.* sigan viendo
+    // las llamadas.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.$transaction.mockImplementation(async (cb: any) => {
+      if (typeof cb === "function") {
+        return cb(prisma);
+      }
+      return Promise.all(cb);
+    });
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   // ------------------------------------------------------------------ listByEntity

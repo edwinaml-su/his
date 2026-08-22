@@ -204,8 +204,11 @@ describe("bridgeEncounterRouter", () => {
 
     it("crea episodio y lo vincula — happy path", async () => {
       prisma.encounter.findFirst.mockResolvedValue(MOCK_ENCOUNTER as never);
-      // existing episodios (ninguno)
+      // R02: la 1ª consulta cruda es ahora la validación de que
+      // `establecimientoEceId` pertenece a la sede activa (ece.establecimiento
+      // .establishment_id = ctx.tenant.establishmentId).
       prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: ESTAB_ECE }] as never)                  // establecimiento válido
         .mockResolvedValueOnce([] as never)                                   // existing check
         .mockResolvedValueOnce([{ id: PACIE_ECE, establecimiento_id: ESTAB_ECE }] as never) // findPacienteEce
         .mockResolvedValueOnce([{ id: EPI_ID }] as never);                    // INSERT RETURNING
@@ -225,6 +228,25 @@ describe("bridgeEncounterRouter", () => {
       );
     });
 
+    it("R02: lanza FORBIDDEN si el establecimientoEceId no es de la sede activa", async () => {
+      prisma.encounter.findFirst.mockResolvedValue(MOCK_ENCOUNTER as never);
+      // La columna puente no empareja → el establecimiento es de otro tenant.
+      prisma.$queryRaw.mockResolvedValueOnce([] as never);
+
+      const caller = bridgeEncounterRouter.createCaller(
+        makeCtx({ prisma, tenant: TENANT }),
+      );
+      await expect(
+        caller.createEpisodioFromEncounter(baseInput),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+      // Y no debe insertarse el episodio.
+      const sqls = prisma.$queryRaw.mock.calls.map((c) =>
+        Array.isArray(c[0]) ? (c[0] as unknown as string[]).join(" ? ") : String(c[0]),
+      );
+      expect(sqls.some((q) => /INSERTs+INTOs+ece.episodio_atencion/i.test(q))).toBe(false);
+    });
+
     it("lanza NOT_FOUND si el Encounter no existe en el tenant", async () => {
       prisma.encounter.findFirst.mockResolvedValue(null as never);
 
@@ -238,7 +260,9 @@ describe("bridgeEncounterRouter", () => {
 
     it("lanza CONFLICT si el Encounter ya tiene episodio ECE", async () => {
       prisma.encounter.findFirst.mockResolvedValue(MOCK_ENCOUNTER as never);
-      prisma.$queryRaw.mockResolvedValueOnce([{ id: EPI_ID }] as never); // existing check
+      prisma.$queryRaw
+        .mockResolvedValueOnce([{ id: ESTAB_ECE }] as never) // establecimiento válido
+        .mockResolvedValueOnce([{ id: EPI_ID }] as never);   // existing check
 
       const caller = bridgeEncounterRouter.createCaller(
         makeCtx({ prisma, tenant: TENANT }),
@@ -251,7 +275,8 @@ describe("bridgeEncounterRouter", () => {
     it("lanza PRECONDITION_FAILED si no hay ece.paciente para el patientId", async () => {
       prisma.encounter.findFirst.mockResolvedValue(MOCK_ENCOUNTER as never);
       prisma.$queryRaw
-        .mockResolvedValueOnce([] as never) // existing check — ok
+        .mockResolvedValueOnce([{ id: ESTAB_ECE }] as never) // establecimiento válido
+        .mockResolvedValueOnce([] as never)  // existing check — ok
         .mockResolvedValueOnce([] as never); // findPacienteEce — vacío
 
       const caller = bridgeEncounterRouter.createCaller(
