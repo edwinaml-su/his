@@ -32,6 +32,7 @@ import {
   type VitalSnapshot,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
@@ -53,44 +54,48 @@ export const emergencyRouter = router({
         const encounterFilter =
           Object.keys(encScope).length > 0 ? { encounter: encScope } : {};
 
-        return ctx.prisma.emergencyVisit.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-            ...encounterFilter,
-            ...(input.disposition && { disposition: input.disposition }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.treatingId && { treatingId: input.treatingId }),
-            ...(input.establishmentId && {
-              establishmentId: input.establishmentId,
-            }),
-            ...((input.fromDate || input.toDate) && {
-              arrivedAt: {
-                ...(input.fromDate && { gte: input.fromDate }),
-                ...(input.toDate && { lte: input.toDate }),
-              },
-            }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.emergencyVisit.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+              ...encounterFilter,
+              ...(input.disposition && { disposition: input.disposition }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.treatingId && { treatingId: input.treatingId }),
+              ...(input.establishmentId && {
+                establishmentId: input.establishmentId,
+              }),
+              ...((input.fromDate || input.toDate) && {
+                arrivedAt: {
+                  ...(input.fromDate && { gte: input.fromDate }),
+                  ...(input.toDate && { lte: input.toDate }),
+                },
+              }),
             },
-          },
-          orderBy: { arrivedAt: "desc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+            },
+            orderBy: { arrivedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.emergencyVisit.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.emergencyVisit.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -99,17 +104,19 @@ export const emergencyRouter = router({
     getObservationStatus: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const v = await ctx.prisma.emergencyVisit.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: {
-            observationStartedAt: true,
-            observationEndedAt: true,
-          },
-        });
+        const v = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.emergencyVisit.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: {
+              observationStartedAt: true,
+              observationEndedAt: true,
+            },
+          }),
+        );
         if (!v) throw new TRPCError({ code: "NOT_FOUND" });
         const dur = computeObservationDuration({
           observationStartedAt: v.observationStartedAt,
@@ -127,71 +134,73 @@ export const emergencyRouter = router({
     create: tenantProcedure
       .input(emergencyVisitCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: {
-            id: input.encounterId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true, patientId: true, serviceUnitId: true },
-        });
-        if (!enc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Encuentro no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: {
+              id: input.encounterId,
+              organizationId: ctx.tenant.organizationId,
+            },
+            select: { id: true, patientId: true, serviceUnitId: true },
           });
-        }
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "patientId no coincide con encounter.",
-          });
-        }
-        // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
-        // enc.serviceUnitId puede ser null (encounter recién admitido sin
-        // clasificar) → el helper lo permite (no podemos validar).
-        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "El encuentro pertenece a un servicio fuera de tus asignaciones.",
-          });
-        }
+          if (!enc) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Encuentro no existe en la organización.",
+            });
+          }
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "patientId no coincide con encounter.",
+            });
+          }
+          // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
+          // enc.serviceUnitId puede ser null (encounter recién admitido sin
+          // clasificar) → el helper lo permite (no podemos validar).
+          if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
 
-        // TDR §12.4 — triage Manchester obligatorio antes de admisión a Urgencias.
-        // Ventana de 4 horas: triage completado recientemente sigue siendo válido para
-        // el encuentro actual (misma visita al servicio de urgencias).
-        const TRIAGE_WINDOW_MS = 4 * 60 * 60 * 1000;
-        const windowStart = new Date(Date.now() - TRIAGE_WINDOW_MS);
-        const completedTriage = await ctx.prisma.triageEvaluation.findFirst({
-          where: {
-            patientId: input.patientId,
-            organizationId: ctx.tenant.organizationId,
-            status: "COMPLETED",
-            completedAt: { gte: windowStart },
-          },
-          select: { id: true },
-          orderBy: { completedAt: "desc" },
-        });
-        if (!completedTriage) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              "Triage Manchester previo es obligatorio. Realice triage antes de admitir a Emergencias.",
+          // TDR §12.4 — triage Manchester obligatorio antes de admisión a Urgencias.
+          // Ventana de 4 horas: triage completado recientemente sigue siendo válido para
+          // el encuentro actual (misma visita al servicio de urgencias).
+          const TRIAGE_WINDOW_MS = 4 * 60 * 60 * 1000;
+          const windowStart = new Date(Date.now() - TRIAGE_WINDOW_MS);
+          const completedTriage = await tx.triageEvaluation.findFirst({
+            where: {
+              patientId: input.patientId,
+              organizationId: ctx.tenant.organizationId,
+              status: "COMPLETED",
+              completedAt: { gte: windowStart },
+            },
+            select: { id: true },
+            orderBy: { completedAt: "desc" },
           });
-        }
+          if (!completedTriage) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "Triage Manchester previo es obligatorio. Realice triage antes de admitir a Emergencias.",
+            });
+          }
 
-        return ctx.prisma.emergencyVisit.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            chiefComplaint: input.chiefComplaint,
-            arrivalMode: input.arrivalMode,
-            treatingId: input.treatingId ?? null,
-            triageEvaluationId: completedTriage.id,
-            createdBy: ctx.user.id,
-          },
+          return tx.emergencyVisit.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              chiefComplaint: input.chiefComplaint,
+              arrivalMode: input.arrivalMode,
+              treatingId: input.treatingId ?? null,
+              triageEvaluationId: completedTriage.id,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -202,106 +211,112 @@ export const emergencyRouter = router({
     setDisposition: tenantProcedure
       .input(emergencyVisitDispositionInput)
       .mutation(async ({ ctx, input }) => {
-        const visit = await ctx.prisma.emergencyVisit.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            disposition: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const visit = await tx.emergencyVisit.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: {
+              id: true,
+              disposition: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
+          if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
 
-        const from = visit.disposition as EmergencyDispositionType;
-        const to = input.disposition;
+          const from = visit.disposition as EmergencyDispositionType;
+          const to = input.disposition;
 
-        if (from === to) {
-          return { ok: true as const, transitioned: false };
-        }
-        if (!canTransitionEmergencyDisposition(from, to)) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `Transición inválida: ${from} -> ${to}.`,
+          if (from === to) {
+            return { ok: true as const, transitioned: false };
+          }
+          if (!canTransitionEmergencyDisposition(from, to)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Transición inválida: ${from} -> ${to}.`,
+            });
+          }
+
+          await tx.emergencyVisit.update({
+            where: { id: input.id },
+            data: {
+              disposition: to,
+              dispositionAt: new Date(),
+              ...(input.notes && { notes: input.notes }),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-
-        await ctx.prisma.emergencyVisit.update({
-          where: { id: input.id },
-          data: {
-            disposition: to,
-            dispositionAt: new Date(),
-            ...(input.notes && { notes: input.notes }),
-            updatedBy: ctx.user.id,
-          },
+          return { ok: true as const, transitioned: true };
         });
-        return { ok: true as const, transitioned: true };
       }),
 
     startObservation: tenantProcedure
       .input(emergencyVisitStartObservationInput)
       .mutation(async ({ ctx, input }) => {
-        // Nivel B — load mínimo para scope check antes del updateMany.
-        const visit = await ctx.prisma.emergencyVisit.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: { id: true, observationStartedAt: true, encounter: { select: { serviceUnitId: true } } },
-        });
-        if (!visit) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
-        }
-        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // Nivel B — load mínimo para scope check antes del updateMany.
+          const visit = await tx.emergencyVisit.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: { id: true, observationStartedAt: true, encounter: { select: { serviceUnitId: true } } },
           });
-        }
-        if (visit.observationStartedAt !== null) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
-        }
-        await ctx.prisma.emergencyVisit.update({
-          where: { id: input.id },
-          data: { observationStartedAt: new Date(), updatedBy: ctx.user.id },
+          if (!visit) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
+          }
+          if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (visit.observationStartedAt !== null) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe u observación ya iniciada." });
+          }
+          await tx.emergencyVisit.update({
+            where: { id: input.id },
+            data: { observationStartedAt: new Date(), updatedBy: ctx.user.id },
+          });
+          return { ok: true as const };
         });
-        return { ok: true as const };
       }),
 
     endObservation: tenantProcedure
       .input(emergencyVisitEndObservationInput)
       .mutation(async ({ ctx, input }) => {
-        // Nivel B — load mínimo para scope check antes del update.
-        const visit = await ctx.prisma.emergencyVisit.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: {
-            id: true,
-            observationStartedAt: true,
-            observationEndedAt: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!visit || visit.observationStartedAt === null || visit.observationEndedAt !== null) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe, sin observación abierta." });
-        }
-        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // Nivel B — load mínimo para scope check antes del update.
+          const visit = await tx.emergencyVisit.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: {
+              id: true,
+              observationStartedAt: true,
+              observationEndedAt: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        await ctx.prisma.emergencyVisit.update({
-          where: { id: input.id },
-          data: { observationEndedAt: new Date(), updatedBy: ctx.user.id },
+          if (!visit || visit.observationStartedAt === null || visit.observationEndedAt !== null) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Visita no existe, sin observación abierta." });
+          }
+          if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          await tx.emergencyVisit.update({
+            where: { id: input.id },
+            data: { observationEndedAt: new Date(), updatedBy: ctx.user.id },
+          });
+          return { ok: true as const };
         });
-        return { ok: true as const };
       }),
 
     /**
@@ -312,75 +327,77 @@ export const emergencyRouter = router({
     lwbsCheck: tenantProcedure
       .input(lwbsCheckInput)
       .mutation(async ({ ctx, input }) => {
-        const now = new Date();
-        const candidates = await ctx.prisma.emergencyVisit.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            disposition: "PENDING",
-            treatingId: null,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            arrivedAt: true,
-            disposition: true,
-            treatingId: true,
-          },
-          take: input.limit,
-        });
-
-        const results = candidates.map((v) => {
-          const det = detectLwbsCandidate({
-            visit: {
-              disposition: v.disposition as EmergencyDispositionType,
-              arrivedAt: v.arrivedAt,
-              treatingId: v.treatingId,
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const now = new Date();
+          const candidates = await tx.emergencyVisit.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              disposition: "PENDING",
+              treatingId: null,
+              deletedAt: null,
             },
-            now,
-            timeoutMinutes: input.timeoutMinutes,
+            select: {
+              id: true,
+              arrivedAt: true,
+              disposition: true,
+              treatingId: true,
+            },
+            take: input.limit,
           });
-          return {
-            id: v.id,
-            arrivedAt: v.arrivedAt,
-            elapsedMinutes: det.elapsedMinutes,
-            timeoutMinutes: det.timeoutMinutes,
-            isCandidate: det.isCandidate,
-            reason: det.reason,
-          };
-        });
 
-        const flagged = results.filter((r) => r.isCandidate);
+          const results = candidates.map((v) => {
+            const det = detectLwbsCandidate({
+              visit: {
+                disposition: v.disposition as EmergencyDispositionType,
+                arrivedAt: v.arrivedAt,
+                treatingId: v.treatingId,
+              },
+              now,
+              timeoutMinutes: input.timeoutMinutes,
+            });
+            return {
+              id: v.id,
+              arrivedAt: v.arrivedAt,
+              elapsedMinutes: det.elapsedMinutes,
+              timeoutMinutes: det.timeoutMinutes,
+              isCandidate: det.isCandidate,
+              reason: det.reason,
+            };
+          });
 
-        if (input.dryRun || flagged.length === 0) {
+          const flagged = results.filter((r) => r.isCandidate);
+
+          if (input.dryRun || flagged.length === 0) {
+            return {
+              dryRun: input.dryRun,
+              evaluated: results.length,
+              flagged: flagged.length,
+              details: flagged,
+            };
+          }
+
+          // Commit: bulk update solo las que pasaron la detección.
+          const ids = flagged.map((r) => r.id);
+          await tx.emergencyVisit.updateMany({
+            where: {
+              id: { in: ids },
+              organizationId: ctx.tenant.organizationId,
+              disposition: "PENDING", // re-check para race condition
+            },
+            data: {
+              disposition: "LWBS",
+              dispositionAt: now,
+              updatedBy: ctx.user.id,
+            },
+          });
+
           return {
-            dryRun: input.dryRun,
+            dryRun: false,
             evaluated: results.length,
             flagged: flagged.length,
             details: flagged,
           };
-        }
-
-        // Commit: bulk update solo las que pasaron la detección.
-        const ids = flagged.map((r) => r.id);
-        await ctx.prisma.emergencyVisit.updateMany({
-          where: {
-            id: { in: ids },
-            organizationId: ctx.tenant.organizationId,
-            disposition: "PENDING", // re-check para race condition
-          },
-          data: {
-            disposition: "LWBS",
-            dispositionAt: now,
-            updatedBy: ctx.user.id,
-          },
         });
-
-        return {
-          dryRun: false,
-          evaluated: results.length,
-          flagged: flagged.length,
-          details: flagged,
-        };
       }),
 
     /**
@@ -391,85 +408,87 @@ export const emergencyRouter = router({
     recordVitalSnapshot: tenantProcedure
       .input(emergencyVitalRecordInput)
       .mutation(async ({ ctx, input }) => {
-        const visit = await ctx.prisma.emergencyVisit.findFirst({
-          where: {
-            id: input.visitId,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            encounterId: true,
-            disposition: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
-          });
-        }
-        if (isTerminalEmergencyDisposition(visit.disposition as EmergencyDispositionType)) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Visita ya finalizada; no admite vitales.",
-          });
-        }
-
-        // Recupera vitales recientes del encounter (4NF — key-value) y
-        // pivotea a snapshot wide para evaluación de deterioro.
-        const lastVitals = await ctx.prisma.triageVitalSign.findMany({
-          where: {
-            evaluation: {
-              encounterId: visit.encounterId,
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const visit = await tx.emergencyVisit.findFirst({
+            where: {
+              id: input.visitId,
               organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
             },
-          },
-          orderBy: { measuredAt: "desc" },
-          take: 50, // ventana suficiente para cubrir últimos códigos
-          select: {
-            vitalCode: true,
-            valueNumeric: true,
-            measuredAt: true,
-          },
+            select: {
+              id: true,
+              encounterId: true,
+              disposition: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
+          });
+          if (!visit) throw new TRPCError({ code: "NOT_FOUND" });
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (isTerminalEmergencyDisposition(visit.disposition as EmergencyDispositionType)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Visita ya finalizada; no admite vitales.",
+            });
+          }
+
+          // Recupera vitales recientes del encounter (4NF — key-value) y
+          // pivotea a snapshot wide para evaluación de deterioro.
+          const lastVitals = await tx.triageVitalSign.findMany({
+            where: {
+              evaluation: {
+                encounterId: visit.encounterId,
+                organizationId: ctx.tenant.organizationId,
+              },
+            },
+            orderBy: { measuredAt: "desc" },
+            take: 50, // ventana suficiente para cubrir últimos códigos
+            select: {
+              vitalCode: true,
+              valueNumeric: true,
+              measuredAt: true,
+            },
+          });
+
+          const previous = lastVitals.length > 0
+            ? pivotVitalsToSnapshot(lastVitals)
+            : null;
+
+          const current: VitalSnapshot = {
+            heartRate: input.heartRate,
+            respiratoryRate: input.respiratoryRate,
+            spo2: input.spo2,
+            systolicBp: input.systolicBp,
+            temperatureC: input.temperatureC,
+            painScale: input.painScale,
+          };
+
+          const evaluation = shouldTriggerRetriage({ previous, current });
+
+          // Registra como EmergencyNote categoría REASSESSMENT con el resumen.
+          const summary = formatVitalSummary(current);
+          await tx.emergencyNote.create({
+            data: {
+              visitId: visit.id,
+              recordedById: ctx.user.id,
+              category: "REASSESSMENT",
+              body: input.notes
+                ? `${summary}\nNota: ${input.notes}`
+                : summary,
+            },
+          });
+
+          return {
+            retriageSuggested: evaluation.shouldRetriage,
+            reasons: evaluation.reasons,
+            recorded: true,
+          };
         });
-
-        const previous = lastVitals.length > 0
-          ? pivotVitalsToSnapshot(lastVitals)
-          : null;
-
-        const current: VitalSnapshot = {
-          heartRate: input.heartRate,
-          respiratoryRate: input.respiratoryRate,
-          spo2: input.spo2,
-          systolicBp: input.systolicBp,
-          temperatureC: input.temperatureC,
-          painScale: input.painScale,
-        };
-
-        const evaluation = shouldTriggerRetriage({ previous, current });
-
-        // Registra como EmergencyNote categoría REASSESSMENT con el resumen.
-        const summary = formatVitalSummary(current);
-        await ctx.prisma.emergencyNote.create({
-          data: {
-            visitId: visit.id,
-            recordedById: ctx.user.id,
-            category: "REASSESSMENT",
-            body: input.notes
-              ? `${summary}\nNota: ${input.notes}`
-              : summary,
-          },
-        });
-
-        return {
-          retriageSuggested: evaluation.shouldRetriage,
-          reasons: evaluation.reasons,
-          recorded: true,
-        };
       }),
   }),
 
@@ -477,46 +496,48 @@ export const emergencyRouter = router({
     create: tenantProcedure
       .input(emergencyNoteCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const visit = await ctx.prisma.emergencyVisit.findFirst({
-          where: {
-            id: input.visitId,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            disposition: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!visit) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Visita no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const visit = await tx.emergencyVisit.findFirst({
+            where: {
+              id: input.visitId,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: {
+              id: true,
+              disposition: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          if (!visit) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Visita no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, visit.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          // Beta.4: bloqueo de notas sobre visitas terminadas para preservar
+          // integridad clínica del cierre.
+          if (isTerminalEmergencyDisposition(visit.disposition as EmergencyDispositionType)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Visita ya finalizada; no admite notas adicionales.",
+            });
+          }
+          return tx.emergencyNote.create({
+            data: {
+              visitId: input.visitId,
+              recordedById: ctx.user.id,
+              category: input.category,
+              body: input.body,
+            },
           });
-        }
-        // Beta.4: bloqueo de notas sobre visitas terminadas para preservar
-        // integridad clínica del cierre.
-        if (isTerminalEmergencyDisposition(visit.disposition as EmergencyDispositionType)) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Visita ya finalizada; no admite notas adicionales.",
-          });
-        }
-        return ctx.prisma.emergencyNote.create({
-          data: {
-            visitId: input.visitId,
-            recordedById: ctx.user.id,
-            category: input.category,
-            body: input.body,
-          },
         });
       }),
 
@@ -528,14 +549,16 @@ export const emergencyRouter = router({
         }),
       )
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.emergencyNote.findMany({
-          where: {
-            visitId: input.visitId,
-            visit: { organizationId: ctx.tenant.organizationId },
-          },
-          orderBy: { recordedAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.emergencyNote.findMany({
+            where: {
+              visitId: input.visitId,
+              visit: { organizationId: ctx.tenant.organizationId },
+            },
+            orderBy: { recordedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
   }),
 });

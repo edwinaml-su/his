@@ -7,6 +7,7 @@ import {
   bedReleaseSchema,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
@@ -21,77 +22,83 @@ export const bedRouter = router({
         message: "El servicio seleccionado no está en tus asignaciones.",
       });
     }
-    return ctx.prisma.bed.findMany({
-      where: {
-        organizationId: ctx.tenant.organizationId,
-        active: true,
-        // Si vino input.serviceUnitId (ya validado en scope), úsalo directo.
-        // Si no, aplica el scope agregado del usuario. Bed.serviceUnitId es
-        // REQUIRED → no incluimos nullable.
-        ...(input.serviceUnitId
-          ? { serviceUnitId: input.serviceUnitId }
-          : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
-        ...(input.status ? { status: input.status } : {}),
-      },
-      include: {
-        serviceUnit: true,
-        assignments: {
-          where: { releasedAt: null },
-          include: { encounter: { include: { patient: true } } },
-          take: 1,
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.bed.findMany({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          active: true,
+          // Si vino input.serviceUnitId (ya validado en scope), úsalo directo.
+          // Si no, aplica el scope agregado del usuario. Bed.serviceUnitId es
+          // REQUIRED → no incluimos nullable.
+          ...(input.serviceUnitId
+            ? { serviceUnitId: input.serviceUnitId }
+            : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
+          ...(input.status ? { status: input.status } : {}),
         },
-      },
-      orderBy: [{ serviceUnitId: "asc" }, { code: "asc" }],
-    });
+        include: {
+          serviceUnit: true,
+          assignments: {
+            where: { releasedAt: null },
+            include: { encounter: { include: { patient: true } } },
+            take: 1,
+          },
+        },
+        orderBy: [{ serviceUnitId: "asc" }, { code: "asc" }],
+      }),
+    );
   }),
 
   /** Igual que list pero agrupado por servicio para el componente BedMap. */
   getMap: tenantProcedure.query(async ({ ctx }) => {
-    const services = await ctx.prisma.serviceUnit.findMany({
-      where: {
-        organizationId: ctx.tenant.organizationId,
-        active: true,
-        // Nivel B — el wallboard solo muestra los servicios del usuario.
-        ...serviceUnitWhereFragment(ctx.tenant, "id"),
-      },
-      include: {
-        beds: {
-          where: { active: true },
-          include: {
-            assignments: {
-              where: { releasedAt: null },
-              include: { encounter: { include: { patient: true } } },
-              take: 1,
-            },
-          },
-          orderBy: { code: "asc" },
+    const services = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      tx.serviceUnit.findMany({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          active: true,
+          // Nivel B — el wallboard solo muestra los servicios del usuario.
+          ...serviceUnitWhereFragment(ctx.tenant, "id"),
         },
-      },
-      orderBy: { code: "asc" },
-    });
+        include: {
+          beds: {
+            where: { active: true },
+            include: {
+              assignments: {
+                where: { releasedAt: null },
+                include: { encounter: { include: { patient: true } } },
+                take: 1,
+              },
+            },
+            orderBy: { code: "asc" },
+          },
+        },
+        orderBy: { code: "asc" },
+      }),
+    );
     return services.filter((s) => s.beds.length > 0);
   }),
 
   updateStatus: tenantProcedure
     .input(bedUpdateStatusSchema)
     .mutation(async ({ ctx, input }) => {
-      // Nivel B — la cama debe pertenecer a un servicio del usuario.
-      const bed = await ctx.prisma.bed.findFirst({
-        where: { id: input.bedId, organizationId: ctx.tenant.organizationId },
-        select: { id: true, serviceUnitId: true },
-      });
-      if (!bed) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Cama no encontrada." });
-      }
-      if (isOutOfServiceUnitScope(ctx.tenant, bed.serviceUnitId)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "La cama pertenece a un servicio fuera de tus asignaciones.",
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Nivel B — la cama debe pertenecer a un servicio del usuario.
+        const bed = await tx.bed.findFirst({
+          where: { id: input.bedId, organizationId: ctx.tenant.organizationId },
+          select: { id: true, serviceUnitId: true },
         });
-      }
-      return ctx.prisma.bed.update({
-        where: { id: input.bedId },
-        data: { status: input.status },
+        if (!bed) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Cama no encontrada." });
+        }
+        if (isOutOfServiceUnitScope(ctx.tenant, bed.serviceUnitId)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "La cama pertenece a un servicio fuera de tus asignaciones.",
+          });
+        }
+        return tx.bed.update({
+          where: { id: input.bedId },
+          data: { status: input.status },
+        });
       });
     }),
 
@@ -110,20 +117,22 @@ export const bedRouter = router({
           message: "El servicio seleccionado no está en tus asignaciones.",
         });
       }
-      return ctx.prisma.bed.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          active: true,
-          status: "FREE",
-          ...(input.serviceUnitId
-            ? { serviceUnitId: input.serviceUnitId }
-            : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
-        },
-        include: {
-          serviceUnit: { select: { id: true, code: true, name: true } },
-        },
-        orderBy: [{ serviceUnitId: "asc" }, { code: "asc" }],
-      });
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.bed.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            active: true,
+            status: "FREE",
+            ...(input.serviceUnitId
+              ? { serviceUnitId: input.serviceUnitId }
+              : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId")),
+          },
+          include: {
+            serviceUnit: { select: { id: true, code: true, name: true } },
+          },
+          orderBy: [{ serviceUnitId: "asc" }, { code: "asc" }],
+        }),
+      );
     }),
 
   /**
@@ -147,7 +156,7 @@ export const bedRouter = router({
   assignToEncounter: tenantProcedure
     .input(bedAssignToEncounterSchema)
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.$transaction(async (tx) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const bed = await tx.bed.findFirst({
           where: {
             id: input.bedId,
@@ -228,7 +237,7 @@ export const bedRouter = router({
   release: tenantProcedure
     .input(bedReleaseSchema)
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.$transaction(async (tx) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const bed = await tx.bed.findFirst({
           where: {
             id: input.bedId,

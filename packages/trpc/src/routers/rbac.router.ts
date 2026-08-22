@@ -22,6 +22,35 @@
  *      completo deseado (ALLOW/DENY) — los permisos no enviados se "des-asignan".
  *
  * El schema NO se modifica.
+ *
+ * R02 (auditoría RLS externa) — decisión (c) para TODO el router, NO usa
+ * `withTenantContext`. Verificado en prod (2026-08-22, psql read-only vía
+ * DIRECT_URL) antes de decidir:
+ *   1) Las policies RLS de `Role` (`tenant_isolation_select`/`_modify`:
+ *      `organizationId = current_org_id()`) y de `RolePermission`
+ *      (`role_perm_inherits_role`, EXISTS sobre `Role.organizationId =
+ *      current_org_id()`) NO tienen cláusula para `organizationId IS NULL`.
+ *      Este router trata los roles GLOBALES (`organizationId NULL`, gate
+ *      `super_admin`) como ciudadanos de primera clase en casi todos los
+ *      procedures (`listRoles`, `getRole`, `createRole`, `updateRole`,
+ *      `deactivateRole`, `setRolePermissions`, `permissionMatrix`,
+ *      `setRoleInheritance`). Bajo rol demotado: los SELECT ocultarían en
+ *      SILENCIO los roles globales (NULL = current_org_id() es NULL, no
+ *      TRUE — no es un error, es data faltante sin aviso) y los INSERT/UPDATE
+ *      de super_admin sobre roles/permisos globales fallarían el
+ *      `WITH CHECK`. Mismo hallazgo en `RoleCodeAlias`: la policy de
+ *      lectura sí contempla `organizationId IS NULL`, pero la de escritura
+ *      (`RoleCodeAlias: write_org`) no — rompería `setRoleAlias`/
+ *      `deleteRoleAlias` para alias globales.
+ *   2) `purgeInactiveUsers`/`reactivateUser` tocan `public."User"` con
+ *      `$executeRawUnsafe`, tabla cuya policy `user_self_modify` es
+ *      `id = current_user_id()` — mismo hallazgo que
+ *      `user-admin.router.ts` (bloquea administración de OTROS usuarios).
+ *   Conclusión: el gap NO es "falta aplicar withTenantContext" sino que las
+ *   policies de RBAC no cubren aún el caso "recurso global administrado por
+ *   super_admin" — cerrarlo requiere policies nuevas (@DBA/@AS), no un
+ *   `demoteRole` unilateral que degradaría el catálogo de roles en
+ *   silencio. Documentado como pendiente en el reporte de este lote.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

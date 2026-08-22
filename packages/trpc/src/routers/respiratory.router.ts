@@ -34,6 +34,7 @@ import {
   VT_ABS_MAX,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // State machine transition table
@@ -122,31 +123,35 @@ export const respiratoryRouter = router({
     list: tenantProcedure
       .input(respiratoryOrderListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.respiratoryOrder.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.status && { status: input.status }),
-            ...(input.type && { type: input.type }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.respiratoryOrder.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.status && { status: input.status }),
+              ...(input.type && { type: input.type }),
             },
-            prescriber: { select: { id: true, fullName: true } },
-          },
-          orderBy: { startedAt: "desc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              prescriber: { select: { id: true, fullName: true } },
+            },
+            orderBy: { startedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.respiratoryOrder.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.respiratoryOrder.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -154,118 +159,126 @@ export const respiratoryRouter = router({
     create: tenantProcedure
       .input(respiratoryOrderCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: {
-            id: input.encounterId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true, patientId: true },
-        });
-        if (!enc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Encuentro no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: {
+              id: input.encounterId,
+              organizationId: ctx.tenant.organizationId,
+            },
+            select: { id: true, patientId: true },
           });
-        }
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "patientId no coincide con encounter.",
+          if (!enc) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Encuentro no existe en la organización.",
+            });
+          }
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "patientId no coincide con encounter.",
+            });
+          }
+
+          const now = new Date();
+          const expiresAt = input.expiresAt ?? new Date(now.getTime() + ORDER_DEFAULT_DURATION_MS);
+
+          return tx.respiratoryOrder.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              prescriberId: input.prescriberId,
+              type: input.type,
+              flowRate: input.flowRate ?? null,
+              fio2: input.fio2 ?? null,
+              notes: input.notes ?? null,
+              startedAt: now,
+              expiresAt,
+              createdBy: ctx.user.id,
+            },
           });
-        }
-
-        const now = new Date();
-        const expiresAt = input.expiresAt ?? new Date(now.getTime() + ORDER_DEFAULT_DURATION_MS);
-
-        return ctx.prisma.respiratoryOrder.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            prescriberId: input.prescriberId,
-            type: input.type,
-            flowRate: input.flowRate ?? null,
-            fio2: input.fio2 ?? null,
-            notes: input.notes ?? null,
-            startedAt: now,
-            expiresAt,
-            createdBy: ctx.user.id,
-          },
         });
       }),
 
     complete: tenantProcedure
       .input(respiratoryOrderCompleteInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.respiratoryOrder.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["ACTIVE", "ON_HOLD"] },
-          },
-          data: {
-            status: "COMPLETED",
-            endedAt: new Date(),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden no existe o ya está cerrada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.respiratoryOrder.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["ACTIVE", "ON_HOLD"] },
+            },
+            data: {
+              status: "COMPLETED",
+              endedAt: new Date(),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden no existe o ya está cerrada.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     cancel: tenantProcedure
       .input(respiratoryOrderCancelInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.respiratoryOrder.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["ACTIVE", "ON_HOLD"] },
-          },
-          data: {
-            status: "CANCELLED",
-            endedAt: new Date(),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden no existe o ya está cerrada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.respiratoryOrder.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["ACTIVE", "ON_HOLD"] },
+            },
+            data: {
+              status: "CANCELLED",
+              endedAt: new Date(),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden no existe o ya está cerrada.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     /** Beta.12 — renew: sets renewedAt = now() and expiresAt = now() + 24 h. */
     renew: tenantProcedure
       .input(respiratoryOrderRenewInput)
       .mutation(async ({ ctx, input }) => {
-        const now = new Date();
-        const updated = await ctx.prisma.respiratoryOrder.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "ACTIVE",
-          },
-          data: {
-            renewedAt: now,
-            expiresAt: new Date(now.getTime() + ORDER_DEFAULT_DURATION_MS),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden activa no encontrada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const now = new Date();
+          const updated = await tx.respiratoryOrder.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "ACTIVE",
+            },
+            data: {
+              renewedAt: now,
+              expiresAt: new Date(now.getTime() + ORDER_DEFAULT_DURATION_MS),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden activa no encontrada.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     /** Beta.12 — returns ACTIVE orders past expiresAt without renewal. */
@@ -273,14 +286,16 @@ export const respiratoryRouter = router({
       .input(getExpiredOrdersInput)
       .query(async ({ ctx, input }) => {
         const asOf = input.asOf ?? new Date();
-        return ctx.prisma.respiratoryOrder.findMany({
-          where: buildExpiredWhereClause(
-            input.organizationId ?? ctx.tenant.organizationId,
-            asOf,
-          ),
-          orderBy: { expiresAt: "asc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.respiratoryOrder.findMany({
+            where: buildExpiredWhereClause(
+              input.organizationId ?? ctx.tenant.organizationId,
+              asOf,
+            ),
+            orderBy: { expiresAt: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
   }),
 
@@ -288,15 +303,17 @@ export const respiratoryRouter = router({
     list: tenantProcedure
       .input(ventilatorSessionListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.ventilatorSession.findMany({
-          where: {
-            order: { organizationId: ctx.tenant.organizationId },
-            ...(input.orderId && { orderId: input.orderId }),
-            ...(input.statusSM && { statusSM: input.statusSM }),
-          },
-          orderBy: { startedAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.ventilatorSession.findMany({
+            where: {
+              order: { organizationId: ctx.tenant.organizationId },
+              ...(input.orderId && { orderId: input.orderId }),
+              ...(input.statusSM && { statusSM: input.statusSM }),
+            },
+            orderBy: { startedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     /**
@@ -312,86 +329,92 @@ export const respiratoryRouter = router({
           tidalVolume: input.tidalVolume,
         });
 
-        const order = await ctx.prisma.respiratoryOrder.findFirst({
-          where: {
-            id: input.orderId,
-            organizationId: ctx.tenant.organizationId,
-            type: "MECHANICAL_VENT",
-            status: "ACTIVE",
-          },
-          select: { id: true },
-        });
-        if (!order) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden de ventilación mecánica activa no encontrada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.respiratoryOrder.findFirst({
+            where: {
+              id: input.orderId,
+              organizationId: ctx.tenant.organizationId,
+              type: "MECHANICAL_VENT",
+              status: "ACTIVE",
+            },
+            select: { id: true },
           });
-        }
+          if (!order) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden de ventilación mecánica activa no encontrada.",
+            });
+          }
 
-        return ctx.prisma.ventilatorSession.create({
-          data: {
-            orderId: input.orderId,
-            mode: input.mode,
-            tidalVolume: input.tidalVolume ?? null,
-            rrSet: input.rrSet ?? null,
-            peep: input.peep ?? null,
-            fio2: input.fio2 ?? null,
-            patientWeightKg: input.patientWeightKg ?? null,
-            notes: input.notes ?? null,
-          },
+          return tx.ventilatorSession.create({
+            data: {
+              orderId: input.orderId,
+              mode: input.mode,
+              tidalVolume: input.tidalVolume ?? null,
+              rrSet: input.rrSet ?? null,
+              peep: input.peep ?? null,
+              fio2: input.fio2 ?? null,
+              patientWeightKg: input.patientWeightKg ?? null,
+              notes: input.notes ?? null,
+            },
+          });
         });
       }),
 
     end: tenantProcedure
       .input(ventilatorSessionEndInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.ventilatorSession.updateMany({
-          where: {
-            id: input.id,
-            order: { organizationId: ctx.tenant.organizationId },
-            endedAt: null,
-          },
-          data: { endedAt: new Date() },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Sesión no existe o ya finalizada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.ventilatorSession.updateMany({
+            where: {
+              id: input.id,
+              order: { organizationId: ctx.tenant.organizationId },
+              endedAt: null,
+            },
+            data: { endedAt: new Date() },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Sesión no existe o ya finalizada.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     /** Beta.12 — advance state machine with graph validation. */
     transition: tenantProcedure
       .input(ventilatorSessionTransitionInput)
       .mutation(async ({ ctx, input }) => {
-        const session = await ctx.prisma.ventilatorSession.findFirst({
-          where: {
-            id: input.id,
-            order: { organizationId: ctx.tenant.organizationId },
-          },
-          select: { id: true, statusSM: true, endedAt: true },
-        });
-
-        if (!session) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Sesión de ventilación no encontrada." });
-        }
-        if (session.endedAt !== null) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "No se puede transicionar una sesión ya finalizada.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const session = await tx.ventilatorSession.findFirst({
+            where: {
+              id: input.id,
+              order: { organizationId: ctx.tenant.organizationId },
+            },
+            select: { id: true, statusSM: true, endedAt: true },
           });
-        }
 
-        assertTransitionAllowed(session.statusSM as VentilatorStatus, input.to as VentilatorStatus);
+          if (!session) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Sesión de ventilación no encontrada." });
+          }
+          if (session.endedAt !== null) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "No se puede transicionar una sesión ya finalizada.",
+            });
+          }
 
-        return ctx.prisma.ventilatorSession.update({
-          where: { id: input.id },
-          data: {
-            statusSM: input.to,
-            notes: input.notes ?? undefined,
-          },
+          assertTransitionAllowed(session.statusSM as VentilatorStatus, input.to as VentilatorStatus);
+
+          return tx.ventilatorSession.update({
+            where: { id: input.id },
+            data: {
+              statusSM: input.to,
+              notes: input.notes ?? undefined,
+            },
+          });
         });
       }),
   }),
@@ -400,21 +423,23 @@ export const respiratoryRouter = router({
     list: tenantProcedure
       .input(medicalGasUsageListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.medicalGasUsage.findMany({
-          where: {
-            order: { organizationId: ctx.tenant.organizationId },
-            ...(input.orderId && { orderId: input.orderId }),
-            ...(input.gasType && { gasType: input.gasType }),
-            ...((input.fromDate || input.toDate) && {
-              measuredAt: {
-                ...(input.fromDate && { gte: input.fromDate }),
-                ...(input.toDate && { lte: input.toDate }),
-              },
-            }),
-          },
-          orderBy: { measuredAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.medicalGasUsage.findMany({
+            where: {
+              order: { organizationId: ctx.tenant.organizationId },
+              ...(input.orderId && { orderId: input.orderId }),
+              ...(input.gasType && { gasType: input.gasType }),
+              ...((input.fromDate || input.toDate) && {
+                measuredAt: {
+                  ...(input.fromDate && { gte: input.fromDate }),
+                  ...(input.toDate && { lte: input.toDate }),
+                },
+              }),
+            },
+            orderBy: { measuredAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     /**
@@ -424,27 +449,29 @@ export const respiratoryRouter = router({
     create: tenantProcedure
       .input(medicalGasUsageCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const order = await ctx.prisma.respiratoryOrder.findFirst({
-          where: {
-            id: input.orderId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true },
-        });
-        if (!order) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Orden respiratoria no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const order = await tx.respiratoryOrder.findFirst({
+            where: {
+              id: input.orderId,
+              organizationId: ctx.tenant.organizationId,
+            },
+            select: { id: true },
           });
-        }
-        return ctx.prisma.medicalGasUsage.create({
-          data: {
-            orderId: input.orderId,
-            gasType: input.gasType,
-            volumeLiters: input.volumeLiters,
-            recordedById: ctx.user.id,
-            notes: input.notes ?? null,
-          },
+          if (!order) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Orden respiratoria no existe en la organización.",
+            });
+          }
+          return tx.medicalGasUsage.create({
+            data: {
+              orderId: input.orderId,
+              gasType: input.gasType,
+              volumeLiters: input.volumeLiters,
+              recordedById: ctx.user.id,
+              notes: input.notes ?? null,
+            },
+          });
         });
       }),
   }),

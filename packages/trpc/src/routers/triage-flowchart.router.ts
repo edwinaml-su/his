@@ -32,6 +32,7 @@ import {
   type TriageColorOut,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 export const triageFlowchartRouter = router({
   /**
@@ -46,24 +47,26 @@ export const triageFlowchartRouter = router({
     .input(listFlowchartsInputSchema)
     .query(async ({ ctx, input }): Promise<FlowchartListItem[]> => {
       const search = input?.search?.trim();
-      const rows = await ctx.prisma.triageFlowchart.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          ...(input?.includeInactive ? {} : { active: true }),
-          ...(search
-            ? {
-                OR: [
-                  { name: { contains: search, mode: "insensitive" } },
-                  { code: { contains: search, mode: "insensitive" } },
-                ],
-              }
-            : {}),
-        },
-        orderBy: { name: "asc" },
-        include: {
-          _count: { select: { discriminators: { where: { active: true } } } },
-        },
-      });
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.triageFlowchart.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            ...(input?.includeInactive ? {} : { active: true }),
+            ...(search
+              ? {
+                  OR: [
+                    { name: { contains: search, mode: "insensitive" } },
+                    { code: { contains: search, mode: "insensitive" } },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: { name: "asc" },
+          include: {
+            _count: { select: { discriminators: { where: { active: true } } } },
+          },
+        }),
+      );
 
       const all: FlowchartListItem[] = rows.map((r) => ({
         id: r.id,
@@ -87,20 +90,22 @@ export const triageFlowchartRouter = router({
   get: tenantProcedure
     .input(getFlowchartInputSchema)
     .query(async ({ ctx, input }): Promise<FlowchartDetail> => {
-      const fc = await ctx.prisma.triageFlowchart.findFirst({
-        where: {
-          id: input.id,
-          organizationId: ctx.tenant.organizationId,
-        },
-        include: {
-          discriminators: {
-            where: { active: true },
-            orderBy: { ordinal: "asc" },
-            include: { resultLevel: true },
+      const fc = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.triageFlowchart.findFirst({
+          where: {
+            id: input.id,
+            organizationId: ctx.tenant.organizationId,
           },
-          _count: { select: { discriminators: { where: { active: true } } } },
-        },
-      });
+          include: {
+            discriminators: {
+              where: { active: true },
+              orderBy: { ordinal: "asc" },
+              include: { resultLevel: true },
+            },
+            _count: { select: { discriminators: { where: { active: true } } } },
+          },
+        }),
+      );
       if (!fc) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Flujograma no existe." });
       }
@@ -142,33 +147,36 @@ export const triageFlowchartRouter = router({
   listForTriage: tenantProcedure
     .input(listForTriageInputSchema)
     .query(async ({ ctx, input }) => {
-      const evaluation = await ctx.prisma.triageEvaluation.findFirst({
-        where: {
-          id: input.triageEvaluationId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        select: { id: true, flowchartId: true, status: true },
-      });
-      if (!evaluation) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Evaluación de triage no existe.",
+      const { evaluation, fc, discriminators } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const evaluation = await tx.triageEvaluation.findFirst({
+          where: {
+            id: input.triageEvaluationId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          select: { id: true, flowchartId: true, status: true },
         });
-      }
-      const fc = await ctx.prisma.triageFlowchart.findUnique({
-        where: { id: evaluation.flowchartId },
-        select: { id: true, code: true, name: true, isPediatric: true, defaultLevelId: true },
-      });
-      if (!fc) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "Flujograma de la evaluación no existe.",
+        if (!evaluation) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Evaluación de triage no existe.",
+          });
+        }
+        const fc = await tx.triageFlowchart.findUnique({
+          where: { id: evaluation.flowchartId },
+          select: { id: true, code: true, name: true, isPediatric: true, defaultLevelId: true },
         });
-      }
-      const discriminators = await ctx.prisma.triageDiscriminator.findMany({
-        where: { flowchartId: fc.id, active: true },
-        orderBy: { ordinal: "asc" },
-        include: { resultLevel: true },
+        if (!fc) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Flujograma de la evaluación no existe.",
+          });
+        }
+        const discriminators = await tx.triageDiscriminator.findMany({
+          where: { flowchartId: fc.id, active: true },
+          orderBy: { ordinal: "asc" },
+          include: { resultLevel: true },
+        });
+        return { evaluation, fc, discriminators };
       });
 
       return {
@@ -209,19 +217,20 @@ export const triageFlowchartRouter = router({
   setActive: tenantProcedure
     .input(setFlowchartActiveInputSchema)
     .mutation(async ({ ctx, input }) => {
-      // Verifica que pertenezca al tenant.
-      const fc = await ctx.prisma.triageFlowchart.findFirst({
-        where: { id: input.id, organizationId: ctx.tenant.organizationId },
-        select: { id: true },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Verifica que pertenezca al tenant.
+        const fc = await tx.triageFlowchart.findFirst({
+          where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!fc) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Flujograma no existe." });
+        }
+        return tx.triageFlowchart.update({
+          where: { id: fc.id },
+          data: { active: input.active },
+          select: { id: true, active: true },
+        });
       });
-      if (!fc) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Flujograma no existe." });
-      }
-      const updated = await ctx.prisma.triageFlowchart.update({
-        where: { id: fc.id },
-        data: { active: input.active },
-        select: { id: true, active: true },
-      });
-      return updated;
     }),
 });

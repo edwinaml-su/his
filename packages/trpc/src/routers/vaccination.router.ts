@@ -31,6 +31,7 @@ import {
   expectedDosesFor,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 /**
  * Componentes de las vacunas PAI más comunes para matching contra alergias.
@@ -109,25 +110,38 @@ export const vaccinationRouter = router({
               OR: [{ countryId: ctx.tenant.countryId }, { countryId: null }],
             };
 
-      return ctx.prisma.vaccine.findMany({
-        where: {
-          ...countryFilter,
-          ...(input.activeOnly ? { active: true } : {}),
-          ...(input.search
-            ? {
-                OR: [
-                  { code: { contains: input.search, mode: "insensitive" } },
-                  { name: { contains: input.search, mode: "insensitive" } },
-                ],
-              }
-            : {}),
-        },
-        orderBy: [{ code: "asc" }],
-      });
+      // Vaccine es catálogo global (policy SELECT `true`) — corre demotado
+      // por consistencia aunque no requiere scoping tenant.
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.vaccine.findMany({
+          where: {
+            ...countryFilter,
+            ...(input.activeOnly ? { active: true } : {}),
+            ...(input.search
+              ? {
+                  OR: [
+                    { code: { contains: input.search, mode: "insensitive" } },
+                    { name: { contains: input.search, mode: "insensitive" } },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: [{ code: "asc" }],
+        }),
+      );
     }),
 
   /**
    * Crea una vacuna en el catálogo (admin). Idempotente vía unique (countryId, code).
+   *
+   * R02 — NO migrado a `withTenantContext` a propósito. `Vaccine` es un
+   * catálogo compartido: RLS solo tiene una policy `SELECT` (`Vaccine_select_all`,
+   * qual=true); no existe policy `INSERT`/`ALL`, así que aunque `authenticated`
+   * tiene GRANT INSERT a nivel de tabla, RLS deniega por defecto (sin policy
+   * permisiva para el comando) — demotar el rol rompería este create con
+   * "new row violates row-level security policy". Vaccine no tiene
+   * `organizationId` (es catálogo global, no tenant-scoped), así que no hay
+   * JS filter débil que reforzar aquí en primer lugar.
    */
   createVaccine: tenantProcedure
     .input(vaccineCreateInput)
@@ -165,21 +179,25 @@ export const vaccinationRouter = router({
   byPatient: tenantProcedure
     .input(vaccinationByPatientInput)
     .query(async ({ ctx, input }) => {
-      const patient = await ctx.prisma.patient.findUnique({
-        where: { id: input.patientId },
-        select: { id: true, organizationId: true },
+      const { patient, records } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findUnique({
+          where: { id: input.patientId },
+          select: { id: true, organizationId: true },
+        });
+        if (!patient) return { patient: null, records: [] };
+
+        const records = await tx.patientVaccination.findMany({
+          where: { patientId: input.patientId },
+          include: {
+            vaccine: true,
+          },
+          orderBy: [{ administeredAt: "asc" }],
+        });
+        return { patient, records };
       });
       if (!patient || patient.organizationId !== ctx.tenant.organizationId) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
       }
-
-      const records = await ctx.prisma.patientVaccination.findMany({
-        where: { patientId: input.patientId },
-        include: {
-          vaccine: true,
-        },
-        orderBy: [{ administeredAt: "asc" }],
-      });
 
       // Agrupa por vaccineId.
       const groups = new Map<
@@ -231,82 +249,84 @@ export const vaccinationRouter = router({
   recordVaccination: tenantProcedure
     .input(recordVaccinationInput)
     .mutation(async ({ ctx, input }) => {
-      const [patient, vaccine] = await Promise.all([
-        ctx.prisma.patient.findUnique({
-          where: { id: input.patientId },
-          select: {
-            id: true,
-            organizationId: true,
-            allergies: {
-              where: { active: true },
-              select: { id: true, substanceText: true, severity: true },
-            },
-          },
-        }),
-        ctx.prisma.vaccine.findUnique({ where: { id: input.vaccineId } }),
-      ]);
-
-      if (!patient || patient.organizationId !== ctx.tenant.organizationId) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
-      }
-      if (!vaccine || !vaccine.active) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Vacuna no encontrada o inactiva.",
-        });
-      }
-
-      // Alerta de alergia (matching simple por keyword).
-      const allergyHits = findAllergyMatches(patient.allergies, vaccine.code, vaccine.name);
-      if (allergyHits.length > 0 && !input.overrideAllergyAlert) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            `El paciente tiene ${allergyHits.length} alergia(s) con coincidencia sobre componentes de ${vaccine.name}. ` +
-            `Substancias: ${allergyHits.map((h) => h.substance).join(", ")}. ` +
-            `Confirme override clínico para continuar.`,
-          cause: { allergyHits },
-        });
-      }
-
-      // Dosis duplicada (regla de negocio MVP: una entrada por (patient, vaccine, doseNumber)).
-      const existing = await ctx.prisma.patientVaccination.findFirst({
-        where: {
-          patientId: input.patientId,
-          vaccineId: input.vaccineId,
-          doseNumber: input.doseNumber,
-        },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `La dosis ${input.doseNumber} de ${vaccine.name} ya fue registrada.`,
-        });
-      }
-
       try {
-        const created = await ctx.prisma.patientVaccination.create({
-          data: {
-            patientId: input.patientId,
-            vaccineId: input.vaccineId,
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: ctx.tenant.establishmentId ?? undefined,
-            doseNumber: input.doseNumber,
-            administeredAt: input.administeredAt,
-            lotNumber: input.lotNumber,
-            expirationDate: input.expirationDate,
-            anatomicalSite: input.anatomicalSite,
-            administeredById: ctx.tenant.userId,
-            reactionsObserved: input.reactionsObserved,
-            notes: input.notes,
-            createdBy: ctx.tenant.userId,
-          },
+        return await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const [patient, vaccine] = await Promise.all([
+            tx.patient.findUnique({
+              where: { id: input.patientId },
+              select: {
+                id: true,
+                organizationId: true,
+                allergies: {
+                  where: { active: true },
+                  select: { id: true, substanceText: true, severity: true },
+                },
+              },
+            }),
+            tx.vaccine.findUnique({ where: { id: input.vaccineId } }),
+          ]);
+
+          if (!patient || patient.organizationId !== ctx.tenant.organizationId) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+          }
+          if (!vaccine || !vaccine.active) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Vacuna no encontrada o inactiva.",
+            });
+          }
+
+          // Alerta de alergia (matching simple por keyword).
+          const allergyHits = findAllergyMatches(patient.allergies, vaccine.code, vaccine.name);
+          if (allergyHits.length > 0 && !input.overrideAllergyAlert) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message:
+                `El paciente tiene ${allergyHits.length} alergia(s) con coincidencia sobre componentes de ${vaccine.name}. ` +
+                `Substancias: ${allergyHits.map((h) => h.substance).join(", ")}. ` +
+                `Confirme override clínico para continuar.`,
+              cause: { allergyHits },
+            });
+          }
+
+          // Dosis duplicada (regla de negocio MVP: una entrada por (patient, vaccine, doseNumber)).
+          const existing = await tx.patientVaccination.findFirst({
+            where: {
+              patientId: input.patientId,
+              vaccineId: input.vaccineId,
+              doseNumber: input.doseNumber,
+            },
+            select: { id: true },
+          });
+          if (existing) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `La dosis ${input.doseNumber} de ${vaccine.name} ya fue registrada.`,
+            });
+          }
+
+          const created = await tx.patientVaccination.create({
+            data: {
+              patientId: input.patientId,
+              vaccineId: input.vaccineId,
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: ctx.tenant.establishmentId ?? undefined,
+              doseNumber: input.doseNumber,
+              administeredAt: input.administeredAt,
+              lotNumber: input.lotNumber,
+              expirationDate: input.expirationDate,
+              anatomicalSite: input.anatomicalSite,
+              administeredById: ctx.tenant.userId,
+              reactionsObserved: input.reactionsObserved,
+              notes: input.notes,
+              createdBy: ctx.tenant.userId,
+            },
+          });
+          return {
+            ...created,
+            allergyHits, // Si hubo hits y se hizo override, se devuelven para auditoría UI.
+          };
         });
-        return {
-          ...created,
-          allergyHits, // Si hubo hits y se hizo override, se devuelven para auditoría UI.
-        };
       } catch (err) {
         if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2003") {
           throw new TRPCError({

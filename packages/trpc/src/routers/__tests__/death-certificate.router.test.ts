@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { deathCertificateRouter } from "../death-certificate.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
 /** Helper local: pequeño envoltorio sobre vi.fn() para reducir ruido. */
@@ -23,6 +23,7 @@ describe("deathCertificateRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    installTenantContextMock(prisma);
   });
 
   describe("list", () => {

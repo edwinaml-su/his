@@ -73,6 +73,14 @@ let prisma: DeepMockProxy<PrismaClient>;
 beforeEach(() => {
   prisma = mockDeep<PrismaClient>();
   vi.clearAllMocks();
+  // R02: todos los procedures ahora pasan por withTenantContext ($transaction
+  // + SET LOCAL). El mock invoca el callback con el mismo `prisma` mockeado
+  // para que `prisma.$queryRaw`/`$executeRaw` sigan viendo las llamadas.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  prisma.$transaction.mockImplementation(async (cb: any) => {
+    if (typeof cb === "function") return cb(prisma);
+    return Promise.all(cb);
+  });
 });
 
 function makeCaller() {

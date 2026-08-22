@@ -45,6 +45,41 @@
  *                                              cercano para extranjeros menores)
  *
  * Spec: docs/blueprints/ece_his_bridge.md
+ *
+ * ===========================================================================
+ * R02 (remediación multi-tenant) — auditado, NO migrado a `withTenantContext`
+ * ===========================================================================
+ *
+ * Evaluado explícitamente para el hallazgo "57 routers filtran solo por
+ * organizationId en JS". Se decidió NO migrar por dos bloqueos reales,
+ * verificados contra prod vía psql:
+ *
+ * 1. Doble espacio de GUC en la MISMA transacción. `public.Patient` se rige
+ *    por `app.current_org_id` (withTenantContext), pero `ece.paciente` tiene
+ *    RLS propia (`paciente_tenant_insert/update/select`) atada a
+ *    `ece.current_establecimiento_id_safe()` (withWorkflowContext) — un GUC
+ *    completamente distinto. linkPatient/syncFromHis/syncToHis escriben
+ *    AMBAS tablas en la misma tx. Si `ctx.tenant.establishmentId` es null
+ *    (sesión sin establecimiento elegido, permitido por `requireRole`), el
+ *    UPDATE/INSERT sobre `ece.paciente` quedaría filtrado a 0 filas SIN
+ *    error — el router hoy ni siquiera verifica rowcount en unlinkPatient,
+ *    así que reportaría éxito sin haber desvinculado nada.
+ * 2. `emitDomainEvent` (outbox `ece.paciente.linked`/`.synced`) escribe
+ *    internamente en `AuditLog`, y `authenticated` NO tiene GRANT INSERT
+ *    sobre esa tabla (verificado en prod: solo SELECT) — demotar el rol
+ *    tumbaría la transacción completa, incluido el link/sync real.
+ *
+ * Separar el emit en una tx aparte (patrón usado en otros routers de este
+ * lote) evita el bloqueo #2, pero el #1 sigue siendo un riesgo real de
+ * "éxito silencioso sin efecto" que no se puede resolver sin: (a) aplicar
+ * AMBOS contextos (tenant + ece) en la misma tx con un guard explícito de
+ * `establishmentId`, y (b) tests de integración contra Postgres real (no
+ * mocks) que confirmen que las policies de `ece.paciente` se satisfacen —
+ * fuera del alcance de esta tarea (sin permiso para aplicar SQL a prod ni
+ * para escribir un helper compartido nuevo en `packages/trpc/src/lib/`).
+ * El filtro tenant de este router sigue viviendo solo en `organizationId`
+ * (JS, vía `tx.patient.findFirst({ where: { organizationId } })`) — riesgo
+ * aceptado y documentado, no defensa en profundidad real.
  */
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../trpc";

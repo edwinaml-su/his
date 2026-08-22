@@ -32,6 +32,7 @@ import {
   type TriageMonitorResponse,
 } from "@his/contracts/schemas/triage-monitor";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
@@ -91,49 +92,57 @@ export const triageDashboardRouter = router({
         ? { serviceUnitId: filters.serviceUnitId }
         : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
 
-      const evaluations = await ctx.prisma.triageEvaluation.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          ...(establishmentId ? { establishmentId } : {}),
-          ...scopedSU,
-          status: { notIn: ["COMPLETED", "CANCELLED"] },
-          ...(search
-            ? {
-                patient: {
-                  OR: [
-                    { mrn: { contains: search, mode: "insensitive" } },
-                    { firstName: { contains: search, mode: "insensitive" } },
-                    { lastName: { contains: search, mode: "insensitive" } },
-                  ],
-                },
-              }
-            : {}),
-        },
-        include: {
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              mrn: true,
-              birthDate: true,
-              isUnknown: true,
-            },
+      const { evaluations, levels: dashLevels } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const evaluations = await tx.triageEvaluation.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            ...(establishmentId ? { establishmentId } : {}),
+            ...scopedSU,
+            status: { notIn: ["COMPLETED", "CANCELLED"] },
+            ...(search
+              ? {
+                  patient: {
+                    OR: [
+                      { mrn: { contains: search, mode: "insensitive" } },
+                      { firstName: { contains: search, mode: "insensitive" } },
+                      { lastName: { contains: search, mode: "insensitive" } },
+                    ],
+                  },
+                }
+              : {}),
           },
-          serviceUnit: { select: { id: true, name: true } },
-          assignedLevel: {
-            select: {
-              id: true,
-              color: true,
-              name: true,
-              priority: true,
-              maxWaitMinutes: true,
-              uiColorHex: true,
+          include: {
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+                birthDate: true,
+                isUnknown: true,
+              },
             },
+            serviceUnit: { select: { id: true, name: true } },
+            assignedLevel: {
+              select: {
+                id: true,
+                color: true,
+                name: true,
+                priority: true,
+                maxWaitMinutes: true,
+                uiColorHex: true,
+              },
+            },
+            // Cuenta encadenada de re-triages siguiendo `reTriageOfId`.
+            reTriageOf_back: { select: { id: true } },
           },
-          // Cuenta encadenada de re-triages siguiendo `reTriageOfId`.
-          reTriageOf_back: { select: { id: true } },
-        },
+        });
+        const levels = await tx.triageLevel.findMany({
+          where: { organizationId: ctx.tenant.organizationId, active: true },
+          orderBy: { priority: "asc" },
+          select: { color: true, name: true, uiColorHex: true },
+        });
+        return { evaluations, levels };
       });
 
       const now = new Date();
@@ -193,12 +202,7 @@ export const triageDashboardRouter = router({
 
       // Counts por nivel — incluye niveles activos sin items en cero para el
       // header con 5 cards.
-      const levels = await ctx.prisma.triageLevel.findMany({
-        where: { organizationId: ctx.tenant.organizationId, active: true },
-        orderBy: { priority: "asc" },
-        select: { color: true, name: true, uiColorHex: true },
-      });
-      const counts = levels.map((lvl) => {
+      const counts = dashLevels.map((lvl) => {
         const matching = items.filter((i) => i.assignedLevel.color === lvl.color);
         return {
           color: lvl.color,
@@ -230,18 +234,20 @@ export const triageDashboardRouter = router({
   closeEvaluation: tenantProcedure
     .input(z.object({ triageEvaluationId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const updated = await ctx.prisma.triageEvaluation.updateMany({
-        where: {
-          id: input.triageEvaluationId,
-          organizationId: ctx.tenant.organizationId,
-          status: "IN_PROGRESS",
-        },
-        data: {
-          status: "COMPLETED",
-          completedAt: new Date(),
-          updatedBy: ctx.user.id,
-        },
-      });
+      const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.triageEvaluation.updateMany({
+          where: {
+            id: input.triageEvaluationId,
+            organizationId: ctx.tenant.organizationId,
+            status: "IN_PROGRESS",
+          },
+          data: {
+            status: "COMPLETED",
+            completedAt: new Date(),
+            updatedBy: ctx.user.id,
+          },
+        }),
+      );
       return { closed: updated.count };
     }),
 
@@ -289,107 +295,144 @@ export const triageDashboardRouter = router({
         ? { serviceUnitId: input.serviceUnitId }
         : serviceUnitWhereFragment(ctx.tenant, "serviceUnitId", { includeNullable: true });
 
-      // 1. Triage evaluations: IN_PROGRESS o COMPLETED del día.
-      const evaluations = await ctx.prisma.triageEvaluation.findMany({
-        where: {
-          organizationId: ctx.tenant.organizationId,
-          ...(establishmentId ? { establishmentId } : {}),
-          ...scopedSU,
-          status: { in: ["IN_PROGRESS", "COMPLETED"] },
-          startedAt: { gte: dayStart },
-        },
-        include: {
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              mrn: true,
-              birthDate: true,
-              isUnknown: true,
-              biologicalSex: { select: { code: true } },
+      // R02 — todo el bloque de lectura corre demotado en una sola transacción
+      // (incluye los 2 `$queryRawUnsafe`: RLS aplica igual sobre SQL crudo que
+      // sobre Prisma, así que de paso se cierra el hueco de esas dos queries
+      // que no llevaban ningún filtro de organización, ni JS ni RLS).
+      const {
+        evaluations,
+        encounterById,
+        admittedEncSet,
+        pendingLabSet,
+        pendingImgSet,
+        inConsultSet,
+        levels,
+      } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // 1. Triage evaluations: IN_PROGRESS o COMPLETED del día.
+        const evaluations = await tx.triageEvaluation.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            ...(establishmentId ? { establishmentId } : {}),
+            ...scopedSU,
+            status: { in: ["IN_PROGRESS", "COMPLETED"] },
+            startedAt: { gte: dayStart },
+          },
+          include: {
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+                birthDate: true,
+                isUnknown: true,
+                biologicalSex: { select: { code: true } },
+              },
+            },
+            assignedLevel: {
+              select: {
+                color: true,
+                name: true,
+                priority: true,
+                maxWaitMinutes: true,
+                uiColorHex: true,
+              },
             },
           },
-          assignedLevel: {
-            select: {
-              color: true,
-              name: true,
-              priority: true,
-              maxWaitMinutes: true,
-              uiColorHex: true,
-            },
+        });
+
+        const encounterIds = evaluations
+          .map((e) => e.encounterId)
+          .filter((id): id is string => !!id);
+
+        // 2. Encounters relacionados — para detectar dischargedAt y admissionType.
+        const encounters = encounterIds.length
+          ? await tx.encounter.findMany({
+              where: { id: { in: encounterIds } },
+              select: {
+                id: true,
+                dischargedAt: true,
+                admissionType: true,
+              },
+            })
+          : [];
+        const encounterById = new Map(encounters.map((e) => [e.id, e]));
+
+        // 3. InpatientAdmission activa por encounter.
+        const inpatientAdmissions = encounterIds.length
+          ? await tx.$queryRawUnsafe<
+              Array<{ encounterId: string }>
+            >(
+              `SELECT "encounterId" FROM "InpatientAdmission"
+               WHERE "encounterId" = ANY($1::uuid[])
+                 AND ("dischargedAt" IS NULL OR "dischargedAt" > now())`,
+              encounterIds,
+            )
+          : [];
+        const admittedEncSet = new Set(inpatientAdmissions.map((a) => a.encounterId));
+
+        // 4. LabOrders pendientes por encounter (status ORDERED|IN_PROGRESS).
+        const labOrders = encounterIds.length
+          ? await tx.labOrder.findMany({
+              where: {
+                encounterId: { in: encounterIds },
+                status: { in: ["ORDERED", "COLLECTED", "IN_PROCESS"] },
+              },
+              select: { encounterId: true },
+            })
+          : [];
+        const pendingLabSet = new Set(labOrders.map((l) => l.encounterId));
+
+        // 5. ImagingOrders pendientes por encounter.
+        const imgOrders = encounterIds.length
+          ? await tx.imagingOrder.findMany({
+              where: {
+                encounterId: { in: encounterIds },
+                status: { in: ["ORDERED", "SCHEDULED", "IN_PROGRESS"] },
+              },
+              select: { encounterId: true },
+            })
+          : [];
+        const pendingImgSet = new Set(imgOrders.map((i) => i.encounterId));
+
+        // 6. ClinicalNote reciente (última hora) por encounter → señal "en consulta".
+        // (Antes referenciaba "EhrNote" que nunca existió en BD — la tabla real
+        // es public."ClinicalNote", causaba 42P01 en /triage/monitor.)
+        const recentNotes = encounterIds.length
+          ? await tx.$queryRawUnsafe<
+              Array<{ encounterId: string }>
+            >(
+              `SELECT DISTINCT "encounterId" FROM "ClinicalNote"
+               WHERE "encounterId" = ANY($1::uuid[])
+                 AND "createdAt" > now() - interval '60 minutes'`,
+              encounterIds,
+            )
+          : [];
+        const inConsultSet = new Set(recentNotes.map((n) => n.encounterId));
+
+        // 7. Niveles activos del tenant (para asegurar 5 columnas aunque vacías).
+        const levels = await tx.triageLevel.findMany({
+          where: { organizationId: ctx.tenant.organizationId, active: true },
+          orderBy: { priority: "asc" },
+          select: {
+            color: true,
+            name: true,
+            uiColorHex: true,
+            maxWaitMinutes: true,
+            priority: true,
           },
-        },
+        });
+
+        return {
+          evaluations,
+          encounterById,
+          admittedEncSet,
+          pendingLabSet,
+          pendingImgSet,
+          inConsultSet,
+          levels,
+        };
       });
-
-      const encounterIds = evaluations
-        .map((e) => e.encounterId)
-        .filter((id): id is string => !!id);
-
-      // 2. Encounters relacionados — para detectar dischargedAt y admissionType.
-      const encounters = encounterIds.length
-        ? await ctx.prisma.encounter.findMany({
-            where: { id: { in: encounterIds } },
-            select: {
-              id: true,
-              dischargedAt: true,
-              admissionType: true,
-            },
-          })
-        : [];
-      const encounterById = new Map(encounters.map((e) => [e.id, e]));
-
-      // 3. InpatientAdmission activa por encounter.
-      const inpatientAdmissions = encounterIds.length
-        ? await ctx.prisma.$queryRawUnsafe<
-            Array<{ encounterId: string }>
-          >(
-            `SELECT "encounterId" FROM "InpatientAdmission"
-             WHERE "encounterId" = ANY($1::uuid[])
-               AND ("dischargedAt" IS NULL OR "dischargedAt" > now())`,
-            encounterIds,
-          )
-        : [];
-      const admittedEncSet = new Set(inpatientAdmissions.map((a) => a.encounterId));
-
-      // 4. LabOrders pendientes por encounter (status ORDERED|IN_PROGRESS).
-      const labOrders = encounterIds.length
-        ? await ctx.prisma.labOrder.findMany({
-            where: {
-              encounterId: { in: encounterIds },
-              status: { in: ["ORDERED", "COLLECTED", "IN_PROCESS"] },
-            },
-            select: { encounterId: true },
-          })
-        : [];
-      const pendingLabSet = new Set(labOrders.map((l) => l.encounterId));
-
-      // 5. ImagingOrders pendientes por encounter.
-      const imgOrders = encounterIds.length
-        ? await ctx.prisma.imagingOrder.findMany({
-            where: {
-              encounterId: { in: encounterIds },
-              status: { in: ["ORDERED", "SCHEDULED", "IN_PROGRESS"] },
-            },
-            select: { encounterId: true },
-          })
-        : [];
-      const pendingImgSet = new Set(imgOrders.map((i) => i.encounterId));
-
-      // 6. ClinicalNote reciente (última hora) por encounter → señal "en consulta".
-      // (Antes referenciaba "EhrNote" que nunca existió en BD — la tabla real
-      // es public."ClinicalNote", causaba 42P01 en /triage/monitor.)
-      const recentNotes = encounterIds.length
-        ? await ctx.prisma.$queryRawUnsafe<
-            Array<{ encounterId: string }>
-          >(
-            `SELECT DISTINCT "encounterId" FROM "ClinicalNote"
-             WHERE "encounterId" = ANY($1::uuid[])
-               AND "createdAt" > now() - interval '60 minutes'`,
-            encounterIds,
-          )
-        : [];
-      const inConsultSet = new Set(recentNotes.map((n) => n.encounterId));
 
       function deriveProcessStep(
         evalStatus: string,
@@ -416,19 +459,6 @@ export const triageDashboardRouter = router({
 
         return "WAITING_DOCTOR";
       }
-
-      // 7. Niveles activos del tenant (para asegurar 5 columnas aunque vacías).
-      const levels = await ctx.prisma.triageLevel.findMany({
-        where: { organizationId: ctx.tenant.organizationId, active: true },
-        orderBy: { priority: "asc" },
-        select: {
-          color: true,
-          name: true,
-          uiColorHex: true,
-          maxWaitMinutes: true,
-          priority: true,
-        },
-      });
 
       // 8. Construir items.
       const items: TriageMonitorItem[] = evaluations.map((e) => {

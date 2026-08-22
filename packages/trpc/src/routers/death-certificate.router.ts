@@ -34,6 +34,7 @@ import {
   deathCertificateGetSchema,
 } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 const ICD10_SYSTEM_CODES = ["ICD-10", "ICD10", "CIE-10", "CIE10"] as const;
 
@@ -79,60 +80,65 @@ export const deathCertificateRouter = router({
         });
       }
 
-      // 2) Encounter abierto + paciente válido.
-      const encounter = await ctx.prisma.encounter.findFirst({
-        where: {
-          id: input.encounterId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        include: {
-          patient: { select: { id: true, deletedAt: true } },
-          bedAssignments: { where: { releasedAt: null }, take: 1 },
-        },
-      });
-      if (!encounter) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Encuentro no encontrado.",
+      // R02 — lecturas + escrituras clínicas (DeathCertificate/Encounter/
+      // BedAssignment/Bed, todas con policy ALL/organizationId) corren
+      // demotadas. El `auditLog.create` de severity=HIGH NO va aquí adentro:
+      // `authenticated` no tiene GRANT INSERT sobre AuditLog en absoluto
+      // (verificado en prod) — se escribe después, bajo el rol bypass, mismo
+      // patrón que en `emitDomainEvent`.
+      const certificate = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // 2) Encounter abierto + paciente válido.
+        const encounter = await tx.encounter.findFirst({
+          where: {
+            id: input.encounterId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          include: {
+            patient: { select: { id: true, deletedAt: true } },
+            bedAssignments: { where: { releasedAt: null }, take: 1 },
+          },
         });
-      }
-      if (encounter.dischargedAt) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "El encuentro ya está cerrado. No se puede emitir certificado retroactivamente sin justificación administrativa.",
-        });
-      }
-      if (encounter.patient.deletedAt) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "El paciente está marcado como inactivo (deletedAt). Revisa el estado antes de certificar.",
-        });
-      }
-      if (input.occurredAt < encounter.admittedAt) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "La fecha de fallecimiento no puede ser anterior a la admisión.",
-        });
-      }
+        if (!encounter) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Encuentro no encontrado.",
+          });
+        }
+        if (encounter.dischargedAt) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "El encuentro ya está cerrado. No se puede emitir certificado retroactivamente sin justificación administrativa.",
+          });
+        }
+        if (encounter.patient.deletedAt) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "El paciente está marcado como inactivo (deletedAt). Revisa el estado antes de certificar.",
+          });
+        }
+        if (input.occurredAt < encounter.admittedAt) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "La fecha de fallecimiento no puede ser anterior a la admisión.",
+          });
+        }
 
-      // 3) Idempotencia: ya existe DeathCertificate para el paciente.
-      const existing = await ctx.prisma.deathCertificate.findUnique({
-        where: { patientId: encounter.patientId },
-        select: { id: true },
-      });
-      if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "El paciente ya tiene un certificado de defunción registrado.",
+        // 3) Idempotencia: ya existe DeathCertificate para el paciente.
+        const existing = await tx.deathCertificate.findUnique({
+          where: { patientId: encounter.patientId },
+          select: { id: true },
         });
-      }
+        if (existing) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "El paciente ya tiene un certificado de defunción registrado.",
+          });
+        }
 
-      // 4) Transacción atómica.
-      return ctx.prisma.$transaction(async (tx) => {
         const certificate = await tx.deathCertificate.create({
           data: {
             patientId: encounter.patientId,
@@ -183,85 +189,91 @@ export const deathCertificateRouter = router({
         // El "estado fallecido" se deriva de la existencia de DeathCertificate
         // y del encounter cerrado con dischargeType=DEATH.
 
-        // Audit log severity=HIGH (acción crítica e irreversible).
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "CREATE",
-            entity: "DeathCertificate",
-            entityId: certificate.id,
-            afterJson: {
-              severity: "HIGH",
-              op: "DEATH_CERTIFY",
-              encounterId: encounter.id,
-              patientId: encounter.patientId,
-              basicCauseCode: input.basicCauseCode,
-              manner: input.manner ?? null,
-              occurredAt: input.occurredAt.toISOString(),
-            },
-            justification:
-              "Emisión de certificado médico de defunción (TDR §8.7).",
-          },
-        });
-
         return certificate;
       });
+
+      // Audit log severity=HIGH (acción crítica e irreversible).
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: ctx.tenant.organizationId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "CREATE",
+          entity: "DeathCertificate",
+          entityId: certificate.id,
+          afterJson: {
+            severity: "HIGH",
+            op: "DEATH_CERTIFY",
+            encounterId: certificate.encounterId,
+            patientId: certificate.patientId,
+            basicCauseCode: input.basicCauseCode,
+            manner: input.manner ?? null,
+            occurredAt: input.occurredAt.toISOString(),
+          },
+          justification:
+            "Emisión de certificado médico de defunción (TDR §8.7).",
+        },
+      });
+
+      return certificate;
     }),
 
   /** Devuelve el certificado de un paciente (o null si no existe). */
   byPatient: tenantProcedure
     .input(deathCertificateByPatientSchema)
     .query(async ({ ctx, input }) => {
-      return ctx.prisma.deathCertificate.findFirst({
-        where: {
-          patientId: input.patientId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        include: {
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              mrn: true,
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.deathCertificate.findFirst({
+          where: {
+            patientId: input.patientId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          include: {
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+              },
             },
           },
-        },
-      });
+        }),
+      );
     }),
 
   /** Lectura individual para el visor. */
   get: physicianOrAdminProc
     .input(deathCertificateGetSchema)
     .query(async ({ ctx, input }) => {
-      const cert = await ctx.prisma.deathCertificate.findFirst({
-        where: {
-          id: input.id,
-          organizationId: ctx.tenant.organizationId,
-        },
-        include: {
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              mrn: true,
-              birthDate: true,
+      const cert = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.deathCertificate.findFirst({
+          where: {
+            id: input.id,
+            organizationId: ctx.tenant.organizationId,
+          },
+          include: {
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                mrn: true,
+                birthDate: true,
+              },
+            },
+            encounter: {
+              select: {
+                id: true,
+                encounterNumber: true,
+                admittedAt: true,
+              },
             },
           },
-          encounter: {
-            select: {
-              id: true,
-              encounterNumber: true,
-              admittedAt: true,
-            },
-          },
-        },
-      });
+        }),
+      );
       if (!cert) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -273,6 +285,15 @@ export const deathCertificateRouter = router({
 
   /**
    * Listado paginado de certificados emitidos. Sólo PHYSICIAN o ADMIN.
+   *
+   * R02 — `input.organizationId` es un override sin caller conocido (no
+   * referenciado desde apps/web) y sin rol cross-org real detrás (ADMIN aquí
+   * es `requireRole`, org-scoped). Antes de esta migración ya era defensa
+   * débil (solo JS); con `withTenantContext` demotado, si alguien pasa el id
+   * de OTRA organización la policy RLS (`organizationId = current_org_id()`)
+   * lo filtra a 0 filas en vez de filtrar por ese id — no se abre acceso
+   * cruzado, se cierra un posible vector de fuga. No se removió el parámetro
+   * para no romper el contrato público sin autorización explícita.
    */
   list: physicianOrAdminProc
     .input(deathCertificateListSchema)
@@ -289,26 +310,28 @@ export const deathCertificateRouter = router({
             }
           : {}),
       };
-      const [items, total] = await Promise.all([
-        ctx.prisma.deathCertificate.findMany({
-          where,
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-          orderBy: { occurredAt: "desc" },
-          include: {
-            patient: {
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                mrn: true,
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [items, total] = await Promise.all([
+          tx.deathCertificate.findMany({
+            where,
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { occurredAt: "desc" },
+            include: {
+              patient: {
+                select: {
+                  id: true,
+                  firstName: true,
+                  lastName: true,
+                  mrn: true,
+                },
               },
             },
-          },
-        }),
-        ctx.prisma.deathCertificate.count({ where }),
-      ]);
-      return { items, total, page: input.page, pageSize: input.pageSize };
+          }),
+          tx.deathCertificate.count({ where }),
+        ]);
+        return { items, total, page: input.page, pageSize: input.pageSize };
+      });
     }),
 
   /**
@@ -327,20 +350,23 @@ export const deathCertificateRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const q = input.query;
-      const items = await ctx.prisma.clinicalConcept.findMany({
-        where: {
-          active: true,
-          codeSystem: { code: { in: [...ICD10_SYSTEM_CODES] } },
-          OR: [
-            { code: { startsWith: q, mode: "insensitive" } },
-            { display: { contains: q, mode: "insensitive" } },
-          ],
-        },
-        take: input.limit,
-        orderBy: [{ code: "asc" }],
-        select: { id: true, code: true, display: true },
-      });
-      return items;
+      // ClinicalConcept es catálogo global (policy SELECT `true`) — sin
+      // scoping tenant, pero igual corre demotado por consistencia.
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.clinicalConcept.findMany({
+          where: {
+            active: true,
+            codeSystem: { code: { in: [...ICD10_SYSTEM_CODES] } },
+            OR: [
+              { code: { startsWith: q, mode: "insensitive" } },
+              { display: { contains: q, mode: "insensitive" } },
+            ],
+          },
+          take: input.limit,
+          orderBy: [{ code: "asc" }],
+          select: { id: true, code: true, display: true },
+        }),
+      );
     }),
 
   /**
@@ -350,26 +376,35 @@ export const deathCertificateRouter = router({
   notifyCivilRegistry: physicianOrAdminProc
     .input(deathCertificateNotifyCivilRegistrySchema)
     .mutation(async ({ ctx, input }) => {
-      const cert = await ctx.prisma.deathCertificate.findFirst({
-        where: {
-          id: input.certificateId,
-          organizationId: ctx.tenant.organizationId,
-        },
-      });
-      if (!cert) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Certificado no encontrado.",
+      const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const cert = await tx.deathCertificate.findFirst({
+          where: {
+            id: input.certificateId,
+            organizationId: ctx.tenant.organizationId,
+          },
         });
-      }
-      if (cert.notifiedToCivilRegistryAt) {
-        return cert;
-      }
-      const now = new Date();
-      const updated = await ctx.prisma.deathCertificate.update({
-        where: { id: cert.id },
-        data: { notifiedToCivilRegistryAt: now },
+        if (!cert) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Certificado no encontrado.",
+          });
+        }
+        if (cert.notifiedToCivilRegistryAt) {
+          return { updated: cert, alreadyNotified: true as const };
+        }
+        const now = new Date();
+        const updated = await tx.deathCertificate.update({
+          where: { id: cert.id },
+          data: { notifiedToCivilRegistryAt: now },
+        });
+        return { updated, alreadyNotified: false as const, now };
       });
+
+      if (result.alreadyNotified) {
+        return result.updated;
+      }
+
+      // auditLog.create corre fuera del contexto demotado (ver create()).
       await ctx.prisma.auditLog.create({
         data: {
           userId: ctx.user.id,
@@ -379,16 +414,16 @@ export const deathCertificateRouter = router({
           userAgent: ctx.userAgent ?? null,
           action: "UPDATE",
           entity: "DeathCertificate",
-          entityId: cert.id,
+          entityId: result.updated.id,
           afterJson: {
             severity: "MEDIUM",
             op: "NOTIFY_CIVIL_REGISTRY_STUB",
-            notifiedAt: now.toISOString(),
+            notifiedAt: result.now!.toISOString(),
           },
           justification:
             "Notificación al Registro Civil (stub — pendiente integración Sprint 6).",
         },
       });
-      return updated;
+      return result.updated;
     }),
 });

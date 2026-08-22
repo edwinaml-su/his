@@ -13,6 +13,7 @@
  */
 import { z } from "zod";
 import { router, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 const daysInput = z.object({
   days: z.number().int().min(1).max(365).default(30),
@@ -53,12 +54,21 @@ interface RecentSessionRow {
   first_user_msg: string | null;
 }
 
+/**
+ * R02 (auditoría RLS externa) — decisión (a) para las 4 procedures de este
+ * router: `chat_session`/`chat_message` tienen policies dedicadas por comando
+ * (`chat_session_select_tenant`/`_insert_tenant`/`_update_tenant`/`_delete_tenant`,
+ * ídem `chat_message_*`), todas `organization_id = current_org_id()`, y
+ * `authenticated` tiene grants completos (verificado en prod 2026-08-22).
+ * Todo el router es solo-lectura, así que `withTenantContext` agrega defensa
+ * RLS real sin riesgo de romper un INSERT/UPDATE sin policy.
+ */
 export const chatAnalyticsRouter = router({
   summary: requireRole(["ADMIN", "DIR"])
     .input(daysInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
-      const rows = await ctx.prisma.$queryRaw<SummaryRow[]>`
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) => tx.$queryRaw<SummaryRow[]>`
         WITH sess AS (
           SELECT * FROM public.chat_session
           WHERE organization_id = ${orgId}::uuid
@@ -80,7 +90,7 @@ export const chatAnalyticsRouter = router({
           COUNT(*) FILTER (WHERE s.user_feedback = -1)::int              AS thumbs_down,
           COUNT(DISTINCT s.user_id)::int                                 AS active_users
         FROM sess s
-      `;
+      `);
       const r = rows[0] ?? {
         total_sessions: 0,
         total_messages: 0,
@@ -116,7 +126,7 @@ export const chatAnalyticsRouter = router({
     .input(daysInput.extend({ limit: z.number().int().min(1).max(50).default(20) }))
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
-      const rows = await ctx.prisma.$queryRaw<TopQueryRow[]>`
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) => tx.$queryRaw<TopQueryRow[]>`
         SELECT
           -- Truncamos a 100 chars + lowercase para agrupar variaciones.
           lower(substring(content, 1, 100)) AS content,
@@ -130,7 +140,7 @@ export const chatAnalyticsRouter = router({
         GROUP BY lower(substring(content, 1, 100))
         ORDER BY count DESC
         LIMIT ${input.limit}
-      `;
+      `);
       return rows.map((r) => ({
         content: r.content,
         count: r.count,
@@ -141,7 +151,7 @@ export const chatAnalyticsRouter = router({
     .input(daysInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
-      const rows = await ctx.prisma.$queryRaw<ByRoleRow[]>`
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) => tx.$queryRaw<ByRoleRow[]>`
         WITH role_unnest AS (
           SELECT s.id AS session_id, unnest(s.user_role_codes) AS role_code
           FROM public.chat_session s
@@ -157,7 +167,7 @@ export const chatAnalyticsRouter = router({
         GROUP BY ru.role_code
         ORDER BY sessions DESC
         LIMIT 20
-      `;
+      `);
       return rows.map((r) => ({
         roleCode: r.role_code,
         sessions: r.sessions,
@@ -169,7 +179,7 @@ export const chatAnalyticsRouter = router({
     .input(z.object({ limit: z.number().int().min(1).max(100).default(30) }))
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
-      const rows = await ctx.prisma.$queryRaw<RecentSessionRow[]>`
+      const rows = await withTenantContext(ctx.prisma, ctx.tenant, (tx) => tx.$queryRaw<RecentSessionRow[]>`
         SELECT
           s.id::text,
           s.user_id::text,
@@ -186,7 +196,7 @@ export const chatAnalyticsRouter = router({
         WHERE s.organization_id = ${orgId}::uuid
         ORDER BY s.last_message_at DESC
         LIMIT ${input.limit}
-      `;
+      `);
       return rows.map((r) => ({
         id: r.id,
         userId: r.user_id,

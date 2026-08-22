@@ -32,6 +32,7 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
@@ -45,6 +46,20 @@ export const encounterTransferRouter = router({
    * Mueve un encuentro abierto a otro servicio (y opcionalmente a otra
    * cama). Operación atómica.
    */
+  // R02 — NO migrado a `withTenantContext` a propósito. `emitDomainEvent`
+  // (outbox `patient.transfer.sent`) escribe internamente en AuditLog
+  // (@his/database/outbox/emit.ts), y el rol `authenticated` NO tiene GRANT
+  // INSERT sobre AuditLog en absoluto (verificado en prod: solo SELECT) — si
+  // se demuestra el rol, la transacción entera revienta con permission
+  // denied, incluyendo el traslado clínico (Encounter/BedAssignment/Bed) que
+  // sí tiene policy válida. Separar el emitDomainEvent/EPCIS del resto en
+  // otra transacción rompería la garantía de "transaccional estricto" de
+  // ADR 0019 D7 (si el evento EPCIS falla, el traslado NO debe persistir) —
+  // eso SÍ sería cambiar lógica de negocio, prohibido para esta tarea. El
+  // filtro tenant sigue viviendo solo en `organizationId` (JS) — riesgo
+  // aceptado y documentado; requiere resolverse ampliando el GRANT/policy de
+  // AuditLog para `authenticated` (fuera de scope: cambio de BD, coordinar
+  // con @DBA) antes de reintentar esta migración.
   transferEncounter: tenantProcedure
     .input(transferEncounterInput)
     .mutation(async ({ ctx, input }) => {
@@ -255,23 +270,25 @@ export const encounterTransferRouter = router({
   listByEncounter: tenantProcedure
     .input(listTransfersByEncounterInput)
     .query(async ({ ctx, input }) => {
-      // Verifica pertenencia del encuentro al tenant.
-      const enc = await ctx.prisma.encounter.findFirst({
-        where: {
-          id: input.encounterId,
-          organizationId: ctx.tenant.organizationId,
-        },
-        select: { id: true },
-      });
-      if (!enc) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Encuentro no encontrado.",
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // Verifica pertenencia del encuentro al tenant.
+        const enc = await tx.encounter.findFirst({
+          where: {
+            id: input.encounterId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          select: { id: true },
         });
-      }
-      return ctx.prisma.encounterTransfer.findMany({
-        where: { encounterId: input.encounterId },
-        orderBy: { occurredAt: "asc" },
+        if (!enc) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Encuentro no encontrado.",
+          });
+        }
+        return tx.encounterTransfer.findMany({
+          where: { encounterId: input.encounterId },
+          orderBy: { occurredAt: "asc" },
+        });
       });
     }),
 
@@ -288,12 +305,59 @@ export const encounterTransferRouter = router({
           ? { toServiceId: input.serviceUnitId }
           : {}),
       };
-      const [items, total] = await Promise.all([
-        ctx.prisma.encounterTransfer.findMany({
-          where,
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-          orderBy: { occurredAt: "desc" },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [items, total] = await Promise.all([
+          tx.encounterTransfer.findMany({
+            where,
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { occurredAt: "desc" },
+            include: {
+              encounter: {
+                select: {
+                  id: true,
+                  encounterNumber: true,
+                  patient: {
+                    select: {
+                      id: true,
+                      firstName: true,
+                      lastName: true,
+                      mrn: true,
+                    },
+                  },
+                },
+              },
+              receivedBy: { select: { id: true, fullName: true } },
+            },
+          }),
+          tx.encounterTransfer.count({ where }),
+        ]);
+        return { items, total, page: input.page, pageSize: input.pageSize };
+      });
+    }),
+
+  /**
+   * sql/56 — bandeja de pacientes EN TRÁNSITO al servicio destino.
+   *
+   * Devuelve los `EncounterTransfer` con `status='SENT'` para que el
+   * receptor (piso, quirófano, URPA) los confirme con `confirmReceipt`.
+   * Si no se pasa `toServiceUnitId`, devuelve todos los pendientes del
+   * tenant (vista admin / supervisor).
+   */
+  listPendingArrivals: tenantProcedure
+    .input(listPendingArrivalsInput)
+    .query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.encounterTransfer.findMany({
+          where: {
+            status: "SENT",
+            encounter: { organizationId: ctx.tenant.organizationId },
+            ...(input.toServiceUnitId
+              ? { toServiceId: input.toServiceUnitId }
+              : {}),
+          },
+          orderBy: { occurredAt: "asc" }, // FIFO: el que salió primero, primero
+          take: input.limit,
           include: {
             encounter: {
               select: {
@@ -309,52 +373,9 @@ export const encounterTransferRouter = router({
                 },
               },
             },
-            receivedBy: { select: { id: true, fullName: true } },
           },
         }),
-        ctx.prisma.encounterTransfer.count({ where }),
-      ]);
-      return { items, total, page: input.page, pageSize: input.pageSize };
-    }),
-
-  /**
-   * sql/56 — bandeja de pacientes EN TRÁNSITO al servicio destino.
-   *
-   * Devuelve los `EncounterTransfer` con `status='SENT'` para que el
-   * receptor (piso, quirófano, URPA) los confirme con `confirmReceipt`.
-   * Si no se pasa `toServiceUnitId`, devuelve todos los pendientes del
-   * tenant (vista admin / supervisor).
-   */
-  listPendingArrivals: tenantProcedure
-    .input(listPendingArrivalsInput)
-    .query(async ({ ctx, input }) => {
-      return ctx.prisma.encounterTransfer.findMany({
-        where: {
-          status: "SENT",
-          encounter: { organizationId: ctx.tenant.organizationId },
-          ...(input.toServiceUnitId
-            ? { toServiceId: input.toServiceUnitId }
-            : {}),
-        },
-        orderBy: { occurredAt: "asc" }, // FIFO: el que salió primero, primero
-        take: input.limit,
-        include: {
-          encounter: {
-            select: {
-              id: true,
-              encounterNumber: true,
-              patient: {
-                select: {
-                  id: true,
-                  firstName: true,
-                  lastName: true,
-                  mrn: true,
-                },
-              },
-            },
-          },
-        },
-      });
+      );
     }),
 
   /**
@@ -369,6 +390,10 @@ export const encounterTransferRouter = router({
    * Idempotente: si ya está RECEIVED devuelve el record sin cambios. Si
    * está CANCELLED lanza CONFLICT.
    */
+  // R02 — NO migrado, mismo motivo que transferEncounter: emitDomainEvent
+  // (`patient.transfer.confirmed`) escribe AuditLog sin GRANT INSERT para
+  // `authenticated`, y el evento EPCIS de arribo debe ser atómico con el
+  // cambio de estado (ADR 0019 D7).
   confirmReceipt: tenantProcedure
     .input(confirmReceiptInput)
     .mutation(async ({ ctx, input }) => {

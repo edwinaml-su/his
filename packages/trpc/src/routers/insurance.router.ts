@@ -30,6 +30,7 @@ import {
   type CoveredProcedureEntry,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // b14: states that are treated as "open" for transitions.
 const OPEN_STATES = ["PENDING", "REQUESTED"] as const;
@@ -63,6 +64,28 @@ function isProcedureCovered(
   return { covered: true, maxCoverage: match.maxCoverage ?? null };
 }
 
+/**
+ * R02 (auditoría RLS externa) — decisión (a) para TODO este router:
+ * `Insurer`/`InsurancePlan`/`PatientCoverage`/`AuthorizationRequest` (más
+ * `Patient`/`Encounter`, leídas para validar FKs) tienen policies completas
+ * (`insurer_tenant_select/_modify`, `insurance_plan_inherit_insurer`,
+ * `patient_coverage_tenant_select/_modify`,
+ * `authorization_request_tenant_select/_modify`) matcheando
+ * `organizationId = current_org_id()` (o `IS NULL` para catálogo global), y
+ * `authenticated` tiene grants completos en las 6 tablas (verificado en prod
+ * 2026-08-22). Se envuelve cada procedure individualmente en
+ * `withTenantContext` (no un solo wrapper de router) para no tocar la firma
+ * pública del router.
+ *
+ * Nota — `insurer.create` con `organizationId: null` (catálogo global): el
+ * comentario original ya señalaba "sólo service_role debería poder" pero
+ * nada lo exigía en JS. `insurer_tenant_modify` (WITH CHECK
+ * `organizationId = current_org_id()`) no tiene excepción para NULL — con el
+ * rol demotado, un tenant intentando crear un insurer global ahora recibe un
+ * error de RLS real en vez de que el INSERT silenciosamente tenga éxito. Es
+ * un cambio de comportamiento intencional que cierra el gap que el propio
+ * comentario ya documentaba.
+ */
 export const insuranceRouter = router({
   insurer: router({
     /**
@@ -89,11 +112,13 @@ export const insuranceRouter = router({
             ],
           });
         }
-        return ctx.prisma.insurer.findMany({
-          where: { AND: filters },
-          orderBy: { name: "asc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.insurer.findMany({
+            where: { AND: filters },
+            orderBy: { name: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
@@ -105,18 +130,20 @@ export const insuranceRouter = router({
           input.organizationId === null
             ? null
             : (input.organizationId ?? ctx.tenant.organizationId);
-        return ctx.prisma.insurer.create({
-          data: {
-            organizationId: orgId,
-            code: input.code,
-            name: input.name,
-            taxId: input.taxId ?? null,
-            kind: input.kind,
-            contactPhone: input.contactPhone ?? null,
-            contactEmail: input.contactEmail ?? null,
-            createdBy: ctx.user.id,
-          },
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.insurer.create({
+            data: {
+              organizationId: orgId,
+              code: input.code,
+              name: input.name,
+              taxId: input.taxId ?? null,
+              kind: input.kind,
+              contactPhone: input.contactPhone ?? null,
+              contactEmail: input.contactEmail ?? null,
+              createdBy: ctx.user.id,
+            },
+          }),
+        );
       }),
   }),
 
@@ -124,54 +151,58 @@ export const insuranceRouter = router({
     list: tenantProcedure
       .input(insurancePlanListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.insurancePlan.findMany({
-          where: {
-            // El plan hereda tenancy del insurer; si insurer es global, el plan también.
-            insurer: {
-              OR: [
-                { organizationId: null },
-                { organizationId: ctx.tenant.organizationId },
-              ],
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.insurancePlan.findMany({
+            where: {
+              // El plan hereda tenancy del insurer; si insurer es global, el plan también.
+              insurer: {
+                OR: [
+                  { organizationId: null },
+                  { organizationId: ctx.tenant.organizationId },
+                ],
+              },
+              ...(input.insurerId && { insurerId: input.insurerId }),
+              ...(input.activeOnly && { active: true }),
             },
-            ...(input.insurerId && { insurerId: input.insurerId }),
-            ...(input.activeOnly && { active: true }),
-          },
-          include: { insurer: { select: { id: true, code: true, name: true } } },
-          orderBy: { name: "asc" },
-          take: input.limit,
-        });
+            include: { insurer: { select: { id: true, code: true, name: true } } },
+            orderBy: { name: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
       .input(insurancePlanCreateInput)
       .mutation(async ({ ctx, input }) => {
-        // Verifica que el insurer sea visible para el tenant.
-        const insurer = await ctx.prisma.insurer.findFirst({
-          where: {
-            id: input.insurerId,
-            OR: [
-              { organizationId: null },
-              { organizationId: ctx.tenant.organizationId },
-            ],
-          },
-          select: { id: true },
-        });
-        if (!insurer) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Aseguradora no visible para el tenant.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // Verifica que el insurer sea visible para el tenant.
+          const insurer = await tx.insurer.findFirst({
+            where: {
+              id: input.insurerId,
+              OR: [
+                { organizationId: null },
+                { organizationId: ctx.tenant.organizationId },
+              ],
+            },
+            select: { id: true },
           });
-        }
-        return ctx.prisma.insurancePlan.create({
-          data: {
-            insurerId: input.insurerId,
-            code: input.code,
-            name: input.name,
-            description: input.description ?? null,
-            copayPct: input.copayPct ?? null,
-            // Store as JSON if provided; Prisma requires Prisma.DbNull para NULL en columna Json?.
-            coveredProcedures: input.coveredProcedures ?? Prisma.DbNull,
-          },
+          if (!insurer) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Aseguradora no visible para el tenant.",
+            });
+          }
+          return tx.insurancePlan.create({
+            data: {
+              insurerId: input.insurerId,
+              code: input.code,
+              name: input.name,
+              description: input.description ?? null,
+              copayPct: input.copayPct ?? null,
+              // Store as JSON if provided; Prisma requires Prisma.DbNull para NULL en columna Json?.
+              coveredProcedures: input.coveredProcedures ?? Prisma.DbNull,
+            },
+          });
         });
       }),
   }),
@@ -180,86 +211,92 @@ export const insuranceRouter = router({
     list: tenantProcedure
       .input(patientCoverageListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.patientCoverage.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.planId && { planId: input.planId }),
-            ...(input.activeOnly && { active: true }),
-          },
-          include: {
-            patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
-            plan: {
-              select: {
-                id: true,
-                code: true,
-                name: true,
-                insurer: { select: { id: true, code: true, name: true } },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.patientCoverage.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.planId && { planId: input.planId }),
+              ...(input.activeOnly && { active: true }),
+            },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              plan: {
+                select: {
+                  id: true,
+                  code: true,
+                  name: true,
+                  insurer: { select: { id: true, code: true, name: true } },
+                },
               },
             },
-          },
-          orderBy: { validFrom: "desc" },
-          take: input.limit,
-        });
+            orderBy: { validFrom: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
       .input(patientCoverageCreateInput)
       .mutation(async ({ ctx, input }) => {
-        // Verifica que el paciente pertenezca al tenant.
-        const patient = await ctx.prisma.patient.findFirst({
-          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
-          select: { id: true },
-        });
-        if (!patient) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Paciente no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // Verifica que el paciente pertenezca al tenant.
+          const patient = await tx.patient.findFirst({
+            where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+            select: { id: true },
           });
-        }
-        // Plan visible para tenant (vía insurer.organizationId null|tenant).
-        const plan = await ctx.prisma.insurancePlan.findFirst({
-          where: {
-            id: input.planId,
-            insurer: {
-              OR: [
-                { organizationId: null },
-                { organizationId: ctx.tenant.organizationId },
-              ],
+          if (!patient) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Paciente no existe en la organización.",
+            });
+          }
+          // Plan visible para tenant (vía insurer.organizationId null|tenant).
+          const plan = await tx.insurancePlan.findFirst({
+            where: {
+              id: input.planId,
+              insurer: {
+                OR: [
+                  { organizationId: null },
+                  { organizationId: ctx.tenant.organizationId },
+                ],
+              },
             },
-          },
-          select: { id: true },
-        });
-        if (!plan) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Plan de aseguradora no visible para el tenant.",
+            select: { id: true },
           });
-        }
-        return ctx.prisma.patientCoverage.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            patientId: input.patientId,
-            planId: input.planId,
-            policyNumber: input.policyNumber,
-            validFrom: input.validFrom,
-            validTo: input.validTo ?? null,
-            createdBy: ctx.user.id,
-          },
+          if (!plan) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Plan de aseguradora no visible para el tenant.",
+            });
+          }
+          return tx.patientCoverage.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              patientId: input.patientId,
+              planId: input.planId,
+              policyNumber: input.policyNumber,
+              validFrom: input.validFrom,
+              validTo: input.validTo ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
     deactivate: tenantProcedure
       .input(patientCoverageDeactivateInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.patientCoverage.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            active: true,
-          },
-          data: { active: false, updatedBy: ctx.user.id },
-        });
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.patientCoverage.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              active: true,
+            },
+            data: { active: false, updatedBy: ctx.user.id },
+          }),
+        );
         if (updated.count === 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -274,39 +311,43 @@ export const insuranceRouter = router({
     list: tenantProcedure
       .input(authorizationRequestListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.authorizationRequest.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.coverageId && { coverageId: input.coverageId }),
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.status && { status: input.status }),
-            ...((input.fromDate || input.toDate) && {
-              requestedAt: {
-                ...(input.fromDate && { gte: input.fromDate }),
-                ...(input.toDate && { lte: input.toDate }),
-              },
-            }),
-          },
-          include: {
-            coverage: {
-              select: {
-                id: true,
-                policyNumber: true,
-                plan: { select: { id: true, code: true, name: true } },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.authorizationRequest.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.coverageId && { coverageId: input.coverageId }),
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.status && { status: input.status }),
+              ...((input.fromDate || input.toDate) && {
+                requestedAt: {
+                  ...(input.fromDate && { gte: input.fromDate }),
+                  ...(input.toDate && { lte: input.toDate }),
+                },
+              }),
+            },
+            include: {
+              coverage: {
+                select: {
+                  id: true,
+                  policyNumber: true,
+                  plan: { select: { id: true, code: true, name: true } },
+                },
               },
             },
-          },
-          orderBy: { requestedAt: "desc" },
-          take: input.limit,
-        });
+            orderBy: { requestedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.authorizationRequest.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.authorizationRequest.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -314,46 +355,48 @@ export const insuranceRouter = router({
     create: tenantProcedure
       .input(authorizationRequestCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const cov = await ctx.prisma.patientCoverage.findFirst({
-          where: {
-            id: input.coverageId,
-            organizationId: ctx.tenant.organizationId,
-            active: true,
-          },
-          select: { id: true },
-        });
-        if (!cov) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Cobertura activa no existe en la organización.",
-          });
-        }
-        if (input.encounterId) {
-          const enc = await ctx.prisma.encounter.findFirst({
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const cov = await tx.patientCoverage.findFirst({
             where: {
-              id: input.encounterId,
+              id: input.coverageId,
               organizationId: ctx.tenant.organizationId,
+              active: true,
             },
             select: { id: true },
           });
-          if (!enc) {
+          if (!cov) {
             throw new TRPCError({
               code: "NOT_FOUND",
-              message: "Encuentro no existe en la organización.",
+              message: "Cobertura activa no existe en la organización.",
             });
           }
-        }
-        // b14: new records use PENDING as the canonical start state.
-        return ctx.prisma.authorizationRequest.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            coverageId: input.coverageId,
-            encounterId: input.encounterId ?? null,
-            serviceCode: input.serviceCode,
-            serviceDesc: input.serviceDesc,
-            requestedById: ctx.user.id,
-            status: "PENDING",
-          },
+          if (input.encounterId) {
+            const enc = await tx.encounter.findFirst({
+              where: {
+                id: input.encounterId,
+                organizationId: ctx.tenant.organizationId,
+              },
+              select: { id: true },
+            });
+            if (!enc) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Encuentro no existe en la organización.",
+              });
+            }
+          }
+          // b14: new records use PENDING as the canonical start state.
+          return tx.authorizationRequest.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              coverageId: input.coverageId,
+              encounterId: input.encounterId ?? null,
+              serviceCode: input.serviceCode,
+              serviceDesc: input.serviceDesc,
+              requestedById: ctx.user.id,
+              status: "PENDING",
+            },
+          });
         });
       }),
 
@@ -372,20 +415,22 @@ export const insuranceRouter = router({
         }
 
         // b14: state machine allows transition from PENDING or REQUESTED (legacy).
-        const updated = await ctx.prisma.authorizationRequest.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: [...OPEN_STATES] },
-          },
-          data: {
-            status: isPartial ? "PARTIAL" : "APPROVED",
-            externalRef: input.externalRef,
-            approvedAmount: input.approvedAmount ?? null,
-            validFrom: input.validFrom ?? null,
-            validTo: validUntil,
-          },
-        });
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.authorizationRequest.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: [...OPEN_STATES] },
+            },
+            data: {
+              status: isPartial ? "PARTIAL" : "APPROVED",
+              externalRef: input.externalRef,
+              approvedAmount: input.approvedAmount ?? null,
+              validFrom: input.validFrom ?? null,
+              validTo: validUntil,
+            },
+          }),
+        );
         if (updated.count === 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -400,17 +445,19 @@ export const insuranceRouter = router({
       .mutation(async ({ ctx, input }) => {
         // b14: denialReason is required (enforced by schema + DB trigger).
         // state machine allows transition from PENDING or REQUESTED (legacy).
-        const updated = await ctx.prisma.authorizationRequest.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: [...OPEN_STATES] },
-          },
-          data: {
-            status: "DENIED",
-            denialReason: input.denialReason,
-          },
-        });
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.authorizationRequest.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: [...OPEN_STATES] },
+            },
+            data: {
+              status: "DENIED",
+              denialReason: input.denialReason,
+            },
+          }),
+        );
         if (updated.count === 0) {
           throw new TRPCError({
             code: "NOT_FOUND",
@@ -430,29 +477,31 @@ export const insuranceRouter = router({
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() + input.daysAhead);
 
-        return ctx.prisma.authorizationRequest.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            status: "APPROVED",
-            validTo: {
-              not: null,
-              lte: cutoff,
-              gte: new Date(), // exclude already expired
-            },
-          },
-          include: {
-            coverage: {
-              select: {
-                id: true,
-                policyNumber: true,
-                patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
-                plan: { select: { id: true, code: true, name: true } },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.authorizationRequest.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              status: "APPROVED",
+              validTo: {
+                not: null,
+                lte: cutoff,
+                gte: new Date(), // exclude already expired
               },
             },
-          },
-          orderBy: { validTo: "asc" },
-          take: input.limit,
-        });
+            include: {
+              coverage: {
+                select: {
+                  id: true,
+                  policyNumber: true,
+                  patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+                  plan: { select: { id: true, code: true, name: true } },
+                },
+              },
+            },
+            orderBy: { validTo: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
   }),
 
@@ -463,19 +512,21 @@ export const insuranceRouter = router({
   checkCoverage: tenantProcedure
     .input(checkCoverageInput)
     .query(async ({ ctx, input }) => {
-      const plan = await ctx.prisma.insurancePlan.findFirst({
-        where: {
-          id: input.planId,
-          active: true,
-          insurer: {
-            OR: [
-              { organizationId: null },
-              { organizationId: ctx.tenant.organizationId },
-            ],
+      const plan = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.insurancePlan.findFirst({
+          where: {
+            id: input.planId,
+            active: true,
+            insurer: {
+              OR: [
+                { organizationId: null },
+                { organizationId: ctx.tenant.organizationId },
+              ],
+            },
           },
-        },
-        select: { id: true, coveredProcedures: true },
-      });
+          select: { id: true, coveredProcedures: true },
+        }),
+      );
 
       if (!plan) {
         throw new TRPCError({

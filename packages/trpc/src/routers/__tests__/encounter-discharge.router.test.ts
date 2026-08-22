@@ -28,6 +28,8 @@ describe("encounterDischargeRouter", () => {
       .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
         fn(prisma),
       );
+    // R02 — withTenantContext hace SET LOCAL vía $executeRawUnsafe.
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
   });
 
   describe("dischargeEncounter", () => {

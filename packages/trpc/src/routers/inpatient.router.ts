@@ -37,6 +37,7 @@ import {
 } from "@his/contracts";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
@@ -94,40 +95,44 @@ export const inpatientRouter = router({
         const encounterFilter =
           Object.keys(encScope).length > 0 ? { encounter: encScope } : {};
 
-        return ctx.prisma.inpatientAdmission.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-            ...encounterFilter,
-            ...(input.status && { status: input.status }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.attendingId && { attendingId: input.attendingId }),
-            ...(input.establishmentId && {
-              establishmentId: input.establishmentId,
-            }),
-            ...(input.costCenterId && { costCenterId: input.costCenterId }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.inpatientAdmission.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+              ...encounterFilter,
+              ...(input.status && { status: input.status }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.attendingId && { attendingId: input.attendingId }),
+              ...(input.establishmentId && {
+                establishmentId: input.establishmentId,
+              }),
+              ...(input.costCenterId && { costCenterId: input.costCenterId }),
             },
-            attending: { select: { id: true, fullName: true, email: true } },
-          },
-          orderBy: { admittedAt: "desc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              attending: { select: { id: true, fullName: true, email: true } },
+            },
+            orderBy: { admittedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -135,67 +140,67 @@ export const inpatientRouter = router({
     create: tenantProcedure
       .input(inpatientAdmissionCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: {
-            id: input.encounterId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true, patientId: true, serviceUnitId: true },
-        });
-        if (!enc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Encuentro no existe en la organización.",
-          });
-        }
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "patientId no coincide con encounter.",
-          });
-        }
-        // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
-        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "El encuentro pertenece a un servicio fuera de tus asignaciones.",
-          });
-        }
-
-        // Beta.1 — validar cama si viene en el input (debe ser misma org + status FREE).
-        if (input.bedId) {
-          const bed = await ctx.prisma.bed.findFirst({
+        // Crear admisión + (opcional) bed assignment en transacción atómica.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
             where: {
-              id: input.bedId,
+              id: input.encounterId,
               organizationId: ctx.tenant.organizationId,
-              active: true,
             },
-            select: { id: true, status: true, establishmentId: true },
+            select: { id: true, patientId: true, serviceUnitId: true },
           });
-          if (!bed) {
+          if (!enc) {
             throw new TRPCError({
               code: "NOT_FOUND",
-              message: "Cama no existe en la organización.",
+              message: "Encuentro no existe en la organización.",
             });
           }
-          if (bed.status !== "FREE") {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `La cama no está disponible (status=${bed.status}).`,
-            });
-          }
-          if (bed.establishmentId !== input.establishmentId) {
+          if (enc.patientId !== input.patientId) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message:
-                "La cama pertenece a un establecimiento distinto del de la admisión.",
+              message: "patientId no coincide con encounter.",
             });
           }
-        }
+          // Nivel B — el encuentro debe pertenecer a un servicio del usuario.
+          if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
 
-        // Crear admisión + (opcional) bed assignment en transacción atómica.
-        return ctx.prisma.$transaction(async (tx) => {
+          // Beta.1 — validar cama si viene en el input (debe ser misma org + status FREE).
+          if (input.bedId) {
+            const bed = await tx.bed.findFirst({
+              where: {
+                id: input.bedId,
+                organizationId: ctx.tenant.organizationId,
+                active: true,
+              },
+              select: { id: true, status: true, establishmentId: true },
+            });
+            if (!bed) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Cama no existe en la organización.",
+              });
+            }
+            if (bed.status !== "FREE") {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: `La cama no está disponible (status=${bed.status}).`,
+              });
+            }
+            if (bed.establishmentId !== input.establishmentId) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message:
+                  "La cama pertenece a un establecimiento distinto del de la admisión.",
+              });
+            }
+          }
+
           const admission = await tx.inpatientAdmission.create({
             data: {
               organizationId: ctx.tenant.organizationId,
@@ -242,43 +247,45 @@ export const inpatientRouter = router({
     decidirAdmision: tenantProcedure
       .input(inpatientDecidirAdmisionInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-          select: { id: true, patientId: true, serviceUnitId: true },
-        });
-        if (!enc) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe." });
-        }
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide." });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
+            select: { id: true, patientId: true, serviceUnitId: true },
           });
-        }
-        const now = new Date();
-        return ctx.prisma.inpatientAdmission.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            attendingId: input.attendingId,
-            reason: input.reason,
-            expectedLos: input.expectedLos ?? null,
-            notes: input.notes ?? null,
-            costCenterId: input.costCenterId ?? null,
-            status: "ADMISSION_DECIDED",
-            admissionDecidedAt: now,
-            admissionDecidedById: ctx.user.id,
-            // admittedAt requerido en schema legacy — usamos `now` como placeholder
-            // hasta que se confirme la recepción física (que lo sobrescribe).
-            admittedAt: now,
-            createdBy: ctx.user.id,
-          },
+          if (!enc) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe." });
+          }
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide." });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, enc.serviceUnitId)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          const now = new Date();
+          return tx.inpatientAdmission.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              attendingId: input.attendingId,
+              reason: input.reason,
+              expectedLos: input.expectedLos ?? null,
+              notes: input.notes ?? null,
+              costCenterId: input.costCenterId ?? null,
+              status: "ADMISSION_DECIDED",
+              admissionDecidedAt: now,
+              admissionDecidedById: ctx.user.id,
+              // admittedAt requerido en schema legacy — usamos `now` como placeholder
+              // hasta que se confirme la recepción física (que lo sobrescribe).
+              admittedAt: now,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -290,67 +297,69 @@ export const inpatientRouter = router({
     asignarCama: tenantProcedure
       .input(inpatientAsignarCamaInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: {
-            id: true,
-            status: true,
-            notes: true,
-            establishmentId: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!adm) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: {
+              id: true,
+              status: true,
+              notes: true,
+              establishmentId: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        if (!canTransitionInpatient(adm.status as InpatientStatusType, "BED_ASSIGNED")) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Transición ${adm.status} → BED_ASSIGNED no permitida.`,
+          if (!adm) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (!canTransitionInpatient(adm.status as InpatientStatusType, "BED_ASSIGNED")) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Transición ${adm.status} → BED_ASSIGNED no permitida.`,
+            });
+          }
+          const bed = await tx.bed.findFirst({
+            where: {
+              id: input.bedId,
+              organizationId: ctx.tenant.organizationId,
+              active: true,
+            },
+            select: { id: true, status: true, establishmentId: true },
           });
-        }
-        const bed = await ctx.prisma.bed.findFirst({
-          where: {
-            id: input.bedId,
-            organizationId: ctx.tenant.organizationId,
-            active: true,
-          },
-          select: { id: true, status: true, establishmentId: true },
-        });
-        if (!bed) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Cama no existe." });
-        }
-        if (bed.status !== "FREE") {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Cama no disponible (status=${bed.status}).`,
+          if (!bed) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Cama no existe." });
+          }
+          if (bed.status !== "FREE") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Cama no disponible (status=${bed.status}).`,
+            });
+          }
+          if (bed.establishmentId !== adm.establishmentId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "La cama pertenece a otro establecimiento.",
+            });
+          }
+          return tx.inpatientAdmission.update({
+            where: { id: input.id },
+            data: {
+              status: "BED_ASSIGNED",
+              bedId: input.bedId,
+              bedAssignedAt: new Date(),
+              bedAssignedById: ctx.user.id,
+              notes: input.reason
+                ? `${adm.notes ?? ""}\n[Cama asignada] ${input.reason}`.trim()
+                : adm.notes,
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        if (bed.establishmentId !== adm.establishmentId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "La cama pertenece a otro establecimiento.",
-          });
-        }
-        return ctx.prisma.inpatientAdmission.update({
-          where: { id: input.id },
-          data: {
-            status: "BED_ASSIGNED",
-            bedId: input.bedId,
-            bedAssignedAt: new Date(),
-            bedAssignedById: ctx.user.id,
-            notes: input.reason
-              ? `${adm.notes ?? ""}\n[Cama asignada] ${input.reason}`.trim()
-              : adm.notes,
-            updatedBy: ctx.user.id,
-          },
         });
       }),
 
@@ -362,41 +371,41 @@ export const inpatientRouter = router({
     confirmarRecepcionFisica: tenantProcedure
       .input(inpatientConfirmarRecepcionFisicaInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: {
-            id: true,
-            status: true,
-            notes: true,
-            bedId: true,
-            encounterId: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!adm) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: {
+              id: true,
+              status: true,
+              notes: true,
+              bedId: true,
+              encounterId: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Transición ${adm.status} → ACTIVE no permitida. Asigne cama primero.`,
-          });
-        }
-        if (!adm.bedId) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "No hay cama asignada para esta admisión.",
-          });
-        }
-        const now = new Date();
-        return ctx.prisma.$transaction(async (tx) => {
+          if (!adm) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Transición ${adm.status} → ACTIVE no permitida. Asigne cama primero.`,
+            });
+          }
+          if (!adm.bedId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "No hay cama asignada para esta admisión.",
+            });
+          }
+          const now = new Date();
           const updated = await tx.inpatientAdmission.update({
             where: { id: input.id },
             data: {
@@ -439,38 +448,40 @@ export const inpatientRouter = router({
     cancelarPreCama: tenantProcedure
       .input(inpatientCancelarPreCamaInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
-          select: {
-            id: true,
-            status: true,
-            notes: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!adm) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, deletedAt: null },
+            select: {
+              id: true,
+              status: true,
+              notes: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        if (adm.status !== "ADMISSION_DECIDED") {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Solo se puede cancelar pre-cama desde ADMISSION_DECIDED. Estado actual: ${adm.status}.`,
+          if (!adm) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Admisión no existe." });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (adm.status !== "ADMISSION_DECIDED") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Solo se puede cancelar pre-cama desde ADMISSION_DECIDED. Estado actual: ${adm.status}.`,
+            });
+          }
+          return tx.inpatientAdmission.update({
+            where: { id: input.id },
+            data: {
+              status: "CANCELLED",
+              notes: `${adm.notes ?? ""}\n[Cancelada pre-cama] ${input.reason}`.trim(),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return ctx.prisma.inpatientAdmission.update({
-          where: { id: input.id },
-          data: {
-            status: "CANCELLED",
-            notes: `${adm.notes ?? ""}\n[Cancelada pre-cama] ${input.reason}`.trim(),
-            updatedBy: ctx.user.id,
-          },
         });
       }),
 
@@ -481,7 +492,7 @@ export const inpatientRouter = router({
     discharge: tenantProcedure
       .input(inpatientAdmissionDischargeInput)
       .mutation(async ({ ctx, input }) => {
-        return ctx.prisma.$transaction(async (tx) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
           const adm = await tx.inpatientAdmission.findFirst({
             where: {
               id: input.id,
@@ -535,94 +546,98 @@ export const inpatientRouter = router({
     goOnLeave: tenantProcedure
       .input(inpatientAdmissionGoOnLeaveInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
+          });
+          if (!adm) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (!canTransitionInpatient(adm.status as InpatientStatusType, "ON_LEAVE")) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Transición inválida: ${adm.status} → ON_LEAVE.`,
+            });
+          }
+          await tx.inpatientAdmission.update({
+            where: { id: adm.id },
+            data: {
+              status: "ON_LEAVE",
+              notes: appendNoteLine(adm.notes, `[ON_LEAVE] ${input.reason}`),
+              updatedBy: ctx.user.id,
+            },
+          });
+          return { ok: true as const };
         });
-        if (!adm) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Admisión no existe en la organización.",
-          });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
-          });
-        }
-        if (!canTransitionInpatient(adm.status as InpatientStatusType, "ON_LEAVE")) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Transición inválida: ${adm.status} → ON_LEAVE.`,
-          });
-        }
-        await ctx.prisma.inpatientAdmission.update({
-          where: { id: adm.id },
-          data: {
-            status: "ON_LEAVE",
-            notes: appendNoteLine(adm.notes, `[ON_LEAVE] ${input.reason}`),
-            updatedBy: ctx.user.id,
-          },
-        });
-        return { ok: true as const };
       }),
 
     /** Beta.1 — Transición ON_LEAVE → ACTIVE. */
     returnFromLeave: tenantProcedure
       .input(inpatientAdmissionReturnFromLeaveInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: { id: true, status: true, notes: true, encounter: { select: { serviceUnitId: true } } },
+          });
+          if (!adm) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Transición inválida: ${adm.status} → ACTIVE.`,
+            });
+          }
+          await tx.inpatientAdmission.update({
+            where: { id: adm.id },
+            data: {
+              status: "ACTIVE",
+              notes: appendNoteLine(
+                adm.notes,
+                `[RETURN] ${input.notes ?? "Retorno de permiso."}`,
+              ),
+              updatedBy: ctx.user.id,
+            },
+          });
+          return { ok: true as const };
         });
-        if (!adm) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Admisión no existe en la organización.",
-          });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
-          });
-        }
-        if (!canTransitionInpatient(adm.status as InpatientStatusType, "ACTIVE")) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Transición inválida: ${adm.status} → ACTIVE.`,
-          });
-        }
-        await ctx.prisma.inpatientAdmission.update({
-          where: { id: adm.id },
-          data: {
-            status: "ACTIVE",
-            notes: appendNoteLine(
-              adm.notes,
-              `[RETURN] ${input.notes ?? "Retorno de permiso."}`,
-            ),
-            updatedBy: ctx.user.id,
-          },
-        });
-        return { ok: true as const };
       }),
 
     /** Beta.1 — Transición ACTIVE → TRANSFERRED_OUT (a otra organización). */
     transferOut: tenantProcedure
       .input(inpatientAdmissionTransferOutInput)
       .mutation(async ({ ctx, input }) => {
-        return ctx.prisma.$transaction(async (tx) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
           const adm = await tx.inpatientAdmission.findFirst({
             where: {
               id: input.id,
@@ -696,51 +711,60 @@ export const inpatientRouter = router({
     record: tenantProcedure
       .input(inpatientVitalsRecordInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.admissionId,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: {
-            id: true,
-            status: true,
-            patientId: true,
-            encounter: { select: { serviceUnitId: true } },
-          },
-        });
-        if (!adm) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Admisión no existe en la organización.",
+        // R02 — la creación de InpatientVitals corre demotada (RLS aplica);
+        // el `emitDomainEvent` (si hay alerta crítica) NO puede ir dentro de
+        // `withTenantContext`: internamente escribe en AuditLog, y el rol
+        // `authenticated` NO tiene GRANT INSERT sobre esa tabla en absoluto
+        // (verificado en prod — solo SELECT). Se emite después, en una
+        // transacción separada bajo el rol bypass, mismo patrón que
+        // encounter.router.ts (hook EPCIS) y workflow-instance.router.ts
+        // (`advance`). Riesgo residual: el INSERT de DomainEvent ya trae su
+        // propia policy `organizationId = current_org_id()`, pero corre con
+        // el rol bypass — la protección real ahí sigue siendo el filtro JS.
+        const { adm, vitals, alerts } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.admissionId,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: {
+              id: true,
+              status: true,
+              patientId: true,
+              encounter: { select: { serviceUnitId: true } },
+            },
           });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          if (!adm) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se pueden registrar vitales en admisión ${adm.status}.`,
+            });
+          }
+          const alerts = evaluateVitalAlerts({
+            temperatureC: input.temperatureC ?? null,
+            heartRate: input.heartRate ?? null,
+            respiratoryRate: input.respiratoryRate ?? null,
+            systolicBp: input.systolicBp ?? null,
+            diastolicBp: input.diastolicBp ?? null,
+            spo2: input.spo2 ?? null,
+            painScale: input.painScale ?? null,
           });
-        }
-        if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `No se pueden registrar vitales en admisión ${adm.status}.`,
-          });
-        }
-        const alerts = evaluateVitalAlerts({
-          temperatureC: input.temperatureC ?? null,
-          heartRate: input.heartRate ?? null,
-          respiratoryRate: input.respiratoryRate ?? null,
-          systolicBp: input.systolicBp ?? null,
-          diastolicBp: input.diastolicBp ?? null,
-          spo2: input.spo2 ?? null,
-          painScale: input.painScale ?? null,
-        });
-        const hasCritical = alerts.some((a) => a.severity === "critical");
 
-        const vitals = await ctx.prisma.$transaction(async (tx) => {
-          const created = await tx.inpatientVitals.create({
+          const vitals = await tx.inpatientVitals.create({
             data: {
               admissionId: input.admissionId,
               recordedById: ctx.user.id,
@@ -754,31 +778,35 @@ export const inpatientRouter = router({
               notes: input.notes ?? null,
             },
           });
-          if (hasCritical) {
-            const payloadAlerts = alerts
-              .map(toPayloadAlert)
-              .filter((a): a is NonNullable<typeof a> => a !== null);
-            // Defensa: si el mapeo no produce alerts (shouldn't, ya validamos
-            // hasCritical), no emitimos — el payload Zod exige min(1).
-            if (payloadAlerts.length > 0) {
+          return { adm, vitals, alerts };
+        });
+
+        const hasCritical = alerts.some((a) => a.severity === "critical");
+        if (hasCritical) {
+          const payloadAlerts = alerts
+            .map(toPayloadAlert)
+            .filter((a): a is NonNullable<typeof a> => a !== null);
+          // Defensa: si el mapeo no produce alerts (shouldn't, ya validamos
+          // hasCritical), no emitimos — el payload Zod exige min(1).
+          if (payloadAlerts.length > 0) {
+            await ctx.prisma.$transaction(async (tx) => {
               await emitDomainEvent(tx, {
                 organizationId: ctx.tenant.organizationId,
                 eventType: "vital.critical",
                 aggregateType: "InpatientVitals",
-                aggregateId: created.id,
+                aggregateId: vitals.id,
                 emittedById: ctx.user.id,
                 payload: {
                   source: "InpatientVitals",
                   admissionId: adm.id,
                   patientId: adm.patientId,
-                  sourceRowId: created.id,
+                  sourceRowId: vitals.id,
                   alerts: payloadAlerts,
                 } satisfies VitalCriticalPayload,
               });
-            }
+            });
           }
-          return created;
-        });
+        }
 
         return { vitals, alerts };
       }),
@@ -786,14 +814,16 @@ export const inpatientRouter = router({
     listByAdmission: tenantProcedure
       .input(z.object({ admissionId: z.string().uuid(), limit: z.number().int().min(1).max(200).default(50) }))
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.inpatientVitals.findMany({
-          where: {
-            admissionId: input.admissionId,
-            admission: { organizationId: ctx.tenant.organizationId },
-          },
-          orderBy: { recordedAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.inpatientVitals.findMany({
+            where: {
+              admissionId: input.admissionId,
+              admission: { organizationId: ctx.tenant.organizationId },
+            },
+            orderBy: { recordedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
   }),
 
@@ -807,41 +837,43 @@ export const inpatientRouter = router({
     create: tenantProcedure
       .input(inpatientKardexCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.admissionId,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
-        });
-        if (!adm) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Admisión no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.admissionId,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
           });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          if (!adm) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se pueden agregar entradas de kardex en admisión ${adm.status}.`,
+            });
+          }
+          return tx.inpatientKardex.create({
+            data: {
+              admissionId: input.admissionId,
+              recordedById: ctx.user.id,
+              category: input.category,
+              entry: input.entry,
+              shift: input.shift ?? null,
+            },
           });
-        }
-        if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `No se pueden agregar entradas de kardex en admisión ${adm.status}.`,
-          });
-        }
-        return ctx.prisma.inpatientKardex.create({
-          data: {
-            admissionId: input.admissionId,
-            recordedById: ctx.user.id,
-            category: input.category,
-            entry: input.entry,
-            shift: input.shift ?? null,
-          },
         });
       }),
   }),
@@ -850,71 +882,75 @@ export const inpatientRouter = router({
     create: tenantProcedure
       .input(inpatientCarePlanCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const adm = await ctx.prisma.inpatientAdmission.findFirst({
-          where: {
-            id: input.admissionId,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
-        });
-        if (!adm) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Admisión no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const adm = await tx.inpatientAdmission.findFirst({
+            where: {
+              id: input.admissionId,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: { id: true, status: true, encounter: { select: { serviceUnitId: true } } },
           });
-        }
-        // Nivel B — mutation defense.
-        if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+          if (!adm) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Admisión no existe en la organización.",
+            });
+          }
+          // Nivel B — mutation defense.
+          if (isOutOfServiceUnitScope(ctx.tenant, adm.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se pueden crear planes en admisión ${adm.status}.`,
+            });
+          }
+          return tx.inpatientCarePlan.create({
+            data: {
+              admissionId: input.admissionId,
+              title: input.title,
+              goal: input.goal ?? null,
+              interventions: input.interventions ?? null,
+              createdById: ctx.user.id,
+            },
           });
-        }
-        if (isTerminalInpatientStatus(adm.status as InpatientStatusType)) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `No se pueden crear planes en admisión ${adm.status}.`,
-          });
-        }
-        return ctx.prisma.inpatientCarePlan.create({
-          data: {
-            admissionId: input.admissionId,
-            title: input.title,
-            goal: input.goal ?? null,
-            interventions: input.interventions ?? null,
-            createdById: ctx.user.id,
-          },
         });
       }),
 
     updateStatus: tenantProcedure
       .input(inpatientCarePlanUpdateStatusInput)
       .mutation(async ({ ctx, input }) => {
-        // Nivel B — load mínimo para scope check; navega carePlan → admission → encounter.
-        const plan = await ctx.prisma.inpatientCarePlan.findFirst({
-          where: { id: input.id, admission: { organizationId: ctx.tenant.organizationId } },
-          select: { id: true, admission: { select: { encounter: { select: { serviceUnitId: true } } } } },
-        });
-        if (!plan) throw new TRPCError({ code: "NOT_FOUND" });
-        if (isOutOfServiceUnitScope(ctx.tenant, plan.admission?.encounter?.serviceUnitId ?? null)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // Nivel B — load mínimo para scope check; navega carePlan → admission → encounter.
+          const plan = await tx.inpatientCarePlan.findFirst({
+            where: { id: input.id, admission: { organizationId: ctx.tenant.organizationId } },
+            select: { id: true, admission: { select: { encounter: { select: { serviceUnitId: true } } } } },
           });
-        }
-        const updated = await ctx.prisma.inpatientCarePlan.updateMany({
-          where: {
-            id: input.id,
-            admission: { organizationId: ctx.tenant.organizationId },
-          },
-          data: {
-            status: input.status,
-            ...(input.status === "COMPLETED" && { completedAt: new Date() }),
-          },
+          if (!plan) throw new TRPCError({ code: "NOT_FOUND" });
+          if (isOutOfServiceUnitScope(ctx.tenant, plan.admission?.encounter?.serviceUnitId ?? null)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "El encuentro pertenece a un servicio fuera de tus asignaciones.",
+            });
+          }
+          const updated = await tx.inpatientCarePlan.updateMany({
+            where: {
+              id: input.id,
+              admission: { organizationId: ctx.tenant.organizationId },
+            },
+            data: {
+              status: input.status,
+              ...(input.status === "COMPLETED" && { completedAt: new Date() }),
+            },
+          });
+          if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
+          return { ok: true as const };
         });
-        if (updated.count === 0) throw new TRPCError({ code: "NOT_FOUND" });
-        return { ok: true as const };
       }),
   }),
 });

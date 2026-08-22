@@ -19,6 +19,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, tenantProcedure, requireRole } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -197,6 +198,13 @@ export const allocationRuleRouter = router({
   /**
    * Lista reglas con targets incluidos.
    * Filtros: sourceCostCenterId, active.
+   *
+   * R02 (auditoría RLS externa) — decisión (a): `CostCenterAllocationRule` y
+   * `CostCenterAllocationTarget` tienen policies `alloc_rule_tenant` /
+   * `alloc_target_tenant` (ALL commands, `organizationId = current_org_id()`
+   * — target vía EXISTS a su rule) y `authenticated` tiene grants completos
+   * (verificado en prod 2026-08-22). `withTenantContext` es defensa en
+   * profundidad redundante con el filtro JS existente aquí.
    */
   list: readerProc.input(listInput).query(async ({ ctx, input }) => {
     const orgId = ctx.tenant.organizationId;
@@ -210,27 +218,29 @@ export const allocationRuleRouter = router({
     const where = conditions.join(" AND ");
 
     try {
-      const rules = await ctx.prisma.$queryRawUnsafe<RuleRow[]>(
-        `SELECT r.id, r."organizationId", r.name,
-                r."sourceCostCenterId",
-                src.code AS "sourceCode", src.name AS "sourceName",
-                r.base, r.periodicity, r.active
-         FROM "CostCenterAllocationRule" r
-         JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
-         WHERE ${where}
-         ORDER BY r.name ASC`,
-      );
+      return await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rules = await tx.$queryRawUnsafe<RuleRow[]>(
+          `SELECT r.id, r."organizationId", r.name,
+                  r."sourceCostCenterId",
+                  src.code AS "sourceCode", src.name AS "sourceName",
+                  r.base, r.periodicity, r.active
+           FROM "CostCenterAllocationRule" r
+           JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
+           WHERE ${where}
+           ORDER BY r.name ASC`,
+        );
 
-      if (!rules.length) return [];
+        if (!rules.length) return [];
 
-      const targets = await fetchTargetsForRules(ctx.prisma, rules.map((r) => r.id));
+        const targets = await fetchTargetsForRules(tx, rules.map((r) => r.id));
 
-      return rules.map((rule) => ({
-        ...rule,
-        targets: targets
-          .filter((t) => t.ruleId === rule.id)
-          .map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
-      }));
+        return rules.map((rule) => ({
+          ...rule,
+          targets: targets
+            .filter((t) => t.ruleId === rule.id)
+            .map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
+        }));
+      });
     } catch {
       // Tabla no existe en entorno dev sin migración
       return [];
@@ -239,28 +249,36 @@ export const allocationRuleRouter = router({
 
   /**
    * Detalle de una regla con targets.
+   *
+   * R02: a diferencia de `list`, este procedure NUNCA filtró por tenant en JS
+   * (solo `WHERE r.id = $1`) — cualquier usuario autenticado podía leer la
+   * regla de prorrateo de OTRA organización adivinando su UUID. `alloc_rule_tenant`
+   * cubre SELECT (verificado en prod), así que demotar el rol cierra el IDOR:
+   * bajo RLS, un id de otra org simplemente no matchea ninguna fila.
    */
   get: readerProc.input(getInput).query(async ({ ctx, input }) => {
     try {
-      const rules = await ctx.prisma.$queryRawUnsafe<RuleRow[]>(
-        `SELECT r.id, r."organizationId", r.name,
-                r."sourceCostCenterId",
-                src.code AS "sourceCode", src.name AS "sourceName",
-                r.base, r.periodicity, r.active
-         FROM "CostCenterAllocationRule" r
-         JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
-         WHERE r.id = $1`,
-        input.id,
-      );
-      if (!rules.length) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Regla no encontrada." });
-      }
-      const rule = rules[0]!;
-      const targets = await fetchTargetsForRules(ctx.prisma, [input.id]);
-      return {
-        ...rule,
-        targets: targets.map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
-      };
+      return await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rules = await tx.$queryRawUnsafe<RuleRow[]>(
+          `SELECT r.id, r."organizationId", r.name,
+                  r."sourceCostCenterId",
+                  src.code AS "sourceCode", src.name AS "sourceName",
+                  r.base, r.periodicity, r.active
+           FROM "CostCenterAllocationRule" r
+           JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
+           WHERE r.id = $1`,
+          input.id,
+        );
+        if (!rules.length) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Regla no encontrada." });
+        }
+        const rule = rules[0]!;
+        const targets = await fetchTargetsForRules(tx, [input.id]);
+        return {
+          ...rule,
+          targets: targets.map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
+        };
+      });
     } catch (err) {
       if (err instanceof TRPCError) throw err;
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al leer regla." });
@@ -270,6 +288,14 @@ export const allocationRuleRouter = router({
   /**
    * Crea regla + targets en una transacción.
    * Valida: source=apoyo, targets=productivo|intermedio, sum=100%.
+   *
+   * R02 — decisión (a): INSERT ya fija `organizationId: orgId` desde
+   * `ctx.tenant` (el cliente no puede inyectar otro), pero `withTenantContext`
+   * agrega defensa RLS real (`alloc_rule_tenant`/`alloc_target_tenant` cubren
+   * INSERT). `assertSourceIsApoyo`/`assertTargetsAreValid` (fuera de esta tx)
+   * quedan sin envolver a propósito: son lecturas de validación sobre
+   * `CostCenter` por id sin boundary de tenant hoy (gap preexistente de
+   * integridad referencial, no de RLS bypass — fuera de alcance de R02).
    */
   create: writerProc.input(createInput).mutation(async ({ ctx, input }) => {
     const orgId = ctx.tenant.organizationId;
@@ -290,7 +316,7 @@ export const allocationRuleRouter = router({
     }
 
     try {
-      const result = await ctx.prisma.$transaction(async (tx) => {
+      const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const ruleRows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
           `INSERT INTO "CostCenterAllocationRule"
              ("organizationId", name, "sourceCostCenterId", base, periodicity, active)
@@ -334,6 +360,11 @@ export const allocationRuleRouter = router({
 
   /**
    * Reemplaza todos los targets de una regla (no actualización parcial).
+   *
+   * R02: igual que `get`, este UPDATE no verificaba tenant (`WHERE id = $id`
+   * a secas) — un id de otra org se actualizaba igual. Con el rol demotado,
+   * `alloc_rule_tenant`/`alloc_target_tenant` (cubren UPDATE/DELETE) hacen que
+   * un id ajeno afecte 0 filas en vez de escribir cross-tenant.
    */
   update: writerProc.input(updateInput).mutation(async ({ ctx, input }) => {
     if (input.targets) {
@@ -344,7 +375,7 @@ export const allocationRuleRouter = router({
     }
 
     try {
-      await ctx.prisma.$transaction(async (tx) => {
+      await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const setParts: string[] = [];
         const params: unknown[] = [];
         let idx = 1;
@@ -400,12 +431,17 @@ export const allocationRuleRouter = router({
 
   /**
    * Desactiva una regla (active=false). No elimina.
+   *
+   * R02: mismo gap de `update` — sin tenant check en JS. `withTenantContext`
+   * cierra el IDOR vía `alloc_rule_tenant` (cubre UPDATE).
    */
   deactivate: writerProc.input(deactivateInput).mutation(async ({ ctx, input }) => {
     try {
-      await ctx.prisma.$executeRawUnsafe(
-        `UPDATE "CostCenterAllocationRule" SET active = false WHERE id = $1`,
-        input.id,
+      await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.$executeRawUnsafe(
+          `UPDATE "CostCenterAllocationRule" SET active = false WHERE id = $1`,
+          input.id,
+        ),
       );
       return { id: input.id };
     } catch (err) {
@@ -423,91 +459,107 @@ export const allocationRuleRouter = router({
    *   1. HisOperatingCost.amount — si la tabla existe
    *   2. InvoiceItem.unitPrice * quantity via Invoice.issuedAt — si existe
    *   3. 0 — entorno dev / sin datos
+   *
+   * R02 — decisión (a), y esta es la más seria del lote: `input.organizationId`
+   * es un campo del cliente, NO `ctx.tenant.organizationId` — cualquier
+   * ADMIN/ACCOUNTANT autenticado en SU org podía pasar el UUID de OTRA org y
+   * leer sus reglas de prorrateo + montos de costo (cross-tenant real, no solo
+   * IDOR de un id puntual). `withTenantContext` cierra esto de forma
+   * estructural: bajo rol demotado, la policy `alloc_rule_tenant` exige
+   * `organizationId = current_org_id()` (el de `ctx.tenant`, NO el del input)
+   * ADEMÁS del filtro JS `WHERE organizationId = $1 (input)` — la intersección
+   * de ambos solo puede ser no-vacía cuando el input coincide con el tenant
+   * real. `HisOperatingCost`/`InvoiceItem`/`Invoice` también tienen policies
+   * tenant-scoped completas (verificado en prod) y quedan cubiertas al mover
+   * las queries internas a `tx`.
    */
   runProration: writerProc.input(runProrationInput).mutation(async ({ ctx, input }) => {
     type ParsedTarget = Omit<TargetRow, "percentage"> & { percentage: number };
-    let rules: (RuleRow & { targets: ParsedTarget[] })[] = [];
 
-    try {
-      const ruleRows = await ctx.prisma.$queryRawUnsafe<RuleRow[]>(
-        `SELECT r.id, r."organizationId", r.name,
-                r."sourceCostCenterId",
-                src.code AS "sourceCode", src.name AS "sourceName",
-                r.base, r.periodicity, r.active
-         FROM "CostCenterAllocationRule" r
-         JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
-         WHERE r."organizationId" = $1 AND r.active = true`,
-        input.organizationId,
-      );
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      let rules: (RuleRow & { targets: ParsedTarget[] })[] = [];
 
-      if (!ruleRows.length) return [];
+      try {
+        const ruleRows = await tx.$queryRawUnsafe<RuleRow[]>(
+          `SELECT r.id, r."organizationId", r.name,
+                  r."sourceCostCenterId",
+                  src.code AS "sourceCode", src.name AS "sourceName",
+                  r.base, r.periodicity, r.active
+           FROM "CostCenterAllocationRule" r
+           JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
+           WHERE r."organizationId" = $1 AND r.active = true`,
+          input.organizationId,
+        );
 
-      const targetRows = await fetchTargetsForRules(ctx.prisma, ruleRows.map((r) => r.id));
+        if (!ruleRows.length) return [];
 
-      rules = ruleRows.map((rule) => ({
-        ...rule,
-        targets: targetRows
-          .filter((t) => t.ruleId === rule.id)
-          .map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
-      }));
-    } catch {
-      return [];
-    }
+        const targetRows = await fetchTargetsForRules(tx, ruleRows.map((r) => r.id));
 
-    const result = await Promise.all(
-      rules.map(async (rule) => {
-        let totalCosto = 0;
+        rules = ruleRows.map((rule) => ({
+          ...rule,
+          targets: targetRows
+            .filter((t) => t.ruleId === rule.id)
+            .map((t) => ({ ...t, percentage: parseFloat(t.percentage) })),
+        }));
+      } catch {
+        return [];
+      }
 
-        try {
-          const rows = await ctx.prisma.$queryRawUnsafe<Array<{ total: string }>>(
-            `SELECT COALESCE(SUM(amount), 0)::text AS total
-             FROM "HisOperatingCost"
-             WHERE "costCenterId" = $1
-               AND "date" >= $2::timestamptz
-               AND "date" <= $3::timestamptz`,
-            rule.sourceCostCenterId,
-            input.periodStart,
-            input.periodEnd,
-          );
-          totalCosto = parseFloat(rows[0]?.total ?? "0");
-        } catch {
-          // HisOperatingCost no existe; intentar InvoiceItem
+      const result = await Promise.all(
+        rules.map(async (rule) => {
+          let totalCosto = 0;
+
           try {
-            const rows = await ctx.prisma.$queryRawUnsafe<Array<{ total: string }>>(
-              `SELECT COALESCE(SUM(ii."unitPrice" * ii.quantity), 0)::text AS total
-               FROM "InvoiceItem" ii
-               JOIN "Invoice" inv ON inv.id = ii."invoiceId"
-               WHERE ii."costCenterId" = $1
-                 AND inv."issuedAt" >= $2::timestamptz
-                 AND inv."issuedAt" <= $3::timestamptz`,
+            const rows = await tx.$queryRawUnsafe<Array<{ total: string }>>(
+              `SELECT COALESCE(SUM(amount), 0)::text AS total
+               FROM "HisOperatingCost"
+               WHERE "costCenterId" = $1
+                 AND "date" >= $2::timestamptz
+                 AND "date" <= $3::timestamptz`,
               rule.sourceCostCenterId,
               input.periodStart,
               input.periodEnd,
             );
             totalCosto = parseFloat(rows[0]?.total ?? "0");
           } catch {
-            totalCosto = 0;
+            // HisOperatingCost no existe; intentar InvoiceItem
+            try {
+              const rows = await tx.$queryRawUnsafe<Array<{ total: string }>>(
+                `SELECT COALESCE(SUM(ii."unitPrice" * ii.quantity), 0)::text AS total
+                 FROM "InvoiceItem" ii
+                 JOIN "Invoice" inv ON inv.id = ii."invoiceId"
+                 WHERE ii."costCenterId" = $1
+                   AND inv."issuedAt" >= $2::timestamptz
+                   AND inv."issuedAt" <= $3::timestamptz`,
+                rule.sourceCostCenterId,
+                input.periodStart,
+                input.periodEnd,
+              );
+              totalCosto = parseFloat(rows[0]?.total ?? "0");
+            } catch {
+              totalCosto = 0;
+            }
           }
-        }
 
-        return {
-          ruleId: rule.id,
-          ruleName: rule.name,
-          sourceCostCenterCode: rule.sourceCode,
-          sourceCostCenterName: rule.sourceName,
-          base: rule.base,
-          totalProrateado: totalCosto,
-          distribuciones: rule.targets.map((target) => ({
-            targetCostCenterId: target.targetCostCenterId,
-            targetCode: target.targetCode,
-            targetName: target.targetName,
-            porcentaje: target.percentage,
-            monto: parseFloat(((totalCosto * target.percentage) / 100).toFixed(2)),
-          })),
-        };
-      }),
-    );
+          return {
+            ruleId: rule.id,
+            ruleName: rule.name,
+            sourceCostCenterCode: rule.sourceCode,
+            sourceCostCenterName: rule.sourceName,
+            base: rule.base,
+            totalProrateado: totalCosto,
+            distribuciones: rule.targets.map((target) => ({
+              targetCostCenterId: target.targetCostCenterId,
+              targetCode: target.targetCode,
+              targetName: target.targetName,
+              porcentaje: target.percentage,
+              monto: parseFloat(((totalCosto * target.percentage) / 100).toFixed(2)),
+            })),
+          };
+        }),
+      );
 
-    return result;
+      return result;
+    });
   }),
 });

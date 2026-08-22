@@ -20,6 +20,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 // -----------------------------------------------------------------------------
 // Schema input local — espejo del schema canónico en
@@ -53,8 +54,23 @@ export const breakGlassRouter = router({
   activate: tenantProcedure
     .input(breakGlassActivateInput)
     .mutation(async ({ ctx, input }) => {
-      // Defensa: paciente debe existir. No filtramos por org porque break-glass
-      // explícitamente se usa cross-permission; pero sí debe ser un UUID real.
+      // R02 (auditoría RLS externa) — decisión (c), documentada con evidencia:
+      // esta mutation NO pasa por withTenantContext a propósito.
+      //   1) El lookup de paciente es deliberadamente cross-org: break-glass
+      //      existe para acceder a un expediente fuera del alcance normal del
+      //      usuario, así que demotar a `authenticated` y aplicar RLS de
+      //      tenant aquí rompería el propósito mismo del mecanismo.
+      //   2) Verificado en prod (2026-08-22, psql read-only vía DIRECT_URL):
+      //      el rol `authenticated` NO tiene grant INSERT sobre
+      //      `audit."AuditLog"` (solo SELECT). Si esta mutation demotara el
+      //      rol, el `ctx.prisma.auditLog.create(...)` de abajo fallaría con
+      //      "permission denied" y el acceso de emergencia nunca quedaría
+      //      auditado — el peor escenario posible para break-glass.
+      // El registro SIGUE siendo seguro: el audit log es inmutable (hash
+      // chain, §"Audit hash chain" CLAUDE.md) y `current` (abajo) sí aplica
+      // RLS porque solo lee y `authenticated` tiene SELECT + policy
+      // `auditlog_tenant_select` (organizationId = current_org_id() OR
+      // is_break_glass()).
       const patient = await ctx.prisma.patient.findUnique({
         where: { id: input.patientId },
         select: { id: true },
@@ -147,21 +163,28 @@ export const breakGlassRouter = router({
    */
   current: tenantProcedure.query(async ({ ctx }) => {
     const cutoff = new Date(Date.now() - BREAK_GLASS_TTL_SECONDS * 1000);
-    const last = await ctx.prisma.auditLog.findFirst({
-      where: {
-        userId: ctx.user.id,
-        organizationId: ctx.tenant.organizationId,
-        action: "BREAK_GLASS",
-        occurredAt: { gte: cutoff },
-      },
-      orderBy: { occurredAt: "desc" },
-      select: {
-        id: true,
-        occurredAt: true,
-        entityId: true,
-        justification: true,
-      },
-    });
+    // Solo lectura, ya scoped por organizationId en JS: sí podemos demotar
+    // (default withTenantContext) porque `authenticated` tiene grant SELECT
+    // sobre audit."AuditLog" + policy auditlog_tenant_select — a diferencia
+    // de `activate`, aquí no hay riesgo de "permission denied" (ver comentario
+    // arriba con la evidencia verificada en prod).
+    const last = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) =>
+      tx.auditLog.findFirst({
+        where: {
+          userId: ctx.user.id,
+          organizationId: ctx.tenant.organizationId,
+          action: "BREAK_GLASS",
+          occurredAt: { gte: cutoff },
+        },
+        orderBy: { occurredAt: "desc" },
+        select: {
+          id: true,
+          occurredAt: true,
+          entityId: true,
+          justification: true,
+        },
+      }),
+    );
 
     if (!last || !last.entityId) {
       return { active: false as const };

@@ -41,6 +41,7 @@ import {
 import type { DrugInteractionPayload } from "../../../contracts/src/events/payloads";
 import * as Database from "@his/database";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 
 /**
  * Beta.15 — mapea severities del helper Pharmacy (minor/moderate/major/
@@ -154,27 +155,38 @@ function getDispenseCreateExtendedInput() {
 export const pharmacyRouter = router({
   drug: router({
     list: tenantProcedure.input(drugListInput).query(async ({ ctx, input }) => {
-      return ctx.prisma.drug.findMany({
-        where: {
-          OR: [
-            { organizationId: null }, // catálogo global
-            { organizationId: ctx.tenant.organizationId },
-          ],
-          ...(input.activeOnly && { active: true }),
-          ...(input.dispensingClass && { dispensingClass: input.dispensingClass }),
-          ...(input.search && {
+      // Drug SELECT policy (`drug_global_or_tenant_select`) cubre exactamente
+      // este OR (organizationId IS NULL OR = current_org_id()) — demotar es seguro.
+      return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.drug.findMany({
+          where: {
             OR: [
-              { genericName: { contains: input.search, mode: "insensitive" } },
-              { brandName: { contains: input.search, mode: "insensitive" } },
-              { atcCode: { contains: input.search, mode: "insensitive" } },
+              { organizationId: null }, // catálogo global
+              { organizationId: ctx.tenant.organizationId },
             ],
-          }),
-        },
-        orderBy: { genericName: "asc" },
-        take: input.limit,
-      });
+            ...(input.activeOnly && { active: true }),
+            ...(input.dispensingClass && { dispensingClass: input.dispensingClass }),
+            ...(input.search && {
+              OR: [
+                { genericName: { contains: input.search, mode: "insensitive" } },
+                { brandName: { contains: input.search, mode: "insensitive" } },
+                { atcCode: { contains: input.search, mode: "insensitive" } },
+              ],
+            }),
+          },
+          orderBy: { genericName: "asc" },
+          take: input.limit,
+        }),
+      );
     }),
 
+    // R02 — NO migrado a propósito. `drug_tenant_modify` (policy ALL/INSERT)
+    // exige `organizationId = current_org_id()`; el caso de catálogo GLOBAL
+    // (`input.organizationId === null`, ver comentario original — "sólo
+    // service_role debería poder crearlo") requeriría insertar con
+    // organizationId NULL, que el with_check rechazaría bajo rol demotado.
+    // Es un path admin/cross-org legítimo (igual que Vaccine/ClinicalConcept),
+    // no un JS-filter débil sobre datos de paciente.
     create: tenantProcedure
       .input(drugCreateInput)
       .mutation(async ({ ctx, input }) => {
@@ -193,28 +205,32 @@ export const pharmacyRouter = router({
     list: tenantProcedure
       .input(prescriptionListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.prescription.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            ...(input.encounterId && { encounterId: input.encounterId }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.prescriberId && { prescriberId: input.prescriberId }),
-            ...(input.fromDate && { prescribedAt: { gte: input.fromDate } }),
-            ...(input.costCenterId && { costCenterId: input.costCenterId }),
-          },
-          include: { items: { include: { drug: true } } },
-          orderBy: { prescribedAt: "desc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.prescription.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.encounterId && { encounterId: input.encounterId }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.prescriberId && { prescriberId: input.prescriberId }),
+              ...(input.fromDate && { prescribedAt: { gte: input.fromDate } }),
+              ...(input.costCenterId && { costCenterId: input.costCenterId }),
+            },
+            include: { items: { include: { drug: true } } },
+            orderBy: { prescribedAt: "desc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const presc = await ctx.prisma.prescription.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          include: { items: { include: { drug: true, dispenses: true } } },
-        });
+        const presc = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.prescription.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            include: { items: { include: { drug: true, dispenses: true } } },
+          }),
+        );
         if (!presc) throw new TRPCError({ code: "NOT_FOUND" });
         return presc;
       }),
@@ -222,25 +238,27 @@ export const pharmacyRouter = router({
     create: tenantProcedure
       .input(prescriptionCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
-          select: { id: true, patientId: true },
-        });
-        if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
-        }
-        return ctx.prisma.prescription.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            prescriberId: ctx.user.id,
-            notes: input.notes ?? null,
-            ...(input.costCenterId && { costCenterId: input.costCenterId }),
-            items: { create: input.items },
-          },
-          include: { items: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: { id: input.encounterId, organizationId: ctx.tenant.organizationId },
+            select: { id: true, patientId: true },
+          });
+          if (!enc) throw new TRPCError({ code: "NOT_FOUND", message: "Encuentro no existe en la organización." });
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({ code: "BAD_REQUEST", message: "patientId no coincide con encounter." });
+          }
+          return tx.prescription.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              prescriberId: ctx.user.id,
+              notes: input.notes ?? null,
+              ...(input.costCenterId && { costCenterId: input.costCenterId }),
+              items: { create: input.items },
+            },
+            include: { items: true },
+          });
         });
       }),
 
@@ -254,60 +272,64 @@ export const pharmacyRouter = router({
     sign: tenantProcedure
       .input(getPrescriptionSignWithOverrideInput())
       .mutation(async ({ ctx, input }) => {
-        const presc = await ctx.prisma.prescription.findFirst({
-          where: { id: input.id, organizationId: ctx.tenant.organizationId },
-          // Beta.15: prescriberId requerido para el payload del evento.
-          select: { id: true, status: true, prescriberId: true },
-        });
-        if (!presc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Receta no encontrada.",
+        // R02 — el update de Prescription corre demotado (policy ALL cubre
+        // organizationId = current_org_id()). `emitDomainEvent` (evento
+        // `drug.interaction`) escribe internamente en AuditLog, sin GRANT
+        // INSERT para `authenticated` — se emite después, bajo el rol bypass
+        // (mismo patrón que en encounter-discharge/inpatient.vitals.record).
+        const { presc, alerts, conflictingDrugIds, shouldEmit } = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const presc = await tx.prescription.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            // Beta.15: prescriberId requerido para el payload del evento.
+            select: { id: true, status: true, prescriberId: true },
           });
-        }
-        if (
-          !canTransitionPrescription(
-            presc.status as PrescriptionStatusType,
-            "SIGNED",
-          )
-        ) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Transición inválida: ${presc.status} → SIGNED.`,
+          if (!presc) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Receta no encontrada.",
+            });
+          }
+          if (
+            !canTransitionPrescription(
+              presc.status as PrescriptionStatusType,
+              "SIGNED",
+            )
+          ) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Transición inválida: ${presc.status} → SIGNED.`,
+            });
+          }
+
+          const items = await tx.prescriptionItem.findMany({
+            where: { prescriptionId: presc.id },
+            // Beta.15: drug.id requerido para `conflictingDrugIds` del payload.
+            include: {
+              drug: { select: { id: true, atcCode: true, genericName: true } },
+            },
           });
-        }
+          const alerts = detectInteractionAlerts(
+            items.map((it) => ({ atcCode: it.drug.atcCode, name: it.drug.genericName })),
+            getInteractionsDataset(),
+          );
 
-        const items = await ctx.prisma.prescriptionItem.findMany({
-          where: { prescriptionId: presc.id },
-          // Beta.15: drug.id requerido para `conflictingDrugIds` del payload.
-          include: {
-            drug: { select: { id: true, atcCode: true, genericName: true } },
-          },
-        });
-        const alerts = detectInteractionAlerts(
-          items.map((it) => ({ atcCode: it.drug.atcCode, name: it.drug.genericName })),
-          getInteractionsDataset(),
-        );
+          if (hasBlockingInteraction(alerts) && !input.forceOverrideJustification) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                `Se detectaron interacciones mayor/contraindicadas (${alerts.length}). Requiere justificación de override.`,
+              cause: { alerts } as unknown as Error,
+            });
+          }
 
-        if (hasBlockingInteraction(alerts) && !input.forceOverrideJustification) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              `Se detectaron interacciones mayor/contraindicadas (${alerts.length}). Requiere justificación de override.`,
-            cause: { alerts } as unknown as Error,
-          });
-        }
+          // Beta.15 (US.B15.4.3 — drug.interaction): `conflictingDrugIds`
+          // resuelto a partir de los items; si <2 IDs únicos, no emitimos
+          // (payload Zod requiere min 2).
+          const conflictingDrugIds = alerts.length > 0
+            ? buildConflictingDrugIds(alerts, items)
+            : null;
+          const shouldEmit = alerts.length > 0 && conflictingDrugIds !== null;
 
-        // Beta.15 (US.B15.4.3 — drug.interaction): si hay alerts y el sign
-        // procede (override o no-blocking), emitimos evento en la misma tx
-        // del update. `conflictingDrugIds` resuelto a partir de los items;
-        // si <2 IDs únicos, no emitimos (payload Zod requiere min 2).
-        const conflictingDrugIds = alerts.length > 0
-          ? buildConflictingDrugIds(alerts, items)
-          : null;
-        const shouldEmit = alerts.length > 0 && conflictingDrugIds !== null;
-
-        await ctx.prisma.$transaction(async (tx) => {
           await tx.prescription.update({
             where: { id: presc.id },
             data: {
@@ -318,18 +340,23 @@ export const pharmacyRouter = router({
               }),
             },
           });
-          if (shouldEmit) {
-            const description = alerts
-              .map((a) => a.description)
-              .join("; ")
-              .slice(0, 500);
-            const payload: DrugInteractionPayload = {
-              prescriptionId: presc.id,
-              prescriberId: presc.prescriberId,
-              conflictingDrugIds: conflictingDrugIds!,
-              severity: worstInteractionSeverity(alerts),
-              description,
-            };
+
+          return { presc, alerts, conflictingDrugIds, shouldEmit };
+        });
+
+        if (shouldEmit) {
+          const description = alerts
+            .map((a) => a.description)
+            .join("; ")
+            .slice(0, 500);
+          const payload: DrugInteractionPayload = {
+            prescriptionId: presc.id,
+            prescriberId: presc.prescriberId,
+            conflictingDrugIds: conflictingDrugIds!,
+            severity: worstInteractionSeverity(alerts),
+            description,
+          };
+          await ctx.prisma.$transaction(async (tx) => {
             await Database.emitDomainEvent(tx, {
               organizationId: ctx.tenant.organizationId,
               eventType: "drug.interaction",
@@ -338,8 +365,8 @@ export const pharmacyRouter = router({
               emittedById: ctx.user.id,
               payload,
             });
-          }
-        });
+          });
+        }
         return { ok: true as const, alerts };
       }),
   }),
@@ -357,8 +384,9 @@ export const pharmacyRouter = router({
     create: tenantProcedure
       .input(getDispenseCreateExtendedInput())
       .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Verifica que el item pertenezca a una prescription dispensable de la misma org.
-        const item = await ctx.prisma.prescriptionItem.findFirst({
+        const item = await tx.prescriptionItem.findFirst({
           where: {
             id: input.prescriptionItemId,
             prescription: {
@@ -447,14 +475,14 @@ export const pharmacyRouter = router({
         // intenta auto-sugerir 2-FAR-HOS del tenant. Si no existe en BD, queda null.
         let resolvedCostCenterId: string | null = input.costCenterId ?? null;
         if (!resolvedCostCenterId) {
-          const farmaciaCc = await ctx.prisma.costCenter.findFirst({
+          const farmaciaCc = await tx.costCenter.findFirst({
             where: { code: "2-FAR-HOS", organizationId: ctx.tenant.organizationId },
             select: { id: true },
           });
           resolvedCostCenterId = farmaciaCc?.id ?? null;
         }
 
-        return ctx.prisma.medicationDispense.create({
+        return tx.medicationDispense.create({
           data: {
             prescriptionItemId: input.prescriptionItemId,
             dispensedById: ctx.user.id,
@@ -464,6 +492,7 @@ export const pharmacyRouter = router({
             notes: composeDispenseNotes(input),
             ...(resolvedCostCenterId && { costCenterId: resolvedCostCenterId }),
           },
+        });
         });
       }),
   }),

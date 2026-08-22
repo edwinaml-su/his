@@ -30,6 +30,7 @@ import {
   surgeryCaseUpdateIntraopNotesInput,
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
+import { withTenantContext } from "../rls-context";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import type { PrismaClient } from "@prisma/client";
 
@@ -71,36 +72,40 @@ export const surgeryRouter = router({
     list: tenantProcedure
       .input(operatingRoomListInput)
       .query(async ({ ctx, input }) => {
-        return ctx.prisma.operatingRoom.findMany({
-          where: {
-            establishment: { organizationId: ctx.tenant.organizationId },
-            ...(input.establishmentId && {
-              establishmentId: input.establishmentId,
-            }),
-            ...(input.activeOnly && { active: true }),
-          },
-          orderBy: { code: "asc" },
-          take: input.limit,
-        });
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.operatingRoom.findMany({
+            where: {
+              establishment: { organizationId: ctx.tenant.organizationId },
+              ...(input.establishmentId && {
+                establishmentId: input.establishmentId,
+              }),
+              ...(input.activeOnly && { active: true }),
+            },
+            orderBy: { code: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     create: tenantProcedure
       .input(operatingRoomCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const est = await ctx.prisma.establishment.findFirst({
-          where: {
-            id: input.establishmentId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true },
-        });
-        if (!est) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Establecimiento no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const est = await tx.establishment.findFirst({
+            where: {
+              id: input.establishmentId,
+              organizationId: ctx.tenant.organizationId,
+            },
+            select: { id: true },
           });
-        }
-        return ctx.prisma.operatingRoom.create({ data: input });
+          if (!est) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Establecimiento no existe en la organización.",
+            });
+          }
+          return tx.operatingRoom.create({ data: input });
+        });
       }),
   }),
 
@@ -117,49 +122,53 @@ export const surgeryRouter = router({
         const orFilter =
           Object.keys(orScope).length > 0 ? { operatingRoom: orScope } : {};
 
-        return ctx.prisma.surgeryCase.findMany({
-          where: {
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-            ...orFilter,
-            ...(input.status && { status: input.status }),
-            ...(input.primarySurgeonId && {
-              primarySurgeonId: input.primarySurgeonId,
-            }),
-            ...(input.operatingRoomId && {
-              operatingRoomId: input.operatingRoomId,
-            }),
-            ...(input.patientId && { patientId: input.patientId }),
-            ...(input.costCenterId && { costCenterId: input.costCenterId }),
-            ...((input.fromDate || input.toDate) && {
-              scheduledStart: {
-                ...(input.fromDate && { gte: input.fromDate }),
-                ...(input.toDate && { lte: input.toDate }),
-              },
-            }),
-          },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.surgeryCase.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+              ...orFilter,
+              ...(input.status && { status: input.status }),
+              ...(input.primarySurgeonId && {
+                primarySurgeonId: input.primarySurgeonId,
+              }),
+              ...(input.operatingRoomId && {
+                operatingRoomId: input.operatingRoomId,
+              }),
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.costCenterId && { costCenterId: input.costCenterId }),
+              ...((input.fromDate || input.toDate) && {
+                scheduledStart: {
+                  ...(input.fromDate && { gte: input.fromDate }),
+                  ...(input.toDate && { lte: input.toDate }),
+                },
+              }),
             },
-            primarySurgeon: { select: { id: true, fullName: true } },
-            operatingRoom: { select: { id: true, code: true, name: true } },
-          },
-          orderBy: { scheduledStart: "asc" },
-          take: input.limit,
-        });
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              primarySurgeon: { select: { id: true, fullName: true } },
+              operatingRoom: { select: { id: true, code: true, name: true } },
+            },
+            orderBy: { scheduledStart: "asc" },
+            take: input.limit,
+          }),
+        );
       }),
 
     get: tenantProcedure
       .input(z.object({ id: z.string().uuid() }))
       .query(async ({ ctx, input }) => {
-        const item = await ctx.prisma.surgeryCase.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-        });
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.surgeryCase.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+          }),
+        );
         if (!item) throw new TRPCError({ code: "NOT_FOUND" });
         return item;
       }),
@@ -167,60 +176,62 @@ export const surgeryRouter = router({
     create: tenantProcedure
       .input(surgeryCaseCreateInput)
       .mutation(async ({ ctx, input }) => {
-        const enc = await ctx.prisma.encounter.findFirst({
-          where: {
-            id: input.encounterId,
-            organizationId: ctx.tenant.organizationId,
-          },
-          select: { id: true, patientId: true },
-        });
-        if (!enc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Encuentro no existe en la organización.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const enc = await tx.encounter.findFirst({
+            where: {
+              id: input.encounterId,
+              organizationId: ctx.tenant.organizationId,
+            },
+            select: { id: true, patientId: true },
           });
-        }
-        if (enc.patientId !== input.patientId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "patientId no coincide con encounter.",
-          });
-        }
-
-        // OR conflict detection (only if an OR was specified)
-        if (input.operatingRoomId) {
-          const conflict = await detectOrConflict(
-            ctx.prisma,
-            input.operatingRoomId,
-            input.scheduledStart,
-            input.scheduledEnd,
-          );
-          if (conflict) {
+          if (!enc) {
             throw new TRPCError({
-              code: "CONFLICT",
-              message:
-                "El quirófano ya tiene un caso activo en ese intervalo horario.",
+              code: "NOT_FOUND",
+              message: "Encuentro no existe en la organización.",
             });
           }
-        }
+          if (enc.patientId !== input.patientId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "patientId no coincide con encounter.",
+            });
+          }
 
-        return ctx.prisma.surgeryCase.create({
-          data: {
-            organizationId: ctx.tenant.organizationId,
-            establishmentId: input.establishmentId,
-            encounterId: input.encounterId,
-            patientId: input.patientId,
-            primarySurgeonId: input.primarySurgeonId,
-            operatingRoomId: input.operatingRoomId ?? null,
-            procedureDescription: input.procedureDescription,
-            procedureCode: input.procedureCode ?? null,
-            scheduledStart: input.scheduledStart,
-            scheduledEnd: input.scheduledEnd,
-            asaClass: input.asaClass ?? null,
-            preopNotes: input.preopNotes ?? null,
-            costCenterId: input.costCenterId ?? null,
-            createdBy: ctx.user.id,
-          },
+          // OR conflict detection (only if an OR was specified)
+          if (input.operatingRoomId) {
+            const conflict = await detectOrConflict(
+              tx,
+              input.operatingRoomId,
+              input.scheduledStart,
+              input.scheduledEnd,
+            );
+            if (conflict) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message:
+                  "El quirófano ya tiene un caso activo en ese intervalo horario.",
+              });
+            }
+          }
+
+          return tx.surgeryCase.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              encounterId: input.encounterId,
+              patientId: input.patientId,
+              primarySurgeonId: input.primarySurgeonId,
+              operatingRoomId: input.operatingRoomId ?? null,
+              procedureDescription: input.procedureDescription,
+              procedureCode: input.procedureCode ?? null,
+              scheduledStart: input.scheduledStart,
+              scheduledEnd: input.scheduledEnd,
+              asaClass: input.asaClass ?? null,
+              preopNotes: input.preopNotes ?? null,
+              costCenterId: input.costCenterId ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -235,63 +246,65 @@ export const surgeryRouter = router({
     signIn: tenantProcedure
       .input(surgeryCaseSignInInput)
       .mutation(async ({ ctx, input }) => {
-        // 1) Cargar el caso para conocer encounterId.
-        const surgeryCase = await ctx.prisma.surgeryCase.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            deletedAt: null,
-          },
-          select: { id: true, encounterId: true, signInAt: true, status: true },
-        });
-        if (!surgeryCase) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Caso quirúrgico no encontrado.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // 1) Cargar el caso para conocer encounterId.
+          const surgeryCase = await tx.surgeryCase.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              deletedAt: null,
+            },
+            select: { id: true, encounterId: true, signInAt: true, status: true },
           });
-        }
+          if (!surgeryCase) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Caso quirúrgico no encontrado.",
+            });
+          }
 
-        // 2) Gate handoff: ¿hay traslado SENT pendiente? Rechazar.
-        const pendingHandoff = await ctx.prisma.encounterTransfer.findFirst({
-          where: {
-            encounterId: surgeryCase.encounterId,
-            status: "SENT",
-          },
-          select: { id: true, toServiceId: true },
-        });
-        if (pendingHandoff) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              "El paciente tiene un traslado pendiente de recepción. " +
-              "Confirme la llegada (Recibir paciente) antes del Sign-In WHO.",
-            cause: { pendingTransferId: pendingHandoff.id },
+          // 2) Gate handoff: ¿hay traslado SENT pendiente? Rechazar.
+          const pendingHandoff = await tx.encounterTransfer.findFirst({
+            where: {
+              encounterId: surgeryCase.encounterId,
+              status: "SENT",
+            },
+            select: { id: true, toServiceId: true },
           });
-        }
+          if (pendingHandoff) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "El paciente tiene un traslado pendiente de recepción. " +
+                "Confirme la llegada (Recibir paciente) antes del Sign-In WHO.",
+              cause: { pendingTransferId: pendingHandoff.id },
+            });
+          }
 
-        // 3) Sign-In (idempotente, único).
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED"] },
-            signInAt: null, // idempotency guard — only sign-in once
-            deletedAt: null,
-          },
-          data: {
-            signInAt: new Date(),
-            signInById: ctx.user.id,
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe, ya tiene Sign In registrado, o no está en estado válido.",
+          // 3) Sign-In (idempotente, único).
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED"] },
+              signInAt: null, // idempotency guard — only sign-in once
+              deletedAt: null,
+            },
+            data: {
+              signInAt: new Date(),
+              signInById: ctx.user.id,
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe, ya tiene Sign In registrado, o no está en estado válido.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -300,29 +313,31 @@ export const surgeryRouter = router({
     timeOut: tenantProcedure
       .input(surgeryCaseTimeOutInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED"] },
-            signInAt: { not: null }, // Sign In must be done first
-            timeOutAt: null,         // idempotency guard
-            deletedAt: null,
-          },
-          data: {
-            timeOutAt: new Date(),
-            timeOutById: ctx.user.id,
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe, falta Sign In previo, ya tiene Time Out, o no está en estado válido.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED"] },
+              signInAt: { not: null }, // Sign In must be done first
+              timeOutAt: null,         // idempotency guard
+              deletedAt: null,
+            },
+            data: {
+              timeOutAt: new Date(),
+              timeOutById: ctx.user.id,
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe, falta Sign In previo, ya tiene Time Out, o no está en estado válido.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -332,29 +347,31 @@ export const surgeryRouter = router({
     start: tenantProcedure
       .input(surgeryCaseStartInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED"] },
-            signInAt: { not: null },  // WHO Sign In required
-            timeOutAt: { not: null }, // WHO Time Out required
-            deletedAt: null,
-          },
-          data: {
-            status: "IN_PROGRESS",
-            actualStart: new Date(),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe, faltan Sign In y/o Time Out del checklist WHO, o el estado no es válido.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED"] },
+              signInAt: { not: null },  // WHO Sign In required
+              timeOutAt: { not: null }, // WHO Time Out required
+              deletedAt: null,
+            },
+            data: {
+              status: "IN_PROGRESS",
+              actualStart: new Date(),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe, faltan Sign In y/o Time Out del checklist WHO, o el estado no es válido.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -363,28 +380,30 @@ export const surgeryRouter = router({
     signOut: tenantProcedure
       .input(surgeryCaseSignOutInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "IN_PROGRESS",
-            signOutAt: null, // idempotency guard
-            deletedAt: null,
-          },
-          data: {
-            signOutAt: new Date(),
-            signOutById: ctx.user.id,
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe, ya tiene Sign Out registrado, o no está IN_PROGRESS.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "IN_PROGRESS",
+              signOutAt: null, // idempotency guard
+              deletedAt: null,
+            },
+            data: {
+              signOutAt: new Date(),
+              signOutById: ctx.user.id,
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe, ya tiene Sign Out registrado, o no está IN_PROGRESS.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -394,31 +413,33 @@ export const surgeryRouter = router({
     postOp: tenantProcedure
       .input(surgeryCasePostOpInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "IN_PROGRESS",
-            signOutAt: { not: null }, // WHO Sign Out required
-            deletedAt: null,
-          },
-          data: {
-            status: "POST_OP",
-            actualEnd: new Date(),
-            ...(input.intraopNotes !== undefined && {
-              intraopNotes: input.intraopNotes,
-            }),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe, falta Sign Out del checklist WHO, o no está IN_PROGRESS.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "IN_PROGRESS",
+              signOutAt: { not: null }, // WHO Sign Out required
+              deletedAt: null,
+            },
+            data: {
+              status: "POST_OP",
+              actualEnd: new Date(),
+              ...(input.intraopNotes !== undefined && {
+                intraopNotes: input.intraopNotes,
+              }),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe, falta Sign Out del checklist WHO, o no está IN_PROGRESS.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -427,28 +448,30 @@ export const surgeryRouter = router({
     complete: tenantProcedure
       .input(surgeryCaseCompleteInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "POST_OP",
-            deletedAt: null,
-          },
-          data: {
-            status: "COMPLETED",
-            ...(input.postopNotes !== undefined && {
-              postopNotes: input.postopNotes,
-            }),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Caso no existe o no está en POST_OP.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "POST_OP",
+              deletedAt: null,
+            },
+            data: {
+              status: "COMPLETED",
+              ...(input.postopNotes !== undefined && {
+                postopNotes: input.postopNotes,
+              }),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Caso no existe o no está en POST_OP.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -457,26 +480,28 @@ export const surgeryRouter = router({
     cancel: tenantProcedure
       .input(surgeryCaseCancelInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED", "POSTPONED"] },
-            deletedAt: null,
-          },
-          data: {
-            status: "CANCELLED",
-            cancelReason: input.cancelReason,
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Caso no existe o ya inició / fue cancelado.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED", "POSTPONED"] },
+              deletedAt: null,
+            },
+            data: {
+              status: "CANCELLED",
+              cancelReason: input.cancelReason,
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Caso no existe o ya inició / fue cancelado.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
 
     // ------------------------------------------------------------------
@@ -493,48 +518,50 @@ export const surgeryRouter = router({
           });
         }
 
-        const existing = await ctx.prisma.surgeryCase.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED"] },
-            deletedAt: null,
-          },
-          select: { id: true, operatingRoomId: true },
-        });
-        if (!existing) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Caso no existe o no está en estado cancelable.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const existing = await tx.surgeryCase.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED"] },
+              deletedAt: null,
+            },
+            select: { id: true, operatingRoomId: true },
           });
-        }
-
-        if (existing.operatingRoomId) {
-          const conflict = await detectOrConflict(
-            ctx.prisma,
-            existing.operatingRoomId,
-            input.newScheduledStart,
-            input.newScheduledEnd,
-            input.id,
-          );
-          if (conflict) {
+          if (!existing) {
             throw new TRPCError({
-              code: "CONFLICT",
-              message:
-                "El quirófano ya tiene un caso activo en el nuevo intervalo horario.",
+              code: "NOT_FOUND",
+              message: "Caso no existe o no está en estado cancelable.",
             });
           }
-        }
 
-        return ctx.prisma.surgeryCase.update({
-          where: { id: input.id },
-          data: {
-            status: "POSTPONED",
-            cancelReason: input.cancelReason,
-            scheduledStart: input.newScheduledStart,
-            scheduledEnd: input.newScheduledEnd,
-            updatedBy: ctx.user.id,
-          },
+          if (existing.operatingRoomId) {
+            const conflict = await detectOrConflict(
+              tx,
+              existing.operatingRoomId,
+              input.newScheduledStart,
+              input.newScheduledEnd,
+              input.id,
+            );
+            if (conflict) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message:
+                  "El quirófano ya tiene un caso activo en el nuevo intervalo horario.",
+              });
+            }
+          }
+
+          return tx.surgeryCase.update({
+            where: { id: input.id },
+            data: {
+              status: "POSTPONED",
+              cancelReason: input.cancelReason,
+              scheduledStart: input.newScheduledStart,
+              scheduledEnd: input.newScheduledEnd,
+              updatedBy: ctx.user.id,
+            },
+          });
         });
       }),
 
@@ -545,40 +572,40 @@ export const surgeryRouter = router({
     updateIntraopNotes: tenantProcedure
       .input(surgeryCaseUpdateIntraopNotesInput)
       .mutation(async ({ ctx, input }) => {
-        // SELECT FOR UPDATE — idempotent guard, atomically verify status before append.
-        const existing = await ctx.prisma.surgeryCase.findFirst({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: "IN_PROGRESS",
-            deletedAt: null,
-          },
-          select: { id: true, intraopNotes: true },
-        });
-        if (!existing) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Solo se pueden agregar notas durante IN_PROGRESS.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          // SELECT FOR UPDATE — idempotent guard, atomically verify status before append.
+          const existing = await tx.surgeryCase.findFirst({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "IN_PROGRESS",
+              deletedAt: null,
+            },
+            select: { id: true, intraopNotes: true },
           });
-        }
+          if (!existing) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Solo se pueden agregar notas durante IN_PROGRESS.",
+            });
+          }
 
-        // Format: [ISO-timestamp] [TYPE] texto
-        const ts = new Date().toISOString();
-        const line = `[${ts}] [${input.entryType}] ${input.appendText}`;
-        const updatedNotes = existing.intraopNotes
-          ? `${existing.intraopNotes}\n${line}`
-          : line;
+          // Format: [ISO-timestamp] [TYPE] texto
+          const ts = new Date().toISOString();
+          const line = `[${ts}] [${input.entryType}] ${input.appendText}`;
+          const updatedNotes = existing.intraopNotes
+            ? `${existing.intraopNotes}\n${line}`
+            : line;
 
-        const updated = await ctx.prisma.surgeryCase.update({
-          where: { id: existing.id },
-          data: {
-            intraopNotes: updatedNotes,
-            updatedBy: ctx.user.id,
-          },
-          select: { id: true, intraopNotes: true },
+          return tx.surgeryCase.update({
+            where: { id: existing.id },
+            data: {
+              intraopNotes: updatedNotes,
+              updatedBy: ctx.user.id,
+            },
+            select: { id: true, intraopNotes: true },
+          });
         });
-
-        return updated;
       }),
 
     // ------------------------------------------------------------------
@@ -587,30 +614,32 @@ export const surgeryRouter = router({
     recordAnesthesia: tenantProcedure
       .input(surgeryCaseAnesthesiaInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await ctx.prisma.surgeryCase.updateMany({
-          where: {
-            id: input.id,
-            organizationId: ctx.tenant.organizationId,
-            status: { in: ["SCHEDULED", "CONFIRMED", "IN_PROGRESS", "POST_OP"] },
-            deletedAt: null,
-          },
-          data: {
-            anesthesiaType: input.anesthesiaType,
-            anesthesiaStartAt: input.anesthesiaStartAt,
-            ...(input.anesthesiaEndAt !== undefined && {
-              anesthesiaEndAt: input.anesthesiaEndAt,
-            }),
-            updatedBy: ctx.user.id,
-          },
-        });
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message:
-              "Caso no existe o no está en estado que permita registrar anestesia.",
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const updated = await tx.surgeryCase.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["SCHEDULED", "CONFIRMED", "IN_PROGRESS", "POST_OP"] },
+              deletedAt: null,
+            },
+            data: {
+              anesthesiaType: input.anesthesiaType,
+              anesthesiaStartAt: input.anesthesiaStartAt,
+              ...(input.anesthesiaEndAt !== undefined && {
+                anesthesiaEndAt: input.anesthesiaEndAt,
+              }),
+              updatedBy: ctx.user.id,
+            },
           });
-        }
-        return { ok: true as const };
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message:
+                "Caso no existe o no está en estado que permita registrar anestesia.",
+            });
+          }
+          return { ok: true as const };
+        });
       }),
   }),
 });

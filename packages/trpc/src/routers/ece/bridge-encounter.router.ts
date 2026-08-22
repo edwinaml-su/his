@@ -112,19 +112,50 @@ type PacienteEceRow = {
 // Helpers raw SQL
 // =============================================================================
 
+/**
+ * R02 — Ámbito de tenant para las consultas crudas a ece.*.
+ *
+ * ece.episodio_atencion NO tiene organization_id, así que el ámbito se resuelve
+ * por el establecimiento del paciente: ece.paciente.establecimiento_id es FK a
+ * public."Establishment"(id), que es exactamente el mismo espacio de ids que
+ * `ctx.tenant.establishmentId`. Verificado contra la BD: los 30 episodios
+ * quedan dentro del establecimiento propio y 0 dentro de uno ajeno.
+ *
+ * OJO: esto NO es RLS. La policy de ece.episodio_atencion compara contra
+ * ece.current_establecimiento_id() — el GUC `app.ece_establecimiento_id` —, que
+ * pertenece al espacio de ids de ece.establecimiento(id), NO al de
+ * public."Establishment"(id). Mientras ese desalineamiento exista, demotar el
+ * rol aquí devolvería 0 filas y rompería el bridge. Ver informe R02.
+ */
+function requireEstablishment(tenant: { establishmentId?: string }): string {
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar el bridge ECE.",
+    });
+  }
+  return tenant.establishmentId;
+}
+
 async function findEpisodio(
   prisma: {
     $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
   },
   episodioId: string,
+  establecimientoId: string,
 ): Promise<EpisodioRow | null> {
   const rows = await (prisma.$queryRaw as (
     q: TemplateStringsArray,
     ...v: unknown[]
   ) => Promise<EpisodioRow[]>)`
-    SELECT id, public_encounter_id, paciente_id, establecimiento_id, estado
-    FROM ece.episodio_atencion
-    WHERE id = ${episodioId}::uuid
+    SELECT ea.id, ea.public_encounter_id, ea.paciente_id, ea.establecimiento_id, ea.estado
+    FROM ece.episodio_atencion ea
+    WHERE ea.id = ${episodioId}::uuid
+      AND EXISTS (
+        SELECT 1 FROM ece.paciente p
+        WHERE p.id = ea.paciente_id
+          AND p.establecimiento_id = ${establecimientoId}::uuid
+      )
     LIMIT 1
   `;
   return rows[0] ?? null;
@@ -135,6 +166,7 @@ async function findPacienteEcePorPublicPatient(
     $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown>;
   },
   publicPatientId: string,
+  establecimientoId: string,
 ): Promise<PacienteEceRow | null> {
   const rows = await (prisma.$queryRaw as (
     q: TemplateStringsArray,
@@ -143,6 +175,7 @@ async function findPacienteEcePorPublicPatient(
     SELECT id, establecimiento_id
     FROM ece.paciente
     WHERE public_patient_id = ${publicPatientId}::uuid
+      AND establecimiento_id = ${establecimientoId}::uuid
       AND estado_expediente = 'activo'
     LIMIT 1
   `;
@@ -177,8 +210,9 @@ export const bridgeEncounterRouter = router({
         });
       }
 
-      // 2. Verificar que el episodio ECE existe y no tiene ya un vínculo.
-      const episodio = await findEpisodio(ctx.prisma, input.episodioId);
+      // 2. Verificar que el episodio ECE existe, es del tenant, y no tiene vínculo.
+      const establecimientoId = requireEstablishment(ctx.tenant);
+      const episodio = await findEpisodio(ctx.prisma, input.episodioId, establecimientoId);
       if (!episodio) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -198,10 +232,15 @@ export const bridgeEncounterRouter = router({
           q: TemplateStringsArray,
           ...v: unknown[]
         ) => Promise<number>)`
-          UPDATE ece.episodio_atencion
+          UPDATE ece.episodio_atencion ea
           SET public_encounter_id = ${input.encounterId}::uuid,
               actualizado_en      = now()
-          WHERE id = ${input.episodioId}::uuid
+          WHERE ea.id = ${input.episodioId}::uuid
+            AND EXISTS (
+              SELECT 1 FROM ece.paciente p
+              WHERE p.id = ea.paciente_id
+                AND p.establecimiento_id = ${establecimientoId}::uuid
+            )
         `;
 
         await emitDomainEvent(tx, {
@@ -230,7 +269,8 @@ export const bridgeEncounterRouter = router({
   unlinkEncounter: requireRole(["PHYSICIAN", "NURSE", "ADM"])
     .input(unlinkEncounterSchema)
     .mutation(async ({ ctx, input }) => {
-      const episodio = await findEpisodio(ctx.prisma, input.episodioId);
+      const establecimientoId = requireEstablishment(ctx.tenant);
+      const episodio = await findEpisodio(ctx.prisma, input.episodioId, establecimientoId);
       if (!episodio) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -248,10 +288,15 @@ export const bridgeEncounterRouter = router({
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<number>)`
-        UPDATE ece.episodio_atencion
+        UPDATE ece.episodio_atencion ea
         SET public_encounter_id = NULL,
             actualizado_en      = now()
-        WHERE id = ${input.episodioId}::uuid
+        WHERE ea.id = ${input.episodioId}::uuid
+          AND EXISTS (
+            SELECT 1 FROM ece.paciente p
+            WHERE p.id = ea.paciente_id
+              AND p.establecimiento_id = ${establecimientoId}::uuid
+          )
       `;
 
       return { episodioId: input.episodioId, unlinkedEncounterId: episodio.public_encounter_id };
@@ -289,6 +334,29 @@ export const bridgeEncounterRouter = router({
         });
       }
 
+      // 1b. R02 — `establecimientoEceId` llega del cliente y es la clave de
+      // ámbito de la fila que se va a crear. Sin esta validación, un usuario
+      // podía crear el episodio colgado del establecimiento de otro tenant.
+      // Se contrasta contra ece.establecimiento.establishment_id, la columna
+      // puente hacia public."Establishment"(id) — el espacio de ids de
+      // `ctx.tenant.establishmentId`.
+      const establecimientoId = requireEstablishment(ctx.tenant);
+      const estabOk = await (ctx.prisma.$queryRaw as (
+        q: TemplateStringsArray,
+        ...v: unknown[]
+      ) => Promise<Array<{ id: string }>>)`
+        SELECT id FROM ece.establecimiento
+        WHERE id = ${input.establecimientoEceId}::uuid
+          AND establishment_id = ${establecimientoId}::uuid
+        LIMIT 1
+      `;
+      if (estabOk.length === 0) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El establecimiento indicado no pertenece a la sede activa.",
+        });
+      }
+
       // 2. Verificar que el Encounter no tenga ya un episodio vinculado.
       const existing = await (ctx.prisma.$queryRaw as (
         q: TemplateStringsArray,
@@ -309,6 +377,7 @@ export const bridgeEncounterRouter = router({
       const pacienteEce = await findPacienteEcePorPublicPatient(
         ctx.prisma,
         encounter.patientId,
+        establecimientoId,
       );
       if (!pacienteEce) {
         throw new TRPCError({
@@ -389,13 +458,23 @@ export const bridgeEncounterRouter = router({
       // Subquery: encuentros que YA tienen un episodio ECE vinculado.
       // No usamos JOIN en Prisma porque ece.* no está en el schema Prisma.
       // Traemos los encounter IDs vinculados y los excluimos con notIn.
+      // R02 — Esta subconsulta traía los public_encounter_id de TODAS las
+      // organizaciones. Además de filtrar de más el listado propio, exponía por
+      // inferencia qué Encounters ajenos están vinculados. Se acota a la sede
+      // activa por el establecimiento del paciente del episodio.
+      const establecimientoId = requireEstablishment(ctx.tenant);
       const linkedRows = await (ctx.prisma.$queryRaw as (
         q: TemplateStringsArray,
         ...v: unknown[]
       ) => Promise<Array<{ eid: string }>>)`
-        SELECT public_encounter_id::text AS eid
-        FROM ece.episodio_atencion
-        WHERE public_encounter_id IS NOT NULL
+        SELECT ea.public_encounter_id::text AS eid
+        FROM ece.episodio_atencion ea
+        WHERE ea.public_encounter_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM ece.paciente p
+            WHERE p.id = ea.paciente_id
+              AND p.establecimiento_id = ${establecimientoId}::uuid
+          )
       `;
       const linkedIds = linkedRows.map((r) => r.eid);
 
