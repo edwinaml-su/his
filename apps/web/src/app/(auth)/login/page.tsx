@@ -400,8 +400,18 @@ function LoginForm() {
                   onChange={onEmailChange}
                 />
               </label>
-              <label className={styles.fld} htmlFor="loginPassword">
-                <span>{t.pass}</span>
+              <div className={styles.fld}>
+                {/* El botón de mostrar/ocultar NO puede vivir dentro de este
+                    <label> aunque el mockup lo dibuje pegado al input: un
+                    control interactivo anidado en el <label> de OTRO control
+                    se suma al cálculo del nombre accesible del input
+                    (termina anunciándose "Contraseña Ver contraseña") y,
+                    peor, hace que getByLabel/lectores de pantalla no puedan
+                    distinguir el input del botón — ambos "responden" a
+                    /contraseña/i. Por eso el <label> cierra antes del botón;
+                    el layout visual (position:absolute vía .passWrap) no
+                    depende de la jerarquía DOM y queda idéntico al mockup. */}
+                <label htmlFor="loginPassword">{t.pass}</label>
                 <span className={styles.passWrap}>
                   <input
                     id="loginPassword"
@@ -422,7 +432,7 @@ function LoginForm() {
                     {showPassword ? <EyeClosedIcon /> : <EyeOpenIcon />}
                   </button>
                 </span>
-              </label>
+              </div>
               <div className={styles.rowBetween}>
                 <label className={styles.chk}>
                   <input

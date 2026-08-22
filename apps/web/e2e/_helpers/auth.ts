@@ -27,14 +27,39 @@ export const TEST_CREDENTIALS = {
 // dejamos el default en local (dev cold-compile puede tardar más).
 const LOGIN_REDIRECT_TIMEOUT = process.env.CI ? 10_000 : 30_000;
 
+/**
+ * El login (CC-0010) deja en el DOM una copia oculta (`hidden`, id="S:0") de
+ * toda la tarjeta — remanente del streaming OOB de Next 16/Turbopack que no
+ * se limpia tras el swap. No es un defecto de accesibilidad real (los nodos
+ * `hidden` quedan fuera del árbol de accesibilidad, ningún usuario ni lector
+ * de pantalla los alcanza), pero SÍ rompe cualquier locator de Playwright que
+ * matchee por texto/label/id, porque strict mode cuenta nodos del DOM sin
+ * mirar visibilidad. `visible(locator)` filtra al único nodo realmente
+ * renderizado. Ver docs/runbooks/e2e-gotrue-auth.md.
+ */
+function visible(locator: ReturnType<Page["locator"]>) {
+  return locator.and(locator.page().locator(":visible"));
+}
+
 export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "admin") {
   const creds = TEST_CREDENTIALS[who];
   // ?skipIntro=1 salta la animación AxisMed (CC-0010) — la tarjeta de login
   // queda visible de inmediato, sin esperar los ~12.6s de la secuencia.
   await page.goto("/login?skipIntro=1");
-  await page.getByLabel(/correo|email/i).fill(creds.email);
-  await page.getByLabel(/contraseña|password/i).fill(creds.password);
-  await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
+  // getByLabel(/contraseña/i) matcheaba también el botón de mostrar/ocultar
+  // contraseña (aria-label="Ver/Ocultar contraseña" — correcto en sí mismo,
+  // pero contiene la misma palabra). getByRole("textbox", ...) sólo matchea
+  // el <input>, nunca un <button>: es la forma robusta de pedir "el campo",
+  // no "cualquier cosa que mencione la palabra".
+  await visible(page.getByRole("textbox", { name: /correo|email/i })).fill(creds.email);
+  await visible(page.getByRole("textbox", { name: /contraseña|password/i })).fill(creds.password);
+  // El regex /ingresar|iniciar sesión|login/i también matchea el botón SSO
+  // "Iniciar sesión con Microsoft" (contiene "iniciar sesión"). type=submit
+  // es el rasgo estable que distingue al botón real del form del botón SSO
+  // (type=button) sin importar el copy/idioma.
+  await visible(
+    page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).and(page.locator('[type="submit"]')),
+  ).click();
   await maybeSelectSede(page);
   try {
     await page.waitForURL(/\/(dashboard|patients|beds|triage|admission)/, {
@@ -66,7 +91,7 @@ export async function login(page: Page, who: keyof typeof TEST_CREDENTIALS = "ad
  * el select nunca aparece.
  */
 async function maybeSelectSede(page: Page): Promise<void> {
-  const sedeSelect = page.locator("#loginSede");
+  const sedeSelect = visible(page.locator("#loginSede"));
   try {
     await sedeSelect.waitFor({ state: "visible", timeout: 3_000 });
   } catch {
@@ -77,5 +102,5 @@ async function maybeSelectSede(page: Page): Promise<void> {
     const value = await options[1]!.getAttribute("value");
     if (value) await sedeSelect.selectOption(value);
   }
-  await page.getByRole("button", { name: /ingresar a la sede|enter site/i }).click();
+  await visible(page.getByRole("button", { name: /ingresar a la sede|enter site/i })).click();
 }
