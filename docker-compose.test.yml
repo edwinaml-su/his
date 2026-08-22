@@ -62,7 +62,48 @@ services:
       # (namespace separado de `public`). packages/database/scripts/
       # seed-test-users.mjs inserta en public."User" con el MISMO id (uuid)
       # que auth.users — por eso comparten instancia de Postgres.
-      GOTRUE_DB_DATABASE_URL: postgres://his:his@postgres-test:5432/his_e2e?sslmode=disable
+      # search_path=auth es el fix de la causa raíz del 500 "Database error
+      # checking email" (ver docs/runbooks/e2e-gotrue-auth.md §2 actualizado
+      # 2026-08-22). GoTrue NUNCA fija search_path por código (confirmado:
+      # internal/storage/dial.go no lo toca; grep "search_path" en todo
+      # github.com/supabase/auth da CERO resultados fuera de sus propios
+      # scripts de bootstrap). Sus migraciones funcionan igual porque el SQL
+      # sale con el schema calificado a mano vía plantilla Go
+      # (`{{ index .Options "Namespace" }}.identities`), pero TODAS las
+      # queries en runtime del ORM pop (ej. `Where("email = ?", ...)` en
+      # internal/models/user.go#IsDuplicatedEmail — la que dispara este 500)
+      # arman SQL con el nombre de tabla SIN calificar (`Identity.TableName()`
+      # devuelve literal "identities"), así que dependen 100% de que el ROL
+      # de Postgres tenga `search_path` apuntando a `auth` por su cuenta.
+      # Sin esto, "identities"/"users"/etc. resuelven contra `public` (que no
+      # tiene esas tablas) → "relation does not exist" — envuelto por GoTrue
+      # como "Database error checking email" (internal/api/admin.go:415).
+      # El propio repo de GoTrue hace exactamente esto en su bootstrap oficial
+      # de dev/test (github.com/supabase/auth hack/init_postgres.sql +
+      # init_postgres.sh): `ALTER USER supabase_auth_admin SET search_path =
+      # 'auth';`. En vez de un ALTER ROLE persistente sobre `his` (compartido
+      # con Prisma/seed-test-users.mjs/db:seed — todos ya califican schema
+      # explícito, pero un ALTER ROLE global es blast radius innecesario),
+      # `search_path` como query param de la URL de conexión de pgx aplica
+      # SOLO a las sesiones que abre GoTrue con ESTA URL (confirmado con el
+      # test oficial de pgx: pgconn/config_test.go, caso "database url
+      # everything" — `?search_path=myschema` se parsea directo a
+      # RuntimeParams["search_path"]). No hace falta agregar `public`: PG13+
+      # resuelve `gen_random_uuid()` vía pg_catalog (siempre implícito en
+      # search_path), que es la única función de extensión que tocan las
+      # migraciones de GoTrue — confirmado que NINGUNA migración de
+      # supabase/auth referencia pgcrypto/uuid-ossp.
+      #
+      # ⚠️ SIN VERIFICAR EN VIVO: Docker Desktop está roto en esta máquina
+      # (crashea al arrancar por un socket AF_UNIX corrupto de su propio
+      # Inference manager — error de Docker Desktop, no de este compose; ver
+      # runbook §2b). Este fix está construido 100% por lectura de código
+      # (dial.go, admin.go, user.go, identity.go) + los scripts de bootstrap
+      # oficiales de supabase/auth + los tests de pgx — no por logs de un
+      # contenedor real. Correr `docker compose -f docker-compose.test.yml up
+      # -d --wait && node packages/database/scripts/seed-test-users.mjs` en
+      # cuanto Docker vuelva es el siguiente paso obligatorio.
+      GOTRUE_DB_DATABASE_URL: postgres://his:his@postgres-test:5432/his_e2e?sslmode=disable&search_path=auth
       GOTRUE_DB_NAMESPACE: auth
       GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:-e2e-gotrue-test-secret-do-not-use-in-prod-only}
       GOTRUE_JWT_EXP: '3600'

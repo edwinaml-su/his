@@ -138,6 +138,31 @@ jobs:
       - name: Run Smoke E2E (@smoke only)
         run: npm run test:e2e
 
+      - name: Dump logs del stack (si algo posterior al boot falló)
+        # Gap real de la sesión anterior (ver docs/runbooks/e2e-gotrue-auth.md
+        # §4): el step "Dump logs del stack (si el boot falló)" de arriba solo
+        # corre si "Boot test stack" mismo falla — en GitHub Actions un step
+        # ya ejecutado (aunque no haya hecho nada porque `if: failure()` dio
+        # false en ese momento) no se re-evalúa más tarde. Si el stack queda
+        # healthy pero un step POSTERIOR falla (seed de usuarios, build, los
+        # tests), ese primer dump nunca captura nada. Este segundo dump, al
+        # final del job, sí ve el estado real de los contenedores en el
+        # momento del fallo real.
+        if: failure()
+        run: |
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color --tail=200 || true
+          echo "::endgroup::"
+
       - name: Upload Playwright report (solo si falla)
         if: failure()
         uses: actions/upload-artifact@v7
