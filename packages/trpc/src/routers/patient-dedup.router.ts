@@ -28,6 +28,7 @@ import { TRPCError } from "@trpc/server";
 import { argon2 } from "@his/infrastructure";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { requirePersonalSalud } from "../lib/identity-resolver";
 
 // ─── Tipos y helpers firma electrónica (HJ-30 / HJ-31) ───────────────────────
 
@@ -49,31 +50,24 @@ type PersonalRolRow = {
 /**
  * Resuelve his_user_id → firma electrónica activa en ece.
  * Lanza PRECONDITION_FAILED si no existe personal ECE o firma sin configurar.
+ *
+ * R03: delega al resolver canónico en vez de reimplementar el lookup
+ * his_user_id → ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
  */
 async function resolveFirma(
   prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
   userId: string,
 ): Promise<FirmaRow> {
-  const personal = await (
-    prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>
-  )`
-    SELECT id FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  if (!personal[0]) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No se encontró personal ECE activo para el usuario firmante.",
-    });
-  }
+  const personal = await requirePersonalSalud(prisma, userId, {
+    action: "firmar la fusión de expedientes",
+  });
 
   const firmas = await (
     prisma.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<FirmaRow[]>
   )`
     SELECT id, personal_id, pin_hash, failed_attempts, locked_until, revoked_at
     FROM ece.firma_electronica
-    WHERE personal_id = ${personal[0].id}::uuid
+    WHERE personal_id = ${personal.id}::uuid
     LIMIT 1
   `;
   if (!firmas[0]) {

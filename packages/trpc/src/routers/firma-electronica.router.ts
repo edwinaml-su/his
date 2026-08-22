@@ -45,6 +45,7 @@ import { protectedProcedure, publicProcedure, requireRole, router } from "../trp
 import { argon2 } from "@his/infrastructure";
 import { rateLimitOrThrow, normalizeIp } from "../middleware/rate-limit";
 import { evaluarAbac, atributosDesdeContexto } from "../abac";
+import { resolvePersonalSalud } from "../lib/identity-resolver";
 
 // =============================================================================
 // Constantes
@@ -307,22 +308,17 @@ function hashRecoveryToken(token: string): string {
 /**
  * Busca el personal_salud vinculado al usuario HIS.
  * La FK `his_user_id` en ece.personal_salud referencia public."User".id.
+ *
+ * R03: delega al resolver canónico (`packages/trpc/src/lib/identity-resolver.ts`)
+ * en vez de reimplementar el query — este archivo era una de las 48
+ * ubicaciones dispersas del mismo lookup.
  */
 async function findPersonal(
   prisma: { $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown> },
   userId: string,
 ): Promise<PersonalRow | null> {
-  const rows = await (prisma.$queryRaw as (
-    query: TemplateStringsArray,
-    ...values: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id
-    FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  const personal = await resolvePersonalSalud(prisma, userId);
+  return personal ? { id: personal.id } : null;
 }
 
 async function findFirma(

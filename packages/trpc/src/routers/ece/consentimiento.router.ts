@@ -61,6 +61,7 @@ import { argon2 } from "@his/infrastructure";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 // Schemas importados desde contracts (disponibles post-merge al main branch).
 // En el worktree se definen inline para evitar resolución de symlink.
 import {
@@ -200,21 +201,14 @@ async function findConsentimiento(
   return rows[0] ?? null;
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonal(
   tx: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
   hisUserId: string,
 ): Promise<PersonalRow | null> {
-  const rows = await (tx.$queryRaw as (
-    q: TemplateStringsArray,
-    ...v: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id::text
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  const personal = await resolvePersonalSalud(tx, hisUserId);
+  return personal ? { id: personal.id } : null;
 }
 
 async function findFirmaByPersonal(

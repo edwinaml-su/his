@@ -22,6 +22,7 @@ import { emitDomainEvent } from "@his/database";
 import { argon2 } from "@his/infrastructure";
 import { router, requireRole, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { requirePersonalSalud } from "../lib/identity-resolver";
 import type {
   PathologyReportSignedPayload,
   PathologyCriticalFindingPayload,
@@ -137,7 +138,6 @@ async function verifyPinOrThrow(
   hisUserId: string,
   pin: string,
 ): Promise<void> {
-  interface PersonalRow { id: string }
   interface FirmaRow {
     id: string;
     pin_hash: string;
@@ -145,22 +145,11 @@ async function verifyPinOrThrow(
     locked_until: Date | null;
   }
 
-  const personalRows = await (tx.$queryRaw as (
-    q: TemplateStringsArray,
-    ...v: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id::text
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  const personal = personalRows[0] ?? null;
-  if (!personal) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No se encontró un profesional de salud asociado a su cuenta.",
-    });
-  }
+  // R03: delega al resolver canónico en vez de reimplementar el lookup
+  // his_user_id → ece.personal_salud (packages/trpc/src/lib/identity-resolver.ts).
+  const personal = await requirePersonalSalud(tx, hisUserId, {
+    action: "verificar su firma electrónica",
+  });
 
   const firmaRows = await (tx.$queryRaw as (
     q: TemplateStringsArray,
