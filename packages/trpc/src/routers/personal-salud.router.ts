@@ -22,6 +22,16 @@
  * Aislamiento: la tabla `ece.personal_salud` se filtra por `establecimiento_id`
  * del tenant.
  *
+ * R03 (identidad HIS↔ECE) — `his_user_id` es el bridge que
+ * `packages/trpc/src/lib/identity-resolver.ts` y ~100 lecturas dispersas en
+ * otros 48 archivos resuelven (firma electrónica, autorizaciones,
+ * certificaciones). Este archivo es el único camino de escritura en
+ * producción: `create` deja `his_user_id` NULL a propósito (profesional sin
+ * cuenta HIS todavía — estado legítimo); `linkAuthUser`/`createAndLinkUser`
+ * lo setean junto con `auth_user_id` (antes de este fix, NINGÚN procedure de
+ * este archivo tocaba `his_user_id` — la tabla podía "vincularse" sin que el
+ * bridge que el resto del sistema lee quedara poblado).
+ *
  * R02 (auditoría RLS externa) — decisión (c) para el grueso del router,
  * documentado con evidencia (2026-08-22, psql read-only vía DIRECT_URL prod):
  * el comentario original de este bloque decía "RLS aplica vía
@@ -134,6 +144,28 @@ function resolveEstablecimiento(ctx: { tenant: { establishmentId?: string } }): 
     });
   }
   return ctx.tenant.establishmentId;
+}
+
+/**
+ * R03 — traduce la violación de unicidad de `his_user_id` (23505: dos
+ * profesionales vinculados al mismo usuario HIS) a un TRPCError comprensible.
+ * Mismo patrón que `rethrowConstraint` en workflow-estado.router.ts /
+ * workflow-transicion.router.ts — no se comparte helper entre archivos en
+ * este codebase, se duplica la función pequeña por convención existente.
+ *
+ * El pre-check hace este caso raro en la práctica (dos ADMIN vinculando el
+ * mismo usuario en simultáneo) — esto es la defensa de carrera, no el camino
+ * principal.
+ */
+function rethrowHisUserIdConflict(err: unknown): never {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("unique") || msg.includes("duplicate") || msg.includes("23505")) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Este usuario del HIS ya está vinculado a otro profesional de salud.",
+    });
+  }
+  throw err;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +345,14 @@ export const personalSaludRouter = router({
       }
 
       const personal = await ctx.prisma.$transaction(async (tx) => {
+        // R03 — `his_user_id` (el bridge que ~100 lecturas dispersas resuelven
+        // vía identity-resolver.ts) queda NULL a propósito acá: `create` da de
+        // alta al PROFESIONAL (médico visitante, personal sin cuenta propia
+        // del HIS todavía), no una cuenta de acceso. Un `personal_salud` sin
+        // `his_user_id` es un estado legítimo — no es el bug que R03 corrige,
+        // es el caso "profesional sin usuario HIS aún". El vínculo se hace
+        // después, explícitamente, vía `linkAuthUser` o `createAndLinkUser`
+        // (ambos abajo, ahora seteando `his_user_id` — ver R03).
         const created = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.personal_salud
             (institucion_id, establecimiento_id, documento_identidad,
@@ -617,6 +657,14 @@ export const personalSaludRouter = router({
    * Vincula el personal con un User HIS existente (cuenta de acceso).
    * Necesario para que el procedure `getPacientesReferidos` pueda asociar
    * encuentros, y para que el médico pueda iniciar sesión.
+   *
+   * R03 (fix): además de `auth_user_id` (link legacy consumido por el tramo
+   * B2B2C de este archivo), ahora setea `his_user_id` — el bridge que
+   * `identity-resolver.ts` y ~100 lecturas dispersas en otros 48 archivos
+   * resuelven. `input.userId` YA es inequívocamente un `public."User".id`
+   * (se valida arriba con `ctx.prisma.user.findUnique({ where: { id: ... } })`,
+   * el delegate Prisma de `public."User"`) — no hace falta resolverlo por
+   * email ni ningún otro dato adicional, el endpoint ya lo tiene.
    */
   linkAuthUser: requireRole(["ADMIN", "DIR"])
     .input(z.object({ personalId: z.string().uuid(), userId: z.string().uuid() }))
@@ -644,7 +692,8 @@ export const personalSaludRouter = router({
 
       const alreadyLinked = await ctx.prisma.$queryRaw<{ id: string }[]>`
         SELECT id::text FROM ece.personal_salud
-        WHERE auth_user_id = ${input.userId}::uuid AND id <> ${input.personalId}::uuid
+        WHERE (auth_user_id = ${input.userId}::uuid OR his_user_id = ${input.userId}::uuid)
+          AND id <> ${input.personalId}::uuid
         LIMIT 1
       `;
       if (alreadyLinked[0]) {
@@ -654,16 +703,31 @@ export const personalSaludRouter = router({
         });
       }
 
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.personal_salud
-        SET auth_user_id = ${input.userId}::uuid
-        WHERE id = ${input.personalId}::uuid
-      `;
+      try {
+        await ctx.prisma.$executeRaw`
+          UPDATE ece.personal_salud
+          SET auth_user_id = ${input.userId}::uuid,
+              his_user_id = ${input.userId}::uuid
+          WHERE id = ${input.personalId}::uuid
+        `;
+      } catch (err) {
+        rethrowHisUserIdConflict(err);
+      }
 
       return { id: input.personalId, userEmail: userExists.email };
     }),
 
-  /** Desvincula la cuenta de acceso. No borra el User HIS — solo el link. */
+  /**
+   * Desvincula la cuenta de acceso. No borra el User HIS — solo el link.
+   *
+   * R03: limpia `auth_user_id` únicamente. `his_user_id` es el bridge de
+   * identidad primario que consumen las ~100 lecturas dispersas (firma
+   * electrónica, autorizaciones, certificaciones) — desvincular la
+   * característica B2B2C de "cuenta de acceso" no debe romper esos flujos
+   * clínicos. Si en el futuro se necesita un "unlink completo" que también
+   * borre `his_user_id`, debe ser un procedure explícito y separado, no un
+   * efecto secundario de este.
+   */
   unlinkAuthUser: requireRole(["ADMIN", "DIR"])
     .input(z.object({ personalId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -884,7 +948,9 @@ export const personalSaludRouter = router({
    * Útil para el flujo "Crear nueva cuenta" desde el dialog de vinculación.
    *
    * Crea: public."User" + public."UserOrganizationRole" (rol opcional) +
-   * UPDATE ece.personal_salud.auth_user_id.
+   * UPDATE ece.personal_salud.auth_user_id + his_user_id (R03 — `user.id`
+   * recién creado es, por definición, un `public."User".id` válido: no hay
+   * ambigüedad que resolver, a diferencia de `linkAuthUser`).
    *
    * Idempotencia: si el email ya existe → CONFLICT.
    */
@@ -967,11 +1033,16 @@ export const personalSaludRouter = router({
             },
           });
         }
-        await tx.$executeRaw`
-          UPDATE ece.personal_salud
-          SET auth_user_id = ${user.id}::uuid
-          WHERE id = ${input.personalId}::uuid
-        `;
+        try {
+          await tx.$executeRaw`
+            UPDATE ece.personal_salud
+            SET auth_user_id = ${user.id}::uuid,
+                his_user_id = ${user.id}::uuid
+            WHERE id = ${input.personalId}::uuid
+          `;
+        } catch (err) {
+          rethrowHisUserIdConflict(err);
+        }
         return user;
       });
 
