@@ -109,6 +109,56 @@ Eso deja la sospecha en un fallo **en tiempo de ejecución** de esa query puntua
 
 ---
 
+## 2b. Continuación 2026-08-22 — causa raíz identificada (sin Docker local, otra vez)
+
+**Docker Desktop está roto en esta máquina, por una razón distinta y no relacionada con este stack.** Al intentar levantarlo para reproducir el 500 en vivo, crashea sistemáticamente con:
+
+```
+starting services: initializing Inference manager: listening on unix://C:/Users/.../AppData/Local/Docker/run/dockerInference:
+remove C:/Users/.../AppData/Local/Docker/run/dockerInference: The file cannot be accessed by the system.
+(listener: The filename, directory name, or volume label syntax is incorrect.)
+```
+
+`C:\...\AppData\Local\Docker\run\` contenía sockets AF_UNIX (reparse points de Windows) de una corrida previa, corruptos — ni `Remove-Item -Force` ni `del /f /a` pueden borrarlos ("El sistema no tiene acceso al archivo"), pero `Rename-Item` sobre el directorio padre sí funciona (evidencia: ya había carpetas `run.roto-*` de intentos anteriores — el propio Docker Desktop reconoce este patrón). Renombrar `run/` y reiniciar Docker Desktop **recrea el mismo socket corrupto de nuevo en segundos** — el bug se reproduce en la creación, no es un archivo residual. Es un problema del Inference manager (Model Runner) de Docker Desktop 4.79.0 con AF_UNIX en Windows, ajeno por completo a `docker-compose.test.yml`/GoTrue. Edwin lo está resolviendo aparte. Quien retome esto: no pierdas tiempo en `run.roto`/reinstalar — es infra de Docker Desktop, no del proyecto.
+
+**Por eso lo de abajo es 100% análisis de código — CERO verificación en vivo.** Nivel de confianza alto (la cadena de evidencia es completa y viene de fuentes primarias: el código fuente real de `supabase/auth` en el tag que usa la imagen pineada, sus propios scripts de bootstrap, y los tests oficiales de `pgx`), pero sigue siendo una hipótesis hasta que alguien la corra contra un Postgres real.
+
+### La causa raíz: falta `search_path` en la conexión de GoTrue
+
+Cadena de evidencia (todo vía `gh api repos/supabase/auth/contents/...`, código fuente real, no memoria):
+
+1. `internal/api/admin.go:415` — el 500 sale de envolver el error de `models.IsDuplicatedEmail(...)`.
+2. `internal/models/user.go` (`IsDuplicatedEmail`) — la query real es `tx.Eager().Q().Where("email = ?", ...).All(&identities)`.
+3. `internal/models/identity.go` — `func (Identity) TableName() string { return "identities" }` — **sin calificar de schema**, literal `"identities"`, no `"auth.identities"`.
+4. `internal/storage/dial.go` (`DialContext`/`newConnectionDetails`/`applyDBDriver`) — arma la conexión pgx pasando `config.DB.URL` tal cual. **Nunca** setea `search_path`, `Options["Namespace"]` ni nada de schema en la conexión de runtime.
+5. Búsqueda de `search_path` en **todo** el repo `supabase/auth` (`gh api "search/code?q=search_path+repo:supabase/auth"`): únicos 2 resultados en todo el repo, y ambos son scripts de bootstrap de Postgres para dev/test — `init_postgres.sh` y `hack/init_postgres.sql` — **nunca** en código Go.
+6. Esos dos scripts oficiales hacen, textual:
+   ```sql
+   CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin;
+   ALTER USER supabase_auth_admin SET search_path = 'auth';
+   ```
+   La migración SÍ funciona sin esto porque el runner de migraciones arma el SQL con el schema calificado a mano vía plantilla Go (`{{ index .Options "Namespace" }}.identities` → `auth.identities`, texto literal antes de ejecutar). Pero las queries de runtime del ORM `pop` (paso 2-3 arriba) NUNCA pasan por esa plantilla — dependen 100% de que el **rol de Postgres** que usa la conexión tenga su propio `search_path` apuntando a `auth`.
+
+`scripts/gotrue-test-init.sql` (de la sesión anterior) crea el schema `auth` y el rol `postgres` de bypass para los GRANT — pero **nunca** hace el equivalente al `ALTER USER ... SET search_path`. El rol real que usa GoTrue (`his`, vía `GOTRUE_DB_DATABASE_URL`) se queda con el `search_path` default de Postgres (`"$user", public`). Resultado: cualquier query sin calificar contra `identities`/`users`/etc. busca en `public` (donde Prisma tiene sus tablas `PascalCase` con comillas — nada que se llame `identities` en minúscula) y falla con `relation "identities" does not exist` — que GoTrue envuelve en el genérico "Database error checking email" antes de devolverlo al cliente. Esto explica exactamente la paradoja que dejó pendiente la sesión anterior (§2, punto "Por qué esto NO es..."): las migraciones pasan (SQL calificado a mano) pero la primera query real de runtime (sin calificar) revienta.
+
+### El fix aplicado (en `docker-compose.test.yml`, servicio `gotrue`)
+
+```
+GOTRUE_DB_DATABASE_URL: postgres://his:his@postgres-test:5432/his_e2e?sslmode=disable&search_path=auth
+```
+
+Se agregó `&search_path=auth` a la URL. `pgx` (el driver que usa `pop` v5 para Postgres — confirmado en `dial.go`: `driver = "pgx"`) soporta `search_path` como parámetro de conexión de primera clase — no hace falta la sintaxis `options=-c ...`. Evidencia: el test oficial `pgconn/config_test.go` de `jackc/pgx` (caso `"database url everything"`) parsea `postgres://.../mydb?sslmode=disable&search_path=myschema` directo a `RuntimeParams["search_path"] = "myschema"`.
+
+**Por qué así y no `ALTER ROLE his SET search_path = 'auth'` en el SQL de init** (que sería el equivalente más literal al script oficial de GoTrue): el rol `his` es compartido con Prisma, `seed-test-users.mjs` y `db:seed` en el resto del stack — un `ALTER ROLE` persistente le cambiaría el `search_path` por defecto a TODAS las conexiones futuras de ese rol, no solo a las de GoTrue. El parámetro `search_path` en la URL de conexión es un `RuntimeParam` que pgx manda en el mensaje de *startup* — aplica SOLO a las sesiones que abre GoTrue con esa URL puntual, cero blast radius sobre el resto del stack. No hace falta agregar `public` al `search_path`: Postgres 13+ resuelve `gen_random_uuid()` (la única función de extensión que tocan las migraciones de GoTrue, confirmado por `gh api "search/code?q=gen_random_uuid+repo:supabase/auth"` cruzado con `pgcrypto`/`uuid-ossp` — cero resultados) vía `pg_catalog`, que Postgres busca siempre implícito sin importar el `search_path`.
+
+### Qué falta para cerrar esto de verdad
+
+1. **Correrlo.** En cuanto Docker Desktop funcione en algún runner (local o CI): `docker compose -f docker-compose.test.yml up -d --wait && node packages/database/scripts/seed-test-users.mjs` (variables de entorno en §1 de este runbook). Si el análisis es correcto, `qa.admin@his.test` se crea y el script sigue con los otros 4 usuarios sin el 500.
+2. Si por algún motivo SIGUE fallando, el siguiente paso es exactamente el que la sesión anterior nunca pudo dar: capturar el log real de `gotrue` (`docker compose -f docker-compose.test.yml logs gotrue`) en el momento del 500 — ahora los workflows `e2e-smoke.yml`/`e2e.yml` tienen un segundo step de diagnóstico (`Dump logs del stack (si algo posterior al boot falló)`, agregado en esta sesión, `if: failure()` justo antes de "Upload Playwright report") que cubre exactamente este caso — el gap que dejó documentado el §4 original de este runbook, que antes solo capturaba logs si "Boot test stack" mismo fallaba.
+3. Una vez que `qa.admin@his.test` se cree, seguir con las 5 hipótesis/pasos restantes del §3 de abajo (specs `@smoke` nunca corridas).
+
+---
+
 ## 3. Aviso: el gate seguirá rojo aun después de resolver el 500
 
 Cerrar el 500 hace que **el primer** `qa.admin@his.test` se cree. Pero:
@@ -121,8 +171,9 @@ Cerrar el 500 hace que **el primer** `qa.admin@his.test` se cree. Pero:
 
 ## 4. Lo que nunca verifiqué (gaps explícitos)
 
-- **Docker local nunca funcionó** en esta máquina durante toda la sesión — cero verificación local; todo fue commit → push → leer logs de CI real (`gh run view <id> --log` / `--log-failed`). Quien continúe sin Docker local tiene que seguir el mismo patrón.
-- **El log interno de GoTrue para el 500 nunca se capturó.** El step de diagnóstico (`Dump logs del stack (si el boot falló)`, agregado en `982aa26`) solo corre si el step **"Boot test stack"** falla — no cubre un fallo en un step posterior (como "Seed usuarios de test E2E") que igual depende del stack ya arriba. Estaba a mitad de agregar un segundo step, más amplio (`if: failure()` sin atarlo a un step puntual, posicionado justo antes de "Tear down stack", volcando `gotrue`/`gotrue-gateway`/`postgres-test` con `--tail=200`) cuando se cortó la sesión — **ese cambio quedó descartado sin commitear**, no está en la rama. Es el primer paso obviable para quien retome esto.
+- **Docker local nunca funcionó**, ni en esta sesión ni en la anterior — dos intentos independientes, dos máquinas/momentos distintos, mismo resultado (aunque por causas distintas: la sesión original nunca tuvo el daemon disponible; esta sesión sí lo tenía instalado pero Docker Desktop 4.79.0 crashea al arrancar por un socket AF_UNIX corrupto de su propio Inference manager — ver §2b, ajeno a este proyecto). El patrón de trabajo sigue siendo commit → push → leer logs de CI real (`gh run view <id> --log` / `--log-failed`), o esperar a que Docker Desktop quede sano en esta máquina.
+- **El log interno de GoTrue para el 500 nunca se capturó — sigue sin capturarse.** La hipótesis de §2b (falta `search_path=auth` en `GOTRUE_DB_DATABASE_URL`) se armó 100% leyendo el código fuente real de `supabase/auth` + los tests de `pgx`, sin ver un solo log de un contenedor `gotrue` real corriendo. Es la pieza de evidencia más importante que falta. El gap del step de diagnóstico que solo cubría un fallo del propio "Boot test stack" (no de steps posteriores) **ya se cerró en esta sesión**: `e2e-smoke.yml`/`e2e.yml` tienen ahora un segundo step "Dump logs del stack (si algo posterior al boot falló)" (`if: failure()`, justo antes de "Upload Playwright report") que si el fix de `search_path` no alcanza, va a mostrar el log real de GoTrue en el próximo run de CI que falle.
+- **El fix de `search_path=auth` en `docker-compose.test.yml` está sin correr ni una sola vez** — ni local ni en CI. Es una hipótesis de alta confianza (cadena de evidencia completa en fuentes primarias, ver §2b) pero sigue siendo una hipótesis.
 - **Ninguna de las 77 specs `@smoke` llegó a ejecutarse** — todas quedan `skipped` porque el seed de usuarios falla antes de "Build app"/"Run Smoke E2E".
 - **No confirmé** si `GOTRUE_MAILER_AUTOCONFIRM=true` alcanza para el flujo completo de login (`signInWithPassword`) — solo se llegó hasta el paso de creación de usuario, nunca a un login real.
 - **`a11y.yml` no se tocó** — sigue usando `NEXT_PUBLIC_SUPABASE_URL=https://ci-dummy.supabase.co` y degradando con gracia (salta specs con `role`, ver `HAS_REAL_SUPABASE` en `apps/web/e2e/dod/a11y-baseline.spec.ts`). Cablearlo al GoTrue real quedaría como mejora futura opcional, no bloqueante — no colgaba, a diferencia del bug original de `e2e-smoke.yml`.

@@ -113,6 +113,26 @@ jobs:
       - name: Run E2E tests
         run: npm run test:e2e
 
+      - name: Dump logs del stack (si algo posterior al boot falló)
+        # Ver el mismo step en e2e-smoke.yml: el dump de arriba solo cubre un
+        # fallo del propio "Boot test stack"; si el stack queda healthy pero
+        # un step posterior falla (seed, build, tests), este segundo dump es
+        # el único que ve el estado real de los contenedores en ese momento.
+        if: failure()
+        run: |
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color --tail=200 || true
+          echo "::endgroup::"
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v7
