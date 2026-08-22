@@ -184,12 +184,18 @@ export const SECTIONS: NavSection[] = [
     label: "ECE — Quirófano",
     defaultOpen: true,
     items: [
+      // ADR 0021 (docs/adr/0021-fuente-verdad-quirurgica.md) — el dominio
+      // quirúrgico tiene dos representaciones (SurgeryCase legacy vs ece.*)
+      // y hasta 2026-08-22 el sidebar listaba AMBAS bajo esta sección
+      // ("Dashboard Quirófano" y "Quirófano" → /surgery), violando
+      // CLAUDE.md §"Adecuar legacy vs duplicar" (un solo item por dominio).
+      // /surgery sigue viva en código (pendiente decisión de Edwin sobre
+      // consolidar en ECE) pero se retira del sidebar: este dashboard ya
+      // es el punto de entrada al dominio y enlaza a las 8 piezas
+      // documentales NTEC de abajo. No borrar sin volver a esta nota.
       { href: "/ece/quirofano", label: "Dashboard Quirófano", icon: LayoutGrid,
         requiredServiceUnits: ["QX"],
         description: "Vista general de salas, casos del día y estado del proceso quirúrgico." },
-      { href: "/surgery", label: "Quirófano", icon: Scissors,
-        requiredServiceUnits: ["QX"],
-        description: "Listado de casos quirúrgicos: pendientes, en curso, completados." },
       { href: "/ece/quirofano/preop", label: "Preoperatorio", icon: ClipboardList,
         requiredServiceUnits: ["QX"],
         description: "Valoración preoperatoria: riesgo anestésico, exámenes, ayuno." },
