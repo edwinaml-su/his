@@ -118,16 +118,56 @@ export async function emitDomainEvent(
   // Action: usamos `CREATE` del enum AuditAction existente (NO añadimos
   // valor nuevo — fricción operativa con ALTER TYPE). El sentido semántico
   // "DOMAIN_EVENT_EMITTED" + el eventType se preserva en `justification`.
-  await tx.auditLog.create({
-    data: {
-      organizationId: input.organizationId,
-      userId: input.emittedById ?? null,
-      action: "CREATE",
-      entity: "DomainEvent",
-      entityId: created.id,
-      justification: `DOMAIN_EVENT_EMITTED:${input.eventType}`,
-    },
-  });
+  //
+  // P0-0 (sql/206) — el rol `authenticated` NO tiene GRANT INSERT sobre
+  // audit."AuditLog" (y no debe tenerlo: con un rol compartido por todos los
+  // usuarios, un INSERT directo permitiría forjar entradas a nombre de otro).
+  // Antes de sql/206 eso hacía que TODA ruta demotada que emitiera un evento
+  // reventara con `permission denied` y revirtiera la transacción entera —
+  // incluido el `DomainEvent` que sí se había insertado, porque ese INSERT
+  // sí está permitido. Era el bloqueante de R02 en escrituras.
+  //
+  // La vía aprobada es `audit.fn_write_manual_audit_entry`: SECURITY DEFINER,
+  // deriva el userId de la sesión y exige que el organizationId coincida con
+  // el tenant activo, así que ni la identidad ni el tenant son falsificables.
+  //
+  // Requiere contexto de tenant (`app.current_org_id`). Los emisores que
+  // corren FUERA de `withTenantContext` no lo tienen, y para ellos el INSERT
+  // directo sigue siendo válido porque corren con el rol privilegiado. De ahí
+  // la bifurcación: no es defensa contra un error, es que hay dos caminos
+  // legítimos y hay que elegir el que corresponde al rol en curso.
+  // El resultado se lee con optional chaining a propósito: Prisma real siempre
+  // devuelve un array, pero los tests que mockean `tx` no stubean esta sonda —
+  // y no deberían tener que hacerlo, porque para ellos el camino relevante es
+  // el del rol privilegiado. Sin contexto detectable se usa ese camino, que es
+  // además el comportamiento previo a sql/206.
+  const ctxRows = (await tx.$queryRaw<Array<{ hasTenantContext: boolean }>>`
+    SELECT public.current_org_id() IS NOT NULL AS "hasTenantContext"
+  `) as Array<{ hasTenantContext: boolean }> | undefined;
+
+  if (ctxRows?.[0]?.hasTenantContext === true) {
+    await tx.$executeRaw`
+      SELECT audit.fn_write_manual_audit_entry(
+        ${input.organizationId}::uuid,
+        'CREATE'::public."AuditAction",
+        'DomainEvent',
+        ${created.id},
+        ${`DOMAIN_EVENT_EMITTED:${input.eventType}`},
+        NULL, NULL, NULL
+      )
+    `;
+  } else {
+    await tx.auditLog.create({
+      data: {
+        organizationId: input.organizationId,
+        userId: input.emittedById ?? null,
+        action: "CREATE",
+        entity: "DomainEvent",
+        entityId: created.id,
+        justification: `DOMAIN_EVENT_EMITTED:${input.eventType}`,
+      },
+    });
+  }
 
   return created;
 }
