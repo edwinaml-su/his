@@ -192,3 +192,49 @@ Cerrar el 500 hace que **el primer** `qa.admin@his.test` se cree. Pero:
 | `6156f6a` | `gotrue-gateway` (nginx) agrega `listen [::]:9999;` — el healthcheck fallaba por IPv6. |
 
 Todos con evidencia real de un run de CI fallando ANTES del commit y (salvo el bloqueo actual del §2) pasando después. Ningún fix de esta lista fue especulativo — cada uno resolvió exactamente el error que aparecía en el log del run anterior.
+
+---
+
+## 6. Continuación 2026-08-24 — el 500 de §2b se cerró solo; nueva causa raíz: CORS `apikey` (run 32588358301, @QA)
+
+El fix de `search_path=auth` del §2b **sí funcionó** (nunca se documentó el cierre porque el `strict mode violation` de otro bug tapaba todo — ver PR #560). Evidencia del run 32588358301 (commit 21ef9bb, YA incluye #560): los tres servicios booteados healthy, `seed-test-users.mjs` completó sin el 500 ("Seed usuarios de test E2E (GoTrue)" en verde), y `strict mode violation` desapareció del log (0 ocurrencias, contra 72 antes). Progreso real.
+
+Pero la suite completa dio **25 failed / 1 passed / 1 flaky / 459 did not run**, el 100% de los fallos con el mismo error:
+
+```
+Error: login("admin") no redirigió tras 10000ms.
+Mensaje de error visible: Cuenta bloqueada hasta las 11:59 a. m.. Intenta de nuevo en N minutos.
+```
+
+### Se descartó la hipótesis "el lockout cuenta logins exitosos"
+
+`apps/web/src/app/actions/login-policy.ts#recordLoginAttempt` resetea `failedAttempts`/`lockedUntil` en cada llamada con `success: true` (línea 135-144) — código correcto, un login real exitoso SIEMPRE limpia el contador. Esto por sí solo no explicaba el bloqueo, así que había que probar la hipótesis contraria: algo hacía fallar el login DE VERDAD, y el lockout (funcionando como diseñado) solo amplificaba el daño.
+
+### Evidencia que decide entre las dos hipótesis: `results.xml` del reporte de Playwright
+
+`gh run download 32588358301` + grep sobre `playwright-report/results.xml` mostró el mensaje real ANTES del primer bloqueo:
+
+```
+Mensaje de error visible: Failed to fetch. Causa original: page.waitForURL: Timeout 10000ms exceeded.
+```
+
+`"Failed to fetch"` es el `TypeError` que revienta `fetch()` en el navegador cuando una request se bloquea en el cliente (CORS, DNS, conexión rechazada) — **nunca** es el texto de un 400/401 real de GoTrue (esos vienen como `Invalid login credentials`, JSON parseado por `supabase-js`). Cruzando esto con el dump de logs del gateway (`docker compose logs gotrue-gateway --tail=200`, step "Dump logs del stack (si algo posterior al boot falló)"): **10 líneas `OPTIONS /auth/v1/token?grant_type=password` con `204`, CERO líneas `POST /auth/v1/token`** en toda la ventana del run. El preflight CORS se completaba; el POST real nunca salía del navegador.
+
+### Causa raíz confirmada contra el código fuente real (mismo patrón de evidencia que §2b — `gh api`/`curl` contra los tags pineados, no memoria)
+
+1. `supabase-js@2.58.0` (`SupabaseClient.ts#_initSupabaseAuthClient`, línea ~324): TODO cliente de auth se construye con `authHeaders = { Authorization: 'Bearer ' + anonKey, apikey: anonKey }`, mergeado en `this.headers` de `GoTrueClient` — **cada** llamada a `signInWithPassword` manda el header `apikey`, sin excepción, sin flag para desactivarlo.
+2. `supabase/auth` (GoTrue) `v2.189.0`, `internal/api/api.go` línea 451-455: el CORS handler (`github.com/rs/cors`) se arma con `AllowedHeaders: globalConfig.CORS.AllAllowedHeaders([]string{"Accept", "Authorization", "Content-Type", "X-Client-IP", "X-Client-Info", audHeaderName, useCookieHeader, APIVersionHeaderName})` — **`apikey` no está en esa lista por defecto.**
+3. `internal/conf/configuration.go` línea 415-434: `CORSConfiguration.AllowedHeaders` (env `GOTRUE_CORS_ALLOWED_HEADERS`, vía `envconfig.Process("gotrue", ...)` línea 1049) se **suma** al default (`AllAllowedHeaders`), no lo reemplaza — y `docker-compose.test.yml` nunca la seteaba.
+4. Resultado: el navegador manda el preflight `OPTIONS` con `Access-Control-Request-Headers: apikey,...`; GoTrue responde `204` pero su `Access-Control-Allow-Headers` no incluye `apikey`; el navegador, por spec CORS, **bloquea el envío del POST real** sin loggear nada server-side. `signInWithPassword` rechaza la promesa con `TypeError: Failed to fetch`. `login-policy.ts` registra esto como fallo real (correctamente — SÍ fue un fallo real) y a la 5ª vez bloquea la cuenta 15 min. Como la causa persiste, se re-bloquea en bucle durante toda la corrida (de ahí los tres `lockedUntil` distintos vistos en el log: 11:59, 12:10, 12:15 — no es un solo lock decayendo, son bloqueos sucesivos).
+
+**Veredicto: hipótesis (B).** El lockout de `login-policy.ts` no tiene ningún defecto — hizo exactamente lo que debía con 5 fallos reales consecutivos. La causa real es un gap de configuración CORS del stack de test (`docker-compose.test.yml`), sin relación con producción (Supabase real hospeda GoTrue detrás de Kong, que sí trae `apikey` preconfigurado en su CORS).
+
+### Fix aplicado
+
+`docker-compose.test.yml`, servicio `gotrue`: se agregó `GOTRUE_CORS_ALLOWED_HEADERS: apikey`. Además, `e2e.yml` y `e2e-smoke.yml` ganaron un step nuevo "Verificar CORS de GoTrue (apikey) — fail-fast" inmediatamente después de "Boot test stack": un preflight `curl -X OPTIONS` contra `/auth/v1/token` que falla el job en segundos si `apikey` no aparece en `Access-Control-Allow-Headers`, en vez de quemar ~19 minutos de suite completa para llegar al mismo diagnóstico. Comentarios inline en ambos archivos documentan la cadena de evidencia completa para quien lo vea sin este runbook.
+
+### Qué falta para cerrar esto de verdad
+
+- **Sin verificar en vivo** — Docker Desktop sigue roto en esta máquina (mismo problema del §2b, no relacionado con el proyecto). El fix se armó 100% contra el código fuente real de `supabase-js` y `supabase/auth` en los tags exactos que usa este repo, con la misma disciplina de evidencia que cerró el §2b — pero como aquel, sigue siendo una hipótesis de alta confianza hasta que corra en CI real.
+- Si el fix es correcto, el próximo run de `e2e.yml`/`e2e-smoke.yml` debería completar `login()` real y avanzar a las 459 specs que nunca llegaron a correr — momento en el que, tal como anticipa el §3 de este runbook, es esperable ver fallos de producto reales (selectors, timing, roles) que hasta ahora nunca tuvieron la oportunidad de aparecer.
+- Si el preflight check nuevo falla en CI real con un `Access-Control-Allow-Headers` que SÍ incluye `apikey` pero el POST real sigue sin llegar, el siguiente sospechoso es `Access-Control-Allow-Methods` (no incluye `OPTIONS` en la lista de `api.go` línea 452 — pero `rs/cors` maneja preflight aparte del middleware normal, así que no debería importar; queda como hipótesis de repuesto, no verificada).
