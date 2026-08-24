@@ -18,6 +18,14 @@ import { defineConfig, devices } from "@playwright/test";
 const isCI = !!process.env.CI;
 // Inyectar filtro de tags desde env. Smoke PR usa E2E_GREP=@smoke.
 const grepFilter = process.env.E2E_GREP ? new RegExp(process.env.E2E_GREP) : undefined;
+// Override puntual del circuit breaker (ver comentario en maxFailures más abajo).
+// Uso: corridas de diagnóstico que necesitan ver el inventario completo de
+// fallos en vez de cortar en 8/25. Sin la env var, se mantienen los defaults.
+const maxFailuresOverrideRaw = process.env.E2E_MAX_FAILURES ? Number(process.env.E2E_MAX_FAILURES) : undefined;
+if (maxFailuresOverrideRaw !== undefined && !Number.isFinite(maxFailuresOverrideRaw)) {
+  throw new Error(`E2E_MAX_FAILURES debe ser numérico, recibido: "${process.env.E2E_MAX_FAILURES}"`);
+}
+const maxFailuresOverride = maxFailuresOverrideRaw;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -36,7 +44,7 @@ export default defineConfig({
   // del workflow. Cortamos temprano y dejamos evidencia clara en el reporter.
   // Smoke (PR, grep @smoke): corta rápido, es un gate de PR. Nightly: margen mayor
   // porque busca cobertura de reporte, pero sigue acotado (no corre indefinido).
-  maxFailures: isCI ? (grepFilter ? 8 : 25) : undefined,
+  maxFailures: isCI ? (maxFailuresOverride ?? (grepFilter ? 8 : 25)) : undefined,
   reporter: isCI
     ? [["line"], ["html", { open: "never" }], ["junit", { outputFile: "playwright-report/results.xml" }]]
     : [["list"], ["html", { open: "never" }]],

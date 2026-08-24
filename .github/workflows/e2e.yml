@@ -2,6 +2,14 @@ name: E2E (Playwright)
 
 on:
   workflow_dispatch:
+    inputs:
+      max_failures:
+        description: >-
+          Override del circuit breaker maxFailures (playwright.config.ts).
+          Vacio = defaults (25 full / 8 con E2E_GREP). Usar 0 para inventario
+          completo sin corte (~486 tests, consume el timeout-minutes del job).
+        required: false
+        type: string
   schedule:
     # Nightly 06:00 UTC ≈ 00:00 America/El_Salvador (UTC-6)
     - cron: '0 6 * * *'
@@ -137,6 +145,8 @@ jobs:
         run: npm run build
 
       - name: Run E2E tests
+        env:
+          E2E_MAX_FAILURES: ${{ inputs.max_failures }}
         run: npm run test:e2e
 
       - name: Dump logs del stack (si algo posterior al boot falló)
