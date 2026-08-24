@@ -2169,6 +2169,8 @@ model PharmacyReservation {
   serie           String?                   @db.VarChar(80) /// número de serie; null si ítem sin serie
   status          PharmacyReservationStatus @default(RESERVED)
   expiresAt       DateTime                  @db.Timestamptz() /// now() + 4h al crear
+  /// SQL 208 (docs/45_registro_drift_schema.md §4.3) — cancelMotivo y updatedAt
+  /// faltaban en prod; un trigger preexistente ya asumía que updatedAt existía.
   cancelMotivo    String?                   @db.Text
   createdAt       DateTime                  @default(now()) @db.Timestamptz()
   updatedAt       DateTime                  @updatedAt @db.Timestamptz()
@@ -2544,6 +2546,7 @@ model ClinicalNote {
   signedAt       DateTime? @db.Timestamptz()
   signatureHash  String?   @db.VarChar(120)
   /// Historial de cambios pre-firma. Array [{at, by, action, diff}]. Max 50 entries (oldest dropped).
+  /// SQL 208 (docs/45_registro_drift_schema.md §4.1) — columna faltaba en prod.
   editHistory    Json?
   /// K-05 audit Stream K: gate explícita de visibilidad al Portal Paciente.
   /// Default false — el clínico debe marcar la nota como publicable.
@@ -3865,6 +3868,8 @@ model DietPlan {
   compatibleWithDiagnoses String[]       @default([])
   /// Alergenos declarados en el plan (e.g. ["NUTS", "DAIRY", "GLUTEN"]).
   /// Comparados contra PatientAllergy.substanceText (uppercase) en order.create. UAT-BUG-02.
+  /// SQL 208 (docs/45_registro_drift_schema.md §4.2) — 54_diet_plan_allergens.sql
+  /// declaraba esta columna pero nunca se aplicó a prod; 208 la reintenta.
   allergens               String[]       @default([])
   notes                   String?        @db.Text
   startedAt               DateTime       @default(now()) @db.Timestamptz()
@@ -5157,12 +5162,17 @@ model EcePaciente {
   // el corpus SQL/prod; el campo TS `origenIdentidad` no tiene usos en el
   // repo (grep sin resultados), así que renombrar el @map es seguro.
   origenIdentidad       String    @default("verificado") @map("tipo_registro_identidad") @db.VarChar(30)
-  primerNombre          String?   @map("primer_nombre") @db.VarChar(60)
-  segundoNombre         String?   @map("segundo_nombre") @db.VarChar(60)
-  primerApellido        String?   @map("primer_apellido") @db.VarChar(60)
-  segundoApellido       String?   @map("segundo_apellido") @db.VarChar(60)
-  fechaNacimiento       DateTime? @map("fecha_nacimiento") @db.Date
-  sexo                  String?   @db.VarChar(1)
+  // NOTA @DBA (docs/45_registro_drift_schema.md §4.5, SQL 208): primerNombre,
+  // segundoNombre, primerApellido, segundoApellido, fechaNacimiento y sexo NO
+  // existen como columnas en ece.paciente (confirmado por introspección de
+  // prod, 58_ece_03_paciente.sql nunca las creó) — la demografía del paciente
+  // vive en public."Patient" (firstName/middleName/lastName/secondLastName/
+  // birthDate), enlazada vía publicPatientId más abajo. Se remueven de este
+  // modelo primerNombre/primerApellido/segundoApellido/fechaNacimiento porque
+  // patient-dedup.router.ts (US.F2.7.40) los seleccionaba directo de
+  // ecePaciente y rompía en cada invocación; ahora lee de Patient vía el
+  // bridge. segundoNombre/sexo/documentoNoPresentado NO tienen uso en código
+  // (grep sin resultados) — quedan fuera de este PR, ver §4.6 del censo.
   estadoFamiliar        String?   @map("estado_familiar") @db.VarChar(30)
   nacionalidad          String?   @db.VarChar(60)
   direccion             String?   @db.VarChar(300)
@@ -7407,6 +7417,8 @@ model AuditDashboardConfig {
   /// Hora fin horario clínico (formato HH:MM). Default 22:00.
   horarioClinicoFin     String   @default("22:00") @db.VarChar(5)
   /// Habilita alertas de outlier para la org.
+  /// SQL 208 (docs/45_registro_drift_schema.md §4.4) — 95_f2_s15_d_audit_rbac.sql
+  /// declaraba esta columna pero solo ella nunca se aplicó a prod; 208 la reintenta.
   outlierAlertEnabled   Boolean  @default(true)
   createdAt             DateTime @default(now()) @db.Timestamptz()
   updatedAt             DateTime @updatedAt @db.Timestamptz()

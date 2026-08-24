@@ -46,6 +46,9 @@ const ORG_ID = MOCK_TENANT.organizationId;
 const ESTAB_ID = MOCK_TENANT.establishmentId!;
 const PATIENT_A = "11111111-1111-1111-1111-111111111111";
 const PATIENT_B = "22222222-2222-2222-2222-222222222222";
+// public."Patient".id — distinto del id de EcePaciente (bridge publicPatientId).
+const PUBLIC_PATIENT_A = "33333333-aaaa-aaaa-aaaa-333333333333";
+const PUBLIC_PATIENT_B = "44444444-bbbb-bbbb-bbbb-444444444444";
 const MERGE_ID = "33333333-3333-3333-3333-333333333333";
 
 // UUIDs ficticios para personal ECE y firmas electrónicas en tests de confirmEceMerge.
@@ -104,19 +107,32 @@ function mockQueryRawHappyPath(prisma: DeepMockProxy<PrismaClient>) {
     ]);
 }
 
+// La demografía (nombre/apellidos/fecha de nacimiento) NO vive en EcePaciente
+// (ver docs/45_registro_drift_schema.md §4.5) — el router la resuelve vía
+// publicPatientId → prisma.patient.findMany(). Por default null: la mayoría
+// de estos tests solo ejercitan el scoring por NUI/DUI, que sí son columnas
+// reales de EcePaciente y no requieren mockear prisma.patient.
 function makeEcePaciente(overrides: Record<string, unknown> = {}) {
   return {
     id: PATIENT_A,
     nui: null,
     dui: null,
-    primerNombre: "Juan",
-    primerApellido: "García",
-    segundoApellido: "López",
-    fechaNacimiento: new Date("1985-03-15"),
+    publicPatientId: null,
     establecimientoId: ESTAB_ID,
     estadoRegistro: "vigente",
     estadoExpediente: "activo",
     numeroExpediente: "EXP-001",
+    ...overrides,
+  };
+}
+
+function makePatientDemo(overrides: Record<string, unknown> = {}) {
+  return {
+    id: PATIENT_A,
+    firstName: "Juan",
+    lastName: "García",
+    secondLastName: "López",
+    birthDate: new Date("1985-03-15"),
     ...overrides,
   };
 }
@@ -177,18 +193,25 @@ describe("patientDedupRouter", () => {
     it("DUI exact match contribuye con peso 0.4 al score", async () => {
       const dui = "012345679";
       prisma.ecePaciente.findUnique.mockResolvedValue(
-        makeEcePaciente({ dui }) as never,
+        makeEcePaciente({ dui, publicPatientId: PUBLIC_PATIENT_A }) as never,
       );
       // Candidato con DUI igual pero nombre distinto y sin fecha → score ~0.4
       prisma.ecePaciente.findMany.mockResolvedValue([
         makeEcePaciente({
           id: PATIENT_B,
           dui,
-          primerNombre: "Carlos",
-          primerApellido: "Martínez",
-          segundoApellido: null,
-          fechaNacimiento: null,
+          publicPatientId: PUBLIC_PATIENT_B,
           numeroExpediente: "EXP-002",
+        }),
+      ] as never);
+      prisma.patient.findMany.mockResolvedValue([
+        makePatientDemo({ id: PUBLIC_PATIENT_A }),
+        makePatientDemo({
+          id: PUBLIC_PATIENT_B,
+          firstName: "Carlos",
+          lastName: "Martínez",
+          secondLastName: null,
+          birthDate: null,
         }),
       ] as never);
 
@@ -211,18 +234,21 @@ describe("patientDedupRouter", () => {
       const dui = "012345679";
       // Con DUI(0.4) + nombre exacto(0.35) + fecha exacta(0.25) = 1.0
       prisma.ecePaciente.findUnique.mockResolvedValue(
-        makeEcePaciente({ fechaNacimiento, dui }) as never,
+        makeEcePaciente({ dui, publicPatientId: PUBLIC_PATIENT_A }) as never,
       );
       prisma.ecePaciente.findMany.mockResolvedValue([
         makeEcePaciente({
           id: PATIENT_B,
-          primerNombre: "Juan",
-          primerApellido: "García",
-          segundoApellido: "López",
-          fechaNacimiento,
           dui,
+          publicPatientId: PUBLIC_PATIENT_B,
           numeroExpediente: "EXP-002",
         }),
+      ] as never);
+      // Mismo nombre+apellidos+fecha en ambos registros de public.Patient — el
+      // duplicado real: dos Patient distintos para la misma persona física.
+      prisma.patient.findMany.mockResolvedValue([
+        makePatientDemo({ id: PUBLIC_PATIENT_A, birthDate: fechaNacimiento }),
+        makePatientDemo({ id: PUBLIC_PATIENT_B, birthDate: fechaNacimiento }),
       ] as never);
 
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
@@ -237,17 +263,18 @@ describe("patientDedupRouter", () => {
       const fechaPivot = new Date("1985-03-15");
       const fechaCand = new Date("1985-03-18"); // 3 días de diferencia
       prisma.ecePaciente.findUnique.mockResolvedValue(
-        makeEcePaciente({ fechaNacimiento: fechaPivot }) as never,
+        makeEcePaciente({ publicPatientId: PUBLIC_PATIENT_A }) as never,
       );
       prisma.ecePaciente.findMany.mockResolvedValue([
         makeEcePaciente({
           id: PATIENT_B,
-          primerNombre: "Juan",
-          primerApellido: "García",
-          segundoApellido: "López",
-          fechaNacimiento: fechaCand,
+          publicPatientId: PUBLIC_PATIENT_B,
           numeroExpediente: "EXP-002",
         }),
+      ] as never);
+      prisma.patient.findMany.mockResolvedValue([
+        makePatientDemo({ id: PUBLIC_PATIENT_A, birthDate: fechaPivot }),
+        makePatientDemo({ id: PUBLIC_PATIENT_B, birthDate: fechaCand }),
       ] as never);
 
       const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
@@ -280,6 +307,64 @@ describe("patientDedupRouter", () => {
         limit: 3,
       });
       expect(result.candidates.length).toBeLessThanOrEqual(3);
+    });
+
+    // Regresión docs/45_registro_drift_schema.md §4.5 / SQL 208: EcePaciente no
+    // tiene columnas de demografía en prod — deben resolverse desde
+    // public.Patient vía publicPatientId, nunca leerse directo de ecePaciente.
+    it("resuelve demografía desde public.Patient vía publicPatientId, no desde EcePaciente", async () => {
+      prisma.ecePaciente.findUnique.mockResolvedValue(
+        makeEcePaciente({ publicPatientId: PUBLIC_PATIENT_A }) as never,
+      );
+      prisma.ecePaciente.findMany.mockResolvedValue([
+        makeEcePaciente({
+          id: PATIENT_B,
+          publicPatientId: PUBLIC_PATIENT_B,
+          numeroExpediente: "EXP-002",
+        }),
+      ] as never);
+      prisma.patient.findMany.mockResolvedValue([
+        makePatientDemo({ id: PUBLIC_PATIENT_A }),
+        makePatientDemo({ id: PUBLIC_PATIENT_B }),
+      ] as never);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.findPotentialDuplicates({
+        ecePacienteId: PATIENT_A,
+        threshold: 0.5,
+      });
+
+      const patientFindManyArgs = prisma.patient.findMany.mock.calls[0]![0];
+      expect(patientFindManyArgs.where).toMatchObject({
+        id: { in: expect.arrayContaining([PUBLIC_PATIENT_A, PUBLIC_PATIENT_B]) },
+      });
+      expect(result.candidates).toHaveLength(1);
+      expect(result.candidates[0]!.primerNombre).toBe("Juan");
+      expect(result.candidates[0]!.primerApellido).toBe("García");
+    });
+
+    it("candidato sin publicPatientId (sin bridge a Patient) no rompe y devuelve demografía null", async () => {
+      prisma.ecePaciente.findUnique.mockResolvedValue(
+        makeEcePaciente({ nui: "SLV-2006-999999" }) as never,
+      );
+      prisma.ecePaciente.findMany.mockResolvedValue([
+        makeEcePaciente({
+          id: PATIENT_B,
+          nui: "SLV-2006-999999",
+          publicPatientId: null,
+          numeroExpediente: "EXP-002",
+        }),
+      ] as never);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.findPotentialDuplicates({ ecePacienteId: PATIENT_A });
+
+      // NUI exact match igual da score=1 sin necesitar demografía.
+      expect(result.candidates).toHaveLength(1);
+      expect(result.candidates[0]!.primerNombre).toBeNull();
+      expect(result.candidates[0]!.fechaNacimiento).toBeNull();
+      // Sin ningún publicPatientId en juego, no debía consultarse Patient.
+      expect(prisma.patient.findMany).not.toHaveBeenCalled();
     });
   });
 

@@ -289,28 +289,29 @@ export const patientDedupRouter = router({
   findPotentialDuplicates: tenantProcedure
     .input(findDuplicatesInput)
     .query(async ({ ctx, input }) => {
-      const pivot = await ctx.prisma.ecePaciente.findUnique({
+      // La demografía (nombre/apellidos/fecha de nacimiento) NO vive en
+      // ece.paciente — la tabla real solo tiene identificadores. Vive en
+      // public."Patient", enlazada vía ece.paciente.public_patient_id
+      // (Prisma: publicPatientId). Ver docs/45_registro_drift_schema.md §4.5.
+      const pivotRow = await ctx.prisma.ecePaciente.findUnique({
         where: { id: input.ecePacienteId },
         select: {
           id: true,
           nui: true,
           dui: true,
-          primerNombre: true,
-          primerApellido: true,
-          segundoApellido: true,
-          fechaNacimiento: true,
+          publicPatientId: true,
           establecimientoId: true,
         },
       });
-      if (!pivot) {
+      if (!pivotRow) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Paciente ECE no encontrado." });
       }
 
       // Pre-filter: misma org via establecimiento, no fusionados, no el pivote
-      const candidates = await ctx.prisma.ecePaciente.findMany({
+      const candidateRows = await ctx.prisma.ecePaciente.findMany({
         where: {
           id: { not: input.ecePacienteId },
-          establecimientoId: pivot.establecimientoId,
+          establecimientoId: pivotRow.establecimientoId,
           estadoRegistro: "vigente",
           estadoExpediente: { not: "fusionado" },
         },
@@ -318,19 +319,57 @@ export const patientDedupRouter = router({
           id: true,
           nui: true,
           dui: true,
-          primerNombre: true,
-          primerApellido: true,
-          segundoApellido: true,
-          fechaNacimiento: true,
+          publicPatientId: true,
           numeroExpediente: true,
         },
         take: 500,
       });
 
+      const publicPatientIds = [
+        pivotRow.publicPatientId,
+        ...candidateRows.map((c) => c.publicPatientId),
+      ].filter((id): id is string => id !== null);
+
+      const demografiaPorPatientId = new Map<
+        string,
+        { firstName: string; lastName: string; secondLastName: string | null; birthDate: Date | null }
+      >();
+      if (publicPatientIds.length > 0) {
+        const patients = await ctx.prisma.patient.findMany({
+          where: { id: { in: publicPatientIds } },
+          select: { id: true, firstName: true, lastName: true, secondLastName: true, birthDate: true },
+        });
+        for (const p of patients) demografiaPorPatientId.set(p.id, p);
+      }
+
+      const toCandidate = (row: {
+        id: string;
+        nui: string | null;
+        dui: string | null;
+        publicPatientId: string | null;
+      }): EcePacienteCandidate => {
+        const demo = row.publicPatientId ? demografiaPorPatientId.get(row.publicPatientId) : undefined;
+        return {
+          id: row.id,
+          nui: row.nui,
+          dui: row.dui,
+          primerNombre: demo?.firstName ?? null,
+          primerApellido: demo?.lastName ?? null,
+          segundoApellido: demo?.secondLastName ?? null,
+          fechaNacimiento: demo?.birthDate ?? null,
+        };
+      };
+
+      const pivot = toCandidate(pivotRow);
+      const candidates = candidateRows.map((row) => ({
+        ...toCandidate(row),
+        numeroExpediente: row.numeroExpediente,
+      }));
+
       const scored = candidates
-        .map((c) => ({
-          candidate: c,
-          score: scoreEcePair(pivot, c),
+        .map((candidate) => ({
+          candidate,
+          score: scoreEcePair(pivot, candidate),
         }))
         .filter((s) => s.score >= input.threshold)
         .sort((a, b) => b.score - a.score)
