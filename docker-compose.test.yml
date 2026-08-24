@@ -118,6 +118,31 @@ services:
       GOTRUE_DISABLE_SIGNUP: 'false'
       GOTRUE_EXTERNAL_EMAIL_ENABLED: 'true'
       GOTRUE_LOG_LEVEL: info
+      # Causa raíz del run de CI 32588358301 (E2E 25 failed / 459 did not
+      # run, todos por lockout de cuenta): supabase-js SIEMPRE agrega el
+      # header `apikey` a cada request de auth (ver
+      # supabase-js/src/SupabaseClient.ts#_initSupabaseAuthClient —
+      # `authHeaders = { Authorization: Bearer <key>, apikey: <key> }`,
+      # mergeado en TODOS los métodos de GoTrueClient incl.
+      # signInWithPassword). El CORS default de GoTrue (internal/api/api.go,
+      # v2.189.0) SOLO permite
+      # Accept/Authorization/Content-Type/X-Client-IP/X-Client-Info/aud/
+      # X-Use-Cookie/X-Supabase-Api-Version — `apikey` no está. El navegador
+      # manda el preflight OPTIONS (200/204, se ve en el log de
+      # gotrue-gateway), pero como `apikey` no aparece en el
+      # `Access-Control-Allow-Headers` de la respuesta, bloquea el POST real
+      # ANTES de mandarlo — nunca llega ni a nginx ni a GoTrue (0 líneas
+      # "POST /auth/v1/token" en los logs, solo OPTIONS). signInWithPassword
+      # revienta con `TypeError: Failed to fetch` en el cliente. Con 5
+      # fallos reales así, login-policy.ts bloquea la cuenta 15 min — y como
+      # la causa persiste, se re-bloquea en bucle: todo el runbook de
+      # "Account locked" en docs/runbooks/e2e-gotrue-auth.md era un síntoma
+      # de ESTO, no un defecto del lockout (que sí resetea el contador en
+      # login exitoso — código correcto, nunca hubo login exitoso que
+      # resetear). `GOTRUE_CORS_ALLOWED_HEADERS` se agrega vía
+      # `AllAllowedHeaders` al default (no lo reemplaza), envconfig con
+      # `split_words` en `CORSConfiguration.AllowedHeaders`.
+      GOTRUE_CORS_ALLOWED_HEADERS: apikey
     # Sin publicar puerto al host: GoTrue solo se alcanza dentro de la red del
     # compose, en `gotrue:9999`. El puerto 9999 del HOST lo publica
     # `gotrue-gateway` (ver abajo) — GoTrue no entiende el prefijo `/auth/v1`

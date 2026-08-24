@@ -59,6 +59,32 @@ jobs:
       - name: Boot test stack (Postgres + GoTrue efímeros)
         run: docker compose -f docker-compose.test.yml up -d --wait
 
+      - name: Verificar CORS de GoTrue (apikey) — fail-fast
+        # Regresión del run 32588358301: 25 failed / 459 did not run, todos
+        # por "login no redirigió" → cuenta bloqueada. Causa real: supabase-js
+        # manda el header `apikey` en TODA request de auth (SupabaseClient.ts
+        # #_initSupabaseAuthClient), pero el CORS default de GoTrue no lo
+        # permite — el navegador bloquea el POST real después de un preflight
+        # OPTIONS 204 "exitoso" (0 líneas "POST /auth/v1/token" en los logs
+        # de ese run, solo OPTIONS). signInWithPassword revienta con
+        # "Failed to fetch" en TODOS los intentos, dispara el lockout de 5
+        # fallos de login-policy.ts, y el resto de la suite muere con "Cuenta
+        # bloqueada" — un síntoma que no tiene nada que ver con el lockout en
+        # sí (correcto: resetea el contador en login exitoso, solo que nunca
+        # hubo uno). Ver GOTRUE_CORS_ALLOWED_HEADERS en docker-compose.test.yml.
+        # Este check falla en segundos en vez de quemar ~19 min de suite.
+        run: |
+          headers=$(curl -s -o /dev/null -D - \
+            -X OPTIONS "http://localhost:9999/auth/v1/token?grant_type=password" \
+            -H "Origin: http://localhost:3000" \
+            -H "Access-Control-Request-Method: POST" \
+            -H "Access-Control-Request-Headers: apikey,authorization,content-type,x-client-info")
+          echo "$headers"
+          echo "$headers" | grep -i "^access-control-allow-headers:" | grep -qi "apikey" || {
+            echo "::error::GoTrue no incluye 'apikey' en Access-Control-Allow-Headers. El navegador bloqueará signInWithPassword con 'Failed to fetch' y login() disparará el lockout de cuenta en cascada para TODA la suite (ver run 32588358301). Revisar GOTRUE_CORS_ALLOWED_HEADERS en docker-compose.test.yml."
+            exit 1
+          }
+
       - name: Dump logs del stack (si el boot falló)
         # Sin esto, un fallo acá es "exited (1)" sin más — el mismo tipo de
         # fallo opaco que esta tanda de trabajo vino a eliminar. Vuelca ps -a
