@@ -46,7 +46,9 @@ async function loginEce(page: Page, role: EceRole) {
   // ?skipIntro=1 salta la animación AxisMed (CC-0010).
   await page.goto("/login?skipIntro=1");
   await page.getByLabel(/correo|email/i).fill(creds.email);
-  await page.getByLabel(/contraseña|password/i).fill(creds.password);
+  // getByLabel(/contraseña/i) también matchea el botón "Ver contraseña"
+  // (mismo aria-label) — getByRole("textbox", ...) sólo matchea el <input>.
+  await page.getByRole("textbox", { name: /contraseña|password/i }).fill(creds.password);
   await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
   await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|ece|patients|beds|triage|admission)/);

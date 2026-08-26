@@ -36,8 +36,8 @@ test.describe("@smoke - Autenticación", () => {
   });
 
   test("signup público está deshabilitado en producción del MVP", async ({ page }) => {
-    // Ruta real: /auth/signup (Sprint 3 — antes era /signup).
-    const resp = await page.goto("/auth/signup");
+    // Ruta real: /signup — (auth) es route group de Next y no aparece en la URL.
+    const resp = await page.goto("/signup");
     expect(resp?.status() ?? 0).toBeLessThan(500);
     await expect(page.getByText(/registro deshabilitado/i)).toBeVisible();
     await expect(

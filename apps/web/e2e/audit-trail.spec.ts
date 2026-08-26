@@ -25,8 +25,8 @@ test.describe("@smoke - Audit trail", () => {
     await page.getByLabel(/motivo/i).fill("Prueba E2E auditoría.");
     await page.getByRole("button", { name: /confirmar/i }).click();
 
-    // Visor de auditoría sobre la cama (admin → /admin/audit).
-    await page.goto("/admin/audit");
+    // Visor de auditoría sobre la cama (admin → /audit).
+    await page.goto("/audit");
     await page.getByLabel(/entidad/i).fill("Bed");
     await page.getByRole("button", { name: /buscar/i }).click();
 
