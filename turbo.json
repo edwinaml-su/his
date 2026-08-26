@@ -39,6 +39,7 @@
     },
     "test:e2e": {
       "dependsOn": ["^build"],
+      "env": ["E2E_MAX_FAILURES", "E2E_GREP", "E2E_BASE_URL"],
       "outputs": ["playwright-report/**", "test-results/**"]
     },
     "clean": {
