@@ -489,3 +489,45 @@ describe("validate5Correctos — edge cases de input Zod", () => {
     expect(result).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// shiftQueue.pending — CC-0026 Ola 0 (fix cola bedside 0 filas siempre)
+// ---------------------------------------------------------------------------
+
+describe("shiftQueue.pending", () => {
+  it(
+    "filtra por estado_registro IN (firmado,validado) + vigencia ACTIVA " +
+      "(no 'vigente') y resuelve patient_id vía episodio_atencion, no documento_instancia",
+    async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma as any).$queryRawUnsafe = vi
+        .fn()
+        // 1. Turno activo (ece.staff_schedule) — sin turno asignado.
+        .mockResolvedValueOnce([])
+        // 2. Indicaciones pendientes.
+        .mockResolvedValueOnce([]);
+
+      const caller = makeCaller();
+      const result = await caller.shiftQueue.pending();
+
+      expect(result.items).toEqual([]);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const calls = (prisma.$queryRawUnsafe as any).mock.calls;
+      expect(calls.length).toBe(2);
+      const indicSql = calls[1][0] as string;
+
+      // Defecto 1: 'vigente' no existe en chk_ind_estado_registro (SQL 98).
+      expect(indicSql).not.toContain("'vigente'");
+      expect(indicSql).toContain("IN ('firmado', 'validado')");
+      expect(indicSql).toContain("vigencia = 'ACTIVA'");
+
+      // Defecto 2: instancia_id nunca lo escribe create() → JOIN vía
+      // episodio_id (siempre poblado) a episodio_atencion, no documento_instancia.
+      expect(indicSql).not.toContain("documento_instancia");
+      expect(indicSql).not.toContain("instancia_id");
+      expect(indicSql).toContain("ece.episodio_atencion");
+      expect(indicSql).toContain("ea.paciente_id");
+    },
+  );
+});

@@ -139,6 +139,9 @@ export const SECTIONS: NavSection[] = [
         description: "Agendas y citas de consulta externa programada." },
       { href: "/ece/rectificaciones", label: "ECE Rectificaciones", icon: FilePenLine,
         description: "Solicitudes de rectificación de documentos ECE firmados (Art. 40 NTEC)." },
+      { href: "/tableros", label: "Tableros por área", icon: LayoutGrid,
+        requiredRoles: ["NURSE", "TRIAGE_NURSE", "PHYSICIAN", "ADMIN", "DIR", "DIRECTOR"],
+        description: "Seguimiento de actividades pendientes por área (quirófano, laboratorio, imágenes, enfermería, etc.)." },
     ],
   },
   {

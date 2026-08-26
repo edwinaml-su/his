@@ -15,8 +15,10 @@
  *
  * ─── Qué verifica ──────────────────────────────────────────────────────────
  *
- * Este test lee el SQL de la migración canónica (202), extrae los valores
- * literales de cada CHECK, y los compara contra los enums Zod de los cuatro
+ * Este test lee el SQL de las migraciones canónicas (202 para
+ * chk_admin_med_estado_v2; 211 para chk_ind_item_tipo, que amplió a 202 con
+ * MOVIMIENTO/INTERCONSULTA en CC-0026 Ola 2 — ver esa cabecera), extrae los
+ * valores literales de cada CHECK, y los compara contra los enums Zod de los
  * puntos de definición del vocabulario. Cualquier edición de UN solo lado
  * rompe CI.
  *
@@ -50,6 +52,11 @@ const SQL_FILE = resolve(
   HERE,
   "../../../../../database/sql/202_ece_indicacion_vocabulario_estados.sql",
 );
+/** CC-0026 Ola 2 — amplía chk_ind_item_tipo de 202 con MOVIMIENTO/INTERCONSULTA. */
+const SQL_FILE_211 = resolve(
+  HERE,
+  "../../../../../database/sql/211_cc0026_indicacion_item_estructura.sql",
+);
 
 /**
  * Extrae los valores de un `ADD CONSTRAINT <nombre> ... CHECK (col IN (...))`.
@@ -76,6 +83,7 @@ function checkValues(sql: string, constraintName: string): string[] {
 // Duplicado a propósito: si alguien cambia el SQL o un enum, tiene que venir
 // aquí y declarar el cambio de forma deliberada.
 
+/** CC-0026 Ola 2 (SQL 211) agregó MOVIMIENTO/INTERCONSULTA al superset de 202. */
 const TIPO_BD = [
   "MEDICAMENTO",
   "PROCEDIMIENTO",
@@ -83,6 +91,8 @@ const TIPO_BD = [
   "CUIDADO_GENERAL",
   "ESTUDIO",
   "REPOSO",
+  "MOVIMIENTO",
+  "INTERCONSULTA",
 ] as const;
 
 const ESTADO_BD = [
@@ -95,18 +105,19 @@ const ESTADO_BD = [
 
 /**
  * Valores que el CHECK acepta pero ningún enum Zod expone todavía.
- * REPOSO viene del DDL original (61) y se conservó para no perder la categoría
- * clínica; exponerlo en el enum + el Select de la UI es un cambio de producto,
- * no de este fix.
+ * Vacío desde CC-0026 Ola 2: REPOSO (el único delta que existía) se expuso en
+ * el enum del router/contracts en el mismo cambio que agregó
+ * MOVIMIENTO/INTERCONSULTA (211) — ver cabecera de ese archivo.
  */
-const SOLO_BD = { tipo: ["REPOSO"], estado: [] as string[] };
+const SOLO_BD = { tipo: [] as string[], estado: [] as string[] };
 
 const sql = readFileSync(SQL_FILE, "utf-8");
+const sql211 = readFileSync(SQL_FILE_211, "utf-8");
 const ordenado = (xs: readonly string[]) => [...xs].sort();
 
 describe("vocabulario BD ↔ Zod — ece.indicacion_item.tipo", () => {
-  it("chk_ind_item_tipo en 202 contiene exactamente el vocabulario canónico", () => {
-    expect(ordenado(checkValues(sql, "chk_ind_item_tipo"))).toEqual(
+  it("chk_ind_item_tipo en 211 (superset de 202) contiene exactamente el vocabulario canónico", () => {
+    expect(ordenado(checkValues(sql211, "chk_ind_item_tipo"))).toEqual(
       ordenado(TIPO_BD),
     );
   });

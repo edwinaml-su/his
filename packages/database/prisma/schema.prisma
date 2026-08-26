@@ -487,6 +487,8 @@ model Organization {
   tiposCuenta               TipoCuenta[]               @relation("TipoCuentaOrg")
   // CC-0017 F2 — reglas ABAC persistidas por organización
   abacRules                 AbacRule[]                 @relation("AbacRuleOrg")
+  // CC-0026 — tareas de tablero generadas al firmar indicaciones/órdenes
+  careTasks                 CareTask[]
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -526,6 +528,8 @@ model Establishment {
   bloodBank              BloodBank?
   // Finance — sql/127
   invoices               Invoice[] @relation("InvoiceEstablishment")
+  // CC-0026 — tareas de tablero ancladas al establecimiento
+  careTasks              CareTask[]
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -1073,6 +1077,10 @@ model ServiceUnit {
   /// GLN (GS1 Global Location Number) de la unidad — ADR 0019 D8. FK a ece.gs1_gln(codigo),
   /// sql/199_epcis_patient_movement.sql. Nullable mientras el catálogo no esté sembrado.
   glnCodigo       String?  @db.VarChar(13)
+  /// CC-0026 D3 — clasificación funcional para tableros /tableros/[unidad].
+  /// Vocabulario cerrado por CHECK (sql/212), no enum Postgres. Nullable:
+  /// unidades sin tablero propio quedan sin clasificar.
+  areaType        String?  @db.VarChar(20)
 
   organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   establishment Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
@@ -1086,6 +1094,8 @@ model ServiceUnit {
   assignments   UserServiceUnitAssignment[] @relation("ServiceUnitAssignments")
   // Nivel B — sql/61
   operatingRooms OperatingRoom[]
+  // CC-0026 — tareas de tablero por área
+  careTasks      CareTask[]
 
   @@unique([establishmentId, code])
   @@schema("public")
@@ -1282,6 +1292,8 @@ model Patient {
   invoices               Invoice[]          @relation("InvoicePatient")
   // CC-0002 §7 — cuentas de paciente
   patientAccounts        PatientAccount[]   @relation("PatientAccounts")
+  // CC-0026 — tareas de tablero ancladas al paciente
+  careTasks              CareTask[]
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1686,6 +1698,8 @@ model Encounter {
   // CC-0002 §7 — cuentas y servicios vinculados al encuentro
   accounts               PatientAccount[]        @relation("EncounterAccounts")
   accountServices        PatientAccountService[] @relation("EncounterAccountServices")
+  // CC-0026 — tareas de tablero ancladas al episodio
+  careTasks              CareTask[]
 
   @@unique([organizationId, encounterNumber])
   @@index([patientId])
@@ -7830,6 +7844,8 @@ model PatientAccount {
   /// CC-0016 — órdenes y solicitudes de imagen ancladas a esta cuenta.
   imagingOrders   ImagingOrder[]   @relation("ImagingOrderPatientAccount")
   imagingRequests ImagingRequest[] @relation("ImagingRequestPatientAccount")
+  /// CC-0026 — tareas de tablero ancladas a esta cuenta.
+  careTasks       CareTask[]
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])
@@ -7916,6 +7932,74 @@ model AbacRule {
   organization Organization @relation("AbacRuleOrg", fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, recurso, accion, active])
+  @@schema("public")
+}
+
+// =============================================================================
+// CC-0026 — Indicación médica → tareas por área + tableros (SQL sql/209)
+// =============================================================================
+
+/// CC-0026 D1 — tarea de primera clase generada al firmar una indicación
+/// médica (o al crear una LabOrder/ImagingOrder/traslado) para seguimiento
+/// por área/rol. Fuente polimórfica vía `sourceType`+`sourceId` (NO FK —
+/// apunta a filas de `ece.indicacion_item` u otras tablas fuera de
+/// schema.prisma). Alimenta `/tableros/[unidad]` (por `serviceUnitId`) y el
+/// tablero de enfermería (filtro `assignedRoleCode='NURSE'`, transversal a
+/// unidades). La bandeja `/tareas` (workflow-inbox) es independiente y NO
+/// se deriva de esta tabla en esta ola.
+///
+/// SIN trigger de auditoría: `authenticated` no tiene INSERT sobre
+/// `audit."AuditLog"` (bloqueante P0-0 documentado en sql/206) y el INSERT
+/// de CareTask corre dentro de transacciones demotadas (`withEceContext` en
+/// `firmar()`) que no pueden asumir ese grant. Se retoma cuando sql/206 se
+/// generalice a más call-sites.
+///
+/// RLS (sql/209) reconoce DOS espacios de GUC: `withTenantContext`
+/// (`app.current_org_id`) y `withEceContext` (`app.ece_establecimiento_id`,
+/// sin `app.current_org_id`) — este último es el que usa `firmar()` en
+/// `indicaciones-medicas.router.ts`. Ver `public.current_org_id_or_ece_context()`.
+model CareTask {
+  id               String    @id @default(uuid()) @db.Uuid
+  organizationId   String    @db.Uuid
+  establishmentId  String    @db.Uuid
+  serviceUnitId    String?   @db.Uuid
+  /// Código de rol destino (NURSE|LAB_TECH|RAD_TECH|...) — catálogo en aplicación, no FK.
+  assignedRoleCode String    @db.VarChar(40)
+  assigneeId       String?   @db.Uuid /// usuario específico opcional (sin FK — ver nota de FKs en sql/209).
+  patientId        String?   @db.Uuid
+  encounterId      String?   @db.Uuid
+  patientAccountId String?   @db.Uuid
+  /// Origen polimórfico: INDICACION_ITEM|LAB_ORDER|IMAGING_ORDER|TRANSFER|MANUAL.
+  sourceType       String    @db.VarChar(30)
+  /// PK de la fila origen en la tabla que corresponda a `sourceType` (sin FK — polimórfico).
+  sourceId         String    @db.Uuid
+  /// Categoría de tarea dentro del área (p. ej. SIGNOS_VITALES, MEDICAMENTO, CUIDADO_ENF).
+  taskType         String    @db.VarChar(60)
+  title            String    @db.VarChar(200)
+  description      String?
+  priority         String    @default("NORMAL") @db.VarChar(10) /// LOW|NORMAL|HIGH|CRITICAL.
+  slaMinutes       Int?
+  dueAt            DateTime? @db.Timestamptz()
+  status           String    @default("PENDIENTE") @db.VarChar(20) /// PENDIENTE|EN_PROCESO|CUMPLIDA|CANCELADA.
+  completedById    String?   @db.Uuid
+  completedAt      DateTime? @db.Timestamptz()
+  cancelReason     String?   @db.VarChar(300)
+  createdBy        String    @db.Uuid
+  createdAt        DateTime  @default(now()) @db.Timestamptz()
+  updatedAt        DateTime  @updatedAt @db.Timestamptz()
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment  Establishment   @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  serviceUnit    ServiceUnit?    @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  patient        Patient?        @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  encounter      Encounter?      @relation(fields: [encounterId], references: [id], onDelete: SetNull)
+  patientAccount PatientAccount? @relation(fields: [patientAccountId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, serviceUnitId, status])
+  @@index([organizationId, assignedRoleCode, status])
+  @@index([sourceType, sourceId])
+  @@index([encounterId])
+  @@index([dueAt])
   @@schema("public")
 }
 

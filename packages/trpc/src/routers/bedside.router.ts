@@ -661,20 +661,26 @@ const shiftQueueRouter = router({
       const servicioId = scheduleRows[0]?.servicio_id ?? null;
 
       // Indicaciones activas — indicaciones_medicas no tiene patient_id/organization_id/estado.
-      // Obtenemos paciente vía instancia_id → documento_instancia.paciente_id.
+      // Obtenemos paciente vía episodio_id → episodio_atencion.paciente_id (NOT NULL,
+      // siempre escrito por create()). Antes se unía documento_instancia vía
+      // instancia_id, pero create() nunca escribe esa columna (queda NULL) y el
+      // INNER JOIN eliminaba toda fila — cero filas siempre (CC-0026 Ola 0).
       // Filtramos por organización vía episodio_hospitalario.servicio_id cuando hay schedule.
       // fecha_hora de indicaciones_medicas actúa como hora_programada.
       // gtin proviene de indicacion_item.tipo = 'MEDICAMENTO' primer item.
+      // estado_registro/vigencia son ejes ortogonales (chk_ind_estado_registro
+      // SQL 98 = {borrador,firmado,validado}; 'vigente' no existe ahí y nunca
+      // matcheaba). Ejecutable por enfermería = firmado o validado + vigencia ACTIVA.
       const indicRows = await ctx.prisma.$queryRawUnsafe<IndicacionPendienteRow[]>(
         `SELECT
            im.id                   AS indicacion_id,
-           di.paciente_id          AS patient_id,
+           ea.paciente_id          AS patient_id,
            g.codigo                AS patient_gsrn,
            ii.descripcion          AS gtin,
            im.fecha_hora           AS hora_programada
          FROM ece.indicaciones_medicas im
-         JOIN ece.documento_instancia di ON di.id = im.instancia_id
-         LEFT JOIN ece.gs1_gsrn g ON g.referencia_id = di.paciente_id
+         JOIN ece.episodio_atencion ea ON ea.id = im.episodio_id
+         LEFT JOIN ece.gs1_gsrn g ON g.referencia_id = ea.paciente_id
                                   AND g.tipo = 'paciente' AND g.activo = true
          LEFT JOIN ece.indicacion_item ii
                ON ii.indicacion_id = im.id AND ii.tipo = 'MEDICAMENTO'
@@ -682,7 +688,8 @@ const shiftQueueRouter = router({
            ? `JOIN ece.episodio_hospitalario eh ON eh.episodio_id = im.episodio_id
               AND eh.servicio_id = $1::uuid`
            : ""}
-         WHERE im.estado_registro = 'vigente'
+         WHERE im.estado_registro IN ('firmado', 'validado')
+           AND im.vigencia = 'ACTIVA'
          ORDER BY im.fecha_hora ASC NULLS LAST
          LIMIT 100`,
         ...(servicioId ? [servicioId] : []),
