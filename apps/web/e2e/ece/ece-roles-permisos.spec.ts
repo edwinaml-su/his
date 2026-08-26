@@ -26,6 +26,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 // ---------------------------------------------------------------------------
 // Guard
@@ -41,13 +42,6 @@ const SEED_EPISODIO_ID = "00000000-0000-0000-0000-000000000001";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function probeRoute(page: Page, path: string): Promise<number> {
-  const response = await page.goto(path);
-  const status = response?.status() ?? 0;
-  test.info().annotations.push({ type: "http-probe", description: `GET ${path} → ${status}` });
-  return status;
-}
 
 /**
  * Navega a una ruta HC (por episodio o lista) y retorna si la página cargó.

@@ -29,6 +29,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -42,17 +43,6 @@ let episodioId = "00000000-0000-0000-0000-000000000099";
 // ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
-
-/**
- * Navega a path. Devuelve true si el status < 500.
- * Si 404 anota y retorna false; el llamador decide si continúa.
- */
-async function probeRoute(page: Page, path: string): Promise<boolean> {
-  const res = await page.goto(path);
-  const status = res?.status() ?? 0;
-  test.info().annotations.push({ type: "route-probe", description: `GET ${path} → ${status}` });
-  return status < 500;
-}
 
 /** Intenta firmar si el botón está disponible. Anota el resultado. */
 async function firmarDocumento(page: Page, label = "firmar"): Promise<void> {
@@ -96,7 +86,7 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
   test("1. MT crea orden de ingreso y la firma", async ({ page }) => {
     await login(page, "physician");
 
-    const ok = await probeRoute(page, "/ece/orden-ingreso/nueva");
+    const ok = await probeRoute(page, "/ece/orden-ingreso/nuevo");
     if (!ok) return;
 
     await expect(page).toHaveURL(/orden-ingreso/);
@@ -182,7 +172,7 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
   test("4. ENF registra valoración inicial enfermería y firma", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/valoracion-enfermeria/nueva");
+    const ok = await probeRoute(page, "/ece/valoracion-inicial-enfermeria/nueva");
     if (!ok) return;
 
     const episodioInput = page.getByLabel(/episodio|paciente/i).first();
@@ -333,7 +323,7 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
   test("8. ENF registra administraciones MAR", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/mar");
+    const ok = await probeRoute(page, "/emar");
     if (!ok) return;
 
     // Filtrar por episodio
