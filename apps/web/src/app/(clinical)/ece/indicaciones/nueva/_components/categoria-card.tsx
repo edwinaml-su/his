@@ -23,7 +23,11 @@ export function CategoriaGrid({
   onQuitar: (key: CategoriaKey, id: string) => void;
 }) {
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    // Una sola columna apilada — el mockup NO define grid para #cats
+    // (.catcard es block + margin-bottom): el orden vertical mov → dieta →
+    // cuidados → med → lab → gab → proc → inter es secuencia clínica, no
+    // decoración (corrección UAT Edwin 2026-08-26).
+    <div className="grid gap-3">
       {CATEGORIAS.map((cat) => {
         const lineas = entradas[cat.key] ?? [];
         const full = !cat.freeBox && lineas.length >= MAX_LINES;
