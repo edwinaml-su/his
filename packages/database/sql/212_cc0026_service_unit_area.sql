@@ -48,6 +48,13 @@ COMMENT ON COLUMN public."ServiceUnit"."areaType" IS
 -- 2. Backfill por código del seed actual (idempotente — solo toca filas cuyo
 --    areaType siga NULL, así no pisa overrides manuales posteriores).
 -- -----------------------------------------------------------------------------
+-- ⚠️ APLICADO A PROD 2026-08-26 en DOS migraciones (212a DDL / 212b DML):
+-- CREATE INDEX no puede correr en la misma tx que UPDATE/INSERT sobre la
+-- tabla (los triggers de auditoría dejan pending trigger events → error
+-- 55006). Por eso el índice va ANTES del DML en este archivo. Misma clase
+-- de lección que ALTER TYPE + CREATE INDEX (30a/30b).
+CREATE INDEX IF NOT EXISTS idx_serviceunit_area_type ON public."ServiceUnit" ("establishmentId", "areaType") WHERE "areaType" IS NOT NULL;
+
 UPDATE public."ServiceUnit" SET "areaType" = 'QUIROFANO'       WHERE code = 'QX'     AND "areaType" IS NULL;
 UPDATE public."ServiceUnit" SET "areaType" = 'LABORATORIO'     WHERE code = 'LAB'    AND "areaType" IS NULL;
 UPDATE public."ServiceUnit" SET "areaType" = 'IMAGENES'        WHERE code = 'RX'     AND "areaType" IS NULL;
@@ -82,7 +89,7 @@ WHERE e.active = true
     WHERE su."establishmentId" = e.id AND su.code = 'MAX_URG'
   );
 
-CREATE INDEX IF NOT EXISTS idx_serviceunit_area_type ON public."ServiceUnit" ("establishmentId", "areaType") WHERE "areaType" IS NOT NULL;
+
 
 -- -----------------------------------------------------------------------------
 -- 4. Verificación
