@@ -97,7 +97,9 @@ export function AppShell({
           />
 
           <SidebarInset>
-            <header className="flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
+            {/* sticky: PatientContextBar (sticky top-14) asume este header visible
+                al scrollear — sin esto quedaba un hueco de 3.5rem sobre la barra. */}
+            <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background px-2 shadow-sm sm:px-4">
               {/* SidebarTrigger cubre desktop (colapsa panel) y mobile (abre Sheet).
                   Shadcn Sidebar detecta breakpoint internamente via useIsMobile. */}
               <SidebarTrigger aria-label="Mostrar u ocultar menú" />

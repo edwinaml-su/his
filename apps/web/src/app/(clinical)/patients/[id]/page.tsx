@@ -16,7 +16,6 @@ import {
 } from "@his/ui/components/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
-import { PatientShellBar } from "@/components/patient-shell-bar";
 
 const dateTimeFmt = new Intl.DateTimeFormat("es-SV", {
   day: "2-digit",
@@ -55,7 +54,6 @@ export default function PatientDetailPage() {
 
   return (
     <div className="space-y-4">
-      <PatientShellBar patientId={params.id} />
       <div>
         <h1 className="text-2xl font-bold">
           {p.lastName}
