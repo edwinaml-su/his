@@ -54,7 +54,9 @@ async function loginAs(
   // ?skipIntro=1 salta la animación AxisMed (CC-0010).
   await page.goto("/login?skipIntro=1");
   await page.getByLabel(/correo|email/i).fill(email);
-  await page.getByLabel(/contraseña|password/i).fill(password);
+  // getByLabel(/contraseña/i) también matchea el botón "Ver contraseña"
+  // (mismo aria-label) — getByRole("textbox", ...) sólo matchea el <input>.
+  await page.getByRole("textbox", { name: /contraseña|password/i }).fill(password);
   await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
   await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|ece|patients|login)/, { timeout: 12_000 });

@@ -7,12 +7,12 @@
  * NTEC Art. 32.
  *
  * Casos:
- *   COMITE-01: Página /admin/ece/comite carga con tabla de minutas
+ *   COMITE-01: Página /ece/comite carga con tabla de minutas
  *   COMITE-02: Botón "Nueva minuta" muestra el formulario
  *   COMITE-03: Formulario con datos válidos crea una minuta
  *   COMITE-04: Minuta en borrador muestra botón "Firmar"
  *   COMITE-05: Minuta firmada muestra badge "Firmada" y no tiene botón Firmar
- *   COMITE-06: Dashboard /admin/ece/calidad-documental carga con KPIs
+ *   COMITE-06: Dashboard /ece/calidad-documental carga con KPIs
  *   COMITE-07: Panel de exportación genera reporte al seleccionar período
  *
  * Prerrequisito de seed:
@@ -23,8 +23,8 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-const ROUTE_COMITE = "/admin/ece/comite";
-const ROUTE_CALIDAD = "/admin/ece/calidad-documental";
+const ROUTE_COMITE = "/ece/comite";
+const ROUTE_CALIDAD = "/ece/calidad-documental";
 
 // ---------------------------------------------------------------------------
 // Comité — minutas

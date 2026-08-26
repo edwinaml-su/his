@@ -3,7 +3,7 @@
  * US.F2.7.16 — Vista para DIR.
  *
  * Cubre:
- *   ADSH-01: Solo DIR puede acceder a /admin/audit-dashboard.
+ *   ADSH-01: Solo DIR puede acceder a /audit-dashboard.
  *   ADSH-02: KPIs "Total Accesos", "Outliers Detectados", "Accesos Sensibles" visibles.
  *   ADSH-03: Tabla "Top 10 Usuarios" renderiza encabezados.
  *   ADSH-04: Tabla "Accesos Outlier" renderiza aunque esté vacía.
@@ -14,7 +14,7 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-const ROUTE = "/admin/audit-dashboard";
+const ROUTE = "/audit-dashboard";
 
 test.describe("ADSH-01: control de acceso", () => {
   test("usuario sin rol DIR no accede a audit-dashboard", async ({ page }) => {

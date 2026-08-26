@@ -245,8 +245,8 @@ export function CalcWidget({ pacienteId }: { pacienteId?: string }) {
         <div
           ref={resultsRef}
           className={cx(styles.results, active && styles.show, below && styles.below)}
-          role="listbox"
-          aria-label="Calculadoras"
+          role={flat.length > 0 ? "listbox" : undefined}
+          aria-label={flat.length > 0 ? "Calculadoras" : undefined}
         >
           {flat.length === 0 ? (
             <div className={styles.resEmpty}>Sin resultados. Prueba con otro nombre o código.</div>
