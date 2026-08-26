@@ -2,7 +2,17 @@
  * Consumer — 'ece.indicaciones.firmadas' → `public."CareTask"` (CC-0026 D2).
  *
  * Al firmar una indicación médica, cada ítem genera UNA tarea de seguimiento
- * asignada a enfermería en la unidad del episodio (REQ CC-0026, decisión D2).
+ * asignada a enfermería en la unidad del episodio (REQ CC-0026, decisión D2)
+ * — CON UNA EXCEPCIÓN corregida por Edwin 2026-08-26 tras UAT: los ítems
+ * ESTUDIO cuyo `detalle.categoriaUI` sea LABORATORIO o GABINETE NO generan
+ * tarea de enfermería. Esos ítems generan en su lugar la orden real
+ * (LabOrder/ImagingRequest+ImagingOrder) y una `CareTask` para el área
+ * ejecutora — ver `order-consumer.ts` y su `categoriaUIDeItem` (mismo
+ * discriminador, importado aquí para que los dos consumers nunca diverjan
+ * sobre qué ítems son "estudio real"). "Los estudios no se hacen para
+ * enfermería: pueden ayudar a sacar muestras pero no generan los resultados"
+ * (REQ CC-0026, decisión D2).
+ *
  * Patrón gemelo de `mar-consumer.ts` (misma transacción `withEceContext` que
  * `firmar()`, mismo contrato de fallo: NO atrapa excepciones — si el INSERT
  * de `CareTask` falla, la excepción propaga y la transacción completa de
@@ -68,12 +78,19 @@
  *     depende de la misma cadena bloqueada que serviceUnitId (vía Encounter).
  */
 import type { PrismaClient } from "@his/database";
+import { categoriaUIDeItem } from "./order-consumer";
 
 export interface CareTaskIndicacionItem {
   id: string;
   /** Valor crudo de `ece.indicacion_item.tipo` (CHECK `chk_ind_item_tipo`, sql/202). */
   tipo: string;
   descripcion: string;
+  /**
+   * CC-0026 — corrección de Edwin 2026-08-26: necesario para excluir de
+   * enfermería los ítems ESTUDIO que `order-consumer.ts` materializa como
+   * LabOrder/ImagingRequest real (ver `categoriaUIDeItem` más abajo).
+   */
+  detalle?: Record<string, unknown> | null;
 }
 
 export interface MaterializeCareTasksParams {
@@ -170,6 +187,12 @@ export async function materializeCareTasksFromIndicacion(
 
   let tasksCreated = 0;
   for (const item of items) {
+    // CC-0026 — ítems lab/gabinete no generan tarea de enfermería; los
+    // materializa `order-consumer.ts` con su propia CareTask de área.
+    if (categoriaUIDeItem(item.tipo, item.detalle) !== null) {
+      continue;
+    }
+
     await tx.careTask.create({
       data: {
         organizationId,

@@ -241,9 +241,9 @@ export default function NuevaIndicacionPage(): React.ReactElement {
               onSuccess: (res) => {
                 setToast({
                   title: "Indicación firmada",
-                  description: `${res.tasksCreated} tarea(s) de seguimiento generada(s) para enfermería.${
-                    res.plazoExcedido ? " ⚠ Se excedió el plazo de 32h desde la última firma." : ""
-                  }`,
+                  // CC-0026 D2 (corrección Edwin 2026-08-26) — lab/gabinete generan
+                  // orden real en vez de tarea de enfermería; el toast informa las tres cosas.
+                  description: `${res.tasksCreated} tarea(s) de enfermería · ${res.labOrdersCreated} orden(es) de laboratorio · ${res.imagingRequestsCreated} solicitud(es) de imágenes generada(s).${res.ordenesOmitidas.length > 0 ? ` ⚠ ${res.ordenesOmitidas.length} ítem(s) no generaron orden real: ${res.ordenesOmitidas.map((o) => o.motivo).join(" ")}` : ""}${res.plazoExcedido ? " ⚠ Se excedió el plazo de 32h desde la última firma." : ""}`,
                 });
                 router.push("/ece/indicaciones");
               },

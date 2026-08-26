@@ -78,6 +78,7 @@ import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
 import { materializeCareTasksFromIndicacion } from "../../ece/care-task-consumer";
+import { materializeOrdenesFromIndicacion } from "../../ece/order-consumer";
 import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
@@ -726,12 +727,14 @@ export const indicacionesMedicasRouter = router({
 
           // JCI IPSG.2 ME 3 — escanear texto libre de items (warning, no bloquea)
           // ece.indicacion_item no tiene columna 'notas'; solo descripcion es texto libre.
-          // Se piden id+tipo en la misma query porque CC-0026 los reusa para
-          // materializar CareTask por ítem (ver más abajo).
+          // Se piden id+tipo+detalle en la misma query porque CC-0026 los reusa
+          // para materializar CareTask/LabOrder/ImagingRequest por ítem (ver
+          // más abajo) — `detalle` es el payload estructurado del CPOE
+          // (ESP-MOCKUP-0026) que discrimina lab/gabinete de los demás tipos.
           const items = await tx.$queryRaw<
-            { id: string; tipo: string; descripcion: string }[]
+            { id: string; tipo: string; descripcion: string; detalle: Record<string, unknown> | null }[]
           >`
-            SELECT id::text, tipo, descripcion
+            SELECT id::text, tipo, descripcion, detalle
             FROM ece.indicacion_item
             WHERE indicacion_id = ${input.id}::uuid
           `;
@@ -818,6 +821,34 @@ export const indicacionesMedicasRouter = router({
             });
           }
 
+          // CC-0026 D2 (corrección Edwin 2026-08-26) — ítems ESTUDIO de
+          // laboratorio/gabinete generan la orden REAL (LabOrder/ImagingRequest+
+          // ImagingOrder) + CareTask del área ejecutora, en la MISMA transacción.
+          // Mismo contrato de fallo que farmacia/enfermería arriba: si falla,
+          // la firma completa revierte.
+          let ordenesResult: {
+            labOrdersCreated: number;
+            imagingRequestsCreated: number;
+            ordenesOmitidas: { descripcion: string; motivo: string }[];
+          };
+          try {
+            ordenesResult = await materializeOrdenesFromIndicacion(tx, {
+              episodioId: indicacion.episodio_id,
+              establishmentId: ctx.tenant.establishmentId!,
+              userId: ctx.user.id,
+              items,
+            });
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló la creación de la orden " +
+                "real de laboratorio/imágenes. La firma no se aplicó — reintente; " +
+                "si persiste, contacte soporte.",
+              cause: err,
+            });
+          }
+
           return {
             id: input.id,
             estadoRegistro: "firmado" as const,
@@ -826,8 +857,18 @@ export const indicacionesMedicasRouter = router({
             horasDesdeUltimaFirma,
             // CC-0026 Ola 2 — la UI lo muestra en el toast de confirmación.
             tasksCreated: careTaskResult.tasksCreated,
+            // CC-0026 D2 (corrección Edwin 2026-08-26) — lab/gabinete generan
+            // orden real en vez de tarea de enfermería.
+            labOrdersCreated: ordenesResult.labOrdersCreated,
+            imagingRequestsCreated: ordenesResult.imagingRequestsCreated,
+            ordenesOmitidas: ordenesResult.ordenesOmitidas,
           };
         },
+        // CC-0026 — escritura cross-espacio: LabOrder/ImagingRequest/ImagingOrder
+        // viven en `public.*` con RLS de tenant clásico (app.current_org_id),
+        // ausente bajo `withEceContext` por defecto. Ver docstring de
+        // `EceContextOptions.tenantContext` en rls-context.ts.
+        { tenantContext: { userId: ctx.user.id, orgId: ctx.tenant.organizationId } },
       );
     }),
 

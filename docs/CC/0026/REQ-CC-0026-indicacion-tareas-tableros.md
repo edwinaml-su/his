@@ -43,13 +43,17 @@ INDICACION_ITEM|LAB_ORDER|IMAGING_ORDER|TRANSFER), estados
 `PENDIENTE→EN_PROCESO→CUMPLIDA|CANCELADA`, `dueAt` desde SLA, RLS por org.
 La bandeja `/tareas` (workflow-inbox, 100% derivada) NO se toca en este CC.
 
-**D2 — Ruteo al firmar** (consumer síncrono en `firmar()`, patrón
-`mar-consumer.ts`): toda categoría → tarea NURSE en la unidad del episodio;
-lab → crea `LabOrder` real (LIS) + tarea área LAB; gab → `ImagingRequest`
-real + tarea área RX; subsección signos vitales → tarea que abre
-`SignosVitalesModal` (CC-0012) desde el tablero. Medicamentos → catálogo
-`Drug` del HIS (NO el MED_DATA embebido) ⇒ captura `drugId` estructurado
-(cierra parcialmente R06 en el punto de prescripción).
+**D2 — Ruteo al firmar** (consumer síncrono en firmar(), patrón
+mar-consumer.ts) — CORREGIDO por Edwin 2026-08-26 tras UAT: mov/dieta/
+cuidados/med/proc/inter → tarea NURSE en la unidad del episodio; **lab →
+crea LabOrder REAL (LIS, estado ORDERED) + CareTask al área LABORATORIO
+(LAB_TECHNICIAN) — SIN tarea de enfermería**; **gab → ImagingRequest +
+ImagingOrder REALES + CareTask al área IMAGENES (RAD_TECHNICIAN) — SIN
+tarea de enfermería**. Los estudios no se hacen para enfermería: pueden
+ayudar a sacar muestras pero no generan los resultados. Subsección signos
+vitales → tarea que abre SignosVitalesModal (CC-0012) desde el tablero.
+Medicamentos → catálogo Drug del HIS ⇒ drugId estructurado (cierra
+parcialmente R06).
 
 **D3 — Tableros.** `/tableros/[unidad]` genérico sobre `ServiceUnit` +
 columna nueva `areaType` + seed de SALA_ESPERA y MAX_URG (hoy inexistentes,
