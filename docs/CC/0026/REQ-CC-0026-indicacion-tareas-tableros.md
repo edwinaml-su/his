@@ -28,7 +28,10 @@ dieta · cuidados (20 subsecciones CUI_SECTIONS, regla abierta=registra /
 contraída=no / todas resueltas para agregar; O₂ Venturi flujo↔FiO₂; VMNI/VMI) ·
 med (catálogo + cargos a cuenta) · lab (prioridad Rutina/Urgente/STAT + muestra) ·
 gab (modalidad + región + prioridad) · proc (consentimiento) · inter
-(especialidad). Firma: INICIAL → SUBSECUENTE con deadline 24h (chip countdown,
+(especialidad). Firma: INICIAL → SUBSECUENTE (subtipos: Indicación diaria | Indicación
+rápida) con plazo máximo de 32h entre indicaciones firmadas — REGLA DE
+BACKEND según el propio mockup: timestamp de última firma en BD y rechazo
+server-side de la mutación que incumpla; la UI solo informa (chip countdown,
 warn <6h).
 
 ## Decisiones de diseño aprobadas
