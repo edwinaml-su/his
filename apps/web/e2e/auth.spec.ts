@@ -22,7 +22,12 @@ test.describe("@smoke - Autenticación", () => {
     // ?skipIntro=1 salta la animación AxisMed (CC-0010).
     await page.goto("/login?skipIntro=1");
     await page.getByLabel(/correo|email/i).fill(TEST_CREDENTIALS.admin.email);
-    await page.getByLabel(/contraseña|password/i).fill("contraseña-invalida");
+    // getByLabel(/contraseña/i) también matchea el botón de mostrar/ocultar
+    // (aria-label="Ver contraseña" — correcto en sí mismo, pero contiene la
+    // misma palabra). Mismo defecto documentado en _helpers/auth.ts: no es
+    // un bug de la página, getByRole("textbox", ...) es la forma robusta de
+    // pedir "el campo", no "cualquier cosa que mencione la palabra".
+    await page.getByRole("textbox", { name: /contraseña|password/i }).fill("contraseña-invalida");
     await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
 
     // El error debe ser anunciado vía role=alert (a11y).
