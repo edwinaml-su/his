@@ -29,6 +29,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login, TEST_CREDENTIALS } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 // ---------------------------------------------------------------------------
 // Guard — requiere BD real Supabase
@@ -40,17 +41,6 @@ const SKIP_SUITE = !HAS_REAL_SUPABASE || process.env.SKIP_CROSS_SPRINT === "1";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Navega a `path` y devuelve HTTP status. Anota en el reporte. */
-async function probeRoute(page: Page, path: string): Promise<number> {
-  const response = await page.goto(path);
-  const status = response?.status() ?? 0;
-  test.info().annotations.push({
-    type: "route-probe",
-    description: `GET ${path} → HTTP ${status}`,
-  });
-  return status;
-}
 
 /** Login reutilizando helper central. */
 async function loginAs(page: Page, role: keyof typeof TEST_CREDENTIALS) {

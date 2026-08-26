@@ -10,7 +10,7 @@
  *
  * Guard: HAS_REAL_SUPABASE=1 requerido para ejecutar.
  * Cleanup tag: @obstetricia-e2e anotado para inspección manual.
- * Stub-tolerant: rutas con 404 se anotan y el test continúa sin fallar.
+ * Rutas 404 fallan explícitamente (ver e2e/_helpers/route-probe.ts).
  *
  * Usuarios (sembrados por seed-test-users.mjs):
  *   qa.physician@his.test → rol MC (médico de guardia)
@@ -20,6 +20,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -42,22 +43,6 @@ const TOMAS_PARTOGRAMA = [
 // ---------------------------------------------------------------------------
 // Utilidades internas
 // ---------------------------------------------------------------------------
-
-async function probeRoute(page: Page, path: string): Promise<boolean> {
-  const res = await page.goto(path);
-  const status = res?.status() ?? 0;
-  test.info().annotations.push({
-    type: "route-probe",
-    description: `GET ${path} → ${status}`,
-  });
-  if (status === 404) {
-    test.info().annotations.push({
-      type: "stub-404",
-      description: `Ruta ${path} no implementada — step skipped.`,
-    });
-  }
-  return status < 500;
-}
 
 async function firmarDocumento(page: Page, label = "firmar"): Promise<void> {
   const btn = page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }).first();

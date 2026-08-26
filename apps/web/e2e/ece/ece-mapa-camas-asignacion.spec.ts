@@ -10,28 +10,18 @@
  *   Verifica cama queda en estado limpieza
  *
  * Guard: HAS_REAL_SUPABASE=1 requerido.
- * Stub-tolerant: rutas 404 anotadas, test continúa.
+ * Rutas 404 fallan explícitamente (ver e2e/_helpers/route-probe.ts).
  */
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
 // Cama de referencia para el test (se elige la primera disponible en el mapa)
 let camaId   = "";
 let camaNro  = "";
-
-// ---------------------------------------------------------------------------
-// Utilidades
-// ---------------------------------------------------------------------------
-
-async function probeRoute(page: Page, path: string): Promise<boolean> {
-  const res = await page.goto(path);
-  const status = res?.status() ?? 0;
-  test.info().annotations.push({ type: "route-probe", description: `GET ${path} → ${status}` });
-  return status < 500;
-}
 
 // ---------------------------------------------------------------------------
 // Suite

@@ -29,6 +29,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 // ---------------------------------------------------------------------------
 // Guard: saltar en CI ephemeral (dummy Supabase URL)
@@ -56,17 +57,6 @@ async function loginEce(
   role: "nurse" | "physician" | "admin",
 ): Promise<void> {
   await login(page, role);
-}
-
-/**
- * Navega a `path` y devuelve si la ruta responde con HTTP < 500.
- * Anota el status en el reporte Playwright.
- */
-async function probeRoute(page: Page, path: string): Promise<number> {
-  const response = await page.goto(path);
-  const status = response?.status() ?? 0;
-  test.info().annotations.push({ type: "http-probe", description: `GET ${path} → ${status}` });
-  return status;
 }
 
 /**

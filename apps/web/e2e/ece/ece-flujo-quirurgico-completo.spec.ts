@@ -12,7 +12,7 @@
  *
  * Guard: HAS_REAL_SUPABASE=1 requerido para ejecutar.
  * Cleanup tag: @cirugia-e2e anotado para inspección manual.
- * Stub-tolerant: rutas con 404 se anotan y el test continúa sin fallar.
+ * Rutas 404 fallan explícitamente (ver e2e/_helpers/route-probe.ts).
  *
  * Usuarios (sembrados por seed-test-users.mjs):
  *   qa.physician@his.test → roles MC, anestesiólogo
@@ -22,6 +22,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -32,26 +33,6 @@ let episodioId = "00000000-0000-0000-0000-000000000098";
 // ---------------------------------------------------------------------------
 // Utilidades internas
 // ---------------------------------------------------------------------------
-
-/**
- * Navega a path. Devuelve true si status < 500.
- * Si 404 → anota "stub no desplegado" y retorna false; el llamador debe hacer return.
- */
-async function probeRoute(page: Page, path: string): Promise<boolean> {
-  const res = await page.goto(path);
-  const status = res?.status() ?? 0;
-  test.info().annotations.push({
-    type: "route-probe",
-    description: `GET ${path} → ${status}`,
-  });
-  if (status === 404) {
-    test.info().annotations.push({
-      type: "stub-404",
-      description: `Ruta ${path} no implementada — step skipped.`,
-    });
-  }
-  return status < 500;
-}
 
 /** Intenta firmar si el botón está disponible. Anota si no lo está. */
 async function firmarDocumento(page: Page, label = "firmar"): Promise<void> {
@@ -110,7 +91,7 @@ test.describe.serial("ECE — Ruta quirúrgica completa (happy path)", () => {
   test("1. MC programa cirugía (tipo + especialidad + fecha)", async ({ page }) => {
     await login(page, "physician");
 
-    const ok = await probeRoute(page, "/ece/cirugia/programar");
+    const ok = await probeRoute(page, "/ece/quirofano/programacion/nueva");
     if (!ok) return;
 
     // Tipo de cirugía
