@@ -21,7 +21,7 @@ import { login } from "../_helpers/auth";
 const PAGES: Array<{ name: string; path: string; role?: "admin" | "triagist" | "nurse" }> = [
   { name: "Inicio (público)", path: "/", role: undefined },
   { name: "Login", path: "/login", role: undefined },
-  { name: "Admin dashboard", path: "/admin", role: "admin" },
+  { name: "Admin dashboard", path: "/dashboard", role: "admin" },
   { name: "Notificaciones", path: "/notifications", role: "admin" },
   { name: "Configuración notificaciones", path: "/settings/notifications", role: "admin" },
 ];

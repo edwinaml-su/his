@@ -15,7 +15,7 @@
  *   - Si no hay providers en el seed, los tests anotan y pasan sin bloquear.
  *   - La UI de agendamiento puede variar — los selectores son best-effort.
  *
- * Ruta esperada: /outpatient/appointments/new (o /appointments/new).
+ * Ruta esperada: /outpatient/new.
  */
 import { test, expect } from "@playwright/test";
 import { login } from "../_helpers/auth";
@@ -27,15 +27,9 @@ const TEST_SLOT_TIME = "09:00";
 
 /** Navega al formulario de nueva cita y retorna si la ruta existe (no 404). */
 async function goToNewAppointment(page: Parameters<typeof login>[0]): Promise<boolean> {
-  const routes = ["/outpatient/appointments/new", "/appointments/new", "/outpatient/new-appointment"];
-  for (const route of routes) {
-    const res = await page.goto(route);
-    const status = res?.status() ?? 0;
-    if (status !== 404) {
-      return true;
-    }
-  }
-  return false;
+  const res = await page.goto("/outpatient/new");
+  const status = res?.status() ?? 0;
+  return status !== 404;
 }
 
 test.describe("@smoke - Double-booking prevention (K-15)", () => {
@@ -53,7 +47,7 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
       test.info().annotations.push({
         type: "route-missing",
         description:
-          "Ninguna ruta de nueva cita encontrada (/outpatient/appointments/new, etc.). " +
+          "Ruta de nueva cita no encontrada (/outpatient/new). " +
           "DBK-01 no puede ejecutarse hasta que el módulo esté disponible.",
       });
       test.skip(true, "Módulo de agendamiento no disponible en esta build");
@@ -175,13 +169,9 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
   // -------------------------------------------------------------------------
   test("DBK-03: slot de cita cancelada puede re-agendarse", async ({ page }) => {
     // Verificar que la ruta de cancelación de citas existe.
-    const appointmentsRoute = "/outpatient/appointments";
-    const altRoute = "/appointments";
+    const appointmentsRoute = "/outpatient";
 
-    let listResponse = await page.goto(appointmentsRoute);
-    if ((listResponse?.status() ?? 404) === 404) {
-      listResponse = await page.goto(altRoute);
-    }
+    const listResponse = await page.goto(appointmentsRoute);
 
     const status = listResponse?.status() ?? 0;
     test.info().annotations.push({

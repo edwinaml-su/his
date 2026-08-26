@@ -19,6 +19,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { probeRoute } from "../_helpers/route-probe";
 
 const SKIP = process.env.SKIP_E2E_ECE === "1";
 
@@ -55,20 +56,6 @@ async function maybeSelectSede(page: Page): Promise<void> {
     if (value) await sedeSelect.selectOption(value);
   }
   await page.getByRole("button", { name: /ingresar a la sede|enter site/i }).click();
-}
-
-/**
- * Navega a una ruta y devuelve el HTTP status.
- * Permite detectar 403/404 vs 200 vs 5xx.
- */
-async function probeRoute(page: Page, path: string): Promise<number> {
-  const response = await page.goto(path);
-  const status = response?.status() ?? 0;
-  test.info().annotations.push({
-    type: "http-probe",
-    description: `GET ${path} → ${status}`,
-  });
-  return status;
 }
 
 // ---------------------------------------------------------------------------
