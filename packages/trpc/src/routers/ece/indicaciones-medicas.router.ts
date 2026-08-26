@@ -89,13 +89,22 @@ import {
 // ─── Input schemas (inline — evita problemas de resolución en tests de worktree)
 // La copia canónica para el cliente vive en @his/contracts/src/schemas/ece-indicaciones.ts
 
-/** Espejo de chk_ind_item_tipo (SQL 202). Ver __tests__/vocabulario-bd-drift.test.ts. */
+/**
+ * Espejo de chk_ind_item_tipo (SQL 202 + 211). Ver __tests__/vocabulario-bd-drift.test.ts.
+ * MOVIMIENTO/INTERCONSULTA — nuevos en 211 (categorías `mov`/`inter` del CPOE,
+ * ESP-MOCKUP-0026, sin tipo equivalente hasta ahora). REPOSO ya existía en el
+ * CHECK desde el DDL original pero no estaba expuesto aquí (delta documentado
+ * en el test de drift); se expone ahora junto con el resto del cambio.
+ */
 export const tipoIndicacionEnum = z.enum([
   "MEDICAMENTO",
   "PROCEDIMIENTO",
   "DIETA",
   "CUIDADO_GENERAL",
   "ESTUDIO",
+  "REPOSO",
+  "MOVIMIENTO",
+  "INTERCONSULTA",
 ]);
 
 const viaAdminEnum = z.enum([
@@ -150,6 +159,19 @@ const indicacionItemSchema = z
     via: viaAdminEnum.optional(),
     frecuencia: frecuenciaEnum.optional(),
     duracion: z.string().trim().max(100).optional(),
+    /**
+     * CC-0026 Ola 2 (SQL 211) — FK a `public."Drug"` cuando tipo=MEDICAMENTO y
+     * el médico seleccionó un producto del catálogo real (no el MED_DATA del
+     * mockup). Opcional a propósito: no rompe callers viejos que solo mandan
+     * descripcion en texto libre.
+     */
+    drugId: z.string().uuid().optional(),
+    /**
+     * CC-0026 Ola 2 (SQL 211) — payload estructurado por categoría que arma
+     * cada modal del CPOE (ESP-MOCKUP-0026) además del texto de `descripcion`.
+     * Sin schema fijo: cada categoría define sus propias claves.
+     */
+    detalle: z.record(z.string(), z.unknown()).optional(),
     /**
      * JCI IPSG.2-H2 (US-21-D2): si la descripción contiene abreviaciones
      * prohibidas de severity="error", este flag debe ser true para pasar
@@ -265,6 +287,10 @@ export interface IndicacionRow {
   registrado_en: Date;
   estado_registro: string;
   digitado_retroactivamente: boolean;
+  /** CC-0026 (SQL 210). NULL para indicaciones no firmadas o creadas antes del cambio. */
+  tipo_indicacion: string | null;
+  /** CC-0026 (SQL 210). Base del chip countdown de 32h en la UI — ver `firmar()`. */
+  fecha_firma: Date | null;
 }
 
 export interface IndicacionItemRow {
@@ -276,6 +302,10 @@ export interface IndicacionItemRow {
   via: string | null;
   frecuencia: string | null;
   duracion: string | null;
+  /** CC-0026 Ola 2 (SQL 211). */
+  drug_id: string | null;
+  /** CC-0026 Ola 2 (SQL 211). */
+  detalle: Record<string, unknown> | null;
 }
 
 export interface AdminRow {
@@ -300,7 +330,8 @@ async function getIndicacionOrThrow(
       id::text, instancia_id::text, episodio_id::text,
       fecha_hora, version, vigencia,
       medico_prescriptor::text, transcripcion_enf::text,
-      registrado_en, estado_registro, digitado_retroactivamente
+      registrado_en, estado_registro, digitado_retroactivamente,
+      tipo_indicacion, fecha_firma
     FROM ece.indicaciones_medicas
     WHERE id = ${id}::uuid
     LIMIT 1
@@ -424,7 +455,8 @@ export const indicacionesMedicasRouter = router({
             id::text, instancia_id::text, episodio_id::text,
             fecha_hora, version, vigencia,
             medico_prescriptor::text, transcripcion_enf::text,
-            registrado_en, estado_registro, digitado_retroactivamente
+            registrado_en, estado_registro, digitado_retroactivamente,
+            tipo_indicacion, fecha_firma
           FROM ece.indicaciones_medicas
           WHERE episodio_id = ${input.episodioId}::uuid
             AND (${vigenciaFilter}::text IS NULL OR vigencia = ${vigenciaFilter})
@@ -458,7 +490,8 @@ export const indicacionesMedicasRouter = router({
         const items = await tx.$queryRaw<IndicacionItemRow[]>`
           SELECT
             id::text, indicacion_id::text,
-            tipo, descripcion, dosis, via, frecuencia, duracion
+            tipo, descripcion, dosis, via, frecuencia, duracion,
+            drug_id::text AS drug_id, detalle
           FROM ece.indicacion_item
           WHERE indicacion_id = ${input.id}::uuid
           ORDER BY id ASC
@@ -516,7 +549,8 @@ export const indicacionesMedicasRouter = router({
           for (const item of input.items) {
             await tx.$executeRaw`
               INSERT INTO ece.indicacion_item
-                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion)
+                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion,
+                 drug_id, detalle)
               VALUES (
                 ${indicacionId}::uuid,
                 ${item.tipo},
@@ -524,7 +558,9 @@ export const indicacionesMedicasRouter = router({
                 ${item.dosis ?? null},
                 ${item.via ?? null},
                 ${item.frecuencia ?? null},
-                ${item.duracion ?? null}
+                ${item.duracion ?? null},
+                ${item.drugId ?? null}::uuid,
+                ${item.detalle ? JSON.stringify(item.detalle) : null}::jsonb
               )
             `;
 
@@ -584,7 +620,8 @@ export const indicacionesMedicasRouter = router({
           for (const item of input.items) {
             await tx.$executeRaw`
               INSERT INTO ece.indicacion_item
-                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion)
+                (indicacion_id, tipo, descripcion, dosis, via, frecuencia, duracion,
+                 drug_id, detalle)
               VALUES (
                 ${input.id}::uuid,
                 ${item.tipo},
@@ -592,7 +629,9 @@ export const indicacionesMedicasRouter = router({
                 ${item.dosis ?? null},
                 ${item.via ?? null},
                 ${item.frecuencia ?? null},
-                ${item.duracion ?? null}
+                ${item.duracion ?? null},
+                ${item.drugId ?? null}::uuid,
+                ${item.detalle ? JSON.stringify(item.detalle) : null}::jsonb
               )
             `;
 
@@ -758,8 +797,9 @@ export const indicacionesMedicasRouter = router({
           // que la firma. Mismo contrato de fallo que farmacia (arriba): si
           // falla, la firma completa revierte — nunca queda "firmada" sin
           // que enfermería tenga la tarea de seguimiento.
+          let careTaskResult: { tasksCreated: number };
           try {
-            await materializeCareTasksFromIndicacion(tx, {
+            careTaskResult = await materializeCareTasksFromIndicacion(tx, {
               indicacionId: input.id,
               episodioId: indicacion.episodio_id,
               eceEstablecimientoId: establecimientoId,
@@ -784,6 +824,8 @@ export const indicacionesMedicasRouter = router({
             ipsg2Warnings: [...ipsg2.errors, ...ipsg2.warnings],
             plazoExcedido,
             horasDesdeUltimaFirma,
+            // CC-0026 Ola 2 — la UI lo muestra en el toast de confirmación.
+            tasksCreated: careTaskResult.tasksCreated,
           };
         },
       );
@@ -923,4 +965,29 @@ export const indicacionesMedicasRouter = router({
         },
       );
     }),
+
+  /**
+   * CC-0026 Ola 2 — nombre del establecimiento activo de la sesión, para que
+   * la categoría "Movimiento de paciente" del CPOE resuelva la sede (HE
+   * Masferrer / CM Beethoven / SAT Surf City) sin pedirla en el formulario
+   * ("se sobreentiende desde admisión", ESP-MOCKUP-0026 §mov). Lectura directa
+   * — `public."Establishment"` no está bajo `withEceContext`/`withTenantContext`
+   * aquí a propósito: el id ya viene resuelto server-side desde la cookie de
+   * sesión (`ctx.tenant.establishmentId`), no de un input del cliente, así
+   * que no hay riesgo de fuga cross-tenant por saltarse RLS para este único
+   * SELECT de solo nombre.
+   */
+  contextoSede: clinicalProcedure.query(async ({ ctx }) => {
+    if (!ctx.tenant.establishmentId) {
+      return { establishmentId: null, establishmentName: null };
+    }
+    const establishment = await ctx.prisma.establishment.findUnique({
+      where: { id: ctx.tenant.establishmentId },
+      select: { id: true, name: true },
+    });
+    return {
+      establishmentId: establishment?.id ?? null,
+      establishmentName: establishment?.name ?? null,
+    };
+  }),
 });

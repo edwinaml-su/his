@@ -17,12 +17,22 @@ import { z } from "zod";
 
 // ─── Enumerados ───────────────────────────────────────────────────────────────
 
+/**
+ * CC-0026 Ola 2 (SQL 211) — MOVIMIENTO/INTERCONSULTA nuevos (categorías `mov`/
+ * `inter` del CPOE, ESP-MOCKUP-0026); REPOSO ya existía en el CHECK de BD y se
+ * expone ahora. Debe coincidir exactamente con `tipoIndicacionEnum` de
+ * packages/trpc/src/routers/ece/indicaciones-medicas.router.ts — ver
+ * __tests__/vocabulario-bd-drift.test.ts.
+ */
 export const tipoIndicacionEnum = z.enum([
   "MEDICAMENTO",
   "PROCEDIMIENTO",
   "DIETA",
   "CUIDADO_GENERAL",
   "ESTUDIO",
+  "REPOSO",
+  "MOVIMIENTO",
+  "INTERCONSULTA",
 ]);
 
 export const vigenciaEnum = z.enum(["ACTIVA", "SUSPENDIDA", "CANCELADA"]);
@@ -76,6 +86,10 @@ export const indicacionItemSchema = z.object({
   via: viaAdminEnum.optional(),
   frecuencia: frecuenciaEnum.optional(),
   duracion: z.string().trim().max(100).optional(),
+  /** CC-0026 Ola 2 (SQL 211) — FK a Drug real cuando tipo=MEDICAMENTO. */
+  drugId: z.string().uuid().optional(),
+  /** CC-0026 Ola 2 (SQL 211) — detalle estructurado por categoría del CPOE. */
+  detalle: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type IndicacionItem = z.infer<typeof indicacionItemSchema>;
