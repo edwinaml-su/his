@@ -1077,6 +1077,10 @@ model ServiceUnit {
   /// GLN (GS1 Global Location Number) de la unidad — ADR 0019 D8. FK a ece.gs1_gln(codigo),
   /// sql/199_epcis_patient_movement.sql. Nullable mientras el catálogo no esté sembrado.
   glnCodigo       String?  @db.VarChar(13)
+  /// CC-0026 D3 — clasificación funcional para tableros /tableros/[unidad].
+  /// Vocabulario cerrado por CHECK (sql/212), no enum Postgres. Nullable:
+  /// unidades sin tablero propio quedan sin clasificar.
+  areaType        String?  @db.VarChar(20)
 
   organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   establishment Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Cascade)

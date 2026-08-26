@@ -322,16 +322,19 @@ async function main() {
 
   // ─────────────────────── ServiceUnits ────────────────────────────────────
   const services = [
-    { code: "CE", name: "Consulta Externa" },
-    { code: "ER", name: "Emergencia" },
-    { code: "HOSP", name: "Hospitalización" },
-    { code: "UCI", name: "Unidad de Cuidados Intensivos" },
-    { code: "UCIN", name: "UCI Neonatal" },
-    { code: "QX", name: "Quirófanos" },
-    { code: "PARTOS", name: "Sala de Partos" },
-    { code: "LAB", name: "Laboratorio Clínico" },
-    { code: "RX", name: "Imágenes / Radiología" },
-    { code: "FAR", name: "Farmacia" },
+    { code: "CE", name: "Consulta Externa", areaType: "CONSULTA" },
+    { code: "ER", name: "Emergencia", areaType: "EMERGENCIA" },
+    { code: "HOSP", name: "Hospitalización", areaType: "HOSPITALIZACION" },
+    { code: "UCI", name: "Unidad de Cuidados Intensivos", areaType: "UCI" },
+    { code: "UCIN", name: "UCI Neonatal", areaType: "UCIN" },
+    { code: "QX", name: "Quirófanos", areaType: "QUIROFANO" },
+    { code: "PARTOS", name: "Sala de Partos", areaType: "PARTOS" },
+    { code: "LAB", name: "Laboratorio Clínico", areaType: "LABORATORIO" },
+    { code: "RX", name: "Imágenes / Radiología", areaType: "IMAGENES" },
+    { code: "FAR", name: "Farmacia", areaType: "FARMACIA" },
+    // CC-0026 D3 — áreas nuevas para /tableros/[unidad] (sql/212).
+    { code: "SALA_ESP", name: "Sala de Espera", areaType: "SALA_ESPERA" },
+    { code: "MAX_URG", name: "Unidad de Máxima Urgencia", areaType: "MAX_URGENCIA" },
   ];
   for (const s of services) {
     await prisma.serviceUnit.upsert({
@@ -342,6 +345,7 @@ async function main() {
         establishmentId: estab.id,
         code: s.code,
         name: s.name,
+        areaType: s.areaType,
       },
     });
   }

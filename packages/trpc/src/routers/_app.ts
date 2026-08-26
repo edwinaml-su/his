@@ -230,6 +230,8 @@ import { calculadorasRouter } from "./calculadoras.router";
 // Workflow Inbox — bandeja BPM centralizada con routing RBAC (Ola 1: 29 fuentes)
 import { workflowInboxRouter } from "./workflow-inbox.router";
 import { careTaskRouter } from "./care-task.router";
+// CC-0026 D3 — Tableros de seguimiento por área/rol (/tableros/[unidad])
+import { careBoardRouter } from "./care-board.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -460,6 +462,8 @@ export const appRouter = router({
   calculadoras: calculadorasRouter,
   // CC-0026 — Tareas de tablero por área/rol (Ola 1b)
   careTask: careTaskRouter,
+  // CC-0026 D3 — Tableros de seguimiento por área/rol (Ola 3)
+  careBoard: careBoardRouter,
 });
 
 export type AppRouter = typeof appRouter;
