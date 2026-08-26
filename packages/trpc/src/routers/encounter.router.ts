@@ -342,6 +342,14 @@ export const encounterRouter = router({
         include: {
           patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
           serviceUnit: true,
+          // Ubicación para el segundo header del paciente (PatientContextBar):
+          // establecimiento + cama activa (asignación sin releasedAt).
+          establishment: { select: { id: true, name: true } },
+          bedAssignments: {
+            where: { releasedAt: null },
+            take: 1,
+            include: { bed: { select: { id: true, code: true } } },
+          },
         },
       }),
       ctx.prisma.encounter.count({ where }),

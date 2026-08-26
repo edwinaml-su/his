@@ -30,8 +30,25 @@ export function PatientShellBar({ patientId }: PatientShellBarProps) {
     { enabled: !!patientId },
   );
 
+  // Encuentro abierto más reciente → zona centro (ubicación) de la barra.
+  // Si el paciente no tiene servicio activo, location queda undefined y la
+  // barra oculta la zona centro (contrato CC-0008 §B).
+  const { data: openEncounters } = trpc.encounter.list.useQuery(
+    { patientId, status: "OPEN", page: 1, pageSize: 1 },
+    { enabled: !!patientId },
+  );
+
   // No renderizar durante carga ni si el paciente no existe
   if (isLoading || !patient) return null;
+
+  const activeEncounter = openEncounters?.items[0];
+  const location = activeEncounter
+    ? {
+        establishment: activeEncounter.establishment.name,
+        service: activeEncounter.serviceUnit?.name ?? undefined,
+        bed: activeEncounter.bedAssignments[0]?.bed.code ?? undefined,
+      }
+    : undefined;
 
   // Mapear alergias al formato de chips (normalizar severity a mayúsculas)
   const allergiesForBar = patient.allergies
@@ -43,6 +60,7 @@ export function PatientShellBar({ patientId }: PatientShellBarProps) {
 
   return (
     <PatientContextBar
+      location={location}
       patient={{
         id: patient.id,
         firstName: patient.firstName,
