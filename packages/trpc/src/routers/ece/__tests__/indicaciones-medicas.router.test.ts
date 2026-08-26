@@ -211,15 +211,26 @@ describe("indicacionesMedicasRouter", () => {
       // Mock getIndicacionOrThrow
       (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
-        // Mock item texts for IPSG.2 forbidden-abbreviations check (solo descripcion, sin notas)
-        .mockResolvedValueOnce([{ descripcion: "Paracetamol 500mg VO cada 8h" }])
-        // Mock count items
-        .mockResolvedValueOnce([{ cnt: 2 }]);
+        // CC-0026 — getUltimaFirma: sin indicaciones previas firmadas en el episodio
+        .mockResolvedValueOnce([])
+        // Items (id+tipo+descripcion) — usados por IPSG.2 y por el consumer de CareTask (CC-0026)
+        .mockResolvedValueOnce([
+          { id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO cada 8h" },
+          { id: "00000000-0000-4000-8001-00000000000a", tipo: "DIETA", descripcion: "Dieta blanda" },
+        ])
+        // CC-0026 care-task-consumer: resolución de organizationId (dual-GUC, sql/209)
+        .mockResolvedValueOnce([{ org_id: ORG_ID }])
+        // CC-0026 care-task-consumer: bridge episodio→encounter/patient
+        .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
       (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "00000000-0000-4000-8001-00000000000b",
+      });
 
       const result = await caller(ctx).firmar({ id: IND_ID });
 
       expect(result.estadoRegistro).toBe("firmado");
+      expect(result.plazoExcedido).toBe(false);
       expect(emitDomainEvent).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -228,6 +239,7 @@ describe("indicacionesMedicasRouter", () => {
           payload: expect.objectContaining({ itemCount: 2 }),
         }),
       );
+      expect(ctx.prisma.careTask.create).toHaveBeenCalledTimes(2);
     });
 
     it("rechaza si estado_registro no es borrador", async () => {
@@ -241,6 +253,91 @@ describe("indicacionesMedicasRouter", () => {
       await expect(caller(ctx).firmar({ id: IND_ID })).rejects.toThrow(
         TRPCError,
       );
+    });
+
+    // CC-0026 — tipo INICIAL/SUBSECUENTE + regla de 32h (SQL 210).
+    describe("CC-0026 — tipoIndicacion + plazo de 32h", () => {
+      it("tipoIndicacion=INICIAL con una firmada previa en el episodio → PRECONDITION_FAILED", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          // getUltimaFirma: SÍ hay una previa firmada
+          .mockResolvedValueOnce([{ fecha_firma: new Date() }]);
+
+        await expect(
+          caller(ctx).firmar({ id: IND_ID, tipoIndicacion: "INICIAL" }),
+        ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      });
+
+      it("tipoIndicacion=SUBSECUENTE sin ninguna firmada previa → PRECONDITION_FAILED", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          // getUltimaFirma: NO hay ninguna previa
+          .mockResolvedValueOnce([]);
+
+        await expect(
+          caller(ctx).firmar({ id: IND_ID, tipoIndicacion: "SUBSECUENTE" }),
+        ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      });
+
+      it("más de 32h desde la última firma → plazoExcedido=true pero la firma SÍ se aplica", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+        const hace33Horas = new Date(Date.now() - 33 * 60 * 60 * 1000);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          .mockResolvedValueOnce([{ fecha_firma: hace33Horas }])
+          .mockResolvedValueOnce([
+            { id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO c/8h" },
+          ])
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-00000000000c",
+        });
+
+        const result = await caller(ctx).firmar({
+          id: IND_ID,
+          tipoIndicacion: "SUBSECUENTE",
+        });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.plazoExcedido).toBe(true);
+        expect(result.horasDesdeUltimaFirma).toBeGreaterThan(32);
+      });
+
+      it("menos de 32h desde la última firma → plazoExcedido=false", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+        const hace5Horas = new Date(Date.now() - 5 * 60 * 60 * 1000);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          .mockResolvedValueOnce([{ fecha_firma: hace5Horas }])
+          .mockResolvedValueOnce([
+            { id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO c/8h" },
+          ])
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-00000000000d",
+        });
+
+        const result = await caller(ctx).firmar({
+          id: IND_ID,
+          tipoIndicacion: "SUBSECUENTE",
+        });
+
+        expect(result.plazoExcedido).toBe(false);
+      });
     });
   });
 

@@ -77,6 +77,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
+import { materializeCareTasksFromIndicacion } from "../../ece/care-task-consumer";
 import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
@@ -126,6 +127,9 @@ const frecuenciaEnum = z.enum([
 ]);
 
 const vigenciaEnum = z.enum(["ACTIVA", "SUSPENDIDA", "CANCELADA"]);
+
+/** ESP-MOCKUP-0026 §Estructura — plazo máximo entre indicaciones firmadas del mismo episodio. */
+const PLAZO_MAXIMO_HORAS = 32;
 
 /**
  * Subconjunto de chk_admin_med_estado_v2 (SQL 202). DIFERIDA es parte del CHECK
@@ -191,6 +195,27 @@ const listSchema = z.object({
 });
 
 const idSchema = z.object({ id: z.string().uuid() });
+
+/**
+ * CC-0026 — INICIAL (primera del episodio) | SUBSECUENTE (hay al menos una
+ * firmada/validada previa). Espejo de `chk_ind_tipo_indicacion` (SQL 210).
+ * Nombre distinto de `tipoIndicacionEnum` (arriba) a propósito — ese enum
+ * describe el TIPO DE ÍTEM (medicamento/dieta/...), este describe el TIPO DE
+ * FIRMA del encabezado; son conceptos distintos que comparten la palabra
+ * "tipo" en el mockup.
+ */
+export const tipoFirmaIndicacionEnum = z.enum(["INICIAL", "SUBSECUENTE"]);
+
+/**
+ * `tipoIndicacion` es OPCIONAL y retrocompatible a propósito: si el caller no
+ * lo envía, `firmar()` no valida el tipo (comportamiento bit-idéntico al de
+ * antes de CC-0026) pero SÍ sigue calculando `plazoExcedido` — la regla de
+ * 32h del mockup aplica siempre, la clasificación INICIAL/SUBSECUENTE es la
+ * parte que la UI puede adoptar de forma incremental.
+ */
+const firmarSchema = idSchema.extend({
+  tipoIndicacion: tipoFirmaIndicacionEnum.optional(),
+});
 
 const suspenderSchema = z.object({
   id: z.string().uuid(),
@@ -288,6 +313,47 @@ async function getIndicacionOrThrow(
     });
   }
   return row;
+}
+
+// ─── Helper: regla de 32h + tipo INICIAL/SUBSECUENTE (CC-0026, SQL 210) ──────
+
+interface UltimaFirmaResult {
+  /** true si el episodio ya tiene alguna indicación estado_registro IN (firmado, validado). */
+  hasPrevious: boolean;
+  /** Horas transcurridas desde la última `fecha_firma` registrada, o null si no hay dato. */
+  horasDesdeUltimaFirma: number | null;
+}
+
+/**
+ * Lee la última indicación firmada/validada del episodio. `hasPrevious` se
+ * calcula por `estado_registro` (no por `fecha_firma`) porque en teoría una
+ * fila podría estar firmada sin `fecha_firma` (columna nueva, SQL 210,
+ * nullable) — separar ambos evita que un dato viejo sin timestamp haga creer
+ * al server que la indicación es INICIAL cuando no lo es. `horasDesdeUltimaFirma`
+ * sale null si esa fila no tiene `fecha_firma` (no se puede calcular el
+ * plazo, pero el tipo INICIAL/SUBSECUENTE sigue siendo correcto).
+ */
+async function getUltimaFirma(
+  tx: PrismaClient,
+  episodioId: string,
+): Promise<UltimaFirmaResult> {
+  const rows = await tx.$queryRaw<{ fecha_firma: Date | null }[]>`
+    SELECT fecha_firma
+    FROM ece.indicaciones_medicas
+    WHERE episodio_id = ${episodioId}::uuid
+      AND estado_registro IN ('firmado', 'validado')
+    ORDER BY fecha_firma DESC NULLS LAST
+    LIMIT 1
+  `;
+  const row = rows[0];
+  if (!row) {
+    return { hasPrevious: false, horasDesdeUltimaFirma: null };
+  }
+  if (!row.fecha_firma) {
+    return { hasPrevious: true, horasDesdeUltimaFirma: null };
+  }
+  const horas = (Date.now() - new Date(row.fecha_firma).getTime()) / (1000 * 60 * 60);
+  return { hasPrevious: true, horasDesdeUltimaFirma: horas };
 }
 
 // ─── Helper: armar contexto ECE desde ctx tRPC ───────────────────────────────
@@ -564,7 +630,7 @@ export const indicacionesMedicasRouter = router({
    * Solo PHYSICIAN.
    */
   firmar: physicianProcedure
-    .input(idSchema)
+    .input(firmarSchema)
     .mutation(async ({ ctx, input }) => {
       const { personalId, establecimientoId } = await eceIds(ctx);
 
@@ -589,14 +655,48 @@ export const indicacionesMedicasRouter = router({
             });
           }
 
+          // CC-0026 (SQL 210) — tipo INICIAL/SUBSECUENTE + regla de 32h.
+          // `tipoIndicacion` es opcional: si el caller no lo envía, no se
+          // valida el tipo (retrocompatible), pero `plazoExcedido` SIEMPRE
+          // se calcula — la regla de 32h del mockup no depende de que la UI
+          // ya declare el tipo.
+          const { hasPrevious, horasDesdeUltimaFirma } = await getUltimaFirma(
+            tx,
+            indicacion.episodio_id,
+          );
+
+          if (input.tipoIndicacion === "INICIAL" && hasPrevious) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "El episodio ya tiene una indicación firmada — no se puede firmar " +
+                "otra como INICIAL. Use tipoIndicacion='SUBSECUENTE'.",
+            });
+          }
+          if (input.tipoIndicacion === "SUBSECUENTE" && !hasPrevious) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "El episodio no tiene ninguna indicación firmada todavía — la " +
+                "primera debe firmarse como tipoIndicacion='INICIAL'.",
+            });
+          }
+
+          const plazoExcedido =
+            horasDesdeUltimaFirma !== null && horasDesdeUltimaFirma > PLAZO_MAXIMO_HORAS;
+
           // JCI IPSG.2 ME 3 — escanear texto libre de items (warning, no bloquea)
-          // ece.indicacion_item no tiene columna 'notas'; solo descripcion es texto libre
-          const itemTexts = await tx.$queryRaw<{ descripcion: string }[]>`
-            SELECT descripcion
+          // ece.indicacion_item no tiene columna 'notas'; solo descripcion es texto libre.
+          // Se piden id+tipo en la misma query porque CC-0026 los reusa para
+          // materializar CareTask por ítem (ver más abajo).
+          const items = await tx.$queryRaw<
+            { id: string; tipo: string; descripcion: string }[]
+          >`
+            SELECT id::text, tipo, descripcion
             FROM ece.indicacion_item
             WHERE indicacion_id = ${input.id}::uuid
           `;
-          const textoItems = itemTexts.map((r) => r.descripcion).join(" ");
+          const textoItems = items.map((r) => r.descripcion).join(" ");
           const ipsg2 = validateClinicalText(textoItems);
           if (ipsg2.errors.length > 0 || ipsg2.warnings.length > 0) {
             console.warn(
@@ -608,17 +708,13 @@ export const indicacionesMedicasRouter = router({
           await tx.$executeRaw`
             UPDATE ece.indicaciones_medicas
             SET estado_registro = 'firmado',
-                transcripcion_enf = null
+                transcripcion_enf = null,
+                fecha_firma = now(),
+                tipo_indicacion = ${input.tipoIndicacion ?? null}
             WHERE id = ${input.id}::uuid
           `;
 
-          // Contar items para el payload del evento
-          const countRows = await tx.$queryRaw<{ cnt: number }[]>`
-            SELECT count(*)::int AS cnt
-            FROM ece.indicacion_item
-            WHERE indicacion_id = ${input.id}::uuid
-          `;
-          const itemCount = countRows[0]?.cnt ?? 0;
+          const itemCount = items.length;
 
           const domainEvent = await emitDomainEvent(tx, {
             organizationId: ctx.tenant.organizationId,
@@ -658,10 +754,36 @@ export const indicacionesMedicasRouter = router({
             });
           }
 
+          // CC-0026 D2 — una CareTask NURSE por ítem, en la MISMA transacción
+          // que la firma. Mismo contrato de fallo que farmacia (arriba): si
+          // falla, la firma completa revierte — nunca queda "firmada" sin
+          // que enfermería tenga la tarea de seguimiento.
+          try {
+            await materializeCareTasksFromIndicacion(tx, {
+              indicacionId: input.id,
+              episodioId: indicacion.episodio_id,
+              eceEstablecimientoId: establecimientoId,
+              establishmentId: ctx.tenant.establishmentId!,
+              userId: ctx.user.id,
+              items,
+            });
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló la creación de tareas " +
+                "de seguimiento para enfermería. La firma no se aplicó — " +
+                "reintente; si persiste, contacte soporte.",
+              cause: err,
+            });
+          }
+
           return {
             id: input.id,
             estadoRegistro: "firmado" as const,
             ipsg2Warnings: [...ipsg2.errors, ...ipsg2.warnings],
+            plazoExcedido,
+            horasDesdeUltimaFirma,
           };
         },
       );

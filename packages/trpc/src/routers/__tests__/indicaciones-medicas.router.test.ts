@@ -209,11 +209,20 @@ describe("indicacionesMedicasRouter", () => {
       primeEceResolve(prisma);
       (prisma.$queryRaw as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
-        // itemTexts para IPSG.2 forbidden-abbreviations check
-        .mockResolvedValueOnce([{ descripcion: "Paracetamol 500mg VO cada 8h", notas: null }])
-        // countRows
-        .mockResolvedValueOnce([{ cnt: 1 }]);
+        // CC-0026 — getUltimaFirma: sin indicaciones previas firmadas en el episodio
+        .mockResolvedValueOnce([])
+        // items (id+tipo+descripcion) — IPSG.2 + consumer de CareTask (CC-0026)
+        .mockResolvedValueOnce([
+          { id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO cada 8h" },
+        ])
+        // CC-0026 care-task-consumer: resolución de organizationId
+        .mockResolvedValueOnce([{ org_id: "00000000-0000-0000-0000-0000000000aa" }])
+        // CC-0026 care-task-consumer: bridge episodio→encounter/patient
+        .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
       prisma.$executeRaw.mockResolvedValue(1 as never);
+      (prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+        id: "00000000-0000-0000-0000-0000000000f1",
+      } as never);
       vi.mocked(emitDomainEvent).mockResolvedValueOnce({ id: "evt-1" } as never);
 
       const caller = indicacionesMedicasRouter.createCaller(

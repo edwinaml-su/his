@@ -8,6 +8,7 @@ export * from "./audit-integrity";
 export * from "./auth";
 export * from "./bed";
 export * from "./break-glass";
+export * from "./care-task";
 export * from "./catalog";
 export * from "./census";
 export * from "./common";
