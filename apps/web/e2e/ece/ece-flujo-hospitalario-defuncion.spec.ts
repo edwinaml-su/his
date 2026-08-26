@@ -14,11 +14,12 @@
  *   Verifica: episodio cerrado con motivo=defuncion
  *
  * Guard: HAS_REAL_SUPABASE=1 requerido.
- * Stub-tolerant: rutas 404 anotadas, test continúa.
+ * Rutas 404 fallan explícitamente (ver e2e/_helpers/route-probe.ts).
  */
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -29,13 +30,6 @@ let episodioId = "00000000-0000-0000-0000-000000000098";
 // ---------------------------------------------------------------------------
 // Utilidades (duplicadas localmente — cada spec es autocontenido)
 // ---------------------------------------------------------------------------
-
-async function probeRoute(page: Page, path: string): Promise<boolean> {
-  const res = await page.goto(path);
-  const status = res?.status() ?? 0;
-  test.info().annotations.push({ type: "route-probe", description: `GET ${path} → ${status}` });
-  return status < 500;
-}
 
 async function firmarDocumento(page: Page, label = "firmar"): Promise<void> {
   const btn = page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }).first();
@@ -77,7 +71,7 @@ test.describe.serial("ECE — Ruta hospitalaria: alta por defunción", () => {
   test("1. MT crea orden de ingreso y firma", async ({ page }) => {
     await login(page, "physician");
 
-    const ok = await probeRoute(page, "/ece/orden-ingreso/nueva");
+    const ok = await probeRoute(page, "/ece/orden-ingreso/nuevo");
     if (!ok) return;
 
     const motivoInput = page.getByLabel(/motivo de ingreso|motivo/i).first();
@@ -147,7 +141,7 @@ test.describe.serial("ECE — Ruta hospitalaria: alta por defunción", () => {
     await login(page, "nurse");
 
     // Valoración
-    const okVal = await probeRoute(page, "/ece/valoracion-enfermeria/nueva");
+    const okVal = await probeRoute(page, "/ece/valoracion-inicial-enfermeria/nueva");
     if (okVal) {
       const valorInput = page.getByLabel(/valoración inicial|valoracion/i).first();
       if ((await valorInput.count()) > 0) {

@@ -30,6 +30,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
+import { probeRoute } from "../_helpers/route-probe";
 
 // ---------------------------------------------------------------------------
 // Guard
@@ -77,13 +78,6 @@ async function maybeSelectSede(page: Page): Promise<void> {
     if (value) await sedeSelect.selectOption(value);
   }
   await page.getByRole("button", { name: /ingresar a la sede|enter site/i }).click();
-}
-
-async function probeRoute(page: Page, path: string): Promise<number> {
-  const response = await page.goto(path);
-  const status = response?.status() ?? 0;
-  test.info().annotations.push({ type: "http-probe", description: `GET ${path} → ${status}` });
-  return status;
 }
 
 /**
@@ -152,30 +146,25 @@ test.describe("@smoke - ECE — RLS cross-tenant", () => {
       await login(page, "nurse");
     }
 
-    const rutasPacientes = ["/ece/pacientes", "/patients", "/ece/lista-pacientes"];
-    for (const ruta of rutasPacientes) {
-      const status = await probeRoute(page, ruta);
-      if (status < 500 && status !== 404) {
-        // Encontramos una ruta de pacientes — verificar aislamiento
-        if (!usarNurseComoB) {
-          // Usuario externo: debe ver 0 pacientes del tenant A
-          const filas = page.locator("tbody tr, [data-testid='patient-row'], [data-testid='fila-paciente']");
-          const count = await filas.count();
-          test.info().annotations.push({
-            type: "pacientes-visibles-establecimiento-b",
-            description: `${count} pacientes visibles para establecimiento B`,
-          });
+    await probeRoute(page, "/patients");
 
-          // Si hay filas, verificar que los data-establecimiento-id no correspondan al tenant A
-          const estIds = await page
-            .locator("[data-establecimiento-id]")
-            .evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute("data-establecimiento-id")).filter(Boolean))]);
+    // Encontramos una ruta de pacientes — verificar aislamiento
+    if (!usarNurseComoB) {
+      // Usuario externo: debe ver 0 pacientes del tenant A
+      const filas = page.locator("tbody tr, [data-testid='patient-row'], [data-testid='fila-paciente']");
+      const count = await filas.count();
+      test.info().annotations.push({
+        type: "pacientes-visibles-establecimiento-b",
+        description: `${count} pacientes visibles para establecimiento B`,
+      });
 
-          if (estIds.length > 0) {
-            expect(estIds.length, `Cross-tenant leak: ${estIds.length} establecimientos visibles`).toBe(1);
-          }
-        }
-        break;
+      // Si hay filas, verificar que los data-establecimiento-id no correspondan al tenant A
+      const estIds = await page
+        .locator("[data-establecimiento-id]")
+        .evaluateAll((els) => [...new Set(els.map((el) => el.getAttribute("data-establecimiento-id")).filter(Boolean))]);
+
+      if (estIds.length > 0) {
+        expect(estIds.length, `Cross-tenant leak: ${estIds.length} establecimientos visibles`).toBe(1);
       }
     }
   });
