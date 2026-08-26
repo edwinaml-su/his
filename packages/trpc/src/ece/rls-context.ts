@@ -26,6 +26,20 @@ export interface EceContextOptions {
    * Usar false solo en flujos admin/seeders que no están sujetos a RLS ECE.
    */
   demoteRole?: boolean;
+  /**
+   * CC-0026 — escrituras cross-espacio: `firmar()` corre bajo este contexto
+   * (GUC `app.ece_*`) pero necesita insertar en tablas `public.*` con RLS de
+   * tenant clásico (`LabOrder`, `ImagingRequest`, `ImagingOrder`), que exigen
+   * `app.current_org_id` — GUC que este helper NUNCA setea por sí solo (ver
+   * la "trampa de los dos espacios de GUC" documentada en la cabecera de
+   * `packages/database/sql/209_cc0026_care_task.sql`). Pasar `tenantContext`
+   * hace que, en la MISMA transacción y ANTES del demote, también se setee
+   * `app.current_user_id` / `app.current_org_id` (vía
+   * `public.set_tenant_context`, sql/04) — así un único `$transaction` puede
+   * escribir válidamente en ambos espacios sin partir la atomicidad de
+   * `firmar()` en dos transacciones.
+   */
+  tenantContext?: { userId: string; orgId: string };
 }
 
 /**
@@ -57,6 +71,16 @@ export async function withEceContext<T>(
     await (tx as unknown as Pick<PrismaClient, "$executeRaw">).$executeRaw`
       SELECT ece.set_ece_context(${personalId}::uuid, ${establecimientoId}::uuid)
     `;
+
+    // CC-0026 — cross-espacio: si el caller necesita escribir en tablas
+    // `public.*` con RLS de tenant clásico dentro de esta misma transacción
+    // ECE, setear también app.current_user_id/app.current_org_id ANTES del
+    // demote (ver docstring de EceContextOptions.tenantContext).
+    if (options.tenantContext) {
+      await (tx as unknown as Pick<PrismaClient, "$executeRaw">).$executeRaw`
+        SELECT public.set_tenant_context(${options.tenantContext.userId}::uuid, ${options.tenantContext.orgId}::uuid, false)
+      `;
+    }
 
     // Demote DESPUÉS de set_ece_context — la función puede requerir privilegios
     // que solo el rol original tiene. Tras el demote, todas las queries de esta

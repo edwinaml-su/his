@@ -239,4 +239,83 @@ describe("materializeCareTasksFromIndicacion", () => {
       ),
     ).rejects.toThrow(dbError);
   });
+
+  // CC-0026 D2 (corrección Edwin 2026-08-26) — lab/gabinete NO generan CareTask NURSE.
+  describe("exclusión de ítems lab/gabinete (order-consumer los materializa)", () => {
+    it("ESTUDIO con detalle.categoriaUI=LABORATORIO no crea CareTask NURSE", async () => {
+      const tx = makeTx();
+      primeResolution(tx);
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([
+          {
+            id: "1",
+            tipo: "ESTUDIO",
+            descripcion: "Hemograma",
+            detalle: { categoriaUI: "LABORATORIO", labTestId: "test-1" },
+          },
+        ]),
+      );
+
+      expect(result.tasksCreated).toBe(0);
+      expect(tx.careTask.create).not.toHaveBeenCalled();
+    });
+
+    it("ESTUDIO con detalle.categoriaUI=GABINETE no crea CareTask NURSE", async () => {
+      const tx = makeTx();
+      primeResolution(tx);
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([
+          {
+            id: "1",
+            tipo: "ESTUDIO",
+            descripcion: "Rx tórax",
+            detalle: { categoriaUI: "GABINETE", labTestId: "test-2" },
+          },
+        ]),
+      );
+
+      expect(result.tasksCreated).toBe(0);
+      expect(tx.careTask.create).not.toHaveBeenCalled();
+    });
+
+    it("ESTUDIO sin detalle (retrocompat) sigue creando CareTask NURSE", async () => {
+      const tx = makeTx();
+      primeResolution(tx);
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([{ id: "1", tipo: "ESTUDIO", descripcion: "x" }]),
+      );
+
+      expect(result.tasksCreated).toBe(1);
+      expect(tx.careTask.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("mezcla: ítem NURSE normal + ítem lab excluido → solo 1 CareTask", async () => {
+      const tx = makeTx();
+      primeResolution(tx);
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([
+          { id: "1", tipo: "DIETA", descripcion: "Dieta blanda" },
+          {
+            id: "2",
+            tipo: "ESTUDIO",
+            descripcion: "Glucosa",
+            detalle: { categoriaUI: "LABORATORIO", labTestId: "test-3" },
+          },
+        ]),
+      );
+
+      expect(result.tasksCreated).toBe(1);
+      expect(tx.careTask.create).toHaveBeenCalledTimes(1);
+      const data = tx.careTask.create.mock.calls[0]![0] as { data: { sourceId: string } };
+      expect(data.data.sourceId).toBe("1");
+    });
+  });
 });
