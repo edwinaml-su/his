@@ -1,0 +1,4 @@
+# Salidas de corridas k6 (JSON + HTML) — no versionar resultados de carga locales.
+*.json
+*.html
+!.gitkeep
