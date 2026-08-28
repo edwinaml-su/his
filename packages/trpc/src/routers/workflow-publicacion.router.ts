@@ -14,13 +14,23 @@
  *        Cualquier tenantProcedure puede leer historial.
  *
  * Inmutabilidad: el snapshot se hashea con SHA-256 encadenado (Art. 42 NTEC).
+ *
+ * RLS: `ece.flujo_estado`, `ece.flujo_transicion`, `ece.workflow_publicacion_audit`,
+ * `ece.workflow_draft` y `ece.workflow_role_orphan` solo tienen policy de
+ * SELECT para el rol `authenticated` (catálogo global, no tenant-scoped —
+ * `65_ece_rls_hardening.sql` / `95_workflow_publicacion_versioning.sql`).
+ * NO envolver los INSERT/UPDATE/DELETE de este router en `withTenantContext`
+ * (demota a `authenticated` y el write queda bloqueado por RLS sin policy de
+ * escritura — verificado contra prod). Igual que `workflow-estado.router.ts`
+ * y `workflow-transicion.router.ts`: se escribe directo con `ctx.prisma`
+ * (rol BYPASSRLS de Supabase), envuelto en `$transaction` solo cuando se
+ * necesita atomicidad multi-statement.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createHash } from "crypto";
 import { Prisma } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../trpc";
-import { withTenantContext } from "../rls-context";
 
 // ─── Schemas Zod ──────────────────────────────────────────────────────────────
 
@@ -82,16 +92,14 @@ export const workflowPublicacionRouter = router({
       const { tipDocumentoId, draft } = input;
       const userId = ctx.user.id;
 
-      await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        await tx.$executeRaw`
-          INSERT INTO ece.workflow_draft (tipo_doc_id, draft_jsonb, updated_by_id, updated_at)
-          VALUES (${tipDocumentoId}::uuid, ${JSON.stringify(draft)}::jsonb, ${userId}::uuid, now())
-          ON CONFLICT (tipo_doc_id) DO UPDATE
-            SET draft_jsonb    = EXCLUDED.draft_jsonb,
-                updated_by_id  = EXCLUDED.updated_by_id,
-                updated_at     = EXCLUDED.updated_at
-        `;
-      });
+      await ctx.prisma.$executeRaw`
+        INSERT INTO ece.workflow_draft (tipo_doc_id, draft_jsonb, updated_by_id, updated_at)
+        VALUES (${tipDocumentoId}::uuid, ${JSON.stringify(draft)}::jsonb, ${userId}::uuid, now())
+        ON CONFLICT (tipo_doc_id) DO UPDATE
+          SET draft_jsonb    = EXCLUDED.draft_jsonb,
+              updated_by_id  = EXCLUDED.updated_by_id,
+              updated_at     = EXCLUDED.updated_at
+      `;
 
       return { saved: true, updatedAt: new Date() };
     }),
@@ -133,14 +141,19 @@ export const workflowPublicacionRouter = router({
       const userId = ctx.user.id;
       const snapshotJson = JSON.stringify(snapshot);
 
-      // Validación server-side: roles referenciados deben existir
+      // Validación server-side: roles referenciados deben existir en el
+      // catálogo ECE (ece.rol — el mismo que flujo_transicion.rol_autoriza_id
+      // referencia por FK). NOTA: esta query antes consultaba
+      // public."Role" (catálogo RBAC de tRPC, columna "code" no "codigo"),
+      // catálogo distinto que además rompía con error SQL 42703 en cuanto
+      // una transición traía rolCodigo — bloqueaba publish() por completo.
       const rolCodigos = snapshot.edges
         .map((e) => e.rolCodigo)
         .filter((r): r is string => !!r);
 
       if (rolCodigos.length > 0) {
         const existentes = await ctx.prisma.$queryRaw<Array<{ codigo: string }>>(
-          Prisma.sql`SELECT codigo FROM public."Role" WHERE codigo = ANY(${rolCodigos})`,
+          Prisma.sql`SELECT codigo FROM ece.rol WHERE codigo = ANY(${rolCodigos})`,
         );
         const existenteSet = new Set(existentes.map((r) => r.codigo));
         const invalidos = rolCodigos.filter((c) => !existenteSet.has(c));
@@ -152,7 +165,7 @@ export const workflowPublicacionRouter = router({
         }
       }
 
-      const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const result = await ctx.prisma.$transaction(async (tx) => {
         // 1. Obtener versión siguiente
         const versionRows = await tx.$queryRaw<Array<{ next_version: number }>>`
           SELECT ece.next_workflow_version(${tipDocumentoId}::uuid) AS next_version
@@ -370,9 +383,32 @@ export const workflowPublicacionRouter = router({
     }),
 
   /**
-   * Rollback: restaura versión HISTORICO como nueva publicación PUBLICADO.
-   * US.F2.2.19
-   * Solo DIR puede hacer rollback.
+   * Rollback: restaura versión HISTORICO como nueva publicación PUBLICADO
+   * *y aplica el snapshot al motor de ejecución* (ece.flujo_estado /
+   * ece.flujo_transicion) para que el flujo operativo quede efectivamente
+   * revertido, no solo el registro de auditoría (hallazgo 2026-08-28:
+   * el rollback anterior solo tocaba workflow_publicacion_audit y dejaba
+   * el motor de ejecución sin cambios — Art. 42/55-56 NTEC).
+   * US.F2.2.19. Solo DIR puede hacer rollback.
+   *
+   * Estrategia de convergencia (upsert + delete por id, ver
+   * docstring de cabecera sobre RLS):
+   *  1. Resetear es_inicial/es_final en todos los estados vivos (evita choque
+   *     transitorio con los partial unique index uix_flujo_estado_inicial/_final
+   *     cuando el estado inicial/final del snapshot objetivo tiene otro id).
+   *  2. Upsert de cada nodo del snapshot → ece.flujo_estado (por id).
+   *  3. Resolver rol_autoriza_id de cada arista por código contra ece.rol.
+   *  4. Upsert de cada arista del snapshot → ece.flujo_transicion (por id).
+   *  5. DELETE de transiciones vivas que no están en el snapshot objetivo.
+   *  6. DELETE de estados vivos que no están en el snapshot objetivo.
+   *
+   * Guardia de integridad: si algún estado a eliminar tiene documento_instancia
+   * vivas apuntándolo (estado_actual_id), aborta ANTES de tocar nada con
+   * PRECONDITION_FAILED — restaurar no puede corromper documentos en curso.
+   * Como red de seguridad adicional, cualquier violación de FK/unique que
+   * Postgres levante durante la aplicación (p.ej. un estado referenciado solo
+   * por bitácora histórica, no por instancias vivas) también se traduce a un
+   * error claro en vez de dejar escapar el error crudo de Postgres.
    */
   rollback: dirProc
     .input(
@@ -386,7 +422,7 @@ export const workflowPublicacionRouter = router({
       const { tipDocumentoId, targetVersionId, motivoCambio } = input;
       const userId = ctx.user.id;
 
-      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      return ctx.prisma.$transaction(async (tx) => {
         // Cargar versión objetivo
         const targetRows = await tx.$queryRaw<
           Array<{ version: number; estado: string; snapshot_jsonb: unknown }>
@@ -409,13 +445,179 @@ export const workflowPublicacionRouter = router({
           });
         }
 
-        // Obtener siguiente versión
+        // Parsear y validar el snapshot antes de aplicarlo — defensa contra
+        // JSONB corrupto o incompleto.
+        const parsed = GraphSnapshotSchema.safeParse(target.snapshot_jsonb);
+        if (!parsed.success) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message:
+              "El snapshot de la versión objetivo está corrupto y no se puede restaurar al motor de ejecución.",
+          });
+        }
+        const snapshot = parsed.data;
+
+        // flujo_transicion.rol_autoriza_id es NOT NULL — toda arista del
+        // snapshot debe declarar rolCodigo para poder aplicarse.
+        const edgeSinRol = snapshot.edges.find((e) => !e.rolCodigo);
+        if (edgeSinRol) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `La transición '${edgeSinRol.accion}' del snapshot no tiene rol autorizador; no se puede restaurar el motor de ejecución.`,
+          });
+        }
+
+        // ── Estado vivo actual del motor de ejecución ──────────────────────
+        const liveEstados = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id::text FROM ece.flujo_estado WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+        `;
+        const liveTransiciones = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id::text FROM ece.flujo_transicion WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+        `;
+
+        const targetNodeIds = new Set(snapshot.nodes.map((n) => n.id));
+        const targetEdgeIds = new Set(snapshot.edges.map((e) => e.id));
+
+        const estadosARemover = liveEstados.map((e) => e.id).filter((id) => !targetNodeIds.has(id));
+        const transicionesARemover = liveTransiciones
+          .map((e) => e.id)
+          .filter((id) => !targetEdgeIds.has(id));
+
+        // ── Guardia: no corromper documentos en curso ──────────────────────
+        if (estadosARemover.length > 0) {
+          const referencias = await tx.$queryRaw<
+            Array<{ estado_actual_id: string; codigo: string; nombre: string; total: bigint }>
+          >`
+            SELECT di.estado_actual_id::text, fe.codigo, fe.nombre, COUNT(*)::bigint AS total
+              FROM ece.documento_instancia di
+              JOIN ece.flujo_estado fe ON fe.id = di.estado_actual_id
+             WHERE di.tipo_documento_id = ${tipDocumentoId}::uuid
+               AND di.estado_actual_id = ANY(${estadosARemover}::uuid[])
+             GROUP BY di.estado_actual_id, fe.codigo, fe.nombre
+          `;
+          if (referencias.length > 0) {
+            const totalInstancias = referencias.reduce((acc, r) => acc + Number(r.total), 0);
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                `No se puede restaurar v${target.version}: ${totalInstancias} documento(s) en curso ` +
+                `referencian estado(s) que esta versión elimina (${referencias
+                  .map((r) => `${r.codigo}: ${r.total}`)
+                  .join(", ")}). Resuelva o migre esos documentos antes de restaurar.`,
+              cause: {
+                estadosBloqueados: referencias.map((r) => ({
+                  estadoId: r.estado_actual_id,
+                  codigo: r.codigo,
+                  nombre: r.nombre,
+                  instancias: Number(r.total),
+                })),
+                totalInstancias,
+              },
+            });
+          }
+        }
+
+        // ── Resolver rol_autoriza_id de cada arista por código ─────────────
+        const rolCodigos = [
+          ...new Set(snapshot.edges.map((e) => e.rolCodigo).filter((c): c is string => !!c)),
+        ];
+        const rolesEce = await tx.$queryRaw<Array<{ id: string; codigo: string }>>`
+          SELECT id::text, codigo FROM ece.rol WHERE codigo = ANY(${rolCodigos}::text[])
+        `;
+        const rolIdPorCodigo = new Map(rolesEce.map((r) => [r.codigo, r.id]));
+        const rolFaltante = rolCodigos.find((c) => !rolIdPorCodigo.has(c));
+        if (rolFaltante) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `El rol '${rolFaltante}' referenciado en el snapshot no existe en ece.rol; no se puede restaurar.`,
+          });
+        }
+
+        try {
+          // ── Aplicar snapshot al motor de ejecución (converger) ───────────
+          await tx.$executeRaw`
+            UPDATE ece.flujo_estado
+               SET es_inicial = false, es_final = false
+             WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+          `;
+
+          for (const node of snapshot.nodes) {
+            await tx.$executeRaw`
+              INSERT INTO ece.flujo_estado
+                (id, tipo_documento_id, codigo, nombre, es_inicial, es_final, orden)
+              VALUES
+                (${node.id}::uuid, ${tipDocumentoId}::uuid, ${node.codigo}, ${node.nombre},
+                 ${node.es_inicial}, ${node.es_final}, ${node.orden})
+              ON CONFLICT (id) DO UPDATE
+                SET codigo     = EXCLUDED.codigo,
+                    nombre     = EXCLUDED.nombre,
+                    es_inicial = EXCLUDED.es_inicial,
+                    es_final   = EXCLUDED.es_final,
+                    orden      = EXCLUDED.orden
+            `;
+
+            if (node.posX !== undefined && node.posY !== undefined) {
+              await tx.$executeRaw`
+                INSERT INTO ece.workflow_estado_layout (estado_id, x, y, updated_at)
+                VALUES (${node.id}::uuid, ${node.posX}, ${node.posY}, now())
+                ON CONFLICT (estado_id)
+                  DO UPDATE SET x = EXCLUDED.x, y = EXCLUDED.y, updated_at = now()
+              `;
+            }
+          }
+
+          for (const edge of snapshot.edges) {
+            const rolId = rolIdPorCodigo.get(edge.rolCodigo as string);
+            await tx.$executeRaw`
+              INSERT INTO ece.flujo_transicion
+                (id, tipo_documento_id, estado_origen_id, estado_destino_id,
+                 accion, rol_autoriza_id, requiere_firma)
+              VALUES
+                (${edge.id}::uuid, ${tipDocumentoId}::uuid, ${edge.source}::uuid, ${edge.target}::uuid,
+                 ${edge.accion}, ${rolId}::uuid, ${edge.requiereFirma ?? true})
+              ON CONFLICT (id) DO UPDATE
+                SET estado_origen_id  = EXCLUDED.estado_origen_id,
+                    estado_destino_id = EXCLUDED.estado_destino_id,
+                    accion            = EXCLUDED.accion,
+                    rol_autoriza_id   = EXCLUDED.rol_autoriza_id,
+                    requiere_firma    = EXCLUDED.requiere_firma
+            `;
+          }
+
+          if (transicionesARemover.length > 0) {
+            await tx.$executeRaw`
+              DELETE FROM ece.flujo_transicion
+               WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+                 AND id = ANY(${transicionesARemover}::uuid[])
+            `;
+          }
+
+          if (estadosARemover.length > 0) {
+            await tx.$executeRaw`
+              DELETE FROM ece.flujo_estado
+               WHERE tipo_documento_id = ${tipDocumentoId}::uuid
+                 AND id = ANY(${estadosARemover}::uuid[])
+            `;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("foreign key") || msg.includes("23503")) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                `No se puede restaurar v${target.version}: existen referencias (bitácora de auditoría u ` +
+                `otros registros) que impiden eliminar estados/transiciones removidos por esta versión. Detalle: ${msg}`,
+            });
+          }
+          throw err;
+        }
+
+        // ── Registrar la restauración en el audit trail ────────────────────
         const versionRows = await tx.$queryRaw<Array<{ next_version: number }>>`
           SELECT ece.next_workflow_version(${tipDocumentoId}::uuid) AS next_version
         `;
         const nextVersion = Number(versionRows[0]?.next_version ?? 1);
 
-        // Hash chain
         const lastHashRows = await tx.$queryRaw<Array<{ chain_hash: string | null }>>`
           SELECT chain_hash
             FROM ece.workflow_publicacion_audit
@@ -453,6 +655,12 @@ export const workflowPublicacionRouter = router({
           version: nextVersion,
           restoredFromVersion: target.version,
           chainHash,
+          motorAplicado: {
+            estadosAplicados: snapshot.nodes.length,
+            transicionesAplicadas: snapshot.edges.length,
+            estadosEliminados: estadosARemover.length,
+            transicionesEliminadas: transicionesARemover.length,
+          },
         };
       });
     }),
