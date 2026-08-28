@@ -64,10 +64,8 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setError(null);
 
-    if (password.length < MIN_PASSWORD_LENGTH) {
-      setError(
-        `La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres.`,
-      );
+    if (!pwdCheck.valid) {
+      setError(pwdCheck.errors.join(" "));
       return;
     }
     if (password !== confirm) {

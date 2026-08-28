@@ -116,8 +116,8 @@ Ejecutado en 7 PRs paralelos:
 | `Gs1Scanner` (dedupe) | #585 | Las 2 "copias" NO eran copias (no parsean AIs — una era stub muerto, otra listener HID crudo). Sí había duplicación real no listada: el scanner HID de `gs1/transfers/nueva` clonado en `gs1/transfers/[id]` → extraído a `hid-scan-input.tsx` |
 | `PatientConsents` | #579 | Integrado como tab en `patients/[id]` (cierra el TODO Sprint 2 de su JSDoc) |
 | Workflow Designer (8) | — | **Diferido** — decisión @PO pendiente |
-| `OrgSwitcherClient` | #580 | **NO montado — premisa del inventario incorrecta**: `OrgRoleSwitcher` ya cubre el caso, montado en los topbars admin y clínico. Candidato a eliminación |
-| `PasswordStrengthMeter` | #580 | Montado en `/recover/reset` y en el reset admin de usuarios, con la política real de `@his/contracts`. Gap: el submit sigue más laxo que la política (no exige símbolo) |
+| `OrgSwitcherClient` | #580, eliminado en fix/password-policy-y-limpieza | **NO montado — premisa del inventario incorrecta**: `OrgRoleSwitcher` ya cubre el caso, montado en los topbars admin y clínico. Componente eliminado (0 imports fuera de sí mismo) |
+| `PasswordStrengthMeter` | #580, submit endurecido en fix/password-policy-y-limpieza | Montado en `/recover/reset` y en el reset admin de usuarios, con la política real de `@his/contracts`. Gap cerrado: el submit (cliente y `userAdmin.resetPassword` en servidor) ahora valida con `validatePassword()` completa, símbolo incluido |
 | `ViewTransitionProvider` | #585 | Eliminado (0 consumidores confirmado) |
 | `ValidationPanel` (dedupe) | #585 | Copia inline (superset) consolidada en el canónico de `_components/` y migrado el consumidor — cierra huérfano y duplicado a la vez |
 
