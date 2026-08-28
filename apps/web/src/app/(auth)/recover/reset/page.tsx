@@ -26,8 +26,10 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import { Alert, AlertDescription } from "@his/ui/components/alert";
+import { validatePassword } from "@his/contracts";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { clearMfaSession } from "@/app/actions/mfa";
+import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 
 const MIN_PASSWORD_LENGTH = 12;
 
@@ -41,6 +43,9 @@ export default function ResetPasswordPage() {
   // Supabase emite event="PASSWORD_RECOVERY" cuando llega aquí con token
   // válido. Nos suscribimos para detectar si el enlace está vivo.
   const [recoveryReady, setRecoveryReady] = React.useState(false);
+
+  // US-2.10 — feedback visual de fortaleza (política @his/contracts).
+  const pwdCheck = React.useMemo(() => validatePassword(password), [password]);
 
   React.useEffect(() => {
     const supabase = createSupabaseBrowserClient();
@@ -165,6 +170,11 @@ export default function ResetPasswordPage() {
                 )}
               </button>
             </div>
+            <PasswordStrengthMeter
+              score={pwdCheck.strengthScore}
+              errors={pwdCheck.errors}
+              empty={password.length === 0}
+            />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="confirm">Confirmar contraseña</Label>
