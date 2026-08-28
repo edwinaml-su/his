@@ -25,8 +25,12 @@ on:
 permissions:
   contents: read
 
+# El grupo incluye event_name: el nightly (schedule, 30 min, corte a 25
+# fallos) NO debe cancelar un inventario lanzado por workflow_dispatch —
+# run 33193829657 (inventario 330 min) murió a los 76 min cuando entró el
+# schedule al mismo grupo e2e-main.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
