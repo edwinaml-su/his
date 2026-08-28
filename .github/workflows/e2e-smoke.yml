@@ -43,7 +43,12 @@ jobs:
     # setup(~1.7m)+build(~2.5m)+e2e ya no puede apoyarse en el fast-fail del
     # circuit breaker (los tests corren su curso real, no fallan todos en el
     # primer segundo) — volvemos al headroom pre-incidente.
-    timeout-minutes: 20
+    # 20m alcanzaba cuando el circuit breaker cortaba a 8 fallos casi al
+    # inicio. Con los fixtures sembrados (PR #599) las specs que antes
+    # fallaban rápido ahora CORREN — el run 33217829132 murió a los 20m con
+    # la suite aún en curso. 30m da headroom para ~70 specs @smoke seriales
+    # (workers:1, BD compartida) + setup (~6m).
+    timeout-minutes: 30
 
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
@@ -212,7 +217,12 @@ jobs:
         run: npm run build
 
       - name: Run Smoke E2E (@smoke only)
-        run: npm run test:e2e
+        # Directo al workspace, SIN turbo: turbo bufferea la salida del task y
+        # si el job muere por timeout el log se pierde entero — el run
+        # 33217829132 estuvo 16 min "en silencio" y quedó indiagnosticable
+        # (mismo antipatrón del incidente de junio, CLAUDE.md §E2E). Con
+        # playwright directo el reporter "line" streamea al log del job.
+        run: npm run -w @his/web test:e2e
 
       - name: Dump logs del stack (si algo posterior al boot falló)
         # Gap real de la sesión anterior (ver docs/runbooks/e2e-gotrue-auth.md

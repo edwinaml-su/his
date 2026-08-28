@@ -187,7 +187,9 @@ jobs:
       - name: Run E2E tests
         env:
           E2E_MAX_FAILURES: ${{ inputs.max_failures }}
-        run: npm run test:e2e
+        # Directo al workspace, SIN turbo — turbo bufferea la salida y un kill
+        # por timeout pierde el log completo (ver mismo step en e2e-smoke.yml).
+        run: npm run -w @his/web test:e2e
 
       - name: Dump logs del stack (si algo posterior al boot falló)
         # Ver el mismo step en e2e-smoke.yml: el dump de arriba solo cubre un
