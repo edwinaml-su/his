@@ -23,6 +23,7 @@ import {
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
 import { RollbackDialog } from "../../_components/rollback-dialog";
+import { VersionDiff } from "../../_components/version-diff";
 
 const PAGE_SIZE = 20;
 
@@ -35,6 +36,8 @@ export default function WorkflowHistorialPage() {
     id: string;
     version: number;
   } | null>(null);
+  const [versionA, setVersionA] = React.useState<number | null>(null);
+  const [versionB, setVersionB] = React.useState<number | null>(null);
 
   // Resolver tipo_doc_id desde codigo
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,6 +66,20 @@ export default function WorkflowHistorialPage() {
       void refetch();
     },
   });
+
+  // Diff entre dos versiones (US.F2.2.07) — habilitado solo con dos
+  // versiones distintas seleccionadas.
+  const diffEnabled =
+    !!tipoDoc?.id && versionA !== null && versionB !== null && versionA !== versionB;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: diffData, isFetching: diffLoading } = (trpc as any).workflowPublicacion.diff.useQuery(
+    {
+      tipDocumentoId: tipoDoc?.id ?? "",
+      versionA: versionA ?? 0,
+      versionB: versionB ?? 0,
+    },
+    { enabled: diffEnabled },
+  );
 
   if (!tipoDoc && !isLoading) {
     return (
@@ -108,6 +125,61 @@ export default function WorkflowHistorialPage() {
           </Button>
         </div>
       </div>
+
+      {/* Comparar versiones (US.F2.2.07) */}
+      {(data?.items?.length ?? 0) >= 2 && (
+        <div className="space-y-3 rounded-md border p-4">
+          <h2 className="text-sm font-semibold">Comparar versiones</h2>
+          <div className="flex flex-wrap items-end gap-3">
+            <div>
+              <label htmlFor="diff-version-a" className="block text-xs font-medium">
+                Versión A
+              </label>
+              <select
+                id="diff-version-a"
+                value={versionA ?? ""}
+                onChange={(e) => setVersionA(e.target.value ? Number(e.target.value) : null)}
+                className="mt-0.5 rounded border px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">Seleccionar…</option>
+                {data?.items.map((i: { version: number }) => (
+                  <option key={i.version} value={i.version}>
+                    v{i.version}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="diff-version-b" className="block text-xs font-medium">
+                Versión B
+              </label>
+              <select
+                id="diff-version-b"
+                value={versionB ?? ""}
+                onChange={(e) => setVersionB(e.target.value ? Number(e.target.value) : null)}
+                className="mt-0.5 rounded border px-2 py-1 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">Seleccionar…</option>
+                {data?.items.map((i: { version: number }) => (
+                  <option key={i.version} value={i.version}>
+                    v{i.version}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {versionA !== null && versionB !== null && versionA === versionB && (
+            <p className="text-xs text-muted-foreground">Selecciona dos versiones distintas.</p>
+          )}
+          {diffEnabled && diffLoading && (
+            <p className="text-xs text-muted-foreground">Calculando diferencias…</p>
+          )}
+          {diffEnabled && !diffLoading && diffData && (
+            <VersionDiff versionA={versionA!} versionB={versionB!} diff={diffData} />
+          )}
+        </div>
+      )}
 
       {/* Tabla */}
       {isLoading ? (

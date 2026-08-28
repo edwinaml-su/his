@@ -58,8 +58,9 @@ export function RollbackDialog({
           Restaurar versión v{version}
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Esto marcará la versión activa como HISTÓRICO y activará v{version} como nueva
-          publicación. Esta acción quedará en el audit trail.
+          Esto marcará la versión activa como HISTÓRICO, activará v{version} como nueva
+          publicación y aplicará sus estados/transiciones al flujo operativo (motor de
+          ejecución). Esta acción quedará en el audit trail.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">

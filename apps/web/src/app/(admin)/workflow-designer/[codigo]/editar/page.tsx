@@ -37,6 +37,8 @@ import {
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
 import { MarkdownEditor } from "../../_components/markdown-editor";
+import { PublishDialog } from "../../_components/publish-dialog";
+import { buildGraphSnapshot } from "../../_components/graph-snapshot";
 
 // ─── Constantes ───────────────────────────────────────────────────────────────
 
@@ -966,6 +968,10 @@ export default function WorkflowEditorPage() {
   const params = useParams();
   const codigo = typeof params.codigo === "string" ? params.codigo : "";
 
+  const [publishOpen, setPublishOpen] = React.useState(false);
+  const [publishedVersion, setPublishedVersion] = React.useState<number | null>(null);
+  const [publishError, setPublishError] = React.useState<string | null>(null);
+
   const { data: tiposDocs, isLoading: loadingDoc, refetch: refetchTipos } = trpc.workflowTipoDoc.list.useQuery(
     { soloActivos: false },
   );
@@ -996,6 +1002,30 @@ export default function WorkflowEditorPage() {
   // Transiciones (rol autorizador) y Roles funcionales (rol asignado).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: rolesDisponibles } = (trpc as any).workflowRol.listAvailableRoles.useQuery();
+
+  // Layout guardado (posiciones del grafo) — se incluye en el snapshot de
+  // publicación por fidelidad, aunque no es requerido para la integridad
+  // funcional del workflow.
+  const { data: layout } = trpc.workflowEstado.estado.getLayout.useQuery(
+    { tipDocumentoId: tipoDoc?.id ?? "" },
+    { enabled: !!tipoDoc?.id },
+  );
+
+  // Validación de integridad — gatea el botón Publicar (US.F2.2.06/18).
+  const { data: validacion } = trpc.workflowValidator.validate.useQuery(
+    { tipDocumentoId: tipoDoc?.id ?? "" },
+    { enabled: !!tipoDoc?.id },
+  );
+  const errorCount = (validacion?.errors ?? []).filter((i) => i.severity === "error").length;
+
+  const publishMutation = trpc.workflowPublicacion.publish.useMutation({
+    onSuccess: (result) => {
+      setPublishOpen(false);
+      setPublishError(null);
+      setPublishedVersion(result.version);
+    },
+    onError: (e: { message: string }) => setPublishError(e.message),
+  });
 
   if (loadingDoc) {
     return (
@@ -1031,12 +1061,57 @@ export default function WorkflowEditorPage() {
             Configura estados, transiciones y roles funcionales.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link href={`/workflow-designer/${codigo}`}>
-            Ver grafo
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline">
+            <Link href={`/workflow-designer/${codigo}`}>
+              Ver grafo
+            </Link>
+          </Button>
+          <Button
+            onClick={() => setPublishOpen(true)}
+            aria-label="Publicar workflow"
+            data-testid="publish-open-btn"
+          >
+            Publicar
+          </Button>
+        </div>
       </div>
+
+      {/* Aviso: la edición de arriba aplica de inmediato al motor de ejecución
+          (ece.flujo_estado/flujo_transicion) — "Publicar" solo registra la
+          versión para auditoría y restauración (Art. 42/55-56 NTEC), NO
+          es lo que hace vigentes los cambios. Decisión de arquitectura
+          pendiente: separar edición en vivo de un ciclo borrador→publicación
+          real (ver docs/qa/inventario-componentes-huerfanos-2026-08-26.md). */}
+      <Alert>
+        <AlertTitle>Los cambios de esta página aplican de inmediato</AlertTitle>
+        <AlertDescription>
+          Crear, editar o eliminar un estado/transición/rol aquí abajo cambia el flujo
+          operativo AL INSTANTE — no hay borrador intermedio. &quot;Publicar&quot; registra la
+          versión actual en el historial auditable para trazabilidad y restauración; no es
+          lo que activa el cambio.
+        </AlertDescription>
+      </Alert>
+
+      {publishedVersion !== null && (
+        <Alert>
+          <AlertTitle>Versión v{publishedVersion} publicada</AlertTitle>
+          <AlertDescription>
+            Quedó registrada en el{" "}
+            <Link href={`/workflow-designer/${codigo}/historial`} className="underline">
+              historial de publicaciones
+            </Link>
+            .
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {publishError && (
+        <Alert variant="destructive">
+          <AlertTitle>No se pudo publicar</AlertTitle>
+          <AlertDescription>{publishError}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Secciones de edición */}
       <div className="space-y-4">
@@ -1072,6 +1147,22 @@ export default function WorkflowEditorPage() {
         </Link>{" "}
         / Editar
       </p>
+
+      <PublishDialog
+        open={publishOpen}
+        onClose={() => setPublishOpen(false)}
+        onConfirm={(motivo) => {
+          setPublishError(null);
+          const snapshot = buildGraphSnapshot(estados ?? [], transiciones ?? [], layout);
+          publishMutation.mutate({
+            tipDocumentoId: tipoDoc.id,
+            snapshot,
+            motivoCambio: motivo,
+          });
+        }}
+        isPending={publishMutation.isPending}
+        errorCount={errorCount}
+      />
     </div>
   );
 }
