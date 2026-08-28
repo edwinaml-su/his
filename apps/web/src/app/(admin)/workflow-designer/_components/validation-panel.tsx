@@ -1,105 +1,154 @@
 "use client";
 
 /**
- * ValidationPanel — Panel de issues en el pie del canvas.
+ * ValidationPanel — Panel de validación de integridad del workflow.
  * US.F2.2.05
  *
- * Muestra la lista de errores y warnings del grafo en tiempo real.
- * Errores bloquean el botón Publicar. Warnings son informativos.
+ * Muestra errores y advertencias del grafo, con botón para (re)ejecutar la
+ * validación y enlaces directos al editor por cada issue.
+ *
+ * Consolidado desde la copia inline de `workflow-designer/[codigo]/page.tsx`
+ * (inventario huérfanos 2026-08-26, patrón B): este componente estaba
+ * definido aquí pero sin importadores (huérfano Tier 2), mientras la página
+ * del grafo reimplementaba su propia versión, más completa, en línea. Se
+ * consolida la lógica superset (botón "Validar", `tipoDocCodigo` para los
+ * enlaces "Ir al item") aquí y la página pasa a importar este archivo.
  */
 // Tipos inline para evitar dependencia de path interno de @his/trpc
-type VisualSeverity = "error" | "warning";
-interface VisualIssue {
+type ValidationSeverity = "error" | "warning";
+export interface ValidationIssue {
   code: string;
   message: string;
-  severity: VisualSeverity;
+  severity: ValidationSeverity;
   nodeIds?: string[];
   edgeIds?: string[];
 }
+
+import Link from "next/link";
 import { Badge } from "@his/ui/components/badge";
+import { Button } from "@his/ui/components/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 
 interface ValidationPanelProps {
-  issues: VisualIssue[];
-  loadingRoles?: boolean;
+  issues: ValidationIssue[] | undefined;
+  onValidate: () => void;
+  isLoading: boolean;
+  tipoDocCodigo: string;
 }
 
-export function ValidationPanel({ issues, loadingRoles }: ValidationPanelProps) {
-  const errors = issues.filter((i) => i.severity === "error");
-  const warnings = issues.filter((i) => i.severity === "warning");
-
-  if (issues.length === 0 && !loadingRoles) {
-    return (
-      <div
-        role="status"
-        aria-live="polite"
-        className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700"
-        data-testid="validation-panel-ok"
-      >
-        <span aria-hidden>&#10003;</span>
-        Sin errores de validación
-      </div>
-    );
-  }
+export function ValidationPanel({
+  issues,
+  onValidate,
+  isLoading,
+  tipoDocCodigo,
+}: ValidationPanelProps) {
+  const errores = (issues ?? []).filter((i) => i.severity === "error");
+  const warnings = (issues ?? []).filter((i) => i.severity === "warning");
+  const badgeCount = errores.length + warnings.length;
 
   return (
-    <section
-      aria-label="Panel de errores de validación"
-      className="rounded-md border border-border bg-background"
-      data-testid="validation-panel"
-    >
-      <header className="flex items-center gap-3 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-        <span>Validación</span>
-        {errors.length > 0 && (
-          <Badge variant="destructive" className="text-xs">
-            {errors.length} error{errors.length !== 1 ? "es" : ""}
-          </Badge>
-        )}
-        {warnings.length > 0 && (
-          <Badge
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm">
+            Validación de integridad
+            {badgeCount > 0 && (
+              <Badge
+                variant={errores.length > 0 ? "destructive" : "outline"}
+                className="ml-2 text-xs"
+                aria-label={`${errores.length} errores, ${warnings.length} advertencias`}
+              >
+                {errores.length > 0
+                  ? `${errores.length} error${errores.length > 1 ? "es" : ""}`
+                  : `${warnings.length} advertencia${warnings.length > 1 ? "s" : ""}`}
+              </Badge>
+            )}
+            {issues !== undefined && badgeCount === 0 && (
+              <Badge variant="secondary" className="ml-2 text-xs">
+                Valido
+              </Badge>
+            )}
+          </CardTitle>
+          <Button
             variant="outline"
-            className="border-yellow-400 bg-yellow-50 text-xs text-yellow-700"
+            size="sm"
+            onClick={onValidate}
+            disabled={isLoading}
+            aria-label="Validar integridad del workflow"
           >
-            {warnings.length} advertencia{warnings.length !== 1 ? "s" : ""}
-          </Badge>
-        )}
-        {loadingRoles && (
-          <span className="ml-auto text-xs text-muted-foreground">
-            Verificando roles…
-          </span>
-        )}
-      </header>
-
-      <ul className="max-h-40 divide-y overflow-y-auto" role="list">
-        {errors.map((issue, idx) => (
-          <IssueRow key={`${issue.code}-${idx}`} issue={issue} />
-        ))}
-        {warnings.map((issue, idx) => (
-          <IssueRow key={`${issue.code}-${idx}`} issue={issue} />
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function IssueRow({ issue }: { issue: VisualIssue }) {
-  const isError = issue.severity === "error";
-  return (
-    <li
-      role="listitem"
-      className={`flex items-start gap-2 px-3 py-2 text-xs ${
-        isError ? "text-destructive" : "text-yellow-700"
-      }`}
-    >
-      <span
-        aria-hidden="true"
-        className={`mt-0.5 shrink-0 font-bold ${isError ? "text-destructive" : "text-yellow-600"}`}
-      >
-        {isError ? "✕" : "!"}
-      </span>
-      <span>
-        <span className="mr-1 font-mono opacity-60">[{issue.code}]</span>
-        {issue.message}
-      </span>
-    </li>
+            {isLoading ? "Validando..." : "Validar workflow"}
+          </Button>
+        </div>
+      </CardHeader>
+      {issues !== undefined && badgeCount > 0 && (
+        <CardContent className="space-y-2">
+          {errores.length > 0 && (
+            <details open>
+              <summary className="cursor-pointer select-none text-sm font-medium text-destructive">
+                Errores ({errores.length})
+              </summary>
+              <ul className="mt-2 space-y-1" role="list" aria-label="Lista de errores de validación">
+                {errores.map((issue) => (
+                  <li
+                    key={`${issue.code}-${issue.message}`}
+                    className="flex items-start justify-between gap-2 rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs"
+                  >
+                    <span>
+                      <span className="mr-1 font-mono font-semibold text-destructive">
+                        [{issue.code}]
+                      </span>
+                      {issue.message}
+                    </span>
+                    <Link
+                      href={`/workflow-designer/${tipoDocCodigo}/editar`}
+                      className="shrink-0 text-xs text-muted-foreground underline hover:text-foreground"
+                      aria-label={`Ir al editor para corregir: ${issue.message}`}
+                    >
+                      Ir al item
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {warnings.length > 0 && (
+            <details open>
+              <summary className="cursor-pointer select-none text-sm font-medium text-amber-600 dark:text-amber-400">
+                Advertencias ({warnings.length})
+              </summary>
+              <ul className="mt-2 space-y-1" role="list" aria-label="Lista de advertencias de validación">
+                {warnings.map((issue) => (
+                  <li
+                    key={`${issue.code}-${issue.message}`}
+                    className="flex items-start justify-between gap-2 rounded border border-amber-300/40 bg-amber-50/50 px-3 py-2 text-xs dark:border-amber-700/30 dark:bg-amber-900/10"
+                  >
+                    <span>
+                      <span className="mr-1 font-mono font-semibold text-amber-600 dark:text-amber-400">
+                        [{issue.code}]
+                      </span>
+                      {issue.message}
+                    </span>
+                    <Link
+                      href={`/workflow-designer/${tipoDocCodigo}/editar`}
+                      className="shrink-0 text-xs text-muted-foreground underline hover:text-foreground"
+                      aria-label={`Ir al editor para revisar: ${issue.message}`}
+                    >
+                      Ir al item
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </CardContent>
+      )}
+      {issues !== undefined && badgeCount === 0 && (
+        <CardContent>
+          <p className="text-xs text-muted-foreground">
+            El workflow cumple todas las reglas de integridad.
+          </p>
+        </CardContent>
+      )}
+    </Card>
   );
 }
