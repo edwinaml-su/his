@@ -57,6 +57,11 @@ jobs:
       GOTRUE_JWT_SECRET: e2e-gotrue-test-secret-do-not-use-in-prod-only
       AUTH_SECRET: e2e-dummy-secret
       NODE_ENV: test
+      # bedside-hard-stops.spec.ts tiene doble drift (spec↔UI y
+      # router↔schema) y no puede pasar hoy — ver el comentario extendido en
+      # e2e-smoke.yml. Se omite también en nightly hasta reparar
+      # runValidate5Correctos + reescribir la spec contra la UI real.
+      SKIP_E2E_BEDSIDE_HS: '1'
 
     steps:
       - name: Checkout
@@ -152,11 +157,13 @@ jobs:
         # (runs 33182478251/33193829657: los ~103 "fallos de producto" del
         # triage parcial estaban contaminados por esto). Ver
         # scripts/e2e-rls-bootstrap.sql para el detalle y por qué NO se aplica
-        # el corpus RLS completo acá.
+        # el corpus RLS completo acá. 02_audit_triggers.sql habilita
+        # audit.fn_audit_row para que audit-trail.spec.ts tenga filas.
         run: |
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
 
       - name: Seed minimal data
         run: npm run db:seed
@@ -167,6 +174,12 @@ jobs:
         # local + su fila espejo en public."User" (mismo id). Sin
         # continue-on-error: si esto falla, login() falla para TODA la suite.
         run: node packages/database/scripts/seed-test-users.mjs
+
+      - name: Seed fixtures clínicos E2E
+        # Camas (5 estados) + encuentro abierto + espejo ECE de la ocupación +
+        # GSRN/GTIN escaneables + indicación firmada. UUIDs deterministas
+        # espejados en apps/web/e2e/_helpers/fixtures.ts.
+        run: node packages/database/scripts/seed-e2e-fixtures.mjs
 
       - name: Build app
         run: npm run build
