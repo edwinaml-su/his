@@ -2,157 +2,168 @@
  * E2E — ICD-10 Picker + Hard-stop cierre epicrisis.
  *
  * US.F2.7.33 — Búsqueda catálogo CIE-10.
- * US.F2.7.34 — Hard-stop: no se puede firmar epicrisis sin CIE-10.
+ * US.F2.7.34 — Hard-stop: no se puede firmar epicrisis sin CIE-10 principal.
  * US.F2.7.35 — Advertencia combinaciones inválidas.
+ *
+ * Realidad montada (huérfanos Tier 1, docs/qa/inventario-componentes-huerfanos-2026-08-26.md):
+ * `ICD10Picker` vive en `/ece/epicrisis/[id]` (sección "Diagnóstico CIE-10 de
+ * cierre", solo en estado `borrador`), NO en `/ece/epicrisis/nueva` — el
+ * wizard de creación captura `diagnosticos_egreso` como texto libre, un
+ * campo distinto de `cie10_principal`/`cie10_secundarios` (los que el
+ * servidor exige en `eceEpicrisis.firmar`, PRECONDITION_FAILED si faltan).
  *
  * Casos:
  *   ICD-01: El picker autocomplete retorna resultados al escribir "J06"
  *   ICD-02: Seleccionar ítem del picker llena el campo con el código
  *   ICD-03: Búsqueda por texto libre "diabetes" retorna resultados
  *   ICD-04: Código inválido "ZZZ9" no aparece en sugerencias (catálogo no lo tiene)
- *   ICD-05: Intento de firmar epicrisis sin CIE-10 → mensaje de error visible
- *   ICD-06: Epicrisis con CIE-10 asignado muestra badge del código
+ *   ICD-05: Sin CIE-10 principal, "Firmar como MC" está deshabilitado y se
+ *           muestra el mensaje de hard-stop (Art. 17 NTEC)
+ *   ICD-06: Tras guardar el CIE-10 de cierre, aparece como badge y habilita el botón de firma
  *
  * Prerrequisito de seed:
  *   - Catálogo ICD-10 cargado (seed-icd10.mjs).
- *   - Episodio hospitalario con epicrisis en estado 'borrador' disponible.
- *   - Usuario qa.admin@his.test con rol MC.
+ *   - Al menos una epicrisis en estado 'borrador' visible en /ece/epicrisis
+ *     para el usuario qa.physician@his.test (rol MC).
+ *   Si no hay ninguna, los tests se saltan explícitamente (no fallan en falso).
  */
-
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-const ROUTE_EPICRISIS_NUEVA = "/ece/epicrisis/nueva";
-const ROUTE_CATALOGOS_ICD10 = "/admin/ece/icd10-picker";
+const ROUTE_EPICRISIS_LIST = "/ece/epicrisis";
 
-test.describe("ICD-10 — Picker autocomplete", () => {
+/**
+ * Navega al listado de epicrisis y abre la primera en estado "Borrador".
+ * Devuelve `false` (sin navegar más allá del listado) si no hay ninguna —
+ * las specs deben saltarse explícitamente en ese caso, no fingir un pase.
+ */
+async function abrirEpicrisisBorrador(page: Page): Promise<boolean> {
+  await page.goto(ROUTE_EPICRISIS_LIST);
+
+  const filaBorrador = page
+    .getByRole("row")
+    .filter({ has: page.getByText("Borrador", { exact: true }) })
+    .first();
+
+  if ((await filaBorrador.count()) === 0) return false;
+
+  await filaBorrador.getByRole("link", { name: /ver \/ firmar/i }).click();
+  await expect(page.getByRole("heading", { name: "Epicrisis de Egreso" })).toBeVisible({
+    timeout: 8_000,
+  });
+  return true;
+}
+
+function cie10PrincipalInput(page: Page) {
+  return page.getByRole("combobox", { name: "CIE-10 principal" });
+}
+
+test.describe("ICD-10 — Picker autocomplete (epicrisis, cierre)", () => {
   test.beforeEach(async ({ page }) => {
-    await login(page, "admin");
+    await login(page, "physician");
   });
 
   test("ICD-01: Picker muestra resultados al escribir código J06", async ({ page }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
 
-    // Buscar el campo de diagnóstico CIE-10 principal
-    const picker = page.getByRole("combobox", { name: /cie-10|diagnóstico/i }).first();
-
-    // Si no hay picker en la página, buscar el input genérico del picker
-    const inputEl = picker.or(page.locator('[aria-autocomplete="list"]').first());
-    await expect(inputEl).toBeVisible({ timeout: 8000 });
-
+    const inputEl = cie10PrincipalInput(page);
+    await expect(inputEl).toBeVisible({ timeout: 8_000 });
     await inputEl.fill("J06");
 
-    // Lista de sugerencias debe aparecer
-    const listbox = page.getByRole("listbox");
-    await expect(listbox).toBeVisible({ timeout: 5000 });
-
-    // Debe haber al menos 1 opción
-    const opciones = page.getByRole("option");
-    await expect(opciones.first()).toBeVisible();
+    const listbox = page.getByRole("listbox", { name: "Resultados CIE-10" });
+    await expect(listbox).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole("option").first()).toBeVisible();
   });
 
   test("ICD-02: Seleccionar ítem del picker llena el campo con el código", async ({ page }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
 
-    const inputEl = page.locator('[aria-autocomplete="list"]').first();
-    await expect(inputEl).toBeVisible({ timeout: 8000 });
-
+    const inputEl = cie10PrincipalInput(page);
     await inputEl.fill("J06");
 
-    const listbox = page.getByRole("listbox");
-    await expect(listbox).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("listbox", { name: "Resultados CIE-10" })).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.getByRole("option").first().click();
 
-    // Seleccionar la primera opción
-    const primeraOpcion = page.getByRole("option").first();
-    await primeraOpcion.click();
-
-    // El input debe contener un código CIE-10 (J06.x format)
-    const val = await inputEl.inputValue();
-    expect(val).toMatch(/^J06/);
+    await expect(inputEl).toHaveValue(/^J06/);
   });
 
   test("ICD-03: Búsqueda por texto libre retorna resultados", async ({ page }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
 
-    const inputEl = page.locator('[aria-autocomplete="list"]').first();
-    await expect(inputEl).toBeVisible({ timeout: 8000 });
-
+    const inputEl = cie10PrincipalInput(page);
     await inputEl.fill("diabetes");
 
-    const listbox = page.getByRole("listbox");
-    await expect(listbox).toBeVisible({ timeout: 5000 });
-
-    // Debe haber al menos 1 resultado que contenga "diabetes" en la descripción
+    await expect(page.getByRole("listbox", { name: "Resultados CIE-10" })).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(page.getByRole("option")).not.toHaveCount(0);
   });
 
-  test("ICD-04: Código inexistente ZZZ9 no genera sugerencias", async ({ page }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
+  test("ICD-04: Código inexistente ZZZ9 no genera sugerencias seleccionables", async ({ page }) => {
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
 
-    const inputEl = page.locator('[aria-autocomplete="list"]').first();
-    await expect(inputEl).toBeVisible({ timeout: 8000 });
-
+    const inputEl = cie10PrincipalInput(page);
     await inputEl.fill("ZZZ9");
 
-    // Esperar a que la lista aparezca con mensaje de sin resultados
-    await expect(
-      page.getByText(/sin resultados/i).or(page.getByRole("option")),
-    ).toBeVisible({ timeout: 5000 });
-
-    // No debe haber opciones seleccionables (códigos reales)
-    const opciones = page.getByRole("option");
-    const count = await opciones.count();
-    // 0 opciones O solo el mensaje de "sin resultados" (que es un listitem, no option)
-    expect(count).toBe(0);
-  });
-
-  test("ICD-05: Intento de firmar epicrisis sin CIE-10 muestra error", async ({ page }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
-
-    // Buscar botón de firma (si existe en la página actual)
-    const btnFirmar = page.getByRole("button", { name: /firmar/i });
-    if (await btnFirmar.isVisible()) {
-      await btnFirmar.click();
-
-      // Debe aparecer mensaje de error sobre CIE-10 obligatorio
-      const errorMsg = page
-        .getByRole("alert")
-        .or(page.getByText(/cie-10|diagnóstico.*obligatorio|art.*17/i));
-      await expect(errorMsg).toBeVisible({ timeout: 5000 });
-    } else {
-      // Si el botón no está visible en este contexto, skip test con nota
-      test.skip();
-    }
+    await expect(page.getByText("Sin resultados para “ZZZ9”")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByRole("option")).toHaveCount(0);
   });
 });
 
-test.describe("ICD-10 — Validación combinaciones", () => {
+test.describe("ICD-10 — Hard-stop de firma sin CIE-10 (Art. 17 NTEC)", () => {
   test.beforeEach(async ({ page }) => {
-    await login(page, "admin");
+    await login(page, "physician");
   });
 
-  test("ICD-06: Epicrisis con CIE-10 asignado muestra el código en el formulario", async ({
+  test("ICD-05: Sin CIE-10 principal, el botón de firma está deshabilitado con el aviso visible", async ({
     page,
   }) => {
-    await page.goto(ROUTE_EPICRISIS_NUEVA);
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
 
-    const inputEl = page.locator('[aria-autocomplete="list"]').first();
-    await expect(inputEl).toBeVisible({ timeout: 8000 });
+    const btnFirmar = page.getByRole("button", { name: "Firmar epicrisis como Médico Cirujano" });
 
-    // Simular selección de código
+    // Si esta epicrisis del seed ya trae CIE-10 asignado, el hard-stop no
+    // aplica en este documento — el caso se cubre en ICD-06 con el mismo seed.
+    const yaTieneCie10 = (await page.getByText("CIE-10 cierre:").count()) > 0;
+    test.skip(yaTieneCie10, "La epicrisis borrador del seed ya tiene CIE-10 principal asignado.");
+
+    await expect(btnFirmar).toBeDisabled();
+    await expect(
+      page.getByRole("alert", {
+        name: "Debe asignar el diagnóstico CIE-10 principal antes de firmar (Art. 17 NTEC).",
+      }),
+    ).toBeVisible();
+  });
+
+  test("ICD-06: Guardar CIE-10 de cierre muestra el badge y habilita la firma", async ({ page }) => {
+    const ok = await abrirEpicrisisBorrador(page);
+    test.skip(!ok, "Sin epicrisis en estado borrador disponible para el seed actual.");
+
+    const yaTieneCie10 = (await page.getByText("CIE-10 cierre:").count()) > 0;
+    test.skip(yaTieneCie10, "La epicrisis borrador del seed ya tiene CIE-10 principal asignado.");
+
+    const inputEl = cie10PrincipalInput(page);
     await inputEl.fill("I10");
-    const listbox = page.getByRole("listbox");
+    await expect(page.getByRole("listbox", { name: "Resultados CIE-10" })).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.getByRole("option").first().click();
 
-    if (await listbox.isVisible()) {
-      const primeraOpcion = page.getByRole("option").first();
-      await primeraOpcion.click();
+    await page.getByRole("button", { name: "Guardar CIE-10 de cierre" }).click();
 
-      // Badge con el código debe aparecer en alguna parte del formulario
-      const badge = page.getByText("I10");
-      await expect(badge).toBeVisible({ timeout: 3000 });
-    } else {
-      // Picker no disponible en contexto de prueba
-      test.skip();
-    }
+    await expect(page.getByText("CIE-10 cierre:")).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[aria-label="CIE-10 principal: I10"]')).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Firmar epicrisis como Médico Cirujano" }),
+    ).toBeEnabled();
   });
 });

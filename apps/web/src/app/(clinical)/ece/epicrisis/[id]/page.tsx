@@ -18,7 +18,7 @@
 
 import * as React from "react";
 import { use } from "react";
-import { Lock, ChevronDown, ChevronRight, FileText, ClipboardList } from "lucide-react";
+import { Lock, ChevronDown, ChevronRight, FileText, ClipboardList, Plus, Trash2, Stethoscope } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import {
   Dialog,
@@ -40,7 +40,10 @@ import {
   type EpicrisisEstado,
 } from "@/components/workflow-timeline";
 import { EpicrisisPdfPreview, type EpicrisisPdfData } from "@/components/epicrisis-pdf-preview";
+import { ICD10Picker } from "@/app/(clinical)/ece/icd10-picker/icd10-picker";
 import { trpc } from "@/lib/trpc/react";
+
+const MAX_CIE10_SECUNDARIOS = 4;
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -192,6 +195,136 @@ function CertificarDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Diagnóstico CIE-10 de cierre (US.F2.7.33-35, Art. 17 NTEC)
+//
+// Hard-stop (caso ICD-05): `eceEpicrisis.firmar` rechaza con PRECONDITION_FAILED
+// si `cie10_principal` no está asignado. Esta sección es la única forma de
+// asignarlo (llama a `eceEpicrisis.setCie10`) — sin ella el hard-stop del
+// servidor era inalcanzable desde la UI.
+// ---------------------------------------------------------------------------
+
+function Cie10CierreSection({
+  epicrisisId,
+  cie10Principal,
+  cie10Secundarios,
+  onSaved,
+}: {
+  epicrisisId: string;
+  cie10Principal: string | null;
+  cie10Secundarios: string[] | null;
+  onSaved: () => void;
+}) {
+  const [principal, setPrincipal] = React.useState(cie10Principal ?? "");
+  const [secundarios, setSecundarios] = React.useState<string[]>(cie10Secundarios ?? []);
+
+  // Recarga el formulario solo cuando cambia el documento (no en cada refetch).
+  React.useEffect(() => {
+    setPrincipal(cie10Principal ?? "");
+    setSecundarios(cie10Secundarios ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [epicrisisId]);
+
+  const codigosParaValidar = [principal, ...secundarios].filter((c): c is string => Boolean(c));
+  const validateQ = trpc.icd10.validate.useQuery(
+    { codigos: codigosParaValidar },
+    { enabled: codigosParaValidar.length > 0, staleTime: 30_000 },
+  );
+  const warnings = (validateQ.data?.warnings ?? []).map((w) => w.mensaje);
+
+  const setCie10 = trpc.eceEpicrisis.setCie10.useMutation({ onSuccess: onSaved });
+
+  const hasChanges =
+    principal !== (cie10Principal ?? "") ||
+    JSON.stringify(secundarios) !== JSON.stringify(cie10Secundarios ?? []);
+
+  function handleSave() {
+    if (!principal) return;
+    setCie10.mutate({
+      id: epicrisisId,
+      cie10Principal: principal,
+      cie10Secundarios: secundarios.filter(Boolean),
+    });
+  }
+
+  function addSecundario() {
+    if (secundarios.length >= MAX_CIE10_SECUNDARIOS) return;
+    setSecundarios((s) => [...s, ""]);
+  }
+
+  function removeSecundario(index: number) {
+    setSecundarios((s) => s.filter((_, i) => i !== index));
+  }
+
+  return (
+    <div className="space-y-3 border-t pt-3">
+      <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+        <Stethoscope className="h-4 w-4 text-muted-foreground" aria-hidden />
+        Diagnóstico CIE-10 de cierre
+      </h3>
+      <p className="text-xs text-muted-foreground">
+        Obligatorio para firmar (Art. 17 NTEC).
+      </p>
+
+      <ICD10Picker
+        id="cie10-principal"
+        label="CIE-10 principal"
+        value={principal}
+        required
+        onChange={(item) => setPrincipal(item?.codigo ?? "")}
+        warnings={warnings}
+      />
+
+      {secundarios.map((codigo, i) => (
+        <div key={i} className="flex items-end gap-1.5">
+          <div className="flex-1">
+            <ICD10Picker
+              id={`cie10-secundario-${i}`}
+              label={`CIE-10 secundario ${i + 1}`}
+              value={codigo}
+              onChange={(item) =>
+                setSecundarios((s) => s.map((c, idx) => (idx === i ? (item?.codigo ?? "") : c)))
+              }
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => removeSecundario(i)}
+            aria-label={`Eliminar CIE-10 secundario ${i + 1}`}
+            className="mb-1.5 rounded p-1.5 text-muted-foreground hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Trash2 className="h-4 w-4" aria-hidden />
+          </button>
+        </div>
+      ))}
+
+      {secundarios.length < MAX_CIE10_SECUNDARIOS && (
+        <Button type="button" variant="outline" size="sm" onClick={addSecundario} className="w-full">
+          <Plus className="mr-1.5 h-4 w-4" aria-hidden />
+          Agregar CIE-10 secundario
+        </Button>
+      )}
+
+      {setCie10.error && (
+        <p role="alert" className="text-xs text-destructive">
+          {setCie10.error.message}
+        </p>
+      )}
+
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={handleSave}
+        disabled={!principal || !hasChanges || setCie10.isPending}
+        className="w-full"
+      >
+        {setCie10.isPending ? "Guardando…" : "Guardar CIE-10 de cierre"}
+      </Button>
+    </div>
   );
 }
 
@@ -479,6 +612,21 @@ export default function EpicrisisDetailPage({
               <CardContent className="space-y-4">
                 <WorkflowTimeline steps={timelineSteps} />
 
+                {/* Badge CIE-10 de cierre asignado — visible en cualquier estado */}
+                {epicrisis.cie10_principal && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="text-muted-foreground">CIE-10 cierre:</span>
+                    <Badge variant="outline" className="font-mono" aria-label={`CIE-10 principal: ${epicrisis.cie10_principal}`}>
+                      {epicrisis.cie10_principal}
+                    </Badge>
+                    {(epicrisis.cie10_secundarios ?? []).map((codigo) => (
+                      <Badge key={codigo} variant="secondary" className="font-mono">
+                        {codigo}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+
                 {/* Error de mutación */}
                 {mutationError && (
                   <p role="alert" className="text-xs text-destructive">
@@ -486,18 +634,35 @@ export default function EpicrisisDetailPage({
                   </p>
                 )}
 
+                {/* Diagnóstico CIE-10 de cierre — editable solo en borrador */}
+                {estado === "borrador" && (
+                  <Cie10CierreSection
+                    epicrisisId={id}
+                    cie10Principal={epicrisis.cie10_principal}
+                    cie10Secundarios={epicrisis.cie10_secundarios}
+                    onSaved={() => query.refetch()}
+                  />
+                )}
+
                 {/* Botones contextuales según estado */}
                 {!isCertificado && !isAnulado && (
                   <div className="space-y-2 border-t pt-3">
                     {estado === "borrador" && (
-                      <Button
-                        className="w-full bg-[#1a3c6e] hover:bg-[#15305a] text-white"
-                        onClick={handleFirmar}
-                        disabled={isMutating}
-                        aria-label="Firmar epicrisis como Médico Cirujano"
-                      >
-                        {firmar.isPending ? "Firmando…" : "Firmar como MC"}
-                      </Button>
+                      <>
+                        {!epicrisis.cie10_principal && (
+                          <p role="alert" className="text-xs text-destructive">
+                            Debe asignar el diagnóstico CIE-10 principal antes de firmar (Art. 17 NTEC).
+                          </p>
+                        )}
+                        <Button
+                          className="w-full bg-[#1a3c6e] hover:bg-[#15305a] text-white"
+                          onClick={handleFirmar}
+                          disabled={isMutating || !epicrisis.cie10_principal}
+                          aria-label="Firmar epicrisis como Médico Cirujano"
+                        >
+                          {firmar.isPending ? "Firmando…" : "Firmar como MC"}
+                        </Button>
+                      </>
                     )}
                     {estado === "firmado" && (
                       <Button
