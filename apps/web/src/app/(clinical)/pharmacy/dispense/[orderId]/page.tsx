@@ -38,6 +38,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { SubstitutionModal } from "../../_components/substitution-modal";
 
 interface CostCenterOption {
   id: string;
@@ -60,6 +61,14 @@ type HardStopReason =
 interface HardStop {
   reason: HardStopReason;
   detail: string;
+}
+
+/** Target de sustitución — misma forma que `SubstitutionTarget` en substitution-modal.tsx. */
+interface SubstitutionTarget {
+  prescriptionId: string;
+  prescriptionItemId: string;
+  drugName: string;
+  gtinOriginal: string;
 }
 
 export default function GS1DispensePage(): React.ReactElement {
@@ -110,6 +119,12 @@ export default function GS1DispensePage(): React.ReactElement {
   const [cancelError, setCancelError] = React.useState<string | null>(null);
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [checkPending, setCheckPending] = React.useState(false);
+
+  // Sustitución genérico-comercial (US.F2.6.11) — bloquea el despacho del
+  // ítem hasta que el médico prescriptor autorice.
+  const [substitutionTarget, setSubstitutionTarget] =
+    React.useState<SubstitutionTarget | null>(null);
+  const [blockedItemId, setBlockedItemId] = React.useState<string | null>(null);
 
   // Contador tiempo restante
   const [minutosRestantes, setMinutosRestantes] = React.useState<number | null>(null);
@@ -164,6 +179,20 @@ export default function GS1DispensePage(): React.ReactElement {
     },
     onError: (err: { message: string }) => setCancelError(err.message),
   });
+
+  // Mientras haya una sustitución propuesta para el ítem actual, consulta si
+  // ya fue autorizada por el médico (poll 15 s, igual cadencia que el modal).
+  const authorizedSubstitutionsQuery =
+    trpcAny.pharmacySubstitution.listAuthorizedForItem.useQuery(
+      { prescriptionItemId: blockedItemId ?? "" },
+      { enabled: Boolean(blockedItemId), refetchInterval: 15_000 },
+    );
+  const isSubstitutionAuthorized =
+    ((authorizedSubstitutionsQuery.data as unknown[] | undefined)?.length ?? 0) > 0;
+  const isCurrentItemBlocked =
+    blockedItemId !== null &&
+    blockedItemId === form.prescriptionItemId &&
+    !isSubstitutionAuthorized;
 
   function validate(): boolean {
     const e: Partial<ScanFormState> = {};
@@ -235,6 +264,31 @@ export default function GS1DispensePage(): React.ReactElement {
       reservationId,
       motivo: cancelMotivo.trim(),
     });
+  }
+
+  /**
+   * Abre el modal de sustitución para el GTIN/ítem actuales cuando el
+   * farmacéutico determina que no hay stock del medicamento original.
+   */
+  function handleRequestSubstitution() {
+    const e: Partial<ScanFormState> = {};
+    if (!/^\d{14}$/.test(form.gtin)) e.gtin = "GTIN-14: 14 dígitos numéricos";
+    if (!form.prescriptionItemId.trim())
+      e.prescriptionItemId = "ID de ítem de receta requerido";
+    if (Object.keys(e).length > 0) {
+      setErrors((prev) => ({ ...prev, ...e }));
+      return;
+    }
+    setSubstitutionTarget({
+      prescriptionId: orderId,
+      prescriptionItemId: form.prescriptionItemId,
+      drugName: `Medicamento (GTIN ${form.gtin})`,
+      gtinOriginal: form.gtin,
+    });
+  }
+
+  function handleSubstitutionProposed() {
+    setBlockedItemId(form.prescriptionItemId);
   }
 
   const isPending =
@@ -311,6 +365,23 @@ export default function GS1DispensePage(): React.ReactElement {
           >
             Descartar
           </Button>
+        </div>
+      ) : null}
+
+      {/* Sustitución genérico-comercial pendiente — bloquea el despacho */}
+      {isCurrentItemBlocked ? (
+        <div
+          role="alert"
+          aria-live="assertive"
+          className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3"
+        >
+          <p className="font-semibold text-amber-700">
+            Despacho bloqueado — sustitución pendiente de autorización médica
+          </p>
+          <p className="mt-1 text-sm text-amber-700">
+            Se solicitó sustituir el GTIN {form.gtin}. No podrá reservar este
+            ítem hasta que el médico prescriptor autorice la sustitución.
+          </p>
         </div>
       ) : null}
 
@@ -437,9 +508,22 @@ export default function GS1DispensePage(): React.ReactElement {
             ) : null}
 
             {!reservationId ? (
-              <Button type="submit" disabled={isPending}>
-                {isPending ? "Verificando…" : "Validar y reservar"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="submit" disabled={isPending || isCurrentItemBlocked}>
+                  {isPending ? "Verificando…" : "Validar y reservar"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={
+                    isPending ||
+                    (blockedItemId !== null && blockedItemId === form.prescriptionItemId)
+                  }
+                  onClick={handleRequestSubstitution}
+                >
+                  Solicitar Sustitución
+                </Button>
+              </div>
             ) : (
               <p className="text-sm text-green-700">
                 Unidad reservada correctamente. Confirme el despacho desde el
@@ -497,6 +581,13 @@ export default function GS1DispensePage(): React.ReactElement {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Modal de sustitución genérico-comercial (US.F2.6.11) */}
+      <SubstitutionModal
+        target={substitutionTarget}
+        onClose={() => setSubstitutionTarget(null)}
+        onProposed={handleSubstitutionProposed}
+      />
     </div>
   );
 }
