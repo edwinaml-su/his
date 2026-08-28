@@ -239,11 +239,13 @@ try {
   ];
   for (const g of gsrns) {
     await c.query(
+      // $1 no puede reutilizarse para gsrn (varchar) y codigo (char(18)) a la
+      // vez — Postgres deduce tipos inconsistentes (42P08). Parámetros aparte.
       `INSERT INTO ece.gs1_gsrn (gsrn, codigo, tipo, referencia_id, activo, descripcion)
-       VALUES ($1, $1, $2, $3::uuid, $4, $5)
+       VALUES ($1, $2, $3, $4::uuid, $5, $6)
        ON CONFLICT (gsrn) DO UPDATE SET referencia_id = EXCLUDED.referencia_id,
                                         activo = EXCLUDED.activo`,
-      [g.gsrn, g.tipo, g.ref, g.activo, g.desc],
+      [g.gsrn, g.gsrn, g.tipo, g.ref, g.activo, g.desc],
     );
   }
   const gtins = [
@@ -258,9 +260,9 @@ try {
          (codigo, descripcion, fabricante, presentacion, contenido_unidades,
           principio_activo, codigo_atc, principios_activos, excipientes_alergenos)
        VALUES ($1, $2, 'Laboratorios QA Test SV', $3, 1, $4, $5,
-               ARRAY[$4]::text[], '{}'::text[])
+               ARRAY[$6]::text[], '{}'::text[])
        ON CONFLICT (codigo) DO NOTHING`,
-      [g.codigo, g.descripcion, g.presentacion, g.principio, g.atc],
+      [g.codigo, g.descripcion, g.presentacion, g.principio, g.atc, g.principio],
     );
   }
   console.log(`gsrn=${gsrns.length} gtin=${gtins.length}`);
