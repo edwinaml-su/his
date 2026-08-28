@@ -95,3 +95,33 @@ medicamentos con lógica potencialmente divergente entre copias.
 Cablear vs. eliminar, por grupo y no por componente. Con 12 en Tier 1 la
 respuesta difícilmente sea "eliminar" en bloque; cada cableado es un mini-PR
 con su spec E2E des-mentido como criterio de aceptación.
+
+## Remediación — 2026-08-28
+
+Decisión tomada (Edwin): cablear Tier 1 completo + OrgSwitcher/PasswordStrength
+de Tier 2, eliminar Tier 3, dedupe de las copias inline. El editor del
+Workflow Designer (8 componentes Tier 2) quedó **diferido a decisión aparte**.
+Ejecutado en 7 PRs paralelos:
+
+| Componente(s) | PR | Resultado |
+|---|---|---|
+| `OfflineBanner` + `SyncQueueModal` | #584 | Montados en `bedside/page.tsx` (banner `role="status"`; el modal se abre desde el banner) |
+| `StatActivationDialog` + `StatBanner` | #584 | Montados en `administration-wizard.tsx`. ⚠ Solo UI: `bedside.router.ts` no degrada hard-stops server-side (follow-up en curso) |
+| `BarcodeScanner` + `HidScannerInput` | #584 | Cámara como toggle por paso del wizard; HID en layout anidado nuevo de bedside (el montaje que describía su JSDoc) |
+| `SubstitutionModal` | #581 | Montado en `/pharmacy/dispense/[orderId]`; bloquea validación del ítem hasta autorización médica. ⚠ Destapó routers de dispensación duplicados sin stock-check (follow-up en curso) |
+| `ICD10Picker` | #583 | Montado como sección "Diagnóstico CIE-10 de cierre" en `/ece/epicrisis/[id]`. NO obsoleto frente a CIE-11: catálogos coexisten a propósito (CIE-11 = historia clínica; CIE-10 NTEC = cierre epicrisis) |
+| `BreakGlassButton` + `BreakGlassModal` | #582 | Montados en `patient-shell-bar.tsx` cuando `patient.get` falla. Follow-up: RBAC intra-org por paciente |
+| `ApgarDisplay` | #583 | **NO montado**: exige 5 subpuntajes 0-2 y ningún capturador del repo persiste más que totales 0-10. Gap de datos documentado en el PR con opciones |
+| `SurgeryCaseCard` | #579 | Montada en el listado quirúrgico (reemplaza tabla inline; datos 1:1 con el router) |
+| `Gs1Scanner` (dedupe) | #585 | Las 2 "copias" NO eran copias (no parsean AIs — una era stub muerto, otra listener HID crudo). Sí había duplicación real no listada: el scanner HID de `gs1/transfers/nueva` clonado en `gs1/transfers/[id]` → extraído a `hid-scan-input.tsx` |
+| `PatientConsents` | #579 | Integrado como tab en `patients/[id]` (cierra el TODO Sprint 2 de su JSDoc) |
+| Workflow Designer (8) | — | **Diferido** — decisión @PO pendiente |
+| `OrgSwitcherClient` | #580, eliminado en fix/password-policy-y-limpieza | **NO montado — premisa del inventario incorrecta**: `OrgRoleSwitcher` ya cubre el caso, montado en los topbars admin y clínico. Componente eliminado (0 imports fuera de sí mismo) |
+| `PasswordStrengthMeter` | #580, submit endurecido en fix/password-policy-y-limpieza | Montado en `/recover/reset` y en el reset admin de usuarios, con la política real de `@his/contracts`. Gap cerrado: el submit (cliente y `userAdmin.resetPassword` en servidor) ahora valida con `validatePassword()` completa, símbolo incluido |
+| `ViewTransitionProvider` | #585 | Eliminado (0 consumidores confirmado) |
+| `ValidationPanel` (dedupe) | #585 | Copia inline (superset) consolidada en el canónico de `_components/` y migrado el consumidor — cierra huérfano y duplicado a la vez |
+
+Specs E2E des-mentidos en estos PRs: `bedside-stat`, `pharmacy-substitution`,
+`icd10-cierre` (reescrito: apuntaba al wizard sin picker). `bedside-offline`
+ya era estricto. Los de workflow-designer siguen mintiendo hasta que se decida
+ese grupo.

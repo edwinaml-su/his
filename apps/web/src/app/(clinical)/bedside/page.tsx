@@ -11,6 +11,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getCurrentUser, getTenantContext } from "@/lib/auth/session";
 import { BedsideQueueClient } from "./_components/bedside-queue-client";
+import { OfflineBanner } from "./_components/offline-banner";
 
 export const metadata = {
   title: "Bedside — Cola de turno | AVANTE HIS",
@@ -34,6 +35,7 @@ export default async function BedsidePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <OfflineBanner />
           <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-800">
             Enfermería
           </span>

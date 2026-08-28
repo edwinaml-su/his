@@ -293,6 +293,36 @@ describe("workflowEstadoRouter", () => {
       // sin cambios — updated refleja los mismos valores
       expect(result.updated.orden).toBe(ESTADO_BORRADOR.orden);
     });
+
+    it("persiste descripcionMarkdown cuando se envía (US.F2.2.03)", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([ESTADO_BORRADOR] as never);
+      const actualizado = {
+        ...ESTADO_BORRADOR,
+        descripcion_markdown: "Fundamento normativo actualizado.",
+      };
+      prisma.$queryRaw.mockResolvedValueOnce([actualizado] as never);
+      const caller = workflowEstadoRouter.createCaller(workflowCtx(prisma));
+      const result = await caller.estado.update({
+        id: ESTADO_A_ID,
+        descripcionMarkdown: "Fundamento normativo actualizado.",
+      });
+      expect(result.updated.descripcion_markdown).toBe(
+        "Fundamento normativo actualizado.",
+      );
+    });
+
+    it("permite limpiar descripcionMarkdown enviando null explícito", async () => {
+      const conDescripcion = { ...ESTADO_BORRADOR, descripcion_markdown: "Texto previo." };
+      prisma.$queryRaw.mockResolvedValueOnce([conDescripcion] as never);
+      const limpiado = { ...ESTADO_BORRADOR, descripcion_markdown: null };
+      prisma.$queryRaw.mockResolvedValueOnce([limpiado] as never);
+      const caller = workflowEstadoRouter.createCaller(workflowCtx(prisma));
+      const result = await caller.estado.update({
+        id: ESTADO_A_ID,
+        descripcionMarkdown: null,
+      });
+      expect(result.updated.descripcion_markdown).toBeNull();
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

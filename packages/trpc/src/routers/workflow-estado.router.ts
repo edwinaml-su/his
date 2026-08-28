@@ -50,6 +50,7 @@ const estadoCreateInput = z.object({
 const estadoUpdateInput = z.object({
   id: z.string().uuid(),
   nombre: z.string().trim().min(1).max(255).optional(),
+  descripcionMarkdown: z.string().max(20000).nullable().optional(),
   esInicial: z.boolean().optional(),
   esFinal: z.boolean().optional(),
   orden: z.number().int().min(0).optional(),
@@ -232,7 +233,7 @@ export const workflowEstadoRouter = router({
       .mutation(async ({ ctx, input }) => {
         const [prev] = await ctx.prisma.$queryRaw<[FlujoEstadoRow?]>`
           SELECT id::text, tipo_documento_id::text, codigo, nombre,
-                 es_inicial, es_final, orden
+                 es_inicial, es_final, orden, descripcion_markdown
             FROM ece.flujo_estado
            WHERE id = ${input.id}::uuid
            LIMIT 1
@@ -243,6 +244,10 @@ export const workflowEstadoRouter = router({
 
         const updated = {
           nombre: input.nombre ?? prev.nombre,
+          descripcionMarkdown:
+            input.descripcionMarkdown !== undefined
+              ? input.descripcionMarkdown
+              : prev.descripcion_markdown,
           esInicial: input.esInicial ?? prev.es_inicial,
           esFinal: input.esFinal ?? prev.es_final,
           orden: input.orden ?? prev.orden,
@@ -294,13 +299,14 @@ export const workflowEstadoRouter = router({
 
         const [row] = await ctx.prisma.$queryRaw<[FlujoEstadoRow]>`
           UPDATE ece.flujo_estado
-             SET nombre     = ${updated.nombre},
-                 es_inicial = ${updated.esInicial},
-                 es_final   = ${updated.esFinal},
-                 orden      = ${updated.orden}
+             SET nombre               = ${updated.nombre},
+                 descripcion_markdown = ${updated.descripcionMarkdown},
+                 es_inicial           = ${updated.esInicial},
+                 es_final             = ${updated.esFinal},
+                 orden                = ${updated.orden}
            WHERE id = ${input.id}::uuid
            RETURNING id::text, tipo_documento_id::text, codigo, nombre,
-                     es_inicial, es_final, orden
+                     es_inicial, es_final, orden, descripcion_markdown
         `;
         return { updated: row, prev };
       }),

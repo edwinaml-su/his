@@ -26,7 +26,9 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
+import { validatePassword } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
+import { PasswordStrengthMeter } from "@/components/password-strength-meter";
 import { RoleAssignmentDialog } from "../role-assignment-dialog";
 
 type RoleMembership = {
@@ -81,6 +83,9 @@ export default function UserDetailPage() {
   const [pwdReason, setPwdReason] = React.useState("");
   const [pwdShow, setPwdShow] = React.useState(false);
   const [pwdError, setPwdError] = React.useState<string | null>(null);
+
+  // US-2.10 — feedback visual de fortaleza (política @his/contracts).
+  const pwdCheck = React.useMemo(() => validatePassword(pwd), [pwd]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const query = (trpc as any).userAdmin.get.useQuery({ id }, { enabled: !!id });
@@ -152,14 +157,11 @@ export default function UserDetailPage() {
   function submitResetPassword(e: React.FormEvent) {
     e.preventDefault();
     setPwdError(null);
-    // Validación cliente: complejidad + match — defensa en profundidad
-    // (Zod en el server vuelve a validar — UX más amigable que el error backend).
-    if (pwd.length < 12) {
-      setPwdError("Mínimo 12 caracteres.");
-      return;
-    }
-    if (!/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd)) {
-      setPwdError("Debe incluir al menos una letra y un dígito.");
+    // Validación cliente: política completa @his/contracts (misma que el
+    // medidor de fuerza) + match — defensa en profundidad (Zod en el server
+    // vuelve a validar — UX más amigable que el error backend).
+    if (!pwdCheck.valid) {
+      setPwdError(pwdCheck.errors.join(" "));
       return;
     }
     if (pwd !== pwdConfirm) {
@@ -412,6 +414,11 @@ export default function UserDetailPage() {
                   <p id="pwd-hint" className="text-xs text-muted-foreground">
                     Mínimo 12 caracteres, al menos 1 letra y 1 dígito.
                   </p>
+                  <PasswordStrengthMeter
+                    score={pwdCheck.strengthScore}
+                    errors={pwdCheck.errors}
+                    empty={pwd.length === 0}
+                  />
                 </FormField>
                 <FormField>
                   <Label htmlFor="newPasswordConfirm">Confirmar contraseña</Label>

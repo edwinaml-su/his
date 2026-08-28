@@ -344,7 +344,8 @@ describe("validate5Correctos — hard stop cases", () => {
       .mockResolvedValueOnce([{                                          // Indicación del PACIENTE_002
         ...MOCK_INDICATION_ACTIVA,
         patient_id: UUID_PATIENT_002,
-      }]);
+      }])
+      .mockResolvedValue([]);                                            // sin sesión STAT (US.F2.6.47)
     const caller = makeCaller();
     const result = await caller.validate5Correctos(baseInput());
     expect(result.ok).toBe(false);
@@ -359,7 +360,8 @@ describe("validate5Correctos — hard stop cases", () => {
     (prisma as any).$queryRawUnsafe = vi
       .fn()
       .mockResolvedValueOnce([MOCK_GSRN_ROW_ACTIVO])
-      .mockResolvedValueOnce([MOCK_INDICATION_ACTIVA]);  // gtin = GTIN_AMOXICILINA_500MG
+      .mockResolvedValueOnce([MOCK_INDICATION_ACTIVA])   // gtin = GTIN_AMOXICILINA_500MG
+      .mockResolvedValue([]);                            // sin sesión STAT (US.F2.6.47)
     const caller = makeCaller();
     const result = await caller.validate5Correctos({
       ...baseInput(),
@@ -402,7 +404,8 @@ describe("validate5Correctos — hard stop cases", () => {
       .mockResolvedValueOnce([MOCK_GSRN_ROW_ACTIVO])
       .mockResolvedValueOnce([MOCK_INDICATION_ACTIVA])
       .mockResolvedValueOnce([MOCK_GTIN_AMOXICILINA_500])
-      .mockResolvedValueOnce([mockLastAdminRow(lastAdminHace1h())]);
+      .mockResolvedValueOnce([mockLastAdminRow(lastAdminHace1h())])
+      .mockResolvedValue([]);                            // sin sesión STAT (US.F2.6.47)
     const caller = makeCaller();
     const result = await caller.validate5Correctos(baseInput());
     expect(result.ok).toBe(false);

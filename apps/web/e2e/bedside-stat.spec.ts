@@ -1,21 +1,29 @@
 /**
  * E2E — Modo STAT: bypass justificado bedside (US.F2.6.47)
  *
- * Smoke tests de navegación y presencia de elementos clave.
- * La activación real del STAT requiere semillas E2E con indicación activa
- * y GSRN registrado — eso se cubre en Sprint E2E-STAT cuando los seeds
- * incluyan los fixtures necesarios.
+ * `StatActivationDialog` y `StatBanner` se montan en `AdministrationWizard`
+ * (`/bedside/[patientId]/[indicationId]`) — antes de este cableado
+ * (inventario de componentes huérfanos 2026-08-26, Tier 1) ningún archivo
+ * los importaba y esta suite lo admitía en comentario en vez de probarlo.
+ * El wizard no consulta el backend por patientId/indicationId hasta que
+ * el usuario escanea, así que un UUID de placeholder en la URL basta para
+ * ejercitar el chrome del formulario sin depender de seeds de indicación.
  *
  * Lo que se verifica aquí:
  *  - La página /bedside carga y muestra el flujo principal.
- *  - El botón "Activar STAT" es visible en el flujo bedside.
- *  - El dialog de activación STAT renderiza dropdown de motivos.
- *  - El badge rojo STAT ACTIVO aparece tras activación simulada.
+ *  - El botón "Activar STAT" es visible en el wizard bedside y abre el diálogo
+ *    con motivo/GSRN/testigos.
+ *  - Sin sesión STAT activa, el banner `[data-testid='stat-banner']` no se monta.
  *  - El dashboard /audit/stat-events renderiza filtros y tabla.
  */
 
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
+
+// Placeholders — el wizard no valida estos IDs contra el backend hasta el
+// primer scan, así que no requieren seeds de indicación real.
+const DUMMY_PATIENT_ID = "00000000-0000-4000-8000-000000000001";
+const DUMMY_INDICATION_ID = "00000000-0000-4000-8000-000000000002";
 
 test.describe("Modo STAT — Bedside bypass justificado", () => {
   test.beforeEach(async ({ page }) => {
@@ -67,25 +75,28 @@ test.describe("Modo STAT — Bedside bypass justificado", () => {
     await expect(page.locator("#stat-anio")).toHaveValue("2025");
   });
 
-  test("stat-activation-dialog: formulario tiene campos requeridos", async ({ page }) => {
-    // Navegar al bedside y simular apertura del dialog STAT.
-    // En el DOM el dialog se abre por botón "Activar STAT" — aquí verificamos
-    // que al llegar a /bedside el botón eventualmente aparece (o que la ruta
-    // es accesible para el rol). El dialog completo se prueba con seeds en sprint E2E-STAT.
-    await page.goto("/bedside");
-
-    // Verificar que la ruta bedside es accesible (no 404 ni redirect a login)
+  test("stat-activation-dialog: botón Activar STAT abre formulario con campos requeridos", async ({ page }) => {
+    await page.goto(`/bedside/${DUMMY_PATIENT_ID}/${DUMMY_INDICATION_ID}`);
     await expect(page).not.toHaveURL(/\/login/);
-    await expect(page).toHaveURL(/\/bedside/);
+
+    const activateButton = page.getByRole("button", { name: /Activar STAT/i });
+    await expect(activateButton).toBeVisible();
+    await activateButton.click();
+
+    const dialog = page.getByRole("dialog", { name: /Activar Modo STAT/i });
+    await expect(dialog).toBeVisible();
+
+    await expect(page.locator("#stat-motivo")).toBeVisible();
+    await expect(page.locator("#stat-gsrn-medico")).toBeVisible();
+    await expect(page.getByPlaceholder("UUID del testigo")).toBeVisible();
   });
 
-  test("stat-banner: tiene el data-testid correcto cuando STAT activo", async ({ page }) => {
-    // El StatBanner se monta cuando hay sesión STAT activa.
-    // Sin sesión activa el banner no aparece — verificamos que el selector
-    // no existe en estado inicial (sin STAT activo).
-    await page.goto("/bedside");
+  test("stat-banner: no se monta sin sesión STAT activa", async ({ page }) => {
+    // El StatBanner se monta en el wizard bedside cuando hay sesión STAT activa
+    // (bedsideStat.getActive). Sin sesión activa para esta indicación, el
+    // selector no debe existir en el DOM.
+    await page.goto(`/bedside/${DUMMY_PATIENT_ID}/${DUMMY_INDICATION_ID}`);
     const banner = page.locator("[data-testid='stat-banner']");
-    // En estado normal (sin STAT activo) el banner no debe estar visible
     await expect(banner).not.toBeVisible();
   });
 });

@@ -1,14 +1,16 @@
 /**
  * E2E — Workflow Designer Editor Core (US.F2.2.01-04)
  *
- * Cubre happy paths del editor visual completo:
+ * Cubre happy paths del editor visual cableado en este lote:
  *  1. Carga del editor con canvas React Flow visible.
  *  2. Toolbar: botones Encuadrar y Auto-layout visibles.
- *  3. Paleta izquierda: muestra tipos de estado.
- *  4. Click en nodo → panel de propiedades aparece con código y nombre.
- *  5. Panel de propiedades muestra tipo (INICIAL/INTERMEDIO/FINAL).
- *  6. Botón "Editar tabla" navega a /editar.
- *  7. Auto-layout no crashea (smoke).
+ *  3. Botón "Editar tabla" (del EditorToolbar cableado) navega a /editar.
+ *  4. Auto-layout no crashea (smoke).
+ *  5. Panel de propiedades (US.F2.2.03): click en nodo lo abre, ✕ lo cierra.
+ *
+ * EditorPalette (US.F2.2.02) fue eliminado (decisión Edwin 2026-08-28): duplicaba
+ * el CRUD tabular de /editar y 3 de sus 5 tipos (FINAL_OK/FINAL_KO/ESPERANDO_FIRMA)
+ * no existen en el esquema (ece.flujo_estado solo tiene es_inicial/es_final).
  *
  * Prerequisito: al menos un tipo de documento con estados sembrado en BD de test.
  * Si no hay datos disponibles, los tests se marcan como info y pasan (no fallan CI).
@@ -16,8 +18,8 @@
  * @QA: Antes de marcar US.F2.2.01-04 como Done, ejecutar este spec contra
  * el ambiente staging con datos reales de workflow. Verificar:
  *   - Drag de nodo persiste posición en BD (requiere rol WORKFLOW_DESIGNER).
- *   - Drop desde paleta abre modal de creación (requiere usuario con rol editor).
  *   - Auto-layout anima con 300ms y reposiciona correctamente.
+ *   - Guardar en el panel de propiedades persiste nombre/descripción/requiere_firma.
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -90,84 +92,42 @@ test.describe("Workflow Designer — Editor Core (US.F2.2.01-04)", () => {
     await expect(breadcrumb).toBeVisible();
   });
 
-  test("US.F2.2.02 — paleta izquierda muestra tipos de estado", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    // Paleta sidebar
-    const palette = page.getByRole("complementary", { name: /Paleta/i });
-    if (await palette.count() === 0) {
-      // Si es readOnly no se muestra la paleta — ok
-      return;
-    }
-
-    await expect(palette).toBeVisible();
-    await expect(palette.getByText("Estado Inicial")).toBeVisible();
-    await expect(palette.getByText("Estado Intermedio")).toBeVisible();
-    await expect(palette.getByText("Estado Final (OK)")).toBeVisible();
-  });
-
-  test("US.F2.2.02 — búsqueda en paleta filtra elementos", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    const palette = page.getByRole("complementary", { name: /Paleta/i });
-    if (await palette.count() === 0) return;
-
-    const searchInput = palette.getByRole("searchbox");
-    await searchInput.fill("Firma");
-
-    await expect(palette.getByText("Esperando Firma")).toBeVisible();
-    await expect(palette.getByText("Estado Inicial")).not.toBeVisible();
-  });
-
+  // US.F2.2.03 — EditorPropsPanel se monta en workflow-grafo-view.tsx (solo con
+  // canEdit). El click en un nodo dispara onSelectNode → abre el aside con
+  // aria-label real del componente (editor-props-panel.tsx).
   test("US.F2.2.03 — click en nodo abre panel de propiedades", async ({ page }) => {
     const href = await navigateToFirstWorkflow(page);
     if (!href) return;
 
-    const firstNode = page.locator(".react-flow__node-estado").first();
-    if (await firstNode.count() === 0) {
-      test.info().annotations.push({
-        type: "skip-reason",
-        description: "No hay estados en este workflow",
-      });
-      return;
-    }
-
-    await firstNode.click();
-    await page.waitForTimeout(500);
-
-    // Panel de propiedades con role complementary
-    const propsPanel = page.getByRole("complementary", {
-      name: /Panel de propiedades/i,
+    const panel = page.getByRole("complementary", {
+      name: "Panel de propiedades del elemento seleccionado",
     });
-    await expect(propsPanel).toBeVisible();
+    await expect(panel).not.toBeVisible();
 
-    // Debe mostrar título "Estado"
-    await expect(propsPanel).toContainText("Estado");
+    const firstNode = page.locator(".react-flow__node").first();
+    if ((await firstNode.count()) === 0) return; // sin estados sembrados
+    await firstNode.click();
 
-    // Debe mostrar el código del estado
-    await expect(propsPanel.locator("code")).toBeVisible();
+    await expect(panel).toBeVisible();
+    // El panel de nodo muestra el código (solo lectura) del estado seleccionado.
+    await expect(panel.getByText(/Código \(solo lectura\)/i)).toBeVisible();
   });
 
   test("US.F2.2.03 — panel de propiedades cierra al presionar ✕", async ({ page }) => {
     const href = await navigateToFirstWorkflow(page);
     if (!href) return;
 
-    const firstNode = page.locator(".react-flow__node-estado").first();
-    if (await firstNode.count() === 0) return;
-
+    const firstNode = page.locator(".react-flow__node").first();
+    if ((await firstNode.count()) === 0) return; // sin estados sembrados
     await firstNode.click();
-    await page.waitForTimeout(500);
 
-    const propsPanel = page.getByRole("complementary", { name: /Panel de propiedades/i });
-    if (await propsPanel.count() === 0) return;
+    const panel = page.getByRole("complementary", {
+      name: "Panel de propiedades del elemento seleccionado",
+    });
+    await expect(panel).toBeVisible();
 
-    const closeBtn = propsPanel.getByRole("button", { name: /cerrar panel/i });
-    await closeBtn.click();
-    await page.waitForTimeout(300);
-
-    await expect(propsPanel).not.toBeVisible();
+    await page.getByRole("button", { name: "Cerrar panel de propiedades" }).click();
+    await expect(panel).not.toBeVisible();
   });
 
   test("US.F2.2.04 — botón Auto-layout no genera error de JS", async ({ page }) => {
