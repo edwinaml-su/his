@@ -24,6 +24,7 @@ import { withTenantContext } from "../rls-context";
 import { computeScheduledSlot } from "../utils/medication-slot";
 import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
 import { persistGs1EpcisEvent } from "../lib/epcis-event-persist";
+import type { BypassableHardStop } from "./bedside-stat.router";
 
 // ---------------------------------------------------------------------------
 // GS1 DataMatrix parser (AI 01 / 10 / 17 / 21)
@@ -243,8 +244,21 @@ export type HardStopCode =
   | "GSRN_PACIENTE_NO_ENCONTRADO"
   | "GS1_PARSE_ERROR";
 
+/** Hard-stop degradado a warning bajo sesión STAT activa (US.F2.6.47). */
+export interface StatBypassWarning {
+  hardStop: BypassableHardStop;
+  reason: string;
+  expected?: string;
+  received?: string;
+}
+
 export type ValidateResult =
-  | { ok: true; validationId: string }
+  | {
+      ok: true;
+      validationId: string;
+      /** Presente solo si hard-stops bypassables se degradaron bajo modo STAT. */
+      statBypass?: { statEventId: string; warnings: StatBypassWarning[] };
+    }
   | { ok: false; hardStop: HardStopCode; reason: string; expected?: string; received?: string };
 
 // ---------------------------------------------------------------------------
@@ -456,6 +470,7 @@ const administrationRouter = router({
             requiresDoubleCheck: true as const,
             lasaAlert,
             administrationId: null,
+            statEventId: null,
           };
         }
 
@@ -558,6 +573,25 @@ const administrationRouter = router({
           select: { id: true },
         });
 
+        // Modo STAT (US.F2.6.47): si hay sesión STAT abierta para esta
+        // indicación, enlazar server-side la administración registrada — el
+        // rastro de auditoría no depende de que el cliente llame
+        // bedsideStat.complete. No-op (0 filas) sin sesión activa.
+        const statRows = await tx.$queryRawUnsafe<{ id: string }[]>(
+          `UPDATE ece.stat_event
+              SET medication_administration_id = $3::uuid
+            WHERE organization_id = $1::uuid
+              AND indication_id = $2
+              AND completado = false
+              AND medication_administration_id IS NULL
+              AND activado_en > now() - interval '15 minutes'
+            RETURNING id`,
+          orgId,
+          input.indicationId,
+          admin.id,
+        );
+        const statEventId = statRows[0]?.id ?? null;
+
         // Evento EPCIS bedside — tabla real: ece.gs1_epcis_event
         // Cols: tipo_evento, subtipo, what, where_data, event_time, record_time,
         //       why, who, payload_hash, indication_id, establecimiento_id, status
@@ -592,13 +626,15 @@ const administrationRouter = router({
           status: "COMMITTED",
         });
 
-        return admin;
+        return { adminId: admin.id, statEventId };
       });
 
       return {
         requiresDoubleCheck: false as const,
         lasaAlert,
-        administrationId: result.id,
+        administrationId: result.adminId,
+        /** Sesión STAT abierta enlazada a esta administración; null si no había. */
+        statEventId: result.statEventId,
       };
     }),
 });
@@ -768,11 +804,66 @@ type Validate5CorrectosCtx = {
   tenant: { organizationId: string; userId: string; establishmentId?: string };
 };
 
+// ---------------------------------------------------------------------------
+// Modo STAT (US.F2.6.47) — sesión activa que degrada hard-stops bypassables
+// ---------------------------------------------------------------------------
+
+interface ActiveStatSession {
+  id: string;
+  hardStopsBypassed: BypassableHardStop[];
+}
+
+/**
+ * Busca la sesión STAT abierta para la indicación: no completada y dentro de
+ * la ventana de 15 min (espejo de ece.stat_event_expire_old). Corre sobre
+ * ctx.prisma (fuera de tx, mismo patrón de lectura que bedside-stat.router)
+ * con filtro explícito de organización.
+ */
+async function findActiveStatSession(
+  prisma: PrismaClient,
+  orgId: string,
+  indicationId: string,
+): Promise<ActiveStatSession | null> {
+  const rows = await prisma.$queryRawUnsafe<
+    { id: string; hard_stops_bypassed: unknown }[]
+  >(
+    `SELECT id, hard_stops_bypassed
+       FROM ece.stat_event
+      WHERE organization_id = $1::uuid
+        AND indication_id = $2
+        AND completado = false
+        AND activado_en > now() - interval '15 minutes'
+      ORDER BY activado_en DESC
+      LIMIT 1`,
+    orgId,
+    indicationId,
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    hardStopsBypassed: Array.isArray(row.hard_stops_bypassed)
+      ? (row.hard_stops_bypassed as BypassableHardStop[])
+      : [],
+  };
+}
+
 async function runValidate5Correctos(
   ctx: Validate5CorrectosCtx,
   input: z.infer<typeof validate5CorrectosInput>,
 ): Promise<ValidateResult> {
       const orgId = ctx.tenant.organizationId;
+
+      // Modo STAT (US.F2.6.47): lookup lazy — solo se consulta la primera vez
+      // que un hard-stop bypassable falla (cero queries extra en el happy path).
+      let statSession: ActiveStatSession | null | undefined;
+      const statWarnings: StatBypassWarning[] = [];
+      const statBypassActivo = async (): Promise<boolean> => {
+        if (statSession === undefined) {
+          statSession = await findActiveStatSession(ctx.prisma, orgId, input.indicationId);
+        }
+        return statSession !== null;
+      };
 
       // ── Paso 0: Parsear DataMatrix GS1 ─────────────────────────────────
       const gs1 = parseGs1DataMatrix(input.gs1Medicamento);
@@ -862,28 +953,39 @@ async function runValidate5Correctos(
 
       // Verificar que el paciente de la indicación coincide con el GSRN escaneado
       if (indication.patient_id !== patientId) {
-        const code: HardStopCode = "PACIENTE_NO_COINCIDE";
+        const code = "PACIENTE_NO_COINCIDE" as const;
         const reason = `El GSRN escaneado pertenece al paciente ${patientId}, pero la indicación corresponde al paciente ${indication.patient_id}.`;
+        const bypass = await statBypassActivo();
+        // El ledger inmutable registra la detección SIEMPRE — bypaseado o no.
         await persistValidation(ctx.prisma, {
           orgId, input, gs1ParsedGtin: gs1.gtin, patientId,
-          status: "HARD_STOP", hardStopCode: code, reason,
+          status: "HARD_STOP", hardStopCode: code,
+          reason: bypass ? `[STAT_BYPASS ${statSession!.id}] ${reason}` : reason,
           expected: indication.patient_id,
           received: patientId,
         });
-        return { ok: false, hardStop: code, reason, expected: indication.patient_id, received: patientId };
+        if (!bypass) {
+          return { ok: false, hardStop: code, reason, expected: indication.patient_id, received: patientId };
+        }
+        statWarnings.push({ hardStop: code, reason, expected: indication.patient_id, received: patientId });
       }
 
       // ── Paso 3: Medicamento correcto ───────────────────────────────────
       if (indication.gtin && indication.gtin !== gs1.gtin) {
-        const code: HardStopCode = "MEDICAMENTO_NO_COINCIDE";
+        const code = "MEDICAMENTO_NO_COINCIDE" as const;
         const reason = `GTIN escaneado no coincide con la indicación.`;
+        const bypass = await statBypassActivo();
         await persistValidation(ctx.prisma, {
           orgId, input, gs1ParsedGtin: gs1.gtin, patientId,
-          status: "HARD_STOP", hardStopCode: code, reason,
+          status: "HARD_STOP", hardStopCode: code,
+          reason: bypass ? `[STAT_BYPASS ${statSession!.id}] ${reason}` : reason,
           expected: indication.gtin,
           received: gs1.gtin,
         });
-        return { ok: false, hardStop: code, reason, expected: indication.gtin, received: gs1.gtin };
+        if (!bypass) {
+          return { ok: false, hardStop: code, reason, expected: indication.gtin, received: gs1.gtin };
+        }
+        statWarnings.push({ hardStop: code, reason, expected: indication.gtin, received: gs1.gtin });
       }
 
       // ── Paso 4: Dosis correcta ─────────────────────────────────────────
@@ -939,16 +1041,21 @@ async function runValidate5Correctos(
           });
 
           if (!ventana.ok) {
-            const code: HardStopCode = "FUERA_DE_VENTANA";
+            const code = "FUERA_DE_VENTANA" as const;
             const reason = `Administración fuera de la ventana terapéutica.`;
             const expected = `${ventana.proximaVentanaInicio.toISOString()} – ${ventana.proximaVentanaFin.toISOString()}`;
             const received = input.timestamp.toISOString();
+            const bypass = await statBypassActivo();
             await persistValidation(ctx.prisma, {
               orgId, input, gs1ParsedGtin: gs1.gtin, patientId,
-              status: "HARD_STOP", hardStopCode: code, reason,
+              status: "HARD_STOP", hardStopCode: code,
+              reason: bypass ? `[STAT_BYPASS ${statSession!.id}] ${reason}` : reason,
               expected, received,
             });
-            return { ok: false, hardStop: code, reason, expected, received };
+            if (!bypass) {
+              return { ok: false, hardStop: code, reason, expected, received };
+            }
+            statWarnings.push({ hardStop: code, reason, expected, received });
           }
         }
       }
@@ -998,6 +1105,28 @@ async function runValidate5Correctos(
             input.glnUbicacion ?? null,
           );
 
+          // Rastro STAT server-side (US.F2.6.47): persistir qué hard-stops se
+          // degradaron en esta validación — no depende de que el cliente llame
+          // bedsideStat.complete. Mismo tx que el registro de validación.
+          if (statSession && statWarnings.length > 0) {
+            const merged = Array.from(
+              new Set([
+                ...statSession.hardStopsBypassed,
+                ...statWarnings.map((w) => w.hardStop),
+              ]),
+            );
+            await tx.$executeRawUnsafe(
+              `UPDATE ece.stat_event
+                  SET hard_stops_bypassed = $2::jsonb
+                WHERE id = $1::uuid
+                  AND organization_id = $3::uuid
+                  AND completado = false`,
+              statSession.id,
+              JSON.stringify(merged),
+              orgId,
+            );
+          }
+
           // EPCIS ObjectEvent — tabla real: ece.gs1_epcis_event
           // Cols: tipo_evento, subtipo, what, where_data, event_time, record_time,
           //       why, who, payload_hash, indication_id, establecimiento_id, status
@@ -1030,6 +1159,13 @@ async function runValidate5Correctos(
         },
       );
 
+      if (statSession && statWarnings.length > 0) {
+        return {
+          ok: true,
+          validationId,
+          statBypass: { statEventId: statSession.id, warnings: statWarnings },
+        };
+      }
       return { ok: true, validationId };
 }
 
