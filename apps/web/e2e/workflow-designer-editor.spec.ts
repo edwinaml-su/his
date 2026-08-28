@@ -1,14 +1,15 @@
 /**
  * E2E — Workflow Designer Editor Core (US.F2.2.01-04)
  *
- * Cubre happy paths del editor visual completo:
+ * Cubre happy paths del editor visual cableado en este lote:
  *  1. Carga del editor con canvas React Flow visible.
  *  2. Toolbar: botones Encuadrar y Auto-layout visibles.
- *  3. Paleta izquierda: muestra tipos de estado.
- *  4. Click en nodo → panel de propiedades aparece con código y nombre.
- *  5. Panel de propiedades muestra tipo (INICIAL/INTERMEDIO/FINAL).
- *  6. Botón "Editar tabla" navega a /editar.
- *  7. Auto-layout no crashea (smoke).
+ *  3. Botón "Editar tabla" (del EditorToolbar cableado) navega a /editar.
+ *  4. Auto-layout no crashea (smoke).
+ *
+ * Paleta (US.F2.2.02) y panel de propiedades (US.F2.2.03) quedan `test.fixme`:
+ * `EditorPalette`/`EditorPropsPanel` son huérfanos, fuera del alcance de este
+ * cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).
  *
  * Prerequisito: al menos un tipo de documento con estados sembrado en BD de test.
  * Si no hay datos disponibles, los tests se marcan como info y pasan (no fallan CI).
@@ -90,84 +91,41 @@ test.describe("Workflow Designer — Editor Core (US.F2.2.01-04)", () => {
     await expect(breadcrumb).toBeVisible();
   });
 
-  test("US.F2.2.02 — paleta izquierda muestra tipos de estado", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    // Paleta sidebar
-    const palette = page.getByRole("complementary", { name: /Paleta/i });
-    if (await palette.count() === 0) {
-      // Si es readOnly no se muestra la paleta — ok
-      return;
-    }
-
-    await expect(palette).toBeVisible();
-    await expect(palette.getByText("Estado Inicial")).toBeVisible();
-    await expect(palette.getByText("Estado Intermedio")).toBeVisible();
-    await expect(palette.getByText("Estado Final (OK)")).toBeVisible();
+  // US.F2.2.02 — EditorPalette existe (_components/editor-palette.tsx, cubierto
+  // por editor-components.test.tsx) pero NO está montado en [codigo]/page.tsx —
+  // decisión de producto (docs/qa/inventario-componentes-huerfanos-2026-08-26.md
+  // Tier 2): solo se cableó ExportButtons/EditorToolbar/SimulatorDialog en este
+  // lote. La paleta real del canvas es de solo drag&drop de estados, sin
+  // búsqueda ni el listado "Estado Inicial/Intermedio/Final" de EditorPalette.
+  test("US.F2.2.02 — paleta izquierda muestra tipos de estado", async () => {
+    test.fixme(
+      true,
+      "EditorPalette no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
+    );
   });
 
-  test("US.F2.2.02 — búsqueda en paleta filtra elementos", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    const palette = page.getByRole("complementary", { name: /Paleta/i });
-    if (await palette.count() === 0) return;
-
-    const searchInput = palette.getByRole("searchbox");
-    await searchInput.fill("Firma");
-
-    await expect(palette.getByText("Esperando Firma")).toBeVisible();
-    await expect(palette.getByText("Estado Inicial")).not.toBeVisible();
+  test("US.F2.2.02 — búsqueda en paleta filtra elementos", async () => {
+    test.fixme(
+      true,
+      "EditorPalette no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
+    );
   });
 
-  test("US.F2.2.03 — click en nodo abre panel de propiedades", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    const firstNode = page.locator(".react-flow__node-estado").first();
-    if (await firstNode.count() === 0) {
-      test.info().annotations.push({
-        type: "skip-reason",
-        description: "No hay estados en este workflow",
-      });
-      return;
-    }
-
-    await firstNode.click();
-    await page.waitForTimeout(500);
-
-    // Panel de propiedades con role complementary
-    const propsPanel = page.getByRole("complementary", {
-      name: /Panel de propiedades/i,
-    });
-    await expect(propsPanel).toBeVisible();
-
-    // Debe mostrar título "Estado"
-    await expect(propsPanel).toContainText("Estado");
-
-    // Debe mostrar el código del estado
-    await expect(propsPanel.locator("code")).toBeVisible();
+  // US.F2.2.03 — EditorPropsPanel (mismo doc, Tier 2) tampoco está montado. El
+  // click en nodo del canvas real no abre ningún panel lateral — solo dispara
+  // onSelectNode, sin consumidor en [codigo]/page.tsx.
+  test("US.F2.2.03 — click en nodo abre panel de propiedades", async () => {
+    test.fixme(
+      true,
+      "EditorPropsPanel no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
+    );
   });
 
-  test("US.F2.2.03 — panel de propiedades cierra al presionar ✕", async ({ page }) => {
-    const href = await navigateToFirstWorkflow(page);
-    if (!href) return;
-
-    const firstNode = page.locator(".react-flow__node-estado").first();
-    if (await firstNode.count() === 0) return;
-
-    await firstNode.click();
-    await page.waitForTimeout(500);
-
-    const propsPanel = page.getByRole("complementary", { name: /Panel de propiedades/i });
-    if (await propsPanel.count() === 0) return;
-
-    const closeBtn = propsPanel.getByRole("button", { name: /cerrar panel/i });
-    await closeBtn.click();
-    await page.waitForTimeout(300);
-
-    await expect(propsPanel).not.toBeVisible();
+  test("US.F2.2.03 — panel de propiedades cierra al presionar ✕", async () => {
+    test.fixme(
+      true,
+      "EditorPropsPanel no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
+    );
   });
 
   test("US.F2.2.04 — botón Auto-layout no genera error de JS", async ({ page }) => {
