@@ -10,6 +10,13 @@ on:
           completo sin corte (~486 tests, consume el timeout-minutes del job).
         required: false
         type: string
+      timeout_minutes:
+        description: >-
+          Timeout del job en minutos (default 30). Para inventario completo
+          usar 90-120: la suite serial de ~486 specs no cabe en 30 (run
+          33018607233 cancelado a los 30m27s con max_failures=200).
+        required: false
+        type: string
   schedule:
     # Nightly 06:00 UTC ≈ 00:00 America/El_Salvador (UTC-6)
     - cron: '0 6 * * *'
@@ -30,7 +37,9 @@ jobs:
   e2e:
     name: Playwright E2E
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # workflow_dispatch puede subirlo vía input; schedule/nightly queda en 30
+    # (inputs es null en schedule → fromJSON('30')).
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '30') }}
 
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
