@@ -61,18 +61,22 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
     // El campo real es un único input#scheduledAt type=datetime-local — un
     // fill con solo la fecha revienta con "Malformed value" (run 33219220987).
     const dateInput = page.getByLabel(/fecha/i).first();
+    let dateTimeCombined = false;
     if ((await dateInput.count()) > 0) {
       const inputType = await dateInput.getAttribute("type");
+      dateTimeCombined = inputType === "datetime-local";
       await dateInput.fill(
-        inputType === "datetime-local"
-          ? `${TEST_SLOT_DATE}T${TEST_SLOT_TIME}`
-          : TEST_SLOT_DATE,
+        dateTimeCombined ? `${TEST_SLOT_DATE}T${TEST_SLOT_TIME}` : TEST_SLOT_DATE,
       );
     }
 
-    const timeInput = page.getByLabel(/hora/i).first();
-    if ((await timeInput.count()) > 0) {
-      await timeInput.fill(TEST_SLOT_TIME);
+    // Con datetime-local NO hay campo "hora" aparte: getByLabel(/hora/i)
+    // matchea el MISMO input ("Fecha y hora") y fill("09:00") es Malformed.
+    if (!dateTimeCombined) {
+      const timeInput = page.getByLabel(/hora/i).first();
+      if ((await timeInput.count()) > 0) {
+        await timeInput.fill(TEST_SLOT_TIME);
+      }
     }
 
     // Seleccionar el primer proveedor disponible.
