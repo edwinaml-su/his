@@ -148,6 +148,31 @@ jobs:
         # schema completo de una sola vez en la BD efímera del runner.
         run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
 
+      - name: Bootstrap RLS helpers (set_tenant_context + rol authenticated)
+        # `db push` solo crea lo que modela schema.prisma — NO el corpus SQL
+        # hand-rolled de packages/database/sql/ (CLAUDE.md §Schema drift). Sin
+        # esto, cualquier router que llame `withTenantContext`
+        # (packages/trpc/src/rls-context.ts) revienta con
+        # "function public.set_tenant_context(...) does not exist" y después
+        # "role authenticated does not exist" — eso tumbaba TODAS las specs
+        # @smoke (diagnóstico 2026-08-28, run 33199823168: bed.getMap,
+        # costCenter.list, encounterTransfer.listRecent, etc. Ver
+        # scripts/e2e-rls-bootstrap.sql para el detalle completo y por qué NO
+        # se aplica el corpus RLS completo acá).
+        #
+        # 62b_ece_context_helpers.sql: mismo problema, espacio de GUC `ece.*`
+        # (withEceContext, packages/trpc/src/ece/rls-context.ts). Diagnóstico
+        # de seguimiento (run 33207913650, iteración 2): sin esto,
+        # `ece.set_ece_context(uuid, uuid)` no existe y CUALQUIER router ECE
+        # revienta sin catch (a diferencia de costCenter.list, que sí tiene
+        # fallback). Este archivo está documentado en el propio corpus como
+        # apto para reconstrucción portable — solo depende de que exista el
+        # schema `ece` (ya creado por `prisma db push`), sin auth.*/vault.
+        run: |
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+
       - name: Seed minimal data
         run: npm run db:seed
         continue-on-error: true
