@@ -57,6 +57,7 @@ export interface EstadoRow {
   es_inicial: boolean;
   es_final: boolean;
   orden: number;
+  descripcion_markdown?: string | null;
 }
 
 export interface TransicionRow {
@@ -287,7 +288,7 @@ const WorkflowGraphInner = React.forwardRef<WorkflowGraphHandle, WorkflowGraphPr
           es_inicial: e.es_inicial,
           es_final: e.es_final,
           orden: e.orden,
-          descripcion_markdown: (e as { descripcion_markdown?: string | null }).descripcion_markdown ?? null,
+          descripcion_markdown: e.descripcion_markdown ?? null,
           onSelect: placeholder as EstadoNodeData["onSelect"],
           highlighted: e.id === highlightEstadoId,
         },

@@ -3,8 +3,8 @@
  * Tests unitarios — Workflow Designer Editor Core (US.F2.2.01-04)
  *
  * Estrategia: mock de React Flow (no renderizable en jsdom), tRPC, UI libs y next/link.
- * Los tests verifican comportamiento de componentes UI, lógica de paleta,
- * props panel y toolbar.
+ * Los tests verifican comportamiento de componentes UI: props panel y toolbar.
+ * (EditorPalette fue eliminado — duplicaba el CRUD tabular de /editar, ver F2.2.03.)
  *
  * @QA: Agregar E2E para happy paths completos (drag nodo, auto-layout visual,
  * persistencia BD) en workflow-designer-editor.spec.ts.
@@ -119,72 +119,11 @@ vi.mock("@his/ui/components/badge", () => ({
 // ─── Importar componentes bajo test (DESPUÉS de los mocks) ───────────────────
 
 import {
-  EditorPalette,
-  type PaletteEstadoTipo,
-} from "../_components/editor-palette";
-import {
   EditorPropsPanel,
   type EstadoNodeData,
   type TransicionEdgeData,
 } from "../_components/editor-props-panel";
 import { EditorToolbar } from "../_components/editor-toolbar";
-
-// ─── EditorPalette ────────────────────────────────────────────────────────────
-
-describe("EditorPalette", () => {
-  afterEach(() => cleanup());
-
-  it("renderiza todos los tipos de elemento", () => {
-    render(<EditorPalette tiposPresentes={[]} />);
-    expect(screen.getByText("Estado Inicial")).toBeInTheDocument();
-    expect(screen.getByText("Estado Intermedio")).toBeInTheDocument();
-    expect(screen.getByText("Estado Final (OK)")).toBeInTheDocument();
-    expect(screen.getByText("Estado Final (KO)")).toBeInTheDocument();
-    expect(screen.getByText("Esperando Firma")).toBeInTheDocument();
-  });
-
-  it("muestra 'Ya existe en el canvas' cuando INICIAL ya está presente", () => {
-    const tiposPresentes: PaletteEstadoTipo[] = ["INICIAL"];
-    render(<EditorPalette tiposPresentes={tiposPresentes} />);
-    expect(screen.getByText("Ya existe en el canvas")).toBeInTheDocument();
-  });
-
-  it("filtra elementos por texto de búsqueda", () => {
-    render(<EditorPalette tiposPresentes={[]} />);
-    const searchInput = screen.getByRole("searchbox");
-    fireEvent.change(searchInput, { target: { value: "Firma" } });
-    expect(screen.getByText("Esperando Firma")).toBeInTheDocument();
-    expect(screen.queryByText("Estado Inicial")).not.toBeInTheDocument();
-  });
-
-  it("muestra 'Sin resultados' cuando no hay coincidencias", () => {
-    render(<EditorPalette tiposPresentes={[]} />);
-    const searchInput = screen.getByRole("searchbox");
-    fireEvent.change(searchInput, { target: { value: "zzz_inexistente" } });
-    expect(screen.getByText("Sin resultados.")).toBeInTheDocument();
-  });
-
-  it("en modo readOnly muestra nota de solo lectura", () => {
-    render(<EditorPalette tiposPresentes={[]} readOnly />);
-    expect(screen.getByText(/Modo solo lectura/i)).toBeInTheDocument();
-  });
-
-  it("el elemento INICIAL bloqueado tiene aria-disabled=true", () => {
-    render(<EditorPalette tiposPresentes={["INICIAL"]} />);
-    // El item bloqueado tiene aria-disabled="true" como string
-    const listItems = screen.getAllByRole("listitem");
-    const blockedItem = listItems.find(
-      (el) => el.getAttribute("aria-disabled") === "true",
-    );
-    expect(blockedItem).toBeDefined();
-  });
-
-  it("la paleta tiene landmark de navegación accesible", () => {
-    render(<EditorPalette tiposPresentes={[]} />);
-    const aside = screen.getByRole("complementary", { name: /Paleta/i });
-    expect(aside).toBeInTheDocument();
-  });
-});
 
 // ─── EditorPropsPanel — nodo ─────────────────────────────────────────────────
 
@@ -266,6 +205,57 @@ describe("EditorPropsPanel — selección de nodo", () => {
     );
     expect(container.firstChild).toBeNull();
   });
+
+  it("no muestra input de color (campo fantasma eliminado — sin columna en ece.flujo_estado)", () => {
+    const { container } = render(
+      <EditorPropsPanel
+        selection={{ kind: "node", data: estadoData }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(container.querySelector('input[type="color"]')).toBeNull();
+  });
+
+  it("Guardar envía nombre y descripcionMarkdown recortados a workflowEstado.estado.update", () => {
+    mockMutation.mutate.mockClear();
+    const conDescripcion: EstadoNodeData = { ...estadoData, descripcion: "Texto previo" };
+    render(
+      <EditorPropsPanel
+        selection={{ kind: "node", data: conDescripcion }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const textarea = screen.getByLabelText("Descripción");
+    fireEvent.change(textarea, { target: { value: "  Fundamento normativo actualizado.  " } });
+    fireEvent.click(screen.getByRole("button", { name: /^guardar$/i }));
+    expect(mockMutation.mutate).toHaveBeenCalledWith({
+      id: "uuid-estado-1",
+      nombre: "Borrador",
+      descripcionMarkdown: "Fundamento normativo actualizado.",
+    });
+  });
+
+  it("Guardar envía descripcionMarkdown=null cuando el campo queda vacío", () => {
+    mockMutation.mutate.mockClear();
+    const conDescripcion: EstadoNodeData = { ...estadoData, descripcion: "Texto previo" };
+    render(
+      <EditorPropsPanel
+        selection={{ kind: "node", data: conDescripcion }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const textarea = screen.getByLabelText("Descripción");
+    fireEvent.change(textarea, { target: { value: "   " } });
+    fireEvent.click(screen.getByRole("button", { name: /^guardar$/i }));
+    expect(mockMutation.mutate).toHaveBeenCalledWith({
+      id: "uuid-estado-1",
+      nombre: "Borrador",
+      descripcionMarkdown: null,
+    });
+  });
 });
 
 // ─── EditorPropsPanel — arista ────────────────────────────────────────────────
@@ -327,6 +317,36 @@ describe("EditorPropsPanel — selección de arista", () => {
     );
     const checkbox = screen.getByRole("checkbox", { name: /firma electrónica/i });
     expect(checkbox).not.toBeChecked();
+  });
+
+  it("no muestra 'Tipo de transición' ni 'Validador' (campos fantasma eliminados)", () => {
+    render(
+      <EditorPropsPanel
+        selection={{ kind: "edge", data: transicionData }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Tipo de transición/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Validador/i)).not.toBeInTheDocument();
+  });
+
+  it("Guardar en arista solo envía id y requiereFirma a workflowTransicion.update", () => {
+    mockMutation.mutate.mockClear();
+    render(
+      <EditorPropsPanel
+        selection={{ kind: "edge", data: transicionData }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    );
+    const checkbox = screen.getByRole("checkbox", { name: /firma electrónica/i });
+    fireEvent.click(checkbox);
+    fireEvent.click(screen.getByRole("button", { name: /^guardar$/i }));
+    expect(mockMutation.mutate).toHaveBeenCalledWith({
+      id: "uuid-transicion-1",
+      requiereFirma: false,
+    });
   });
 });
 

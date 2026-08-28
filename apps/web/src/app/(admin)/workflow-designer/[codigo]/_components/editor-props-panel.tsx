@@ -4,9 +4,13 @@
  * EditorPropsPanel — Sidebar derecho del Workflow Designer.
  *
  * US.F2.2.03: muestra propiedades del nodo o arista seleccionados.
- * - Nodo: codigo (read-only), nombre, tipo (INICIAL/INTERMEDIO/FINAL), descripción, color hex.
- * - Arista: origen, destino, label, tipo, rol requerido, validador.
+ * - Nodo: codigo (read-only), nombre, tipo (INICIAL/INTERMEDIO/FINAL), descripción
+ *   (persiste en `ece.flujo_estado.descripcion_markdown`).
+ * - Arista: acción, rol requerido (read-only), requiere firma electrónica.
  * - Edit inline + Save que llama mutaciones tRPC.
+ *
+ * Campos deliberadamente ausentes (no tienen columna/soporte real, ver F2.2.03
+ * limpieza de fantasmas): color de nodo, tipo/validador de transición.
  *
  * El componente es controlado: el padre mantiene el elemento seleccionado.
  * Al guardar exitosamente llama onSaved() para que el padre re-fetche.
@@ -37,8 +41,6 @@ export interface TransicionEdgeData {
   requiere_firma: boolean;
   rol_codigo?: string;
   rol_autoriza_id?: string;
-  tipo?: string;
-  validador?: string;
 }
 
 type PanelSelection =
@@ -68,7 +70,6 @@ function NodePropsForm({
 }) {
   const [nombre, setNombre] = React.useState(data.nombre);
   const [descripcion, setDescripcion] = React.useState(data.descripcion ?? "");
-  const [color, setColor] = React.useState("#f3f4f6");
   const [error, setError] = React.useState<string | null>(null);
 
   // Sync when selection changes
@@ -92,7 +93,12 @@ function NodePropsForm({
       return;
     }
     setError(null);
-    updateMutation.mutate({ id: data.id, nombre: nombre.trim() });
+    const descripcionTrim = descripcion.trim();
+    updateMutation.mutate({
+      id: data.id,
+      nombre: nombre.trim(),
+      descripcionMarkdown: descripcionTrim === "" ? null : descripcionTrim,
+    });
   }
 
   const tipo = data.es_inicial ? "INICIAL" : data.es_final ? "FINAL" : "INTERMEDIO";
@@ -149,25 +155,6 @@ function NodePropsForm({
           />
         )}
       </div>
-
-      {!readOnly && (
-        <div>
-          <label htmlFor="node-color" className="block text-xs font-medium">
-            Color
-          </label>
-          <div className="mt-0.5 flex items-center gap-2">
-            <input
-              id="node-color"
-              type="color"
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="h-7 w-10 cursor-pointer rounded border"
-              aria-label="Color del nodo en el canvas"
-            />
-            <span className="text-xs font-mono text-muted-foreground">{color}</span>
-          </div>
-        </div>
-      )}
 
       <div>
         <label className="block text-xs font-medium">Orden</label>
@@ -255,22 +242,6 @@ function EdgePropsForm({
           <Badge variant="outline" className="mt-0.5 text-xs font-mono">
             {data.rol_codigo}
           </Badge>
-        </div>
-      )}
-
-      <div>
-        <label className="block text-xs font-medium">Tipo de transición</label>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {data.tipo ?? "MANUAL"}
-        </p>
-      </div>
-
-      {data.validador && (
-        <div>
-          <label className="block text-xs font-medium">Validador (callback)</label>
-          <code className="block mt-0.5 text-xs bg-muted rounded px-2 py-1">
-            {data.validador}
-          </code>
         </div>
       )}
 
