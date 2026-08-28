@@ -15,6 +15,7 @@
  *   `docs/CC/0019/REQ-SEC-USR-001-alta-usuario-auth.md`.
  */
 import { z } from "zod";
+import { validatePassword } from "./password";
 
 /**
  * Estado de la cuenta de autenticación (Supabase Auth) de un usuario local,
@@ -87,9 +88,10 @@ export const userAdminResendInvitationInput = z.object({ userId: z.string().uuid
  * con método PASSWORD por uno nuevo (idempotente: cierra el viejo con
  * validTo=now y crea el nuevo en una sola tx).
  *
- * Política mínima de complejidad — alineada con OWASP ASVS L2 v4.0.3 §2.1:
- *   - 12+ caracteres
- *   - al menos 1 letra y 1 dígito (defensa básica anti-diccionario)
+ * Política completa Avante (`validatePassword` de `./password`, misma que
+ * alimenta el medidor de fuerza en el form) — 12+ caracteres, mayúscula,
+ * minúscula, dígito y símbolo. Antes de este fix el servidor solo exigía
+ * letra+dígito, más laxo que lo que el medidor mostraba (hallazgo PR #580):
  *   - el caller no puede resetear su propio password aquí (debe usar el
  *     flujo de cambio propio que valida el password anterior).
  */
@@ -97,10 +99,13 @@ export const userAdminResetPasswordInput = z.object({
   id: z.string().uuid(),
   newPassword: z
     .string()
-    .min(12, "Mínimo 12 caracteres.")
     .max(200, "Máximo 200 caracteres.")
-    .refine((v) => /[A-Za-z]/.test(v), "Debe incluir al menos una letra.")
-    .refine((v) => /[0-9]/.test(v), "Debe incluir al menos un dígito."),
+    .superRefine((value, ctx) => {
+      const result = validatePassword(value);
+      for (const message of result.errors) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message });
+      }
+    }),
   /** Razón clínica/operativa registrada en audit log (compliance). */
   reason: z.string().trim().min(5).max(500),
 });

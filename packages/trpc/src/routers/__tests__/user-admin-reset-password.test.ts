@@ -20,7 +20,9 @@ vi.mock("@his/infrastructure", () => ({
 const TARGET_ID = "00000000-0000-0000-0000-0000000000ff";
 const TARGET_EMAIL = "target@his.test";
 const AUTH_UUID = "a48fed25-9eb2-4d07-9124-e25c6ac95cbe";
-const VALID_INPUT = { id: TARGET_ID, newPassword: "Avante062026", reason: "reset por olvido" };
+// Incluye símbolo — la política completa (`validatePassword` de
+// @his/contracts) la exige desde el fix de submit-validation (hallazgo #580).
+const VALID_INPUT = { id: TARGET_ID, newPassword: "Avante062026!", reason: "reset por olvido" };
 
 /**
  * CC-0017 — resetPassword migró de un chequeo manual
@@ -84,6 +86,13 @@ describe("userAdmin.resetPassword", () => {
     await expect(caller().resetPassword(VALID_INPUT)).rejects.toMatchObject({
       code: "BAD_REQUEST",
     });
+  });
+
+  it("rechaza newPassword sin símbolo — política completa @his/contracts (#580)", async () => {
+    grantUserManageToAdmin(prisma);
+    await expect(
+      caller().resetPassword({ ...VALID_INPUT, newPassword: "Avante062026" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("PRECONDITION_FAILED si no hay cuenta en Supabase Auth", async () => {

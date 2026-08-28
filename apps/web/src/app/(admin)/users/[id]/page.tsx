@@ -157,14 +157,11 @@ export default function UserDetailPage() {
   function submitResetPassword(e: React.FormEvent) {
     e.preventDefault();
     setPwdError(null);
-    // Validación cliente: complejidad + match — defensa en profundidad
-    // (Zod en el server vuelve a validar — UX más amigable que el error backend).
-    if (pwd.length < 12) {
-      setPwdError("Mínimo 12 caracteres.");
-      return;
-    }
-    if (!/[A-Za-z]/.test(pwd) || !/[0-9]/.test(pwd)) {
-      setPwdError("Debe incluir al menos una letra y un dígito.");
+    // Validación cliente: política completa @his/contracts (misma que el
+    // medidor de fuerza) + match — defensa en profundidad (Zod en el server
+    // vuelve a validar — UX más amigable que el error backend).
+    if (!pwdCheck.valid) {
+      setPwdError(pwdCheck.errors.join(" "));
       return;
     }
     if (pwd !== pwdConfirm) {
