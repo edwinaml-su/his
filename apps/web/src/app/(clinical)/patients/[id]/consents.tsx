@@ -6,8 +6,7 @@
  * Muestra resumen ("X vigentes, Y revocados") y lista expandible con
  * el detalle de cada consentimiento (propósito, vigencia, firmante).
  *
- * Importable desde `page.tsx` del paciente cuando se añada el tab "Consentimientos"
- * (TODO Sprint 2: integrar al Tabs principal del paciente).
+ * Integrado como tab "Consentimientos" en `page.tsx` del paciente (vista 360°).
  */
 import * as React from "react";
 import {

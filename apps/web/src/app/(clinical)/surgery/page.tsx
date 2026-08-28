@@ -6,14 +6,6 @@
 import * as React from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@his/ui/components/table";
 import { Button } from "@his/ui/components/button";
 import {
   Select,
@@ -24,6 +16,7 @@ import {
 } from "@his/ui/components/select";
 import { Label } from "@his/ui/components/label";
 import { trpc } from "@/lib/trpc/react";
+import { SurgeryCaseCard } from "@/components/surgery/surgery-case-card";
 
 type SurgeryStatus =
   | "SCHEDULED"
@@ -42,11 +35,6 @@ const STATUS_OPTIONS: { value: SurgeryStatus | "ALL"; label: string }[] = [
   { value: "CANCELLED", label: "Cancelado" },
   { value: "POSTPONED", label: "Pospuesto" },
 ];
-
-const dateFmt = new Intl.DateTimeFormat("es-SV", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 export default function SurgeryListPage() {
   const [status, setStatus] = React.useState<SurgeryStatus | "ALL">("ALL");
@@ -116,43 +104,11 @@ export default function SurgeryListPage() {
             <p className="text-sm text-muted-foreground">Sin casos para los filtros.</p>
           )}
           {query.data && query.data.length > 0 && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Paciente</TableHead>
-                  <TableHead>Cirujano principal</TableHead>
-                  <TableHead>Quirófano</TableHead>
-                  <TableHead>Inicio programado</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>Procedimiento</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {query.data.map((c) => {
-                  const patientName = c.patient
-                    ? `${c.patient.firstName} ${c.patient.lastName}`
-                    : "—";
-                  const surgeonName = c.primarySurgeon?.fullName ?? "—";
-                  const orName = c.operatingRoom
-                    ? `${c.operatingRoom.code} — ${c.operatingRoom.name}`
-                    : "—";
-                  return (
-                    <TableRow key={c.id}>
-                      <TableCell>{patientName}</TableCell>
-                      <TableCell>{surgeonName}</TableCell>
-                      <TableCell>{orName}</TableCell>
-                      <TableCell className="tabular-nums">
-                        {dateFmt.format(new Date(c.scheduledStart))}
-                      </TableCell>
-                      <TableCell>{c.status}</TableCell>
-                      <TableCell className="max-w-[20rem] truncate">
-                        {c.procedureDescription}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+            <div className="space-y-2">
+              {query.data.map((c) => (
+                <SurgeryCaseCard key={c.id} surgeryCase={c} />
+              ))}
+            </div>
           )}
         </CardContent>
       </Card>
