@@ -44,9 +44,12 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
     // ADMIN no debe ver "acceso restringido" ni menú colapsado por scope.
     await expect(page.getByText(/acceso restringido|sin acceso/i)).not.toBeVisible();
 
-    // El sidebar debe tener al menos 5 ítems de navegación.
-    const navLinks = nav.getByRole("link");
-    const linkCount = await navLinks.count();
+    // El sidebar debe tener al menos 5 ítems de navegación. Los ítems
+    // renderizan role=menuitem (SidebarMenuButton dentro de menu, no link) y
+    // las secciones colapsadas exponen solo su botón trigger — contamos ambos.
+    const linkCount =
+      (await nav.getByRole("menuitem").count()) +
+      (await nav.getByRole("button").count());
     expect(linkCount, "ADMIN debe ver al menos 5 ítems de navegación").toBeGreaterThanOrEqual(5);
 
     test.info().annotations.push({
@@ -85,9 +88,9 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
       return;
     }
 
-    // Verificar que ítems de ER son visibles.
+    // Verificar que ítems de ER son visibles (role=menuitem, ver SCOPE-A-01).
     for (const pattern of ER_SIDEBAR_ITEMS) {
-      const matchingLinks = nav.getByRole("link").filter({ hasText: pattern });
+      const matchingLinks = nav.getByRole("menuitem").filter({ hasText: pattern });
       const count = await matchingLinks.count();
       test.info().annotations.push({
         type: "er-item-check",
@@ -97,7 +100,7 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
 
     // Verificar que ítems de otras unidades NO son visibles.
     for (const pattern of NON_ER_SIDEBAR_ITEMS) {
-      const nonErLinks = nav.getByRole("link").filter({ hasText: pattern });
+      const nonErLinks = nav.getByRole("menuitem").filter({ hasText: pattern });
       const count = await nonErLinks.count();
       if (count > 0) {
         test.info().annotations.push({
@@ -124,8 +127,10 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
     // No debe ver mensaje de acceso restringido.
     await expect(page.getByText(/acceso restringido|sin acceso/i)).not.toBeVisible();
 
-    const navLinks = nav.getByRole("link");
-    const linkCount = await navLinks.count();
+    // role=menuitem + triggers de sección — ver SCOPE-A-01.
+    const linkCount =
+      (await nav.getByRole("menuitem").count()) +
+      (await nav.getByRole("button").count());
     expect(linkCount, "Sin asignaciones debe ver al menos 5 ítems (backward compat)").toBeGreaterThanOrEqual(5);
 
     test.info().annotations.push({

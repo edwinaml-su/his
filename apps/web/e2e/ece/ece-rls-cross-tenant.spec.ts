@@ -192,6 +192,11 @@ test.describe("@smoke - ECE — RLS cross-tenant", () => {
   // -------------------------------------------------------------------------
 
   test("3. Signos vitales: 0 resultados para episodio de otro tenant", async ({ page }) => {
+    // No existe ruta /ece/signos-vitales/[episodioId] (solo la lista y
+    // /nueva) — probeRoute da 404 y el test alterna fail/flaky según el
+    // redirect de auth (runs 33209216000/33219220987). Reactivar cuando
+    // exista la vista por episodio o el probe acepte query params.
+    test.fixme(true, "Ruta /ece/signos-vitales/[episodioId] inexistente — ver docs/qa/e2e-auditoria-rutas-2026-08-26.md");
     if (usarNurseComoB) {
       await login(page, "nurse");
     } else {

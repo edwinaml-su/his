@@ -58,9 +58,16 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
     await expect(page.getByRole("heading", { name: /nueva cita|agendar cita/i })).toBeVisible();
 
     // Intentar seleccionar fecha y hora del slot de prueba.
+    // El campo real es un único input#scheduledAt type=datetime-local — un
+    // fill con solo la fecha revienta con "Malformed value" (run 33219220987).
     const dateInput = page.getByLabel(/fecha/i).first();
     if ((await dateInput.count()) > 0) {
-      await dateInput.fill(TEST_SLOT_DATE);
+      const inputType = await dateInput.getAttribute("type");
+      await dateInput.fill(
+        inputType === "datetime-local"
+          ? `${TEST_SLOT_DATE}T${TEST_SLOT_TIME}`
+          : TEST_SLOT_DATE,
+      );
     }
 
     const timeInput = page.getByLabel(/hora/i).first();

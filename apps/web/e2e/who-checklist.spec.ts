@@ -41,9 +41,12 @@ test.describe("@smoke - WHO Surgical Safety Checklist", () => {
 
   test("el sidebar contiene enlace WHO Checklist bajo ECE — Quirófano", async ({ page }) => {
     await page.goto("/dashboard");
-    // El sidebar debe tener el item registrado
+    // La sección "ECE — Quirófano" está colapsada por default (solo la
+    // sección activa se auto-expande) — expandirla primero. Los ítems del
+    // sidebar exponen role=menuitem, no link (SidebarMenuButton en un menu).
+    await page.getByRole("button", { name: /ECE — Quirófano/i }).click();
     await expect(
-      page.getByRole("link", { name: /WHO Checklist/i }),
+      page.getByRole("menuitem", { name: /WHO Checklist/i }),
     ).toBeVisible();
   });
 

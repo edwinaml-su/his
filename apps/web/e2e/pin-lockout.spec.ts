@@ -16,7 +16,11 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-const ROUTE_FIRMA = "/admin/firma-electronica";
+// La ruta real es /firma-electronica/setup — (admin) es un route group de
+// Next (no aparece en la URL) y la página con el h1 "Firma electrónica" +
+// wizard de PIN vive en el segmento /setup. "/admin/firma-electronica"
+// devolvía 404 → hasContent=false (run 33219220987).
+const ROUTE_FIRMA = "/firma-electronica/setup";
 
 test.describe("@smoke - LOCK-01: página firma electrónica", () => {
   test("la página de firma electrónica carga para usuarios autenticados", async ({

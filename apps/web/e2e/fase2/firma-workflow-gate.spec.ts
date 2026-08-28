@@ -117,6 +117,11 @@ test.describe("@smoke - Fase 2 — Gate: firma electrónica + HC", () => {
   test("2. Crear Ficha Identificación con número de expediente único", async ({
     page,
   }) => {
+    // FIXME (2026-08-28, run 33219220987): /patients/new ya no es el form
+    // "Nuevo paciente" con MRN manual — es el Pre-registro CC-0008 y el
+    // expediente es server-generated (CC-0002 §6, inmutable). Realinear
+    // junto con patient-mpi.spec.ts (misma tarea de seguimiento).
+    test.fixme(true, "UI extinta: /patients/new = Pre-registro CC-0008; expediente server-generated");
     await page.goto("/patients/new");
     await expect(page).toHaveURL(/\/patients\/new/);
 
