@@ -5,7 +5,7 @@
  *
  * Mejoras US.F2.2.14-17:
  *  - RBAC: solo WORKFLOW_DESIGNER / DIR / ADMIN pueden editar (US.F2.2.14).
- *  - Read-only mode: banner azul + paleta oculta + botones deshabilitados (US.F2.2.15).
+ *  - Read-only mode: banner azul + panel de propiedades oculto + botones deshabilitados (US.F2.2.15).
  *  - Mobile: viewport < 768px muestra MobileView (lista de estados) (US.F2.2.16).
  *  - Accesibilidad WCAG 2.1 AA: skip-links, aria-labels, focus visible (US.F2.2.17).
  *
@@ -14,6 +14,11 @@
  * y SimulatorDialog (F2.2.08) se montan aquí. `roleCodes` llega como prop desde
  * el Server Component en `page.tsx` — reemplaza el TODO(HG-19) que hardcodeaba
  * roleCodes=[] y dejaba canEdit siempre en false.
+ *
+ * F2.2.03 (limpieza de fantasmas, decisión Edwin 2026-08-28): EditorPropsPanel
+ * se monta acá (solo con canEdit) para editar nombre/descripción de estado y
+ * requiere_firma de transición. EditorPalette se eliminó — duplicaba el CRUD
+ * tabular de /editar y 3 de sus 5 tipos no existen en el esquema.
  */
 import * as React from "react";
 import Link from "next/link";
@@ -31,13 +36,14 @@ import {
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
 import { useParams } from "next/navigation";
-import { WorkflowGraph, type WorkflowGraphHandle } from "./workflow-graph";
+import { WorkflowGraph, type WorkflowGraphHandle, type EstadoRow, type TransicionRow } from "./workflow-graph";
 import { MobileView } from "./mobile-view";
 import { ReadOnlyBanner } from "./read-only-banner";
 import { useWorkflowAccess } from "./use-workflow-access";
 import { ExportButtons } from "./export-buttons";
 import { EditorToolbar } from "./editor-toolbar";
 import { SimulatorDialog } from "./simulator-dialog";
+import { EditorPropsPanel, type EstadoNodeData, type TransicionEdgeData } from "./editor-props-panel";
 import { DependenciasGrafo } from "../../_components/dependencias-grafo";
 import { ValidationPanel } from "../../_components/validation-panel";
 import ReactMarkdown from "react-markdown";
@@ -49,14 +55,6 @@ function SkipLinks() {
   return (
     <nav aria-label="Saltar al contenido" className="sr-only focus-within:not-sr-only">
       <ul className="flex gap-2 p-2 bg-primary text-primary-foreground">
-        <li>
-          <a
-            href="#workflow-paleta"
-            className="underline focus:outline-2 focus:outline-primary-foreground px-2 py-1 rounded"
-          >
-            Saltar a paleta
-          </a>
-        </li>
         <li>
           <a
             href="#workflow-canvas"
@@ -88,6 +86,11 @@ const FUNCION_LABELS: Record<string, string> = {
 };
 
 // ─── Tipos raw ────────────────────────────────────────────────────────────────
+
+type PanelSelection =
+  | { kind: "node"; data: EstadoNodeData }
+  | { kind: "edge"; data: TransicionEdgeData }
+  | null;
 
 interface RolRow {
   id: string;
@@ -196,6 +199,7 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
   const graphRef = React.useRef<WorkflowGraphHandle>(null);
   const [simulatorOpen, setSimulatorOpen] = React.useState(false);
   const [highlightEstadoId, setHighlightEstadoId] = React.useState<string | null>(null);
+  const [selection, setSelection] = React.useState<PanelSelection>(null);
 
   const { data: tiposDocs, isLoading: loadingDoc } = trpc.workflowTipoDoc.list.useQuery(
     { soloActivos: false },
@@ -203,12 +207,20 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
 
   const tipoDoc = tiposDocs?.find((d) => d.codigo === codigo);
 
-  const { data: estados, isLoading: loadingEstados } = trpc.workflowEstado.estado.list.useQuery(
+  const {
+    data: estados,
+    isLoading: loadingEstados,
+    refetch: refetchEstados,
+  } = trpc.workflowEstado.estado.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
 
-  const { data: transiciones, isLoading: loadingTransiciones } = trpc.workflowEstado.transicion.list.useQuery(
+  const {
+    data: transiciones,
+    isLoading: loadingTransiciones,
+    refetch: refetchTransiciones,
+  } = trpc.workflowEstado.transicion.list.useQuery(
     { tipDocumentoId: tipoDoc?.id ?? "" },
     { enabled: !!tipoDoc?.id },
   );
@@ -229,6 +241,53 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
   );
 
   const isLoading = loadingDoc || loadingEstados || loadingTransiciones || loadingRoles;
+
+  // ── Panel de propiedades (US.F2.2.03) ──────────────────────────────────────
+  // Convierte las filas crudas de React Flow al shape que espera EditorPropsPanel.
+
+  function handleSelectNode(estado: EstadoRow | null) {
+    setSelection(
+      estado
+        ? {
+            kind: "node",
+            data: {
+              id: estado.id,
+              codigo: estado.codigo,
+              nombre: estado.nombre,
+              es_inicial: estado.es_inicial,
+              es_final: estado.es_final,
+              orden: estado.orden,
+              descripcion: estado.descripcion_markdown ?? undefined,
+            },
+          }
+        : null,
+    );
+  }
+
+  function handleSelectEdge(transicion: TransicionRow | null) {
+    setSelection(
+      transicion
+        ? {
+            kind: "edge",
+            data: {
+              id: transicion.id,
+              accion: transicion.accion,
+              estado_origen_id: transicion.estado_origen_id,
+              estado_destino_id: transicion.estado_destino_id,
+              requiere_firma: transicion.requiere_firma,
+              rol_codigo: transicion.rol_codigo,
+              rol_autoriza_id: transicion.rol_autoriza_id,
+            },
+          }
+        : null,
+    );
+  }
+
+  function handlePanelSaved() {
+    setSelection(null);
+    void refetchEstados();
+    void refetchTransiciones();
+  }
 
   if (isLoading) {
     return (
@@ -448,29 +507,8 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
         tipoDocCodigo={codigo}
       />
 
-      {/* Layout: Paleta (read-only oculta) + Canvas + Propiedades */}
+      {/* Layout: Canvas + Propiedades */}
       <div className="flex flex-col gap-4 lg:flex-row">
-        {/* Paleta lateral — oculta en solo lectura (US.F2.2.15) */}
-        {canEdit && (
-          <aside
-            id="workflow-paleta"
-            aria-label="Paleta de elementos del workflow"
-            className="w-full lg:w-48"
-            tabIndex={-1}
-          >
-            <Card className="h-full">
-              <CardHeader>
-                <CardTitle className="text-sm">Paleta</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">
-                  Arrastra elementos al canvas para agregar estados.
-                </p>
-              </CardContent>
-            </Card>
-          </aside>
-        )}
-
         {/* Grafo de estados y transiciones */}
         <main
           id="workflow-canvas"
@@ -509,6 +547,8 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
                   tipDocCodigo={codigo}
                   readOnly={isReadOnly}
                   highlightEstadoId={highlightEstadoId}
+                  onSelectNode={handleSelectNode}
+                  onSelectEdge={handleSelectEdge}
                 />
               )}
             </CardContent>
@@ -522,6 +562,20 @@ export function WorkflowGrafoView({ roleCodes }: WorkflowGrafoViewProps) {
           className="w-full lg:w-96"
           tabIndex={-1}
         >
+          {/* Panel de propiedades del elemento seleccionado (US.F2.2.03).
+              Solo se monta con permisos de edición — en solo lectura el grafo
+              sigue emitiendo onSelectNode/onSelectEdge, pero no hay nada que
+              editar aquí (ReadOnlyBanner ya cubre el aviso). */}
+          {canEdit && selection && (
+            <div className="mb-4">
+              <EditorPropsPanel
+                selection={selection}
+                onClose={() => setSelection(null)}
+                onSaved={handlePanelSaved}
+              />
+            </div>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-sm">

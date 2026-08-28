@@ -6,10 +6,11 @@
  *  2. Toolbar: botones Encuadrar y Auto-layout visibles.
  *  3. Botón "Editar tabla" (del EditorToolbar cableado) navega a /editar.
  *  4. Auto-layout no crashea (smoke).
+ *  5. Panel de propiedades (US.F2.2.03): click en nodo lo abre, ✕ lo cierra.
  *
- * Paleta (US.F2.2.02) y panel de propiedades (US.F2.2.03) quedan `test.fixme`:
- * `EditorPalette`/`EditorPropsPanel` son huérfanos, fuera del alcance de este
- * cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).
+ * EditorPalette (US.F2.2.02) fue eliminado (decisión Edwin 2026-08-28): duplicaba
+ * el CRUD tabular de /editar y 3 de sus 5 tipos (FINAL_OK/FINAL_KO/ESPERANDO_FIRMA)
+ * no existen en el esquema (ece.flujo_estado solo tiene es_inicial/es_final).
  *
  * Prerequisito: al menos un tipo de documento con estados sembrado en BD de test.
  * Si no hay datos disponibles, los tests se marcan como info y pasan (no fallan CI).
@@ -17,8 +18,8 @@
  * @QA: Antes de marcar US.F2.2.01-04 como Done, ejecutar este spec contra
  * el ambiente staging con datos reales de workflow. Verificar:
  *   - Drag de nodo persiste posición en BD (requiere rol WORKFLOW_DESIGNER).
- *   - Drop desde paleta abre modal de creación (requiere usuario con rol editor).
  *   - Auto-layout anima con 300ms y reposiciona correctamente.
+ *   - Guardar en el panel de propiedades persiste nombre/descripción/requiere_firma.
  */
 
 import { test, expect, type Page } from "@playwright/test";
@@ -91,41 +92,42 @@ test.describe("Workflow Designer — Editor Core (US.F2.2.01-04)", () => {
     await expect(breadcrumb).toBeVisible();
   });
 
-  // US.F2.2.02 — EditorPalette existe (_components/editor-palette.tsx, cubierto
-  // por editor-components.test.tsx) pero NO está montado en [codigo]/page.tsx —
-  // decisión de producto (docs/qa/inventario-componentes-huerfanos-2026-08-26.md
-  // Tier 2): solo se cableó ExportButtons/EditorToolbar/SimulatorDialog en este
-  // lote. La paleta real del canvas es de solo drag&drop de estados, sin
-  // búsqueda ni el listado "Estado Inicial/Intermedio/Final" de EditorPalette.
-  test("US.F2.2.02 — paleta izquierda muestra tipos de estado", async () => {
-    test.fixme(
-      true,
-      "EditorPalette no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
-    );
+  // US.F2.2.03 — EditorPropsPanel se monta en workflow-grafo-view.tsx (solo con
+  // canEdit). El click en un nodo dispara onSelectNode → abre el aside con
+  // aria-label real del componente (editor-props-panel.tsx).
+  test("US.F2.2.03 — click en nodo abre panel de propiedades", async ({ page }) => {
+    const href = await navigateToFirstWorkflow(page);
+    if (!href) return;
+
+    const panel = page.getByRole("complementary", {
+      name: "Panel de propiedades del elemento seleccionado",
+    });
+    await expect(panel).not.toBeVisible();
+
+    const firstNode = page.locator(".react-flow__node").first();
+    if ((await firstNode.count()) === 0) return; // sin estados sembrados
+    await firstNode.click();
+
+    await expect(panel).toBeVisible();
+    // El panel de nodo muestra el código (solo lectura) del estado seleccionado.
+    await expect(panel.getByText(/Código \(solo lectura\)/i)).toBeVisible();
   });
 
-  test("US.F2.2.02 — búsqueda en paleta filtra elementos", async () => {
-    test.fixme(
-      true,
-      "EditorPalette no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
-    );
-  });
+  test("US.F2.2.03 — panel de propiedades cierra al presionar ✕", async ({ page }) => {
+    const href = await navigateToFirstWorkflow(page);
+    if (!href) return;
 
-  // US.F2.2.03 — EditorPropsPanel (mismo doc, Tier 2) tampoco está montado. El
-  // click en nodo del canvas real no abre ningún panel lateral — solo dispara
-  // onSelectNode, sin consumidor en [codigo]/page.tsx.
-  test("US.F2.2.03 — click en nodo abre panel de propiedades", async () => {
-    test.fixme(
-      true,
-      "EditorPropsPanel no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
-    );
-  });
+    const firstNode = page.locator(".react-flow__node").first();
+    if ((await firstNode.count()) === 0) return; // sin estados sembrados
+    await firstNode.click();
 
-  test("US.F2.2.03 — panel de propiedades cierra al presionar ✕", async () => {
-    test.fixme(
-      true,
-      "EditorPropsPanel no está montado en la página — huérfano, fuera del alcance de este cableo (docs/qa/inventario-componentes-huerfanos-2026-08-26.md Tier 2).",
-    );
+    const panel = page.getByRole("complementary", {
+      name: "Panel de propiedades del elemento seleccionado",
+    });
+    await expect(panel).toBeVisible();
+
+    await page.getByRole("button", { name: "Cerrar panel de propiedades" }).click();
+    await expect(panel).not.toBeVisible();
   });
 
   test("US.F2.2.04 — botón Auto-layout no genera error de JS", async ({ page }) => {
