@@ -3,15 +3,14 @@
 /**
  * GS1 — Detalle de transferencia + recepción/rechazo (Proceso B).
  *
- * El receptor escanea todos los productos con <Gs1Scanner> antes de
+ * El receptor escanea todos los productos con <HidScanInput> antes de
  * poder marcar como recibido. La UI lleva conteo de productos verificados.
  */
 
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Scan, CheckCircle2, XCircle, ArrowLeft, PackageCheck } from "lucide-react";
+import { CheckCircle2, XCircle, ArrowLeft, PackageCheck } from "lucide-react";
 import { Button } from "@his/ui/components/button";
-import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { Textarea } from "@his/ui/components/textarea";
 import {
@@ -30,6 +29,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { HidScanInput } from "../_components/hid-scan-input";
 
 // ---------------------------------------------------------------------------
 // Tipos locales
@@ -42,57 +42,6 @@ type Producto = {
   cantidad: number;
   uom: string;
 };
-
-// ---------------------------------------------------------------------------
-// Gs1Scanner inline (igual que nueva/page.tsx — no extraemos a shared todavía)
-// ---------------------------------------------------------------------------
-
-function Gs1Scanner({
-  label,
-  placeholder,
-  onScan,
-}: {
-  label: string;
-  placeholder?: string;
-  onScan: (value: string) => void;
-}) {
-  const [value, setValue] = React.useState("");
-  const inputId = React.useId();
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      if (value.trim()) { onScan(value.trim()); setValue(""); }
-    }
-  }
-
-  return (
-    <div className="flex items-end gap-2">
-      <div className="flex-1 space-y-1.5">
-        <Label htmlFor={inputId}>{label}</Label>
-        <div className="relative">
-          <Scan className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden="true" />
-          <Input
-            id={inputId}
-            className="pl-8 font-mono"
-            placeholder={placeholder ?? "Escanear..."}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-      </div>
-      <Button
-        type="button"
-        variant="outline"
-        onClick={() => { if (value.trim()) { onScan(value.trim()); setValue(""); } }}
-        aria-label={`Confirmar ${label}`}
-      >
-        OK
-      </Button>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -320,10 +269,11 @@ export default function TransferenciaDetallePage() {
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Scanner para verificar productos */}
-            <Gs1Scanner
+            <HidScanInput
               label="Escanear GTIN del producto para verificar"
               placeholder="Escanear GTIN..."
               onScan={handleProductoScan}
+              layout="inline"
             />
 
             {/* Toggle rechazo */}

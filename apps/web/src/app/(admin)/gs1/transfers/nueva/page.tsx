@@ -9,7 +9,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Scan, Plus, Trash2, Truck } from "lucide-react";
+import { Plus, Trash2, Truck } from "lucide-react";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
@@ -21,6 +21,7 @@ import {
 } from "@his/ui/components/card";
 import { Badge } from "@his/ui/components/badge";
 import { trpc } from "@/lib/trpc/react";
+import { HidScanInput } from "../_components/hid-scan-input";
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -49,83 +50,6 @@ const PRODUCTO_EMPTY: ProductoRow = {
   cantidad: 1,
   uom: "EA",
 };
-
-// ---------------------------------------------------------------------------
-// Componente scanner GS1 (stub — integrar con lector HID/barcode real)
-// ---------------------------------------------------------------------------
-
-/**
- * Gs1Scanner — captura scan de código GS1-128 / QR GS1 y emite el valor.
- *
- * En producción se conecta al evento `keydown` del lector HID o a
- * una API de cámara. Por ahora es un input de texto que simula el scan.
- *
- * El `aria-label` describe el tipo de código esperado.
- */
-function Gs1Scanner({
-  label,
-  placeholder,
-  onScan,
-  "aria-label": ariaLabel,
-}: {
-  label: string;
-  placeholder?: string;
-  onScan: (value: string) => void;
-  "aria-label"?: string;
-}) {
-  const [value, setValue] = React.useState("");
-  const inputId = React.useId();
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    // Los lectores HID terminan con Enter
-    if (e.key === "Enter") {
-      e.preventDefault();
-      if (value.trim()) {
-        onScan(value.trim());
-        setValue("");
-      }
-    }
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <Label htmlFor={inputId}>{label}</Label>
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Scan
-            className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <Input
-            id={inputId}
-            className="pl-8 font-mono"
-            placeholder={placeholder ?? "Escanear o escribir..."}
-            aria-label={ariaLabel ?? label}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          onClick={() => {
-            if (value.trim()) {
-              onScan(value.trim());
-              setValue("");
-            }
-          }}
-          aria-label={`Confirmar ${label}`}
-        >
-          OK
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Escanea con lector o escribe y presiona Enter / OK.
-      </p>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -277,11 +201,12 @@ export default function NuevaTransferenciaPage() {
 
             {/* SSCC Pallet via scanner */}
             <div className="sm:col-span-2">
-              <Gs1Scanner
+              <HidScanInput
                 label="SSCC pallet (opcional)"
                 placeholder="Escanear etiqueta GS1-128..."
                 aria-label="SSCC del pallet — 18 dígitos"
                 onScan={handleSsccScan}
+                hint="Escanea con lector o escribe y presiona Enter / OK."
               />
               {form.ssccPallet && (
                 <div className="mt-2 flex items-center gap-2">
@@ -343,11 +268,12 @@ export default function NuevaTransferenciaPage() {
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {/* GTIN via scanner */}
                   <div className="sm:col-span-2 lg:col-span-3">
-                    <Gs1Scanner
+                    <HidScanInput
                       label={`GTIN producto ${idx + 1} *`}
                       placeholder="Escanear código de barras..."
                       aria-label={`GTIN del producto ${idx + 1} — 8 a 14 dígitos`}
                       onScan={(v) => handleGtinScan(idx, v)}
+                      hint="Escanea con lector o escribe y presiona Enter / OK."
                     />
                     {producto.gtin && (
                       <Badge variant="outline" className="mt-1 font-mono">

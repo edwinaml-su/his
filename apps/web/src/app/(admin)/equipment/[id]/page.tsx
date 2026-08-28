@@ -13,9 +13,18 @@ import { Label } from "@his/ui/components/label";
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
-// Componente stub — escaneo GS1 (reemplazable con lector HW real)
+// Componente stub — captura manual de código GIAI/GLN (reemplazable con
+// lector HW real).
+//
+// NO es el `Gs1Scanner` de `@/components/gs1-scanner` (decodifica imágenes
+// GS1 vía cámara/worker y extrae GTIN+lote+vencimiento+serie) ni el
+// `HidScanInput` de `gs1/transfers/_components` (captura HID de un valor
+// crudo con Enter). Este campo es un input controlado de un único código
+// GIAI/GLN editable por el operador; el botón "Escanear" es un punto de
+// extensión sin implementar todavía. El nombre distinto evita sugerir
+// equivalencia funcional entre los tres (inventario huérfanos 2026-08-26).
 // ---------------------------------------------------------------------------
-function Gs1Scanner({
+function ManualGs1CodeField({
   label,
   value,
   onChange,
@@ -177,7 +186,7 @@ export default function EquipmentDetailPage() {
               registrarGiai.mutate({ equipmentId, giaiCode });
             }}
           >
-            <Gs1Scanner
+            <ManualGs1CodeField
               label="Registrar GIAI (18 dígitos)"
               value={giaiCode}
               onChange={setGiaiCode}
@@ -201,7 +210,7 @@ export default function EquipmentDetailPage() {
               actualizarUbicacion.mutate({ equipmentId, glnUbicacion, bizStep });
             }}
           >
-            <Gs1Scanner
+            <ManualGs1CodeField
               label="GLN nueva ubicación (13 dígitos)"
               value={glnUbicacion}
               onChange={setGlnUbicacion}
