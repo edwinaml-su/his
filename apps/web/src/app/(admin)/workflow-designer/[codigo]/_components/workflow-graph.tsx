@@ -86,6 +86,8 @@ interface WorkflowGraphProps {
   onSelectEdge?: (transicion: TransicionRow | null) => void;
   /** Emitido cuando un drag desde paleta crea un nodo nuevo. */
   onDropNewNode?: (tipo: string, position: XYPosition) => void;
+  /** Estado a resaltar en el grafo durante la simulación (US.F2.2.08). */
+  highlightEstadoId?: string | null;
 }
 
 // ─── Constantes ────────────────────────────────────────────────────────────────
@@ -114,6 +116,8 @@ interface EstadoNodeData {
   orden: number;
   descripcion_markdown: string | null;
   onSelect: (id: string) => void;
+  /** true si este es el estado activo de la simulación (US.F2.2.08). */
+  highlighted: boolean;
 }
 
 /** Detecta si un string markdown tiene contenido renderable (no solo whitespace). */
@@ -124,6 +128,10 @@ export function hasMarkdownContent(md: string | null | undefined): boolean {
 
 function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
   const style = nodeStyle(data.es_inicial, data.es_final);
+  // Resalte de simulación (US.F2.2.08): anillo azul pulsante sobre el estilo base.
+  const highlightStyle: React.CSSProperties = data.highlighted
+    ? { boxShadow: "0 0 0 3px #3b82f6" }
+    : {};
   const badge = data.es_inicial ? "INICIAL" : data.es_final ? "FINAL" : null;
   const [tooltipOpen, setTooltipOpen] = React.useState(false);
   const hasDoc = hasMarkdownContent(data.descripcion_markdown);
@@ -149,8 +157,10 @@ function EstadoNode({ id, data }: NodeProps<EstadoNodeData>) {
           }
           if (e.key === "Escape") setTooltipOpen(false);
         }}
+        className={data.highlighted ? "animate-pulse" : undefined}
         style={{
           ...style,
+          ...highlightStyle,
           borderRadius: 8,
           padding: "6px 12px",
           width: NODE_W,
@@ -238,6 +248,7 @@ const WorkflowGraphInner = React.forwardRef<WorkflowGraphHandle, WorkflowGraphPr
       onSelectNode,
       onSelectEdge,
       onDropNewNode,
+      highlightEstadoId = null,
     },
     ref,
   ) {
@@ -278,6 +289,7 @@ const WorkflowGraphInner = React.forwardRef<WorkflowGraphHandle, WorkflowGraphPr
           orden: e.orden,
           descripcion_markdown: (e as { descripcion_markdown?: string | null }).descripcion_markdown ?? null,
           onSelect: placeholder as EstadoNodeData["onSelect"],
+          highlighted: e.id === highlightEstadoId,
         },
         draggable: !readOnly,
       }));
@@ -298,7 +310,7 @@ const WorkflowGraphInner = React.forwardRef<WorkflowGraphHandle, WorkflowGraphPr
 
       return { initialNodes: layoutedNodes, initialEdges: rawEdges };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [estados, transiciones, layoutData, readOnly]);
+    }, [estados, transiciones, layoutData, readOnly, highlightEstadoId]);
 
     const [nodes, setNodes] = React.useState<Node[]>(initialNodes);
     const [edges, setEdges] = React.useState<Edge[]>(initialEdges);

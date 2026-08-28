@@ -2,16 +2,14 @@
  * E2E — Publicación y rollback de workflow.
  * US.F2.2.06 (publicar), US.F2.2.19 (rollback), US.F2.2.20 (historial).
  *
- * Estrategia:
- *  1. Login como WORKFLOW_DESIGNER.
- *  2. Navegar al editor del workflow "HC_AMBULATORIA" (seed).
- *  3. Guardar borrador.
- *  4. Publicar con motivo.
- *  5. Verificar que aparece en historial como PUBLICADO.
- *  6. Publicar segunda versión.
- *  7. Verificar que v1 aparece como HISTÓRICO y tiene botón Restaurar.
- *  8. Hacer rollback a v1.
- *  9. Verificar nueva versión activa y audit trail.
+ * Estado real (2026-08-28, ver docs/qa/inventario-componentes-huerfanos-2026-08-26.md
+ * Tier 2): el flujo de publicación (`PublishDialog`, F2.2.06) está desacoplado
+ * del motor de workflow y no tiene punto de montaje en /editar — decisión de
+ * arquitectura pendiente, no se implementa en este lote. Los tests "publica un
+ * workflow..." y "panel de validación bloquea publicar..." quedan `test.fixme`
+ * con la razón inline. Solo "historial muestra versiones y permite rollback"
+ * ejercita UI real (RollbackDialog), y únicamente verifica el registro de
+ * auditoría del rollback, no la restauración operativa del workflow.
  *
  * Nota: este spec requiere que el seed haya creado tipo_documento HC_AMBULATORIA
  * y usuario qa.wfdesigner@his.test con rol WORKFLOW_DESIGNER.
@@ -27,41 +25,23 @@ test.describe("Workflow — publicación y rollback", () => {
     await login(page, "admin");
   });
 
-  test("publica un workflow y aparece en historial", async ({ page }) => {
-    await page.goto(`/workflow-designer/${WF_CODIGO}/editar`);
-
-    // Si el tipo de documento no existe en seed, skip con mensaje
-    const notFound = page.getByText(/no existe un tipo de documento/i);
-    if (await notFound.isVisible({ timeout: 3000 }).catch(() => false)) {
-      test.skip(true, `Tipo de documento ${WF_CODIGO} no existe en seed`);
-      return;
-    }
-
-    // Guardar borrador
-    const guardarBtn = page.getByRole("button", { name: /guardar borrador/i });
-    if (await guardarBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await guardarBtn.click();
-      await expect(page.getByText(/guardado/i)).toBeVisible({ timeout: 5000 });
-    }
-
-    // Publicar — click en botón Publicar
-    const publicarBtn = page.getByRole("button", { name: /^publicar$/i });
-    await expect(publicarBtn).toBeVisible({ timeout: 5000 });
-    await publicarBtn.click();
-
-    // Dialog de motivo
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible({ timeout: 3000 });
-
-    const motivoTextarea = dialog.getByLabel(/motivo del cambio/i);
-    await motivoTextarea.fill("Primera publicación E2E test.");
-
-    await dialog.getByRole("button", { name: /confirmar publicación/i }).click();
-
-    // Debe mostrar feedback de publicado (cualquier toast o mensaje)
-    await expect(page.getByText(/publicado|versión.*1/i)).toBeVisible({ timeout: 8000 });
+  test("publica un workflow y aparece en historial", async () => {
+    // No existe botón "Publicar" (ni "Guardar borrador") en /editar — el flujo
+    // de publicación (PublishDialog, F2.2.06) está desacoplado del motor de
+    // workflow y su cableo es una decisión de arquitectura pendiente, fuera
+    // del alcance de este lote (docs/qa/inventario-componentes-huerfanos-2026-08-26.md
+    // Tier 2). No implementar aquí — solo desmentir el falso verde.
+    test.fixme(
+      true,
+      "No hay botón Publicar en /editar — PublishDialog no está cableado, flujo de publicación desacoplado del motor (decisión de arquitectura pendiente).",
+    );
   });
 
+  // Este test ejercita UI real (historial/page.tsx + RollbackDialog) y queda
+  // habilitado, pero ojo: sin publicaciones previas (el test de arriba que las
+  // crearía está en fixme) la rama de rollback normalmente no se ejecuta. Y
+  // aunque se ejecute, solo verifica que el registro de auditoría del rollback
+  // se crea — NO que el workflow operativo quede efectivamente restaurado.
   test("historial muestra versiones y permite rollback", async ({ page }) => {
     await page.goto(`/workflow-designer/${WF_CODIGO}/historial`);
 
@@ -102,19 +82,16 @@ test.describe("Workflow — publicación y rollback", () => {
     }
   });
 
-  test("panel de validación bloquea publicar si hay errores", async ({ page }) => {
-    await page.goto(`/workflow-designer/${WF_CODIGO}/editar`);
-
-    const notFound = page.getByText(/no existe un tipo de documento/i);
-    if (await notFound.isVisible({ timeout: 3000 }).catch(() => false)) {
-      test.skip(true, `Tipo de documento ${WF_CODIGO} no existe en seed`);
-      return;
-    }
-
-    // El panel de validación debe estar presente
-    const validationPanel = page.getByTestId("validation-panel").or(
-      page.getByTestId("validation-panel-ok"),
+  test("panel de validación bloquea publicar si hay errores", async () => {
+    // ValidationPanel SÍ está montado, pero en /workflow-designer/[codigo]
+    // (vista de grafo) — NO en /editar (vista de tabla), que es donde este
+    // test navega. Los testids "validation-panel"/"validation-panel-ok" del
+    // panel real nunca aparecen en /editar; el test verificaba un panel
+    // huérfano en la ruta equivocada, no el flujo "bloquea publicar" (que no
+    // existe — ver fixme de "publica un workflow y aparece en historial").
+    test.fixme(
+      true,
+      "ValidationPanel vive en /workflow-designer/[codigo], no en /editar — el test asertaba sobre la ruta equivocada y sobre un flujo de publicar que no existe.",
     );
-    await expect(validationPanel).toBeVisible({ timeout: 5000 });
   });
 });
