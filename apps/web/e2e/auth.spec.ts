@@ -28,7 +28,7 @@ test.describe("@smoke - Autenticación", () => {
     // un bug de la página, getByRole("textbox", ...) es la forma robusta de
     // pedir "el campo", no "cualquier cosa que mencione la palabra".
     await page.getByRole("textbox", { name: /contraseña|password/i }).fill("contraseña-invalida");
-    await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
+    await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).and(page.locator('[type="submit"]')).click();
 
     // El error debe ser anunciado vía role=alert (a11y).
     await expect(page.getByRole("alert")).toBeVisible();

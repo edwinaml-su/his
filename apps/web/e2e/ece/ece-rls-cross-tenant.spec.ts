@@ -58,7 +58,7 @@ async function loginAs(
   // getByLabel(/contraseña/i) también matchea el botón "Ver contraseña"
   // (mismo aria-label) — getByRole("textbox", ...) sólo matchea el <input>.
   await page.getByRole("textbox", { name: /contraseña|password/i }).fill(password);
-  await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).click();
+  await page.getByRole("button", { name: /ingresar|iniciar sesión|login/i }).and(page.locator('[type="submit"]')).click();
   await maybeSelectSede(page);
   await page.waitForURL(/\/(dashboard|ece|patients|login)/, { timeout: 12_000 });
   return !page.url().includes("/login");
