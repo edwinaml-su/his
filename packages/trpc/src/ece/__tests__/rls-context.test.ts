@@ -83,6 +83,50 @@ describe("withEceContext", () => {
     ).rejects.toThrow("fallo_clinico");
   });
 
+  it("con tenantContext — setea public.set_tenant_context ANTES del demote (CC-0026 Ola 2b / sql/213)", async () => {
+    const userId = "33333333-3333-3333-3333-333333333333";
+    const orgId = "44444444-4444-4444-4444-444444444444";
+
+    await withEceContext(
+      prisma,
+      personalId,
+      establecimientoId,
+      async () => ({ ok: true }),
+      { tenantContext: { userId, orgId } },
+    );
+
+    // set_ece_context (1) y set_tenant_context (2): ambos vía $executeRaw,
+    // en ese orden, ANTES del demote — si el orden se invierte, el emisor
+    // de eventos de dominio dentro del callback (emitDomainEvent) vuelve a
+    // ver current_org_id() NULL (ver sql/213_domain_event_dual_context.sql).
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
+
+    const [eceCallParts] = (tx.$executeRaw as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      TemplateStringsArray,
+      ...unknown[]
+    ];
+    expect(eceCallParts.join("?")).toContain("ece.set_ece_context");
+
+    const [tenantCallParts, ...tenantArgs] = (tx.$executeRaw as ReturnType<typeof vi.fn>)
+      .mock.calls[1] as [TemplateStringsArray, ...unknown[]];
+    expect(tenantCallParts.join("?")).toContain("public.set_tenant_context");
+    expect(tenantArgs).toEqual([userId, orgId]);
+
+    // El demote ocurre DESPUÉS de ambos $executeRaw.
+    expect(tx.$executeRawUnsafe).toHaveBeenCalledWith("SET LOCAL ROLE authenticated");
+  });
+
+  it("sin tenantContext — NO llama a public.set_tenant_context (comportamiento previo intacto)", async () => {
+    await withEceContext(prisma, personalId, establecimientoId, async () => null);
+
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    const [templateParts] = (tx.$executeRaw as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      TemplateStringsArray,
+      ...unknown[]
+    ];
+    expect(templateParts.join("?")).not.toContain("set_tenant_context");
+  });
+
   it("sin tx activa (sin $transaction) — SET LOCAL sería no-op, no hay garantía RLS", () => {
     // Este test documenta el contrato: la función REQUIERE que $transaction
     // envuelva el callback; fuera de una tx Postgres ignora SET LOCAL.

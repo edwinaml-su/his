@@ -131,18 +131,32 @@ export async function emitDomainEvent(
   // deriva el userId de la sesión y exige que el organizationId coincida con
   // el tenant activo, así que ni la identidad ni el tenant son falsificables.
   //
-  // Requiere contexto de tenant (`app.current_org_id`). Los emisores que
-  // corren FUERA de `withTenantContext` no lo tienen, y para ellos el INSERT
-  // directo sigue siendo válido porque corren con el rol privilegiado. De ahí
-  // la bifurcación: no es defensa contra un error, es que hay dos caminos
-  // legítimos y hay que elegir el que corresponde al rol en curso.
+  // Requiere contexto de tenant resoluble por CUALQUIERA de los dos espacios
+  // de GUC del proyecto: `app.current_org_id` (withTenantContext) o
+  // `app.ece_establecimiento_id` (withEceContext/withWorkflowContext) — ver
+  // sql/213_domain_event_dual_context.sql, "la trampa de los dos espacios de
+  // GUC" ya documentada en sql/209 para CareTask. Antes de 213 esta sonda
+  // solo miraba current_org_id(), así que TODO emisor que corriera dentro de
+  // una transacción ECE pura (la mayoría de los ~55 call-sites de
+  // emitDomainEvent) caía a la rama de INSERT directo de abajo estando
+  // demotado a `authenticated` — que sql/206 dejó sin GRANT INSERT sobre
+  // audit."AuditLog" — y reventaba la transacción completa con
+  // `insufficient_privilege`, revirtiendo también el DomainEvent recién
+  // insertado. `public.current_org_id_or_ece_context()` (SECURITY DEFINER,
+  // sql/209) resuelve ambos espacios.
+  // Los emisores que corren FUERA de cualquiera de los dos contextos (rol
+  // privilegiado/BYPASSRLS, sin demote) no tienen ninguno de los dos GUC, y
+  // para ellos el INSERT directo sigue siendo válido porque corren con el rol
+  // privilegiado. De ahí la bifurcación: no es defensa contra un error, es
+  // que hay dos caminos legítimos y hay que elegir el que corresponde al rol
+  // en curso.
   // El resultado se lee con optional chaining a propósito: Prisma real siempre
   // devuelve un array, pero los tests que mockean `tx` no stubean esta sonda —
   // y no deberían tener que hacerlo, porque para ellos el camino relevante es
   // el del rol privilegiado. Sin contexto detectable se usa ese camino, que es
   // además el comportamiento previo a sql/206.
   const ctxRows = (await tx.$queryRaw<Array<{ hasTenantContext: boolean }>>`
-    SELECT public.current_org_id() IS NOT NULL AS "hasTenantContext"
+    SELECT public.current_org_id_or_ece_context() IS NOT NULL AS "hasTenantContext"
   `) as Array<{ hasTenantContext: boolean }> | undefined;
 
   if (ctxRows?.[0]?.hasTenantContext === true) {
