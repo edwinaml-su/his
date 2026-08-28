@@ -678,8 +678,11 @@ export const workflowPublicacionRouter = router({
     .query(async ({ ctx, input }) => {
       const { rolCodigos } = input;
 
+      // Catálogo ECE (ece.rol) — el mismo que flujo_transicion.rol_autoriza_id
+      // referencia por FK. public."Role" (RBAC tRPC) usa columna "code", no
+      // "codigo": consultarlo aquí rompía con SQL 42703.
       const existentes = await ctx.prisma.$queryRaw<Array<{ codigo: string }>>(
-        Prisma.sql`SELECT codigo FROM public."Role" WHERE codigo = ANY(${rolCodigos})`,
+        Prisma.sql`SELECT codigo FROM ece.rol WHERE codigo = ANY(${rolCodigos})`,
       );
       const existenteSet = new Set(existentes.map((r) => r.codigo));
 
@@ -737,8 +740,9 @@ export const workflowPublicacionRouter = router({
       if (allRolCodigos.size === 0) return { detected: 0 };
 
       const codigosList = [...allRolCodigos];
+      // Catálogo ECE (ece.rol), no public."Role" — ver nota en validateRoles.
       const existentes = await ctx.prisma.$queryRaw<Array<{ codigo: string }>>(
-        Prisma.sql`SELECT codigo FROM public."Role" WHERE codigo = ANY(${codigosList})`,
+        Prisma.sql`SELECT codigo FROM ece.rol WHERE codigo = ANY(${codigosList})`,
       );
       const existenteSet = new Set(existentes.map((r) => r.codigo));
 

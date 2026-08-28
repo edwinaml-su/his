@@ -58,8 +58,11 @@ export const workflowValidatorVisualRouter = router({
         ];
 
         if (referencedRoles.length > 0) {
+          // Catálogo ECE (ece.rol) — el mismo que flujo_transicion.rol_autoriza_id
+          // referencia por FK. public."Role" (RBAC tRPC) usa columna "code", no
+          // "codigo": consultarlo aquí rompía con SQL 42703.
           const existentes = await ctx.prisma.$queryRaw<Array<{ codigo: string }>>(
-            Prisma.sql`SELECT codigo FROM public."Role" WHERE codigo = ANY(${referencedRoles})`,
+            Prisma.sql`SELECT codigo FROM ece.rol WHERE codigo = ANY(${referencedRoles})`,
           );
           validRoleCodes = new Set(existentes.map((r) => r.codigo));
         } else {
