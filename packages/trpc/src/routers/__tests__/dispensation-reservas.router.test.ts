@@ -1,11 +1,17 @@
 /**
- * Tests: pharmacyDispensationRouter (US.F2.6.8-9).
+ * Tests: dispensationRouter — procedures de reserva consolidados (US.F2.6.8-9).
+ *
+ * Migrado desde pharmacy-dispensation.router.test.ts (PR #581): el router
+ * pharmacy-dispensation fue absorbido por pharmacy/dispensation.router.ts,
+ * que es el canónico porque tiene la validación de inventario R07.
  *
  * US.F2.6.8 — Reserva lógica:
  *   - Alta: crea PharmacyReservation RESERVED con expiresAt=now()+4h.
+ *   - SIN_RECETA_ACTIVA si la receta no existe / no es dispensable (nuevo).
  *   - Idempotencia: mismo serial + mismo paciente devuelve la reserva existente.
  *   - Hard Stop: serial ya RESERVED por otro paciente → CONFLICT.
- *   - Cancelación: cambia status → CANCELLED + audit log.
+ *   - R07: hard stop de inventario + descuento atómico (nuevo, PR #581).
+ *   - Cancelación: cambia status → CANCELLED + repone stock descontado.
  *   - Cancelación: NOT_FOUND si reserva no existe o ya está CANCELLED.
  *
  * US.F2.6.9 — Detección de duplicados:
@@ -14,6 +20,8 @@
  *   - Dispensado fuera de ventana → allowed=true.
  *   - Frecuencia PRN → allowed=true (sin Hard Stop de ventana).
  *   - Ítem no encontrado → NOT_FOUND.
+ *
+ * orderDetail — datos de receta para la estación de despacho.
  *
  * Mocks:
  *   - PrismaClient via vitest-mock-extended.
@@ -30,7 +38,6 @@ import {
 } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { TRPCError } from "@trpc/server";
 import { makeCtx } from "../../__tests__/helpers/caller";
 
 // Mock @his/database para que emitDomainEvent sea un no-op en tests
@@ -42,19 +49,21 @@ vi.mock("@his/database", async (importOriginal) => {
   };
 });
 
-import { pharmacyDispensationRouter } from "../pharmacy-dispensation.router";
+import { dispensationRouter } from "../pharmacy/dispensation.router";
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
-// MOCK_TENANT.organizationId (desde test-utils)
+// MOCK_TENANT.organizationId / establishmentId (desde test-utils)
 const ORG = "00000000-0000-0000-0000-0000000000aa";
-const USER = "00000000-0000-0000-0000-000000000002";
+const ESTABLISHMENT = "00000000-0000-0000-0000-0000000000cc";
 const PATIENT = "00000000-0000-0000-0000-000000000003";
 const ORDER = "00000000-0000-0000-0000-000000000004";
 const ITEM = "00000000-0000-0000-0000-000000000005";
 const RES = "00000000-0000-0000-0000-000000000006";
 const OTHER_PATIENT = "00000000-0000-0000-0000-000000000007";
+const STOCK_ITEM_ID = "00000000-0000-0000-0000-0000000000e1";
+const STOCK_LOT_ID = "00000000-0000-0000-0000-0000000000e2";
 
 const GTIN = "07501000001234"; // 14 dígitos
 const LOTE = "L2024A";
@@ -85,7 +94,7 @@ function makeReservation(overrides: Partial<{
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
-describe("pharmacyDispensationRouter", () => {
+describe("dispensationRouter — reservas consolidadas", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
   beforeEach(() => {
@@ -99,6 +108,8 @@ describe("pharmacyDispensationRouter", () => {
     });
     // emitDomainEvent usa $executeRawUnsafe y tablas de outbox; no-op en tests
     prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    // reserveItem exige receta dispensable (Paso 0) — default: existe
+    prisma.prescription.findFirst.mockResolvedValue({ id: ORDER } as never);
   });
 
   afterEach(() => {
@@ -114,12 +125,8 @@ describe("pharmacyDispensationRouter", () => {
       prisma.pharmacyReservation.create.mockResolvedValue(
         makeReservation() as never,
       );
-      // emitDomainEvent invoca notificationOutbox.create — no-op
-      prisma.notificationOutbox?.create?.mockResolvedValue({} as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.reserveItem({
         pharmacyOrderId: ORDER,
         gtin: GTIN,
@@ -142,14 +149,33 @@ describe("pharmacyDispensationRouter", () => {
       expect(exp).toBeGreaterThan(Date.now() + 3 * 60 * 60 * 1000);
     });
 
+    it("Hard Stop SIN_RECETA_ACTIVA cuando la receta no existe o no es dispensable", async () => {
+      prisma.prescription.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: "SIN_RECETA_ACTIVA",
+      });
+
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
     it("Hard Stop CONFLICT cuando el serial ya está RESERVED por OTRO paciente", async () => {
       prisma.pharmacyReservation.findFirst.mockResolvedValue(
         makeReservation({ patientId: OTHER_PATIENT }) as never,
       );
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
         caller.reserveItem({
@@ -167,7 +193,7 @@ describe("pharmacyDispensationRouter", () => {
       expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
     });
 
-    it("idempotente: devuelve reserva existente si mismo paciente + mismo serial RESERVED", async () => {
+    it("idempotente: devuelve reserva existente si mismo paciente + mismo serial RESERVED (sin re-descontar stock)", async () => {
       const existing = makeReservation({ patientId: PATIENT });
       prisma.pharmacyReservation.findFirst.mockResolvedValue(
         existing as never,
@@ -176,9 +202,7 @@ describe("pharmacyDispensationRouter", () => {
         existing as never,
       );
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.reserveItem({
         pharmacyOrderId: ORDER,
         gtin: GTIN,
@@ -189,6 +213,7 @@ describe("pharmacyDispensationRouter", () => {
 
       expect(result.id).toBe(RES);
       expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+      expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
     });
 
     it("sin número de serie: omite el check UNIQUE (serie=null) y crea directamente", async () => {
@@ -196,11 +221,8 @@ describe("pharmacyDispensationRouter", () => {
       prisma.pharmacyReservation.create.mockResolvedValue(
         makeReservation({ id: "new-id" }) as never,
       );
-      prisma.notificationOutbox?.create?.mockResolvedValue({} as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       await caller.reserveItem({
         pharmacyOrderId: ORDER,
         gtin: GTIN,
@@ -209,9 +231,144 @@ describe("pharmacyDispensationRouter", () => {
         patientId: PATIENT,
       });
 
-      // findFirst NO debe haberse llamado (sin serie no hay check de conflicto)
+      // findFirst de reserva NO debe haberse llamado (sin serie no hay check de conflicto)
       expect(prisma.pharmacyReservation.findFirst).not.toHaveBeenCalled();
       expect(prisma.pharmacyReservation.create).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // R07 — hard stop de inventario en reserveItem (PR #581)
+  // -------------------------------------------------------------------------
+  describe("reserveItem — R07 validación de inventario", () => {
+    beforeEach(() => {
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
+      prisma.pharmacyReservation.create.mockResolvedValue(
+        makeReservation() as never,
+      );
+    });
+
+    it("reserva sin bloquear cuando el GTIN no tiene StockItem (catálogo sin cargar)", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        serie: SERIE,
+        patientId: PATIENT,
+      });
+
+      expect(result.status).toBe("RESERVED");
+      expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("Hard Stop LOTE_NO_EXISTE_EN_INVENTARIO cuando el lote nunca ingresó a la bodega", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+      prisma.stockLot.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: "L-FANTASMA",
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: "LOTE_NO_EXISTE_EN_INVENTARIO",
+      });
+    });
+
+    it("Hard Stop LOTE_NO_DISPONIBLE_INVENTARIO cuando el lote está en cuarentena/recall", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+      prisma.stockLot.findFirst.mockResolvedValue({
+        id: STOCK_LOT_ID,
+        qualityStatus: "QUARANTINE",
+      } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: "LOTE_NO_DISPONIBLE_INVENTARIO",
+      });
+      expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("Hard Stop STOCK_INSUFICIENTE cuando quantityOnHand < 1 (updateMany no afecta filas)", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+      prisma.stockLot.findFirst.mockResolvedValue({
+        id: STOCK_LOT_ID,
+        qualityStatus: "AVAILABLE",
+      } as never);
+      prisma.stockLot.updateMany.mockResolvedValue({ count: 0 } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: "STOCK_INSUFICIENTE",
+      });
+      expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    });
+
+    it("happy path — descuenta 1 unidad y registra StockMovement OUT con referenceCode = reserva", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue({ id: STOCK_ITEM_ID } as never);
+      prisma.stockLot.findFirst.mockResolvedValue({
+        id: STOCK_LOT_ID,
+        qualityStatus: "AVAILABLE",
+      } as never);
+      prisma.stockLot.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        serie: SERIE,
+        patientId: PATIENT,
+      });
+
+      expect(result.status).toBe("RESERVED");
+      expect(prisma.stockLot.updateMany).toHaveBeenCalledWith({
+        where: { id: STOCK_LOT_ID, quantityOnHand: { gte: 1 } },
+        data: { quantityOnHand: { decrement: 1 } },
+      });
+      expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "OUT",
+            quantity: 1,
+            itemId: STOCK_ITEM_ID,
+            lotId: STOCK_LOT_ID,
+            gtinFisico: GTIN,
+            referenceCode: RES,
+            establishmentId: ESTABLISHMENT,
+          }),
+        }),
+      );
     });
   });
 
@@ -228,9 +385,7 @@ describe("pharmacyDispensationRouter", () => {
         { ...existing, status: "CANCELLED", cancelMotivo: "Orden suspendida" } as never,
       );
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.cancelReservation({
         reservationId: RES,
         motivo: "Orden suspendida",
@@ -245,12 +400,63 @@ describe("pharmacyDispensationRouter", () => {
       expect(updateArg.cancelMotivo).toBe("Orden suspendida");
     });
 
+    it("repone la unidad descontada (increment + StockMovement IN) si la reserva descontó stock", async () => {
+      const existing = makeReservation({ status: "RESERVED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(
+        existing as never,
+      );
+      prisma.pharmacyReservation.update.mockResolvedValue(
+        { ...existing, status: "CANCELLED", cancelMotivo: "x" } as never,
+      );
+      prisma.stockMovement.findFirst.mockResolvedValue({
+        itemId: STOCK_ITEM_ID,
+        lotId: STOCK_LOT_ID,
+        quantity: 1,
+        establishmentId: ESTABLISHMENT,
+      } as never);
+      prisma.stockMovement.create.mockResolvedValue({ id: "mov-in" } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.cancelReservation({ reservationId: RES, motivo: "x" });
+
+      expect(prisma.stockLot.updateMany).toHaveBeenCalledWith({
+        where: { id: STOCK_LOT_ID },
+        data: { quantityOnHand: { increment: 1 } },
+      });
+      expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "IN",
+            quantity: 1,
+            itemId: STOCK_ITEM_ID,
+            lotId: STOCK_LOT_ID,
+            referenceCode: RES,
+          }),
+        }),
+      );
+    });
+
+    it("no repone stock si la reserva nunca descontó (sin StockMovement OUT)", async () => {
+      const existing = makeReservation({ status: "RESERVED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(
+        existing as never,
+      );
+      prisma.pharmacyReservation.update.mockResolvedValue(
+        { ...existing, status: "CANCELLED" } as never,
+      );
+      prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.cancelReservation({ reservationId: RES, motivo: "x" });
+
+      expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+      expect(prisma.stockMovement.create).not.toHaveBeenCalled();
+    });
+
     it("NOT_FOUND si la reserva no existe en el tenant", async () => {
       prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
         caller.cancelReservation({
@@ -272,9 +478,7 @@ describe("pharmacyDispensationRouter", () => {
         dispenses: [],
       } as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.checkDuplicate({
         patientId: PATIENT,
         prescriptionItemId: ITEM,
@@ -297,9 +501,7 @@ describe("pharmacyDispensationRouter", () => {
         dispenses: [{ dispensedAt: lastDispensedAt }],
       } as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.checkDuplicate({
         patientId: PATIENT,
         prescriptionItemId: ITEM,
@@ -326,9 +528,7 @@ describe("pharmacyDispensationRouter", () => {
         dispenses: [{ dispensedAt: lastDispensedAt }],
       } as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.checkDuplicate({
         patientId: PATIENT,
         prescriptionItemId: ITEM,
@@ -348,9 +548,7 @@ describe("pharmacyDispensationRouter", () => {
         dispenses: [{ dispensedAt: new Date("2026-05-18T11:00:00Z") }],
       } as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.checkDuplicate({
         patientId: PATIENT,
         prescriptionItemId: ITEM,
@@ -373,9 +571,7 @@ describe("pharmacyDispensationRouter", () => {
         dispenses: [{ dispensedAt: lastDispensedAt }],
       } as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.checkDuplicate({
         patientId: PATIENT,
         prescriptionItemId: ITEM,
@@ -389,9 +585,7 @@ describe("pharmacyDispensationRouter", () => {
     it("NOT_FOUND si el ítem no pertenece al paciente/tenant", async () => {
       prisma.prescriptionItem.findFirst.mockResolvedValue(null as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
         caller.checkDuplicate({
@@ -411,9 +605,7 @@ describe("pharmacyDispensationRouter", () => {
       const res = makeReservation();
       prisma.pharmacyReservation.findFirst.mockResolvedValue(res as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.getReservation({ reservationId: RES });
 
       expect(result.id).toBe(RES);
@@ -422,12 +614,50 @@ describe("pharmacyDispensationRouter", () => {
     it("NOT_FOUND si la reserva no existe en el tenant", async () => {
       prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
 
-      const caller = pharmacyDispensationRouter.createCaller(
-        makeCtx({ prisma }),
-      );
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
         caller.getReservation({ reservationId: RES }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // orderDetail
+  // -------------------------------------------------------------------------
+  describe("orderDetail", () => {
+    it("devuelve paciente e ítems de la receta", async () => {
+      prisma.prescription.findFirst.mockResolvedValue({
+        id: ORDER,
+        status: "SIGNED",
+        patientId: PATIENT,
+        patient: { firstName: "Ana", lastName: "Pérez", mrn: "MRN-001" },
+        items: [
+          {
+            id: ITEM,
+            dosage: "500mg",
+            route: "ORAL",
+            frequency: "Q8H",
+            drug: { id: "d1", genericName: "Amoxicilina 500mg" },
+          },
+        ],
+      } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.orderDetail({ pharmacyOrderId: ORDER });
+
+      expect(result.patientId).toBe(PATIENT);
+      expect(result.patient.firstName).toBe("Ana");
+      expect(result.items[0]?.drug.genericName).toBe("Amoxicilina 500mg");
+    });
+
+    it("NOT_FOUND si la receta no existe en el tenant", async () => {
+      prisma.prescription.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.orderDetail({ pharmacyOrderId: ORDER }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
   });

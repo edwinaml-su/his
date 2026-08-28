@@ -3,12 +3,19 @@
 /**
  * US.F2.6.8-9 — Dispensación GS1 con reserva lógica y detección de duplicados.
  *
+ * PR #581 — usa el router consolidado `dispensation` (antes pharmacyDispensation,
+ * que NO validaba inventario): reserveItem ahora aplica el hard stop R07
+ * (STOCK_INSUFICIENTE / LOTE_NO_EXISTE_EN_INVENTARIO / LOTE_NO_DISPONIBLE_
+ * INVENTARIO) con descuento atómico de StockLot. La página además fetchea la
+ * receta (orderDetail) para mostrar paciente y medicamentos reales en lugar de
+ * pedir UUIDs tipeados a mano.
+ *
  * Flujo:
- *  1. Ingreso del scan GS1 (GTIN, lote, serie).
- *  2. checkDuplicate → Hard Stop si ítem ya dispensado en ventana terapéutica.
- *  3. reserveItem → bloquea el serial al paciente. Muestra contador 4h.
- *  4. Botón "Cancelar Reserva" con confirmación + motivo.
- *  5. Banner visual mientras la reserva está activa.
+ *  1. orderDetail → paciente + ítems de la receta firmada.
+ *  2. Ingreso del scan GS1 (GTIN, lote, serie) + selección del ítem.
+ *  3. checkDuplicate → Hard Stop si ítem ya dispensado en ventana terapéutica.
+ *  4. reserveItem → hard stop de inventario + bloquea el serial al paciente.
+ *  5. Botón "Cancelar Reserva" con confirmación + motivo (repone stock).
  */
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -50,16 +57,39 @@ interface ScanFormState {
   gtin: string;
   lote: string;
   serie: string;
-  patientId: string;
   prescriptionItemId: string;
 }
 
-type HardStopReason =
-  | "ITEM_YA_DISPENSADO_EN_VENTANA"
-  | "SERIAL_YA_RESERVADO_OTRO_PACIENTE";
+interface OrderDetail {
+  id: string;
+  status: string;
+  patientId: string;
+  patient: { firstName: string; lastName: string; mrn: string };
+  items: Array<{
+    id: string;
+    dosage: string;
+    route: string;
+    frequency: string;
+    drug: { id: string; genericName: string };
+  }>;
+}
+
+/** Hard stops del servidor (reserva + inventario R07) mapeados a mensaje UI. */
+const HARD_STOP_DETAIL: Record<string, string> = {
+  SERIAL_YA_RESERVADO_OTRO_PACIENTE:
+    "Este número de serie ya está reservado para otro paciente.",
+  SIN_RECETA_ACTIVA:
+    "No existe receta activa firmada y dispensable para este paciente.",
+  STOCK_INSUFICIENTE:
+    "No hay existencias del lote escaneado en la bodega. Verifique el inventario antes de dispensar.",
+  LOTE_NO_EXISTE_EN_INVENTARIO:
+    "El lote escaneado nunca ingresó al inventario de esta bodega.",
+  LOTE_NO_DISPONIBLE_INVENTARIO:
+    "El lote está bloqueado (cuarentena/recall) y no puede dispensarse.",
+};
 
 interface HardStop {
-  reason: HardStopReason;
+  reason: string;
   detail: string;
 }
 
@@ -103,11 +133,17 @@ export default function GS1DispensePage(): React.ReactElement {
     }
   }, [defaultDispenseCcId, dispenseCostCenterId]);
 
+  // Receta que actúa como orden de farmacia: paciente + ítems reales (PR #581).
+  const orderQuery = trpcAny.dispensation.orderDetail.useQuery(
+    { pharmacyOrderId: orderId },
+    { retry: false },
+  );
+  const order = orderQuery.data as OrderDetail | undefined;
+
   const [form, setForm] = React.useState<ScanFormState>({
     gtin: "",
     lote: "",
     serie: "",
-    patientId: "",
     prescriptionItemId: "",
   });
   const [errors, setErrors] = React.useState<Partial<ScanFormState>>({});
@@ -148,9 +184,18 @@ export default function GS1DispensePage(): React.ReactElement {
     return () => clearInterval(id);
   }, [reservedAt]);
 
-  const checkDuplicateMutation = trpcAny.pharmacyDispensation.checkDuplicate.useQuery;
+  // Auto-seleccionar el ítem cuando la receta tiene uno solo.
+  React.useEffect(() => {
+    const only = order?.items.length === 1 ? order.items[0] : null;
+    if (only && !form.prescriptionItemId) {
+      setForm((f) => ({ ...f, prescriptionItemId: only.id }));
+    }
+  }, [order, form.prescriptionItemId]);
 
-  const reserveMutation = trpcAny.pharmacyDispensation.reserveItem.useMutation({
+  const selectedItem =
+    order?.items.find((it) => it.id === form.prescriptionItemId) ?? null;
+
+  const reserveMutation = trpcAny.dispensation.reserveItem.useMutation({
     onSuccess: (data: { id: string }) => {
       setReservationId(data.id);
       setReservedAt(new Date());
@@ -158,18 +203,16 @@ export default function GS1DispensePage(): React.ReactElement {
     },
     onError: (err: { message: string }) => {
       const msg = err.message;
-      if (msg === "SERIAL_YA_RESERVADO_OTRO_PACIENTE") {
-        setHardStop({
-          reason: "SERIAL_YA_RESERVADO_OTRO_PACIENTE",
-          detail: "Este número de serie ya está reservado para otro paciente.",
-        });
+      const detail = HARD_STOP_DETAIL[msg];
+      if (detail) {
+        setHardStop({ reason: msg, detail });
       } else {
         setServerError(msg);
       }
     },
   });
 
-  const cancelMutation = trpcAny.pharmacyDispensation.cancelReservation.useMutation({
+  const cancelMutation = trpcAny.dispensation.cancelReservation.useMutation({
     onSuccess: () => {
       setReservationId(null);
       setReservedAt(null);
@@ -198,15 +241,15 @@ export default function GS1DispensePage(): React.ReactElement {
     const e: Partial<ScanFormState> = {};
     if (!/^\d{14}$/.test(form.gtin)) e.gtin = "GTIN-14: 14 dígitos numéricos";
     if (!form.lote.trim()) e.lote = "Lote requerido";
-    if (!form.patientId.trim()) e.patientId = "ID de paciente requerido";
     if (!form.prescriptionItemId.trim())
-      e.prescriptionItemId = "ID de ítem de receta requerido";
+      e.prescriptionItemId = "Seleccione el medicamento a dispensar";
     setErrors(e);
     return Object.keys(e).length === 0;
   }
 
   async function handleScan(e: React.FormEvent) {
     e.preventDefault();
+    if (!order) return;
     if (!validate()) return;
     setHardStop(null);
     setServerError(null);
@@ -216,8 +259,8 @@ export default function GS1DispensePage(): React.ReactElement {
       // 1. checkDuplicate primero (US.F2.6.9)
       // Usamos fetch directo para query síncrona inline sin hook condicional
       const checkResult = await (
-        trpcAny.pharmacyDispensation.checkDuplicate.fetch({
-          patientId: form.patientId,
+        trpcAny.dispensation.checkDuplicate.fetch({
+          patientId: order.patientId,
           prescriptionItemId: form.prescriptionItemId,
           gtin: form.gtin,
         }) as Promise<{
@@ -239,13 +282,13 @@ export default function GS1DispensePage(): React.ReactElement {
         return;
       }
 
-      // 2. Reservar serial (US.F2.6.8)
+      // 2. Reservar serial (US.F2.6.8) — con hard stop de inventario server-side
       reserveMutation.mutate({
         pharmacyOrderId: orderId,
         gtin: form.gtin,
         lote: form.lote,
         serie: form.serie.trim() || undefined,
-        patientId: form.patientId,
+        patientId: order.patientId,
       });
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Error inesperado");
@@ -310,8 +353,28 @@ export default function GS1DispensePage(): React.ReactElement {
           <p className="text-sm text-muted-foreground">
             Orden: <code className="font-mono text-xs">{orderId}</code>
           </p>
+          {order ? (
+            <p className="text-sm font-medium">
+              {order.patient.firstName} {order.patient.lastName}
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                MRN {order.patient.mrn} · {order.items.length} ítem
+                {order.items.length !== 1 ? "s" : ""}
+              </span>
+            </p>
+          ) : null}
         </div>
       </div>
+
+      {/* Receta no encontrada / sin acceso */}
+      {orderQuery.error ? (
+        <div
+          role="alert"
+          className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          No se pudo cargar la receta de esta orden:{" "}
+          {(orderQuery.error as { message?: string }).message ?? "error desconocido"}
+        </div>
+      ) : null}
 
       {/* Banner reserva activa */}
       {reservationId && minutosRestantes !== null && minutosRestantes > 0 ? (
@@ -462,39 +525,37 @@ export default function GS1DispensePage(): React.ReactElement {
             </FormField>
 
             <FormField>
-              <Label htmlFor="gs1-patient">
-                ID Paciente <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="gs1-patient"
-                placeholder="UUID del paciente"
-                value={form.patientId}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, patientId: e.target.value }))
-                }
-                aria-invalid={Boolean(errors.patientId)}
-                disabled={Boolean(reservationId)}
-              />
-              <FormError>{errors.patientId}</FormError>
-            </FormField>
-
-            <FormField>
               <Label htmlFor="gs1-item">
-                ID Ítem de Receta <span className="text-destructive">*</span>
+                Medicamento de la receta{" "}
+                <span className="text-destructive">*</span>
               </Label>
-              <Input
-                id="gs1-item"
-                placeholder="UUID del ítem de prescripción"
+              <Select
                 value={form.prescriptionItemId}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    prescriptionItemId: e.target.value,
-                  }))
+                onValueChange={(v) =>
+                  setForm((f) => ({ ...f, prescriptionItemId: v }))
                 }
-                aria-invalid={Boolean(errors.prescriptionItemId)}
-                disabled={Boolean(reservationId)}
-              />
+                disabled={Boolean(reservationId) || !order}
+              >
+                <SelectTrigger
+                  id="gs1-item"
+                  aria-invalid={Boolean(errors.prescriptionItemId)}
+                >
+                  <SelectValue
+                    placeholder={
+                      orderQuery.isLoading
+                        ? "Cargando receta…"
+                        : "Seleccione el medicamento"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {(order?.items ?? []).map((it) => (
+                    <SelectItem key={it.id} value={it.id}>
+                      {it.drug.genericName} — {it.dosage} · {it.frequency}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <FormError>{errors.prescriptionItemId}</FormError>
             </FormField>
 
@@ -509,7 +570,10 @@ export default function GS1DispensePage(): React.ReactElement {
 
             {!reservationId ? (
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" disabled={isPending || isCurrentItemBlocked}>
+                <Button
+                  type="submit"
+                  disabled={isPending || !order || isCurrentItemBlocked}
+                >
                   {isPending ? "Verificando…" : "Validar y reservar"}
                 </Button>
                 <Button
@@ -517,6 +581,7 @@ export default function GS1DispensePage(): React.ReactElement {
                   variant="outline"
                   disabled={
                     isPending ||
+                    !order ||
                     (blockedItemId !== null && blockedItemId === form.prescriptionItemId)
                   }
                   onClick={handleRequestSubstitution}
@@ -526,8 +591,10 @@ export default function GS1DispensePage(): React.ReactElement {
               </div>
             ) : (
               <p className="text-sm text-green-700">
-                Unidad reservada correctamente. Confirme el despacho desde el
-                sistema de farmacia.
+                {selectedItem
+                  ? `${selectedItem.drug.genericName} reservado correctamente.`
+                  : "Unidad reservada correctamente."}{" "}
+                Confirme el despacho desde el sistema de farmacia.
               </p>
             )}
           </Form>

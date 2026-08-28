@@ -1278,6 +1278,7 @@ model Patient {
   // F2-S7 — GS1 Bedside
   pharmacyOrders         PharmacyOrder[]           @relation("PatPharmacyOrders")
   pharmacyReservations   PharmacyReservation[]     @relation("PatPharmacyReservations")
+  prescriptions          Prescription[]            @relation("PatPrescriptions")
   // F2-S7 — Carrito Unidosis
   pharmacyCarts          PharmacyCart[]            @relation("PatientPharmacyCarts")
   // F2-S7 — Patient ID via pulsera GSRN (US.F2.6.37-40)
@@ -1693,6 +1694,7 @@ model Encounter {
   pathologyOrders        PathologyOrder[]        @relation("EncPathologyOrders")
   // F2-S7 — GS1 Bedside
   pharmacyOrders         PharmacyOrder[]         @relation("EncPharmacyOrders")
+  prescriptions          Prescription[]          @relation("EncPrescriptions")
   // Finance — sql/127
   invoices               Invoice[]               @relation("InvoiceEncounter")
   // CC-0002 §7 — cuentas y servicios vinculados al encuentro
@@ -2138,6 +2140,11 @@ model Prescription {
 
   items PrescriptionItem[]
 
+  patient   Patient   @relation("PatPrescriptions", fields: [patientId], references: [id], onDelete: Restrict)
+  encounter Encounter @relation("EncPrescriptions", fields: [encounterId], references: [id], onDelete: Restrict)
+  /// PR #581 — la receta firmada actúa como orden de farmacia en el flujo GS1.
+  reservations PharmacyReservation[] @relation("RxPharmacyReservations")
+
   @@index([organizationId, prescribedAt])
   @@index([encounterId])
   @@index([patientId])
@@ -2176,7 +2183,7 @@ model PrescriptionItem {
 model PharmacyReservation {
   id              String                    @id @default(uuid()) @db.Uuid
   organizationId  String                    @db.Uuid
-  pharmacyOrderId String                    @db.Uuid /// FK a PharmacyOrder
+  pharmacyOrderId String                    @db.Uuid /// FK a Prescription — la receta firmada actúa como orden de farmacia (SQL 214, PR #581)
   patientId       String                    @db.Uuid
   gtin            String                    @db.Char(14)    /// GTIN-14 GS1
   lote            String                    @db.VarChar(80)
@@ -2190,7 +2197,7 @@ model PharmacyReservation {
   updatedAt       DateTime                  @updatedAt @db.Timestamptz()
 
   organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
-  pharmacyOrder PharmacyOrder  @relation(fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
+  pharmacyOrder Prescription   @relation("RxPharmacyReservations", fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
   patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, patientId])
@@ -6915,7 +6922,6 @@ model PharmacyOrder {
   encounter     Encounter             @relation("EncPharmacyOrders", fields: [encounterId], references: [id], onDelete: Restrict)
   patient       Patient               @relation("PatPharmacyOrders", fields: [patientId], references: [id], onDelete: Restrict)
   dispensedBy   User?                 @relation("PharmacyOrderDispenser", fields: [dispensedById], references: [id], onDelete: SetNull)
-  reservations  PharmacyReservation[]
   substitutions PharmacySubstitution[]
 
   @@index([organizationId, status])
