@@ -8,8 +8,8 @@
  * y el chequeo era inocuo.
  *
  * Fuente de tabla de frecuencias: `frequencyToMinutes` del router
- * pharmacy-dispensation. Mantenemos paridad: si cambia ahí, debe cambiar
- * aquí.
+ * pharmacy/dispensation.router (consolidado PR #581). Mantenemos paridad:
+ * si cambia ahí, debe cambiar aquí.
  */
 
 const FREQUENCY_MINUTES: Record<string, number> = {

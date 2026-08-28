@@ -215,7 +215,15 @@ export const pharmacyRouter = router({
               ...(input.fromDate && { prescribedAt: { gte: input.fromDate } }),
               ...(input.costCenterId && { costCenterId: input.costCenterId }),
             },
-            include: { items: { include: { drug: true } } },
+            include: {
+              items: { include: { drug: true } },
+              // PR #581 — la cola de dispensación renderiza paciente y
+              // encuentro; sin estos include llegaban undefined.
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              encounter: { select: { id: true, encounterNumber: true } },
+            },
             orderBy: { prescribedAt: "desc" },
             take: input.limit,
           }),

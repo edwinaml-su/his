@@ -148,10 +148,9 @@ import { staffGsrnRouter } from "./staff-gsrn.router";
 import { glnHierarchyRouter } from "./gs1-gln-hierarchy.router";
 import { gs1MedicationRouter } from "./gs1-medication.router";
 import { gs1DashboardRouter } from "./gs1-dashboard.router";
-// F2-S7 Stream 05 — Picking station dispensation
+// F2-S7 Streams 05+06 — Dispensación consolidada: picking + reservas +
+// duplicados (PR #581: pharmacy-dispensation.router.ts absorbido aquí)
 import { dispensationRouter } from "./pharmacy/dispensation.router";
-// F2-S7 Stream 06 — PharmacyReservation flow + duplicate detection
-import { pharmacyDispensationRouter } from "./pharmacy-dispensation.router";
 // F2-S7 Stream 08 — Sustitución autorizada
 import { pharmacySubstitutionRouter } from "./pharmacy/substitution.router";
 // F2-S7 Stream 09 — Carrito unidosis
@@ -383,10 +382,8 @@ export const appRouter = router({
   gs1GlnHierarchy: glnHierarchyRouter,
   gs1Medication: gs1MedicationRouter,
   gs1Dashboard: gs1DashboardRouter,
-  // F2-S7 Stream 05 — Picking station
+  // F2-S7 Streams 05+06 — Dispensación consolidada (picking + reservas)
   dispensation: dispensationRouter,
-  // F2-S7 Stream 06 — PharmacyReservation
-  pharmacyDispensation: pharmacyDispensationRouter,
   // F2-S7 Stream 08 — Sustitución
   pharmacySubstitution: pharmacySubstitutionRouter,
   // F2-S7 Stream 09 — Carrito unidosis
