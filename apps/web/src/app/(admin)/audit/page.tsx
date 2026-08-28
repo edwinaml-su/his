@@ -38,6 +38,11 @@ export default function AuditPage() {
               if (entity && entityId) setCommitted({ entity, entityId });
             }}
           >
+            {/* data-no-uppercase: la búsqueda es case-sensitive — `entity` es el
+                nombre del modelo Prisma tal como lo escribe el trigger de
+                auditoría ("Bed", no "BED") y `entityId` es un UUID en minúsculas.
+                Sin el opt-out, el UppercaseEnforcer global (CC #487) transforma
+                el valor y la consulta nunca matchea. */}
             <div className="space-y-1.5">
               <Label htmlFor="entity">Entidad</Label>
               <Input
@@ -45,6 +50,7 @@ export default function AuditPage() {
                 value={entity}
                 onChange={(e) => setEntity(e.target.value)}
                 placeholder="Patient"
+                data-no-uppercase
               />
             </div>
             <div className="space-y-1.5">
@@ -55,6 +61,7 @@ export default function AuditPage() {
                 onChange={(e) => setEntityId(e.target.value)}
                 placeholder="UUID"
                 className="w-[320px]"
+                data-no-uppercase
               />
             </div>
             <Button type="submit">Consultar</Button>

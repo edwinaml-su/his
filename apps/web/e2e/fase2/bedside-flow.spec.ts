@@ -53,9 +53,13 @@ test.describe("@smoke - Bedside PWA — flujo de escaneo 3-step", () => {
 
   test("2. Sidebar muestra entry Bedside (Enfermería)", async ({ page }) => {
     await page.goto("/bedside");
-    const sidebarLink = page.getByRole("link", { name: /Bedside/i });
-    await expect(sidebarLink).toBeVisible();
-    await expect(sidebarLink).toHaveAttribute("href", "/bedside");
+    // Los items del sidebar exponen role="menuitem" (SidebarMenuButton dentro
+    // de un menu), no role="link" — verificado en el snapshot a11y del run
+    // 33209216000. La sección "Bedside (BCMA)" se auto-expande por ser la
+    // sección activa (app-sidebar.tsx defaultOpenLabel).
+    const sidebarItem = page.getByRole("menuitem", { name: /Cola Bedside/i });
+    await expect(sidebarItem).toBeVisible();
+    await expect(sidebarItem).toHaveAttribute("href", "/bedside");
   });
 
   test("3. Wizard administración muestra 3 pasos", async ({ page }) => {
@@ -137,8 +141,10 @@ test.describe("@smoke - Bedside PWA — flujo de escaneo 3-step", () => {
 
   test("9. Sidebar activo en /bedside", async ({ page }) => {
     await page.goto("/bedside");
-    // El item del sidebar debe tener estilos de "activo".
-    const sidebarLink = page.getByRole("link", { name: /Bedside/i }).first();
-    await expect(sidebarLink).toHaveClass(/bg-sidebar-accent|font-medium/);
+    // El item activo se marca con data-active=true (SidebarMenuButton) —
+    // toHaveClass era falso-positivo: la className siempre contiene el
+    // literal "data-[active=true]:bg-sidebar-accent" aunque esté inactivo.
+    const sidebarItem = page.getByRole("menuitem", { name: /Cola Bedside/i }).first();
+    await expect(sidebarItem).toHaveAttribute("data-active", "true");
   });
 });

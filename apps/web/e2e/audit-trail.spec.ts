@@ -2,37 +2,36 @@
  * E2E — Audit trail.
  * US: AUD-01 (toda mutación queda registrada), AUD-02 (visor de auditoría).
  *
- * Estrategia: ejecuta una mutación conocida (cambiar estado de cama) y
- * verifica que el visor de auditoría sobre esa entidad muestra el evento
- * con el usuario actor y la timestamp.
+ * 2026-08-28: alineado a la UI actual — el visor /audit exige entidad + ID
+ * (audit.listByEntity) y muestra userId, no email. La escritura auditada que
+ * verificamos es el INSERT de las camas E2E (seed-e2e-fixtures.mjs), que
+ * dispara audit.fn_audit_row (02_audit_triggers.sql, aplicado por el paso
+ * "Bootstrap RLS helpers" del workflow) → fila CREATE en audit."AuditLog".
+ * El flujo UI legacy (cambiar estado de cama desde /beds) ya no existe en la
+ * página actual; la mutación UI→audit se cubrirá cuando /ece/camas deje de
+ * usar SERVICIOS_MOCK.
  */
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
+import { E2E_FIXTURES } from "./_helpers/fixtures";
 
 test.describe("@smoke - Audit trail", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
   });
 
-  test("cambio de estado de cama queda en audit log y se ve en el visor", async ({ page }) => {
-    await page.goto("/beds");
-
-    // Cambiamos una cama a MANTENIMIENTO.
-    const free = page.getByRole("button", { name: /cama.*libre/i }).first();
-    await free.click();
-    await page.getByRole("button", { name: /cambiar estado/i }).click();
-    await page.getByRole("option", { name: /mantenimiento/i }).click();
-    await page.getByLabel(/motivo/i).fill("Prueba E2E auditoría.");
-    await page.getByRole("button", { name: /confirmar/i }).click();
-
-    // Visor de auditoría sobre la cama (admin → /audit).
+  test("las escrituras sobre Bed quedan en audit log y se ven en el visor", async ({ page }) => {
     await page.goto("/audit");
-    await page.getByLabel(/entidad/i).fill("Bed");
-    await page.getByRole("button", { name: /buscar/i }).click();
 
-    // Debe aparecer al menos un evento UPDATE con el usuario actual.
-    const row = page.getByRole("row", { name: /bed.*update/i }).first();
-    await expect(row).toBeVisible();
-    await expect(row).toContainText(/qa.admin@his.test/i);
+    // Visor: buscar por entidad + ID (ambos obligatorios).
+    await page.getByLabel(/entidad/i).fill("Bed");
+    await page.getByLabel(/^id$/i).fill(E2E_FIXTURES.bedFreeId);
+    await page.getByRole("button", { name: /consultar/i }).click();
+
+    // Debe aparecer al menos el evento CREATE del seed de fixtures
+    // (o UPDATE de corridas idempotentes posteriores).
+    await expect(page.getByText(/^(CREATE|UPDATE)$/).first()).toBeVisible();
+    // La columna ID muestra el uuid determinista de la cama E2E-01.
+    await expect(page.getByText(E2E_FIXTURES.bedFreeId).first()).toBeVisible();
   });
 });
