@@ -144,6 +144,20 @@ jobs:
         # crear el schema completo de Prisma en la BD efímera del runner.
         run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
 
+      - name: Bootstrap RLS helpers (set_tenant_context + rol authenticated)
+        # Portado 1:1 de e2e-smoke.yml (PR #597): `db push` no aplica el corpus
+        # SQL hand-rolled — sin set_tenant_context()/ece.set_ece_context() los
+        # ~50 routers con withTenantContext/withEceContext revientan con
+        # INTERNAL_SERVER_ERROR y el inventario mide infra rota, no producto
+        # (runs 33182478251/33193829657: los ~103 "fallos de producto" del
+        # triage parcial estaban contaminados por esto). Ver
+        # scripts/e2e-rls-bootstrap.sql para el detalle y por qué NO se aplica
+        # el corpus RLS completo acá.
+        run: |
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+
       - name: Seed minimal data
         run: npm run db:seed
         continue-on-error: true
