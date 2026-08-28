@@ -12,13 +12,25 @@
  * Hard-stop → modal rojo full-screen.
  *
  * Restaurado en F2-S7 Wave 2 — adapta input al schema de administrationRouter.
+ *
+ * Cableado inventario de componentes huérfanos 2026-08-26 (Tier 1):
+ *  - StatActivationDialog/StatBanner (US.F2.6.47) — activación + indicador de
+ *    modo STAT. bedsideStat.activate/getActive existen en el backend; el
+ *    downgrade real de hard-stops bypasables (PACIENTE_NO_COINCIDE,
+ *    MEDICAMENTO_NO_COINCIDE, FUERA_DE_VENTANA) a warning NO está implementado
+ *    en bedside.router.ts (validate5Correct/administration.record no conocen
+ *    la sesión STAT) — gap documentado, no fabricado aquí.
+ *  - BarcodeScanner (US.F2.6.43/45) — alterna cámara/pistola por paso.
  */
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
 import { ScanStep, type ScanStepStatus } from "./scan-step";
+import { StatActivationDialog } from "./stat-activation-dialog";
+import { StatBanner } from "./stat-banner";
 import { parseGs1String } from "@/lib/gs1/parse-ai";
+import { BarcodeScanner, type BarcodeFormat } from "@/components/scanner/barcode-scanner";
 import { cn } from "@his/ui/lib/utils";
 
 interface AdministrationWizardProps {
@@ -94,6 +106,16 @@ export function AdministrationWizard({
   const [doubleCheckBy, setDoubleCheckBy]   = useState("");
   const [doubleCheckPin, setDoubleCheckPin] = useState("");
   const [doubleCheckError, setDoubleCheckError] = useState<string | undefined>();
+
+  // Modo STAT (US.F2.6.47) — bypass justificado para urgencia.
+  const [showStatDialog, setShowStatDialog] = useState(false);
+  const activeStat = trpc.bedsideStat.getActive.useQuery(
+    {},
+    { retry: false },
+  );
+
+  // Escaneo por cámara (US.F2.6.43/45) — alterna al listener HID por defecto de ScanStep.
+  const [cameraActive, setCameraActive] = useState(false);
 
   const validate5Correct = trpc.bedside.validate5Correct.validate.useMutation();
   const recordAdministration = trpc.bedside.administration.record.useMutation();
@@ -253,6 +275,16 @@ export function AdministrationWizard({
     [scans, indicationId, validate5Correct, submitAdministration],
   );
 
+  // El diálogo solo confirma el statEventId — recargamos la sesión completa
+  // (motivo, expiración) desde getActive en vez de duplicar esos campos aquí.
+  const handleStatActivated = useCallback(
+    (_statEventId: string) => {
+      setShowStatDialog(false);
+      void activeStat.refetch();
+    },
+    [activeStat],
+  );
+
   // ---- Renderizado por fase ----
 
   if (wizardState.phase === "hardStop") {
@@ -296,13 +328,21 @@ export function AdministrationWizard({
     );
   }
 
-  // patientId disponible para prefetch futuro — no eliminar prop
-  void patientId;
-
   const currentStep = wizardState.phase === "validating" ? 3 : wizardState.step;
+  const currentScanStep = wizardState.phase === "scanning" ? wizardState.step : null;
 
   return (
     <div className="space-y-4">
+      {activeStat.data && (
+        <StatBanner
+          statEventId={activeStat.data.statEventId}
+          motivo={activeStat.data.motivo}
+          motivoLibre={activeStat.data.motivoLibre}
+          expiraEn={new Date(activeStat.data.expiraEn)}
+          onExpired={() => void activeStat.refetch()}
+        />
+      )}
+
       <ProgressBar currentStep={currentStep} validating={wizardState.phase === "validating"} />
 
       <ScanStep
@@ -335,6 +375,33 @@ export function AdministrationWizard({
         disabled={wizardState.phase !== "scanning" || wizardState.step !== 3}
       />
 
+      {wizardState.phase === "scanning" && (
+        <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <button
+            type="button"
+            onClick={() => setCameraActive((v) => !v)}
+            className="text-sm font-medium text-blue-600 hover:text-blue-800"
+          >
+            {cameraActive ? "Usar pistola HID" : "Usar cámara en su lugar"}
+          </button>
+          {cameraActive && (
+            <BarcodeScanner
+              formats={
+                currentScanStep === 3
+                  ? (["datamatrix"] as BarcodeFormat[])
+                  : (["code128"] as BarcodeFormat[])
+              }
+              onScan={(raw) => {
+                if (currentScanStep === 1) handlePatientScan(raw);
+                else if (currentScanStep === 2) handleNurseScan(raw);
+                else if (currentScanStep === 3) void handleMedicationScan(raw);
+              }}
+              className="mt-3"
+            />
+          )}
+        </div>
+      )}
+
       {wizardState.phase === "validating" && (
         <div
           className="flex items-center justify-center gap-3 rounded-xl bg-blue-50 p-6"
@@ -348,6 +415,18 @@ export function AdministrationWizard({
         </div>
       )}
 
+      {!activeStat.data && (
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => setShowStatDialog(true)}
+            className="w-full rounded-lg border-2 border-red-600 bg-white px-4 py-3 text-sm font-bold text-red-700 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-500"
+          >
+            Activar STAT — bypass justificado de urgencia
+          </button>
+        </div>
+      )}
+
       <div className="pt-2">
         <button
           type="button"
@@ -357,6 +436,15 @@ export function AdministrationWizard({
           Cancelar y volver a la cola
         </button>
       </div>
+
+      {showStatDialog && (
+        <StatActivationDialog
+          indicationId={indicationId}
+          patientId={patientId}
+          onActivated={handleStatActivated}
+          onCancel={() => setShowStatDialog(false)}
+        />
+      )}
     </div>
   );
 }
