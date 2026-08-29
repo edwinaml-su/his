@@ -63,11 +63,11 @@ test.describe("@smoke - WHO Surgical Safety Checklist", () => {
     // Esperar que el panel cargue (query terminará rápido — no hay datos)
     await page.waitForTimeout(500);
 
-    // Heading de Fase 1
-    await expect(page.getByText(/Fase 1: Sign-In/i)).toBeVisible();
-    // Heading de Fase 2 y 3 presentes (deshabilitados)
-    await expect(page.getByText(/Fase 2: Time-Out/i)).toBeVisible();
-    await expect(page.getByText(/Fase 3: Sign-Out/i)).toBeVisible();
+    // .first(): el título del panel y el botón "Marcar Fase N … completo"
+    // contienen el mismo texto (strict mode violation, run 33222864866).
+    await expect(page.getByText(/Fase 1: Sign-In/i).first()).toBeVisible();
+    await expect(page.getByText(/Fase 2: Time-Out/i).first()).toBeVisible();
+    await expect(page.getByText(/Fase 3: Sign-Out/i).first()).toBeVisible();
   });
 
   test("botón marcar Sign-In completo está deshabilitado si no todos los ítems están verificados", async ({ page }) => {
