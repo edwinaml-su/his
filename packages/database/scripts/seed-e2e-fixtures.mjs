@@ -67,6 +67,7 @@ const IDS = {
   eceServicio:     'e2ef1000-0000-4000-8000-00000000e903',
   eceEpisodio:     'e2ef1000-0000-4000-8000-00000000e904',
   ecePersonal:     'e2ef1000-0000-4000-8000-00000000e905',
+  ecePersonalNurse:'e2ef1000-0000-4000-8000-00000000e90a',
   eceAsignacion:   'e2ef1000-0000-4000-8000-00000000e906',
   eceIndicacion:   'e2ef1000-0000-4000-8000-00000000e907',
   gsrnNurseRef:    'e2ef1000-0000-4000-8000-00000000e908',
@@ -195,13 +196,36 @@ try {
      ON CONFLICT (id) DO NOTHING`,
     [patientId, IDS.eceEstab],
   );
+  // his_user_id enlaza el personal ECE con los usuarios QA de GoTrue (creados
+  // por seed-test-users.mjs en el paso anterior). buildEceCtx (p. ej.
+  // eceWhoChecklist.get) exige ece.personal_salud.his_user_id = ctx.user.id —
+  // sin esto los routers ECE con contexto de personal dan PRECONDITION_FAILED.
+  const { rows: [qaPhysician] } = await c.query(
+    `SELECT id FROM public."User" WHERE email = 'qa.physician@his.test' LIMIT 1`,
+  );
+  const { rows: [qaNurse] } = await c.query(
+    `SELECT id FROM public."User" WHERE email = 'qa.nurse@his.test' LIMIT 1`,
+  );
   await c.query(
     `INSERT INTO ece.personal_salud
-       (id, institucion_id, establecimiento_id, documento_identidad, nombre_completo, profesion)
-     VALUES ($1::uuid, $2::uuid, $3::uuid, '00000000-1', 'Dra. E2E Prescriptora', 'Medicina General')
-     ON CONFLICT (id) DO NOTHING`,
-    [IDS.ecePersonal, IDS.eceInstitucion, IDS.eceEstab],
+       (id, institucion_id, establecimiento_id, documento_identidad,
+        nombre_completo, profesion, his_user_id)
+     VALUES ($1::uuid, $2::uuid, $3::uuid, '00000000-1', 'Dra. E2E Prescriptora',
+             'Medicina General', $4::uuid)
+     ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
+    [IDS.ecePersonal, IDS.eceInstitucion, IDS.eceEstab, qaPhysician?.id ?? null],
   );
+  if (qaNurse) {
+    await c.query(
+      `INSERT INTO ece.personal_salud
+         (id, institucion_id, establecimiento_id, documento_identidad,
+          nombre_completo, profesion, his_user_id)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, '00000000-2', 'Enf. E2E Bedside',
+               'Enfermería', $4::uuid)
+       ON CONFLICT (id) DO UPDATE SET his_user_id = EXCLUDED.his_user_id`,
+      [IDS.ecePersonalNurse, IDS.eceInstitucion, IDS.eceEstab, qaNurse.id],
+    );
+  }
   await c.query(
     `INSERT INTO ece.episodio_atencion
        (id, paciente_id, establecimiento_id, modalidad, servicio_categoria,

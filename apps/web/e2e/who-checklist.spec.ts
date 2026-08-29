@@ -20,13 +20,19 @@ import { login } from "./_helpers/auth";
 
 test.describe("@smoke - WHO Surgical Safety Checklist", () => {
   test.beforeEach(async ({ page }) => {
-    await login(page, "admin");
+    // eceWhoChecklist.get exige rol PHYSICIAN/NURSE/ANEST (requireRole) y
+    // buildEceCtx requiere ece.personal_salud.his_user_id del usuario —
+    // sembrado para qa.physician en seed-e2e-fixtures.mjs. Como admin la
+    // query daba FORBIDDEN y la página solo renderizaba el alert de error
+    // (run 33222104469).
+    await login(page, "physician");
   });
 
   test("página /ece/quirofano/who-check sin actoId muestra error", async ({ page }) => {
     await page.goto("/ece/quirofano/who-check");
-    await expect(page.getByRole("alert")).toBeVisible();
-    await expect(page.getByRole("alert")).toContainText(/actoId/i);
+    // .filter: el toaster global también expone role=alert (strict mode).
+    const alert = page.getByRole("alert").filter({ hasText: /actoId/i });
+    await expect(alert).toBeVisible();
   });
 
   test("página con actoId inválido (UUID no existente) renderiza encabezado WHO", async ({ page }) => {

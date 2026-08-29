@@ -99,8 +99,10 @@ test.describe("@smoke - Scope Nivel B — Datos por unidad de servicio", () => {
       return;
     }
 
-    // Si retorna 200, la UI no debe mostrar datos de QX.
-    const bodyText = await page.locator("body").innerText();
+    // Si retorna 200, la UI no debe mostrar datos de QX. Scope a <main>: el
+    // SIDEBAR siempre contiene la sección "ECE — Quirófano" en su texto, así
+    // que medir el body entero daba falso positivo (run 33222104469).
+    const bodyText = await page.getByRole("main").innerText();
     const hasQxData = /quirófano|QX|operating room/i.test(bodyText);
 
     if (hasQxData) {
