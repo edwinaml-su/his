@@ -57,19 +57,35 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
     // El formulario de nueva cita debe renderizarse.
     await expect(page.getByRole("heading", { name: /nueva cita|agendar cita/i })).toBeVisible();
 
+    // Scope a <main>: getByLabel a nivel de página matchea aria-labels del
+    // sidebar (p. ej. "Orientación táctil — … deriva al paciente…" contiene
+    // "paciente" — run 33222104469).
+    const main = page.getByRole("main");
+
     // Intentar seleccionar fecha y hora del slot de prueba.
-    const dateInput = page.getByLabel(/fecha/i).first();
+    // El campo real es un único input#scheduledAt type=datetime-local — un
+    // fill con solo la fecha revienta con "Malformed value" (run 33219220987).
+    const dateInput = main.getByLabel(/fecha/i).first();
+    let dateTimeCombined = false;
     if ((await dateInput.count()) > 0) {
-      await dateInput.fill(TEST_SLOT_DATE);
+      const inputType = await dateInput.getAttribute("type");
+      dateTimeCombined = inputType === "datetime-local";
+      await dateInput.fill(
+        dateTimeCombined ? `${TEST_SLOT_DATE}T${TEST_SLOT_TIME}` : TEST_SLOT_DATE,
+      );
     }
 
-    const timeInput = page.getByLabel(/hora/i).first();
-    if ((await timeInput.count()) > 0) {
-      await timeInput.fill(TEST_SLOT_TIME);
+    // Con datetime-local NO hay campo "hora" aparte: getByLabel(/hora/i)
+    // matchea el MISMO input ("Fecha y hora") y fill("09:00") es Malformed.
+    if (!dateTimeCombined) {
+      const timeInput = main.getByLabel(/hora/i).first();
+      if ((await timeInput.count()) > 0) {
+        await timeInput.fill(TEST_SLOT_TIME);
+      }
     }
 
     // Seleccionar el primer proveedor disponible.
-    const providerSelect = page.getByLabel(/proveedor|médico|doctor/i).first();
+    const providerSelect = main.getByLabel(/proveedor|médico|doctor/i).first();
     if ((await providerSelect.count()) > 0) {
       await providerSelect.click();
       const firstOption = page.getByRole("option").first();
@@ -79,7 +95,7 @@ test.describe("@smoke - Double-booking prevention (K-15)", () => {
     }
 
     // Seleccionar el primer paciente disponible.
-    const patientInput = page.getByLabel(/paciente/i).first();
+    const patientInput = main.getByLabel(/paciente/i).first();
     if ((await patientInput.count()) > 0) {
       await patientInput.fill("M"); // Buscar por letra para autocompletar
       await page.waitForTimeout(500);

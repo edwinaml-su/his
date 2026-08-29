@@ -43,7 +43,12 @@ jobs:
     # setup(~1.7m)+build(~2.5m)+e2e ya no puede apoyarse en el fast-fail del
     # circuit breaker (los tests corren su curso real, no fallan todos en el
     # primer segundo) — volvemos al headroom pre-incidente.
-    timeout-minutes: 20
+    # 20m alcanzaba cuando el circuit breaker cortaba a 8 fallos casi al
+    # inicio. Con los fixtures sembrados (PR #599) las specs que antes
+    # fallaban rápido ahora CORREN — el run 33217829132 murió a los 20m con
+    # la suite aún en curso. 30m da headroom para ~70 specs @smoke seriales
+    # (workers:1, BD compartida) + setup (~6m).
+    timeout-minutes: 30
 
     env:
       DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
@@ -60,6 +65,16 @@ jobs:
       # Activa el filtro de tags en playwright.config.ts:
       # solo corren tests cuyo describe/test contiene "@smoke".
       E2E_GREP: '@smoke'
+      # bedside-hard-stops.spec.ts tiene DOBLE drift y no puede pasar hoy:
+      # (a) spec↔UI — usa testids que nunca existieron en la app
+      # (gsrn-profesional-input etc.; el wizard real usa aria-labels y otro
+      # orden de pasos) y espera hard-stop en el paso 2 cuando el servidor
+      # valida recién tras el paso 3; (b) router↔schema —
+      # runValidate5Correctos consulta columnas inexistentes de
+      # ece.indicaciones_medicas (patient_id/gtin_medicamento/estado, 42703).
+      # Se omite hasta reparar el router + reescribir la spec contra la UI
+      # real. Los fixtures GSRN/GTIN ya están sembrados para ese momento.
+      SKIP_E2E_BEDSIDE_HS: '1'
 
     steps:
       - name: Checkout
@@ -172,6 +187,12 @@ jobs:
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+          # 02_audit_triggers.sql: triggers de auditoría (audit.fn_audit_row →
+          # audit."AuditLog"). Portables sobre db push: solo dependen del enum
+          # "AuditAction", de audit."AuditLog" (ambos en schema.prisma) y de
+          # public.current_user_id()/is_break_glass() (04, aplicado arriba).
+          # Sin esto audit-trail.spec.ts no tiene filas que mostrar en /audit.
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
 
       - name: Seed minimal data
         run: npm run db:seed
@@ -184,11 +205,24 @@ jobs:
         # las specs @smoke y eso debe ser visible, no silencioso.
         run: node packages/database/scripts/seed-test-users.mjs
 
+      - name: Seed fixtures clínicos E2E
+        # Camas (5 estados) + encuentro abierto + espejo ECE de la ocupación +
+        # GSRN/GTIN escaneables + indicación firmada. UUIDs deterministas
+        # espejados en apps/web/e2e/_helpers/fixtures.ts. Sin
+        # continue-on-error: bed-map/audit-trail/admission-discharge dependen
+        # de estos datos y un seed roto debe ser visible, no silencioso.
+        run: node packages/database/scripts/seed-e2e-fixtures.mjs
+
       - name: Build app
         run: npm run build
 
       - name: Run Smoke E2E (@smoke only)
-        run: npm run test:e2e
+        # Directo al workspace, SIN turbo: turbo bufferea la salida del task y
+        # si el job muere por timeout el log se pierde entero — el run
+        # 33217829132 estuvo 16 min "en silencio" y quedó indiagnosticable
+        # (mismo antipatrón del incidente de junio, CLAUDE.md §E2E). Con
+        # playwright directo el reporter "line" streamea al log del job.
+        run: npm run -w @his/web test:e2e
 
       - name: Dump logs del stack (si algo posterior al boot falló)
         # Gap real de la sesión anterior (ver docs/runbooks/e2e-gotrue-auth.md

@@ -25,7 +25,8 @@ test.describe("@smoke - ARCO — cola de solicitudes (DIR/ADMIN)", () => {
 
   test("página /arco carga sin errores para ADMIN", async ({ page }) => {
     await page.goto("/arco");
-    await expect(page.getByRole("heading", { name: /solicitudes arco|derechos arco/i })).toBeVisible();
+    // h1 real: "Cola ARCO — Solicitudes del paciente" (run 33221108882).
+    await expect(page.getByRole("heading", { name: /cola arco|solicitudes arco|derechos arco/i })).toBeVisible();
   });
 
   test("tabla muestra columnas de tipo, paciente y fecha", async ({ page }) => {

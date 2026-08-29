@@ -25,8 +25,10 @@ test.describe("@smoke - Triage Manchester", () => {
     await expect(rows.first()).toBeVisible();
     // Los roles de columna están presentes para a11y.
     await expect(page.getByRole("columnheader", { name: /paciente/i })).toBeVisible();
+    // .first(): la tabla tiene más de una columna que matchea (p. ej.
+    // "Encuentro" y "Llegada") — strict mode violation sin él.
     await expect(
-      page.getByRole("columnheader", { name: /llegada|admisión|hora|encuentro/i }),
+      page.getByRole("columnheader", { name: /llegada|admisión|hora|encuentro/i }).first(),
     ).toBeVisible();
   });
 

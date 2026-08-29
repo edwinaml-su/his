@@ -16,7 +16,11 @@
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
 
-const ROUTE_FIRMA = "/admin/firma-electronica";
+// La ruta real es /firma-electronica/setup — (admin) es un route group de
+// Next (no aparece en la URL) y la página con el h1 "Firma electrónica" +
+// wizard de PIN vive en el segmento /setup. "/admin/firma-electronica"
+// devolvía 404 → hasContent=false (run 33219220987).
+const ROUTE_FIRMA = "/firma-electronica/setup";
 
 test.describe("@smoke - LOCK-01: página firma electrónica", () => {
   test("la página de firma electrónica carga para usuarios autenticados", async ({
@@ -24,15 +28,13 @@ test.describe("@smoke - LOCK-01: página firma electrónica", () => {
   }) => {
     await login(page, "admin");
     await page.goto(ROUTE_FIRMA);
-    await page.waitForLoadState("networkidle");
 
-    // La página debe cargar (heading o form de firma)
-    const hasContent =
-      (await page.getByRole("heading", { name: /firma electrónica/i }).isVisible()) ||
-      (await page.getByText(/PIN de firma/i).isVisible()) ||
-      (await page.locator("form").count()) > 0;
-
-    expect(hasContent).toBe(true);
+    // OJO: nada de waitForLoadState("networkidle") — la página emite requests
+    // periódicos y networkidle nunca se asienta (timeout de 60s en el run
+    // 33221108882). El h1 "Firma electrónica" con auto-retry es suficiente.
+    await expect(
+      page.getByRole("heading", { name: /firma electrónica/i }),
+    ).toBeVisible();
   });
 });
 
@@ -40,7 +42,10 @@ test.describe("@smoke - LOCK-02/03: mensajes de error PIN", () => {
   test.beforeEach(async ({ page }) => {
     await login(page, "admin");
     await page.goto(ROUTE_FIRMA);
-    await page.waitForLoadState("networkidle");
+    // Sin networkidle (la página polea — ver LOCK-01); esperar el h1 real.
+    await page
+      .getByRole("heading", { name: /firma electrónica/i })
+      .waitFor({ state: "visible" });
   });
 
   test("LOCK-02: formulario de firma tiene campo PIN", async ({ page }) => {
@@ -86,7 +91,9 @@ test.describe("@smoke - LOCK-02/03: mensajes de error PIN", () => {
     });
 
     await page.goto(ROUTE_FIRMA);
-    await page.waitForLoadState("networkidle");
+    await page
+      .getByRole("heading", { name: /firma electrónica/i })
+      .waitFor({ state: "visible" });
 
     // Si hay un formulario de PIN, intentar submit para ver el mensaje de bloqueo
     const hasPinField = (await page.locator('input[type="password"]').count()) > 0;

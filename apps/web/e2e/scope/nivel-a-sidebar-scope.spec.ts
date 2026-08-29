@@ -38,15 +38,19 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
     await login(page, "admin");
     await page.goto("/dashboard");
 
-    const nav = page.getByRole("navigation");
-    await expect(nav).toBeVisible();
-
     // ADMIN no debe ver "acceso restringido" ni menú colapsado por scope.
     await expect(page.getByText(/acceso restringido|sin acceso/i)).not.toBeVisible();
 
-    // El sidebar debe tener al menos 5 ítems de navegación.
-    const navLinks = nav.getByRole("link");
-    const linkCount = await navLinks.count();
+    // El sidebar NO expone role=navigation (getByRole("navigation") resolvía
+    // a otro nav con 0 ítems — run 33221108882). Sus ítems son role=menuitem
+    // (SidebarMenuButton dentro de menu) y las secciones colapsadas solo
+    // renderizan su botón trigger — contamos ambos a nivel de página.
+    const menuItems = page.getByRole("menuitem");
+    const sectionTriggers = page.getByRole("button", {
+      name: /visión|clínico|ece|diagnóstico|gs1|bedside|soporte|administración|maternidad/i,
+    });
+    await expect(menuItems.first()).toBeVisible();
+    const linkCount = (await menuItems.count()) + (await sectionTriggers.count());
     expect(linkCount, "ADMIN debe ver al menos 5 ítems de navegación").toBeGreaterThanOrEqual(5);
 
     test.info().annotations.push({
@@ -64,10 +68,16 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
     await login(page, "nurse");
     await page.goto("/dashboard");
 
-    const nav = page.getByRole("navigation");
-    await expect(nav).toBeVisible();
-
-    const navText = await nav.innerText().catch(() => "");
+    // Ver nota de SCOPE-A-01: los ítems del sidebar son role=menuitem.
+    const menuItems = page.getByRole("menuitem");
+    const sectionTriggers = page.getByRole("button", {
+      name: /visión|clínico|ece|diagnóstico|gs1|bedside|soporte|administración|maternidad/i,
+    });
+    await expect(menuItems.first()).toBeVisible();
+    const navText = [
+      ...(await menuItems.allInnerTexts()),
+      ...(await sectionTriggers.allInnerTexts()),
+    ].join(" ");
 
     // Si qa.nurse no tiene asignación ER en el seed, anotamos y skip.
     const hasErScopeIndicator =
@@ -85,9 +95,9 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
       return;
     }
 
-    // Verificar que ítems de ER son visibles.
+    // Verificar que ítems de ER son visibles (role=menuitem, ver SCOPE-A-01).
     for (const pattern of ER_SIDEBAR_ITEMS) {
-      const matchingLinks = nav.getByRole("link").filter({ hasText: pattern });
+      const matchingLinks = menuItems.filter({ hasText: pattern });
       const count = await matchingLinks.count();
       test.info().annotations.push({
         type: "er-item-check",
@@ -97,7 +107,7 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
 
     // Verificar que ítems de otras unidades NO son visibles.
     for (const pattern of NON_ER_SIDEBAR_ITEMS) {
-      const nonErLinks = nav.getByRole("link").filter({ hasText: pattern });
+      const nonErLinks = menuItems.filter({ hasText: pattern });
       const count = await nonErLinks.count();
       if (count > 0) {
         test.info().annotations.push({
@@ -117,15 +127,17 @@ test.describe("@smoke - Scope Nivel A — Sidebar por unidad de servicio", () =>
     await login(page, "physician");
     await page.goto("/dashboard");
 
-    const nav = page.getByRole("navigation");
-    await expect(nav).toBeVisible();
-
     // Sin asignaciones → comportamiento legacy: ver todo.
     // No debe ver mensaje de acceso restringido.
     await expect(page.getByText(/acceso restringido|sin acceso/i)).not.toBeVisible();
 
-    const navLinks = nav.getByRole("link");
-    const linkCount = await navLinks.count();
+    // role=menuitem + triggers de sección — ver SCOPE-A-01.
+    const menuItems = page.getByRole("menuitem");
+    const sectionTriggers = page.getByRole("button", {
+      name: /visión|clínico|ece|diagnóstico|gs1|bedside|soporte|administración|maternidad/i,
+    });
+    await expect(menuItems.first()).toBeVisible();
+    const linkCount = (await menuItems.count()) + (await sectionTriggers.count());
     expect(linkCount, "Sin asignaciones debe ver al menos 5 ítems (backward compat)").toBeGreaterThanOrEqual(5);
 
     test.info().annotations.push({

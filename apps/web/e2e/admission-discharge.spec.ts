@@ -13,6 +13,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { login } from "./_helpers/auth";
+import { E2E_FIXTURES } from "./_helpers/fixtures";
 
 test.describe("@smoke - Admisión → Traslado → Alta", () => {
   test.beforeEach(async ({ page }) => {
@@ -30,10 +31,16 @@ test.describe("@smoke - Admisión → Traslado → Alta", () => {
   test("traslado: tablero `/transfers` renderiza form y lista de encuentros", async ({ page }) => {
     await page.goto("/transfers");
     await expect(page).toHaveURL(/\/transfers/);
+    // El form es un panel expandible detrás del botón "Nuevo traslado"
+    // (transfers/page.tsx: showForm=false por default).
+    await page.getByRole("button", { name: /nuevo traslado/i }).click();
     // El form inline tiene el campo de selección de encuentro.
     await expect(
       page.getByLabel(/encuentro a trasladar/i),
     ).toBeVisible();
+    // La lista de encuentros abiertos (encounter.listOpenByOrg) muestra el
+    // encuentro sembrado por seed-e2e-fixtures.mjs (ENC-{AAAA}-000101).
+    await expect(page.getByText(E2E_FIXTURES.encounterNumberPattern).first()).toBeVisible();
     // Y el campo de razón clínica (validación min 2 chars).
     await expect(page.getByLabel(/razón clínica/i)).toBeVisible();
     // El botón "Confirmar traslado" debe estar visible (deshabilitado hasta
