@@ -242,6 +242,42 @@ describe("indicacionesMedicasRouter", () => {
       expect(ctx.prisma.careTask.create).toHaveBeenCalledTimes(2);
     });
 
+    // H-09 (UAT CC-0026, Media) — un fallo interno fuera de los 3 consumers
+    // (farmacia/CareTask/órdenes) —p. ej. el outbox de emitDomainEvent, que
+    // en el dry-run reventó por un trigger de auditoría ausente— NO debe
+    // burbujear el stack crudo de Prisma hasta el médico.
+    it("H-09: si emitDomainEvent falla, firmar() lanza INTERNAL_SERVER_ERROR con mensaje operativo (no el stack crudo)", async () => {
+      const ctx = buildCtx(["PHYSICIAN"]);
+
+      primeEceResolve(ctx);
+      (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO cada 8h" },
+        ]);
+      (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      vi.mocked(emitDomainEvent).mockRejectedValueOnce(
+        new Error(
+          'Invalid prisma.$executeRaw() invocation… function audit.fn_write_manual_audit_entry does not exist',
+        ),
+      );
+
+      const error = await caller(ctx)
+        .firmar({ id: IND_ID })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(TRPCError);
+      expect((error as TRPCError).code).toBe("INTERNAL_SERVER_ERROR");
+      expect((error as TRPCError).message).toContain("No se pudo firmar la indicación");
+      expect((error as TRPCError).message).toContain(
+        "La firma no se aplicó — reintente; si persiste, contacte soporte.",
+      );
+      // El mensaje que ve el usuario NO debe filtrar el detalle técnico de Prisma.
+      expect((error as TRPCError).message).not.toContain("fn_write_manual_audit_entry");
+      expect((error as TRPCError).message).not.toContain("Invalid prisma");
+    });
+
     it("rechaza si estado_registro no es borrador", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
 

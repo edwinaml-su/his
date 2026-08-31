@@ -747,31 +747,60 @@ export const indicacionesMedicasRouter = router({
             );
           }
 
-          await tx.$executeRaw`
-            UPDATE ece.indicaciones_medicas
-            SET estado_registro = 'firmado',
-                transcripcion_enf = null,
-                fecha_firma = now(),
-                tipo_indicacion = ${input.tipoIndicacion ?? null}
-            WHERE id = ${input.id}::uuid
-          `;
+          // H-09 (UAT CC-0026, Media) — el resto del cuerpo transaccional va
+          // envuelto con el mismo contrato de error que los 3 consumers de
+          // abajo: un fallo interno aquí (UPDATE del encabezado o el outbox
+          // de emitDomainEvent) NO debe burbujear el error crudo de Prisma
+          // hasta el médico. El rollback ya lo garantiza la transacción de
+          // withEceContext — esto solo cambia el mensaje que ve el usuario.
+          try {
+            await tx.$executeRaw`
+              UPDATE ece.indicaciones_medicas
+              SET estado_registro = 'firmado',
+                  transcripcion_enf = null,
+                  fecha_firma = now(),
+                  tipo_indicacion = ${input.tipoIndicacion ?? null}
+              WHERE id = ${input.id}::uuid
+            `;
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló el registro de la " +
+                "firma. La firma no se aplicó — reintente; si persiste, " +
+                "contacte soporte.",
+              cause: err,
+            });
+          }
 
           const itemCount = items.length;
 
-          const domainEvent = await emitDomainEvent(tx, {
-            organizationId: ctx.tenant.organizationId,
-            eventType: "ece.indicaciones.firmadas",
-            aggregateType: "IndicacionMedica",
-            aggregateId: input.id,
-            emittedById: ctx.user.id,
-            payload: {
-              indicacionId: input.id,
-              episodioId: indicacion.episodio_id,
-              medicoId: personalId,
-              itemCount,
+          let domainEvent: { id: string };
+          try {
+            domainEvent = await emitDomainEvent(tx, {
               organizationId: ctx.tenant.organizationId,
-            },
-          });
+              eventType: "ece.indicaciones.firmadas",
+              aggregateType: "IndicacionMedica",
+              aggregateId: input.id,
+              emittedById: ctx.user.id,
+              payload: {
+                indicacionId: input.id,
+                episodioId: indicacion.episodio_id,
+                medicoId: personalId,
+                itemCount,
+                organizationId: ctx.tenant.organizationId,
+              },
+            });
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló el registro del " +
+                "evento de auditoría. La firma no se aplicó — reintente; si " +
+                "persiste, contacte soporte.",
+              cause: err,
+            });
+          }
 
           // R04 — materializa los ítems tipo=medicamento a la cola de
           // conciliación farmacia/eMAR (ece.indicacion_farmacia_pendiente).
