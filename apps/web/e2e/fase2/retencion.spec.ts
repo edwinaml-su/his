@@ -28,7 +28,7 @@ test.describe("Retención — panel principal", () => {
   test.skip(SKIP, "SKIP_E2E_RETENCION=1");
 
   test.beforeEach(async ({ page }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
   });
 
   test("1. Panel /retencion carga sin error 500", async ({ page }) => {
@@ -119,7 +119,7 @@ test.describe("Retención — endpoint CSV", () => {
   test("7. GET /api/retencion/report.csv con sesión responde con text/csv", async ({
     page,
   }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
     const response = await page.request.get(
       "/api/retencion/report.csv?diasProximos=90",
     );
