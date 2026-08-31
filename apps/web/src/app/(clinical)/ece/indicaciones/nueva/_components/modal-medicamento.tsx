@@ -102,7 +102,13 @@ export const ModalMedicamento = React.forwardRef<ModalMedicamentoHandle, Record<
     const [dosisValor, setDosisValor] = React.useState("");
     const [unidad, setUnidad] = React.useState(UNIDADES_DOSIS[0]!);
     const [via, setVia] = React.useState(VIAS_MED[0]!.label);
-    const [frecuencia, setFrecuencia] = React.useState(FRECUENCIAS_MED[0]!.label);
+    // H-08 (UAT CC-0026, Alta/seguridad del paciente): SIN preselección — un
+    // médico que agrega el ítem sin tocar este campo NO debe terminar con
+    // "STAT (inmediato)" por default (dosis inmediata no intencional +
+    // prioridad Alta heredada por la CareTask). La frecuencia es obligatoria
+    // (ver validación en compose()); el orden de FRECUENCIAS_MED no cambia.
+    const [frecuencia, setFrecuencia] = React.useState("");
+    const [frecuenciaError, setFrecuenciaError] = React.useState(false);
     const [duracion, setDuracion] = React.useState("");
     const [cantidad, setCantidad] = React.useState(1);
     const [obs, setObs] = React.useState("");
@@ -121,6 +127,10 @@ export const ModalMedicamento = React.forwardRef<ModalMedicamentoHandle, Record<
     React.useImperativeHandle(ref, () => ({
       compose: () => {
         if (!seleccionado) return null;
+        if (!frecuencia) {
+          setFrecuenciaError(true);
+          return null;
+        }
         const viaSel = VIAS_MED.find((v) => v.label === via);
         const frecSel = FRECUENCIAS_MED.find((f) => f.label === frecuencia);
         const nombre = seleccionado.brandName || seleccionado.genericName;
@@ -271,10 +281,18 @@ export const ModalMedicamento = React.forwardRef<ModalMedicamentoHandle, Record<
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1">
-            <Label htmlFor="med-frec">Frecuencia</Label>
-            <Select value={frecuencia} onValueChange={setFrecuencia}>
-              <SelectTrigger id="med-frec">
-                <SelectValue />
+            <Label htmlFor="med-frec">
+              Frecuencia <span className="text-destructive">*</span>
+            </Label>
+            <Select
+              value={frecuencia}
+              onValueChange={(v) => {
+                setFrecuencia(v);
+                setFrecuenciaError(false);
+              }}
+            >
+              <SelectTrigger id="med-frec" aria-invalid={frecuenciaError}>
+                <SelectValue placeholder="Seleccione…" />
               </SelectTrigger>
               <SelectContent>
                 {FRECUENCIAS_MED.map((f) => (
@@ -284,6 +302,11 @@ export const ModalMedicamento = React.forwardRef<ModalMedicamentoHandle, Record<
                 ))}
               </SelectContent>
             </Select>
+            {frecuenciaError ? (
+              <p className="text-xs text-destructive">
+                Seleccione la frecuencia antes de agregar el medicamento.
+              </p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <Label htmlFor="med-dur">Duración (opcional)</Label>

@@ -245,7 +245,13 @@ export default function NuevaIndicacionPage(): React.ReactElement {
                   // orden real en vez de tarea de enfermería; el toast informa las tres cosas.
                   description: `${res.tasksCreated} tarea(s) de enfermería · ${res.labOrdersCreated} orden(es) de laboratorio · ${res.imagingRequestsCreated} solicitud(es) de imágenes generada(s).${res.ordenesOmitidas.length > 0 ? ` ⚠ ${res.ordenesOmitidas.length} ítem(s) no generaron orden real: ${res.ordenesOmitidas.map((o) => o.motivo).join(" ")}` : ""}${res.plazoExcedido ? " ⚠ Se excedió el plazo de 32h desde la última firma." : ""}`,
                 });
-                router.push("/ece/indicaciones");
+                // H-01 (UAT CC-0026, Media) — router.push desmontaba la página
+                // (y con ella el toast) en el mismo tick que setToast, así que
+                // el médico se quedaba sin ver los contadores de la firma en
+                // 2 de 3 corridas. Mismo patrón que patients/merge y
+                // finance/operating-costs·cost-centers "nuevo": diferir la
+                // navegación para que el toast alcance a mostrarse.
+                setTimeout(() => router.push("/ece/indicaciones"), 1500);
               },
             },
           );
