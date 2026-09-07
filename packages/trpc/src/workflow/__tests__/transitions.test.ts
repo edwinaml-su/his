@@ -429,11 +429,13 @@ describe("executeTransition", () => {
 
     await executeTransition(prisma, INSTANCIA_ID, ACCION_FIRMAR, CTX_MC, PERSONAL_ID);
 
-    // applyWorkflowContext emite 3–4 SET LOCAL via $executeRawUnsafe
+    // applyWorkflowContext delega los GUC de identidad a ece.set_ece_context
+    // (ADR 0022, sql/216: resuelve el puente de espacios de id) y setea
+    // break_glass + demote vía SET LOCAL.
     expect(prisma.$executeRawUnsafe).toHaveBeenCalled();
     const calls = prisma.$executeRawUnsafe.mock.calls;
     const sqlStrings = calls.map((c) => String(c[0]));
-    expect(sqlStrings.some((s) => s.includes("ece_personal_id"))).toBe(true);
-    expect(sqlStrings.some((s) => s.includes("establecimiento_id"))).toBe(true);
+    expect(sqlStrings.some((s) => s.includes("ece.set_ece_context"))).toBe(true);
+    expect(sqlStrings.some((s) => s.includes("app.is_break_glass"))).toBe(true);
   });
 });
