@@ -24,9 +24,9 @@ Versiones instaladas (verificado 2026-08-18 — si tocás una, actualizá esta t
 | Postgres | 15 (Supabase) | 227 SQL numerados en `packages/database/sql/` — ver §Motor de workflow |
 | Tailwind | 3.4.19 | + Shadcn en `@his/ui` |
 | Zod | 3.25.76 | Base de `@his/contracts` |
-| Supabase JS / SSR | 2.108 / 0.5.2 | Auth vía `signInWithPassword`, no credenciales locales |
+| Supabase JS / SSR | 2.116 / 0.5.2 | Auth vía `signInWithPassword`, no credenciales locales |
 | Vitest | 2.1.9 | Dependabot ignora el mayor a 4 |
-| Playwright | 1.60 | `workers: 1`, BD compartida |
+| Playwright | 1.63 | `workers: 1`, BD compartida |
 | Sentry | 10.70 | Requiere `SENTRY_DSN` para activarse |
 
 **Cuidado con los bumps mayores:** `.github/dependabot.yml` ignora `semver-major` global y `semver-minor` en 13 librerías 0.x, por historia pagada (Next 14→16, TS 5→6, Vitest 2→4, Prisma 5→7, tiptap-markdown 0.8→0.9). Si un bump rompe CI: revertir y cerrar el PR de Dependabot, no arreglar el breaking en caliente.
