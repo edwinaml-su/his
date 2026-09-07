@@ -35,6 +35,7 @@ import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 import {
   eceUrpaCreateSchema,
   eceUrpaRegistrarSignosSchema,
@@ -62,10 +63,6 @@ export interface UrpaRecoveryRow {
 
 // ─── Tipos internos para firma ───────────────────────────────────────────────
 
-interface PersonalRow {
-  id: string;
-}
-
 interface FirmaRow {
   id: string;
   pin_hash: string;
@@ -82,14 +79,9 @@ async function verifyPinOrThrow(
   hisUserId: string,
   pin: string,
 ): Promise<{ firmaId: string }> {
-  const personalRows = await tx.$queryRaw<PersonalRow[]>`
-    SELECT id::text
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  const personal = personalRows[0];
+  // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  const personal = await resolvePersonalSalud(tx, hisUserId);
   if (!personal) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",

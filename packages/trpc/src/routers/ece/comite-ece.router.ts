@@ -39,6 +39,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { withTenantContext } from "../../rls-context";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -151,19 +152,11 @@ interface CalidadKpiRow {
 
 type RawTx = { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> };
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function resolvePersonalId(tx: RawTx, userId: string): Promise<string> {
-  const rows = await (tx.$queryRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<Array<{ id: string }>>)`
-    SELECT id FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  if (!rows[0]) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No se encontró personal ECE asociado a su cuenta.",
-    });
-  }
-  return rows[0].id;
+  const personal = await requirePersonalSalud(tx, userId);
+  return personal.id;
 }
 
 async function resolveFirmaPresidente(tx: RawTx, personalId: string): Promise<FirmaRow> {

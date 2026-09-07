@@ -14,6 +14,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
+import { requirePersonalSalud, type PersonalSaludTx } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -129,23 +130,14 @@ function resolveEceCtx(ctx: {
 // Helper — resolver personal_salud del usuario activo
 // ---------------------------------------------------------------------------
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function resolvePersonalId(
   prisma: Parameters<typeof router>[0] extends never ? never : { $queryRaw: unknown },
   userId: string,
 ): Promise<string> {
-  const rows = await (
-    prisma as { $queryRaw: (tpl: TemplateStringsArray, ...v: unknown[]) => Promise<{ id: string }[]> }
-  ).$queryRaw`
-    SELECT id::text FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid AND activo = true LIMIT 1
-  `;
-  if (!rows[0]) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "El usuario no tiene un registro de personal de salud activo en ECE.",
-    });
-  }
-  return rows[0].id;
+  const personal = await requirePersonalSalud(prisma as unknown as PersonalSaludTx, userId);
+  return personal.id;
 }
 
 // ---------------------------------------------------------------------------

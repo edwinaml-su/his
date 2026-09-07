@@ -65,6 +65,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../../trpc";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // =============================================================================
 // Schemas Zod (inlined — igual que bridge-encounter.router.ts — para evitar
@@ -184,22 +185,15 @@ async function findFirmaElectronica(
   return rows[0] ?? null;
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonalSaludPorAuthUser(
   prisma: RawClient,
   hisUserId: string,
 ): Promise<PersonalSaludRow | null> {
-  // Patrón canónico (orden-ingreso.router): his_user_id, no auth_user_id.
-  const rows = await (prisma.$queryRaw as (
-    tpl: TemplateStringsArray,
-    ...vals: unknown[]
-  ) => Promise<PersonalSaludRow[]>)`
-    SELECT id, nombre_completo
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  const personal = await resolvePersonalSalud(prisma, hisUserId);
+  if (!personal) return null;
+  return { id: personal.id, nombre_completo: personal.nombreCompleto };
 }
 
 /** Verifica PIN contra hash argon2 almacenado usando pg's pgcrypto verify. */

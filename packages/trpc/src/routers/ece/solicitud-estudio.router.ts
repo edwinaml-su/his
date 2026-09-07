@@ -57,6 +57,7 @@ import { argon2 } from "@his/infrastructure";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext, type EceContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas locales (mirrors de contracts; evita symlink en worktrees)
@@ -169,17 +170,10 @@ async function withEceCtx<T>(
   return withWorkflowContext(prisma, ctx, fn);
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonal(tx: RawTx, hisUserId: string): Promise<PersonalRow | null> {
-  const rows = await (tx.$queryRaw as (
-    q: TemplateStringsArray,
-    ...v: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id::text
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  return resolvePersonalSalud(tx, hisUserId);
 }
 
 async function findFirma(tx: RawTx, personalId: string): Promise<FirmaRow | null> {

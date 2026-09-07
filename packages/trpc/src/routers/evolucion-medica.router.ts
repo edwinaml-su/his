@@ -23,6 +23,7 @@ import { router, requireRole } from "../trpc";
 import { withWorkflowContext, type EceContext } from "../workflow/context";
 import { withTenantContext } from "../rls-context";
 import { emitDomainEvent } from "@his/database";
+import { requirePersonalSalud, resolvePersonalSalud } from "../lib/identity-resolver";
 import {
   eceEvolucionCreateSchema,
   eceEvolucionUpdateSchema,
@@ -415,19 +416,10 @@ export const evolucionMedicaRouter = router({
   create: physicianProc.input(eceEvolucionCreateSchema).mutation(async ({ ctx, input }) => {
     return withEceContext(ctx.prisma, ctx, async (tx) => {
       // Resolver personal_id del usuario
-      const personalRows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id::text
-        FROM ece.personal_salud
-        WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
-        LIMIT 1
-      `;
-      if (personalRows.length === 0) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "El usuario no tiene un perfil de personal de salud activo en ECE.",
-        });
-      }
-      const personalId = personalRows[0]!.id;
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const personal = await requirePersonalSalud(tx, ctx.user.id);
+      const personalId = personal.id;
 
       // Resolver tipo de documento EVOL_MED y estado inicial (borrador)
       const tipoRows = await tx.$queryRaw<{ id: string }[]>`
@@ -533,12 +525,10 @@ export const evolucionMedicaRouter = router({
       }
 
       // Resolver personal_id del usuario para comparar con registrado_por
-      const personalRows = await tx.$queryRaw<{ id: string }[]>`
-        SELECT id::text FROM ece.personal_salud
-        WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
-        LIMIT 1
-      `;
-      if (personalRows.length === 0 || personalRows[0]!.id !== evol.registrado_por) {
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const autor = await resolvePersonalSalud(tx, ctx.user.id);
+      if (!autor || autor.id !== evol.registrado_por) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Solo el autor puede editar la evolución." });
       }
 
@@ -604,18 +594,10 @@ export const evolucionMedicaRouter = router({
         }
 
         // Resolver personal_id del usuario firmante
-        const personalRows = await tx.$queryRaw<{ id: string }[]>`
-          SELECT id::text FROM ece.personal_salud
-          WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
-          LIMIT 1
-        `;
-        if (personalRows.length === 0) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "El usuario no tiene un perfil de personal de salud activo en ECE.",
-          });
-        }
-        const personalId = personalRows[0]!.id;
+        // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+        // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+        const firmante = await requirePersonalSalud(tx, ctx.user.id);
+        const personalId = firmante.id;
 
         // Avanzar estado → firmado
         await avanzarEstado(tx, evol.instancia_id, "firmado", personalId, "firmar");
@@ -678,18 +660,10 @@ export const evolucionMedicaRouter = router({
           });
         }
 
-        const personalRows = await tx.$queryRaw<{ id: string }[]>`
-          SELECT id::text FROM ece.personal_salud
-          WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
-          LIMIT 1
-        `;
-        if (personalRows.length === 0) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "El usuario no tiene un perfil de personal de salud activo en ECE.",
-          });
-        }
-        const personalId = personalRows[0]!.id;
+        // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+        // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+        const validador = await requirePersonalSalud(tx, ctx.user.id);
+        const personalId = validador.id;
 
         await avanzarEstado(tx, evol.instancia_id, "validado", personalId, "validar");
 

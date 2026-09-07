@@ -36,6 +36,7 @@ import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
 import { applyWorkflowContext } from "../../workflow/context";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas locales
@@ -277,17 +278,16 @@ export const epicrisisRouter = router({
       }
 
       // Resolver personal_salud vinculado al usuario HIS.
-      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
-        SELECT id::text FROM ece.personal_salud
-        WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
-      `;
-      if (!personalRows[0]) {
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const personal = await resolvePersonalSalud(tx, eceCtx.personalId);
+      if (!personal) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: "El usuario no tiene un registro de personal de salud activo en ECE.",
         });
       }
-      const medicoId = personalRows[0].id;
+      const medicoId = personal.id;
       const tipoEgreso = input.motivoEgreso === "fallecido" ? "fallecido" : "vivo";
 
       // instancia_id es NOT NULL en epicrisis_egreso — instancia-first igual que bridge-cirugia.
@@ -457,11 +457,10 @@ export const epicrisisRouter = router({
         });
       }
 
-      const personalRows = await tx.$queryRaw<[{ id: string }?]>`
-        SELECT id::text FROM ece.personal_salud
-        WHERE his_user_id = ${eceCtx.personalId}::uuid AND activo = true LIMIT 1
-      `;
-      const jefeId = personalRows[0]?.id ?? eceCtx.personalId;
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const personalJefe = await resolvePersonalSalud(tx, eceCtx.personalId);
+      const jefeId = personalJefe?.id ?? eceCtx.personalId;
       const observacion = input.observacion ?? null;
       void observacion; // reservado para bitácora futura
 

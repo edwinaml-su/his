@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 import type { TenantContext } from "@his/contracts";
 import type { PrismaClient } from "@prisma/client";
 
@@ -103,20 +104,14 @@ async function withEceContext<T>(
   return withWorkflowContext(prisma, buildEceCtx(tenant, userId), fn);
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonalId(
   prisma: Pick<PrismaClient, "$queryRaw">,
   userId: string,
 ): Promise<string | null> {
-  const rows = await (prisma.$queryRaw as (
-    query: TemplateStringsArray,
-    ...values: unknown[]
-  ) => Promise<Array<{ id: string }>>)`
-    SELECT id FROM ece.personal_salud
-     WHERE his_user_id = ${userId}::uuid
-       AND activo = true
-     LIMIT 1
-  `;
-  return rows[0]?.id ?? null;
+  const personal = await resolvePersonalSalud(prisma, userId);
+  return personal?.id ?? null;
 }
 
 async function findSalaExpulsion(
@@ -171,15 +166,9 @@ async function verifyPin(
   hisUserId: string,
   pin: string,
 ): Promise<{ firmaId: string; personalId: string }> {
-  const personalRows = await (prisma.$queryRaw as (
-    query: TemplateStringsArray,
-    ...values: unknown[]
-  ) => Promise<Array<{ id: string }>>)`
-    SELECT id::text FROM ece.personal_salud
-     WHERE his_user_id = ${hisUserId}::uuid AND activo = true
-     LIMIT 1
-  `;
-  const personal = personalRows[0];
+  // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  const personal = await resolvePersonalSalud(prisma, hisUserId);
   if (!personal) {
     throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Sin perfil de personal_salud activo." });
   }
