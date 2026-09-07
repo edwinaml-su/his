@@ -74,42 +74,53 @@ $function$;
 -- -----------------------------------------------------------------------
 -- 2. ece.verbal_order — GUC fantasma 'app.establecimiento_id' → helper real.
 --    Mismo predicado que tenían (join a episodio_atencion), solo cambia la
---    fuente del establecimiento.
+--    fuente del establecimiento. Condicional a que la tabla exista: la BD
+--    efímera de E2E aplica este archivo pero NO sql/113 (DROP POLICY
+--    IF EXISTS no perdona la ausencia de la TABLA — P1014).
 -- -----------------------------------------------------------------------
-DROP POLICY IF EXISTS verbal_order_select_policy ON ece.verbal_order;
-CREATE POLICY verbal_order_select_policy ON ece.verbal_order
-  FOR SELECT
-  USING (EXISTS (
-    SELECT 1 FROM ece.episodio_atencion ea
-    WHERE ea.id = verbal_order.episodio_id
-      AND ea.establecimiento_id = ece.current_establecimiento_id()));
+DO $$ BEGIN
+  IF to_regclass('ece.verbal_order') IS NULL THEN RETURN; END IF;
 
-DROP POLICY IF EXISTS verbal_order_insert_policy ON ece.verbal_order;
-CREATE POLICY verbal_order_insert_policy ON ece.verbal_order
-  FOR INSERT
-  WITH CHECK (EXISTS (
-    SELECT 1 FROM ece.episodio_atencion ea
-    WHERE ea.id = verbal_order.episodio_id
-      AND ea.establecimiento_id = ece.current_establecimiento_id()));
+  DROP POLICY IF EXISTS verbal_order_select_policy ON ece.verbal_order;
+  CREATE POLICY verbal_order_select_policy ON ece.verbal_order
+    FOR SELECT
+    USING (EXISTS (
+      SELECT 1 FROM ece.episodio_atencion ea
+      WHERE ea.id = verbal_order.episodio_id
+        AND ea.establecimiento_id = ece.current_establecimiento_id()));
 
-DROP POLICY IF EXISTS verbal_order_update_policy ON ece.verbal_order;
-CREATE POLICY verbal_order_update_policy ON ece.verbal_order
-  FOR UPDATE
-  USING (EXISTS (
-    SELECT 1 FROM ece.episodio_atencion ea
-    WHERE ea.id = verbal_order.episodio_id
-      AND ea.establecimiento_id = ece.current_establecimiento_id()));
+  DROP POLICY IF EXISTS verbal_order_insert_policy ON ece.verbal_order;
+  CREATE POLICY verbal_order_insert_policy ON ece.verbal_order
+    FOR INSERT
+    WITH CHECK (EXISTS (
+      SELECT 1 FROM ece.episodio_atencion ea
+      WHERE ea.id = verbal_order.episodio_id
+        AND ea.establecimiento_id = ece.current_establecimiento_id()));
+
+  DROP POLICY IF EXISTS verbal_order_update_policy ON ece.verbal_order;
+  CREATE POLICY verbal_order_update_policy ON ece.verbal_order
+    FOR UPDATE
+    USING (EXISTS (
+      SELECT 1 FROM ece.episodio_atencion ea
+      WHERE ea.id = verbal_order.episodio_id
+        AND ea.establecimiento_id = ece.current_establecimiento_id()));
+END $$;
 
 -- -----------------------------------------------------------------------
 -- 3. ece.who_checklist_insert — GUC fantasma 'app.current_estab_id' →
---    alinear con select/update de la misma tabla.
+--    alinear con select/update de la misma tabla. Condicional por la misma
+--    razón que la sección 2.
 -- -----------------------------------------------------------------------
-DROP POLICY IF EXISTS who_checklist_insert ON ece.who_checklist;
-CREATE POLICY who_checklist_insert ON ece.who_checklist
-  FOR INSERT
-  WITH CHECK (EXISTS (
-    SELECT 1
-    FROM ece.acto_quirurgico aq
-    JOIN ece.episodio_atencion ea ON ea.id = aq.episodio_id
-    WHERE aq.id = who_checklist.acto_quirurgico_id
-      AND ea.establecimiento_id = ece.current_establecimiento_id()));
+DO $$ BEGIN
+  IF to_regclass('ece.who_checklist') IS NULL THEN RETURN; END IF;
+
+  DROP POLICY IF EXISTS who_checklist_insert ON ece.who_checklist;
+  CREATE POLICY who_checklist_insert ON ece.who_checklist
+    FOR INSERT
+    WITH CHECK (EXISTS (
+      SELECT 1
+      FROM ece.acto_quirurgico aq
+      JOIN ece.episodio_atencion ea ON ea.id = aq.episodio_id
+      WHERE aq.id = who_checklist.acto_quirurgico_id
+        AND ea.establecimiento_id = ece.current_establecimiento_id()));
+END $$;
