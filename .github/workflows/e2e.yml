@@ -162,6 +162,8 @@ jobs:
         run: |
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
+          # 216: set_ece_context con resolución de puente de espacios de id (ADR 0022)
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/216_ece_contexto_espacio_ids.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
 

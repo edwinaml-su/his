@@ -241,7 +241,9 @@ describe("farmacovigilancia.escalate", () => {
       incidentId: INC_ID,
       severidad: "CRITICAL",
       motivo: "Recall de lote crítico confirmado por MINSAL — escalar a jefe farmacia",
-      establecimientoId: ORG_ID,
+      // ADR 0022: el payload lleva el establecimiento real de la sesión, no el
+      // organizationId (que era un espacio de id equivocado).
+      establecimientoId: MOCK_TENANT.establishmentId,
     });
     expect(typeof (eventArg.payload as Record<string, unknown>).escaladoEn).toBe("string");
   });

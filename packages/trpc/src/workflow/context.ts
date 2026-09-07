@@ -3,9 +3,10 @@
  *
  * Análogo a `rls-context.ts` pero para los GUC del módulo ECE:
  *
- *   - app.establecimiento_id  → uuid del establecimiento activo
- *   - app.ece_personal_id     → uuid del personal ECE ejecutor
- *   - app.is_break_glass      → boolean (acceso de emergencia, auditado)
+ *   - app.ece_establecimiento_id → uuid del establecimiento activo (espacio
+ *     ece.establecimiento — ver ADR 0022)
+ *   - app.ece_personal_id        → uuid del personal ECE ejecutor
+ *   - app.is_break_glass         → boolean (acceso de emergencia, auditado)
  *
  * Obligatorio dentro de una transacción Prisma (`$transaction`) porque
  * `SET LOCAL` solo aplica al scope transaccional.
@@ -16,7 +17,12 @@ import type { PrismaClient } from "@prisma/client";
 export interface EceContext {
   /** UUID del personal ECE que ejecuta la acción. */
   personalId: string;
-  /** UUID del establecimiento activo. */
+  /**
+   * UUID del establecimiento activo. Acepta AMBOS espacios de id (ADR 0022):
+   * `ece.establecimiento.id` o `public."Establishment".id` — la función SQL
+   * `ece.set_ece_context` (sql/216) resuelve el puente y siempre deja el GUC
+   * en el espacio `ece.establecimiento`.
+   */
   establecimientoId: string;
   /** Roles del usuario (informativo; la autorización efectiva la hace RLS). */
   roles?: string[];
@@ -50,15 +56,13 @@ export async function applyWorkflowContext(
   const establecimientoId = String(ctx.establecimientoId).replace(/'/g, "''");
   const bg = options.breakGlass ? "true" : "false";
 
+  // ADR 0022: NO setear los GUC a mano — ece.set_ece_context (sql/216) setea
+  // app.ece_personal_id + app.ece_establecimiento_id Y resuelve el puente de
+  // espacios de id (public."Establishment".id → ece.establecimiento.id). Un
+  // SET LOCAL directo con el id crudo dejaba el GUC en el espacio equivocado
+  // para 15+ tablas ece.* → 0 filas bajo RLS (defecto P0-5).
   await tx.$executeRawUnsafe(
-    `SET LOCAL "app.ece_personal_id" = '${personalId}';`,
-  );
-  // NOTA: el GUC debe llamarse "app.ece_establecimiento_id" (con prefijo ece_)
-  // porque las funciones BD lo leen así: ece.current_establecimiento_id() y
-  // ece.set_ece_context() — un nombre distinto deja el GUC seteado pero
-  // current_setting() devuelve vacío y rompe RLS.
-  await tx.$executeRawUnsafe(
-    `SET LOCAL "app.ece_establecimiento_id" = '${establecimientoId}';`,
+    `SELECT ece.set_ece_context('${personalId}'::uuid, '${establecimientoId}'::uuid);`,
   );
   await tx.$executeRawUnsafe(
     `SET LOCAL "app.is_break_glass" = '${bg}';`,

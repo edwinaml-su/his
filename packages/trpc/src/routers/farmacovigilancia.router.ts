@@ -287,7 +287,10 @@ export const farmacovigilanciaRouter = router({
             incidentId: input.incidentId,
             severidad: inc.severity as "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
             motivo: input.motivo,
-            establecimientoId: ctx.tenant.organizationId,
+            // ADR 0022: antes pasaba organizationId (un espacio de id que no es
+            // establecimiento) — el payload exige uuid, así que se conserva el
+            // fallback solo para sesiones sin establecimiento activo.
+            establecimientoId: ctx.tenant.establishmentId ?? ctx.tenant.organizationId,
             escaladoPor: ctx.user.id,
             escaladoEn: new Date().toISOString(),
           },

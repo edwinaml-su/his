@@ -253,7 +253,7 @@ export const verbalOrderRouter = router({
         SELECT id::text
         FROM ece.episodio_atencion
         WHERE id = ${input.episodioId}::uuid
-          AND establecimiento_id::text = current_setting('app.establecimiento_id', true)
+          AND establecimiento_id::text = current_setting('app.ece_establecimiento_id', true)
         LIMIT 1
       `;
 
@@ -321,7 +321,7 @@ export const verbalOrderRouter = router({
           FROM ece.verbal_order vo
           JOIN ece.episodio_atencion ea ON ea.id = vo.episodio_id
           WHERE vo.id = ${input.orderId}::uuid
-            AND ea.establecimiento_id::text = current_setting('app.establecimiento_id', true)
+            AND ea.establecimiento_id::text = current_setting('app.ece_establecimiento_id', true)
           LIMIT 1
         `;
 
@@ -429,7 +429,7 @@ export const verbalOrderRouter = router({
         FROM ece.verbal_order vo
         JOIN ece.episodio_atencion ea ON ea.id = vo.episodio_id
         WHERE vo.episodio_id = ${input.episodioId}::uuid
-          AND ea.establecimiento_id::text = current_setting('app.establecimiento_id', true)
+          AND ea.establecimiento_id::text = current_setting('app.ece_establecimiento_id', true)
           AND (${input.cursor ?? null}::uuid IS NULL OR vo.id < ${input.cursor ?? null}::uuid)
         ORDER BY vo.dictado_en DESC, vo.id DESC
         LIMIT ${input.limit}
