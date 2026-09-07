@@ -53,6 +53,7 @@ import { router, requireRole } from "../../trpc";
 import { requireEcePermission } from "../../middleware/ece-permission";
 import { withWorkflowContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // PIN de firma: 6-8 dígitos numéricos
 const pinSchema = z
@@ -110,19 +111,13 @@ interface PersonalRow {
 // Helpers raw SQL
 // ---------------------------------------------------------------------------
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonal(
   prisma: { $queryRaw: (q: TemplateStringsArray, ...v: unknown[]) => Promise<unknown> },
   userId: string,
 ): Promise<PersonalRow | null> {
-  const rows = await (prisma.$queryRaw as (
-    q: TemplateStringsArray, ...v: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id
-    FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  return resolvePersonalSalud(prisma, userId);
 }
 
 /** Verifica PIN argon2id contra la firma del DIR. Lanza TRPCError si falla. */

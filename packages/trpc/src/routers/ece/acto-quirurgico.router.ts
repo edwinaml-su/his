@@ -30,6 +30,7 @@ import { withWorkflowContext } from "../../ece/workflow-context";
 // emitDomainEvent: mismo import que consentimiento.router.ts / episodio-hospitalario.router.ts.
 // El error TS2724 es pre-existente en el worktree (stub @his/database desincronizado).
 import { emitDomainEvent } from "@his/database";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 import {
   actoQxListSchema,
   actoQxGetSchema,
@@ -66,10 +67,6 @@ export interface ActoQxRow {
   // join desde documento_instancia + flujo_estado
   estado_codigo: string;
   estado_id: string;
-}
-
-interface PersonalRow {
-  id: string;
 }
 
 interface FirmaRow {
@@ -149,17 +146,6 @@ async function findActoQx(tx: Tx, id: string): Promise<ActoQxRow | null> {
   return rows[0] ?? null;
 }
 
-async function findPersonal(tx: Tx, hisUserId: string): Promise<PersonalRow | null> {
-  const rows = await tx.$queryRaw<PersonalRow[]>`
-    SELECT id::text
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid
-      AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
-}
-
 async function findFirmaByPersonal(tx: Tx, personalId: string): Promise<FirmaRow | null> {
   const rows = await tx.$queryRaw<FirmaRow[]>`
     SELECT id::text, pin_hash, failed_attempts, locked_until, revoked_at
@@ -178,7 +164,9 @@ async function findFirmaByPersonal(tx: Tx, personalId: string): Promise<FirmaRow
 const LOCKOUT_MAX = 5;
 
 async function verifyPinOrThrow(tx: Tx, hisUserId: string, pin: string): Promise<{ firmaId: string }> {
-  const personal = await findPersonal(tx, hisUserId);
+  // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  const personal = await resolvePersonalSalud(tx, hisUserId);
   if (!personal) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",

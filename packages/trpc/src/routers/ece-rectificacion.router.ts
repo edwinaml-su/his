@@ -56,6 +56,7 @@ import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";
 import { requireRole, router } from "../trpc";
 import { requireEcePermission } from "../middleware/ece-permission";
+import { requirePersonalSalud, resolvePersonalSalud } from "../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas de input (contratos públicos — NO cambiar sin migrar la UI)
@@ -165,22 +166,9 @@ async function loadFirmaDir(
   },
   userId: string,
 ): Promise<FirmaRow> {
-  const personal = await (
-    prisma.$queryRaw as (
-      query: TemplateStringsArray,
-      ...values: unknown[]
-    ) => Promise<Array<{ id: string }>>
-  )`
-    SELECT id FROM ece.personal_salud
-    WHERE his_user_id = ${userId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  if (!personal[0]) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "No se encontró personal ECE asociado a su cuenta.",
-    });
-  }
+  // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+  // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+  const personal = await requirePersonalSalud(prisma, userId);
 
   const firmas = await (
     prisma.$queryRaw as (
@@ -190,7 +178,7 @@ async function loadFirmaDir(
   )`
     SELECT id, pin_hash, failed_attempts, locked_until, revoked_at
     FROM ece.firma_electronica
-    WHERE personal_id = ${personal[0].id}::uuid
+    WHERE personal_id = ${personal.id}::uuid
     LIMIT 1
   `;
   if (!firmas[0]) {
@@ -418,17 +406,10 @@ export const eceRectificacionRouter = router({
       }
 
       // Resolver personal_salud del aprobador para insertar en ece.rectificacion.
-      const personalRows = await (
-        ctx.prisma.$queryRaw as (
-          query: TemplateStringsArray,
-          ...values: unknown[]
-        ) => Promise<Array<{ id: string }>>
-      )`
-        SELECT id FROM ece.personal_salud
-        WHERE his_user_id = ${ctx.user.id}::uuid AND activo = true
-        LIMIT 1
-      `;
-      const personalId = personalRows[0]?.id ?? null;
+      // R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+      // en vez de reimplementar el lookup his_user_id → ece.personal_salud.
+      const aprobador = await resolvePersonalSalud(ctx.prisma, ctx.user.id);
+      const personalId = aprobador?.id ?? null;
 
       // hash_original: SHA-256 del motivo + campo + valor_anterior (contenido de la solicitud).
       // Sirve como huella del contexto al momento de la aprobación.

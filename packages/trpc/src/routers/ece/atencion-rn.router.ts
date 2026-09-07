@@ -27,6 +27,7 @@ import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
 import type { EceContext } from "../../workflow/context";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // =============================================================================
 // Schemas Zod
@@ -136,15 +137,10 @@ async function findAtnRn(tx: RawTx, id: string): Promise<AtencionRnRow | null> {
   return rows[0] ?? null;
 }
 
+// R03: delega al resolver canónico (packages/trpc/src/lib/identity-resolver.ts)
+// en vez de reimplementar el lookup his_user_id → ece.personal_salud.
 async function findPersonal(tx: RawTx, hisUserId: string): Promise<{ id: string } | null> {
-  const rows = await (tx.$queryRaw as (
-    tpl: TemplateStringsArray, ...args: unknown[]
-  ) => Promise<Array<{ id: string }>>)`
-    SELECT id::text FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  return resolvePersonalSalud(tx, hisUserId);
 }
 
 async function findFirma(
