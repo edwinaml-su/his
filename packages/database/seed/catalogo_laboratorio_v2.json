@@ -1,0 +1,1631 @@
+{
+  "secciones": [
+    "QUIMICA",
+    "URIANALISIS",
+    "HEMATOLOGIA",
+    "PRUEBAS ESPECIALES",
+    "COAGULACION",
+    "COPROLOGIA",
+    "INMUNOLOGIA/SEROLOGIA",
+    "MICROBIOLOGIA",
+    "INMUNO-HEMATOLOGIA",
+    "BIOLOGIA MOLECULAR",
+    "CITOPATOLOGIA"
+  ],
+  "tipos": [
+    "Sangre y derivados",
+    "Orina",
+    "Heces",
+    "Secreciones y exudados",
+    "Líquidos corporales",
+    "Tracto respiratorio",
+    "Aparato reproductor",
+    "Tejidos y médula",
+    "Otros"
+  ],
+  "subtipos": {
+    "Sangre y derivados": [
+      "Sangre total (EDTA)",
+      "Suero",
+      "Plasma (citratado)",
+      "Sangre capilar",
+      "Sangre arterial",
+      "Hemocultivo",
+      "Gota gruesa / frotis"
+    ],
+    "Orina": [
+      "Orina al azar",
+      "Primera orina de la mañana",
+      "Orina de 24 horas",
+      "Chorro medio (urocultivo)",
+      "Cateterizada / suprapúbica"
+    ],
+    "Heces": [
+      "Heces frescas / preservante",
+      "Muestra seriada (parásitos)",
+      "Hisopado / raspado anal"
+    ],
+    "Secreciones y exudados": [
+      "Faríngeo / nasofaríngeo",
+      "Uretral / vaginal / endocervical",
+      "Conjuntival / ótico",
+      "Ulceras",
+      "Abscesos",
+      "Heridas"
+    ],
+    "Líquidos corporales": [
+      "LCR",
+      "Sinovial (articular)",
+      "Amniótico",
+      "Pleural",
+      "Peritoneal",
+      "Pericárdico"
+    ],
+    "Tracto respiratorio": [
+      "Esputo",
+      "Aspirado / lavado bronquial",
+      "Aspirado traqueal"
+    ],
+    "Aparato reproductor": [
+      "Semen / líquido seminal",
+      "Secreción prostática"
+    ],
+    "Tejidos y médula": [
+      "Médula ósea",
+      "Tejidos y biopsias",
+      "Raspados piel/uñas/pelo (micológico)"
+    ],
+    "Otros": [
+      "Saliva",
+      "Cálculos (litos)",
+      "Sudor",
+      "Uñas/cabello (toxicología)",
+      "Ambientales / puntas de catéter"
+    ]
+  },
+  "pruebas": [
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "AC HEPATITIS C",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "ACIDO URICO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "ACIDO URICO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "AG AUSTRALIANO HEP B",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "AG HELICOBACTER PYLORI",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "AGLUTININAS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "ALBUMINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "ALFA FETO PROTEINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "AMILASA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "AMILASA",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "AMONIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "ANTICOAGULANTE LUPICO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "ANTICUERPOS ANTINUCLEARES",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "ANTICUERPOS HELICOBACTER PYLORI",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "ANTICUERPOS IRREGULARES",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "ANTIGENO COVID 19",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Faríngeo / nasofaríngeo",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "ANTIGENO PARA SALMONELLA",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "ANTIGENOS FEBRILES",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "AZUL DE METILENO",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "BACILOSCOPIA",
+      "tipo": "Tracto respiratorio",
+      "subtipo": "Esputo",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "BILIRRUBINA DIRECTA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "BILIRRUBINA INDIRECTA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "BILIRRUBINA TOTAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "CA 19-9",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CALCIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "CALCIO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "ANTIGENO CARCINOEMBRIONARIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "CHAGAS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICO DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "CK-MB",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CPK-TOTAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CLORO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "CLORO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "CLOSTRIDIUM-PRUEBA RAPIDA",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "COLESTEROL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "COLESTEROL HDL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "COLESTEROL LDL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "COLORACION DE COCCIDIOS",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "COLORACION DE WRIGHT",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Gota gruesa / frotis",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "COLORACION GRAM",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Heridas",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "COLORACION ZIEHL-NEELSEN",
+      "tipo": "Tracto respiratorio",
+      "subtipo": "Esputo",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "COMBO DENGUE NS1/IgG/IgM",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "COMBO IgG/IgM HEPATITIS A",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "COMBO SARAMPION IgG/IgM",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "CONCENTRADO DE HECES",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "CONCENTRADO DE STROUT",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "CONTEO DE EOSINOFILOS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "COOMBS DIRECTO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "COPROCULTIVO",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "CORTISOL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CREATININA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "CREATININA",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO DE ESPUTO",
+      "tipo": "Tracto respiratorio",
+      "subtipo": "Esputo",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO DE HERIDA OPERATORIA",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Heridas",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO DE ULCERA",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Heridas",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO ESPECIFICAR PROCEDENCIA",
+      "tipo": "Otros",
+      "subtipo": "Ambientales / puntas de catéter",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO VAGINAL",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Uretral / vaginal / endocervical",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVOS FARINGEO",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Faríngeo / nasofaríngeo",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CURVA TOLERANCIA GLUCOSA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "DEPURACION DE CREATININA",
+      "tipo": "Orina",
+      "subtipo": "Orina de 24 horas",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "DEPURACION DE PROTEINAS",
+      "tipo": "Orina",
+      "subtipo": "Orina de 24 horas",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "DIMERO D",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "DIMORFISMO ERITROCITARIO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO KOH",
+      "tipo": "Tejidos y médula",
+      "subtipo": "Raspados piel/uñas/pelo (micológico)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO TINTA CHINA DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "ERITROSEDIMENTACIÓN",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "FACTOR REUMATOIDEO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "FERRITINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "FIBRINOGENO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "FOSFATASA ALCATINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "FOSFORO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "FOSFORO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "FROTIS DE SANGRE PERIFERICA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Gota gruesa / frotis",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "GAMMA-GT",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "GENERAL DE HECES",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "GENERAL DE ORINA",
+      "tipo": "Orina",
+      "subtipo": "Primera orina de la mañana",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "GLOBULINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "GLUCOSA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "GLUCOSA",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "GOTA GRUESA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Gota gruesa / frotis",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "HEMOCULTIVOS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Hemocultivo",
+      "cant": 2
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "HEMOGLOBINA GLICOSILADA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "HEMOGRAMA COMPLETO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "HIERRO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "HIV CUARTA GENERACIÓN",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "HIV-RAPIDO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "INDUCCIÓN DE DREPANOCITOS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "INFLUENZA Ag A/B/H1N1",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Faríngeo / nasofaríngeo",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "INSULINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "LACTATO DESHIDROGENASA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "LATEX-FACTOR REUMATOIDEO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "LIPASA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "MAGNESIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "MAGNESIO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "MIOGLOBINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "MONOTEST",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "NITROGENO UREICO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "NITROGENO UREICO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANEL DE INFECCION",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANEL DE SEPSIS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Hemocultivo",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "PANEL GASTRICO VIRAL",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANEL GASTROINTESTINAL",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "PANEL ITS RAPIDO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANEL MENINGITIS/ENCEFALITIS",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "PANEL RAPIDO ARBOVIRUS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "PANEL RAPIDO DE DROGAS",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANEL RESPIRATOIRO",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Faríngeo / nasofaríngeo",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "PANEL RESPIRATORIO RAPIDO",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Faríngeo / nasofaríngeo",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "PANELPNEUMONIA",
+      "tipo": "Tracto respiratorio",
+      "subtipo": "Aspirado / lavado bronquial",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "PCR-CARDIACA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "PH EN HECES",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "POTASIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "POTASIO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "PRO-BNP",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "PROCALCITONINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "PROTEINA C REACTIVA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "PROTEINAS TOTALES",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "PROTEINAS TOTALES",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "PRUEBA ASTO-LATEX",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "PRUEBA CRUZADA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "PRUEBA DE EMBARAZO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "PRUEBA DE EMBARAZO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "PRUEBA DU",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "PSA LIBRE",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "PSA TOTAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "RELACION ALBUMINA/GLOBULINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "RETICULOCITOS",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "ROTAVIRUS",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "RPR-CARBON",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "SANGRE OCULTA",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "SIFILIS CUARTA GENERACIÓN",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNOLOGIA/SEROLOGIA",
+      "prueba": "SIFILIS-RAPIDO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "SODIO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "URIANALISIS",
+      "prueba": "SODIO",
+      "tipo": "Orina",
+      "subtipo": "Orina al azar",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "SUDAN III",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "COPROLOGIA",
+      "prueba": "SUSTANCIAS REDUCTORAS",
+      "tipo": "Heces",
+      "subtipo": "Heces frescas / preservante",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "T3 LIBRE",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "T3 TOTAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "T4 LIBRE",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "T4 TOTAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "TEST 'OSULLIVAN",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "TGO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "TGP",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "TIEMPO DE COAGULACIÓN",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "TIEMPO DE PROTROMBINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "TIEMPO DE SANGRAMIENTO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "TIEMPO DE TROMBINA",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "COAGULACION",
+      "prueba": "TIEMPO DE TROMBOPLASTINA PARCIAL",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Plasma (citratado)",
+      "cant": 1
+    },
+    {
+      "seccion": "INMUNO-HEMATOLOGIA",
+      "prueba": "TIPEO SANGUINEO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Sangre total (EDTA)",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "TRIGLICERIDO",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "TROPONINA I",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "TROPONINA T",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "TSH",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "UROCULTIVO",
+      "tipo": "Orina",
+      "subtipo": "Chorro medio (urocultivo)",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "VITAMINA B12",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "PRUEBAS ESPECIALES",
+      "prueba": "VITAMINA D",
+      "tipo": "Sangre y derivados",
+      "subtipo": "Suero",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS  DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICO DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "pH DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "TRIGLICERIDOS DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "ADENOSINA DESAMINASA (ADA)",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "GENEXPERT DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "LACTATO DESHIDROGENASA DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "PROTEINAS TOTALES DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LCR",
+      "tipo": "Líquidos corporales",
+      "subtipo": "LCR",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LIQUIDO PLEURAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pleural",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "CITOPATOLOGIA",
+      "prueba": "CITOLOGICO DE LIQUIDO AMNIOTICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Amniótico",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICO DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "pH DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "LACTATO DESHIDROGENASA DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "PROTEINAS TOTALES DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "BIOLOGIA MOLECULAR",
+      "prueba": "GENEXPERT DE LIQUIDO PERICARDICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Pericárdico",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICO DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "RECUENTO CELULAR DE LIQUIDO PERITONEAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "ALBUMINA DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICODE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "HEMATOLOGIA",
+      "prueba": "RECUENTO CELULAR DE LIQUIDO ASCITICO",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Peritoneal",
+      "cant": 1
+    },
+    {
+      "seccion": "QUIMICA",
+      "prueba": "CITOQUIMICO DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO BAAR DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO NO BAAR DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "DIRECTO HONGOS DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO BAAR DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO NO BAAR DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "CULTIVO HONGOS DE LIQUIDO SINOVIAL",
+      "tipo": "Líquidos corporales",
+      "subtipo": "Sinovial (articular)",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "COLORACION GRAM DE ULCERA",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Ulceras",
+      "cant": 1
+    },
+    {
+      "seccion": "MICROBIOLOGIA",
+      "prueba": "COLORACION GRAM DE ABSCESOS",
+      "tipo": "Secreciones y exudados",
+      "subtipo": "Ulceras",
+      "cant": 1
+    }
+  ],
+  "parametros": {
+    "Líquidos corporales|||LCR": [
+      "DIRECTO",
+      "CULTIVO NO BAAR",
+      "CULTIVO BAAR",
+      "CULTIVO HONGOS",
+      "pH"
+    ],
+    "Sangre y derivados|||Sangre total (EDTA)": [],
+    "Líquidos corporales|||Pleural": [
+      "DIRECTO",
+      "CULTIVO NO BAAR",
+      "CULTIVO BAAR",
+      "CULTIVO HONGOS",
+      "pH"
+    ]
+  }
+}

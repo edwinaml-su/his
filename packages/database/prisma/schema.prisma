@@ -2318,6 +2318,79 @@ model LabPanel {
   @@schema("public")
 }
 
+/// Rediseño lab 2026-09 (mockup_examenes_laboratorio) — catálogo parametrizable
+/// de TIPOS de muestra (antes solo el enum fijo SpecimenType, que se conserva
+/// para LabSpecimen legado). null en organizationId = catálogo global.
+model LabSampleType {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  name           String   @db.VarChar(120)
+  displayOrder   Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  subtypes LabSampleSubtype[]
+  tests    LabTest[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, active])
+  @@schema("public")
+}
+
+/// Rediseño lab 2026-09 — SUBTIPO de muestra, dependiente de un tipo (cascada
+/// del mockup: el subtipo pertenece a un tipo).
+model LabSampleSubtype {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  sampleTypeId   String   @db.Uuid
+  name           String   @db.VarChar(120)
+  displayOrder   Int      @default(0)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  sampleType LabSampleType @relation(fields: [sampleTypeId], references: [id], onDelete: Cascade)
+  tests      LabTest[]
+
+  @@unique([sampleTypeId, name])
+  @@index([organizationId, active])
+  @@schema("public")
+}
+
+/// Rediseño lab 2026-09 — parámetro (analito/determinación) de una prueba,
+/// configurable en Mantenimiento → Pruebas → Parámetros. La selección por
+/// examen solicitado vive en LabOrderItemParameter.
+model LabTestParameter {
+  id           String   @id @default(uuid()) @db.Uuid
+  labTestId    String   @db.Uuid
+  name         String   @db.VarChar(160)
+  displayOrder Int      @default(0)
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+
+  test       LabTest                 @relation(fields: [labTestId], references: [id], onDelete: Cascade)
+  selections LabOrderItemParameter[]
+
+  @@unique([labTestId, name])
+  @@index([labTestId])
+  @@schema("public")
+}
+
+/// Rediseño lab 2026-09 — parámetros ESCOGIDOS para un examen concreto de una
+/// solicitud (subset de LabTestParameter de la prueba).
+model LabOrderItemParameter {
+  id          String @id @default(uuid()) @db.Uuid
+  orderItemId String @db.Uuid
+  parameterId String @db.Uuid
+
+  orderItem LabOrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  parameter LabTestParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
+
+  @@unique([orderItemId, parameterId])
+  @@index([orderItemId])
+  @@schema("public")
+}
+
 /// TDR §17.1 — test individual de lab.
 model LabTest {
   id             String       @id @default(uuid()) @db.Uuid
@@ -2342,11 +2415,20 @@ model LabTest {
   /// TipoCuenta.priceListId, porque el tarifario vive fuera de schema.prisma.
   /// La usan las reglas de precio con appliedOn = 'category'.
   categoryId     String?      @db.Uuid
+  /// Rediseño lab 2026-09 — tipo/subtipo de muestra parametrizables (mockup).
+  /// `specimen` (enum) se conserva para el flujo de especímenes legado.
+  sampleTypeId    String?     @db.Uuid
+  sampleSubtypeId String?     @db.Uuid
+  /// Rediseño lab 2026-09 — cantidad por defecto al solicitar (ej. HEMOCULTIVOS = 2).
+  defaultQty     Int          @default(1)
   active         Boolean      @default(true)
   createdAt      DateTime     @default(now()) @db.Timestamptz()
   updatedAt      DateTime     @updatedAt @db.Timestamptz()
 
   panel           LabPanel?           @relation(fields: [panelId], references: [id], onDelete: SetNull)
+  sampleType      LabSampleType?      @relation(fields: [sampleTypeId], references: [id], onDelete: SetNull)
+  sampleSubtype   LabSampleSubtype?   @relation(fields: [sampleSubtypeId], references: [id], onDelete: SetNull)
+  parameters      LabTestParameter[]
   orderItems      LabOrderItem[]
   referenceRanges LabReferenceRange[]
   triggersFor     LabReflexRule[]     @relation("LabReflexTrigger")
@@ -2410,10 +2492,13 @@ model LabOrderItem {
   testId  String         @db.Uuid
   status  LabOrderStatus @default(ORDERED)
   notes   String?        @db.Text
+  /// Rediseño lab 2026-09 — cantidad solicitada (mockup: columna Cantidad).
+  quantity Int           @default(1)
 
-  order   LabOrder    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  test    LabTest     @relation(fields: [testId], references: [id], onDelete: Restrict)
-  results LabResult[]
+  order      LabOrder                @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  test       LabTest                 @relation(fields: [testId], references: [id], onDelete: Restrict)
+  results    LabResult[]
+  parameters LabOrderItemParameter[]
 
   @@index([orderId])
   @@schema("public")
