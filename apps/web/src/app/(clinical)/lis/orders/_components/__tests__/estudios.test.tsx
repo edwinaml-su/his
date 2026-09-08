@@ -55,6 +55,7 @@ const ROW_1 = {
   orderId: "order-1",
   examen: "GLUCOSA",
   seccion: "QUIMICA",
+  quantity: 1,
   paciente: { nombre: "Ana Cruz", expediente: "22290000012" },
   cuenta: "CTA00050",
   centro: "2-LAB-CLI — Laboratorio Clínico",
@@ -137,6 +138,8 @@ describe("Estudios (CC-0013b)", () => {
     expect(screen.getByText("GLUCOSA")).toBeInTheDocument();
     expect(screen.getByText("2-LAB-CLI — Laboratorio Clínico")).toBeInTheDocument();
     expect(screen.getByText("Creado")).toBeInTheDocument();
+    // Rediseño lab 2026-09 — columna "Cant." (mockup: tabla .sol-list, línea 71).
+    expect(screen.getByRole("columnheader", { name: "Cant." })).toBeInTheDocument();
   });
 
   it("click en una fila dispara cuentaModal y abre el modal Solicitud", () => {
