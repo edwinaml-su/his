@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
+import { Prisma } from "@his/database";
 import { lisRouter } from "../lis.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
@@ -1016,6 +1017,305 @@ describe("lisRouter", () => {
       expect(result.medico).toBe("Dr. Guevara");
       expect(result.prioridad).toBe("Urgente");
       expect(result.realizados).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Rediseño lab 2026-09 (mockup_examenes_laboratorio) — catálogo de tipos/
+  // subtipos, parámetros, quantity+parameterIds en order.create, export/import.
+  // ---------------------------------------------------------------------------
+
+  describe("catalog.cascada", () => {
+    it("arma el shape con testCount por tipo/subtipo/sección", async () => {
+      prisma.labSampleType.findMany.mockResolvedValue([
+        { id: u, name: "Sangre y derivados", displayOrder: 0 },
+      ] as never);
+      prisma.labSampleSubtype.findMany.mockResolvedValue([
+        { id: v, sampleTypeId: u, name: "Suero", displayOrder: 0 },
+      ] as never);
+      prisma.labPanel.findMany.mockResolvedValue([
+        { id: w, name: "QUIMICA", displayOrder: 0 },
+      ] as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        {
+          id: "test-1",
+          name: "GLUCOSA",
+          panelId: w,
+          sampleTypeId: u,
+          sampleSubtypeId: v,
+          defaultQty: 1,
+          _count: { parameters: 2 },
+        },
+        {
+          id: "test-2",
+          name: "ACIDO URICO",
+          panelId: w,
+          sampleTypeId: u,
+          sampleSubtypeId: null,
+          defaultQty: 1,
+          _count: { parameters: 0 },
+        },
+      ] as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.catalog.cascada();
+
+      expect(result.tipos).toEqual([{ id: u, name: "Sangre y derivados", displayOrder: 0, testCount: 2 }]);
+      expect(result.subtipos).toEqual([{ id: v, sampleTypeId: u, name: "Suero", displayOrder: 0, testCount: 1 }]);
+      expect(result.secciones).toEqual([{ id: w, name: "QUIMICA", displayOrder: 0, testCount: 2 }]);
+      expect(result.pruebas).toHaveLength(2);
+      expect(result.pruebas[0]).toMatchObject({ id: "test-1", paramCount: 2 });
+      expect(result.pruebas[1]).toMatchObject({ id: "test-2", sampleSubtypeId: null, paramCount: 0 });
+    });
+  });
+
+  describe("sampleType.create / sampleType.update", () => {
+    it("create fuerza organizationId desde ctx.tenant", async () => {
+      prisma.labSampleType.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.sampleType.create({ name: "Sangre y derivados", displayOrder: 0 });
+      const args = prisma.labSampleType.create.mock.calls[0]![0];
+      expect(args.data.organizationId).toBe(MOCK_TENANT.organizationId);
+    });
+
+    it("PRECONDITION_FAILED al desactivar un tipo con subtipos/pruebas activos", async () => {
+      prisma.labSampleType.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labSampleSubtype.count.mockResolvedValue(2 as never);
+      prisma.labTest.count.mockResolvedValue(3 as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.sampleType.update({ id: u, active: false }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.labSampleType.update).not.toHaveBeenCalled();
+    });
+
+    it("desactiva sin bloqueo cuando no hay subtipos/pruebas activos", async () => {
+      prisma.labSampleType.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labSampleSubtype.count.mockResolvedValue(0 as never);
+      prisma.labTest.count.mockResolvedValue(0 as never);
+      prisma.labSampleType.update.mockResolvedValue({ id: u, active: false } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.sampleType.update({ id: u, active: false });
+      const args = prisma.labSampleType.update.mock.calls[0]![0];
+      expect(args.data.active).toBe(false);
+    });
+  });
+
+  describe("testParameter.add", () => {
+    it("CONFLICT cuando el parámetro ya existe en la prueba (P2002)", async () => {
+      prisma.labTest.findFirst.mockResolvedValue({ id: u } as never);
+      const p2002 = new Prisma.PrismaClientKnownRequestError("Unique constraint", {
+        code: "P2002",
+        clientVersion: "5.0.0",
+        meta: { target: ["labTestId", "name"] },
+      });
+      prisma.labTestParameter.create.mockRejectedValue(p2002 as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.testParameter.add({ labTestId: u, name: "Glucosa en ayunas" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("NOT_FOUND si la prueba no es del tenant", async () => {
+      prisma.labTest.findFirst.mockResolvedValue(null as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.testParameter.add({ labTestId: u, name: "X" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("crea el parámetro cuando no hay duplicado", async () => {
+      prisma.labTest.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labTestParameter.create.mockResolvedValue({ id: v, name: "Glucosa" } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.testParameter.add({ labTestId: u, name: "Glucosa" });
+      expect(result).toMatchObject({ id: v });
+    });
+  });
+
+  describe("order.create — quantity + parameterIds (rediseño lab 2026-09)", () => {
+    it("persiste quantity y crea LabOrderItemParameter cuando el parámetro pertenece al test", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
+      prisma.labTestParameter.findMany.mockResolvedValue([{ id: w, labTestId: u }] as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        cuentaId: u,
+        items: [{ testId: u, quantity: 3, parameterIds: [w] }],
+      });
+      const args = prisma.labOrder.create.mock.calls[0]![0];
+      const item = args.data.items!.create as Array<Record<string, unknown>>;
+      expect(item[0]!.quantity).toBe(3);
+      expect(item[0]!.parameters).toMatchObject({ create: [{ parameterId: w }] });
+    });
+
+    it("BAD_REQUEST cuando parameterId no corresponde al testId del item", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
+      // El parámetro w pertenece a otra prueba distinta de u.
+      prisma.labTestParameter.findMany.mockResolvedValue([{ id: w, labTestId: "otro-test" }] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.create({
+          cuentaId: u,
+          items: [{ testId: u, quantity: 1, parameterIds: [w] }],
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.labOrder.create).not.toHaveBeenCalled();
+    });
+
+    it("quantity default = 1 cuando no se envía", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({ cuentaId: u, items: [{ testId: u }] });
+      const args = prisma.labOrder.create.mock.calls[0]![0];
+      const item = args.data.items!.create as Array<Record<string, unknown>>;
+      expect(item[0]!.quantity).toBe(1);
+    });
+  });
+
+  describe("order.estudios — quantity en el row", () => {
+    it("incluye quantity del LabOrderItem", async () => {
+      prisma.labOrderItem.findMany.mockResolvedValue([
+        {
+          id: "item-1",
+          testId: "test-1",
+          status: "ORDERED",
+          notes: null,
+          quantity: 2,
+          test: { name: "GLUCOSA", code: "GLU", panel: { name: "QUIMICA" } },
+          order: {
+            id: u,
+            createdAt: new Date(),
+            priority: "ROUTINE",
+            prescriberId: v,
+            patient: { firstName: "Ana", lastName: "Cruz", expediente: "1", mrn: "MRN-1" },
+            patientAccount: { numeroCuenta: "CTA1" },
+            ejecutorCostCenter: null,
+          },
+        },
+      ] as never);
+      prisma.labOrderItem.groupBy.mockResolvedValue([] as never);
+      prisma.user.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.order.estudios({ limit: 25 });
+      expect(result.items[0]!.quantity).toBe(2);
+    });
+  });
+
+  describe("catalogo.export", () => {
+    it("arma el shape del mockup (secciones/tipos/subtipos/pruebas/parametros)", async () => {
+      prisma.labSampleType.findMany.mockResolvedValue([
+        { id: u, name: "Sangre y derivados" },
+      ] as never);
+      prisma.labSampleSubtype.findMany.mockResolvedValue([
+        { id: v, name: "Suero", sampleType: { name: "Sangre y derivados" } },
+      ] as never);
+      prisma.labPanel.findMany.mockResolvedValue([{ id: w, name: "QUIMICA" }] as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        {
+          id: "test-1",
+          name: "GLUCOSA",
+          defaultQty: 1,
+          panel: { name: "QUIMICA" },
+          sampleType: { name: "Sangre y derivados" },
+          sampleSubtype: { name: "Suero" },
+          parameters: [{ name: "Valor" }],
+        },
+      ] as never);
+
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMIN"] } }),
+      );
+      const result = await caller.catalogo.export();
+
+      expect(result.secciones).toEqual(["QUIMICA"]);
+      expect(result.tipos).toEqual(["Sangre y derivados"]);
+      expect(result.subtipos).toEqual({ "Sangre y derivados": ["Suero"] });
+      expect(result.pruebas).toEqual([
+        { seccion: "QUIMICA", prueba: "GLUCOSA", tipo: "Sangre y derivados", subtipo: "Suero", cant: 1 },
+      ]);
+      expect(result.parametros).toEqual({ "QUIMICA|||GLUCOSA": ["Valor"] });
+    });
+  });
+
+  describe("catalogo.import", () => {
+    /** Payload mínimo — 1 sección, 1 tipo, 1 subtipo, 1 prueba, 1 parámetro. */
+    const payload = {
+      secciones: ["QUIMICA"],
+      tipos: ["Sangre y derivados"],
+      subtipos: { "Sangre y derivados": ["Suero"] },
+      pruebas: [{ seccion: "QUIMICA", prueba: "GLUCOSA", tipo: "Sangre y derivados", subtipo: "Suero", cant: 1 }],
+      parametros: { "QUIMICA|||GLUCOSA": ["Valor"] },
+    };
+
+    it("primera corrida: crea sección y prueba con códigos generados", async () => {
+      prisma.labSampleType.upsert.mockResolvedValue({ id: u } as never);
+      prisma.labSampleSubtype.upsert.mockResolvedValue({ id: v } as never);
+      prisma.labPanel.findMany.mockResolvedValueOnce([] as never); // nextCodeSuffix SECIMP-
+      prisma.labPanel.findFirst.mockResolvedValueOnce(null as never); // sección no existe aún
+      prisma.labPanel.create.mockResolvedValue({ id: w } as never);
+      prisma.labTest.findMany
+        .mockResolvedValueOnce([] as never) // nextCodeSuffix LABIMP-
+        .mockResolvedValueOnce([] as never); // staleIds check (nada importado aún)
+      prisma.labTest.findFirst.mockResolvedValueOnce(null as never); // prueba no existe aún
+      prisma.labTest.create.mockResolvedValue({ id: "test-1" } as never);
+      prisma.labTestParameter.upsert.mockResolvedValue({ id: "param-1" } as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.catalogo.import(payload);
+
+      expect(result).toEqual({ ok: true, tipos: 1, secciones: 1, pruebas: 1 });
+      const panelCreateArgs = prisma.labPanel.create.mock.calls[0]![0];
+      expect(panelCreateArgs.data.code).toBe("SECIMP-001");
+      const testCreateArgs = prisma.labTest.create.mock.calls[0]![0];
+      expect(testCreateArgs.data.code).toBe("LABIMP-001");
+      expect(testCreateArgs.data.defaultQty).toBe(1);
+    });
+
+    it("segunda corrida sobre lo ya importado: actualiza en vez de crear (idempotente)", async () => {
+      prisma.labSampleType.upsert.mockResolvedValue({ id: u } as never);
+      prisma.labSampleSubtype.upsert.mockResolvedValue({ id: v } as never);
+      prisma.labPanel.findMany.mockResolvedValueOnce([] as never); // nextCodeSuffix (no se usa si ya existe)
+      prisma.labPanel.findFirst.mockResolvedValueOnce({ id: w } as never); // sección YA existe
+      prisma.labPanel.update.mockResolvedValue({ id: w } as never);
+      prisma.labTest.findMany
+        .mockResolvedValueOnce([] as never) // nextCodeSuffix (no se usa)
+        .mockResolvedValueOnce([
+          { id: "test-1", name: "GLUCOSA", panel: { name: "QUIMICA" } },
+        ] as never); // staleIds check: la prueba ya importada sigue viniendo en el JSON
+      prisma.labTest.findFirst.mockResolvedValueOnce({ id: "test-1" } as never); // prueba YA existe
+      prisma.labTest.update.mockResolvedValue({ id: "test-1" } as never);
+      prisma.labTestParameter.upsert.mockResolvedValue({ id: "param-1" } as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.catalogo.import(payload);
+
+      expect(result).toEqual({ ok: true, tipos: 1, secciones: 1, pruebas: 1 });
+      expect(prisma.labPanel.create).not.toHaveBeenCalled();
+      expect(prisma.labTest.create).not.toHaveBeenCalled();
+      const testUpdateArgs = prisma.labTest.update.mock.calls[0]![0];
+      expect(testUpdateArgs.data.active).toBe(true);
+      // updateMany de desactivación (4b) no debe dispararse: la única prueba
+      // importada sigue viniendo en el JSON.
+      expect(prisma.labTest.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("BAD_REQUEST cuando una prueba referencia una sección que no está en 'secciones'", async () => {
+      prisma.labSampleType.upsert.mockResolvedValue({ id: u } as never);
+      prisma.labSampleSubtype.upsert.mockResolvedValue({ id: v } as never);
+      prisma.labPanel.findMany.mockResolvedValueOnce([] as never);
+      prisma.labPanel.findFirst.mockResolvedValueOnce({ id: w } as never);
+      prisma.labPanel.update.mockResolvedValue({ id: w } as never);
+      prisma.labTest.findMany.mockResolvedValueOnce([] as never); // nextCodeSuffix LABIMP-
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.catalogo.import({
+          ...payload,
+          pruebas: [{ seccion: "SECCION-INEXISTENTE", prueba: "X", tipo: "Sangre y derivados", subtipo: "Suero", cant: 1 }],
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
   });
 });
