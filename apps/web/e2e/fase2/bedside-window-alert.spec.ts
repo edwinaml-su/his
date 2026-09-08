@@ -26,7 +26,7 @@ const SKIP = process.env.SKIP_E2E_BEDSIDE === "1";
 test.describe("Bedside — Alerta Ventana Terapéutica", () => {
   test.beforeEach(async ({ page }) => {
     if (SKIP) test.skip();
-    await login(page, "qa.triagist@his.test", "TestPass123!");
+    await login(page, "triagist");
   });
 
   test("página /bedside carga sin errores de JS", async ({ page }) => {

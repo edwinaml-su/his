@@ -28,7 +28,7 @@ test.describe("Contingencia Operativa — panel ADM", () => {
   test.skip(SKIP, "SKIP_E2E_CONTINGENCIA=1");
 
   test.beforeEach(async ({ page }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
   });
 
   test("1. Panel /contingencia carga sin error 500", async ({ page }) => {
@@ -86,7 +86,7 @@ test.describe("Contingencia — endpoint PDF formularios", () => {
   test("6. PDF signos_vitales responde con Content-Type application/pdf", async ({
     page,
   }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
     const response = await page.request.get(
       "/api/contingencia/forms/signos_vitales.pdf",
     );
@@ -96,7 +96,7 @@ test.describe("Contingencia — endpoint PDF formularios", () => {
   });
 
   test("7. Tipo inválido devuelve 400", async ({ page }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
     const response = await page.request.get(
       "/api/contingencia/forms/radiografia.pdf",
     );
@@ -108,7 +108,7 @@ test.describe("Contingencia — registro retroactivo", () => {
   test.skip(SKIP, "SKIP_E2E_CONTINGENCIA=1");
 
   test.beforeEach(async ({ page }) => {
-    await login(page, "qa.admin@his.test", "TestPass123!");
+    await login(page, "admin");
   });
 
   test("8. Página /ece/registro-retroactivo carga correctamente", async ({
