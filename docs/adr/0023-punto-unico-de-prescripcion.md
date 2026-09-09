@@ -63,3 +63,36 @@ equivocada protege a nadie (H-01) y genera falsa seguridad (H-03).
 - [ ] Confirmar si `/pharmacy/new` queda para recetas ambulatorias de salida o se retira.
 
 Sin esta decisión no se ejecuta nada de R06 (acordado en la jornada Code Castle 2026-08-24).
+
+## Addendum 2026-09-09 — BCMA bedside también está bloqueado por esta decisión
+
+La resurrección del E2E `bedside-hard-stops` reveló que el circuito BCMA
+(`bedside.validate5Correct` → `bedside.administration.record`) **nunca pudo
+terminar en éxito** para una indicación nativa ECE: `record` resolvía el
+`PrescriptionItem` consultando una columna que jamás existió
+(`ece.indicaciones_medicas.prescription_item_id`, 42703 siempre). Eso sube la
+urgencia de este ADR: sin ruta de prescripción resuelta, la enfermería no puede
+registrar administraciones bedside — P0 para Go-Live del circuito BCMA.
+
+**Fix interino (no decide R06):** `record` ahora resuelve el `PrescriptionItem`
+leyendo el **resultado de la conciliación** en la cola R04
+`ece.indicacion_farmacia_pendiente` (columna `prescription_item_id`, sql/222;
+filtro `estado='RECONCILIADO'`). Sin fila conciliada, bloquea con
+`PRECONDITION_FAILED` — fail-safe, jamás mapeo automático texto→Drug. Ese
+SELECT es compatible con cualquier resolución de este ADR:
+
+- **Opción A** (recomendada): al generar la `Prescription` en `firmar()`, el
+  mismo flujo auto-concilia la fila de la cola (escribe `prescription_item_id`
+  del item generado + `estado='RECONCILIADO'`) — BCMA funciona sin tocar
+  `record` de nuevo, y la cola queda como rastro/excepción para ítems de texto
+  libre sin `drug_id`.
+- **Conciliación manual** (flujo R04 original): el pendiente sería el
+  router/UI de farmacia que escriba esa misma columna. Hoy NO existe — hasta
+  que exista (o se apruebe A), `record` bloquea el 100 % de las indicaciones
+  nativas en prod.
+
+Lo que **sí** queda decidido por el fix interino (y no cambia con A/B):
+`MedicationAdministration.bedsideValidationId` ahora se puebla con el id que
+devuelve `validate5Correct`, y el check de ventana terapéutica del Paso 6 usa
+ese enlace (`MedicationAdministration ⋈ ece.bedside_validation.indication_id`)
+— antes consultaba otra columna inexistente (`"orderId"`, 42703).
