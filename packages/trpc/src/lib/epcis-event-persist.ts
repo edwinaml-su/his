@@ -120,7 +120,7 @@ export async function persistGs1EpcisEvent(
     `INSERT INTO ece.gs1_epcis_event
        (tipo_evento, subtipo, what, where_data, event_time, record_time,
         why, who, payload_hash, indication_id, establecimiento_id, status)
-     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $5,
+     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::timestamptz, $5::timestamptz,
              $6::jsonb, $7::jsonb, $8, $9::uuid, $10::uuid, $11)`,
     row.tipoEvento,
     row.subtipo,
