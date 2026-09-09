@@ -103,6 +103,10 @@ export function AdministrationWizard({
     2: undefined,
     3: undefined,
   });
+  // id de la validación 5 Correctos OK (ece.bedside_validation) — se pasa a
+  // administration.record para enlazar administración↔validación (ventana
+  // terapéutica server-side). Sobrevive al desvío por double-check.
+  const [validationId, setValidationId] = useState<string | undefined>();
   // Double-check state — sólo activo cuando servidor responde requiresDoubleCheck=true.
   const [doubleCheckBy, setDoubleCheckBy]   = useState("");
   const [doubleCheckPin, setDoubleCheckPin] = useState("");
@@ -166,6 +170,9 @@ export function AdministrationWizard({
       gtin: string,
       lot: string,
       expiry: string,
+      // Se recibe por parámetro (no del estado): en el flujo normal el
+      // setValidationId de este mismo render aún no es visible en el closure.
+      currentValidationId?: string,
       extraDoubleCheck?: { doubleCheckBy: string; doubleCheckPin: string },
     ) => {
       try {
@@ -177,6 +184,7 @@ export function AdministrationWizard({
           dosis:           `GS1:${expiry}`,
           via:             "IV",
           indicationId,
+          validationId:    currentValidationId,
           ...extraDoubleCheck,
         });
 
@@ -217,12 +225,13 @@ export function AdministrationWizard({
       currentScans.gtin ?? "",
       currentScans.lot  ?? "",
       currentScans.expiry ?? "",
+      validationId,
       {
         doubleCheckBy:  doubleCheckBy.trim(),
         doubleCheckPin: doubleCheckPin.trim(),
       },
     );
-  }, [doubleCheckBy, doubleCheckPin, scans, submitAdministration]);
+  }, [doubleCheckBy, doubleCheckPin, scans, validationId, submitAdministration]);
 
   // Step 3: scan medicamento (DataMatrix GS1)
   const handleMedicationScan = useCallback(
@@ -253,6 +262,7 @@ export function AdministrationWizard({
       setWizardState({ phase: "validating" });
 
       // Validar 5 correctos
+      let okValidationId: string | undefined;
       try {
         const vres = await validate5Correct.mutateAsync({
           patientGsrn: currentScans.patientGsrn!,
@@ -273,6 +283,11 @@ export function AdministrationWizard({
           });
           return;
         }
+        // Guardar para el re-envío double-check (render posterior); al flujo
+        // normal se le pasa por parámetro porque este setState aún no es
+        // visible en el closure de submitAdministration.
+        okValidationId = vres.validationId;
+        setValidationId(vres.validationId);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setWizardState({ phase: "hardStop", reason: extractHardStopReason(message) });
@@ -282,7 +297,7 @@ export function AdministrationWizard({
       // Registrar administración (eMAR BCMA)
       // La vía "IV" es el default bedside — US.F2.6.24 prevé un selector de vía
       // en una pantalla de confirmación futura.
-      await submitAdministration(currentScans, gtin, lot, expiry);
+      await submitAdministration(currentScans, gtin, lot, expiry, okValidationId);
     },
     [scans, indicationId, validate5Correct, submitAdministration],
   );
