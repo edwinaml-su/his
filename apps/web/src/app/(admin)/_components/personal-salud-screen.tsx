@@ -16,7 +16,7 @@
  *   - Toast de feedback en mutaciones.
  */
 import * as React from "react";
-import { UserPlus, UserCog, ShieldCheck, ShieldAlert } from "lucide-react";
+import { UserPlus, UserCog, ShieldCheck, ShieldAlert, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
@@ -85,6 +85,14 @@ interface PersonalSaludScreenProps {
   profesionHint: string;
   /** Ruta base para link al detalle (/admin/medicos | /admin/profesionales-salud). */
   detailBasePath: string;
+  /**
+   * S1 backlog — muestra el banner "Usuarios clínicos sin perfil ECE" con
+   * alta rápida. Opt-in (default false) porque la lista de candidatos no se
+   * filtra por `kind`: es una vista transversal (cualquier rol RBAC clínico),
+   * así que solo se activa donde el flujo tiene sentido hoy
+   * (`/profesionales-salud`) para no duplicar el banner en `/medicos`.
+   */
+  showUsuariosSinPerfil?: boolean;
 }
 
 export function PersonalSaludScreen({
@@ -95,6 +103,7 @@ export function PersonalSaludScreen({
   jvpLabel,
   profesionHint,
   detailBasePath,
+  showUsuariosSinPerfil = false,
 }: PersonalSaludScreenProps) {
   const [search, setSearch] = React.useState("");
   const [activoFilter, setActivoFilter] = React.useState<"activos" | "inactivos" | "todos">("activos");
@@ -108,8 +117,25 @@ export function PersonalSaludScreen({
   const [toast, setToast] = React.useState<ToastState>(null);
   const [form, setForm] = React.useState<FormState>(EMPTY_FORM);
   const [formError, setFormError] = React.useState<string | null>(null);
+  /**
+   * S1 backlog — cuando el "Nuevo" dialog se abrió desde "Crear perfil" del
+   * banner de usuarios sin perfil, guarda el `userId` a vincular. Al crear
+   * exitosamente, `createMut.onSuccess` encadena `linkAuthUser` con este
+   * userId para poblar `his_user_id` (el bridge que identity-resolver.ts
+   * resuelve) en la misma operación — sin esto el alta quedaría "sin
+   * perfil" para el resolver aunque la fila ya exista.
+   */
+  const [linkUserTarget, setLinkUserTarget] = React.useState<{
+    userId: string;
+    nombre: string;
+  } | null>(null);
 
   const utils = trpc.useUtils();
+
+  const usuariosSinPerfilQuery = trpc.personalSalud.usuariosSinPerfil.useQuery(
+    { limit: 100 },
+    { enabled: showUsuariosSinPerfil },
+  );
 
   const listQuery = trpc.personalSalud.list.useQuery({
     kind,
@@ -141,13 +167,32 @@ export function PersonalSaludScreen({
     }
   }, [detailQuery.data, editTarget]);
 
-  const createMut = trpc.personalSalud.create.useMutation({
+  const linkAuthUserMut = trpc.personalSalud.linkAuthUser.useMutation({
     onSuccess: () => {
+      utils.personalSalud.list.invalidate();
+      utils.personalSalud.usuariosSinPerfil.invalidate();
+      setToast({ title: `${noun} creado y vinculado a su cuenta HIS`, variant: "success" });
+      setLinkUserTarget(null);
+    },
+    onError: (err) =>
+      setToast({
+        title: `${noun} creado, pero la vinculación con la cuenta HIS falló`,
+        description: err.message,
+        variant: "destructive",
+      }),
+  });
+
+  const createMut = trpc.personalSalud.create.useMutation({
+    onSuccess: (data) => {
       utils.personalSalud.list.invalidate();
       setNewOpen(false);
       setForm(EMPTY_FORM);
       setFormError(null);
-      setToast({ title: `${noun} creado`, variant: "success" });
+      if (linkUserTarget) {
+        linkAuthUserMut.mutate({ personalId: data.id, userId: linkUserTarget.userId });
+      } else {
+        setToast({ title: `${noun} creado`, variant: "success" });
+      }
     },
     onError: (err) => setFormError(err.message),
   });
@@ -228,6 +273,21 @@ export function PersonalSaludScreen({
 
   const rows = listQuery.data ?? [];
   const roles = rolesQuery.data ?? [];
+  const usuariosSinPerfil = usuariosSinPerfilQuery.data ?? [];
+
+  /**
+   * Abre el dialog "Nuevo" prefijado desde el banner de usuarios sin
+   * perfil: nombre viene del `User`, documento/profesión quedan vacíos
+   * (dato real que el admin completa a mano — normativa prohíbe
+   * inventarlos). El vínculo `his_user_id` se completa después de crear,
+   * ver `createMut.onSuccess`.
+   */
+  function openCreateForCandidate(candidate: { userId: string; nombre: string }) {
+    setForm({ ...EMPTY_FORM, nombreCompleto: candidate.nombre });
+    setFormError(null);
+    setLinkUserTarget({ userId: candidate.userId, nombre: candidate.nombre });
+    setNewOpen(true);
+  }
 
   return (
     <div className="space-y-4">
@@ -243,6 +303,7 @@ export function PersonalSaludScreen({
           onClick={() => {
             setForm(EMPTY_FORM);
             setFormError(null);
+            setLinkUserTarget(null);
             setNewOpen(true);
           }}
         >
@@ -250,6 +311,59 @@ export function PersonalSaludScreen({
           Nuevo {noun}
         </Button>
       </div>
+
+      {showUsuariosSinPerfil && usuariosSinPerfil.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base text-amber-900">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              Usuarios clínicos sin perfil ECE ({usuariosSinPerfil.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-amber-900">
+              Estos usuarios del HIS tienen un rol clínico pero ninguna fila en{" "}
+              <code className="text-xs">ece.personal_salud</code> vinculada — no pueden firmar
+              documentos ECE hasta que se les cree un perfil. El documento de identidad y la
+              profesión son datos reales que debe completar un ADMIN/DIR a mano.
+            </p>
+            <div className="rounded-md border bg-background">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Nombre</TableHead>
+                    <TableHead>Correo</TableHead>
+                    <TableHead>Roles</TableHead>
+                    <TableHead className="w-40 text-right">Acción</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {usuariosSinPerfil.map((u) => (
+                    <TableRow key={u.userId}>
+                      <TableCell className="font-medium">{u.nombre}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{u.email}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {u.roles.map((r) => (
+                            <Badge key={r} variant="secondary" className="text-xs">
+                              {r}
+                            </Badge>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button size="sm" onClick={() => openCreateForCandidate(u)}>
+                          Crear perfil
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -370,12 +484,27 @@ export function PersonalSaludScreen({
       </Card>
 
       {/* Dialog: Nuevo */}
-      <Dialog open={newOpen} onOpenChange={(o) => !o && setNewOpen(false)}>
+      <Dialog
+        open={newOpen}
+        onOpenChange={(o) => {
+          if (!o) {
+            setNewOpen(false);
+            setLinkUserTarget(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Nuevo {noun}</DialogTitle>
             <DialogDescription>
-              Registra los datos del {noun} y asigna los roles ECE necesarios.
+              {linkUserTarget ? (
+                <>
+                  Completa documento de identidad y profesión para vincular el perfil ECE con la
+                  cuenta HIS de <strong>{linkUserTarget.nombre}</strong>.
+                </>
+              ) : (
+                <>Registra los datos del {noun} y asigna los roles ECE necesarios.</>
+              )}
             </DialogDescription>
           </DialogHeader>
           <PersonalForm
@@ -389,11 +518,17 @@ export function PersonalSaludScreen({
             error={formError}
           />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setNewOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNewOpen(false);
+                setLinkUserTarget(null);
+              }}
+            >
               Cancelar
             </Button>
-            <Button onClick={handleSubmitNew} disabled={createMut.isPending}>
-              {createMut.isPending ? "Guardando…" : "Crear"}
+            <Button onClick={handleSubmitNew} disabled={createMut.isPending || linkAuthUserMut.isPending}>
+              {createMut.isPending || linkAuthUserMut.isPending ? "Guardando…" : "Crear"}
             </Button>
           </DialogFooter>
         </DialogContent>

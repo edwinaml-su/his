@@ -79,6 +79,28 @@ export const MEDICO_ROLES = ["MC", "MT", "ESP", "IC"] as const;
 /** Roles ECE que clasifican a un profesional como NO-MÉDICO. */
 export const NO_MEDICO_ROLES = ["ENF", "ARCH", "AC", "ADM"] as const;
 
+/**
+ * S1 backlog (desbloquear `ece.personal_salud` = 0 filas en prod) —
+ * códigos de rol RBAC (`public."Role".code`, el espacio que lee
+ * `ctx.tenant.roleCodes` / `requireRole`) que califican a un `User` como
+ * "personal clínico" candidato a tener fila `ece.personal_salud`. Reusa
+ * `MEDICO_ROLES`/`NO_MEDICO_ROLES` de este archivo (confirmado en
+ * `packages/trpc/src/routers/ece/*.router.ts` que esos mismos códigos ECE
+ * — MC, ESP, IC, ENF... — se leen también como `roleCodes` RBAC) + `DIR`
+ * (dirección médica, firma documentos formales ECE) + los alias
+ * internacionales sembrados en `seed-go-live-defaults.mjs` (`PHYSICIAN` →
+ * MC, `NURSE` → ENF, `PHARM` → FARM) para no perder usuarios que solo
+ * tengan el alias asignado.
+ */
+export const CLINICAL_ROLE_CODES = [
+  ...MEDICO_ROLES,
+  ...NO_MEDICO_ROLES,
+  "DIR",
+  "PHYSICIAN",
+  "NURSE",
+  "PHARM",
+] as const;
+
 const kindEnum = z.enum(["medicos", "no_medicos", "todos"]);
 
 // ---------------------------------------------------------------------------
@@ -1071,5 +1093,68 @@ export const personalSaludRouter = router({
         LIMIT ${input.limit}
       `;
       return users.map((u) => ({ id: u.id, email: u.email, fullName: u.full_name }));
+    }),
+
+  /**
+   * S1 backlog — `ece.personal_salud` tiene 0 filas en prod (ver
+   * `identity-resolver.ts`), y no se pueden crear automáticamente porque
+   * `documento_identidad`/`profesion` son datos reales exigidos por
+   * normativa (prohibido inventarlos). Este procedure alimenta el banner
+   * "Usuarios clínicos sin perfil ECE" en /profesionales-salud y /medicos:
+   * lista Users activos del tenant con algún rol RBAC clínico
+   * (`CLINICAL_ROLE_CODES`) que todavía NO tienen fila vinculada por
+   * `his_user_id` — el bridge que resuelve `identity-resolver.ts`.
+   *
+   * `his_user_id` es UNIQUE global (no por establecimiento — ver
+   * identity-resolver.ts), así que el check de "ya vinculado" es global a
+   * propósito, no filtrado por `establecimiento_id`.
+   */
+  usuariosSinPerfil: requireRole(["ADMIN", "DIR"])
+    .input(z.object({ limit: z.number().int().min(1).max(500).default(100) }).default({}))
+    .query(async ({ ctx, input }) => {
+      const orgId = ctx.tenant.organizationId;
+
+      type ClinicalUserRow = {
+        id: string;
+        full_name: string;
+        email: string;
+        role_codes: string[];
+      };
+      const users = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+        tx.$queryRaw<ClinicalUserRow[]>`
+          SELECT
+            u.id::text,
+            u."fullName" AS full_name,
+            u.email::text,
+            ARRAY_AGG(DISTINCT r.code) AS role_codes
+          FROM public."User" u
+          JOIN public."UserOrganizationRole" uor ON uor."userId" = u.id
+          JOIN public."Role" r ON r.id = uor."roleId"
+          WHERE uor."organizationId" = ${orgId}::uuid
+            AND u.active = true
+            AND (uor."validTo" IS NULL OR uor."validTo" > now())
+            AND r.code = ANY(${Array.from(CLINICAL_ROLE_CODES)}::text[])
+          GROUP BY u.id, u."fullName", u.email
+          ORDER BY u."fullName" ASC
+          LIMIT ${input.limit}
+        `,
+      );
+      if (users.length === 0) return [];
+
+      const linked = await ctx.prisma.$queryRaw<{ his_user_id: string }[]>`
+        SELECT DISTINCT his_user_id::text
+        FROM ece.personal_salud
+        WHERE his_user_id IS NOT NULL
+      `;
+      const linkedSet = new Set(linked.map((r) => r.his_user_id));
+
+      return users
+        .filter((u) => !linkedSet.has(u.id))
+        .map((u) => ({
+          userId: u.id,
+          nombre: u.full_name,
+          email: u.email,
+          roles: u.role_codes,
+        }));
     }),
 });
