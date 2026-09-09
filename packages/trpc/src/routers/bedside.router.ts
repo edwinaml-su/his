@@ -409,7 +409,7 @@ const administrationRouter = router({
         `SELECT im.fecha_hora, ii.frecuencia
          FROM ece.indicaciones_medicas im
          LEFT JOIN ece.indicacion_item ii ON ii.indicacion_id = im.id
-         WHERE im.id = $1
+         WHERE im.id = $1::uuid
          LIMIT 1`,
         input.indicationId,
       );
@@ -444,7 +444,7 @@ const administrationRouter = router({
         `SELECT pi."drugId" AS drug_id, d."alertLevel" AS alert_level
          FROM "PrescriptionItem" pi
          JOIN "Drug" d ON d.id = pi."drugId"
-         WHERE pi.id = $1
+         WHERE pi.id = $1::uuid
          LIMIT 1`,
         prescriptionItemId,
       );
@@ -461,13 +461,13 @@ const administrationRouter = router({
           severidad:        string;
         }[]>(
           `SELECT
-             CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
+             CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
              d."genericName" AS paired_drug_name,
              lp.razon,
              lp.severidad
            FROM ece.lasa_pair lp
-           JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END
-           WHERE (lp.drug_a_id = $1 OR lp.drug_b_id = $1)
+           JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END
+           WHERE (lp.drug_a_id = $1::uuid OR lp.drug_b_id = $1::uuid)
              AND lp.activo = true
            LIMIT 1`,
           drugId,
@@ -507,7 +507,7 @@ const administrationRouter = router({
         }
 
         const verifier = await ctx.prisma.$queryRawUnsafe<{ pin_hash: string | null }[]>(
-          `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1 LIMIT 1`,
+          `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1::uuid LIMIT 1`,
           input.doubleCheckBy,
         );
 
