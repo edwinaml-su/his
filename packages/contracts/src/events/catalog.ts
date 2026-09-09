@@ -176,6 +176,9 @@ export const EVENT_TYPES = [
   // CC-0017 F3 — Break-glass: notifica a DIR/ADMIN/MEDICAL_DIRECTOR de la org
   // (no existe rol "jefe de servicio" seedeado, ver docs/CC/0017).
   "security.breakGlass.activated",
+  // docs/48 Ola 2 (C2-1) — capturarCargo: precio no resoluble (RN-HIS-BOT-001 R3,
+  // nunca se factura a 0; la línea queda PENDIENTE_TARIFA).
+  "cargo.pendiente_tarifa",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

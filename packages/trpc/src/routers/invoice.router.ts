@@ -23,6 +23,16 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { resolverPrecio, mapFuenteAPriceSource } from "../lib/price-resolver";
+
+/**
+ * docs/48 Ola 2 (C2-3/H-03) — roles autorizados a forzar un `unitPrice`
+ * distinto al resuelto por `resolverPrecio` (override auditado).
+ */
+const ROLES_OVERRIDE_PRECIO = ["ADMIN", "DIR"];
+
+/** Tolerancia de redondeo (medio centavo) al comparar unitPrice del cliente vs. el resuelto. */
+const TOLERANCIA_PRECIO = 0.005;
 
 // ---------------------------------------------------------------------------
 // Constantes
@@ -62,10 +72,22 @@ const claimStatusEnum = z.enum([
 
 const itemInput = z.object({
   description: z.string().trim().min(1).max(300),
+  /** docs/48 Ola 2 (C2-3/H-03) — código de catálogo: insumo de `resolverPrecio` server-side. */
+  code: z.string().trim().min(1).max(40),
   quantity: z.number().positive(),
   unitPrice: z.number().min(0),
   costCenterId: z.string().uuid(),
   serviceUnitId: z.string().uuid().optional(),
+  /**
+   * Solo se usa si `unitPrice` difiere del precio resuelto server-side (o si
+   * el servidor no pudo resolver ninguno) — requiere rol ADMIN/DIR
+   * (docs/48 Ola 2, C2-3). Sin esto, un `unitPrice` que no matchea se rechaza.
+   */
+  overridePrecio: z
+    .object({
+      justificacion: z.string().trim().min(10).max(500),
+    })
+    .optional(),
 });
 
 const listInput = z.object({
@@ -302,6 +324,13 @@ export const invoiceRouter = router({
    * Crea Invoice + InvoiceItem[] en una sola transacción.
    * IVA: 13% sobre subtotal (LIVA El Salvador).
    * invoiceNumber: generado automáticamente (no forzamos consecutivo en MVP).
+   *
+   * docs/48 Ola 2 (C2-3/H-03) — por cada línea se re-resuelve el precio
+   * server-side (`resolverPrecio` contra `input.patientAccountId` + `code`).
+   * El `unitPrice` que manda el cliente solo se acepta tal cual si coincide
+   * con el resuelto; si difiere (o no se pudo resolver nada), se exige
+   * `overridePrecio.justificacion` Y rol ADMIN/DIR — de lo contrario
+   * PRECONDITION_FAILED. Nunca se factura sin resolver y sin override.
    */
   create: writerProc.input(createInput).mutation(async ({ ctx, input }) => {
     const { tenant, prisma } = ctx;
@@ -321,26 +350,109 @@ export const invoiceRouter = router({
         });
       }
 
-      // CC-0015 — si viene patientAccountId, validar que la cuenta pertenece
-      // al tenant y al mismo paciente de la factura.
-      if (input.patientAccountId) {
-        type AccountCheckRow = { id: string };
-        const accountRows = await tx.$queryRawUnsafe<AccountCheckRow[]>(
-          `SELECT id FROM "PatientAccount" WHERE id = $1 AND "organizationId" = $2 AND "patientId" = $3`,
-          input.patientAccountId,
-          tenant.organizationId,
-          input.patientId,
-        );
-        if (accountRows.length === 0) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "La cuenta indicada no pertenece a este paciente o tenant.",
-          });
-        }
+      // CC-0015 — validar que la cuenta pertenece al tenant y al mismo
+      // paciente de la factura (ancla la lista de precios de resolverPrecio).
+      type AccountCheckRow = { id: string };
+      const accountRows = await tx.$queryRawUnsafe<AccountCheckRow[]>(
+        `SELECT id FROM "PatientAccount" WHERE id = $1 AND "organizationId" = $2 AND "patientId" = $3`,
+        input.patientAccountId,
+        tenant.organizationId,
+        input.patientId,
+      );
+      if (accountRows.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "La cuenta indicada no pertenece a este paciente o tenant.",
+        });
       }
 
-      // Calcular totales
-      const subtotal = input.items.reduce(
+      // Re-resolución server-side por línea (H-03) — nunca se confía en el
+      // unitPrice del cliente sin verificarlo contra el motor de reglas.
+      const puedeOverride = (ctx.effectiveRoleCodes ?? []).some((r) =>
+        ROLES_OVERRIDE_PRECIO.includes(r),
+      );
+      const overrideNotes: string[] = [];
+
+      const resolvedItems: Array<{
+        description: string;
+        quantity: number;
+        unitPrice: number;
+        costCenterId: string;
+        serviceUnitId?: string;
+        priceListId: string | null;
+        priceRuleId: string | null;
+        resolvedAt: Date;
+        priceSource: string;
+      }> = [];
+
+      for (const item of input.items) {
+        const resuelto = await resolverPrecio(tx, {
+          organizationId: tenant.organizationId,
+          cuentaId: input.patientAccountId,
+          code: item.code,
+          cantidad: item.quantity,
+        });
+
+        const coincide =
+          resuelto.precio != null &&
+          Math.abs(resuelto.precio - item.unitPrice) < TOLERANCIA_PRECIO;
+
+        if (coincide) {
+          resolvedItems.push({
+            description: item.description,
+            quantity: item.quantity,
+            unitPrice: resuelto.precio as number,
+            costCenterId: item.costCenterId,
+            serviceUnitId: item.serviceUnitId,
+            priceListId: resuelto.priceListId,
+            priceRuleId: resuelto.reglaId,
+            resolvedAt: new Date(),
+            // `coincide` ya exige resuelto.precio != null, así que `fuente`
+            // nunca es null aquí (invariante de resolverPrecio).
+            priceSource: mapFuenteAPriceSource(resuelto.fuente) as string,
+          });
+          continue;
+        }
+
+        // Precio no resoluble, o el cliente manda un valor distinto al
+        // resuelto: solo se acepta con override auditado + rol ADMIN/DIR.
+        if (!item.overridePrecio) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              resuelto.precio == null
+                ? `No se pudo resolver el precio del código "${item.code}". Cargue la tarifa o use overridePrecio con rol ADMIN/DIR.`
+                : `El precio enviado (${item.unitPrice}) no coincide con el resuelto por el servidor (${resuelto.precio}) para "${item.code}". Use overridePrecio para forzarlo.`,
+          });
+        }
+
+        if (!puedeOverride) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Solo un rol ADMIN o DIR puede forzar un precio distinto al resuelto.",
+          });
+        }
+
+        overrideNotes.push(
+          `[override manual] ${item.description} (código ${item.code}): unitPrice=${item.unitPrice} — ${item.overridePrecio.justificacion} (por ${ctx.user.id})`,
+        );
+
+        resolvedItems.push({
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          costCenterId: item.costCenterId,
+          serviceUnitId: item.serviceUnitId,
+          priceListId: null,
+          priceRuleId: null,
+          resolvedAt: new Date(),
+          priceSource: "manual_override",
+        });
+      }
+
+      // Calcular totales sobre el precio EFECTIVO (resuelto u override), no
+      // sobre lo que mandó el cliente crudo.
+      const subtotal = resolvedItems.reduce(
         (acc, it) => acc + it.quantity * it.unitPrice,
         0,
       );
@@ -349,6 +461,7 @@ export const invoiceRouter = router({
       const subtotalFixed = parseFloat(subtotal.toFixed(2));
 
       const invoiceNumber = buildInvoiceNumber();
+      const notes = overrideNotes.length > 0 ? overrideNotes.join("\n") : null;
 
       type IdRow = { id: string };
 
@@ -356,9 +469,9 @@ export const invoiceRouter = router({
         `INSERT INTO "Invoice" (
            "organizationId", "establishmentId", "patientId", "encounterId",
            "insurerId", "costCenterId", "currencyId", "invoiceNumber",
-           subtotal, "taxAmount", "totalAmount", status, "patientAccountId"
+           subtotal, "taxAmount", "totalAmount", status, "patientAccountId", notes
          ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13
+           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13, $14
          ) RETURNING id`,
         tenant.organizationId,
         establishmentId,
@@ -372,7 +485,8 @@ export const invoiceRouter = router({
         taxAmount,
         totalAmount,
         input.status,
-        input.patientAccountId ?? null,
+        input.patientAccountId,
+        notes,
       );
 
       const invoiceId = inserted[0]?.id;
@@ -380,14 +494,15 @@ export const invoiceRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al crear factura." });
       }
 
-      // Insertar items
-      for (const item of input.items) {
+      // Insertar items con el precio congelado (docs/48 Ola 1, H-05).
+      for (const item of resolvedItems) {
         const totalPrice = parseFloat((item.quantity * item.unitPrice).toFixed(2));
         await tx.$queryRawUnsafe(
           `INSERT INTO "InvoiceItem" (
              "invoiceId", description, quantity, "unitPrice", "totalPrice",
-             "costCenterId", "serviceUnitId"
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+             "costCenterId", "serviceUnitId", "priceListId", "priceRuleId",
+             "resolvedAt", "priceSource"
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
           invoiceId,
           item.description,
           item.quantity,
@@ -395,6 +510,10 @@ export const invoiceRouter = router({
           totalPrice,
           item.costCenterId,
           item.serviceUnitId ?? null,
+          item.priceListId,
+          item.priceRuleId,
+          item.resolvedAt,
+          item.priceSource,
         );
       }
 

@@ -53,6 +53,7 @@ import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
 import { router, tenantProcedure, requireRole } from "../../trpc";
 import { withTenantContext } from "../../rls-context";
 import { abacGuard } from "../../abac";
+import { capturarCargo, revertirCargo } from "../../lib/charge-capture";
 
 // ---------------------------------------------------------------------------
 // Helpers internos (sin dependencias cross-package)
@@ -139,7 +140,8 @@ type StockDecrementResult =
         | "STOCK_INSUFICIENTE";
       qualityStatus?: string;
     }
-  | { status: "DESCONTADO"; stockItemId: string; lotId: string };
+  /** `sku` = código de catálogo (StockItem.sku) — insumo de `capturarCargo` (docs/48 C2-2). */
+  | { status: "DESCONTADO"; stockItemId: string; lotId: string; sku: string };
 
 async function validateAndDecrementStock(
   tx: PrismaClient,
@@ -158,7 +160,7 @@ async function validateAndDecrementStock(
       gtin: params.gtin,
       OR: [{ organizationId: null }, { organizationId: params.organizationId }],
     },
-    select: { id: true },
+    select: { id: true, sku: true },
   });
 
   // GTIN sin StockItem → ítem aún no incorporado al inventario. No bloquea.
@@ -214,7 +216,21 @@ async function validateAndDecrementStock(
     },
   });
 
-  return { status: "DESCONTADO", stockItemId: stockItem.id, lotId: lot.id };
+  return { status: "DESCONTADO", stockItemId: stockItem.id, lotId: lot.id, sku: stockItem.sku };
+}
+
+/**
+ * docs/48 Ola 2 (C2-2) — código de catálogo para `capturarCargo`.
+ *
+ * El cargo es un eje distinto de la validación de inventario (R07): que el
+ * GTIN todavía no tenga `StockItem` cargado (SIN_CATALOGO, o establecimiento
+ * sin validar) no debe significar dispensar gratis (H-01) — se cae al GTIN
+ * crudo como código, que `resolverPrecio` simplemente no resolverá (→ línea
+ * PENDIENTE_TARIFA, nunca 0). Cuando el StockItem SÍ existe, su `sku` es el
+ * código de catálogo real que el tarifario puede tener cargado.
+ */
+function codigoCargoDispensacion(stock: StockDecrementResult | null, gtin: string): string {
+  return stock?.status === "DESCONTADO" ? stock.sku : gtin;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +412,7 @@ export const dispensationRouter = router({
             select: {
               id: true,
               patientId: true,
+              encounterId: true,
               items: {
                 select: {
                   id: true,
@@ -489,8 +506,9 @@ export const dispensationRouter = router({
           // (withTenantContext ya la abre): si algo más adelante falla, la
           // transacción completa hace rollback, incluido el descuento.
           let stockValidated = false;
+          let stock: StockDecrementResult | null = null;
           if (ctx.tenant.establishmentId && input.lot) {
-            const stock = await validateAndDecrementStock(tx, {
+            stock = await validateAndDecrementStock(tx, {
               organizationId: ctx.tenant.organizationId,
               establishmentId: ctx.tenant.establishmentId,
               gtin: input.gtin,
@@ -526,6 +544,23 @@ export const dispensationRouter = router({
             });
           }
 
+          // docs/48 Ola 2 (C2-2) — captura de cargo en la MISMA transacción que
+          // el descuento de inventario (RN-HIS-BOT-001 R5/H-01). Sin reserva
+          // propia, `referenciaId` ancla a la Prescription (la orden de
+          // farmacia). Si no hay cuenta activa, `capturarCargo` lanza y
+          // scanItem falla completo (rollback incluye el descuento de arriba).
+          const cargo = await capturarCargo(tx, {
+            organizationId: ctx.tenant.organizationId,
+            patientId: prescription.patientId,
+            encounterId: prescription.encounterId,
+            code: codigoCargoDispensacion(stock, input.gtin),
+            descripcion: `Dispensación GS1: ${matchedItem.drug.genericName}`,
+            quantity: 1,
+            origen: "DISPENSACION_FARMACIA",
+            referenciaId: prescription.id,
+            actorId: ctx.user.id,
+          });
+
           return {
             ok: true as const,
             item: {
@@ -539,6 +574,8 @@ export const dispensationRouter = router({
             },
             /** true si se validó y descontó contra StockLot real (§19). */
             stockValidated,
+            /** docs/48 Ola 2 (C2-2) — cargo capturado en la cuenta activa del paciente. */
+            cargo,
           };
         },
       );
@@ -622,7 +659,7 @@ export const dispensationRouter = router({
             patientId: input.patientId,
             status: { in: ["SIGNED", "PARTIALLY_DISPENSED"] },
           },
-          select: { id: true },
+          select: { id: true, encounterId: true },
         });
 
         if (!prescription) {
@@ -679,8 +716,9 @@ export const dispensationRouter = router({
         // R07 — hard stop de inventario (hallazgo PR #581: este flujo no
         // validaba stock). Mismo helper que scanItem; el throw revierte la
         // transacción completa, incluida la reserva recién creada.
+        let stock: StockDecrementResult | null = null;
         if (tenant.establishmentId) {
-          const stock = await validateAndDecrementStock(tx, {
+          stock = await validateAndDecrementStock(tx, {
             organizationId: tenant.organizationId,
             establishmentId: tenant.establishmentId,
             gtin: input.gtin,
@@ -697,6 +735,23 @@ export const dispensationRouter = router({
             });
           }
         }
+
+        // docs/48 Ola 2 (C2-2) — captura de cargo en la MISMA transacción que
+        // el descuento de inventario (RN-HIS-BOT-001 R5/H-01). Sin cuenta
+        // activa, `capturarCargo` lanza PRECONDITION_FAILED y toda la
+        // transacción hace rollback (reserva + descuento incluidos) — la
+        // dispensación falla completa, no queda a medias.
+        const cargo = await capturarCargo(tx, {
+          organizationId: tenant.organizationId,
+          patientId: input.patientId,
+          encounterId: prescription.encounterId,
+          code: codigoCargoDispensacion(stock, input.gtin),
+          descripcion: `Dispensación GS1: GTIN ${input.gtin} lote ${input.lote}`,
+          quantity: 1,
+          origen: "DISPENSACION_FARMACIA",
+          referenciaId: reservation.id,
+          actorId: tenant.userId,
+        });
 
         // Emit domain event para outbox Beta.15
         await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
@@ -717,7 +772,8 @@ export const dispensationRouter = router({
           },
         });
 
-        return reservation;
+        /** docs/48 Ola 2 (C2-2) — cargo capturado en la cuenta activa del paciente. */
+        return { ...reservation, cargo };
       });
     }),
 
@@ -793,6 +849,28 @@ export const dispensationRouter = router({
               gtinFisico: reservation.gtin,
               performedById: tenant.userId,
             },
+          });
+        }
+
+        // docs/48 Ola 2 (C2-4) — reversión de cargo: si la reserva generó un
+        // cargo VIGENTE (referenciaId = reservation.id, docs/48 C2-2), se
+        // revierte en la MISMA transacción que la reposición de inventario.
+        // Nunca borra la línea original — revertirCargo la marca REVERTIDO y
+        // crea la línea REVERSION enlazada.
+        const cargoVigente = await tx.patientAccountService.findFirst({
+          where: {
+            referenciaId: input.reservationId,
+            status: "VIGENTE",
+            account: { organizationId: tenant.organizationId },
+          },
+          select: { id: true },
+        });
+
+        if (cargoVigente) {
+          await revertirCargo(tx, {
+            cargoId: cargoVigente.id,
+            motivo: input.motivo,
+            actorId: tenant.userId,
           });
         }
 

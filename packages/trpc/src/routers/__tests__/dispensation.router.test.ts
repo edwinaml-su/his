@@ -11,6 +11,19 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
+
+// docs/48 Ola 2 (C2-2) — capturarCargo ya tiene su propia suite
+// (charge-capture.test.ts); aquí solo importa que scanItem la invoque sin
+// romper el flujo de validación GS1 que este archivo cubre.
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: vi.fn().mockResolvedValue({
+    cargoId: "cargo-default",
+    status: "VIGENTE",
+    unitPrice: 10,
+  }),
+  revertirCargo: vi.fn().mockResolvedValue({ reversionId: "reversion-default" }),
+}));
+
 import { dispensationRouter } from "../pharmacy/dispensation.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 
