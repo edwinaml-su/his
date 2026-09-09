@@ -193,53 +193,63 @@ export const encounterRouter = router({
         });
       }
 
-      return encounter;
-    }).then(async (encounter) => {
-      // Hook ECE: crear ece.paciente + ece.episodio_atencion para habilitar
-      // documentos clínicos NTEC. TX separada — si falla, no revierte la admisión
-      // (se puede backfillear con scripts/backfill-ece.mjs).
+      // Hook ECE — P0-4 FAIL-FAST (decisión de dirección 2026-09-09, ADR 0024):
+      // la admisión y su episodio NTEC son ATÓMICOS. Antes corría en tx
+      // separada con catch silencioso y dejaba admisiones sin expediente ECE
+      // (hallazgo Code Castle P0-4). Si ECE falla, la admisión revierte con
+      // error ruidoso — mismo criterio transaccional que los traslados EPCIS.
       // EXCEPCIÓN: BIRTH/NEWBORN se gestionan en atencion-rn.router (ya crean ece.*).
       if (
         input.admissionType !== "BIRTH" &&
         input.admissionType !== "NEWBORN"
       ) {
-        await ctx.prisma.$transaction(async (tx) => {
-          const eceEstabId = await resolveEceEstablecimientoId(
-            tx,
-            ctx.tenant.establishmentId!,
-          );
-          if (!eceEstabId) {
-            // ece.establecimiento no inicializado: ejecutar backfill-ece.mjs primero.
-            console.warn(
-              `[encounter.admit] ece.establecimiento no encontrado para estab=${ctx.tenant.establishmentId}. ` +
-                "Ejecuta scripts/backfill-ece.mjs para inicializar el schema ECE.",
-            );
-            return;
-          }
-
-          const patient = await tx.patient.findFirst({
-            where: { id: input.patientId },
-            select: { id: true, mrn: true },
+        const eceEstabId = await resolveEceEstablecimientoId(
+          tx,
+          ctx.tenant.establishmentId!,
+        );
+        if (!eceEstabId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "El establecimiento no tiene su espejo ECE (ece.establecimiento). " +
+              "La admisión no puede continuar sin expediente NTEC — contacte a administración " +
+              "(scripts/backfill-ece.mjs o alta del establecimiento).",
           });
-          if (!patient) return;
+        }
 
-          await hookEceEpisodioAfterAdmit(
-            tx,
-            encounter.id,
-            input.patientId,
-            input.admissionType ?? "SCHEDULED",
-            encounter.admittedAt,
-            eceEstabId,
-            ctx.tenant.establishmentId!,
-            patient.mrn,
-          );
-        }).catch((err: unknown) => {
-          console.error(
-            `[encounter.admit] hook ECE falló para encounter=${encounter.id}:`,
-            err,
-          );
+        const patientEce = await tx.patient.findFirst({
+          where: { id: input.patientId },
+          select: { id: true, mrn: true },
         });
+        if (!patientEce) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Paciente no encontrado al crear el episodio ECE.",
+          });
+        }
+
+        const episodioId = await hookEceEpisodioAfterAdmit(
+          tx,
+          encounter.id,
+          input.patientId,
+          input.admissionType ?? "SCHEDULED",
+          encounter.admittedAt,
+          eceEstabId,
+          ctx.tenant.establishmentId!,
+          patientEce.mrn,
+        );
+        if (!episodioId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "No se pudo crear el episodio ECE de la admisión (expediente NTEC). " +
+              "La admisión fue revertida — verifique el puente ECE del establecimiento.",
+          });
+        }
       }
+
+      return encounter;
+    }).then(async (encounter) => {
 
       // Hook US.F2.6.1: asignar GSRN al confirmar admisión hospitalaria.
       // TX separada — no bloquea la admisión si el GSRN falla.

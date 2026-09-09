@@ -41,6 +41,18 @@ describe("encounterRouter", () => {
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) =>
           fn(prisma),
         );
+      // P0-4 (ADR 0024): el hook ECE ahora corre DENTRO de la tx de admit —
+      // el happy path necesita las 4 respuestas ECE en secuencia.
+      let qraw = 0;
+      prisma.$queryRaw.mockImplementation(() => {
+        const responses = [
+          [{ id: "ece-estab-uuid" }], // resolveEceEstablecimientoId
+          [],                          // SELECT episodio existente -> no
+          [{ id: "ece-pac-uuid" }],   // SELECT paciente ECE -> existe
+          [{ id: "episodio-new" }],   // INSERT episodio RETURNING
+        ];
+        return Promise.resolve(responses[qraw++] ?? []) as never;
+      });
     }
 
     it("genera encounterNumber con formato ENC-YYYY-NNNNNN", async () => {
@@ -205,8 +217,9 @@ describe("encounterRouter", () => {
       expect(qrawCallCount).toBeGreaterThanOrEqual(4);
     });
 
-    it("admit no falla si ece.establecimiento no está inicializado (hook non-fatal)", async () => {
-      // $queryRaw retorna vacío → resolveEceEstablecimientoId = null → warn + return
+    it("P0-4 fail-fast: sin espejo ECE la admisión revienta con PRECONDITION_FAILED (ADR 0024)", async () => {
+      // $queryRaw retorna vacío → resolveEceEstablecimientoId = null →
+      // desde ADR 0024 esto REVIENTA la admisión (antes: warn + return silencioso).
       prisma.$queryRaw.mockResolvedValue([] as never);
 
       prisma.patient.findFirst
@@ -228,14 +241,50 @@ describe("encounterRouter", () => {
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
 
       const caller = encounterRouter.createCaller(makeCtx({ prisma }));
-      // Debe resolver aunque ECE no esté inicializado (warn en stderr)
-      const out = await caller.admit({
-        patientId: "00000000-0000-0000-0000-000000000010",
-        admissionType: "EMERGENCY",
-        currencyId: "00000000-0000-0000-0000-000000000020",
-      } as never);
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "EMERGENCY",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
 
-      expect((out as { id: string }).id).toBe("enc-uuid-2");
+    it("P0-4 fail-fast: si el hook no puede crear el episodio (sin puente de paciente), la admisión revienta", async () => {
+      let qraw = 0;
+      prisma.$queryRaw.mockImplementation(() => {
+        const responses = [
+          [{ id: "ece-estab-uuid" }], // resolveEceEstablecimientoId ok
+          [],                          // SELECT episodio existente -> no
+          [],                          // SELECT paciente ECE -> no existe
+          [],                          // fallback hookEcePacienteAfterCreate: existing -> no
+          [],                          // fallback: resolver puente establecimiento -> NO HAY
+        ];
+        return Promise.resolve(responses[qraw++] ?? []) as never;
+      });
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: "p1", active: true } as never)
+        .mockResolvedValueOnce({ id: "p1", mrn: "MRN-001" } as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.organization.findUnique.mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "enc-uuid-3",
+        admittedAt: new Date(),
+        admissionType: "EMERGENCY",
+      } as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admit({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          admissionType: "EMERGENCY",
+          currencyId: "00000000-0000-0000-0000-000000000020",
+        } as never),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
 
     it("admit BIRTH no ejecuta queries ECE (flujo exclusivo atencion-rn)", async () => {
