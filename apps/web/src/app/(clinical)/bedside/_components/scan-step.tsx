@@ -47,6 +47,8 @@ export interface ScanStepProps {
   disabled?: boolean;
   /** Clase CSS extra para el wrapper. */
   className?: string;
+  /** data-testid del campo de escaneo, para E2E (Playwright). */
+  testId?: string;
 }
 
 /** Reproduce un beep usando HTMLAudioElement si el asset está disponible. */
@@ -80,6 +82,7 @@ export function ScanStep({
   errorMessage,
   disabled = false,
   className,
+  testId,
 }: ScanStepProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   // Acumulador de chars para distinguir scan HID de tipeo manual.
@@ -213,6 +216,7 @@ export function ScanStep({
           </label>
           <input
             id={`scan-input-${label}`}
+            data-testid={testId}
             ref={inputRef}
             type="text"
             readOnly={false}

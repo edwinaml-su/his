@@ -365,6 +365,7 @@ export function AdministrationWizard({
         status={stepStatuses[1]}
         errorMessage={stepErrors[1]}
         disabled={wizardState.phase !== "scanning" || wizardState.step !== 1}
+        testId="bedside-scan-patient"
       />
 
       <ScanStep
@@ -375,6 +376,7 @@ export function AdministrationWizard({
         status={stepStatuses[2]}
         errorMessage={stepErrors[2]}
         disabled={wizardState.phase !== "scanning" || wizardState.step !== 2}
+        testId="bedside-scan-nurse"
       />
 
       <ScanStep
@@ -385,6 +387,7 @@ export function AdministrationWizard({
         status={stepStatuses[3]}
         errorMessage={stepErrors[3]}
         disabled={wizardState.phase !== "scanning" || wizardState.step !== 3}
+        testId="bedside-scan-medication"
       />
 
       {wizardState.phase === "scanning" && (
@@ -532,6 +535,7 @@ function HardStopScreen({
       aria-modal="true"
       aria-label="Hard Stop de administración"
       aria-live="assertive"
+      data-testid="hard-stop-modal"
     >
       <div className="max-w-sm text-center">
         <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white/20">
@@ -713,6 +717,7 @@ function SuccessScreen({
       className="flex flex-col items-center justify-center rounded-2xl bg-green-600 px-8 py-12 text-white"
       role="status"
       aria-live="polite"
+      data-testid="administration-success"
     >
       <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white/20">
         <svg
@@ -734,7 +739,7 @@ function SuccessScreen({
         Los 5 correctos fueron verificados correctamente.
       </p>
       {administrationId && (
-        <p className="mb-8 font-mono text-xs opacity-70">
+        <p className="mb-8 font-mono text-xs opacity-70" data-testid="administration-id">
           ID: {administrationId}
         </p>
       )}

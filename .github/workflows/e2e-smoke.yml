@@ -65,16 +65,6 @@ jobs:
       # Activa el filtro de tags en playwright.config.ts:
       # solo corren tests cuyo describe/test contiene "@smoke".
       E2E_GREP: '@smoke'
-      # bedside-hard-stops.spec.ts tiene DOBLE drift y no puede pasar hoy:
-      # (a) spec↔UI — usa testids que nunca existieron en la app
-      # (gsrn-profesional-input etc.; el wizard real usa aria-labels y otro
-      # orden de pasos) y espera hard-stop en el paso 2 cuando el servidor
-      # valida recién tras el paso 3; (b) router↔schema —
-      # runValidate5Correctos consulta columnas inexistentes de
-      # ece.indicaciones_medicas (patient_id/gtin_medicamento/estado, 42703).
-      # Se omite hasta reparar el router + reescribir la spec contra la UI
-      # real. Los fixtures GSRN/GTIN ya están sembrados para ese momento.
-      SKIP_E2E_BEDSIDE_HS: '1'
 
     steps:
       - name: Checkout
