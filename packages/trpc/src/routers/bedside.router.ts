@@ -915,19 +915,36 @@ async function runValidate5Correctos(
       // ── Paso 2: Cargar indicación médica ───────────────────────────────
       // La indicación viene de ece.hoja_triaje o del módulo de indicaciones.
       // Buscamos en la tabla indicaciones_medicas del schema ece.
+      //
+      // FIX (resurrección E2E bedside-hard-stops, 2026-09): esta query
+      // consultaba columnas que nunca existieron en ece.indicaciones_medicas
+      // (patient_id, gtin_medicamento, dosis, via_administracion, frecuencia,
+      // estado — 42703 siempre). El esquema real (schema.prisma
+      // EceIndicacionesMedicas / EceIndicacionItem, ver también sql/61+98) es:
+      //   - paciente_id vive DIRECTO en indicaciones_medicas.
+      //   - gtin (vía descripcion), dosis, via y frecuencia viven en el ítem
+      //     hijo ece.indicacion_item (tipo='MEDICAMENTO'), no en el encabezado.
+      //   - "estado" no existe; el estado operativo se deriva de
+      //     vigencia + estado_registro (chk_ind_vigencia / chk_ind_estado_registro).
       const indicRows = await ctx.prisma.$queryRawUnsafe<IndicationRow[]>(
         `SELECT
-           i.id,
-           i.patient_id,
+           im.id,
+           im.paciente_id           AS patient_id,
            p.gsrn                   AS patient_gsrn,
-           i.gtin_medicamento       AS gtin,
-           i.dosis                  AS dose,
-           i.via_administracion     AS route,
-           i.frecuencia             AS frequency,
-           i.estado                 AS status
-         FROM ece.indicaciones_medicas i
-         LEFT JOIN "Patient" p ON p.id = i.patient_id
-         WHERE i.id = $1
+           ii.descripcion           AS gtin,
+           ii.dosis                 AS dose,
+           ii.via                   AS route,
+           ii.frecuencia            AS frequency,
+           CASE
+             WHEN im.vigencia = 'ACTIVA' AND im.estado_registro IN ('firmado', 'validado')
+               THEN 'ACTIVA'
+             ELSE im.estado_registro
+           END                      AS status
+         FROM ece.indicaciones_medicas im
+         LEFT JOIN "Patient" p ON p.id = im.paciente_id
+         LEFT JOIN ece.indicacion_item ii
+                ON ii.indicacion_id = im.id AND ii.tipo = 'MEDICAMENTO'
+         WHERE im.id = $1
          LIMIT 1`,
         input.indicationId,
       );

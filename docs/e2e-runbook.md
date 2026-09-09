@@ -143,6 +143,5 @@ Sembrados por `packages/database/scripts/seed-test-users.mjs`:
 | `E2E_BASE_URL` | URL base (default `http://localhost:3000`) |
 | `PROD_SMOKE` | `1` para activar `smoke-production.spec.ts` contra Vercel |
 | `SKIP_E2E_BEDSIDE` | `1` omite suite bedside-flow si no hay servidor disponible |
-| `SKIP_E2E_BEDSIDE_HS` | `1` omite suite bedside-hard-stops |
 | `SKIP_E2E_FASE2` | `1` omite suite firma-workflow-gate |
 | `FEATURE_SCOPE_SIDEBAR` | `0` desactiva tests de scope sidebar |
