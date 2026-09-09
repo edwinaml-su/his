@@ -75,9 +75,17 @@ async function scan(page: Page, testId: string, value: string) {
   await page.getByTestId(testId).fill(value);
 }
 
-/** Construye el DataMatrix GS1 (AI 01/10/17) que espera parseGs1DataMatrix. */
+/**
+ * Construye el DataMatrix GS1 en el formato RAW que `parseGs1String` espera
+ * (apps/web/src/lib/gs1/parse-ai.ts): AIs concatenados SIN paréntesis —
+ * AI 01 (longitud fija) + AI 10 (variable, terminado con FNC1 \x1D) + AI 17.
+ * El formato "humano" (01)…(10)… NO es aceptado por el parser (solo strips
+ * de prefijos de simbología ]d2/]C1/]e0) — con paréntesis el front muestra
+ * "DataMatrix incompleto" y el flujo nunca llega al servidor (visto en el
+ * run 34370023608).
+ */
 function dataMatrix(gtin: string, lote: string, vencimientoYYMMDD: string) {
-  return `(01)${gtin}(10)${lote}(17)${vencimientoYYMMDD}`;
+  return `01${gtin}10${lote}\x1D17${vencimientoYYMMDD}`;
 }
 
 async function assertHardStop(page: Page, textFragment: RegExp) {
@@ -150,44 +158,19 @@ test.describe("@smoke - Bedside — Hard Stops (US.F2.6.27-30)", () => {
   /**
    * Caso feliz — 3 escaneos válidos → success con administrationId.
    *
-   * NO se puede ejercitar hoy. Con los dos fixes de este cambio (query de
-   * indicación en bedside.router.ts + el wizard ya respeta `ok:false`), un
-   * escaneo 100% correcto SÍ pasa la Regla de los 5 Correctos — pero el paso
-   * siguiente (`bedside.administration.record`) tiene un gap de arquitectura
-   * previo, no relacionado con este spec:
-   *
-   *   1. `administration.record` (bedside.router.ts:371) resuelve
-   *      `prescriptionItemId` con
-   *      `SELECT prescription_item_id FROM ece.indicaciones_medicas WHERE id = $1`.
-   *      Esa columna NUNCA existió — ni en el corpus SQL (sql/61, sql/98) ni
-   *      en schema.prisma (EceIndicacionesMedicas). Lanza 42703 para
-   *      cualquier indicationId nativo de ECE.
-   *   2. Aun si (1) se resolviera, `ece.indicacion_item` (el modelo ECE de
-   *      indicación) no tiene ningún vínculo estructurado a
-   *      public."PrescriptionItem" (que exige drugId NOT NULL) — el propio
-   *      repo documenta por qué construir ese puente automáticamente es
-   *      inseguro (packages/database/sql/201_ece_indicacion_farmacia_pendiente.sql,
-   *      cola de conciliación manual en su lugar). No hay bridge que sembrar.
-   *   3. El check de ventana terapéutica de `validate5Correctos`
-   *      (bedside.router.ts:1046) consulta
-   *      `"MedicationAdministration" WHERE "orderId" = $1` — esa columna no
-   *      existe en el modelo (ni con ese nombre ni mapeada) y, aunque
-   *      existiera, `MedicationAdministration` no tiene forma de
-   *      referenciar un indicationId de ECE. Y la tabla de destino de la
-   *      rama OK, `ece.bedside_validation` (sql/91), no tiene modelo en
-   *      schema.prisma — `prisma db push` (BD efímera E2E) nunca la crea,
-   *      así que el INSERT final de la rama OK (sin try/catch) revienta
-   *      igual aunque (1) y (2) se resuelvan.
-   *
-   * Ninguno de los tres es un defecto de este spec ni de sus fixtures —
-   * son gaps de backend preexistentes, más grandes que "resucitar el E2E".
-   * Se documentan aquí en vez de forzar un test verde falso. Ver también el
-   * reporte de @QA de esta sesión para el hallazgo completo (severidad P0
-   * para Go-Live del circuito BCMA).
+   * Ejercita el circuito BCMA completo: validate5Correct (5 Correctos OK →
+   * fila en ece.bedside_validation + evento EPCIS) y administration.record,
+   * que resuelve el PrescriptionItem vía la cola de conciliación de farmacia
+   * `ece.indicacion_farmacia_pendiente` (R04, sql/201 + sql/222): el seeder
+   * siembra la fila RECONCILIADO → Drug/receta estructurados
+   * (seed-e2e-fixtures.mjs §6). Sin fila conciliada, record bloquea con
+   * PRECONDITION_FAILED — quién escribe esa conciliación en producción
+   * (farmacia manual vs generación automática al firmar) es la decisión
+   * R06/ADR 0023, pendiente de dirección; este test cubre el circuito una
+   * vez que el vínculo existe.
    */
-  test.fixme(
-    "caso feliz: 3 escaneos válidos → success con administrationId " +
-      "(bloqueado por gap de arquitectura en administration.record — ver comentario)",
+  test(
+    "caso feliz: 3 escaneos válidos → success con administrationId",
     async ({ page }) => {
       await goToWizard(page);
       await scan(page, "bedside-scan-patient", E2E_GS1.gsrnPaciente);

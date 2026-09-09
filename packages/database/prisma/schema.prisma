@@ -7594,6 +7594,114 @@ model EceStatEvent {
 }
 
 // =============================================================================
+// Circuito BCMA bedside — cierre de drift SQL→Prisma (2026-09)
+//
+// Estas 4 tablas existían solo en el corpus SQL (91/94/117/201) y el router
+// bedside.router.ts las accede vía $queryRaw/$executeRaw — la BD efímera E2E
+// (`prisma db push`) nunca las creaba y la rama OK del circuito reventaba con
+// "relation does not exist". Modelos escalares a propósito (sin relations):
+// las FK, CHECK, triggers de inmutabilidad y RLS viven en los SQL de origen,
+// mismo patrón que EceGs1Gtin ("acceso vía $queryRaw").
+// =============================================================================
+
+/// Log inmutable del algoritmo 5 Correctos bedside (US.F2.6.21-22).
+/// Origen: sql/91_bedside_validation.sql (trigger inmutabilidad + RLS ahí).
+model EceBedsideValidation {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String    @map("organization_id") @db.Uuid
+  indicationId   String    @map("indication_id")
+  patientId      String    @map("patient_id") @db.Uuid
+  nurseGsrn      String    @map("nurse_gsrn")
+  patientGsrn    String    @map("patient_gsrn")
+  gtin           String
+  lote           String?
+  serie          String?
+  fechaVence     DateTime? @map("fecha_vence") @db.Date
+  status         String
+  hardStopCode   String?   @map("hard_stop_code")
+  hardStopReason String?   @map("hard_stop_reason")
+  expectedValue  String?   @map("expected_value")
+  receivedValue  String?   @map("received_value")
+  glnUbicacion   String?   @map("gln_ubicacion")
+  executedAt     DateTime  @default(now()) @map("executed_at") @db.Timestamptz()
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  @@index([organizationId, executedAt(sort: Desc)], map: "idx_bedside_validation_org")
+  @@index([patientId, executedAt(sort: Desc)], map: "idx_bedside_validation_patient")
+  @@index([indicationId, executedAt(sort: Desc)], map: "idx_bedside_validation_indication")
+  @@map("bedside_validation")
+  @@schema("ece")
+}
+
+/// Cola de conciliación farmacia/eMAR (R04). Materializada por mar-consumer.ts
+/// al firmar una indicación con ítems medicamento; `prescription_item_id` es el
+/// resultado de la conciliación (sql/222) que consume administration.record.
+/// Origen: sql/201 + sql/222 (FK/CHECK/RLS ahí).
+model EceIndicacionFarmaciaPendiente {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicacionId       String    @map("indicacion_id") @db.Uuid
+  indicacionItemId   String    @unique(map: "uq_ifp_indicacion_item") @map("indicacion_item_id") @db.Uuid
+  episodioId         String    @map("episodio_id") @db.Uuid
+  medicoPrescriptor  String    @map("medico_prescriptor") @db.Uuid
+  descripcion        String
+  dosis              String?
+  via                String?
+  frecuencia         String?
+  duracion           String?
+  domainEventId      String?   @map("domain_event_id") @db.Uuid
+  estado             String    @default("PENDIENTE_REVISION_FARMACIA")
+  prescriptionItemId String?   @map("prescription_item_id") @db.Uuid
+  creadoEn           DateTime  @default(now()) @map("creado_en") @db.Timestamptz()
+  reconciliadoEn     DateTime? @map("reconciliado_en") @db.Timestamptz()
+  reconciliadoPor    String?   @map("reconciliado_por") @db.Uuid
+
+  @@index([episodioId], map: "idx_ifp_episodio")
+  @@index([estado], map: "idx_ifp_estado")
+  @@map("indicacion_farmacia_pendiente")
+  @@schema("ece")
+}
+
+/// Registro inmutable de eventos GS1 EPCIS 1.2/2.0 (procesos D y E).
+/// Origen: sql/94_farmacovigilancia_epcis.sql (CHECK/trigger/RLS ahí).
+model EceGs1EpcisEvent {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tipoEvento        String   @map("tipo_evento")
+  subtipo           String
+  what              Json
+  whereData         Json     @map("where_data")
+  eventTime         DateTime @map("event_time") @db.Timestamptz()
+  recordTime        DateTime @default(now()) @map("record_time") @db.Timestamptz()
+  why               Json
+  who               Json
+  payloadHash       String   @map("payload_hash") @db.Char(64)
+  indicationId      String?  @map("indication_id") @db.Uuid
+  establecimientoId String   @map("establecimiento_id") @db.Uuid
+  status            String   @default("COMMITTED")
+  creadoEn          DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@index([establecimientoId], map: "idx_gs1_epcis_event_establecimiento")
+  @@index([subtipo], map: "idx_gs1_epcis_event_subtipo")
+  @@map("gs1_epcis_event")
+  @@schema("ece")
+}
+
+/// Pares LASA (look-alike/sound-alike) — JCI IPSG.3 ME 2.
+/// Origen: sql/117_lasa_double_check.sql (FK a Drug/CHECK ahí).
+model EceLasaPair {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  drugAId   String   @map("drug_a_id") @db.Uuid
+  drugBId   String   @map("drug_b_id") @db.Uuid
+  razon     String
+  severidad String
+  activo    Boolean  @default(true)
+  creadoEn  DateTime @default(now()) @map("creado_en") @db.Timestamptz()
+
+  @@unique([drugAId, drugBId], map: "lasa_pair_unique")
+  @@map("lasa_pair")
+  @@schema("ece")
+}
+
+// =============================================================================
 // F2-S14 Stream D — Window Alert + Hardware
 // US.F2.6.52 — Alerta ventana terapéutica próxima a cerrar
 // =============================================================================

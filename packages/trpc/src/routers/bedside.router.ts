@@ -323,6 +323,11 @@ const administrationRecordInput = z.object({
   via:          z.enum(["ORAL", "IV", "IM", "SC", "TOPICAL", "INHALED", "RECTAL", "SUBLINGUAL", "OPHTHALMIC", "OTIC", "NASAL"]),
   indicationId: z.string().uuid(),
   staffGsrn:   z.string().length(18).regex(/^\d{18}$/),
+  // id retornado por validate5Correct (ece.bedside_validation) — enlaza la
+  // administración con su validación 5 Correctos (US.F2.6.30-33). Opcional
+  // por compatibilidad; el check de ventana terapéutica del Paso 6 depende
+  // de este enlace para encontrar la última administración de la indicación.
+  validationId: z.string().uuid().optional(),
   // JCI IPSG.3 ME 4 — double-check independiente para high-alert meds.
   doubleCheckBy:  z.string().uuid().optional(),
   doubleCheckPin: z.string().min(4).max(20).optional(),
@@ -364,18 +369,36 @@ const administrationRouter = router({
       );
       const nurseId = staffRows[0]?.user_id ?? ctx.user.id;
 
-      // Resolver prescriptionItemId desde indicationId
-      // ece.indicaciones_medicas tiene una FK opcional a PrescriptionItem.
-      // Si existe: lo usamos. Si no: necesitamos uno — bloqueamos para seguridad.
+      // Resolver prescriptionItemId desde indicationId.
+      // La indicación nativa ECE no tiene vínculo directo a PrescriptionItem
+      // (la columna ece.indicaciones_medicas.prescription_item_id que se
+      // consultaba aquí nunca existió — 42703 en toda invocación). El vínculo
+      // lo produce la conciliación de farmacia sobre la cola R04
+      // ece.indicacion_farmacia_pendiente (sql/201 + sql/222): farmacia mapea
+      // el texto libre firmado a un Drug/receta estructurados y deja el
+      // resultado en prescription_item_id. Quién escribe ese vínculo
+      // (conciliación manual vs generación automática al firmar) es la
+      // decisión R06/ADR 0023 — este SELECT funciona igual con ambas.
+      // Limitación documentada: con >1 ítem medicamento conciliado en la misma
+      // indicación se toma el primero (creado_en); desambiguar por GTIN
+      // requiere el vínculo Drug↔GTIN que el catálogo aún no tiene.
       const indicRows = await ctx.prisma.$queryRawUnsafe<{ prescription_item_id: string | null }[]>(
-        `SELECT prescription_item_id FROM ece.indicaciones_medicas WHERE id = $1 LIMIT 1`,
+        `SELECT prescription_item_id
+           FROM ece.indicacion_farmacia_pendiente
+          WHERE indicacion_id = $1::uuid
+            AND estado = 'RECONCILIADO'
+            AND prescription_item_id IS NOT NULL
+          ORDER BY creado_en ASC
+          LIMIT 1`,
         input.indicationId,
       );
       const prescriptionItemId = indicRows[0]?.prescription_item_id;
       if (!prescriptionItemId) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: `La indicación ${input.indicationId} no tiene PrescriptionItem enlazado. Complete el bridge ECE→HIS antes de registrar administración bedside.`,
+          message:
+            `La indicación ${input.indicationId} no tiene PrescriptionItem conciliado por farmacia. ` +
+            "Complete la conciliación (ece.indicacion_farmacia_pendiente) antes de registrar la administración bedside.",
         });
       }
 
@@ -386,7 +409,7 @@ const administrationRouter = router({
         `SELECT im.fecha_hora, ii.frecuencia
          FROM ece.indicaciones_medicas im
          LEFT JOIN ece.indicacion_item ii ON ii.indicacion_id = im.id
-         WHERE im.id = $1
+         WHERE im.id = $1::uuid
          LIMIT 1`,
         input.indicationId,
       );
@@ -421,7 +444,7 @@ const administrationRouter = router({
         `SELECT pi."drugId" AS drug_id, d."alertLevel" AS alert_level
          FROM "PrescriptionItem" pi
          JOIN "Drug" d ON d.id = pi."drugId"
-         WHERE pi.id = $1
+         WHERE pi.id = $1::uuid
          LIMIT 1`,
         prescriptionItemId,
       );
@@ -438,13 +461,13 @@ const administrationRouter = router({
           severidad:        string;
         }[]>(
           `SELECT
-             CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
+             CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
              d."genericName" AS paired_drug_name,
              lp.razon,
              lp.severidad
            FROM ece.lasa_pair lp
-           JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END
-           WHERE (lp.drug_a_id = $1 OR lp.drug_b_id = $1)
+           JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END
+           WHERE (lp.drug_a_id = $1::uuid OR lp.drug_b_id = $1::uuid)
              AND lp.activo = true
            LIMIT 1`,
           drugId,
@@ -484,7 +507,7 @@ const administrationRouter = router({
         }
 
         const verifier = await ctx.prisma.$queryRawUnsafe<{ pin_hash: string | null }[]>(
-          `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1 LIMIT 1`,
+          `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1::uuid LIMIT 1`,
           input.doubleCheckBy,
         );
 
@@ -556,6 +579,11 @@ const administrationRouter = router({
             providerBadgeScanned:   true,
             scannedAt:              new Date(),
             patientWristbandScanned: true,
+            // Enlace a la validación 5 Correctos que precedió a esta
+            // administración — vía de vuelta indicación→administración para
+            // el check de ventana terapéutica (MedicationAdministration no
+            // tiene FK a indicaciones ECE; ece.bedside_validation sí).
+            bedsideValidationId: input.validationId ?? null,
             // GS1 bedside fields
             gtinScanned:     input.medicamentoGtin,
             loteScanned:     input.lote,
@@ -1039,13 +1067,22 @@ async function runValidate5Correctos(
       if (indication.frequency) {
         const intervalMin = parseFrecuenciaMinutos(indication.frequency);
         if (intervalMin !== null) {
-          // Última administración para esta indicación
+          // Última administración para esta indicación.
+          // "MedicationAdministration" no tiene columna "orderId" (la query
+          // anterior era 42703 siempre) ni ninguna FK a indicaciones ECE — su
+          // único enlace de vuelta es bedside_validation_id →
+          // ece.bedside_validation.indication_id, poblado por
+          // administration.record vía input.validationId. Administraciones
+          // manuales legacy (sin scan bedside) no aparecen en este join —
+          // limitación conocida: no hay forma estructural de atribuirlas a
+          // una indicación ECE.
           const lastRows = await ctx.prisma.$queryRawUnsafe<LastAdminRow[]>(
-            `SELECT administered_at
-               FROM "MedicationAdministration"
-              WHERE "orderId" = $1
-                AND status = 'ADMINISTERED'
-              ORDER BY administered_at DESC
+            `SELECT ma."administeredAt" AS administered_at
+               FROM "MedicationAdministration" ma
+               JOIN ece.bedside_validation bv ON bv.id = ma.bedside_validation_id
+              WHERE bv.indication_id = $1
+                AND ma.status = 'ADMINISTERED'
+              ORDER BY ma."administeredAt" DESC
               LIMIT 1`,
             input.indicationId,
           );
