@@ -18,6 +18,7 @@ export default function ProfesionalesSaludPage() {
       jvpLabel="JVP / Registro JNR"
       profesionHint="Ej. Licenciada en Enfermería, Auxiliar de Archivo, Anestesista Técnico"
       detailBasePath="/profesionales-salud"
+      showUsuariosSinPerfil
     />
   );
 }

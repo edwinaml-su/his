@@ -18,8 +18,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { personalSaludRouter } from "../personal-salud.router";
-import { makeCtx } from "../../__tests__/helpers/caller";
+import { personalSaludRouter, CLINICAL_ROLE_CODES } from "../personal-salud.router";
+import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 
 const PERSONAL_ID = "00000000-0000-0000-0000-0000000000e1";
 const USER_ID = "00000000-0000-0000-0000-0000000000e2";
@@ -196,5 +196,51 @@ describe("personalSalud.createAndLinkUser", () => {
         fullName: "Dr. Nuevo Médico",
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
+
+describe("personalSalud.usuariosSinPerfil", () => {
+  const USER_LINKED = "00000000-0000-0000-0000-0000000000e4";
+  const USER_UNLINKED = "00000000-0000-0000-0000-0000000000e5";
+
+  it("excluye Users cuyo id ya está vinculado por his_user_id", async () => {
+    installTenantContextMock(prisma);
+    prisma.$queryRaw
+      .mockResolvedValueOnce([
+        { id: USER_LINKED, full_name: "Dr. Ya Vinculado", email: "vinculado@avante.test", role_codes: ["MC"] },
+        { id: USER_UNLINKED, full_name: "Dra. Sin Perfil", email: "sinperfil@avante.test", role_codes: ["ENF"] },
+      ]) // query de Users con rol clínico (dentro de withTenantContext)
+      .mockResolvedValueOnce([{ his_user_id: USER_LINKED }]); // ya vinculados globalmente
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.usuariosSinPerfil({ limit: 100 });
+
+    expect(result).toEqual([
+      { userId: USER_UNLINKED, nombre: "Dra. Sin Perfil", email: "sinperfil@avante.test", roles: ["ENF"] },
+    ]);
+  });
+
+  it("devuelve [] sin consultar personal_salud cuando no hay Users con rol clínico", async () => {
+    installTenantContextMock(prisma);
+    prisma.$queryRaw.mockResolvedValueOnce([]); // sin candidatos
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.usuariosSinPerfil({ limit: 100 });
+
+    expect(result).toEqual([]);
+    // Solo la query de Users — el check de personal_salud se salta.
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("filtra la query de Users por los códigos de rol clínico esperados", async () => {
+    installTenantContextMock(prisma);
+    prisma.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await caller.usuariosSinPerfil({ limit: 50 });
+
+    const call = prisma.$queryRaw.mock.calls[0]!;
+    const interpolated = call.slice(1);
+    expect(interpolated).toContainEqual(Array.from(CLINICAL_ROLE_CODES));
   });
 });
