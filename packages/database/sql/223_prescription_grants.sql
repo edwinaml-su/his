@@ -1,0 +1,59 @@
+-- =====================================================================
+-- 223_prescription_grants.sql
+--
+-- ADR 0023 Ola 1 (punto único de prescripción) — al firmar una indicación
+-- médica NTEC con ítems MEDICAMENTO con drug_id, el router
+-- (indicaciones-medicas.router.ts::firmar(), vía
+-- packages/trpc/src/ece/prescription-consumer.ts) inserta una
+-- public."Prescription" + public."PrescriptionItem" dentro de la
+-- transacción demotada a `authenticated` (withEceContext con
+-- tenantContext, ver rls-context.ts). Ese INSERT necesita GRANT, no solo
+-- policy RLS — y el GRANT falta.
+--
+-- Hallazgo (verificado 2026-09-09, lectura de 09_pharmacy_rls.sql): esa
+-- migración habilitó RLS y creó la policy `prescription_tenant_modify`
+-- (FOR ALL — pensada para cubrir INSERT/UPDATE/DELETE) sobre
+-- public."Prescription"/public."PrescriptionItem", pero el GRANT a
+-- `authenticated` que la acompaña es SOLO:
+--   GRANT SELECT ON public."Prescription"     TO authenticated;
+--   GRANT SELECT ON public."PrescriptionItem" TO authenticated;
+-- Ningún archivo posterior (26/77/132/214_pharmacy_*, barrido completo del
+-- repo) agrega INSERT/UPDATE. Consistente con R06 H-02
+-- (docs/qa/drhis/R06-evaluacion-datos-farmacologicos.md): "Prescription = 0
+-- filas en prod" — el módulo nunca se ejerció contra Postgres real con RLS
+-- demotado a `authenticated`, así que este defecto nunca se manifestó.
+--
+-- La policy en sí NO necesita tocarse: `prescription_tenant_modify` usa
+-- `public.current_org_id()` directo (igual que LabOrder/ImagingRequest,
+-- sql/10) y `firmar()` ya pasa `tenantContext` a `withEceContext`
+-- (packages/trpc/src/ece/rls-context.ts) — eso setea `app.current_org_id`
+-- en la misma transacción vía `public.set_tenant_context` (sql/04), que es
+-- exactamente lo que la policy exige. No hace falta un resolver dual-GUC
+-- nuevo (`current_org_id_or_ece_context()`, sql/209) para esta tabla — el
+-- gap es puramente de GRANT, no de RLS.
+--
+-- Sin DELETE a propósito: medicación no se borra (mismo criterio que
+-- public."CareTask", sql/209 — "las tareas se cancelan vía status, no se
+-- borran"). Una Prescription/PrescriptionItem se cancela cambiando
+-- `status`/`vigencia` de la indicación origen, nunca con DELETE desde
+-- código de aplicación.
+--
+-- Idempotente (GRANT es siempre repetible).
+-- APLICADO a prod 2026-09-09 (migración prescription_grants_223 vía MCP) — NO re-aplicar MANUAL en Supabase SQL Editor / MCP apply_migration —
+-- NO aplicado a prod por este archivo (worktree sin permiso de escritura).
+-- =====================================================================
+
+GRANT INSERT, UPDATE ON public."Prescription"     TO authenticated;
+GRANT INSERT, UPDATE ON public."PrescriptionItem" TO authenticated;
+
+-- =====================================================================
+-- Verificación post-apply
+-- =====================================================================
+-- SELECT grantee, privilege_type FROM information_schema.role_table_grants
+--  WHERE table_schema = 'public' AND table_name = 'Prescription' AND grantee = 'authenticated';
+-- Esperado: SELECT, INSERT, UPDATE (sin DELETE).
+--
+-- SELECT grantee, privilege_type FROM information_schema.role_table_grants
+--  WHERE table_schema = 'public' AND table_name = 'PrescriptionItem' AND grantee = 'authenticated';
+-- Esperado: SELECT, INSERT, UPDATE (sin DELETE).
+-- =====================================================================

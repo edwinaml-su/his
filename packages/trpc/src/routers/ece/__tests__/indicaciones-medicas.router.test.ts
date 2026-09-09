@@ -375,6 +375,117 @@ describe("indicacionesMedicasRouter", () => {
         expect(result.plazoExcedido).toBe(false);
       });
     });
+
+    // ADR 0023 Opción A (punto único de prescripción) — firmar() genera
+    // automáticamente Prescription+PrescriptionItem para ítems MEDICAMENTO
+    // con drug_id y auto-concilia la cola R04. Ver
+    // packages/trpc/src/ece/__tests__/prescription-consumer.test.ts para la
+    // cobertura exhaustiva del consumer en sí (idempotencia, omisiones,
+    // contrato de fallo); acá solo se verifica el cableado en firmar().
+    describe("ADR 0023 — generación automática de Prescription", () => {
+      it("ítem MEDICAMENTO con drug_id genera Prescription SIGNED + PrescriptionItem", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+        const DRUG_ID = "00000000-0000-4000-8001-0000000000d0";
+        const ENC_ID = "00000000-0000-4000-8001-0000000000e0";
+        const PAT_ID = "00000000-0000-4000-8001-0000000000f0";
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          .mockResolvedValueOnce([])
+          // items — ahora con drug_id/dosis/via/frecuencia/duracion
+          .mockResolvedValueOnce([
+            {
+              id: ITEM_ID,
+              tipo: "MEDICAMENTO",
+              descripcion: "Paracetamol 500mg VO cada 8h",
+              detalle: null,
+              drug_id: DRUG_ID,
+              dosis: "500mg",
+              via: "ORAL",
+              frecuencia: "QID",
+              duracion: null,
+            },
+          ])
+          // care-task-consumer: org + bridge
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }])
+          // prescription-consumer: org + bridge + idempotencia
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: ENC_ID, patient_id: PAT_ID }])
+          .mockResolvedValueOnce([]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000c0",
+        });
+        (ctx.prisma.prescription.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000a1",
+        });
+        (ctx.prisma.prescriptionItem.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000a2",
+        });
+
+        const result = await caller(ctx).firmar({ id: IND_ID });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.prescriptionId).toBe("00000000-0000-4000-8001-0000000000a1");
+        expect(result.itemsPrescritos).toBe(1);
+        expect(result.itemsPrescripcionOmitidos).toEqual([]);
+        expect(ctx.prisma.prescription.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            organizationId: ORG_ID,
+            encounterId: ENC_ID,
+            patientId: PAT_ID,
+            prescriberId: MEDICO_ID,
+            status: "SIGNED",
+          }),
+        });
+        expect(ctx.prisma.prescriptionItem.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            prescriptionId: "00000000-0000-4000-8001-0000000000a1",
+            drugId: DRUG_ID,
+            dosage: "500mg",
+            route: "ORAL",
+            frequency: "QID",
+          }),
+        });
+      });
+
+      it("ítem MEDICAMENTO sin drug_id (texto libre) NO genera Prescription", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([
+            {
+              id: ITEM_ID,
+              tipo: "MEDICAMENTO",
+              descripcion: "Ibuprofeno 400mg VO — texto libre legacy",
+              detalle: null,
+              drug_id: null,
+              dosis: null,
+              via: null,
+              frecuencia: null,
+              duracion: null,
+            },
+          ])
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000c1",
+        });
+
+        const result = await caller(ctx).firmar({ id: IND_ID });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.prescriptionId).toBeNull();
+        expect(result.itemsPrescritos).toBe(0);
+        expect(ctx.prisma.prescription.create).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe("registrarAdministracion", () => {
