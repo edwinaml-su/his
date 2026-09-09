@@ -3590,6 +3590,9 @@ enum StockMovementType {
   OUT /// salida (consumo, despacho).
   TRANSFER /// traslado entre bodegas.
   ADJUST /// ajuste de inventario (conteo físico).
+  /// docs/48 Ola 3 (C3-3) — consumo institucional no nominativo (aseo,
+  /// docencia, merma). Nunca liga a paciente ni pasa por capturarCargo.
+  CONSUMPTION
 
   @@schema("public")
 }

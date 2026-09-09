@@ -39,6 +39,7 @@ import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
 import { checkPin } from "./firma-electronica.router";
+import { capturarCargo } from "../lib/charge-capture";
 
 /** CC-0016 — parametrización del módulo: solo administración. */
 const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
@@ -325,7 +326,7 @@ export const imagingRequestRouter = router({
           ejecutorCostCenterId = cc?.id ?? null;
         }
 
-        await tx.imagingOrder.create({
+        const order = await tx.imagingOrder.create({
           data: {
             organizationId,
             establishmentId,
@@ -344,6 +345,24 @@ export const imagingRequestRouter = router({
             ejecutorCostCenterId,
             createdBy: ctx.user.id,
           },
+        });
+
+        // docs/48 Ola 3 (C3-1) — un cargo por prestación de imagen, en la
+        // MISMA tx que la orden (RN-HIS-BOT-001 R5). `accountId` es la cuenta
+        // ya resuelta arriba (`input.cuentaId`) — este flujo SIEMPRE la
+        // conoce (a diferencia de lab, que también acepta el camino legado
+        // por encounterId), así que no hay fallback de resolución.
+        await capturarCargo(tx, {
+          organizationId,
+          patientId: account.patientId,
+          encounterId: account.encounterId,
+          accountId: account.id,
+          code: test.code,
+          descripcion: test.name,
+          quantity: 1,
+          origen: "IMAGENES",
+          referenciaId: order.id,
+          actorId: ctx.user.id,
         });
       }
 

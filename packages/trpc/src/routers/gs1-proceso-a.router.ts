@@ -18,9 +18,12 @@ import {
   verificar5CorrectosInput,
   rechazarRecepcionInput,
   listarRecepcionesInput,
+  type Gs1ProductoRecibido,
 } from "@his/contracts";
 import { emitDomainEvent, Prisma } from "@his/database";
+import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
+import { applyTenantContext } from "../rls-context";
 
 /**
  * HI-06 (audit Stream I): resuelve `personal_salud.id` del usuario autenticado.
@@ -48,6 +51,110 @@ async function resolvePersonalSaludId(
     });
   }
   return rows[0].id;
+}
+
+/**
+ * docs/48 Ola 3 (C3-4, addendum Ola 0) — puente recepción GS1 → Stock
+ * operativo: por cada producto recibido, upsert de `StockItem` (match por
+ * `gtin`, NO por la convención `sku`) + `StockLot` (incrementa si el
+ * lote+item+establecimiento ya existe) + `StockMovement` tipo IN referenciando
+ * la recepción. Debe llamarse DENTRO de la misma tx que el INSERT de
+ * `ece.recepcion_mercancia` (atomicidad: si el bridge falla, la recepción
+ * entera hace rollback — nunca queda una recepción "aceptada" sin su reflejo
+ * en inventario operativo).
+ *
+ * El nombre del `StockItem` nuevo sale de `ece.gs1_gtin.descripcion`
+ * (catálogo GS1 Nivel 2 canónico, SQL 169-174) — si el GTIN no está
+ * catalogado ahí todavía, cae a un nombre genérico en vez de bloquear la
+ * recepción (el catálogo GS1 se completa aparte; la recepción física no debe
+ * esperar por eso).
+ */
+async function upsertStockFromRecepcion(
+  tx: PrismaClient,
+  params: {
+    organizationId: string;
+    establishmentId: string;
+    numeroDocumentoRecepcion: string;
+    productos: Gs1ProductoRecibido[];
+    performedById: string;
+  },
+): Promise<void> {
+  for (const producto of params.productos) {
+    let stockItem = await tx.stockItem.findFirst({
+      where: {
+        gtin: producto.gtin,
+        OR: [{ organizationId: null }, { organizationId: params.organizationId }],
+      },
+      select: { id: true },
+    });
+
+    if (!stockItem) {
+      const catalogo = await tx.$queryRaw<{ descripcion: string | null }[]>`
+        SELECT descripcion FROM ece.gs1_gtin WHERE codigo = ${producto.gtin} LIMIT 1
+      `;
+      const nombre = catalogo[0]?.descripcion?.trim() || `GTIN ${producto.gtin}`;
+      stockItem = await tx.stockItem.create({
+        data: {
+          organizationId: params.organizationId,
+          sku: producto.gtin,
+          name: nombre,
+          unitOfMeasure: "UN",
+          gtin: producto.gtin,
+          createdBy: params.performedById,
+        },
+        select: { id: true },
+      });
+    }
+
+    const existingLot = await tx.stockLot.findFirst({
+      where: {
+        organizationId: params.organizationId,
+        establishmentId: params.establishmentId,
+        itemId: stockItem.id,
+        lotNumber: producto.lote,
+      },
+      select: { id: true },
+    });
+
+    let lotId: string;
+    if (existingLot) {
+      await tx.stockLot.update({
+        where: { id: existingLot.id },
+        data: { quantityOnHand: { increment: producto.cantidad } },
+      });
+      lotId = existingLot.id;
+    } else {
+      const createdLot = await tx.stockLot.create({
+        data: {
+          organizationId: params.organizationId,
+          establishmentId: params.establishmentId,
+          itemId: stockItem.id,
+          lotNumber: producto.lote,
+          gtinFisico: producto.gtin,
+          expiryDate: new Date(`${producto.expiry}T00:00:00Z`),
+          quantityOnHand: producto.cantidad,
+          createdBy: params.performedById,
+        },
+        select: { id: true },
+      });
+      lotId = createdLot.id;
+    }
+
+    await tx.stockMovement.create({
+      data: {
+        organizationId: params.organizationId,
+        establishmentId: params.establishmentId,
+        itemId: stockItem.id,
+        lotId,
+        type: "IN",
+        quantity: producto.cantidad,
+        reason: `Recepción GS1 ${params.numeroDocumentoRecepcion}`,
+        referenceCode: params.numeroDocumentoRecepcion,
+        gtinFisico: producto.gtin,
+        performedById: params.performedById,
+      },
+    });
+  }
 }
 
 function resolveEstablecimientoId(
@@ -119,6 +226,34 @@ export const gs1ProcesoARouter = router({
           )
           RETURNING id, numero_documento_recepcion
         `;
+
+        // docs/48 Ola 3 (C3-4) — puente a Stock operativo, MISMA tx que el
+        // INSERT de arriba (atomicidad: recepción sin su reflejo en
+        // inventario nunca queda persistida). `Stock*` son tablas `public`
+        // tenant-scoped con RLS estándar (current_org_id()) — distinto del
+        // GUC `app.ece_establecimiento_id` que `ece.recepcion_mercancia`
+        // exige y que este endpoint NO setea (el INSERT de arriba corre con
+        // el rol de conexión por defecto, igual que siempre en este router;
+        // no se toca ese camino aquí — ver nota en la cabecera del archivo
+        // sobre la deuda de contexto RLS de gs1-proceso-a, fuera de alcance
+        // de C3-4). Se demota a `authenticated` recién AQUÍ, DESPUÉS del
+        // INSERT ece, para que el bridge sí quede protegido por RLS real
+        // (patrón `applyTenantContext`/`withTenantContext`, no el dual-GUC
+        // `withEceContext({tenantContext})` de CC-0026: ese helper resuelve
+        // `app.ece_establecimiento_id` al espacio B de `ece.establecimiento`
+        // — sql/216, ADR 0022 — que NO es el espacio que esta tabla compara
+        // en su policy hoy; usarlo aquí correría el riesgo de romper el
+        // INSERT que ya funciona).
+        await applyTenantContext(tx as unknown as PrismaClient, ctx.tenant);
+
+        await upsertStockFromRecepcion(tx as unknown as PrismaClient, {
+          organizationId: ctx.tenant.organizationId,
+          establishmentId: establecimientoId,
+          numeroDocumentoRecepcion: input.numero_documento_recepcion,
+          productos: input.productos,
+          performedById: ctx.user.id,
+        });
+
         return rec[0];
       });
 

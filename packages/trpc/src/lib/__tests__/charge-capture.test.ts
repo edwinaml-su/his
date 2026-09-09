@@ -60,7 +60,7 @@ describe("capturarCargo", () => {
     code: "MED-001",
     descripcion: "Amoxicilina 500mg",
     quantity: 2,
-    origen: "dispensacion",
+    origen: "DISPENSACION_FARMACIA",
     referenciaId: REFERENCIA,
     actorId: ACTOR,
   };
@@ -96,6 +96,46 @@ describe("capturarCargo", () => {
       tx,
       expect.objectContaining({ cuentaId: ACCOUNT, code: "MED-001", cantidad: 2 }),
     );
+  });
+
+  it("docs/48 C3-1: con accountId, resuelve esa cuenta directo (sin buscar por encounterId)", async () => {
+    tx.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT } as never);
+    resolverPrecioMock.mockResolvedValue({
+      precio: 10,
+      fuente: "estandar",
+      priceListId: null,
+      reglaId: null,
+    });
+    tx.patientAccountService.create.mockResolvedValue({ id: CARGO_ID } as never);
+
+    await capturarCargo(tx, { ...baseParams, accountId: ACCOUNT });
+
+    expect(tx.patientAccount.findFirst).toHaveBeenCalledTimes(1);
+    const where = tx.patientAccount.findFirst.mock.calls[0]![0]!.where as {
+      id?: string;
+      encounterId?: string;
+    };
+    expect(where.id).toBe(ACCOUNT);
+    expect(where.encounterId).toBeUndefined();
+  });
+
+  it("docs/48 C3-1: accountId de una cuenta no activa/ajena → PRECONDITION_FAILED (mismo contrato que sin cuenta)", async () => {
+    tx.patientAccount.findFirst.mockResolvedValue(null as never);
+
+    await expect(
+      capturarCargo(tx, { ...baseParams, accountId: ACCOUNT }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    expect(tx.patientAccountService.create).not.toHaveBeenCalled();
+  });
+
+  it("docs/48 C3-3: origen fuera de la taxonomía cerrada → BAD_REQUEST, sin tocar la cuenta", async () => {
+    await expect(
+      capturarCargo(tx, { ...baseParams, origen: "dispensacion" as never }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    expect(tx.patientAccount.findFirst).not.toHaveBeenCalled();
+    expect(tx.patientAccountService.create).not.toHaveBeenCalled();
   });
 
   it("cae a la cuenta activa más reciente del paciente si el encounterId no tiene ninguna", async () => {
@@ -141,7 +181,7 @@ describe("capturarCargo", () => {
         priceRuleId: RULE_ID,
         priceSource: "regla",
         status: "VIGENTE",
-        origen: "dispensacion",
+        origen: "DISPENSACION_FARMACIA",
         referenciaId: REFERENCIA,
         createdBy: ACTOR,
       }),
