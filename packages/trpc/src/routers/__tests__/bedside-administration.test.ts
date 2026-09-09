@@ -93,13 +93,16 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("bedside.administration.record", () => {
-  it("crea MedicationAdministration con BCMA=true cuando GSRN y prescriptionItem son válidos", async () => {
+  it("crea MedicationAdministration con BCMA=true cuando GSRN y la conciliación de farmacia son válidos", async () => {
+    const UUID_VALIDATION = "ab000000-0000-0000-0000-000000000001";
     // GSRN paciente → patientId
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (prisma as any).$queryRawUnsafe
       .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])   // gs1_gsrn
       .mockResolvedValueOnce([{ user_id: UUID_USER }])            // StaffGsrn
-      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }]) // indicaciones_medicas
+      // Cola de conciliación R04 (ece.indicacion_farmacia_pendiente,
+      // sql/201+222): fila RECONCILIADO → PrescriptionItem resuelto.
+      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }])
       // `SELECT current_user` del helper que persiste el evento EPCIS bajo el
       // contexto RLS del schema ece (captura del rol antes de demotar).
       .mockResolvedValue([{ current_user: "authenticated" }]);
@@ -109,9 +112,19 @@ describe("bedside.administration.record", () => {
     } as never);
 
     const caller = makeCaller();
-    const result = await caller.administration.record(baseAdminInput());
+    const result = await caller.administration.record({
+      ...baseAdminInput(),
+      validationId: UUID_VALIDATION,
+    });
 
     expect(result.administrationId).toBe(UUID_ADMIN);
+    // La resolución debe ir contra la cola de conciliación, no contra la
+    // columna inexistente ece.indicaciones_medicas.prescription_item_id
+    // (42703 — bug histórico del circuito BCMA).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const resolutionSql = (prisma as any).$queryRawUnsafe.mock.calls[2]?.[0] as string;
+    expect(resolutionSql).toContain("ece.indicacion_farmacia_pendiente");
+    expect(resolutionSql).toContain("RECONCILIADO");
     expect(prisma.medicationAdministration.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -124,6 +137,8 @@ describe("bedside.administration.record", () => {
           gsrnPaciente:          GSRN_PATIENT,
           gsrnEnfermera:         GSRN_NURSE,
           route:                 "IV",
+          // Enlace administración↔validación 5 Correctos (ventana terapéutica).
+          bedsideValidationId:   UUID_VALIDATION,
         }),
       }),
     );
@@ -140,13 +155,14 @@ describe("bedside.administration.record", () => {
     ).rejects.toThrow(TRPCError);
   });
 
-  // 3. indicación sin prescriptionItemId
-  it("lanza PRECONDITION_FAILED si la indicación no tiene prescription_item_id enlazado", async () => {
+  // 3. indicación sin conciliación de farmacia → bloqueo fail-safe
+  it("lanza PRECONDITION_FAILED si la cola de farmacia no tiene fila RECONCILIADO", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (prisma as any).$queryRawUnsafe
       .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])  // gs1_gsrn OK
       .mockResolvedValueOnce([{ user_id: UUID_USER }])           // StaffGsrn OK
-      .mockResolvedValueOnce([{ prescription_item_id: null }]);  // sin bridge
+      .mockResolvedValueOnce([]);  // cola sin fila RECONCILIADO (query filtra
+                                   // estado + prescription_item_id IS NOT NULL)
 
     const caller = makeCaller();
     await expect(

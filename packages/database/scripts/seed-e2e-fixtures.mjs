@@ -72,6 +72,9 @@ const IDS = {
   eceIndicacion:   'e2ef1000-0000-4000-8000-00000000e907',
   gsrnNurseRef:    'e2ef1000-0000-4000-8000-00000000e908',
   gsrnNurseRevRef: 'e2ef1000-0000-4000-8000-00000000e909',
+  drug:            'e2ef1000-0000-4000-8000-00000000d001',
+  prescription:    'e2ef1000-0000-4000-8000-00000000d002',
+  prescriptionItem:'e2ef1000-0000-4000-8000-00000000d003',
 };
 
 // GS1 — mismos valores que packages/test-utils/src/fixtures/bedside-hardstops.ts
@@ -311,6 +314,57 @@ try {
   );
   console.log('indicacion=firmada/ACTIVA');
 
+  // ─── 6. Receta conciliada por farmacia (camino feliz BCMA) ────────────────
+  // administration.record resuelve el PrescriptionItem vía la cola R04
+  // ece.indicacion_farmacia_pendiente con estado=RECONCILIADO (sql/201+222).
+  // Sembramos el resultado de esa conciliación: Drug estructurado + receta
+  // SIGNED + fila de cola conciliada apuntando al item. alertLevel 'standard'
+  // a propósito — el double-check IPSG.3 ME 4 tiene su propio flujo de UI y
+  // no es parte del camino feliz del wizard.
+  await c.query(
+    `INSERT INTO public."Drug"
+       (id, "genericName", "brandName", "pharmaceuticalForm", "strengthValue",
+        "strengthUnit", "dispensingClass", active, "alertLevel", "createdAt", "updatedAt")
+     VALUES ($1::uuid, 'Amoxicilina', 'Amoxi QA 500', 'CAPSULE', 500, 'mg',
+             'RX', true, 'standard', now(), now())
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS.drug],
+  );
+  await c.query(
+    `INSERT INTO public."Prescription"
+       (id, "organizationId", "encounterId", "prescriberId", "patientId",
+        status, "signedAt", "createdAt", "updatedAt")
+     SELECT $1::uuid, $2::uuid, $3::uuid, u.id, $4::uuid,
+            'SIGNED', now(), now(), now()
+       FROM public."User" u LIMIT 1
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS.prescription, orgId, IDS.encounter, patientId],
+  );
+  await c.query(
+    `INSERT INTO public."PrescriptionItem"
+       (id, "prescriptionId", "drugId", dosage, route, frequency, "prescribedQty")
+     VALUES ($1::uuid, $2::uuid, $3::uuid, '500mg cada 8h', 'IV', 'cada 8 horas', 6)
+     ON CONFLICT (id) DO NOTHING`,
+    [IDS.prescriptionItem, IDS.prescription, IDS.drug],
+  );
+  await c.query(
+    `INSERT INTO ece.indicacion_farmacia_pendiente
+       (indicacion_id, indicacion_item_id, episodio_id, medico_prescriptor,
+        descripcion, dosis, via, frecuencia, estado, prescription_item_id,
+        reconciliado_en, reconciliado_por)
+     SELECT $1::uuid, ii.id, $2::uuid, $3::uuid,
+            ii.descripcion, ii.dosis, ii.via, ii.frecuencia,
+            'RECONCILIADO', $4::uuid, now(), $3::uuid
+       FROM ece.indicacion_item ii
+      WHERE ii.indicacion_id = $1::uuid
+      LIMIT 1
+     ON CONFLICT (indicacion_item_id) DO UPDATE
+       SET estado = 'RECONCILIADO',
+           prescription_item_id = EXCLUDED.prescription_item_id`,
+    [IDS.eceIndicacion, IDS.eceEpisodio, IDS.ecePersonal, IDS.prescriptionItem],
+  );
+  console.log('receta=SIGNED conciliacion=RECONCILIADO');
+
   // ─── Verificación final ───────────────────────────────────────────────────
   const { rows: [chk] } = await c.query(
     `SELECT
@@ -318,11 +372,14 @@ try {
        (SELECT count(*)::int FROM public."Encounter"
          WHERE "patientId"=$1::uuid AND "dischargedAt" IS NULL)                AS open_enc,
        (SELECT count(*)::int FROM ece.asignacion_cama WHERE hasta IS NULL)     AS asignaciones,
-       (SELECT count(*)::int FROM ece.gs1_gsrn WHERE gsrn = ANY($2::text[]))   AS gsrns`,
-    [patientId, [GSRN_PACIENTE, GSRN_ENFERMERA, GSRN_ENF_REVOCADA]],
+       (SELECT count(*)::int FROM ece.gs1_gsrn WHERE gsrn = ANY($2::text[]))   AS gsrns,
+       (SELECT count(*)::int FROM ece.indicacion_farmacia_pendiente
+         WHERE indicacion_id = $3::uuid AND estado = 'RECONCILIADO'
+           AND prescription_item_id IS NOT NULL)                               AS reconciliadas`,
+    [patientId, [GSRN_PACIENTE, GSRN_ENFERMERA, GSRN_ENF_REVOCADA], IDS.eceIndicacion],
   );
-  console.log(`check beds=${chk.beds} open_enc=${chk.open_enc} asignaciones=${chk.asignaciones} gsrns=${chk.gsrns}`);
-  if (chk.beds < 6 || chk.open_enc < 1 || chk.asignaciones < 1 || chk.gsrns < 3) {
+  console.log(`check beds=${chk.beds} open_enc=${chk.open_enc} asignaciones=${chk.asignaciones} gsrns=${chk.gsrns} reconciliadas=${chk.reconciliadas}`);
+  if (chk.beds < 6 || chk.open_enc < 1 || chk.asignaciones < 1 || chk.gsrns < 3 || chk.reconciliadas < 1) {
     throw new Error('Verificación de fixtures falló — revisar salida anterior');
   }
 } finally {
