@@ -84,12 +84,14 @@ function setScan(label: string, value: string) {
 async function escanearTresPasos() {
   const botones = await screen.findAllByTestId(/^stub-scan-/);
   // Orden de render: paso 1 (paciente), paso 2 (enfermera), paso 3 (medicamento).
-  setScan(botones[0].textContent ?? "", GSRN_PACIENTE);
-  fireEvent.click(botones[0]);
-  setScan(botones[1].textContent ?? "", GSRN_ENFERMERA);
-  fireEvent.click(botones[1]);
-  setScan(botones[2].textContent ?? "", "cualquier-datamatrix");
-  fireEvent.click(botones[2]);
+  const [paciente, enfermera, medicamento] = botones;
+  if (!paciente || !enfermera || !medicamento) throw new Error("faltan pasos de escaneo");
+  setScan(paciente.textContent ?? "", GSRN_PACIENTE);
+  fireEvent.click(paciente);
+  setScan(enfermera.textContent ?? "", GSRN_ENFERMERA);
+  fireEvent.click(enfermera);
+  setScan(medicamento.textContent ?? "", "cualquier-datamatrix");
+  fireEvent.click(medicamento);
 }
 
 describe("AdministrationWizard — hard-stop de 5 correctos", () => {
