@@ -26,6 +26,7 @@ vi.mock("../../lib/charge-capture", () => ({
 
 import { dispensationRouter } from "../pharmacy/dispensation.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -232,6 +233,19 @@ describe("dispensationRouter.scanItem", () => {
     await expect(
       caller.scanItem({ pharmacyOrderId: PRESCRIPTION, gtin: "12345" }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  // docs/48 Ola 4 (C4-3) — segregación de funciones por IDENTIDAD (RN-HIS-BOT-001 R9).
+  it("FORBIDDEN cuando quien dispensa es el mismo prescriptor de la receta", async () => {
+    prisma.prescription.findFirst.mockResolvedValue({
+      ...basePrescription(),
+      prescriberId: MOCK_USER_ADMIN.id,
+    } as never);
+    const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.scanItem({ pharmacyOrderId: PRESCRIPTION, gtin: VALID_GTIN }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
   });
 });
 

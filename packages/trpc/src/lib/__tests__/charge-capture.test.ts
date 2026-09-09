@@ -138,6 +138,25 @@ describe("capturarCargo", () => {
     expect(tx.patientAccountService.create).not.toHaveBeenCalled();
   });
 
+  it("docs/48 Ola 4 (C4-1): la query de cuenta activa excluye CERRADA — solo ABIERTA/PENDIENTE_REGULARIZAR resuelven", async () => {
+    tx.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT } as never);
+    resolverPrecioMock.mockResolvedValue({
+      precio: 10,
+      fuente: "estandar",
+      priceListId: null,
+      reglaId: null,
+    });
+    tx.patientAccountService.create.mockResolvedValue({ id: CARGO_ID } as never);
+
+    await capturarCargo(tx, baseParams);
+
+    const where = tx.patientAccount.findFirst.mock.calls[0]![0]!.where as {
+      status?: { in: string[] };
+    };
+    expect(where.status?.in).toEqual(["ABIERTA", "PENDIENTE_REGULARIZAR"]);
+    expect(where.status?.in).not.toContain("CERRADA");
+  });
+
   it("cae a la cuenta activa más reciente del paciente si el encounterId no tiene ninguna", async () => {
     tx.patientAccount.findFirst
       .mockResolvedValueOnce(null as never) // sin cuenta activa para ese encounter

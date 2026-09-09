@@ -231,6 +231,8 @@ import { workflowInboxRouter } from "./workflow-inbox.router";
 import { careTaskRouter } from "./care-task.router";
 // CC-0026 D3 — Tableros de seguimiento por área/rol (/tableros/[unidad])
 import { careBoardRouter } from "./care-board.router";
+// docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera (RN-HIS-BOT-001 R11)
+import { conciliacionCargosRouter } from "./conciliacion-cargos.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -461,6 +463,8 @@ export const appRouter = router({
   careTask: careTaskRouter,
   // CC-0026 D3 — Tableros de seguimiento por área/rol (Ola 3)
   careBoard: careBoardRouter,
+  // docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera
+  conciliacionCargos: conciliacionCargosRouter,
 });
 
 export type AppRouter = typeof appRouter;

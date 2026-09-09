@@ -40,7 +40,7 @@ import {
 } from "../../../contracts/src/schemas/pharmacy";
 import type { DrugInteractionPayload } from "../../../contracts/src/events/payloads";
 import * as Database from "@his/database";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 /**
@@ -504,9 +504,111 @@ export const pharmacyRouter = router({
             batchNumber: input.batchNumber ?? null,
             expiryDate: input.expiryDate ?? null,
             notes: composeDispenseNotes(input),
+            // docs/48 Ola 4 (C4-4) — libro de controlados: mismo dato que ya
+            // viajaba como texto libre en `notes` ([CONTROLLED:...]/
+            // [witness:...]), ahora también en columnas consultables. No se
+            // toca el formato de `notes` (no romper el legado).
+            isControlled: isControlledDispensingClass(item.drug.dispensingClass),
+            witnessUserId: input.witnessUserId ?? null,
+            controlledJustification: input.controlledJustification ?? null,
             ...(resolvedCostCenterId && { costCenterId: resolvedCostCenterId }),
           },
         });
+        });
+      }),
+
+    /**
+     * docs/48 Ola 4 (C4-4) — Libro de controlados (Ley Reguladora de
+     * Actividades Relativas a las Drogas): listado por rango de fechas de
+     * dispensaciones `isControlled=true` con fármaco, lote, paciente,
+     * dispensador, testigo y justificación.
+     *
+     * `dispensedById`/`witnessUserId` no tienen relación Prisma declarada
+     * hacia `User` (mismo patrón que el resto de esta tabla) — se resuelven
+     * los nombres en un segundo query batch, igual que
+     * `tipoCuentaRouter.list` resuelve `priceListName`.
+     *
+     * NOTA: esta tabla no registra número de serie (solo lote) — el campo
+     * "serie" del addendum queda pendiente si algún día `dispense.create`
+     * captura GS1 completo (hoy solo lo hace el flujo bedside de
+     * `pharmacy/dispensation.router.ts`, sobre `PharmacyReservation`, que no
+     * marca `isControlled`).
+     */
+    libroControlados: requireRole(["PHARM", "ADMIN", "DIR"])
+      .input(
+        z.object({
+          fechaDesde: z.string().date("Formato YYYY-MM-DD"),
+          fechaHasta: z.string().date("Formato YYYY-MM-DD"),
+        }),
+      )
+      .query(async ({ ctx, input }) => {
+        const { tenant, prisma } = ctx;
+        return withTenantContext(prisma, tenant, async (tx) => {
+          const dispensaciones = await tx.medicationDispense.findMany({
+            where: {
+              isControlled: true,
+              dispensedAt: {
+                gte: new Date(`${input.fechaDesde}T00:00:00`),
+                lte: new Date(`${input.fechaHasta}T23:59:59`),
+              },
+              item: { prescription: { organizationId: tenant.organizationId } },
+            },
+            select: {
+              id: true,
+              dispensedAt: true,
+              quantity: true,
+              batchNumber: true,
+              expiryDate: true,
+              dispensedById: true,
+              witnessUserId: true,
+              controlledJustification: true,
+              item: {
+                select: {
+                  drug: { select: { genericName: true, brandName: true } },
+                  prescription: {
+                    select: {
+                      patient: {
+                        select: { firstName: true, lastName: true, mrn: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: { dispensedAt: "desc" },
+          });
+
+          const userIds = [
+            ...new Set(
+              dispensaciones.flatMap((d) =>
+                [d.dispensedById, d.witnessUserId].filter((id): id is string => !!id),
+              ),
+            ),
+          ];
+          const users = userIds.length
+            ? await tx.user.findMany({
+                where: { id: { in: userIds } },
+                select: { id: true, fullName: true },
+              })
+            : [];
+          const nombrePorId = Object.fromEntries(users.map((u) => [u.id, u.fullName]));
+
+          return dispensaciones.map((d) => ({
+            id: d.id,
+            dispensedAt: d.dispensedAt,
+            quantity: d.quantity,
+            lote: d.batchNumber,
+            expiryDate: d.expiryDate,
+            genericName: d.item.drug.genericName,
+            brandName: d.item.drug.brandName,
+            paciente: d.item.prescription.patient
+              ? `${d.item.prescription.patient.firstName} ${d.item.prescription.patient.lastName}`
+              : null,
+            mrn: d.item.prescription.patient?.mrn ?? null,
+            dispensadoPor: nombrePorId[d.dispensedById] ?? d.dispensedById,
+            testigo: d.witnessUserId ? (nombrePorId[d.witnessUserId] ?? d.witnessUserId) : null,
+            justificacion: d.controlledJustification,
+          }));
         });
       }),
   }),
