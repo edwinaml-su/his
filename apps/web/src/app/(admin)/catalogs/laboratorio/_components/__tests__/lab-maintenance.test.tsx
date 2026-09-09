@@ -296,6 +296,8 @@ describe("LabMaintenance", () => {
     expect(screen.getByRole("heading", { name: "Nueva prueba" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText(/Nombre de la prueba/), { target: { value: "POTASIO" } });
+    // Requerimiento 2026-09-09: el precio del servicio se define en el mismo form.
+    fireEvent.change(screen.getByLabelText(/Precio estándar/), { target: { value: "12.50" } });
     fireEvent.click(screen.getByRole("button", { name: "Guardar" }));
 
     expect(testCreateM.mutate).toHaveBeenCalledWith(
@@ -305,6 +307,7 @@ describe("LabMaintenance", () => {
         sampleTypeId: TIPO_SANGRE.id,
         sampleSubtypeId: SUB_VENOSA.id,
         defaultQty: 1,
+        standardPrice: 12.5,
         code: expect.stringMatching(/^LABMANT-/),
       }),
     );

@@ -58,6 +58,7 @@ export interface CascadaPrueba {
   sampleSubtypeId: string | null;
   defaultQty: number;
   paramCount: number;
+  standardPrice: number | null;
 }
 export interface CascadaData {
   tipos: CascadaTipo[];
