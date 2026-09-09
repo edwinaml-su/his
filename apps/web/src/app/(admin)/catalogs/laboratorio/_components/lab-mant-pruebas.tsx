@@ -43,6 +43,12 @@ function extractFieldErrors(zodError: { errors: { path: (string | number)[]; mes
   return fieldErrors;
 }
 
+/** CC-0013 — formatea standardPrice ($ 2 decimales) o "—" (mismo criterio que test-table.tsx). */
+function formatPrecio(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  return `$ ${Number(v).toFixed(2)}`;
+}
+
 function genCode(prefix: string): string {
   const rand = globalThis.crypto?.randomUUID
     ? globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 8)
@@ -147,13 +153,14 @@ export function PruebasTab({ data, search, newSignal }: PruebasTabProps) {
               <TableHead>Subtipo de muestra</TableHead>
               <TableHead className="w-36 text-center">Parámetros</TableHead>
               <TableHead className="w-20 text-center">Cant. def.</TableHead>
+              <TableHead className="w-28 text-right">Precio estándar</TableHead>
               <TableHead className="w-44 text-right">Acciones</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-sm text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
                   Sin resultados.
                 </TableCell>
               </TableRow>
@@ -173,6 +180,7 @@ export function PruebasTab({ data, search, newSignal }: PruebasTabProps) {
                   </Button>
                 </TableCell>
                 <TableCell className="text-center tabular-nums">{row.defaultQty}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatPrecio(row.standardPrice)}</TableCell>
                 <TableCell className="text-right">
                   <div className="inline-flex gap-2">
                     <Button size="sm" variant="outline" onClick={() => openEdit(row)}>
@@ -241,6 +249,7 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
   const [tipoId, setTipoId] = React.useState("");
   const [subtipoId, setSubtipoId] = React.useState("");
   const [cant, setCant] = React.useState("1");
+  const [precio, setPrecio] = React.useState("");
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
 
@@ -255,6 +264,7 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
     setTipoId(defaultTipo);
     setSubtipoId(defaultSubtipo);
     setCant(String(initialValue?.defaultQty ?? 1));
+    setPrecio(initialValue?.standardPrice != null ? String(initialValue.standardPrice) : "");
     setErrors({});
     setServerError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -300,6 +310,16 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
     let cantNum = Number.parseInt(cant, 10);
     if (Number.isNaN(cantNum) || cantNum < 1) cantNum = 1;
 
+    // Precio estándar (CC-0013, requerimiento 2026-09-09): vacío = sin precio.
+    // En edición, vaciar el campo LIMPIA el precio (null); el contrato de
+    // update lo acepta nullable.
+    const precioTrim = precio.trim();
+    const precioNum = precioTrim === "" ? null : Number(precioTrim);
+    if (precioNum !== null && (Number.isNaN(precioNum) || precioNum < 0)) {
+      setErrors({ standardPrice: "Precio inválido — número ≥ 0 o vacío." });
+      return;
+    }
+
     if (isEdit && initialValue) {
       const parsed = labTestUpdateInput.safeParse({
         id: initialValue.id,
@@ -308,6 +328,7 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
         sampleTypeId: tipoId || undefined,
         sampleSubtypeId: subtipoId || undefined,
         defaultQty: cantNum,
+        standardPrice: precioNum,
       });
       if (!parsed.success) {
         setErrors(extractFieldErrors(parsed.error));
@@ -322,6 +343,7 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
         sampleTypeId: tipoId || undefined,
         sampleSubtypeId: subtipoId || undefined,
         defaultQty: cantNum,
+        standardPrice: precioNum ?? undefined,
       });
       if (!parsed.success) {
         setErrors(extractFieldErrors(parsed.error));
@@ -417,6 +439,22 @@ function PruebaFormDialog({ open, onOpenChange, data, initialValue, onToast }: P
               aria-invalid={Boolean(errors.defaultQty)}
             />
             <FormError>{errors.defaultQty}</FormError>
+          </FormField>
+
+          <FormField>
+            <Label htmlFor="prueba-precio">Precio estándar (US$)</Label>
+            <Input
+              id="prueba-precio"
+              type="number"
+              min={0}
+              step="0.01"
+              value={precio}
+              onChange={(e) => setPrecio(e.target.value)}
+              placeholder="Ej.: 12.50 — vacío = sin precio"
+              aria-invalid={Boolean(errors.standardPrice)}
+              data-no-uppercase
+            />
+            <FormError>{errors.standardPrice}</FormError>
           </FormField>
 
           {serverError ? (

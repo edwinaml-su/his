@@ -136,6 +136,7 @@ export const lisRouter = router({
             sampleTypeId: true,
             sampleSubtypeId: true,
             defaultQty: true,
+            standardPrice: true,
             _count: { select: { parameters: true } },
           },
         }),
@@ -182,6 +183,9 @@ export const lisRouter = router({
           sampleSubtypeId: t.sampleSubtypeId,
           defaultQty: t.defaultQty,
           paramCount: t._count.parameters,
+          // Definición de precio en el mantenimiento (requerimiento 2026-09-09):
+          // mismo campo CC-0013 que edita el TestTable de imágenes.
+          standardPrice: t.standardPrice == null ? null : Number(t.standardPrice),
         })),
       };
     }),
