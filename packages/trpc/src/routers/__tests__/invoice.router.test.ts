@@ -138,8 +138,8 @@ describe("invoiceRouter", () => {
     });
   });
 
-  // CC-0015 — patientAccountId ancla la factura a la cuenta de origen.
-  describe("create — patientAccountId (CC-0015)", () => {
+  // docs/48 Ola 1 (H-08) — patientAccountId ancla la factura a la cuenta de origen.
+  describe("create — patientAccountId (docs/48 H-08)", () => {
     const patientId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
     const accountId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
     const baseInput = {
@@ -155,20 +155,12 @@ describe("invoiceRouter", () => {
       ],
     };
 
-    it("crea sin patientAccountId — comportamiento previo intacto", async () => {
-      mockTransaction(prisma);
-      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
-      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
-      queryMock
-        .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
-        .mockResolvedValueOnce([{ id: "inv-1" }]) // INSERT Invoice RETURNING id
-        .mockResolvedValueOnce(undefined); // INSERT InvoiceItem
-
+    it("rechaza (Zod) sin patientAccountId — ahora es obligatorio", async () => {
       const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
-      const result = await caller.create(baseInput);
-
-      expect(result).toMatchObject({ id: "inv-1" });
-      expect(queryMock).toHaveBeenCalledTimes(3);
+      await expect(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        caller.create(baseInput as any),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("rechaza patientAccountId que no pertenece al tenant/paciente", async () => {

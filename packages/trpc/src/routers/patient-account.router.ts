@@ -9,6 +9,11 @@
  * CC-0015: `crear` ahora requiere `tipoCuentaId` (pivote de lista de precios
  * de los cargos de la cuenta) y acepta un `servicio` opcional para crear
  * cuenta + primer servicio en un solo paso.
+ *
+ * docs/48 Ola 1 (C1-5) — `crear` fija `status` (ABIERTA salvo
+ * `emergenciaSinPagador: true`, RN-HIS-BOT-001 R1 → PENDIENTE_REGULARIZAR).
+ * `cerrar` es un stub que reserva el contrato: los bloqueos reales (líneas
+ * PENDIENTE_TARIFA, devoluciones sin reversión, etc.) llegan en Ola 4 (C4-1).
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -49,6 +54,8 @@ export const patientAccountRouter = router({
         patientId: z.string().uuid(),
         encounterId: z.string().uuid().optional(),
         tipoCuentaId: z.string().uuid(),
+        /** docs/48 (RN-HIS-BOT-001 R1) — emergencia sin pagador definido: abre PENDIENTE_REGULARIZAR. */
+        emergenciaSinPagador: z.boolean().optional(),
         servicio: z
           .object({
             tipo: tipoServicioEnum,
@@ -80,6 +87,7 @@ export const patientAccountRouter = router({
             patientId: input.patientId,
             encounterId: input.encounterId ?? null,
             tipoCuentaId: input.tipoCuentaId,
+            status: input.emergenciaSinPagador ? "PENDIENTE_REGULARIZAR" : "ABIERTA",
             numeroCuenta,
             createdBy: ctx.user.id,
           },
@@ -269,6 +277,23 @@ export const patientAccountRouter = router({
           ...r,
           egresado: r.areaUnidad === null,
         }));
+      });
+    }),
+
+  /**
+   * docs/48 Ola 1 (C1-5) — stub honesto: reserva el contrato de cierre de
+   * cuenta pero NO implementa los bloqueos reales todavía (líneas
+   * PENDIENTE_TARIFA, cuenta PENDIENTE_REGULARIZAR, devoluciones sin
+   * reversión — RN-HIS-BOT-001 R11, paso 23). Esos bloqueos llegan en Ola 4
+   * (C4-1) una vez que exista un cargo real que pueda quedar pendiente.
+   */
+  cerrar: tenantProcedure
+    .input(z.object({ accountId: z.string().uuid() }))
+    .mutation(async () => {
+      throw new TRPCError({
+        code: "NOT_IMPLEMENTED",
+        message:
+          "Cierre de cuenta: los bloqueos de integridad (tarifas pendientes, devoluciones sin reversión, cuenta PENDIENTE_REGULARIZAR) llegan en Ola 4 del plan docs/48. Este procedure solo reserva el contrato.",
       });
     }),
 });

@@ -54,25 +54,37 @@ type Estado = {
   sequence: string;
 };
 
-const ESTADO_INICIAL: Estado = {
-  appliedOn: "item",
-  itemCode: "",
-  categoryId: "",
-  minQuantity: "0",
-  dateStart: "",
-  dateEnd: "",
-  computePrice: "fixed",
-  fixedPrice: "",
-  percentPrice: "0",
-  base: "list_price",
-  basePriceListId: "",
-  priceDiscount: "0",
-  priceSurcharge: "0",
-  priceRound: "0",
-  priceMinMargin: "0",
-  priceMaxMargin: "0",
-  sequence: "0",
-};
+/** Ahora, en formato `datetime-local` (hora local, sin segundos). */
+function ahoraParaDatetimeLocal(): string {
+  const d = new Date();
+  d.setSeconds(0, 0);
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+function estadoInicial(): Estado {
+  return {
+    appliedOn: "item",
+    itemCode: "",
+    categoryId: "",
+    minQuantity: "0",
+    // docs/48 Ola 1 (C1-4) — dateStart es obligatorio en el contrato; se
+    // precarga con "ahora" para que no se pueda enviar vacío por descuido.
+    dateStart: ahoraParaDatetimeLocal(),
+    dateEnd: "",
+    computePrice: "fixed",
+    fixedPrice: "",
+    percentPrice: "0",
+    base: "list_price",
+    basePriceListId: "",
+    priceDiscount: "0",
+    priceSurcharge: "0",
+    priceRound: "0",
+    priceMinMargin: "0",
+    priceMaxMargin: "0",
+    sequence: "0",
+  };
+}
 
 /** Convierte un `datetime-local` a ISO; vacío → undefined. */
 function aIso(valor: string): string | undefined {
@@ -91,13 +103,13 @@ export function ReglaDialog({
   onSuccess: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [form, setForm] = React.useState<Estado>(ESTADO_INICIAL);
+  const [form, setForm] = React.useState<Estado>(estadoInicial);
   const [error, setError] = React.useState<string | null>(null);
 
   const addRule = trpcAny.servicePriceList.addRule.useMutation({
     onSuccess: () => {
       setOpen(false);
-      setForm(ESTADO_INICIAL);
+      setForm(estadoInicial());
       setError(null);
       onSuccess();
     },
