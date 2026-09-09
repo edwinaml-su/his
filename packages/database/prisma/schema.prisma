@@ -2249,12 +2249,20 @@ model MedicationDispense {
   batchNumber        String?   @db.VarChar(80)
   expiryDate         DateTime? @db.Date
   notes              String?   @db.Text
+  /// docs/48 Ola 4 (C4-4) — Libro de controlados (Ley Reguladora de
+  /// Actividades Relativas a las Drogas). Antes solo viajaba como texto
+  /// libre dentro de `notes` ([CONTROLLED:...]/[witness:...]) — ahora en
+  /// columnas consultables por `pharmacy.libroControlados`.
+  isControlled            Boolean @default(false)
+  witnessUserId           String? @db.Uuid
+  controlledJustification String? @db.VarChar(500)
 
   item PrescriptionItem @relation(fields: [prescriptionItemId], references: [id], onDelete: Restrict)
   cartItems PharmacyCartItem[]
 
   @@index([prescriptionItemId])
   @@index([dispensedAt])
+  @@index([isControlled, dispensedAt])
   @@schema("public")
 }
 

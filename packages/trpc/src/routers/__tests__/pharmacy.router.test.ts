@@ -537,5 +537,142 @@ describe("pharmacyRouter", () => {
       });
       expect(prisma.medicationDispense.create).toHaveBeenCalled();
     });
+
+    // docs/48 Ola 4 (C4-4) — libro de controlados: columnas persistidas.
+    it("docs/48 C4-4 — persiste isControlled=true + witness/justificación en columnas dedicadas", async () => {
+      prisma.prescriptionItem.findFirst.mockResolvedValue({
+        id: u,
+        drug: {
+          id: u,
+          atcCode: "N02AA01",
+          dispensingClass: "RX_CONTROLLED",
+          genericName: "Morfina",
+        },
+      } as never);
+      prisma.medicationDispense.create.mockResolvedValue({ id: u } as never);
+      const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+      await caller.dispense.create({
+        prescriptionItemId: u,
+        quantity: 1,
+        witnessUserId: v,
+        controlledJustification: "Dolor oncológico severo — orden Dr. González",
+      });
+      const args = prisma.medicationDispense.create.mock.calls[0]![0];
+      expect(args.data.isControlled).toBe(true);
+      expect(args.data.witnessUserId).toBe(v);
+      expect(args.data.controlledJustification).toBe(
+        "Dolor oncológico severo — orden Dr. González",
+      );
+    });
+
+    it("docs/48 C4-4 — isControlled=false para dispensingClass RX/OTC", async () => {
+      prisma.prescriptionItem.findFirst.mockResolvedValue({
+        id: u,
+        drug: {
+          id: u,
+          atcCode: "N02BE01",
+          dispensingClass: "RX",
+          genericName: "Paracetamol",
+        },
+      } as never);
+      prisma.medicationDispense.create.mockResolvedValue({ id: u } as never);
+      const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+      await caller.dispense.create({ prescriptionItemId: u, quantity: 10 });
+      const args = prisma.medicationDispense.create.mock.calls[0]![0];
+      expect(args.data.isControlled).toBe(false);
+      expect(args.data.witnessUserId).toBeNull();
+      expect(args.data.controlledJustification).toBeNull();
+    });
+  });
+
+  // docs/48 Ola 4 (C4-4) — libro de controlados.
+  describe("dispense.libroControlados", () => {
+    const DISPENSE_ID = "00000000-0000-0000-0000-0000000000d9";
+
+    it("lista dispensaciones isControlled=true del rango con fármaco/paciente/dispensador/testigo", async () => {
+      prisma.medicationDispense.findMany.mockResolvedValue([
+        {
+          id: DISPENSE_ID,
+          dispensedAt: new Date("2026-09-01T10:00:00Z"),
+          quantity: 1,
+          batchNumber: "LOT-001",
+          expiryDate: new Date("2027-01-01"),
+          dispensedById: u,
+          witnessUserId: v,
+          controlledJustification: "Dolor oncológico severo",
+          item: {
+            drug: { genericName: "Morfina", brandName: null },
+            prescription: {
+              patient: { firstName: "Ana", lastName: "Pérez", mrn: "MRN-001" },
+            },
+          },
+        },
+      ] as never);
+      prisma.user.findMany.mockResolvedValue([
+        { id: u, fullName: "Farm. Juan Pérez" },
+        { id: v, fullName: "Enf. María López" },
+      ] as never);
+
+      const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.dispense.libroControlados({
+        fechaDesde: "2026-09-01",
+        fechaHasta: "2026-09-30",
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toMatchObject({
+        genericName: "Morfina",
+        lote: "LOT-001",
+        paciente: "Ana Pérez",
+        mrn: "MRN-001",
+        dispensadoPor: "Farm. Juan Pérez",
+        testigo: "Enf. María López",
+        justificacion: "Dolor oncológico severo",
+      });
+
+      const whereArg = prisma.medicationDispense.findMany.mock.calls[0]![0]!.where;
+      expect(whereArg).toMatchObject({ isControlled: true });
+    });
+
+    it("no consulta usuarios cuando no hay dispensaciones en el rango", async () => {
+      prisma.medicationDispense.findMany.mockResolvedValue([] as never);
+
+      const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.dispense.libroControlados({
+        fechaDesde: "2026-09-01",
+        fechaHasta: "2026-09-30",
+      });
+
+      expect(result).toEqual([]);
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it("cae al uuid crudo si el usuario no se resuelve por nombre", async () => {
+      prisma.medicationDispense.findMany.mockResolvedValue([
+        {
+          id: DISPENSE_ID,
+          dispensedAt: new Date(),
+          quantity: 1,
+          batchNumber: null,
+          expiryDate: null,
+          dispensedById: u,
+          witnessUserId: null,
+          controlledJustification: "x",
+          item: {
+            drug: { genericName: "Morfina", brandName: null },
+            prescription: { patient: null },
+          },
+        },
+      ] as never);
+      prisma.user.findMany.mockResolvedValue([] as never);
+
+      const caller = pharmacyRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.dispense.libroControlados({
+        fechaDesde: "2026-09-01",
+        fechaHasta: "2026-09-30",
+      });
+
+      expect(result[0]).toMatchObject({ dispensadoPor: u, testigo: null, paciente: null });
+    });
   });
 });

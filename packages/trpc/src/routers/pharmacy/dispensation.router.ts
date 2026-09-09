@@ -413,6 +413,7 @@ export const dispensationRouter = router({
               id: true,
               patientId: true,
               encounterId: true,
+              prescriberId: true,
               items: {
                 select: {
                   id: true,
@@ -428,6 +429,16 @@ export const dispensationRouter = router({
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "Orden no encontrada o no dispensable.",
+            });
+          }
+
+          // docs/48 Ola 4 (C4-3) — segregación de funciones por IDENTIDAD
+          // (RN-HIS-BOT-001 R9): mismo contrato que reserveItem. Sin bypass
+          // documentado.
+          if (prescription.prescriberId === ctx.user.id) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Segregación de funciones: quien prescribe no puede dispensar (RN-HIS-BOT-001 R9).",
             });
           }
 
@@ -659,13 +670,25 @@ export const dispensationRouter = router({
             patientId: input.patientId,
             status: { in: ["SIGNED", "PARTIALLY_DISPENSED"] },
           },
-          select: { id: true, encounterId: true },
+          select: { id: true, encounterId: true, prescriberId: true },
         });
 
         if (!prescription) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message: "SIN_RECETA_ACTIVA",
+          });
+        }
+
+        // docs/48 Ola 4 (C4-3) — segregación de funciones por IDENTIDAD
+        // (RN-HIS-BOT-001 R9): quien prescribió esta receta no puede
+        // dispensarla, sin importar su rol. Sin bypass documentado — un
+        // médico que legítimamente despacha en emergencia debe usar otra
+        // cuenta de usuario (decisión R9 literal).
+        if (prescription.prescriberId === tenant.userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Segregación de funciones: quien prescribe no puede dispensar (RN-HIS-BOT-001 R9).",
           });
         }
 

@@ -278,13 +278,228 @@ describe("patientAccountRouter", () => {
     });
   });
 
-  // docs/48 Ola 1 (C1-5) — stub honesto: reserva el contrato, no implementa bloqueos.
+  // docs/48 Ola 4 (C4-1) — cierre bloqueante.
   describe("cerrar", () => {
-    it("lanza NOT_IMPLEMENTED (bloqueos reales llegan en Ola 4)", async () => {
+    function mockAccount(overrides: Partial<{ status: string }> = {}) {
+      return {
+        id: ACCOUNT_ID,
+        organizationId: MOCK_TENANT.organizationId,
+        status: overrides.status ?? "ABIERTA",
+      };
+    }
+
+    it("NOT_FOUND si la cuenta no existe en el tenant", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.cerrar({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
-        code: "NOT_IMPLEMENTED",
+        code: "NOT_FOUND",
       });
+    });
+
+    it("PRECONDITION_FAILED si la cuenta ya está CERRADA", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount({ status: "CERRADA" }) as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.cerrar({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("cierra la cuenta cuando no hay causas de bloqueo", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([] as never); // cargosDispensacionVigentes
+      prisma.patientAccount.update.mockResolvedValue({
+        ...mockAccount(),
+        status: "CERRADA",
+      } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.cerrar({ accountId: ACCOUNT_ID });
+
+      expect(result.status).toBe("CERRADA");
+      const updateArgs = prisma.patientAccount.update.mock.calls[0]![0];
+      expect(updateArgs.where).toEqual({ id: ACCOUNT_ID });
+      expect(updateArgs.data).toMatchObject({
+        status: "CERRADA",
+        closedBy: MOCK_USER_ADMIN.id,
+      });
+      expect(updateArgs.data.closedAt).toBeInstanceOf(Date);
+      expect(prisma.pharmacyReservation.findMany).not.toHaveBeenCalled();
+    });
+
+    it("bloquea listando cargos PENDIENTE_TARIFA (conteo + primeros codes)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([{ code: "MED-001" }, { code: "MED-002" }] as never)
+        .mockResolvedValueOnce([] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({
+          tipo: "CARGOS_PENDIENTE_TARIFA",
+          count: 2,
+          codes: ["MED-001", "MED-002"],
+        }),
+      );
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("bloquea por cuenta PENDIENTE_REGULARIZAR (pagador sin definir — R1)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(
+        mockAccount({ status: "PENDIENTE_REGULARIZAR" }) as never,
+      );
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({ tipo: "CUENTA_PENDIENTE_REGULARIZAR" }),
+      );
+    });
+
+    it("bloquea por devolución de farmacia sin reversión (reserva CANCELLED + cargo VIGENTE)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never); // dispensación vigente
+      prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-1" }] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({ tipo: "DEVOLUCION_SIN_REVERSION", count: 1, cargoIds: ["cargo-1"] }),
+      );
+      expect(prisma.pharmacyReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ id: { in: ["res-1"] }, status: "CANCELLED" }) }),
+      );
+    });
+
+    it("no marca devolución sin reversión si la reserva referenciada no está CANCELLED", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never);
+      // La query real filtra status='CANCELLED' — simulamos que no matcheó nada.
+      prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
+      prisma.patientAccount.update.mockResolvedValue(mockAccount({ status: "CERRADA" }) as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.cerrar({ accountId: ACCOUNT_ID })).resolves.toBeDefined();
+    });
+
+    it("lista TODAS las causas presentes simultáneamente (no solo la primera)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(
+        mockAccount({ status: "PENDIENTE_REGULARIZAR" }) as never,
+      );
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([{ code: "MED-001" }] as never)
+        .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never);
+      prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-1" }] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas.map((c) => c.tipo)).toEqual(
+        expect.arrayContaining([
+          "CARGOS_PENDIENTE_TARIFA",
+          "CUENTA_PENDIENTE_REGULARIZAR",
+          "DEVOLUCION_SIN_REVERSION",
+        ]),
+      );
+      expect(causas).toHaveLength(3);
+    });
+  });
+
+  // docs/48 Ola 4 (C4-1) — regularización de cuenta PENDIENTE_REGULARIZAR.
+  describe("regularizar", () => {
+    it("asigna tipoCuentaId y pasa la cuenta a ABIERTA", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        id: ACCOUNT_ID,
+        organizationId: MOCK_TENANT.organizationId,
+        status: "PENDIENTE_REGULARIZAR",
+      } as never);
+      prisma.tipoCuenta.findFirst.mockResolvedValue(FAKE_TIPO_CUENTA as never);
+      prisma.patientAccount.update.mockResolvedValue({
+        id: ACCOUNT_ID,
+        status: "ABIERTA",
+        tipoCuentaId: TIPO_CUENTA_ID,
+      } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.regularizar({ accountId: ACCOUNT_ID, tipoCuentaId: TIPO_CUENTA_ID });
+
+      expect(result.status).toBe("ABIERTA");
+      expect(prisma.patientAccount.update).toHaveBeenCalledWith({
+        where: { id: ACCOUNT_ID },
+        data: { tipoCuentaId: TIPO_CUENTA_ID, status: "ABIERTA" },
+      });
+    });
+
+    it("NOT_FOUND si la cuenta no existe en el tenant", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.regularizar({ accountId: ACCOUNT_ID, tipoCuentaId: TIPO_CUENTA_ID }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("PRECONDITION_FAILED si la cuenta no está PENDIENTE_REGULARIZAR", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        id: ACCOUNT_ID,
+        organizationId: MOCK_TENANT.organizationId,
+        status: "ABIERTA",
+      } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.regularizar({ accountId: ACCOUNT_ID, tipoCuentaId: TIPO_CUENTA_ID }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("BAD_REQUEST si tipoCuentaId no existe o está inactivo", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({
+        id: ACCOUNT_ID,
+        organizationId: MOCK_TENANT.organizationId,
+        status: "PENDIENTE_REGULARIZAR",
+      } as never);
+      prisma.tipoCuenta.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.regularizar({ accountId: ACCOUNT_ID, tipoCuentaId: TIPO_CUENTA_ID }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
     });
   });
 });

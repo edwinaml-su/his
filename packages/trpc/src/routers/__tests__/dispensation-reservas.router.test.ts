@@ -39,6 +39,7 @@ import {
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { makeCtx } from "../../__tests__/helpers/caller";
+import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 // Mock @his/database para que emitDomainEvent sea un no-op en tests
 vi.mock("@his/database", async (importOriginal) => {
@@ -252,6 +253,27 @@ describe("dispensationRouter — reservas consolidadas", () => {
       // findFirst de reserva NO debe haberse llamado (sin serie no hay check de conflicto)
       expect(prisma.pharmacyReservation.findFirst).not.toHaveBeenCalled();
       expect(prisma.pharmacyReservation.create).toHaveBeenCalledOnce();
+    });
+
+    // docs/48 Ola 4 (C4-3) — segregación de funciones por IDENTIDAD (RN-HIS-BOT-001 R9).
+    it("FORBIDDEN cuando quien dispensa es el mismo prescriptor de la receta", async () => {
+      prisma.prescription.findFirst.mockResolvedValue({
+        id: ORDER,
+        encounterId: null,
+        prescriberId: MOCK_USER_ADMIN.id,
+      } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
     });
   });
 

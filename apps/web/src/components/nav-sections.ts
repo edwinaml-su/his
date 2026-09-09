@@ -75,6 +75,8 @@ import {
   UserCog,
   Footprints,
   CreditCard,
+  GitCompare,
+  Lock,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -287,6 +289,8 @@ export const SECTIONS: NavSection[] = [
         description: "Cola de tareas pendientes en cabecera de paciente (medicación, signos)." },
       { href: "/pharmacy/dispense", label: "Dispensación Farmacia", icon: Pill,
         description: "Dispensación de medicamentos validada por GS1 antes de salir de farmacia." },
+      { href: "/pharmacy/libro-controlados", label: "Libro de Controlados", icon: Lock,
+        description: "Dispensaciones de fármacos de control especial (Ley Reguladora de Actividades Relativas a las Drogas)." },
       { href: "/pharmacy/cart", label: "Carrito Unidosis", icon: Boxes,
         description: "Armado de carrito unidosis por turno para administración por enfermería." },
       { href: "/enfermeria/recepcion-farmacia", label: "Recepción Farmacia", icon: Truck,
@@ -352,6 +356,8 @@ export const SECTIONS: NavSection[] = [
         description: "Configuración de reglas de prorrateo entre centros (suma = 100%)." },
       { href: "/finance/reportes", label: "Reportes Financieros", icon: BarChart3,
         description: "7 reportes regulatorios MINSAL: estado de resultados, costo por paciente, etc." },
+      { href: "/finance/conciliacion", label: "Conciliación Clínico-Financiera", icon: GitCompare,
+        description: "Brechas entre el acto clínico y su reflejo financiero (RN-HIS-BOT-001 R11)." },
       { href: "/notifications", label: "Notificaciones", icon: BellRing,
         description: "Centro de notificaciones del usuario: alertas y eventos del sistema." },
     ],
