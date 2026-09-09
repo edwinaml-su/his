@@ -11,12 +11,26 @@ import { getEffectiveRoleCodes, getEffectivePermissions } from "./rbac/effective
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
+    // ADR 0023 Ola 2 — routers de farmacia/indicaciones lanzan
+    // `TRPCError({ cause: { alerts } as unknown as Error })` cuando bloquean
+    // por interacción medicamentosa (ver pharmacy.router.ts prescription.sign
+    // e indicaciones-medicas.router.ts firmar()). Sin este reenvío, el
+    // `cause` NUNCA llega al cliente (tRPC solo serializa `shape`/`data`) y
+    // la UI no puede mostrar los pares en conflicto — mismo problema que
+    // `zodError` ya resuelve para errores de validación.
+    const interactionAlerts =
+      error.cause !== null &&
+      typeof error.cause === "object" &&
+      "alerts" in error.cause
+        ? (error.cause as { alerts: unknown }).alerts
+        : null;
     return {
       ...shape,
       data: {
         ...shape.data,
         zodError:
           error.cause instanceof ZodError ? error.cause.flatten() : null,
+        interactionAlerts,
       },
     };
   },

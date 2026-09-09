@@ -30,6 +30,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { Button } from "@his/ui/components/button";
+import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
 import { trpc } from "@/lib/trpc/react";
 import {
   IndicacionEstadoBadge,
@@ -45,6 +46,22 @@ interface ItemRow {
   via: string | null;
   frecuencia: string | null;
   duracion: string | null;
+}
+
+/**
+ * ADR 0023 Ola 2 — espejo de `PharmacyInteractionAlert`
+ * (`packages/contracts/src/schemas/pharmacy.ts`). El server reenvía este
+ * arreglo en `err.data.interactionAlerts` cuando `firmar()` bloquea por
+ * interacción major/contraindicated (ver `errorFormatter` en
+ * `packages/trpc/src/trpc.ts`).
+ */
+interface InteractionAlertUI {
+  atcA: string;
+  atcB: string;
+  drugAName?: string | null;
+  drugBName?: string | null;
+  severity: "minor" | "moderate" | "major" | "contraindicated";
+  description: string;
 }
 
 const ROUTE_LABELS: Record<string, string> = {
@@ -70,15 +87,61 @@ export default function IndicacionDetallePage(): React.ReactElement {
   >(null);
   const [motivo, setMotivo] = React.useState("");
 
+  // ADR 0023 Ola 2 — pipeline de seguridad al firmar. `advertencias` son
+  // NO bloqueantes (moderate/minor + advisory renal); `interactionAlerts`
+  // dispara el modal de override cuando hay major/contraindicated.
+  const [advertencias, setAdvertencias] = React.useState<string[]>([]);
+  const [interactionAlerts, setInteractionAlerts] = React.useState<
+    InteractionAlertUI[] | null
+  >(null);
+  const [overrideJustificacion, setOverrideJustificacion] = React.useState("");
+  const [overrideVerificadorId, setOverrideVerificadorId] = React.useState("");
+  const [overrideVerificadorPin, setOverrideVerificadorPin] = React.useState("");
+
   const detail = trpc.eceIndicaciones.get.useQuery(
     { id: params.id },
     { enabled: Boolean(params.id) },
   );
 
   const firmaMutation = trpc.eceIndicaciones.firmar.useMutation({
-    onSuccess: () => void detail.refetch(),
-    onError: (err: { message: string }) => setServerError(err.message),
+    onSuccess: (data) => {
+      setInteractionAlerts(null);
+      setOverrideJustificacion("");
+      setOverrideVerificadorId("");
+      setOverrideVerificadorPin("");
+      setAdvertencias(data.advertencias ?? []);
+      void detail.refetch();
+    },
+    onError: (err) => {
+      // ADR 0023 Ola 2 — H-01/H-06: `firmar()` bloquea con PRECONDITION_FAILED
+      // y reenvía los pares en conflicto vía errorFormatter (trpc.ts). Si
+      // vienen, abrimos el modal de override en vez de un error genérico.
+      const alerts = (err.data as { interactionAlerts?: unknown } | undefined)
+        ?.interactionAlerts;
+      if (
+        err.data?.code === "PRECONDITION_FAILED" &&
+        Array.isArray(alerts) &&
+        alerts.length > 0
+      ) {
+        setInteractionAlerts(alerts as InteractionAlertUI[]);
+        setServerError(null);
+      } else {
+        setServerError(err.message);
+      }
+    },
   });
+
+  const handleOverrideSubmit = () => {
+    if (!params.id) return;
+    firmaMutation.mutate({
+      id: params.id,
+      overrideInteracciones: {
+        justificacion: overrideJustificacion.trim(),
+        verificadorId: overrideVerificadorId.trim(),
+        verificadorPin: overrideVerificadorPin.trim(),
+      },
+    });
+  };
 
   const suspenderMutation = trpc.eceIndicaciones.suspender.useMutation({
     onSuccess: () => {
@@ -211,6 +274,21 @@ export default function IndicacionDetallePage(): React.ReactElement {
         </p>
       ) : null}
 
+      {/* ADR 0023 Ola 2 — advertencias NO bloqueantes de la última firma
+          (interacciones moderate/minor u overrideadas + advisory renal). */}
+      {advertencias.length > 0 ? (
+        <Alert variant="warning" data-testid="alert-advertencias">
+          <AlertTitle>Advertencias de la firma</AlertTitle>
+          <AlertDescription>
+            <ul className="list-disc space-y-1 pl-4">
+              {advertencias.map((a, i) => (
+                <li key={i}>{a}</li>
+              ))}
+            </ul>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {/* Acciones por estado */}
       <div className="flex flex-wrap justify-end gap-2">
         {estadoRegistro === "borrador" ? (
@@ -326,6 +404,145 @@ export default function IndicacionDetallePage(): React.ReactElement {
                 {suspenderMutation.isPending || cancelarMutation.isPending
                   ? "Procesando…"
                   : "Confirmar"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ADR 0023 Ola 2 (R06 H-01/H-06) — modal de override de interacción
+          medicamentosa major/contraindicated. Exige un profesional DISTINTO
+          del que firma (2ª firma: verificadorId + PIN), validado server-side
+          en firmar(). */}
+      {interactionAlerts !== null ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="modal-interaccion-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        >
+          <div className="w-full max-w-md rounded-lg border bg-background p-6 shadow-xl">
+            <h2
+              id="modal-interaccion-title"
+              className="mb-2 text-lg font-semibold text-destructive"
+            >
+              Interacción medicamentosa detectada
+            </h2>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Se requiere autorización de un segundo profesional para firmar
+              esta indicación.
+            </p>
+
+            <ul className="mb-4 space-y-2" data-testid="interaction-alert-list">
+              {interactionAlerts.map((a, i) => (
+                <li
+                  key={i}
+                  className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm"
+                >
+                  <span className="font-medium">
+                    {a.drugAName ?? a.atcA} ↔ {a.drugBName ?? a.atcB}
+                  </span>{" "}
+                  <span className="uppercase text-xs text-destructive">
+                    [{a.severity}]
+                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    {a.description}
+                  </p>
+                </li>
+              ))}
+            </ul>
+
+            <div className="space-y-3">
+              <div>
+                <label
+                  htmlFor="override-verificador"
+                  className="mb-1 block text-sm font-medium"
+                >
+                  Verificador (distinto del médico que firma){" "}
+                  <span className="text-destructive">*</span>
+                </label>
+                <input
+                  id="override-verificador"
+                  value={overrideVerificadorId}
+                  onChange={(e) => setOverrideVerificadorId(e.target.value)}
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  placeholder="ID de usuario del verificador"
+                  data-testid="input-override-verificador"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="override-pin"
+                  className="mb-1 block text-sm font-medium"
+                >
+                  PIN del verificador <span className="text-destructive">*</span>
+                </label>
+                <input
+                  id="override-pin"
+                  type="password"
+                  inputMode="numeric"
+                  value={overrideVerificadorPin}
+                  onChange={(e) => setOverrideVerificadorPin(e.target.value)}
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  placeholder="6-8 dígitos"
+                  data-testid="input-override-pin"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="override-justificacion"
+                  className="mb-1 block text-sm font-medium"
+                >
+                  Justificación clínica <span className="text-destructive">*</span>
+                </label>
+                <textarea
+                  id="override-justificacion"
+                  value={overrideJustificacion}
+                  onChange={(e) => setOverrideJustificacion(e.target.value)}
+                  rows={3}
+                  className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  placeholder="Mínimo 10 caracteres…"
+                  data-testid="input-override-justificacion"
+                />
+              </div>
+            </div>
+
+            {serverError ? (
+              <p
+                role="alert"
+                className="mt-2 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive"
+              >
+                {serverError}
+              </p>
+            ) : null}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setInteractionAlerts(null);
+                  setOverrideJustificacion("");
+                  setOverrideVerificadorId("");
+                  setOverrideVerificadorPin("");
+                  setServerError(null);
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={
+                  overrideJustificacion.trim().length < 10 ||
+                  !overrideVerificadorId.trim() ||
+                  !overrideVerificadorPin.trim() ||
+                  firmaMutation.isPending
+                }
+                onClick={handleOverrideSubmit}
+                data-testid="btn-confirmar-override"
+              >
+                {firmaMutation.isPending ? "Firmando…" : "Firmar con override"}
               </Button>
             </div>
           </div>

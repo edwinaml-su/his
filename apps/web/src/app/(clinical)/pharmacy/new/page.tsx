@@ -14,6 +14,20 @@
  *  - Validación inline: al menos 1 item con drug + dosage + route +
  *    frequency. Errores se muestran por campo.
  *  - On success → router.push('/pharmacy'). On error → role="alert".
+ *
+ * ADR 0023 Ola 2 (decisión Edwin 2026-09-09) — esta pantalla queda SOLO para
+ * recetas ambulatorias/de salida. La prescripción hospitalaria real del
+ * paciente ingresado se hace desde Indicaciones médicas
+ * (`/ece/indicaciones-medicas`), que desde la Ola 1/2 de ADR 0023 es el
+ * único punto de prescripción con el pipeline de seguridad (interacciones +
+ * advisory renal) cableado. `Prescription` (schema.prisma) no tiene una
+ * columna de "tipo de encuentro" (ambulatorio/hospitalario) — no se agrega
+ * en esta ola (fuera de alcance); el banner de abajo es el único control.
+ *
+ * H-02 (R06) — antes de este cambio, `create` dejaba la receta en DRAFT sin
+ * ninguna pantalla que llamara a `prescription.sign`: el hard-stop de
+ * interacciones de `pharmacy.router.ts` nunca se ejercitaba en la práctica.
+ * Ahora "Crear y firmar" encadena `create` → `sign` en la misma acción.
  */
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -24,6 +38,7 @@ import {
   CardTitle,
 } from "@his/ui/components/card";
 import { Form, FormError, FormField, FormHint } from "@his/ui/components/form";
+import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
 import { Label } from "@his/ui/components/label";
 import { Input } from "@his/ui/components/input";
 import { Button } from "@his/ui/components/button";
@@ -124,10 +139,24 @@ export default function NewPrescriptionPage(): React.ReactElement {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
-  const createMutation = trpcAny.pharmacy.prescription.create.useMutation({
+
+  // H-02 (R06) — "Crear y firmar" encadena create → sign. Si sign falla
+  // (p. ej. interacción major/contraindicated sin override), la Prescription
+  // ya quedó creada en DRAFT: se informa el error y se deja al usuario ir al
+  // listado para reintentar la firma, en vez de perder el borrador.
+  const signMutation = trpcAny.pharmacy.prescription.sign.useMutation({
     onSuccess: () => router.push("/pharmacy"),
+    onError: (err: { message: string }) =>
+      setServerError(
+        `La receta se creó en borrador, pero la firma falló: ${err.message} ` +
+          "Puede reintentar la firma desde el listado de recetas.",
+      ),
+  });
+  const createMutation = trpcAny.pharmacy.prescription.create.useMutation({
+    onSuccess: (data: { id: string }) => signMutation.mutate({ id: data.id }),
     onError: (err: { message: string }) => setServerError(err.message),
   });
+  const isSubmitting = createMutation.isPending || signMutation.isPending;
 
   // Centros productivos e intermedios para el solicitante (excluye apoyo).
   const costCentersQuery = trpcAny.costCenter.list.useQuery(
@@ -210,9 +239,20 @@ export default function NewPrescriptionPage(): React.ReactElement {
       <div>
         <h1 className="text-2xl font-bold">Nueva receta</h1>
         <p className="text-sm text-muted-foreground">
-          Agregue uno o más medicamentos. La firma se realiza en el detalle.
+          Agregue uno o más medicamentos. Al guardar, la receta se crea y se
+          firma en el mismo paso.
         </p>
       </div>
+
+      <Alert variant="info">
+        <AlertTitle>Solo recetas ambulatorias / de salida</AlertTitle>
+        <AlertDescription>
+          La prescripción de pacientes hospitalizados se hace desde{" "}
+          <strong>Indicaciones médicas</strong>, no desde esta pantalla — ahí
+          es donde corre la verificación de interacciones y la advertencia de
+          función renal al firmar.
+        </AlertDescription>
+      </Alert>
 
       <Form onSubmit={handleSubmit}>
         <Card>
@@ -328,8 +368,12 @@ export default function NewPrescriptionPage(): React.ReactElement {
           >
             Cancelar
           </Button>
-          <Button type="submit" disabled={createMutation.isPending}>
-            {createMutation.isPending ? "Guardando…" : "Crear receta"}
+          <Button type="submit" disabled={isSubmitting}>
+            {createMutation.isPending
+              ? "Creando…"
+              : signMutation.isPending
+                ? "Firmando…"
+                : "Crear y firmar"}
           </Button>
         </div>
       </Form>

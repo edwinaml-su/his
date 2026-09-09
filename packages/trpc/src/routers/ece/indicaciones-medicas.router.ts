@@ -81,13 +81,17 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@his/database";
+import { argon2 } from "@his/infrastructure";
 import { router, requireRole } from "../../trpc";
 import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
 import { materializeCareTasksFromIndicacion } from "../../ece/care-task-consumer";
 import { materializeOrdenesFromIndicacion } from "../../ece/order-consumer";
 import { materializePrescripcionFromIndicacion } from "../../ece/prescription-consumer";
+import { checkPrescriptionSafety } from "../../ece/prescription-safety-check";
+import { getInteractionsDataset } from "../pharmacy.router";
 import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
 import {
@@ -244,8 +248,23 @@ export const tipoFirmaIndicacionEnum = z.enum(["INICIAL", "SUBSECUENTE"]);
  * 32h del mockup aplica siempre, la clasificación INICIAL/SUBSECUENTE es la
  * parte que la UI puede adoptar de forma incremental.
  */
+/**
+ * ADR 0023 Ola 2 (R06 H-06) — override de una interacción medicamentosa
+ * major/contraindicated detectada al firmar. Exige segunda firma: un
+ * profesional DISTINTO del que firma la indicación (`verificadorId`) valida
+ * su propio PIN (`ece.firma_electronica`, mismo patrón que
+ * `verbal-order.router.ts`/`historia-clinica.router.ts`). `justificacion`
+ * queda en el payload del evento `ece.indicaciones.firmadas` para auditoría.
+ */
+const overrideInteraccionesSchema = z.object({
+  justificacion: z.string().trim().min(10).max(2000),
+  verificadorId: z.string().uuid(),
+  verificadorPin: z.string().trim().regex(/^\d{6,8}$/, "PIN debe ser 6-8 dígitos"),
+});
+
 const firmarSchema = idSchema.extend({
   tipoIndicacion: tipoFirmaIndicacionEnum.optional(),
+  overrideInteracciones: overrideInteraccionesSchema.optional(),
 });
 
 const suspenderSchema = z.object({
@@ -433,6 +452,93 @@ async function eceIds(ctx: {
     personalId: ctx.user.id,
     establecimientoId,
   };
+}
+
+// ─── Helper: PIN del verificador (override de interacciones, ADR 0023 Ola 2) ─
+// Mismo patrón que `verbal-order.router.ts`/`historia-clinica.router.ts`
+// (duplicado a propósito — convención del proyecto, cada router mantiene su
+// propia copia de este helper en vez de compartir un módulo transversal).
+
+interface VerificadorPersonalRow {
+  id: string;
+}
+
+interface VerificadorFirmaRow {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+}
+
+const VERIFICADOR_LOCKOUT_MAX = 5;
+
+async function findVerificadorFirma(
+  tx: PrismaClient,
+  personalId: string,
+): Promise<VerificadorFirmaRow | null> {
+  const rows = await tx.$queryRaw<VerificadorFirmaRow[]>`
+    SELECT id::text, pin_hash, failed_attempts, locked_until, revoked_at
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personalId}::uuid AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+/**
+ * Resuelve el personal_salud del verificador (segunda firma) + valida su PIN
+ * contra argon2id. Lanza TRPCError si el profesional no existe, no tiene
+ * firma configurada, está bloqueado, o el PIN es incorrecto.
+ */
+async function verifyVerificadorPinOrThrow(
+  tx: PrismaClient,
+  verificadorHisUserId: string,
+  pin: string,
+): Promise<void> {
+  const personal: VerificadorPersonalRow | null = await resolvePersonalSalud(
+    tx,
+    verificadorHisUserId,
+  );
+  if (!personal) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se encontró un profesional de salud asociado al verificador.",
+    });
+  }
+  const firma = await findVerificadorFirma(tx, personal.id);
+  if (!firma) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "El verificador no tiene firma electrónica configurada.",
+    });
+  }
+  if (firma.locked_until !== null && firma.locked_until > new Date()) {
+    const mins = Math.ceil((firma.locked_until.getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma del verificador bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    await tx.$executeRaw`
+      UPDATE ece.firma_electronica
+      SET failed_attempts = failed_attempts + 1
+      WHERE id = ${firma.id}::uuid
+    `;
+    const remaining = VERIFICADOR_LOCKOUT_MAX - (firma.failed_attempts + 1);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        remaining > 0
+          ? `PIN del verificador incorrecto. Intentos restantes: ${remaining}.`
+          : "PIN del verificador incorrecto. La firma quedará bloqueada.",
+    });
+  }
+  await tx.$executeRaw`
+    UPDATE ece.firma_electronica SET failed_attempts = 0 WHERE id = ${firma.id}::uuid
+  `;
 }
 
 // ─── Procedures base ─────────────────────────────────────────────────────────
@@ -769,6 +875,58 @@ export const indicacionesMedicasRouter = router({
             );
           }
 
+          // ADR 0023 Ola 2 (R06 H-01/H-04/H-06) — pipeline de seguridad al
+          // prescribir, ANTES de mutar cualquier dato: interacciones
+          // medicamentosas (hard-stop major/contraindicated salvo override
+          // con 2ª firma) + advertencia renal Cockcroft-Gault (solo
+          // informativa). Ver packages/trpc/src/ece/prescription-safety-
+          // check.ts para el alcance completo (solo corre si hay ≥1 ítem
+          // MEDICAMENTO con drug_id — mismo criterio que la generación
+          // automática de Prescription, Ola 1, más abajo).
+          const safety = await checkPrescriptionSafety(
+            tx,
+            {
+              episodioId: indicacion.episodio_id,
+              currentItems: items.map((it) => ({ id: it.id, drugId: it.drug_id })),
+            },
+            getInteractionsDataset(),
+          );
+
+          if (safety.blocking) {
+            if (!input.overrideInteracciones) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message:
+                  `Se detectaron interacciones medicamentosas mayor/contraindicadas ` +
+                  `(${safety.alerts.length}). Requiere override con segunda firma ` +
+                  "(overrideInteracciones: justificación + verificador distinto + PIN).",
+                cause: { alerts: safety.alerts } as unknown as Error,
+              });
+            }
+            if (input.overrideInteracciones.verificadorId === personalId) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message:
+                  "El verificador del override debe ser un profesional distinto " +
+                  "del médico que firma la indicación.",
+              });
+            }
+            // Lanza si el PIN es inválido o la firma del verificador está
+            // bloqueada/no configurada — no continúa la firma en ese caso.
+            await verifyVerificadorPinOrThrow(
+              tx,
+              input.overrideInteracciones.verificadorId,
+              input.overrideInteracciones.verificadorPin,
+            );
+          }
+
+          // Advertencias no bloqueantes para la UI (moderate/minor, o
+          // major/contraindicated ya overrideadas arriba) + advisory renal.
+          const advertencias: string[] = [
+            ...safety.alerts.map((a) => `[${a.severity}] ${a.description}`),
+            ...(safety.renalAdvisory ? [safety.renalAdvisory] : []),
+          ];
+
           // H-09 (UAT CC-0026, Media) — el resto del cuerpo transaccional va
           // envuelto con el mismo contrato de error que los 3 consumers de
           // abajo: un fallo interno aquí (UPDATE del encabezado o el outbox
@@ -811,6 +969,21 @@ export const indicacionesMedicasRouter = router({
                 medicoId: personalId,
                 itemCount,
                 organizationId: ctx.tenant.organizationId,
+                // ADR 0023 Ola 2 (R06 H-06) — auditoría del override de
+                // interacciones: solo presente cuando safety.blocking exigió
+                // 2ª firma (validada arriba con verifyVerificadorPinOrThrow).
+                ...(safety.blocking && input.overrideInteracciones
+                  ? {
+                      interactionOverride: {
+                        justificacion: input.overrideInteracciones.justificacion,
+                        verificadorId: input.overrideInteracciones.verificadorId,
+                        severity: safety.alerts.some((a) => a.severity === "contraindicated")
+                          ? ("contraindicated" as const)
+                          : ("major" as const),
+                        pares: safety.alerts.map((a) => `${a.atcA}↔${a.atcB}`),
+                      },
+                    }
+                  : {}),
               },
             });
           } catch (err) {
@@ -955,6 +1128,11 @@ export const indicacionesMedicasRouter = router({
             prescriptionId: prescripcionResult.prescriptionId,
             itemsPrescritos: prescripcionResult.itemsPrescritos,
             itemsPrescripcionOmitidos: prescripcionResult.itemsOmitidos,
+            // ADR 0023 Ola 2 — advertencias NO bloqueantes del pipeline de
+            // seguridad (interacciones moderate/minor, o major/contraindicated
+            // ya overrideadas arriba, + advisory renal Cockcroft-Gault). La UI
+            // las muestra como toast/lista tras la firma exitosa.
+            advertencias,
           };
         },
         // CC-0026 — escritura cross-espacio: LabOrder/ImagingRequest/ImagingOrder
