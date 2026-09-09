@@ -3,12 +3,27 @@
  * imágenes: cabecera ImagingRequest + N ImagingOrder hijas, catálogo,
  * parametrización de campos/reglas).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { imagingRequestRouter } from "../imaging-request.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT, MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
+
+// docs/48 Ola 3 (C3-1) — capturarCargo ya tiene su propia suite
+// (charge-capture.test.ts); aquí solo importa que `crear` la invoque una vez
+// por prestación con code/quantity correctos, mismo patrón que
+// dispensation.router.test.ts / lis.router.test.ts.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
+import { imagingRequestRouter } from "../imaging-request.router";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const cuentaId = "00000000-0000-0000-0000-000000000010";
@@ -31,6 +46,7 @@ function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
 const CUENTA_ROW = { id: cuentaId, patientId, encounterId: null };
 const TEST_ROW = {
   id: labTestId,
+  code: "RX001",
   name: "RX TORAX",
   imagingAttrs: {
     labTestId,
@@ -50,6 +66,7 @@ describe("imagingRequestRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     wireTransaction(prisma);
+    capturarCargoMock.mockClear();
   });
 
   // ---------------------------------------------------------------------------
@@ -185,6 +202,29 @@ describe("imagingRequestRouter", () => {
         studyDescription: "RX TORAX",
         modalityType: "CR",
       });
+    });
+
+    it("docs/48 Ola 3 (C3-1): genera un cargo por prestación, con code/quantity=1 y origen IMAGENES", async () => {
+      stubHappyPath();
+      prisma.imagingOrder.create.mockResolvedValue({ id: "order-1" } as never);
+
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear(validInput);
+
+      expect(capturarCargoMock).toHaveBeenCalledTimes(1);
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          patientId,
+          encounterId: null,
+          accountId: cuentaId,
+          code: "RX001",
+          descripcion: "RX TORAX",
+          quantity: 1,
+          origen: "IMAGENES",
+          referenciaId: "order-1",
+        }),
+      );
     });
 
     it("devuelve advertencia de duplicado (dupWarn) sin bloquear la creación", async () => {

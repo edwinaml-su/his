@@ -3,13 +3,28 @@
  *
  * Cubre la regla 4-eyes (validator distinto del resultador).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@his/database";
-import { lisRouter } from "../lis.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+
+// docs/48 Ola 3 (C3-1) — capturarCargo ya tiene su propia suite
+// (charge-capture.test.ts); aquí solo importa que order.create la invoque
+// una vez por LabOrderItem con code/quantity correctos, mismo patrón que
+// dispensation.router.test.ts.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
+import { lisRouter } from "../lis.router";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
@@ -34,6 +49,7 @@ describe("lisRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     wireTransaction(prisma);
+    capturarCargoMock.mockClear();
   });
 
   describe("panel.list", () => {
@@ -149,6 +165,7 @@ describe("lisRouter", () => {
         patientId: u,
       } as never);
       prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -167,6 +184,7 @@ describe("lisRouter", () => {
         patientId: v,
         encounterId: w,
       } as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -190,6 +208,7 @@ describe("lisRouter", () => {
     it("CC-0013 — encounterId auto-vincula la cuenta activa del paciente", async () => {
       prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
       prisma.patientAccount.findFirst.mockResolvedValue({ id: v } as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -199,6 +218,62 @@ describe("lisRouter", () => {
       });
       const args = prisma.labOrder.create.mock.calls[0]![0];
       expect(args.data.patientAccountId).toBe(v);
+    });
+
+    it("docs/48 Ola 3 (C3-1): genera un cargo por ítem, con code/quantity del catálogo y origen LABORATORIO", async () => {
+      const ITEM_1 = "00000000-0000-0000-0000-000000000021";
+      const ITEM_2 = "00000000-0000-0000-0000-000000000022";
+      const TEST_1 = "00000000-0000-0000-0000-000000000031";
+      const TEST_2 = "00000000-0000-0000-0000-000000000032";
+
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        { id: TEST_1, code: "718-7", name: "Hemoglobina" },
+        { id: TEST_2, code: "2345-7", name: "Glucosa" },
+      ] as never);
+      prisma.labOrder.create.mockResolvedValue({
+        id: "order-1",
+        items: [
+          { id: ITEM_1, testId: TEST_1, quantity: 1 },
+          { id: ITEM_2, testId: TEST_2, quantity: 2 },
+        ],
+      } as never);
+
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        cuentaId: u,
+        items: [
+          { testId: TEST_1, quantity: 1 },
+          { testId: TEST_2, quantity: 2 },
+        ],
+      });
+
+      expect(capturarCargoMock).toHaveBeenCalledTimes(2);
+      expect(capturarCargoMock).toHaveBeenNthCalledWith(
+        1,
+        prisma,
+        expect.objectContaining({
+          patientId: v,
+          encounterId: w,
+          accountId: u,
+          code: "718-7",
+          descripcion: "Hemoglobina",
+          quantity: 1,
+          origen: "LABORATORIO",
+          referenciaId: ITEM_1,
+        }),
+      );
+      expect(capturarCargoMock).toHaveBeenNthCalledWith(
+        2,
+        prisma,
+        expect.objectContaining({
+          code: "2345-7",
+          descripcion: "Glucosa",
+          quantity: 2,
+          origen: "LABORATORIO",
+          referenciaId: ITEM_2,
+        }),
+      );
     });
   });
 
@@ -1137,6 +1212,7 @@ describe("lisRouter", () => {
     it("persiste quantity y crea LabOrderItemParameter cuando el parámetro pertenece al test", async () => {
       prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
       prisma.labTestParameter.findMany.mockResolvedValue([{ id: w, labTestId: u }] as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({
@@ -1165,6 +1241,7 @@ describe("lisRouter", () => {
 
     it("quantity default = 1 cuando no se envía", async () => {
       prisma.patientAccount.findFirst.mockResolvedValue({ id: u, patientId: v, encounterId: w } as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
       prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
       await caller.order.create({ cuentaId: u, items: [{ testId: u }] });

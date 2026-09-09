@@ -27,6 +27,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
+import { chargeOriginEnum, CHARGE_ORIGINS, type ChargeOrigin } from "@his/contracts";
 import { resolverPrecio, mapFuenteAPriceSource } from "./price-resolver";
 
 /** Estados de `PatientAccount` que aceptan cargos nuevos (docs/48 Ola 1, C1-5). */
@@ -53,12 +54,20 @@ export interface CapturarCargoParams {
   patientId: string;
   /** Si viene, se prefiere la cuenta activa de ESTE encuentro sobre cualquier otra. */
   encounterId?: string | null;
+  /**
+   * docs/48 Ola 3 (C3-1) — si el caller YA conoce la cuenta (p.ej. lab/imágenes,
+   * que anclan la orden a `cuentaId` desde el input), pásala aquí para evitar
+   * la resolución por paciente/encounter y anclar el cargo exactamente a esa
+   * cuenta. Se sigue validando que esté ACTIVA (ABIERTA | PENDIENTE_REGULARIZAR)
+   * — un accountId de una cuenta cerrada falla igual que "sin cuenta activa".
+   */
+  accountId?: string | null;
   /** Código de catálogo (tarifario/LabTest/etc.) — insumo de `resolverPrecio`. */
   code: string;
   descripcion: string;
   quantity: number;
-  /** Acto clínico que originó el cargo: dispensacion | lab_order | imaging | etc. */
-  origen: string;
+  /** Acto clínico que originó el cargo — taxonomía cerrada (docs/48 C3-3). */
+  origen: ChargeOrigin;
   referenciaId?: string | null;
   actorId: string;
 }
@@ -71,16 +80,31 @@ export interface CapturarCargoResult {
 
 /**
  * Resuelve la cuenta activa del paciente para anclar el cargo.
- * Si `encounterId` viene, se prefiere la cuenta activa de ese encuentro; si
- * ninguna cuenta de ese encuentro está activa, cae a la cuenta activa más
- * reciente del paciente (con o sin encuentro).
+ * Si `accountId` viene (C3-1 — el caller ya conoce la cuenta), se valida esa
+ * cuenta puntual y nada más. Si no, y `encounterId` viene, se prefiere la
+ * cuenta activa de ese encuentro; si ninguna cuenta de ese encuentro está
+ * activa, cae a la cuenta activa más reciente del paciente (con o sin
+ * encuentro).
  */
 async function resolverCuentaActiva(
   tx: PrismaClient,
   organizationId: string,
   patientId: string,
   encounterId: string | null | undefined,
+  accountId: string | null | undefined,
 ): Promise<{ id: string } | null> {
+  if (accountId) {
+    return tx.patientAccount.findFirst({
+      where: {
+        id: accountId,
+        organizationId,
+        patientId,
+        status: { in: [...ESTADOS_CUENTA_ACTIVA] },
+      },
+      select: { id: true },
+    });
+  }
+
   if (encounterId) {
     const porEncuentro = await tx.patientAccount.findFirst({
       where: {
@@ -115,11 +139,23 @@ export async function capturarCargo(
   tx: PrismaClient,
   params: CapturarCargoParams,
 ): Promise<CapturarCargoResult> {
+  // docs/48 Ola 3 (C3-3) — taxonomía cerrada: falla temprano y explícito en
+  // vez de dejar que un origen libre llegue a la fila (defensa además del
+  // tipado TS, que un caller con `as any`/JS puro podría saltarse).
+  const origenValidado = chargeOriginEnum.safeParse(params.origen);
+  if (!origenValidado.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `origen de cargo inválido: '${params.origen}'. Valores permitidos: ${CHARGE_ORIGINS.join(", ")}.`,
+    });
+  }
+
   const cuenta = await resolverCuentaActiva(
     tx,
     params.organizationId,
     params.patientId,
     params.encounterId,
+    params.accountId,
   );
 
   if (!cuenta) {

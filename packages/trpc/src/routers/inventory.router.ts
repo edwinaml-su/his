@@ -20,6 +20,7 @@ import {
   stockMovementCreateInput,
   stockMovementListInput,
   stockTransferInput,
+  stockConsumptionCreateInput,
   expiringLotsInput,
   configurarThresholdInput,
   listAlertasInput,
@@ -385,6 +386,84 @@ export const inventoryRouter = router({
       }),
 
     /**
+     * docs/48 Ola 3 (C3-3) — consumo institucional no nominativo (aseo,
+     * docencia, merma): salida de stock catalogada por `motivoConsumo`, que
+     * JAMÁS liga a un paciente ni pasa por `capturarCargo` — a diferencia de
+     * OUT, este tipo no es un insumo del ciclo de cobro (RN-HIS-BOT-001,
+     * docs/48 §3 C3-3). No se importa `capturarCargo` en este archivo: la
+     * garantía es estructural, no un `if` que se pueda olvidar.
+     */
+    consumo: tenantProcedure
+      .input(stockConsumptionCreateInput)
+      .mutation(async ({ ctx, input }) => {
+        const est = await ctx.prisma.establishment.findFirst({
+          where: {
+            id: input.establishmentId,
+            organizationId: ctx.tenant.organizationId,
+          },
+          select: { id: true },
+        });
+        if (!est) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Establecimiento no existe en la organización.",
+          });
+        }
+
+        if (input.lotId) {
+          await assertFefoCompliance(ctx, input.itemId, input.establishmentId, input.lotId);
+
+          const lot = await ctx.prisma.stockLot.findFirst({
+            where: {
+              id: input.lotId,
+              organizationId: ctx.tenant.organizationId,
+              itemId: input.itemId,
+            },
+            select: { id: true, quantityOnHand: true, qualityStatus: true },
+          });
+          if (!lot) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Lote no pertenece al item/tenant.",
+            });
+          }
+          if (lot.qualityStatus !== "AVAILABLE") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Lote no disponible para salida (estado de calidad: ${lot.qualityStatus}).`,
+            });
+          }
+          if (Number(lot.quantityOnHand) < input.quantity) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "Stock insuficiente en el lote.",
+            });
+          }
+        }
+
+        const reason = input.reason
+          ? `${input.motivoConsumo}: ${input.reason}`
+          : input.motivoConsumo;
+
+        // HI-29: envolver INSERT en withTenantContext para RLS.
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          return tx.stockMovement.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: input.establishmentId,
+              itemId: input.itemId,
+              lotId: input.lotId ?? null,
+              type: "CONSUMPTION",
+              quantity: input.quantity,
+              reason,
+              referenceCode: input.referenceCode ?? null,
+              performedById: ctx.user.id,
+            },
+          });
+        });
+      }),
+
+    /**
      * Transfer atomicity — §19 rule 5.
      * Creates paired OUT (src) + IN (dst) movements in a single $transaction
      * sharing a transferGroupId UUID.
@@ -624,10 +703,16 @@ export const inventoryRouter = router({
         const today = new Date();
 
         for (const th of thresholds) {
-          // Buscar StockItem cuyo SKU coincida con el código GTIN
-          const items = await ctx.prisma.stockItem.findMany({
+          const gtinCodigo = th.gtin_codigo.trim();
+
+          // docs/48 Ola 3 (C3-4) — join primario por StockItem.gtin (columna
+          // real, FK lógica a ece.gs1_gtin.codigo, SQL 170). Fallback a sku
+          // (convención legada pre-C3-4: catálogo cargado con sku=código GTIN
+          // sin poblar la columna gtin) solo si el join por gtin no matchea,
+          // para no perder alertas de items viejos.
+          let items = await ctx.prisma.stockItem.findMany({
             where: {
-              sku: th.gtin_codigo.trim(),
+              gtin: gtinCodigo,
               OR: [
                 { organizationId: null },
                 { organizationId: ctx.tenant.organizationId },
@@ -635,6 +720,19 @@ export const inventoryRouter = router({
             },
             select: { id: true },
           });
+
+          if (items.length === 0) {
+            items = await ctx.prisma.stockItem.findMany({
+              where: {
+                sku: gtinCodigo,
+                OR: [
+                  { organizationId: null },
+                  { organizationId: ctx.tenant.organizationId },
+                ],
+              },
+              select: { id: true },
+            });
+          }
 
           if (items.length === 0) continue;
 

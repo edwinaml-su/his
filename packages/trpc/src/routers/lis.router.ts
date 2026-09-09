@@ -65,6 +65,7 @@ import {
 import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { capturarCargo } from "../lib/charge-capture";
 
 /** CC-0011 — CRUD del catálogo LIS (paneles/tests): solo administración. */
 const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
@@ -1012,7 +1013,15 @@ export const lisRouter = router({
           }
         }
 
-        return tx.labOrder.create({
+        // docs/48 Ola 3 (C3-1) — code/name del catálogo para el cargo de cada
+        // ítem (insumo de `capturarCargo`, se congela server-side ahí mismo).
+        const testsForCargo = await tx.labTest.findMany({
+          where: { id: { in: input.items.map((i) => i.testId) } },
+          select: { id: true, code: true, name: true },
+        });
+        const testInfoById = new Map(testsForCargo.map((t) => [t.id, t]));
+
+        const order = await tx.labOrder.create({
           data: {
             organizationId: ctx.tenant.organizationId,
             encounterId,
@@ -1037,6 +1046,31 @@ export const lisRouter = router({
           },
           include: { items: true },
         });
+
+        // docs/48 Ola 3 (C3-1) — un cargo por examen solicitado, en la MISMA
+        // tx que la orden (RN-HIS-BOT-001 R5). `accountId` ancla al mismo
+        // `patientAccountId` ya resuelto arriba (cuentaId explícito o el
+        // fallback CC-0012); si viene null (orden legada sin cuenta
+        // resoluble), `capturarCargo` cae a su propia resolución por
+        // paciente/encounter y, si tampoco encuentra cuenta activa, lanza
+        // PRECONDITION_FAILED — la orden completa hace rollback (RN R5).
+        for (const item of order.items) {
+          const test = testInfoById.get(item.testId);
+          await capturarCargo(tx, {
+            organizationId: ctx.tenant.organizationId,
+            patientId,
+            encounterId,
+            accountId: patientAccountId,
+            code: test?.code ?? item.testId,
+            descripcion: test?.name ?? "Examen de laboratorio",
+            quantity: item.quantity,
+            origen: "LABORATORIO",
+            referenciaId: item.id,
+            actorId: ctx.user.id,
+          });
+        }
+
+        return order;
       });
     }),
 

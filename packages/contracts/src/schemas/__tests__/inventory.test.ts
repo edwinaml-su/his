@@ -11,6 +11,8 @@ import {
   stockMovementCreateInput,
   stockMovementListInput,
   stockTransferInput,
+  stockConsumptionCreateInput,
+  motivoConsumoEnum,
   expiringLotsInput,
   configurarThresholdInput,
   listAlertasInput,
@@ -21,11 +23,51 @@ const u = "00000000-0000-0000-0000-000000000001";
 const u2 = "00000000-0000-0000-0000-000000000002";
 
 describe("stockMovementTypeEnum", () => {
-  it.each(["IN", "OUT", "TRANSFER", "ADJUST"])("type %s válido", (t) =>
+  it.each(["IN", "OUT", "TRANSFER", "ADJUST", "CONSUMPTION"])("type %s válido", (t) =>
     expect(stockMovementTypeEnum.safeParse(t).success).toBe(true),
   );
   it("type FOO inválido", () =>
     expect(stockMovementTypeEnum.safeParse("FOO").success).toBe(false));
+});
+
+// docs/48 Ola 3 (C3-3) — consumo institucional no nominativo.
+describe("motivoConsumoEnum", () => {
+  it.each(["ASEO", "DOCENCIA", "MERMA", "OTRO"])("motivo %s válido", (m) =>
+    expect(motivoConsumoEnum.safeParse(m).success).toBe(true),
+  );
+  it("motivo fuera del catálogo es inválido", () =>
+    expect(motivoConsumoEnum.safeParse("VENTA").success).toBe(false));
+});
+
+describe("stockConsumptionCreateInput", () => {
+  it("acepta input mínimo con motivoConsumo", () =>
+    expect(
+      stockConsumptionCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u2,
+        quantity: 3,
+        motivoConsumo: "ASEO",
+      }).success,
+    ).toBe(true));
+
+  it("rechaza sin motivoConsumo", () =>
+    expect(
+      stockConsumptionCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u2,
+        quantity: 3,
+      }).success,
+    ).toBe(false));
+
+  it("rechaza motivoConsumo fuera del catálogo", () =>
+    expect(
+      stockConsumptionCreateInput.safeParse({
+        establishmentId: u,
+        itemId: u2,
+        quantity: 3,
+        motivoConsumo: "VENTA",
+      }).success,
+    ).toBe(false));
 });
 
 describe("stockItemCreateInput", () => {

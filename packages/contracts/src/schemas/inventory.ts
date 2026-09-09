@@ -6,7 +6,10 @@
  */
 import { z } from "zod";
 
-const STOCK_MOVEMENT_TYPE = ["IN", "OUT", "TRANSFER", "ADJUST"] as const;
+// docs/48 Ola 3 (C3-3) — CONSUMPTION: salida de consumo institucional no
+// nominativo (aseo/docencia/merma), nunca liga a un paciente ni genera
+// cargo (ver `motivoConsumoEnum` + `stockConsumptionCreateInput` abajo).
+const STOCK_MOVEMENT_TYPE = ["IN", "OUT", "TRANSFER", "ADJUST", "CONSUMPTION"] as const;
 
 export const stockMovementTypeEnum = z.enum(STOCK_MOVEMENT_TYPE);
 export type StockMovementTypeType = z.infer<typeof stockMovementTypeEnum>;
@@ -129,6 +132,34 @@ export const stockMovementListInput = z.object({
 export type StockItemCreateInput = z.infer<typeof stockItemCreateInput>;
 export type StockLotCreateInput = z.infer<typeof stockLotCreateInput>;
 export type StockMovementCreateInput = z.infer<typeof stockMovementCreateInput>;
+
+// ---------------------------------------------------------------------------
+// StockMovement — CONSUMPTION (docs/48 Ola 3, C3-3)
+// ---------------------------------------------------------------------------
+
+const MOTIVO_CONSUMO = ["ASEO", "DOCENCIA", "MERMA", "OTRO"] as const;
+
+export const motivoConsumoEnum = z.enum(MOTIVO_CONSUMO);
+export type MotivoConsumo = z.infer<typeof motivoConsumoEnum>;
+
+/**
+ * Salida de consumo institucional no nominativo: nunca liga a un paciente y
+ * JAMÁS pasa por `capturarCargo` (docs/48 C3-3) — a diferencia de OUT, que
+ * hoy tampoco captura cargo automáticamente pero SÍ puede representar un
+ * despacho a paciente (dispensación farmacia lo hace por su propio camino,
+ * `pharmacy/dispensation.router.ts`).
+ */
+export const stockConsumptionCreateInput = z.object({
+  establishmentId: z.string().uuid(),
+  itemId: z.string().uuid(),
+  lotId: z.string().uuid().optional(),
+  quantity: z.number().positive(),
+  motivoConsumo: motivoConsumoEnum,
+  reason: z.string().trim().max(200).optional(),
+  referenceCode: z.string().trim().max(80).optional(),
+});
+
+export type StockConsumptionCreateInput = z.infer<typeof stockConsumptionCreateInput>;
 
 // ---------------------------------------------------------------------------
 // GS1 Inventory Thresholds (SQL 83)

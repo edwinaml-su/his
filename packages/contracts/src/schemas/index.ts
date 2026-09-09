@@ -11,6 +11,7 @@ export * from "./break-glass";
 export * from "./care-task";
 export * from "./catalog";
 export * from "./census";
+export * from "./charge-origin";
 export * from "./common";
 export * from "./consent";
 export * from "./country";

@@ -501,6 +501,138 @@ describe("inventoryRouter", () => {
   });
 
   // -------------------------------------------------------------------------
+  describe("movement.consumo — docs/48 Ola 3 (C3-3)", () => {
+    it("NOT_FOUND si establishment no es del tenant", async () => {
+      prisma.establishment.findFirst.mockResolvedValue(null as never);
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.movement.consumo({
+          establishmentId: u,
+          itemId: u,
+          quantity: 3,
+          motivoConsumo: "ASEO",
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("crea un StockMovement type=CONSUMPTION con el motivo catalogado en reason", async () => {
+      prisma.establishment.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.stockMovement.create.mockResolvedValue({ id: u } as never);
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await caller.movement.consumo({
+        establishmentId: u,
+        itemId: u,
+        quantity: 3,
+        motivoConsumo: "MERMA",
+        reason: "vencimiento en bodega",
+      });
+      const data = prisma.stockMovement.create.mock.calls[0]![0]!.data as {
+        type: string;
+        quantity: number;
+        reason: string;
+        performedById: string;
+      };
+      expect(data.type).toBe("CONSUMPTION");
+      expect(data.quantity).toBe(3);
+      expect(data.reason).toBe("MERMA: vencimiento en bodega");
+      expect(data.performedById).toBeTruthy();
+    });
+
+    it("sin reason libre, usa el motivoConsumo tal cual", async () => {
+      prisma.establishment.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.stockMovement.create.mockResolvedValue({ id: u } as never);
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await caller.movement.consumo({
+        establishmentId: u,
+        itemId: u,
+        quantity: 1,
+        motivoConsumo: "DOCENCIA",
+      });
+      const data = prisma.stockMovement.create.mock.calls[0]![0]!.data as { reason: string };
+      expect(data.reason).toBe("DOCENCIA");
+    });
+
+    it("PRECONDITION_FAILED si el lote no tiene stock suficiente", async () => {
+      prisma.establishment.findFirst.mockResolvedValue({ id: u } as never);
+      // FEFO: el lote consumido ES el earliest (sin violación).
+      prisma.stockLot.findFirst
+        .mockResolvedValueOnce({ id: u, lotNumber: "LOT-A", expiryDate: new Date("2027-01-01") } as never)
+        .mockResolvedValueOnce({ id: u, quantityOnHand: 1, qualityStatus: "AVAILABLE" } as never);
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.movement.consumo({
+          establishmentId: u,
+          itemId: u,
+          lotId: u,
+          quantity: 5,
+          motivoConsumo: "OTRO",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
+
+    // Nota: CONSUMPTION nunca captura cargo por construcción — este archivo
+    // (inventory.router.ts) no importa `capturarCargo`, así que no hay ruta
+    // de código que pueda invocarlo (ver docs/48 Ola 3 C3-3). No hace falta
+    // mockear/espiar el módulo: la garantía es estructural, no un `if`.
+  });
+
+  // -------------------------------------------------------------------------
+  describe("gs1.listAlertas — join por StockItem.gtin (docs/48 Ola 3, C3-4)", () => {
+    const THRESHOLD_ROW = {
+      gtin_id: u,
+      ubicacion_gln: "7750000000001",
+      stock_minimo: 100,
+      stock_critico: 20,
+      reorder_point: 50,
+      dias_caducidad_alerta: 30,
+      gtin_codigo: "07501000001234",
+      gtin_descripcion: "Amoxicilina 500mg",
+      gln_descripcion: "Bodega Central",
+    };
+
+    it("matchea StockItem por columna gtin (no por sku) cuando existe", async () => {
+      prisma.$queryRaw.mockResolvedValue([THRESHOLD_ROW] as never);
+      prisma.stockItem.findMany.mockResolvedValueOnce([{ id: u }] as never);
+      prisma.stockLot.findMany.mockResolvedValue([] as never);
+
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await caller.gs1.listAlertas({ limit: 100 });
+
+      const where = prisma.stockItem.findMany.mock.calls[0]![0]!.where as { gtin?: string };
+      expect(where.gtin).toBe(THRESHOLD_ROW.gtin_codigo);
+      // Un solo lookup: el match por gtin fue suficiente, no cae al fallback sku.
+      expect(prisma.stockItem.findMany).toHaveBeenCalledTimes(1);
+    });
+
+    it("cae a sku (legado) solo si el join por gtin no matchea ningún StockItem", async () => {
+      prisma.$queryRaw.mockResolvedValue([THRESHOLD_ROW] as never);
+      prisma.stockItem.findMany
+        .mockResolvedValueOnce([] as never) // gtin: sin match
+        .mockResolvedValueOnce([{ id: u }] as never); // fallback sku: match
+      prisma.stockLot.findMany.mockResolvedValue([] as never);
+
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      await caller.gs1.listAlertas({ limit: 100 });
+
+      expect(prisma.stockItem.findMany).toHaveBeenCalledTimes(2);
+      const gtinCall = prisma.stockItem.findMany.mock.calls[0]![0]!.where as { gtin?: string };
+      const skuCall = prisma.stockItem.findMany.mock.calls[1]![0]!.where as { sku?: string };
+      expect(gtinCall.gtin).toBe(THRESHOLD_ROW.gtin_codigo);
+      expect(skuCall.sku).toBe(THRESHOLD_ROW.gtin_codigo);
+    });
+
+    it("sin match ni por gtin ni por sku, no genera alertas para ese threshold", async () => {
+      prisma.$queryRaw.mockResolvedValue([THRESHOLD_ROW] as never);
+      prisma.stockItem.findMany.mockResolvedValue([] as never);
+
+      const caller = inventoryRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.gs1.listAlertas({ limit: 100 });
+
+      expect(result).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   describe("movement.list / get", () => {
     it("list filtra por organizationId", async () => {
       prisma.stockMovement.findMany.mockResolvedValue([] as never);

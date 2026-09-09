@@ -1,21 +1,28 @@
 /**
- * Tests unitarios: gs1ProcesoARouter — HI-07 / HI-08.
+ * Tests unitarios: gs1ProcesoARouter — HI-07 / HI-08 / docs/48 Ola 3 (C3-4).
  *
  * HI-07: verifica que `listar` usa query parametrizada ($queryRaw) y NO
- *        interpola el estado en el string SQL. Los tests del router se omiten
- *        en el worktree porque los imports de @his/contracts en gs1-proceso-a
- *        son preexistentes y no resuelven via el symlink del worktree (bug pre-HI-07).
- *        Los tests de schema (HI-08) sí corren directamente sobre el schema Zod.
- *
+ *        interpola el estado en el string SQL.
  * HI-08: verifica que el schema Zod rechaza GTINs con check-digit inválido.
+ * C3-4:  verifica el puente `recibirMercancia` → Stock operativo (StockItem/
+ *        StockLot/StockMovement), mismo patrón mockDeep+wireTransaction que
+ *        el resto de la suite de routers.
+ *
+ * Nota histórica: este archivo antes omitía los tests de router por un bug
+ * de symlinks de `@his/contracts` en worktrees — verificado resuelto (import
+ * directo del router funciona) al escribir la suite de C3-4.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
+import type { PrismaClient } from "@prisma/client";
 import {
   gs1ProductoRecibidoSchema,
   recibirMercanciaInput,
   listarRecepcionesInput,
 } from "../../../../contracts/src/schemas/gs1-inbound";
+import { gs1ProcesoARouter } from "../gs1-proceso-a.router";
+import { makeCtx } from "../../__tests__/helpers/caller";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -129,5 +136,139 @@ describe("HI-08: recibirMercanciaInput — check-digit propagado al schema raíz
       ],
     });
     expect(r.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/48 Ola 3 (C3-4, addendum Ola 0) — puente recepción GS1 → Stock operativo
+// ---------------------------------------------------------------------------
+
+describe("recibirMercancia — puente a Stock operativo (docs/48 Ola 3, C3-4)", () => {
+  const RECEPCION_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+  const ITEM_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const LOT_ID = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+
+  let prisma: DeepMockProxy<PrismaClient>;
+
+  function wireTransaction(): void {
+    prisma.$transaction.mockImplementation(async (cb: unknown) => {
+      if (typeof cb === "function") {
+        return (cb as (tx: unknown) => Promise<unknown>)(prisma);
+      }
+      return cb;
+    });
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+  }
+
+  beforeEach(() => {
+    prisma = mockDeep<PrismaClient>();
+    wireTransaction();
+    // Orden real de $queryRaw en recibirMercancia: 1) chequeo de GLN
+    // (fuera de la tx) 2) INSERT...RETURNING de ece.recepcion_mercancia
+    // (dentro de la tx). El lookup de ece.gs1_gtin (solo si el StockItem no
+    // existe todavía) se encadena aparte en cada test que lo necesita.
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ exists: true }] as never)
+      .mockResolvedValueOnce([
+        { id: RECEPCION_ID, numero_documento_recepcion: VALID_RECEPCION_INPUT.numero_documento_recepcion },
+      ] as never);
+    prisma.domainEvent.create.mockResolvedValue({ id: "event-1" } as never);
+  });
+
+  it("GTIN sin StockItem: lo crea (sku=gtin, nombre del catálogo ece.gs1_gtin) + StockLot + StockMovement IN", async () => {
+    prisma.stockItem.findFirst.mockResolvedValue(null as never);
+    // Encadenado DESPUÉS de los 2 $queryRaw del beforeEach: el lookup de
+    // ece.gs1_gtin para el nombre del StockItem nuevo.
+    prisma.$queryRaw.mockResolvedValueOnce([{ descripcion: "Amoxicilina 500mg" }] as never);
+    prisma.stockItem.create.mockResolvedValue({ id: ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue(null as never);
+    prisma.stockLot.create.mockResolvedValue({ id: LOT_ID } as never);
+    prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+    const caller = gs1ProcesoARouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.recibirMercancia(VALID_RECEPCION_INPUT);
+
+    expect(result.id).toBe(RECEPCION_ID);
+
+    const itemFindWhere = prisma.stockItem.findFirst.mock.calls[0]![0]!.where as { gtin?: string };
+    expect(itemFindWhere.gtin).toBe(VALID_GTIN);
+
+    const itemCreateData = prisma.stockItem.create.mock.calls[0]![0]!.data as {
+      sku: string;
+      gtin: string;
+      name: string;
+      unitOfMeasure: string;
+    };
+    expect(itemCreateData.sku).toBe(VALID_GTIN);
+    expect(itemCreateData.gtin).toBe(VALID_GTIN);
+    expect(itemCreateData.name).toBe("Amoxicilina 500mg");
+    expect(itemCreateData.unitOfMeasure).toBe("UN");
+
+    const lotCreateData = prisma.stockLot.create.mock.calls[0]![0]!.data as {
+      itemId: string;
+      lotNumber: string;
+      quantityOnHand: number;
+    };
+    expect(lotCreateData.itemId).toBe(ITEM_ID);
+    expect(lotCreateData.lotNumber).toBe("L001");
+    expect(lotCreateData.quantityOnHand).toBe(5);
+
+    const movementData = prisma.stockMovement.create.mock.calls[0]![0]!.data as {
+      itemId: string;
+      lotId: string;
+      type: string;
+      quantity: number;
+      referenceCode: string;
+    };
+    expect(movementData.type).toBe("IN");
+    expect(movementData.quantity).toBe(5);
+    expect(movementData.itemId).toBe(ITEM_ID);
+    expect(movementData.lotId).toBe(LOT_ID);
+    expect(movementData.referenceCode).toBe(VALID_RECEPCION_INPUT.numero_documento_recepcion);
+  });
+
+  it("GTIN sin catálogo ece.gs1_gtin: no bloquea la recepción, usa nombre genérico", async () => {
+    prisma.stockItem.findFirst.mockResolvedValue(null as never);
+    prisma.$queryRaw.mockResolvedValueOnce([] as never); // sin fila en ece.gs1_gtin
+    prisma.stockItem.create.mockResolvedValue({ id: ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue(null as never);
+    prisma.stockLot.create.mockResolvedValue({ id: LOT_ID } as never);
+    prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+    const caller = gs1ProcesoARouter.createCaller(makeCtx({ prisma }));
+    await caller.recibirMercancia(VALID_RECEPCION_INPUT);
+
+    const itemCreateData = prisma.stockItem.create.mock.calls[0]![0]!.data as { name: string };
+    expect(itemCreateData.name).toBe(`GTIN ${VALID_GTIN}`);
+  });
+
+  it("StockItem ya existe (match por gtin): NO lo vuelve a crear", async () => {
+    prisma.stockItem.findFirst.mockResolvedValue({ id: ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue(null as never);
+    prisma.stockLot.create.mockResolvedValue({ id: LOT_ID } as never);
+    prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+    const caller = gs1ProcesoARouter.createCaller(makeCtx({ prisma }));
+    await caller.recibirMercancia(VALID_RECEPCION_INPUT);
+
+    expect(prisma.stockItem.create).not.toHaveBeenCalled();
+    const lotCreateData = prisma.stockLot.create.mock.calls[0]![0]!.data as { itemId: string };
+    expect(lotCreateData.itemId).toBe(ITEM_ID);
+  });
+
+  it("mismo lote+item+establecimiento ya existe: incrementa quantityOnHand en vez de crear otro lote", async () => {
+    prisma.stockItem.findFirst.mockResolvedValue({ id: ITEM_ID } as never);
+    prisma.stockLot.findFirst.mockResolvedValue({ id: LOT_ID } as never);
+    prisma.stockLot.update.mockResolvedValue({ id: LOT_ID } as never);
+    prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+    const caller = gs1ProcesoARouter.createCaller(makeCtx({ prisma }));
+    await caller.recibirMercancia(VALID_RECEPCION_INPUT);
+
+    expect(prisma.stockLot.create).not.toHaveBeenCalled();
+    expect(prisma.stockLot.update).toHaveBeenCalledWith({
+      where: { id: LOT_ID },
+      data: { quantityOnHand: { increment: 5 } },
+    });
   });
 });
