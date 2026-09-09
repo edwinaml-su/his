@@ -30,7 +30,7 @@
  *   - registrarAdministracion OMITIDA con motivo <10 chars rechazado.
  *   - list filtra por vigencia=SUSPENDIDA correctamente.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockDeep } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
@@ -54,9 +54,22 @@ vi.mock("@his/database", async (importOriginal) => {
   };
 });
 
+// ADR 0023 Ola 2 — argon2.verify mockeado para no ejecutar hash real en
+// tests (mismo patrón que atencion-emergencia/hoja-ingreso). Preserva el
+// resto de @his/infrastructure (evalFormula/classify) vía importOriginal —
+// prescription-safety-check.ts los necesita reales para el advisory renal.
+vi.mock("@his/infrastructure", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@his/infrastructure")>();
+  return {
+    ...original,
+    argon2: { verify: vi.fn().mockResolvedValue(true) },
+  };
+});
+
 import { indicacionesMedicasRouter } from "../indicaciones-medicas.router";
 import { emitDomainEvent } from "@his/database";
 import { withEceContext } from "../../../ece/rls-context";
+import { _resetInteractionsDatasetForTesting } from "../../pharmacy.router";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -74,6 +87,30 @@ const ESTAB_ID = "00000000-0000-4000-8001-000000000008";
 // eceIds() volviera a pasar ctx.tenant.establishmentId sin resolver, las
 // aserciones de "CONTROL NEGATIVO" abajo fallarían.
 const ECE_ESTABLECIMIENTO_ID = "00000000-0000-4000-8001-000000000009";
+
+// ADR 0023 Ola 2 — fixtures del pipeline de seguridad al firmar.
+const ITEM_ID_B = "00000000-0000-4000-8001-0000000000b0";
+const DRUG_A_ID = "00000000-0000-4000-8001-0000000000a5"; // Warfarina
+const DRUG_B_ID = "00000000-0000-4000-8001-0000000000a6"; // Ibuprofeno
+const VERIFICADOR_ID = "00000000-0000-4000-8001-0000000000a7";
+const PERSONAL_VERIFICADOR_ID = "00000000-0000-4000-8001-0000000000a8";
+const FIRMA_VERIFICADOR_ID = "00000000-0000-4000-8001-0000000000a9";
+const PAT_ID_RENAL = "00000000-0000-4000-8001-0000000000aa";
+
+/** Ítem MEDICAMENTO con drug_id para el pipeline de seguridad (fila raw). */
+function medicamentoItemRow(id: string, drugId: string, descripcion: string) {
+  return {
+    id,
+    tipo: "MEDICAMENTO",
+    descripcion,
+    detalle: null,
+    drug_id: drugId,
+    dosis: null,
+    via: null,
+    frecuencia: null,
+    duracion: null,
+  };
+}
 
 function buildCtx(
   roleCodes: string[] = ["PHYSICIAN"],
@@ -407,6 +444,13 @@ describe("indicacionesMedicasRouter", () => {
               duracion: null,
             },
           ])
+          // ADR 0023 Ola 2 — pipeline de seguridad: active-meds (interacciones)
+          // + bridge renal. Sin atcCode resuelto (drug.findMany mockeado abajo
+          // sin atcCode) y sin patient_id (renal se omite) — este test no
+          // ejercita el pipeline de seguridad en sí, solo verifica que no
+          // rompe el cableado de Prescription.
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ patient_id: null }])
           // care-task-consumer: org + bridge
           .mockResolvedValueOnce([{ org_id: ORG_ID }])
           .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }])
@@ -415,6 +459,7 @@ describe("indicacionesMedicasRouter", () => {
           .mockResolvedValueOnce([{ encounter_id: ENC_ID, patient_id: PAT_ID }])
           .mockResolvedValueOnce([]);
         (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([]);
         (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
           id: "00000000-0000-4000-8001-0000000000c0",
         });
@@ -484,6 +529,258 @@ describe("indicacionesMedicasRouter", () => {
         expect(result.prescriptionId).toBeNull();
         expect(result.itemsPrescritos).toBe(0);
         expect(ctx.prisma.prescription.create).not.toHaveBeenCalled();
+      });
+    });
+
+    // ADR 0023 Ola 2 (R06 H-01/H-04/H-06) — pipeline de seguridad al firmar:
+    // interacciones (hard-stop major/contraindicated salvo override 2ª firma)
+    // + advertencia renal Cockcroft-Gault (nunca bloquea). Cobertura del
+    // helper puro en packages/trpc/src/ece/__tests__/prescription-safety-check.test.ts;
+    // acá solo se verifica el cableado en firmar().
+    describe("ADR 0023 Ola 2 — pipeline de seguridad al firmar", () => {
+      beforeEach(() => {
+        _resetInteractionsDatasetForTesting([]);
+      });
+      afterEach(() => {
+        _resetInteractionsDatasetForTesting();
+      });
+
+      /** Encadena los mocks $queryRaw comunes hasta (incluyendo) items. */
+      function primeHastaItems(
+        ctx: ReturnType<typeof buildCtx>,
+        itemsRow: unknown[],
+      ) {
+        primeEceResolve(ctx);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([baseIndicacion({ estado_registro: "borrador" })])
+          .mockResolvedValueOnce([]) // getUltimaFirma
+          .mockResolvedValueOnce(itemsRow); // items
+      }
+
+      const drugARow = { id: DRUG_A_ID, atcCode: "B01AA03", genericName: "Warfarina" };
+      const drugBRow = { id: DRUG_B_ID, atcCode: "M01AE01", genericName: "Ibuprofeno" };
+      const drugsAB = [drugARow, drugBRow];
+      const majorDataset = [
+        {
+          atcA: "B01AA03",
+          atcB: "M01AE01",
+          severity: "major" as const,
+          description: "Warfarina + Ibuprofeno — riesgo de sangrado",
+        },
+      ];
+
+      it("interacción major sin override ⇒ PRECONDITION_FAILED", async () => {
+        _resetInteractionsDatasetForTesting(majorDataset);
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+          medicamentoItemRow(ITEM_ID_B, DRUG_B_ID, "Ibuprofeno 400mg VO"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: null }]); // renal bridge
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(drugsAB);
+
+        const error = await caller(ctx)
+          .firmar({ id: IND_ID })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(TRPCError);
+        expect((error as TRPCError).code).toBe("PRECONDITION_FAILED");
+        expect(ctx.prisma.$executeRaw).not.toHaveBeenCalled();
+        expect(emitDomainEvent).not.toHaveBeenCalled();
+      });
+
+      it("override válido (verificador distinto + PIN correcto) ⇒ firma continúa y registra el override en el evento", async () => {
+        _resetInteractionsDatasetForTesting(majorDataset);
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+          medicamentoItemRow(ITEM_ID_B, DRUG_B_ID, "Ibuprofeno 400mg VO"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: null }]) // renal bridge
+          // verifyVerificadorPinOrThrow: resolvePersonalSalud + findVerificadorFirma
+          .mockResolvedValueOnce([{ id: PERSONAL_VERIFICADOR_ID, nombre_completo: "Dr. Verificador" }])
+          .mockResolvedValueOnce([
+            {
+              id: FIRMA_VERIFICADOR_ID,
+              pin_hash: "hash-verificador",
+              failed_attempts: 0,
+              locked_until: null,
+              revoked_at: null,
+            },
+          ])
+          // care-task-consumer: org + bridge
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(drugsAB);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000c9",
+        });
+
+        const result = await caller(ctx).firmar({
+          id: IND_ID,
+          overrideInteracciones: {
+            justificacion: "Autorizado por jefe de servicio — anticoagulación crónica.",
+            verificadorId: VERIFICADOR_ID,
+            verificadorPin: "123456",
+          },
+        });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.advertencias.some((a) => a.includes("major"))).toBe(true);
+        expect(emitDomainEvent).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            eventType: "ece.indicaciones.firmadas",
+            payload: expect.objectContaining({
+              interactionOverride: expect.objectContaining({
+                verificadorId: VERIFICADOR_ID,
+                severity: "major",
+                pares: ["B01AA03↔M01AE01"],
+              }),
+            }),
+          }),
+        );
+      });
+
+      it("verificador igual al médico que firma ⇒ FORBIDDEN", async () => {
+        _resetInteractionsDatasetForTesting(majorDataset);
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+          medicamentoItemRow(ITEM_ID_B, DRUG_B_ID, "Ibuprofeno 400mg VO"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: null }]); // renal bridge
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(drugsAB);
+
+        const error = await caller(ctx)
+          .firmar({
+            id: IND_ID,
+            overrideInteracciones: {
+              justificacion: "Autorizado por jefe de servicio.",
+              verificadorId: MEDICO_ID, // mismo que ctx.user.id
+              verificadorPin: "123456",
+            },
+          })
+          .catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(TRPCError);
+        expect((error as TRPCError).code).toBe("FORBIDDEN");
+      });
+
+      it("interacción moderate ⇒ advertencia no bloqueante, la firma se aplica sin override", async () => {
+        _resetInteractionsDatasetForTesting([
+          {
+            atcA: "B01AA03",
+            atcB: "M01AE01",
+            severity: "moderate" as const,
+            description: "Warfarina + Ibuprofeno crónico",
+          },
+        ]);
+        const ctx = buildCtx(["PHYSICIAN"]);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+          medicamentoItemRow(ITEM_ID_B, DRUG_B_ID, "Ibuprofeno 400mg VO"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: null }]) // renal bridge
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue(drugsAB);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000ca",
+        });
+
+        const result = await caller(ctx).firmar({ id: IND_ID });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.advertencias).toHaveLength(1);
+        expect(result.advertencias[0]).toContain("moderate");
+        const calls = (emitDomainEvent as ReturnType<typeof vi.fn>).mock.calls;
+        const lastCall = calls[calls.length - 1];
+        expect(
+          (lastCall![1] as { payload: Record<string, unknown> }).payload,
+        ).not.toHaveProperty("interactionOverride");
+      });
+
+      it("advertencia renal: paciente adulto con ClCr < 60 y creatinina disponible", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+        const birthDate = new Date(Date.now() - 70 * 365.25 * 24 * 60 * 60 * 1000);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: PAT_ID_RENAL }]) // renal bridge
+          .mockResolvedValueOnce([{ peso: "70" }]) // signos_vitales
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+          drugARow,
+        ]);
+        (ctx.prisma.patient.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+          birthDate,
+          biologicalSex: { code: "M" },
+        });
+        (ctx.prisma.labResult.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue({
+          valueNumeric: 3.5,
+        });
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000cb",
+        });
+
+        const result = await caller(ctx).firmar({ id: IND_ID });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(
+          result.advertencias.some((a) => a.includes("Función renal reducida")),
+        ).toBe(true);
+      });
+
+      it("sin advertencia renal cuando falta la creatinina", async () => {
+        const ctx = buildCtx(["PHYSICIAN"]);
+        const birthDate = new Date(Date.now() - 70 * 365.25 * 24 * 60 * 60 * 1000);
+
+        primeHastaItems(ctx, [
+          medicamentoItemRow(ITEM_ID, DRUG_A_ID, "Warfarina 5mg VO QD"),
+        ]);
+        (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>)
+          .mockResolvedValueOnce([]) // active-meds
+          .mockResolvedValueOnce([{ patient_id: PAT_ID_RENAL }]) // renal bridge
+          .mockResolvedValueOnce([{ peso: "70" }]) // signos_vitales
+          .mockResolvedValueOnce([{ org_id: ORG_ID }])
+          .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]);
+        (ctx.prisma.$executeRaw as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+        (ctx.prisma.drug.findMany as ReturnType<typeof vi.fn>).mockResolvedValue([
+          drugARow,
+        ]);
+        (ctx.prisma.patient.findUnique as ReturnType<typeof vi.fn>).mockResolvedValue({
+          birthDate,
+          biologicalSex: { code: "M" },
+        });
+        (ctx.prisma.labResult.findFirst as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+        (ctx.prisma.careTask.create as ReturnType<typeof vi.fn>).mockResolvedValue({
+          id: "00000000-0000-4000-8001-0000000000cc",
+        });
+
+        const result = await caller(ctx).firmar({ id: IND_ID });
+
+        expect(result.estadoRegistro).toBe("firmado");
+        expect(result.advertencias).toEqual([]);
       });
     });
   });

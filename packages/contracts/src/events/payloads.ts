@@ -270,6 +270,22 @@ export const eceIndicacionesFirmadasPayloadSchema = z.object({
   medicoId: z.string().uuid(),
   itemCount: z.number().int().min(0),
   organizationId: z.string().uuid(),
+  /**
+   * ADR 0023 Ola 2 (R06 H-06) — presente SOLO cuando `firmar()` tuvo que
+   * sobrepasar una interacción medicamentosa major/contraindicated con el
+   * override de segunda firma (2-eyes: `verificadorId` distinto del
+   * `medicoId` que firma). Campo opcional y retrocompatible: los eventos
+   * emitidos sin interacciones bloqueantes no lo incluyen.
+   */
+  interactionOverride: z
+    .object({
+      justificacion: z.string().min(10).max(2000),
+      verificadorId: z.string().uuid(),
+      severity: z.enum(["major", "contraindicated"]),
+      /** Pares en conflicto, formato "ATC_A↔ATC_B" — solo para trazabilidad legible. */
+      pares: z.array(z.string().min(1).max(200)).min(1),
+    })
+    .optional(),
 });
 
 export type EceIndicacionesFirmadasPayload = z.infer<

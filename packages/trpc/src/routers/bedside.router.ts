@@ -364,7 +364,7 @@ const administrationRouter = router({
 
       // Resolver userId (enfermero) desde staffGsrn
       const staffRows = await ctx.prisma.$queryRawUnsafe<{ user_id: string }[]>(
-        `SELECT user_id FROM "StaffGsrn" WHERE gsrn = $1 AND status = 'ACTIVE' LIMIT 1`,
+        `SELECT "userId" AS user_id FROM "StaffGsrn" WHERE gsrn = $1 AND status = 'ACTIVE' LIMIT 1`,
         input.staffGsrn,
       );
       const nurseId = staffRows[0]?.user_id ?? ctx.user.id;

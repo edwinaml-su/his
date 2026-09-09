@@ -116,7 +116,13 @@ function loadInteractionsDataset(): DrugInteractionEntry[] {
 
 // Singleton perezoso para permitir tests con dataset inyectado.
 let cachedDataset: DrugInteractionEntry[] | null = null;
-function getInteractionsDataset(): DrugInteractionEntry[] {
+/**
+ * Exportado (ADR 0023 Ola 2) — `indicaciones-medicas.router.ts` reutiliza el
+ * MISMO dataset/loader vía `prescription-safety-check.ts` en vez de
+ * duplicar la resolución de rutas de archivo. Sigue siendo un singleton
+ * perezoso por proceso (ver `_resetInteractionsDatasetForTesting`).
+ */
+export function getInteractionsDataset(): DrugInteractionEntry[] {
   if (cachedDataset === null) cachedDataset = loadInteractionsDataset();
   return cachedDataset;
 }
