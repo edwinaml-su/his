@@ -609,7 +609,7 @@ const administrationRouter = router({
           `UPDATE ece.stat_event
               SET medication_administration_id = $3::uuid
             WHERE organization_id = $1::uuid
-              AND indication_id = $2
+              AND indication_id = $2::uuid
               AND completado = false
               AND medication_administration_id IS NULL
               AND activado_en > now() - interval '15 minutes'
@@ -858,7 +858,7 @@ async function findActiveStatSession(
     `SELECT id, hard_stops_bypassed
        FROM ece.stat_event
       WHERE organization_id = $1::uuid
-        AND indication_id = $2
+        AND indication_id = $2::uuid
         AND completado = false
         AND activado_en > now() - interval '15 minutes'
       ORDER BY activado_en DESC
@@ -972,7 +972,7 @@ async function runValidate5Correctos(
          LEFT JOIN "Patient" p ON p.id = im.paciente_id
          LEFT JOIN ece.indicacion_item ii
                 ON ii.indicacion_id = im.id AND ii.tipo = 'MEDICAMENTO'
-         WHERE im.id = $1
+         WHERE im.id = $1::uuid
          LIMIT 1`,
         input.indicationId,
       );
@@ -1080,7 +1080,7 @@ async function runValidate5Correctos(
             `SELECT ma."administeredAt" AS administered_at
                FROM "MedicationAdministration" ma
                JOIN ece.bedside_validation bv ON bv.id = ma.bedside_validation_id
-              WHERE bv.indication_id = $1
+              WHERE bv.indication_id = $1::uuid
                 AND ma.status = 'ADMINISTERED'
               ORDER BY ma."administeredAt" DESC
               LIMIT 1`,
