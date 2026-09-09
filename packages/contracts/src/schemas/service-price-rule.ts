@@ -125,7 +125,13 @@ export const priceRuleListInput = z.object({
 });
 
 export const priceRuleCreateInput = z
-  .object({ priceListId: z.string().uuid(), ...reglaBase })
+  .object({
+    priceListId: z.string().uuid(),
+    ...reglaBase,
+    // docs/48 Ola 1 (C1-4) — obligatorio al crear: sin fecha de vigencia una
+    // regla nueva no puede cerrar automáticamente a la que reemplaza.
+    dateStart: z.string().datetime(),
+  })
   .superRefine(refinarRegla);
 
 export const priceRuleUpdateInput = z

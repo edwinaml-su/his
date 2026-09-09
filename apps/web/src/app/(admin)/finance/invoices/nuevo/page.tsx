@@ -201,6 +201,8 @@ export default function NuevaFacturaPage() {
     if (!patientId.trim()) return "El ID de paciente es requerido.";
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRe.test(patientId.trim())) return "ID de paciente no es un UUID válido.";
+    // docs/48 Ola 1 (H-08) — sin cuenta no hay lista de precios que ancle los cargos.
+    if (!cuentaId) return "Selecciona la cuenta del paciente.";
     if (!currencyId) return "Selecciona la moneda.";
     for (let i = 0; i < items.length; i++) {
       const it = items[i]!;
@@ -221,7 +223,8 @@ export default function NuevaFacturaPage() {
       patientId: patientId.trim(),
       ...(insurerId ? { insurerId } : {}),
       ...(costCenterId ? { costCenterId } : {}),
-      ...(cuentaId ? { patientAccountId: cuentaId } : {}),
+      // docs/48 Ola 1 (H-08) — patientAccountId es obligatorio; validate() ya lo exige arriba.
+      patientAccountId: cuentaId,
       currencyId,
       status,
       items: items.map((it) => ({

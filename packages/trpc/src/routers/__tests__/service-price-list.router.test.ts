@@ -156,6 +156,7 @@ describe("servicePriceListRouter", () => {
         priceListId: PRICE_LIST_ID,
         appliedOn: "category",
         categoryId: CATEGORY_ID,
+        dateStart: "2026-09-09T00:00:00.000Z",
         computePrice: "formula",
         priceMinMargin: 0.7,
         priceMaxMargin: 0.7,
@@ -174,12 +175,58 @@ describe("servicePriceListRouter", () => {
       expect(insert).toContain("category");
     });
 
+    it("addRule rechaza (Zod) sin dateStart — obligatorio (docs/48 C1-4)", async () => {
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.addRule({
+          priceListId: PRICE_LIST_ID,
+          appliedOn: "item",
+          itemCode: "AVT-001",
+          computePrice: "fixed",
+          fixedPrice: 1,
+        }),
+      ).rejects.toThrow();
+    });
+
+    it("addRule cierra la vigencia de la regla activa que reemplaza (docs/48 C1-4)", async () => {
+      setupTx();
+      const calls: string[] = [];
+      prisma.$queryRawUnsafe.mockImplementation((async (sql: string, ...params: unknown[]) => {
+        calls.push(String(sql));
+        if (String(sql).startsWith("UPDATE")) {
+          expect(params[0]).toBe("2026-09-09T00:00:00.000Z"); // dateEnd = dateStart de la nueva
+          return undefined;
+        }
+        if (String(sql).startsWith("INSERT")) return [{ id: REGLA_ID }];
+        return [{ id: "ok" }];
+      }) as never);
+
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+      await caller.addRule({
+        priceListId: PRICE_LIST_ID,
+        appliedOn: "item",
+        itemCode: "AVT-001",
+        dateStart: "2026-09-09T00:00:00.000Z",
+        computePrice: "fixed",
+        fixedPrice: 5,
+      });
+
+      expect(calls.some((sql) => sql.startsWith("UPDATE") && sql.includes('"ServicePriceRule"'))).toBe(true);
+    });
+
     it("addRule rechaza una regla de categoría sin categoría (validación de contrato)", async () => {
       setupTx();
       const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
 
       await expect(
-        caller.addRule({ priceListId: PRICE_LIST_ID, appliedOn: "category", computePrice: "fixed", fixedPrice: 1 }),
+        caller.addRule({
+          priceListId: PRICE_LIST_ID,
+          appliedOn: "category",
+          dateStart: "2026-09-09T00:00:00.000Z",
+          computePrice: "fixed",
+          fixedPrice: 1,
+        }),
       ).rejects.toThrow(/categoría/i);
     });
 

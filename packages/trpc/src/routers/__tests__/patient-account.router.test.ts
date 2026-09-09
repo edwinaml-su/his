@@ -80,7 +80,20 @@ describe("patientAccountRouter", () => {
         patientId: PATIENT_ID,
         numeroCuenta: "CTA00001",
         tipoCuentaId: TIPO_CUENTA_ID,
+        status: "ABIERTA",
       });
+    });
+
+    // docs/48 Ola 1 (C1-5) — RN-HIS-BOT-001 R1: emergencia sin pagador definido.
+    it("abre PENDIENTE_REGULARIZAR cuando emergenciaSinPagador es true", async () => {
+      setupTx();
+      prisma.patientAccount.create.mockResolvedValue({ id: ACCOUNT_ID, numeroCuenta: "CTA00001" } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear({ patientId: PATIENT_ID, tipoCuentaId: TIPO_CUENTA_ID, emergenciaSinPagador: true });
+
+      const createArgs = prisma.patientAccount.create.mock.calls[0]![0];
+      expect(createArgs.data.status).toBe("PENDIENTE_REGULARIZAR");
     });
 
     it("rechaza si tipoCuentaId no existe o está inactivo en el tenant", async () => {
@@ -262,6 +275,16 @@ describe("patientAccountRouter", () => {
         tipoCuenta: { select: { id: true, code: true, nombre: true } },
       });
       expect(args.orderBy).toMatchObject({ numeroCuenta: "asc" });
+    });
+  });
+
+  // docs/48 Ola 1 (C1-5) — stub honesto: reserva el contrato, no implementa bloqueos.
+  describe("cerrar", () => {
+    it("lanza NOT_IMPLEMENTED (bloqueos reales llegan en Ola 4)", async () => {
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.cerrar({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "NOT_IMPLEMENTED",
+      });
     });
   });
 });

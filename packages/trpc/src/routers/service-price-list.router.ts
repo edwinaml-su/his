@@ -686,6 +686,32 @@ export const servicePriceListRouter = router({
       if (input.categoryId) await assertCategoriaDelTenant(tx, input.categoryId, tenant.organizationId);
       if (input.basePriceListId) await assertListaDelTenant(tx, input.basePriceListId, tenant.organizationId);
 
+      // docs/48 Ola 1 (C1-4) — cierre de vigencia automático: la nueva regla
+      // reemplaza a cualquier regla activa del MISMO nivel/objetivo (item+código
+      // o category+categoría, o global) que siga abierta (dateEnd IS NULL) y
+      // haya empezado antes que esta. Mismo criterio de "objetivo" que usa el
+      // resolver (price-resolver.ts SQL_REGLA_CANDIDATA): appliedOn + itemCode/categoryId.
+      await tx.$queryRawUnsafe(
+        `UPDATE "ServicePriceRule"
+            SET "dateEnd" = $1::timestamptz, "updatedBy" = $2::uuid, "updatedAt" = now()
+          WHERE "priceListId" = $3::uuid
+            AND active = true
+            AND "dateEnd" IS NULL
+            AND "appliedOn" = $4
+            AND (
+              ($4 = 'item'     AND "itemCode"   = $5)
+              OR ($4 = 'category' AND "categoryId" = $6::uuid)
+              OR ($4 = 'global')
+            )
+            AND ("dateStart" IS NULL OR "dateStart" < $1::timestamptz)`,
+        input.dateStart,
+        ctx.user?.id ?? null,
+        input.priceListId,
+        input.appliedOn,
+        input.itemCode ?? null,
+        input.categoryId ?? null,
+      );
+
       const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         `INSERT INTO "ServicePriceRule"
            ("priceListId", "appliedOn", "itemCode", "categoryId", "minQuantity",

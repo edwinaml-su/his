@@ -110,6 +110,29 @@ enum TipoServicio {
   @@schema("public")
 }
 
+/// docs/48 Ola 1 (C1-1/C1-5) — estado administrativo de la cuenta del paciente.
+/// PENDIENTE_REGULARIZAR: cuenta abierta en emergencia sin pagador definido
+/// (RN-HIS-BOT-001 R1) — el bloqueo real de cierre llega en Ola 4 (C4-1).
+enum AccountStatus {
+  ABIERTA
+  PENDIENTE_REGULARIZAR
+  CERRADA
+
+  @@schema("public")
+}
+
+/// docs/48 Ola 1 (C1-1/C1-2) — estado de un cargo (PatientAccountService/InvoiceItem).
+/// REVERTIDO marca el cargo original que fue anulado; REVERSION marca la línea
+/// negativa que lo anula (nunca se borra el original — docs/48 C2-4).
+enum ChargeStatus {
+  VIGENTE
+  PENDIENTE_TARIFA
+  REVERTIDO
+  REVERSION
+
+  @@schema("public")
+}
+
 /// TDR §8.1 — clase de identificador del paciente en MPI.
 enum PatientIdentifierKind {
   DUI
@@ -7871,6 +7894,9 @@ model Invoice {
 }
 
 /// Línea de factura. costCenterId obligatorio (RESTRICT) — sin CC no hay análisis presupuestario.
+/// docs/48 Ola 1 (C1-2/H-05) — priceListId/priceRuleId/resolvedAt/priceSource
+/// congelan la tarifa aplicada; nullable hasta que Ola 2 (C2-3) haga que
+/// invoice.create llame resolverPrecio server-side.
 model InvoiceItem {
   id            String   @id @default(uuid()) @db.Uuid
   invoiceId     String   @db.Uuid
@@ -7881,7 +7907,14 @@ model InvoiceItem {
   serviceUnitId String?  @db.Uuid
   costCenterId  String   @db.Uuid
   estimatedCost Decimal? @db.Decimal(14, 2)
+  /// FK lógica a "ServicePriceList"/"ServicePriceRule" (sin relación Prisma — tablas fuera de schema.prisma).
+  priceListId   String?   @db.Uuid
+  priceRuleId   String?   @db.Uuid
+  resolvedAt    DateTime? @db.Timestamptz()
+  /// regla | lista | standard | manual_override — fuente que produjo el precio congelado.
+  priceSource   String?   @db.VarChar(20)
   createdAt     DateTime @default(now()) @db.Timestamptz()
+  updatedAt     DateTime @updatedAt
 
   invoice     Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   serviceUnit ServiceUnit? @relation("InvoiceItemServiceUnit", fields: [serviceUnitId], references: [id], onDelete: SetNull)
@@ -8028,6 +8061,11 @@ model PatientAccount {
   encounterId    String?  @db.Uuid       /// opcional: cuenta con o sin admisión.
   /// CC-0015 — tipo de cuenta (pivote de lista de precios). Requerido al crear cuentas nuevas.
   tipoCuentaId   String?  @db.Uuid
+  /// docs/48 Ola 1 (C1-5) — estado administrativo. PENDIENTE_REGULARIZAR = emergencia
+  /// sin pagador definido (RN-HIS-BOT-001 R1); bloqueo de cierre real llega en Ola 4.
+  status         AccountStatus @default(ABIERTA)
+  closedAt       DateTime? @db.Timestamptz()
+  closedBy       String?  @db.Uuid
   createdAt      DateTime @default(now()) @db.Timestamptz()
   createdBy      String?  @db.Uuid
 
@@ -8054,21 +8092,47 @@ model PatientAccount {
   @@schema("public")
 }
 
-/// Servicio registrado dentro de una cuenta de paciente (HOSPITALARIO | NO_HOSPITALARIO).
+/// Servicio/cargo registrado dentro de una cuenta de paciente (HOSPITALARIO | NO_HOSPITALARIO).
+/// docs/48 Ola 1 (C1-2/C1-1) — línea de cargo canónica (@AS): el precio se
+/// congela server-side (priceListId/priceRuleId/resolvedAt/priceSource) y
+/// nunca se borra — una reversión crea una fila REVERSION enlazada por
+/// reversalOfId (Ola 2, C2-4). La captura real (Ola 2, C2-1/C2-2) todavía no
+/// escribe aquí — los campos quedan nullable hasta entonces.
 model PatientAccountService {
   id          String       @id @default(uuid()) @db.Uuid
   accountId   String       @db.Uuid
   tipo        TipoServicio
   descripcion String?      @db.VarChar(300)
   encounterId String?      @db.Uuid
+  /// Código de catálogo del cargo (tarifario/LabTest/etc.) — insumo de resolverPrecio.
+  code          String?      @db.VarChar(40)
+  quantity      Decimal      @default(1) @db.Decimal(12, 2)
+  unitPrice     Decimal?     @db.Decimal(12, 2)
+  totalPrice    Decimal?     @db.Decimal(12, 2)
+  /// FK lógica a "ServicePriceList"/"ServicePriceRule" (sin relación Prisma — ver TipoCuenta.priceListId).
+  priceListId   String?      @db.Uuid
+  priceRuleId   String?      @db.Uuid
+  resolvedAt    DateTime?    @db.Timestamptz()
+  /// regla | lista | standard | manual_override — fuente que produjo el precio congelado.
+  priceSource   String?      @db.VarChar(20)
+  status        ChargeStatus @default(VIGENTE)
+  /// Self-FK: la línea REVERSION apunta al cargo VIGENTE/REVERTIDO que anula.
+  reversalOfId  String?      @db.Uuid
+  /// Acto clínico que originó el cargo: dispensacion | lab_order | imaging | etc.
+  origen        String?      @db.VarChar(30)
+  referenciaId  String?      @db.Uuid
+  updatedAt     DateTime     @updatedAt
   createdAt   DateTime     @default(now()) @db.Timestamptz()
   createdBy   String?      @db.Uuid
 
-  account   PatientAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  encounter Encounter?     @relation("EncounterAccountServices", fields: [encounterId], references: [id], onDelete: SetNull)
+  account     PatientAccount          @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  encounter   Encounter?              @relation("EncounterAccountServices", fields: [encounterId], references: [id], onDelete: SetNull)
+  reversalOf  PatientAccountService?  @relation("PatientAccountServiceReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversals   PatientAccountService[] @relation("PatientAccountServiceReversal")
 
   @@index([accountId])
   @@index([encounterId])
+  @@index([reversalOfId])
   @@schema("public")
 }
 

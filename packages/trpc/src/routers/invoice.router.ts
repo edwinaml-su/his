@@ -81,8 +81,9 @@ const createInput = z.object({
   encounterId: z.string().uuid().optional(),
   insurerId: z.string().uuid().optional(),
   costCenterId: z.string().uuid().optional(),
-  // CC-0015 — cuenta de origen de los cargos (ancla la lista de precios aplicada).
-  patientAccountId: z.string().uuid().optional(),
+  // docs/48 Ola 1 (H-08) — obligatoria: sin cuenta no hay lista de precios
+  // que ancle los cargos, y el dictamen no encontró un flujo real sin ella.
+  patientAccountId: z.string().uuid(),
   currencyId: z.string().uuid(),
   items: z.array(itemInput).min(1),
   status: z.enum(["DRAFT", "ISSUED"]).default("DRAFT"),
