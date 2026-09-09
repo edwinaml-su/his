@@ -105,7 +105,7 @@ export async function persistPatientMovementEvent(
     `INSERT INTO ece.gs1_epcis_patient_event
        (tipo_evento, subtipo, what, where_data, event_time,
         why, who, payload_hash, establecimiento_id, status)
-     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5,
+     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::timestamptz,
              $6::jsonb, $7::jsonb, $8, $9::uuid, $10)`,
     row.tipo_evento,
     row.subtipo,
