@@ -1216,6 +1216,25 @@ export type SecurityBreakGlassActivatedPayload = z.infer<
 >;
 
 // -----------------------------------------------------------------------------
+// cargo.pendiente_tarifa  (docs/48 Ola 2, C2-1)
+// Emitido por `capturarCargo` (packages/trpc/src/lib/charge-capture.ts) cuando
+// `resolverPrecio` no resuelve precio para el código — la línea se crea igual,
+// con unitPrice NULL y status PENDIENTE_TARIFA (RN-HIS-BOT-001 R3: nunca 0).
+// -----------------------------------------------------------------------------
+
+export const cargoPendienteTarifaPayloadSchema = z.object({
+  cargoId: z.string().uuid(),
+  accountId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  code: z.string().min(1),
+  quantity: z.number(),
+  origen: z.string().min(1),
+  referenciaId: z.string().uuid().nullable(),
+});
+
+export type CargoPendienteTarifaPayload = z.infer<typeof cargoPendienteTarifaPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1667,6 +1686,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("security.breakGlass.activated"),
     payload: securityBreakGlassActivatedPayloadSchema,
+  }),
+  // docs/48 Ola 2 (C2-1) — capturarCargo: precio no resoluble, línea PENDIENTE_TARIFA.
+  z.object({
+    eventType: z.literal("cargo.pendiente_tarifa"),
+    payload: cargoPendienteTarifaPayloadSchema,
   }),
 ]);
 

@@ -142,6 +142,10 @@ export default function NuevaFacturaPage() {
       const resultados = (await utils.servicePriceList.resolverPorCuenta.fetch({
         cuentaId,
         codes: [line.code.trim()],
+        // docs/48 Ola 2 (C2-3) — misma cantidad que enviará invoice.create al
+        // re-resolver server-side; si difieren, una regla por tramo de
+        // cantidad podría devolver un precio distinto y forzar un override.
+        cantidad: parseFloat(line.quantity) || 1,
       })) as Array<{ code: string; precio: number | null; fuente: string | null }>;
       const resultado = resultados[0];
       if (resultado?.precio != null) {
@@ -209,6 +213,8 @@ export default function NuevaFacturaPage() {
       if (!it.description.trim()) return `Línea ${i + 1}: descripción requerida.`;
       if (!it.costCenterId) return `Línea ${i + 1}: centro de costo requerido.`;
       if (parseFloat(it.quantity) <= 0) return `Línea ${i + 1}: cantidad debe ser positiva.`;
+      // docs/48 Ola 2 (C2-3/H-03) — el servidor re-resuelve el precio por code; sin código no hay qué resolver.
+      if (!it.code.trim()) return `Línea ${i + 1}: código de tarifario requerido.`;
     }
     return null;
   }
@@ -229,6 +235,7 @@ export default function NuevaFacturaPage() {
       status,
       items: items.map((it) => ({
         description: it.description.trim(),
+        code: it.code.trim(),
         quantity: parseFloat(it.quantity),
         unitPrice: parseFloat(it.unitPrice),
         costCenterId: it.costCenterId,

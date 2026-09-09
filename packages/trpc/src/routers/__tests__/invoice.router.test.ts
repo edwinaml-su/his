@@ -13,9 +13,25 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
+
+// docs/48 Ola 2 (C2-3) — resolverPrecio ya tiene su propia suite
+// (price-resolver.test.ts); aquí solo se ejercita el CABLEADO de invoice.create
+// (re-resolución server-side, override auditado). `mapFuenteAPriceSource` se
+// conserva real (es una función pura, no hay razón para mockearla).
+vi.mock("../../lib/price-resolver", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../lib/price-resolver")>();
+  return {
+    ...original,
+    resolverPrecio: vi.fn(),
+  };
+});
+
 import { invoiceRouter } from "../invoice.router";
+import { resolverPrecio } from "../../lib/price-resolver";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
+
+const resolverPrecioMock = vi.mocked(resolverPrecio);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +56,7 @@ describe("invoiceRouter", () => {
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    resolverPrecioMock.mockReset();
   });
 
   describe("listCostCenters", () => {
@@ -148,6 +165,7 @@ describe("invoiceRouter", () => {
       items: [
         {
           description: "Consulta general",
+          code: "CONS-GEN",
           quantity: 1,
           unitPrice: 10,
           costCenterId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
@@ -181,6 +199,14 @@ describe("invoiceRouter", () => {
     it("persiste patientAccountId cuando la cuenta pertenece al tenant y paciente", async () => {
       mockTransaction(prisma);
       (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      // docs/48 Ola 2 (C2-3) — el precio resuelto coincide con el unitPrice
+      // enviado (10): la línea pasa sin necesitar override.
+      resolverPrecioMock.mockResolvedValue({
+        precio: 10,
+        fuente: "estandar",
+        priceListId: null,
+        reglaId: null,
+      });
       const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
       queryMock
         .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
@@ -194,7 +220,136 @@ describe("invoiceRouter", () => {
       expect(result).toMatchObject({ id: "inv-1" });
       const insertCall = queryMock.mock.calls[2]!;
       expect(String(insertCall[0])).toContain('"patientAccountId"');
-      expect(insertCall.at(-1)).toBe(accountId);
+      expect(insertCall).toContain(accountId);
+    });
+  });
+
+  // docs/48 Ola 2 (C2-3/H-03) — invoice.create re-resuelve precio server-side.
+  describe("create — re-resolución de precio server-side (docs/48 C2-3/H-03)", () => {
+    const patientId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const accountId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+    const baseInput = {
+      patientId,
+      patientAccountId: accountId,
+      currencyId: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      items: [
+        {
+          description: "Consulta general",
+          code: "CONS-GEN",
+          quantity: 1,
+          unitPrice: 10,
+          costCenterId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        },
+      ],
+    };
+
+    function mockHastaCuenta(queryMock: ReturnType<typeof vi.fn>) {
+      queryMock
+        .mockResolvedValueOnce([{ id: "estab-1" }]) // Establishment
+        .mockResolvedValueOnce([{ id: accountId }]); // PatientAccount check — OK
+    }
+
+    it("rechaza cuando el precio del cliente difiere del resuelto y no hay override", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 25, // el cliente mandó 10 — no coincide
+        fuente: "regla",
+        priceListId: "list-1",
+        reglaId: "regla-1",
+      });
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      mockHastaCuenta(queryMock);
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.create(baseInput)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    });
+
+    it("rechaza cuando el precio no se puede resolver y no hay override (nunca 0)", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      resolverPrecioMock.mockResolvedValue({
+        precio: null,
+        fuente: null,
+        priceListId: null,
+        reglaId: null,
+      });
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      mockHastaCuenta(queryMock);
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.create(baseInput)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    });
+
+    it("con overridePrecio + rol ADMIN acepta el precio del cliente y persiste priceSource='manual_override'", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 25,
+        fuente: "regla",
+        priceListId: "list-1",
+        reglaId: "regla-1",
+      });
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      mockHastaCuenta(queryMock);
+      queryMock
+        .mockResolvedValueOnce([{ id: "inv-1" }]) // INSERT Invoice
+        .mockResolvedValueOnce(undefined); // INSERT InvoiceItem
+
+      // MOCK_TENANT trae rol ADMIN por defecto (packages/test-utils).
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.create({
+        ...baseInput,
+        items: [
+          {
+            ...baseInput.items[0]!,
+            overridePrecio: { justificacion: "Descuento autorizado por dirección médica" },
+          },
+        ],
+      });
+
+      expect(result).toMatchObject({ id: "inv-1" });
+      const itemInsertCall = queryMock.mock.calls[3]!;
+      expect(String(itemInsertCall[0])).toContain('"priceSource"');
+      expect(itemInsertCall).toContain("manual_override");
+      // el override queda auditado en notes de la factura
+      const invoiceInsertCall = queryMock.mock.calls[2]!;
+      expect(String(invoiceInsertCall[0])).toContain("notes");
+      expect(invoiceInsertCall.some((v: unknown) => typeof v === "string" && v.includes("Descuento autorizado"))).toBe(
+        true,
+      );
+    });
+
+    it("rechaza el override (FORBIDDEN) si el actor no tiene rol ADMIN/DIR", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 25,
+        fuente: "regla",
+        priceListId: "list-1",
+        reglaId: "regla-1",
+      });
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      mockHastaCuenta(queryMock);
+
+      const tenantBilling = { ...MOCK_TENANT, roleCodes: ["BILLING"] };
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma, tenant: tenantBilling }));
+
+      await expect(
+        caller.create({
+          ...baseInput,
+          items: [
+            {
+              ...baseInput.items[0]!,
+              overridePrecio: { justificacion: "Descuento autorizado por dirección médica" },
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 });

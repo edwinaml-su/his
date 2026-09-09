@@ -49,7 +49,23 @@ vi.mock("@his/database", async (importOriginal) => {
   };
 });
 
+// docs/48 Ola 2 (C2-2/C2-4) — capturarCargo/revertirCargo ya tienen su propia
+// suite (charge-capture.test.ts); aquí solo se verifica el CABLEADO (se
+// llaman con los argumentos correctos, en la ruta correcta).
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: vi.fn().mockResolvedValue({
+    cargoId: "cargo-default",
+    status: "VIGENTE",
+    unitPrice: 10,
+  }),
+  revertirCargo: vi.fn().mockResolvedValue({ reversionId: "reversion-default" }),
+}));
+
 import { dispensationRouter } from "../pharmacy/dispensation.router";
+import { capturarCargo, revertirCargo } from "../../lib/charge-capture";
+
+const capturarCargoMock = vi.mocked(capturarCargo);
+const revertirCargoMock = vi.mocked(revertirCargo);
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -109,7 +125,9 @@ describe("dispensationRouter — reservas consolidadas", () => {
     // emitDomainEvent usa $executeRawUnsafe y tablas de outbox; no-op en tests
     prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
     // reserveItem exige receta dispensable (Paso 0) — default: existe
-    prisma.prescription.findFirst.mockResolvedValue({ id: ORDER } as never);
+    prisma.prescription.findFirst.mockResolvedValue({ id: ORDER, encounterId: null } as never);
+    capturarCargoMock.mockClear();
+    revertirCargoMock.mockClear();
   });
 
   afterEach(() => {
@@ -373,6 +391,97 @@ describe("dispensationRouter — reservas consolidadas", () => {
   });
 
   // -------------------------------------------------------------------------
+  // docs/48 Ola 2 (C2-2) — captura de cargo en reserveItem
+  // -------------------------------------------------------------------------
+  describe("reserveItem — captura de cargo (docs/48 C2-2)", () => {
+    beforeEach(() => {
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
+      prisma.pharmacyReservation.create.mockResolvedValue(
+        makeReservation() as never,
+      );
+    });
+
+    it("llama a capturarCargo en la MISMA tx, con code=sku del StockItem cuando existe", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue({
+        id: STOCK_ITEM_ID,
+        sku: "SKU-AMOX-500",
+      } as never);
+      prisma.stockLot.findFirst.mockResolvedValue({
+        id: STOCK_LOT_ID,
+        qualityStatus: "AVAILABLE",
+      } as never);
+      prisma.stockLot.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.stockMovement.create.mockResolvedValue({ id: "mov-1" } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        serie: SERIE,
+        patientId: PATIENT,
+      });
+
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          organizationId: ORG,
+          patientId: PATIENT,
+          code: "SKU-AMOX-500",
+          quantity: 1,
+          origen: "DISPENSACION_FARMACIA",
+          referenciaId: RES,
+        }),
+      );
+      // el resultado expone el cargo capturado (visibilidad de PENDIENTE_TARIFA en UI)
+      expect((result as unknown as { cargo: { status: string } }).cargo.status).toBe("VIGENTE");
+    });
+
+    it("cae al GTIN crudo como code cuando el StockItem aún no está cargado (SIN_CATALOGO)", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        serie: SERIE,
+        patientId: PATIENT,
+      });
+
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ code: GTIN }),
+      );
+    });
+
+    it("si capturarCargo lanza por falta de cuenta activa, la mutación completa falla", async () => {
+      prisma.stockItem.findFirst.mockResolvedValue(null as never);
+      capturarCargoMock.mockRejectedValueOnce(
+        Object.assign(new Error("PRECONDITION_FAILED"), { code: "PRECONDITION_FAILED" }),
+      );
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          serie: SERIE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toThrow();
+
+      // Misma transacción (mismo tx que validateAndDecrementStock): en
+      // Postgres real, el rollback deshace también la reserva y el descuento
+      // de inventario recién creados — aquí se confirma que el error de
+      // capturarCargo se propaga sin ser tragado por el router.
+      expect(capturarCargoMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // US.F2.6.8 — cancelReservation
   // -------------------------------------------------------------------------
   describe("cancelReservation", () => {
@@ -434,6 +543,47 @@ describe("dispensationRouter — reservas consolidadas", () => {
           }),
         }),
       );
+    });
+
+    it("docs/48 Ola 2 (C2-4) — revierte el cargo VIGENTE con referenciaId = reservation.id", async () => {
+      const existing = makeReservation({ status: "RESERVED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+      prisma.pharmacyReservation.update.mockResolvedValue(
+        { ...existing, status: "CANCELLED", cancelMotivo: "devolución" } as never,
+      );
+      prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue({
+        id: "cargo-1",
+      } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.cancelReservation({ reservationId: RES, motivo: "devolución" });
+
+      expect(prisma.patientAccountService.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ referenciaId: RES, status: "VIGENTE" }),
+        }),
+      );
+      expect(revertirCargoMock).toHaveBeenCalledWith(prisma, {
+        cargoId: "cargo-1",
+        motivo: "devolución",
+        actorId: expect.any(String),
+      });
+    });
+
+    it("docs/48 Ola 2 (C2-4) — no revierte nada si la reserva nunca generó un cargo VIGENTE", async () => {
+      const existing = makeReservation({ status: "RESERVED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+      prisma.pharmacyReservation.update.mockResolvedValue(
+        { ...existing, status: "CANCELLED" } as never,
+      );
+      prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.cancelReservation({ reservationId: RES, motivo: "x" });
+
+      expect(revertirCargoMock).not.toHaveBeenCalled();
     });
 
     it("no repone stock si la reserva nunca descontó (sin StockMovement OUT)", async () => {

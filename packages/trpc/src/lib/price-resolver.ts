@@ -42,6 +42,20 @@ export interface PrecioResuelto {
   reglaId: string | null;
 }
 
+/**
+ * docs/48 Ola 2 (C2-1/C2-3) — mapea `PrecioFuente` al string persistido en la
+ * columna `priceSource` de `PatientAccountService`/`InvoiceItem`. "estandar"
+ * se renombra a "standard" para esa columna; el resto se conserva tal cual.
+ * `null` (precio no resuelto) no tiene `priceSource` — el llamador decide
+ * entre `null` (PENDIENTE_TARIFA) o "manual_override" (override auditado).
+ */
+export function mapFuenteAPriceSource(fuente: PrecioFuente): string | null {
+  if (fuente === "regla") return "regla";
+  if (fuente === "lista") return "lista";
+  if (fuente === "estandar") return "standard";
+  return null;
+}
+
 /** Profundidad máxima de la cascada `base = 'pricelist'` (igual que la guarda del trigger, sql/204). */
 const MAX_PROFUNDIDAD_CASCADA = 5;
 
