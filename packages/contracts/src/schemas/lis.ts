@@ -50,6 +50,10 @@ export const labTestListInput = z.object({
 export const labOrderItemInput = z.object({
   testId: z.string().uuid(),
   notes: z.string().trim().max(2000).optional(),
+  /** Rediseño lab 2026-09 — cantidad solicitada (mockup: columna Cantidad). Retrocompatible. */
+  quantity: z.number().int().min(1).default(1),
+  /** Rediseño lab 2026-09 — subset de LabTestParameter escogido para este examen. */
+  parameterIds: z.array(z.string().uuid()).optional(),
 });
 
 /**

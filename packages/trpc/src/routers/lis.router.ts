@@ -23,6 +23,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { Prisma } from "@his/database";
+import type { PrismaClient } from "@prisma/client";
 import {
   labPanelListInput,
   labTestListInput,
@@ -47,6 +48,13 @@ import {
   labTestUpdateInput,
   labTestToggleInput,
   labTestListByAreaInput,
+  labSampleTypeCreateInput,
+  labSampleTypeUpdateInput,
+  labSampleSubtypeCreateInput,
+  labSampleSubtypeUpdateInput,
+  labTestParameterAddInput,
+  labTestParameterRemoveInput,
+  labCatalogoImportInput,
   type LabReferenceRange,
   type LisSex,
   type LisResultFlag,
@@ -72,6 +80,14 @@ function rethrowCatalogPrisma(err: unknown): never {
   throw err;
 }
 
+/** Igual que `rethrowCatalogPrisma` pero con mensaje a medida (tipos/subtipos/parámetros). */
+function rethrowUniqueConflict(err: unknown, message: string): never {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    throw new TRPCError({ code: "CONFLICT", message });
+  }
+  throw err;
+}
+
 /**
  * Beta.15 — convierte Prisma Decimal-or-null a number-or-null para el payload
  * Zod del evento `lab.criticalValue`. Prisma serializa refRangeLow/High como
@@ -86,6 +102,91 @@ function decimalToNullableNumber(
 }
 
 export const lisRouter = router({
+  /**
+   * Rediseño lab 2026-09 — payload único para el front de selección en cascada
+   * (Tipo → Subtipo → Sección → Pruebas) del mockup. Lectura híbrida
+   * global-o-tenant, igual que `panel.list`/`test.list` (ctx.prisma directo,
+   * sin withTenantContext — es catálogo, no dato tenant-restringido por RLS).
+   */
+  catalog: router({
+    cascada: tenantProcedure.query(async ({ ctx }) => {
+      const orgFilter = {
+        OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+      };
+
+      const [tipos, subtipos, secciones, tests] = await Promise.all([
+        ctx.prisma.labSampleType.findMany({
+          where: { ...orgFilter, active: true },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        }),
+        ctx.prisma.labSampleSubtype.findMany({
+          where: { ...orgFilter, active: true },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        }),
+        ctx.prisma.labPanel.findMany({
+          where: { ...orgFilter, active: true, area: "LABORATORIO" },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        }),
+        ctx.prisma.labTest.findMany({
+          where: { ...orgFilter, active: true, panel: { area: "LABORATORIO" } },
+          select: {
+            id: true,
+            name: true,
+            panelId: true,
+            sampleTypeId: true,
+            sampleSubtypeId: true,
+            defaultQty: true,
+            _count: { select: { parameters: true } },
+          },
+        }),
+      ]);
+
+      const countBy = (key: "sampleTypeId" | "sampleSubtypeId" | "panelId"): Map<string, number> => {
+        const map = new Map<string, number>();
+        for (const t of tests) {
+          const k = t[key];
+          if (!k) continue;
+          map.set(k, (map.get(k) ?? 0) + 1);
+        }
+        return map;
+      };
+      const tipoCounts = countBy("sampleTypeId");
+      const subtipoCounts = countBy("sampleSubtypeId");
+      const seccionCounts = countBy("panelId");
+
+      return {
+        tipos: tipos.map((t) => ({
+          id: t.id,
+          name: t.name,
+          displayOrder: t.displayOrder,
+          testCount: tipoCounts.get(t.id) ?? 0,
+        })),
+        subtipos: subtipos.map((s) => ({
+          id: s.id,
+          sampleTypeId: s.sampleTypeId,
+          name: s.name,
+          displayOrder: s.displayOrder,
+          testCount: subtipoCounts.get(s.id) ?? 0,
+        })),
+        secciones: secciones.map((p) => ({
+          id: p.id,
+          name: p.name,
+          displayOrder: p.displayOrder,
+          testCount: seccionCounts.get(p.id) ?? 0,
+        })),
+        pruebas: tests.map((t) => ({
+          id: t.id,
+          name: t.name,
+          panelId: t.panelId,
+          sampleTypeId: t.sampleTypeId,
+          sampleSubtypeId: t.sampleSubtypeId,
+          defaultQty: t.defaultQty,
+          paramCount: t._count.parameters,
+        })),
+      };
+    }),
+  }),
+
   panel: router({
     list: tenantProcedure.input(labPanelListInput).query(async ({ ctx, input }) => {
       return ctx.prisma.labPanel.findMany({
@@ -232,6 +333,21 @@ export const lisRouter = router({
     }),
 
     /**
+     * Rediseño lab 2026-09 — parámetros (analitos) configurados para una
+     * prueba. Payload separado de `catalog.cascada` (solo lleva paramCount)
+     * para no inflar la respuesta de la cascada completa.
+     */
+    parameters: tenantProcedure
+      .input(z.object({ testId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        return ctx.prisma.labTestParameter.findMany({
+          where: { labTestId: input.testId },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+          select: { id: true, name: true, displayOrder: true },
+        });
+      }),
+
+    /**
      * CC-0011 — crea un test del catálogo LIS del propio tenant.
      * organizationId siempre se fuerza desde ctx.tenant (nunca del input).
      */
@@ -298,6 +414,426 @@ export const lisRouter = router({
           throw new TRPCError({ code: "NOT_FOUND", message: "Test no encontrado en el tenant." });
         }
         return { ok: true as const };
+      });
+    }),
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Rediseño lab 2026-09 — catálogo de TIPOS/SUBTIPOS de muestra (mockup:
+  // Mantenimiento de catálogos → Tipos de muestra / Subtipos de muestra).
+  // ---------------------------------------------------------------------------
+  sampleType: router({
+    list: tenantProcedure
+      .input(z.object({ includeInactive: z.boolean().default(false) }))
+      .query(async ({ ctx, input }) => {
+        return ctx.prisma.labSampleType.findMany({
+          where: {
+            OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+            ...(!input.includeInactive && { active: true }),
+          },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        });
+      }),
+
+    create: catalogAdminProc.input(labSampleTypeCreateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        try {
+          return await tx.labSampleType.create({
+            data: { ...input, organizationId: ctx.tenant.organizationId },
+          });
+        } catch (err) {
+          rethrowUniqueConflict(err, "Ya existe un tipo de muestra con ese nombre.");
+        }
+      });
+    }),
+
+    /** `active: false` — bloquea si el tipo tiene subtipos activos o pruebas activas que lo usan. */
+    update: catalogAdminProc.input(labSampleTypeUpdateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const { id, active, ...rest } = input;
+        const current = await tx.labSampleType.findFirst({
+          where: { id, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!current) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Tipo de muestra no encontrado en el tenant." });
+        }
+
+        if (active === false) {
+          const [activeSubtypes, activeTests] = await Promise.all([
+            tx.labSampleSubtype.count({ where: { sampleTypeId: id, active: true } }),
+            tx.labTest.count({ where: { sampleTypeId: id, active: true } }),
+          ]);
+          if (activeSubtypes > 0 || activeTests > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se puede desactivar: tiene ${activeSubtypes} subtipo(s) activo(s) y ${activeTests} prueba(s) activa(s) que lo usan.`,
+            });
+          }
+        }
+
+        try {
+          return await tx.labSampleType.update({
+            where: { id },
+            data: { ...rest, ...(active !== undefined && { active }) },
+          });
+        } catch (err) {
+          rethrowUniqueConflict(err, "Ya existe un tipo de muestra con ese nombre.");
+        }
+      });
+    }),
+  }),
+
+  sampleSubtype: router({
+    list: tenantProcedure
+      .input(z.object({ sampleTypeId: z.string().uuid().optional(), includeInactive: z.boolean().default(false) }))
+      .query(async ({ ctx, input }) => {
+        return ctx.prisma.labSampleSubtype.findMany({
+          where: {
+            OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+            ...(input.sampleTypeId && { sampleTypeId: input.sampleTypeId }),
+            ...(!input.includeInactive && { active: true }),
+          },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        });
+      }),
+
+    create: catalogAdminProc.input(labSampleSubtypeCreateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const parent = await tx.labSampleType.findFirst({
+          where: {
+            id: input.sampleTypeId,
+            OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+          },
+          select: { id: true },
+        });
+        if (!parent) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Tipo de muestra no encontrado." });
+        }
+        try {
+          return await tx.labSampleSubtype.create({
+            data: { ...input, organizationId: ctx.tenant.organizationId },
+          });
+        } catch (err) {
+          rethrowUniqueConflict(err, "Ya existe un subtipo con ese nombre para este tipo de muestra.");
+        }
+      });
+    }),
+
+    /** `active: false` — bloquea si el subtipo tiene pruebas activas que lo usan. */
+    update: catalogAdminProc.input(labSampleSubtypeUpdateInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const { id, active, ...rest } = input;
+        const current = await tx.labSampleSubtype.findFirst({
+          where: { id, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!current) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Subtipo de muestra no encontrado en el tenant." });
+        }
+
+        if (active === false) {
+          const activeTests = await tx.labTest.count({ where: { sampleSubtypeId: id, active: true } });
+          if (activeTests > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se puede desactivar: tiene ${activeTests} prueba(s) activa(s) que lo usan.`,
+            });
+          }
+        }
+
+        try {
+          return await tx.labSampleSubtype.update({
+            where: { id },
+            data: { ...rest, ...(active !== undefined && { active }) },
+          });
+        } catch (err) {
+          rethrowUniqueConflict(err, "Ya existe un subtipo con ese nombre para este tipo de muestra.");
+        }
+      });
+    }),
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Rediseño lab 2026-09 — parámetros (analitos) por prueba (mockup:
+  // Mantenimiento de catálogos → Pruebas → Parámetros).
+  // ---------------------------------------------------------------------------
+  testParameter: router({
+    list: tenantProcedure
+      .input(z.object({ labTestId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        return ctx.prisma.labTestParameter.findMany({
+          where: { labTestId: input.labTestId },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        });
+      }),
+
+    add: catalogAdminProc.input(labTestParameterAddInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const test = await tx.labTest.findFirst({
+          where: { id: input.labTestId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!test) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Prueba no encontrada en el tenant." });
+        }
+        try {
+          return await tx.labTestParameter.create({
+            data: { labTestId: input.labTestId, name: input.name },
+          });
+        } catch (err) {
+          rethrowUniqueConflict(err, "Ese parámetro ya existe en la prueba.");
+        }
+      });
+    }),
+
+    remove: catalogAdminProc.input(labTestParameterRemoveInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const deleted = await tx.labTestParameter.deleteMany({
+          where: { id: input.parameterId, test: { organizationId: ctx.tenant.organizationId } },
+        });
+        if (deleted.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Parámetro no encontrado en el tenant." });
+        }
+        return { ok: true as const };
+      });
+    }),
+  }),
+
+  // ---------------------------------------------------------------------------
+  // Rediseño lab 2026-09 — export/import del catálogo (mockup: botones
+  // Exportar/Importar de "Mantenimiento de catálogos"). Shape idéntico al
+  // JSON del mockup (`packages/database/seed/catalogo_laboratorio_v2.json`).
+  // ---------------------------------------------------------------------------
+  catalogo: router({
+    export: catalogAdminProc.query(async ({ ctx }) => {
+      const orgId = ctx.tenant.organizationId;
+      const [tipos, subtipos, secciones, tests] = await Promise.all([
+        ctx.prisma.labSampleType.findMany({
+          where: { organizationId: orgId, active: true },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        }),
+        ctx.prisma.labSampleSubtype.findMany({
+          where: { organizationId: orgId, active: true },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+          include: { sampleType: { select: { name: true } } },
+        }),
+        ctx.prisma.labPanel.findMany({
+          where: { organizationId: orgId, active: true, area: "LABORATORIO" },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+        }),
+        ctx.prisma.labTest.findMany({
+          where: { organizationId: orgId, active: true, panel: { area: "LABORATORIO" } },
+          orderBy: [{ displayOrder: "asc" }, { name: "asc" }],
+          include: {
+            panel: { select: { name: true } },
+            sampleType: { select: { name: true } },
+            sampleSubtype: { select: { name: true } },
+            parameters: { select: { name: true }, orderBy: { displayOrder: "asc" } },
+          },
+        }),
+      ]);
+
+      const subtiposMap: Record<string, string[]> = {};
+      for (const st of subtipos) {
+        const tipoName = st.sampleType.name;
+        (subtiposMap[tipoName] ??= []).push(st.name);
+      }
+
+      const parametros: Record<string, string[]> = {};
+      const pruebas = tests.map((t) => {
+        if (t.parameters.length > 0) {
+          parametros[`${t.panel?.name ?? ""}|||${t.name}`] = t.parameters.map((p) => p.name);
+        }
+        return {
+          seccion: t.panel?.name ?? "",
+          prueba: t.name,
+          tipo: t.sampleType?.name ?? "",
+          subtipo: t.sampleSubtype?.name ?? "",
+          cant: t.defaultQty,
+        };
+      });
+
+      return {
+        secciones: secciones.map((s) => s.name),
+        tipos: tipos.map((t) => t.name),
+        subtipos: subtiposMap,
+        pruebas,
+        parametros,
+      };
+    }),
+
+    /**
+     * Upsert idempotente del catálogo del TENANT actual, equivalente al seed
+     * de sql/219 pero acotado a `ctx.tenant.organizationId`. Todo en una sola
+     * transacción `withTenantContext`.
+     *
+     * Decisión: `tipo`/`subtipo`/`seccion` referenciados en `pruebas` deben
+     * existir en los arreglos `tipos`/`subtipos`/`secciones` del propio
+     * payload — si no, BAD_REQUEST con el nombre faltante. Import estricto,
+     * no crea estructura huérfana en silencio.
+     */
+    import: catalogAdminProc.input(labCatalogoImportInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const orgId = ctx.tenant.organizationId;
+
+        // 1. Tipos de muestra.
+        const tipoIdByName = new Map<string, string>();
+        for (let i = 0; i < input.tipos.length; i++) {
+          const name = input.tipos[i]!;
+          const tipo = await tx.labSampleType.upsert({
+            where: { organizationId_name: { organizationId: orgId, name } },
+            create: { organizationId: orgId, name, displayOrder: i, active: true },
+            update: { displayOrder: i, active: true },
+          });
+          tipoIdByName.set(name, tipo.id);
+        }
+
+        // 2. Subtipos de muestra (dependientes de un tipo ya upserteado).
+        const subtipoIdByKey = new Map<string, string>(); // key = `${tipo}|||${subtipo}`
+        for (const [tipoName, subNames] of Object.entries(input.subtipos)) {
+          const sampleTypeId = tipoIdByName.get(tipoName);
+          if (!sampleTypeId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `subtipos hace referencia al tipo "${tipoName}", que no está en la lista "tipos".`,
+            });
+          }
+          for (let i = 0; i < subNames.length; i++) {
+            const name = subNames[i]!;
+            const sub = await tx.labSampleSubtype.upsert({
+              where: { sampleTypeId_name: { sampleTypeId, name } },
+              create: { organizationId: orgId, sampleTypeId, name, displayOrder: i, active: true },
+              update: { displayOrder: i, active: true },
+            });
+            subtipoIdByKey.set(`${tipoName}|||${name}`, sub.id);
+          }
+        }
+
+        // 3. Secciones (LabPanel, area LABORATORIO). Match case-insensitive,
+        //    igual que sql/219. Códigos nuevos: SECIMP-NNN.
+        const panelIdByName = new Map<string, string>();
+        let nextSeccionNum = await nextCodeSuffix(tx, orgId, "SECIMP-");
+        for (let i = 0; i < input.secciones.length; i++) {
+          const name = input.secciones[i]!;
+          const existing = await tx.labPanel.findFirst({
+            where: { organizationId: orgId, area: "LABORATORIO", name: { equals: name, mode: "insensitive" } },
+            select: { id: true },
+          });
+          if (existing) {
+            await tx.labPanel.update({
+              where: { id: existing.id },
+              data: { displayOrder: i, active: true },
+            });
+            panelIdByName.set(name, existing.id);
+          } else {
+            nextSeccionNum += 1;
+            const created = await tx.labPanel.create({
+              data: {
+                organizationId: orgId,
+                code: `SECIMP-${String(nextSeccionNum).padStart(3, "0")}`,
+                name,
+                area: "LABORATORIO",
+                displayOrder: i,
+                active: true,
+              },
+            });
+            panelIdByName.set(name, created.id);
+          }
+        }
+
+        // 4. Pruebas (LabTest). Match case-insensitive por sección+nombre,
+        //    igual que sql/219. Códigos nuevos: LABIMP-NNN.
+        const testIdByKey = new Map<string, string>(); // key = `${seccion}|||${prueba}` (upper)
+        let nextTestNum = await nextCodeSuffix(tx, orgId, "LABIMP-");
+        for (let i = 0; i < input.pruebas.length; i++) {
+          const p = input.pruebas[i]!;
+          const panelId = panelIdByName.get(p.seccion);
+          if (!panelId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `La prueba "${p.prueba}" referencia la sección "${p.seccion}", que no está en la lista "secciones".`,
+            });
+          }
+          const sampleTypeId = tipoIdByName.get(p.tipo);
+          if (!sampleTypeId) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `La prueba "${p.prueba}" referencia el tipo "${p.tipo}", que no está en la lista "tipos".`,
+            });
+          }
+          const sampleSubtypeId = subtipoIdByKey.get(`${p.tipo}|||${p.subtipo}`) ?? null;
+
+          const existing = await tx.labTest.findFirst({
+            where: { organizationId: orgId, panelId, name: { equals: p.prueba, mode: "insensitive" } },
+            select: { id: true },
+          });
+          let testId: string;
+          if (existing) {
+            await tx.labTest.update({
+              where: { id: existing.id },
+              data: { sampleTypeId, sampleSubtypeId, defaultQty: p.cant, displayOrder: i, active: true },
+            });
+            testId = existing.id;
+          } else {
+            nextTestNum += 1;
+            const created = await tx.labTest.create({
+              data: {
+                organizationId: orgId,
+                panelId,
+                code: `LABIMP-${String(nextTestNum).padStart(3, "0")}`,
+                name: p.prueba,
+                specimen: "OTHER",
+                sampleTypeId,
+                sampleSubtypeId,
+                defaultQty: p.cant,
+                displayOrder: i,
+                active: true,
+              },
+            });
+            testId = created.id;
+          }
+          testIdByKey.set(`${p.seccion.toUpperCase()}|||${p.prueba.toUpperCase()}`, testId);
+        }
+
+        // 4b. Desactivar pruebas importadas previamente (PORT-/LABV2-/LABIMP-)
+        //     del tenant que ya no vienen en el JSON.
+        const incomingKeys = new Set(
+          input.pruebas.map((p) => `${p.seccion.toUpperCase()}|||${p.prueba.toUpperCase()}`),
+        );
+        const tenantImportedTests = await tx.labTest.findMany({
+          where: {
+            organizationId: orgId,
+            active: true,
+            panel: { area: "LABORATORIO" },
+            OR: [{ code: { startsWith: "PORT-" } }, { code: { startsWith: "LABV2-" } }, { code: { startsWith: "LABIMP-" } }],
+          },
+          select: { id: true, name: true, panel: { select: { name: true } } },
+        });
+        const staleIds = tenantImportedTests
+          .filter((t) => !incomingKeys.has(`${(t.panel?.name ?? "").toUpperCase()}|||${t.name.toUpperCase()}`))
+          .map((t) => t.id);
+        if (staleIds.length > 0) {
+          await tx.labTest.updateMany({ where: { id: { in: staleIds } }, data: { active: false } });
+        }
+
+        // 5. Parámetros por prueba (clave "SECCION|||PRUEBA").
+        if (input.parametros) {
+          for (const [key, paramNames] of Object.entries(input.parametros)) {
+            const testId = testIdByKey.get(key.toUpperCase());
+            if (!testId) continue; // clave no resuelve a una prueba del import — se ignora.
+            for (let i = 0; i < paramNames.length; i++) {
+              const name = paramNames[i]!;
+              await tx.labTestParameter.upsert({
+                where: { labTestId_name: { labTestId: testId, name } },
+                create: { labTestId: testId, name, displayOrder: i },
+                update: { displayOrder: i },
+              });
+            }
+          }
+        }
+
+        return { ok: true as const, tipos: tipoIdByName.size, secciones: panelIdByName.size, pruebas: testIdByKey.size };
       });
     }),
   }),
@@ -451,6 +987,27 @@ export const lisRouter = router({
           ejecutorId = labCli?.id ?? null;
         }
 
+        // Rediseño lab 2026-09 — valida que cada parameterId pertenezca al
+        // testId de su propio item antes de crear la orden.
+        const allParamIds = input.items.flatMap((i) => i.parameterIds ?? []);
+        if (allParamIds.length > 0) {
+          const params = await tx.labTestParameter.findMany({
+            where: { id: { in: allParamIds } },
+            select: { id: true, labTestId: true },
+          });
+          const paramTestMap = new Map(params.map((p) => [p.id, p.labTestId]));
+          for (const item of input.items) {
+            for (const pid of item.parameterIds ?? []) {
+              if (paramTestMap.get(pid) !== item.testId) {
+                throw new TRPCError({
+                  code: "BAD_REQUEST",
+                  message: `El parámetro ${pid} no corresponde a la prueba solicitada (testId=${item.testId}).`,
+                });
+              }
+            }
+          }
+        }
+
         return tx.labOrder.create({
           data: {
             organizationId: ctx.tenant.organizationId,
@@ -464,7 +1021,14 @@ export const lisRouter = router({
             costCenterId: input.costCenterId ?? null,
             ejecutorCostCenterId: ejecutorId,
             items: {
-              create: input.items.map((i) => ({ testId: i.testId, notes: i.notes ?? null })),
+              create: input.items.map((i) => ({
+                testId: i.testId,
+                notes: i.notes ?? null,
+                quantity: i.quantity,
+                ...(i.parameterIds && i.parameterIds.length > 0
+                  ? { parameters: { create: i.parameterIds.map((parameterId) => ({ parameterId })) } }
+                  : {}),
+              })),
             },
           },
           include: { items: true },
@@ -649,6 +1213,7 @@ export const lisRouter = router({
           orderId: i.order.id,
           examen: i.test.name,
           seccion: i.test.panel?.name ?? i.test.code,
+          quantity: i.quantity,
           paciente: {
             nombre: `${i.order.patient.firstName} ${i.order.patient.lastName}`.trim(),
             expediente: i.order.patient.expediente ?? i.order.patient.mrn,
@@ -1054,6 +1619,34 @@ export const lisRouter = router({
 // ---------------------------------------------------------------------------
 
 /**
+ * Rediseño lab 2026-09 — `catalogo.import`: siguiente número disponible para
+ * códigos generados (`SECIMP-NNN` / `LABIMP-NNN`) del tenant, calculado UNA
+ * vez al inicio del import (no se re-consulta por cada fila creada).
+ */
+async function nextCodeSuffix(
+  tx: PrismaClient,
+  organizationId: string,
+  prefix: "SECIMP-" | "LABIMP-",
+): Promise<number> {
+  const existing =
+    prefix === "SECIMP-"
+      ? await tx.labPanel.findMany({
+          where: { organizationId, code: { startsWith: prefix } },
+          select: { code: true },
+        })
+      : await tx.labTest.findMany({
+          where: { organizationId, code: { startsWith: prefix } },
+          select: { code: true },
+        });
+  let max = 0;
+  for (const e of existing) {
+    const n = parseInt(e.code.slice(prefix.length), 10);
+    if (!Number.isNaN(n) && n > max) max = n;
+  }
+  return max;
+}
+
+/**
  * CC-0013b — agrupa LabOrderStatus en los 3 buckets operativos que pide
  * Edwin (Creado/En proceso/Hecho) + Anulado. El modal "Solicitud" del
  * tablero (CC-0013) sigue usando los estados crudos ORDERED/IN_PROCESS/
@@ -1106,6 +1699,8 @@ function buildCuentaRow(
       testId: string;
       status: string;
       notes: string | null;
+      /** Rediseño lab 2026-09 — cantidad solicitada (mockup: columna Cantidad). */
+      quantity: number;
       test: { name: string; panel: { name: string } | null };
     }>;
   },
@@ -1145,6 +1740,7 @@ function buildCuentaRow(
       seccion: i.test.panel?.name ?? "",
       estado: i.status,
       notes: i.notes ?? "",
+      quantity: i.quantity,
     })),
   };
 }

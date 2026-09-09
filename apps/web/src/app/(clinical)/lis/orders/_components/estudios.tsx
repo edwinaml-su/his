@@ -217,7 +217,7 @@ export function Estudios(): React.ReactElement {
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr>
-              {["Paciente", "Cuenta", "Examen", "Sección", "Centro", "Fecha", "Prioridad", "Estado"].map((h) => (
+              {["Paciente", "Cuenta", "Examen", "Sección", "Cant.", "Centro", "Fecha", "Prioridad", "Estado"].map((h) => (
                 <th
                   key={h}
                   className="whitespace-nowrap px-3 py-2 text-left font-semibold text-white"
@@ -231,7 +231,7 @@ export function Estudios(): React.ReactElement {
           <tbody>
             {!firstQuery.isLoading && items.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                <td colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
                   Sin resultados con estos filtros.
                 </td>
               </tr>
@@ -261,6 +261,7 @@ export function Estudios(): React.ReactElement {
                   <td className="px-3 py-2">{row.cuenta ?? "—"}</td>
                   <td className="px-3 py-2">{row.examen}</td>
                   <td className="px-3 py-2">{row.seccion}</td>
+                  <td className="px-3 py-2 text-center tabular-nums">{row.quantity}</td>
                   <td className="px-3 py-2">{row.centro}</td>
                   <td className="px-3 py-2 tabular-nums">{new Date(row.fecha).toLocaleString("es-SV")}</td>
                   <td className="px-3 py-2">

@@ -63,6 +63,11 @@ export const labTestCreateInput = z.object({
   displayOrder: z.number().int().min(0).max(999).default(0),
   /** CC-0013 — precio estándar (opcional; el admin lo parametriza post-creación). */
   standardPrice: standardPriceSchema.optional(),
+  /** Rediseño lab 2026-09 — tipo/subtipo de muestra parametrizables (mockup). */
+  sampleTypeId: z.string().uuid().optional(),
+  sampleSubtypeId: z.string().uuid().optional(),
+  /** Cantidad por defecto al solicitar (ej. HEMOCULTIVOS = 2). */
+  defaultQty: z.number().int().min(1).optional(),
 });
 export type LabTestCreateInput = z.infer<typeof labTestCreateInput>;
 
@@ -75,6 +80,10 @@ export const labTestUpdateInput = z.object({
   displayOrder: z.number().int().min(0).max(999).optional(),
   /** CC-0013 — `null` limpia el precio explícitamente. */
   standardPrice: standardPriceSchema.nullable().optional(),
+  /** Rediseño lab 2026-09 — tipo/subtipo de muestra parametrizables (mockup). */
+  sampleTypeId: z.string().uuid().optional(),
+  sampleSubtypeId: z.string().uuid().optional(),
+  defaultQty: z.number().int().min(1).optional(),
 });
 export type LabTestUpdateInput = z.infer<typeof labTestUpdateInput>;
 
@@ -103,3 +112,72 @@ export interface LabCatalogPanelGroup {
   nombre: string;
   tests: LabCatalogTestItem[];
 }
+
+// ---------------------------------------------------------------------------
+// Rediseño lab 2026-09 (mockup_examenes_laboratorio) — catálogo de tipos y
+// subtipos de muestra + parámetros por prueba + export/import del mockup.
+// ---------------------------------------------------------------------------
+
+export const labSampleTypeCreateInput = z.object({
+  name: z.string().trim().min(1).max(120),
+  displayOrder: z.number().int().min(0).max(999).default(0),
+});
+export type LabSampleTypeCreateInput = z.infer<typeof labSampleTypeCreateInput>;
+
+export const labSampleTypeUpdateInput = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  displayOrder: z.number().int().min(0).max(999).optional(),
+  active: z.boolean().optional(),
+});
+export type LabSampleTypeUpdateInput = z.infer<typeof labSampleTypeUpdateInput>;
+
+export const labSampleSubtypeCreateInput = z.object({
+  sampleTypeId: z.string().uuid(),
+  name: z.string().trim().min(1).max(120),
+  displayOrder: z.number().int().min(0).max(999).default(0),
+});
+export type LabSampleSubtypeCreateInput = z.infer<typeof labSampleSubtypeCreateInput>;
+
+export const labSampleSubtypeUpdateInput = z.object({
+  id: z.string().uuid(),
+  name: z.string().trim().min(1).max(120).optional(),
+  sampleTypeId: z.string().uuid().optional(),
+  displayOrder: z.number().int().min(0).max(999).optional(),
+  active: z.boolean().optional(),
+});
+export type LabSampleSubtypeUpdateInput = z.infer<typeof labSampleSubtypeUpdateInput>;
+
+export const labTestParameterAddInput = z.object({
+  labTestId: z.string().uuid(),
+  name: z.string().trim().min(1).max(160),
+});
+export type LabTestParameterAddInput = z.infer<typeof labTestParameterAddInput>;
+
+export const labTestParameterRemoveInput = z.object({
+  parameterId: z.string().uuid(),
+});
+export type LabTestParameterRemoveInput = z.infer<typeof labTestParameterRemoveInput>;
+
+/**
+ * Shape del JSON exportado/importado desde "Mantenimiento de catálogos" del
+ * mockup (`design/mockup/mockup_examenes_laboratorio.html`, funciones
+ * `exportarCatalogo`/`importarCatalogo`). `parametros` usa como clave
+ * `"SECCION|||PRUEBA"` (helper `keyOf` del mockup).
+ */
+export const labCatalogoImportInput = z.object({
+  secciones: z.array(z.string().trim().min(1).max(200)),
+  tipos: z.array(z.string().trim().min(1).max(120)),
+  subtipos: z.record(z.string(), z.array(z.string().trim().min(1).max(120))),
+  pruebas: z.array(
+    z.object({
+      seccion: z.string().trim().min(1).max(200),
+      prueba: z.string().trim().min(1).max(200),
+      tipo: z.string().trim().min(1).max(120),
+      subtipo: z.string().trim().min(1).max(120),
+      cant: z.number().int().min(1).default(1),
+    }),
+  ),
+  parametros: z.record(z.string(), z.array(z.string().trim().min(1).max(160))).optional(),
+});
+export type LabCatalogoImportInput = z.infer<typeof labCatalogoImportInput>;

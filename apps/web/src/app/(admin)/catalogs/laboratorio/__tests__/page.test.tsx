@@ -44,6 +44,13 @@ vi.mock("next/link", () => ({
 
 const mockPanelListQuery = vi.fn();
 const mockTestListQuery = vi.fn();
+// Rediseño lab 2026-09 — LABORATORIO ahora monta <LabMaintenance> (ver
+// lab-maintenance.test.tsx para su cobertura dedicada). Estos tests siguen
+// probando el master-detail legacy (panel/test), así que navegan a
+// "Radiología" antes de aserttar — pero LabMaintenance igual se monta
+// primero (área por defecto = LABORATORIO), así que necesita un mock mínimo
+// para no tronar: cascada con data=undefined (no monta los 4 sub-tabs).
+const mockCascadaQuery = vi.fn();
 
 /** Shape mínimo de los `options` que los componentes pasan a `useMutation`. */
 interface MutationOpts {
@@ -63,6 +70,7 @@ const mockTestCreate = vi.fn(defaultMutationImpl);
 const mockTestUpdate = vi.fn(defaultMutationImpl);
 const mockTestDeactivate = vi.fn(defaultMutationImpl);
 const mockTestReactivate = vi.fn(defaultMutationImpl);
+const mockCatalogoImport = vi.fn(defaultMutationImpl);
 
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
@@ -81,11 +89,19 @@ vi.mock("@/lib/trpc/react", () => ({
         deactivate: { useMutation: (opts?: MutationOpts) => mockTestDeactivate(opts) },
         reactivate: { useMutation: (opts?: MutationOpts) => mockTestReactivate(opts) },
       },
+      catalog: {
+        cascada: { useQuery: (...args: unknown[]) => mockCascadaQuery(...args) },
+      },
+      catalogo: {
+        import: { useMutation: (opts?: MutationOpts) => mockCatalogoImport(opts) },
+      },
     },
     useUtils: () => ({
       lis: {
         panel: { list: { invalidate: vi.fn() } },
         test: { list: { invalidate: vi.fn() } },
+        catalog: { cascada: { invalidate: vi.fn() } },
+        catalogo: { export: { fetch: vi.fn().mockResolvedValue({}) } },
       },
     }),
   },
@@ -101,7 +117,10 @@ function makePanel(overrides: Record<string, unknown> = {}) {
     organizationId: null,
     code: "AVT-LAB-HEM",
     name: "Hematología y coagulación",
-    area: "LABORATORIO",
+    // Rediseño lab 2026-09 — LABORATORIO ya no usa el master-detail legacy
+    // (ver <LabMaintenance>), así que estos fixtures viven en RADIOLOGIA para
+    // que goToRadiologia() los encuentre.
+    area: "RADIOLOGIA",
     displayOrder: 1,
     active: true,
     ...overrides,
@@ -166,11 +185,25 @@ describe("LaboratorioCatalogPage", () => {
     mockTestReactivate.mockImplementation(() => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }));
     mockPanelListQuery.mockReturnValue({ ...idleQuery, data: [makePanel(), makeTenantPanel()] });
     mockTestListQuery.mockReturnValue({ ...idleQuery, data: [makeTest()] });
+    // LABORATORIO (área por defecto) monta <LabMaintenance>: data=undefined
+    // evita que sus 4 sub-tabs se rendericen — estos tests navegan a
+    // "Radiología" para ejercitar el master-detail legacy.
+    mockCascadaQuery.mockReturnValue({ ...idleQuery, data: undefined });
   });
 
   afterEach(() => {
     cleanup();
   });
+
+  /**
+   * Navega desde el área LABORATORIO (default) a Radiología, donde vive el
+   * master-detail legacy. Radix `TabsTrigger` activa el tab en `onMouseDown`
+   * (no `onClick`) — ver @radix-ui/react-tabs/dist/index.js —, mismo patrón
+   * que `modulo-imagenes.test.tsx`.
+   */
+  function goToRadiologia() {
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Radiología" }), { button: 0 });
+  }
 
   // ── 1. Título + tabs de área ──────────────────────────────────────────────
 
@@ -183,10 +216,20 @@ describe("LaboratorioCatalogPage", () => {
     expect(screen.getByRole("tab", { name: "Cardiología" })).toBeInTheDocument();
   });
 
+  // ── 1b. LABORATORIO por defecto monta el mantenimiento rediseñado ────────
+
+  it("el área Laboratorio (default) monta el mantenimiento de catálogos rediseñado", () => {
+    renderPage();
+
+    expect(screen.getByText("Mantenimiento de catálogos — Laboratorio")).toBeInTheDocument();
+    expect(screen.getByTestId("lab-mant-tab-pruebas")).toBeInTheDocument();
+  });
+
   // ── 2. Global vs Propio ───────────────────────────────────────────────────
 
   it("distingue paneles Global (organizationId=null) de Propio (tenant)", () => {
     renderPage();
+    goToRadiologia();
     const panelTable = firstTable();
 
     expect(within(panelTable).getByText("AVT-LAB-HEM")).toBeInTheDocument();
@@ -199,6 +242,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("al seleccionar un panel, consulta los exámenes de ese panelId", () => {
     renderPage();
+    goToRadiologia();
 
     fireEvent.click(screen.getByText("Panel propio del tenant"));
 
@@ -210,6 +254,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("deshabilita Editar/Desactivar para el panel global y los habilita para el propio", () => {
     renderPage();
+    goToRadiologia();
     const panelTable = firstTable();
 
     const globalRow = within(panelTable).getByText("AVT-LAB-HEM").closest("tr")!;
@@ -225,6 +270,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("el botón 'Nuevo panel' abre el dialog de creación", () => {
     renderPage();
+    goToRadiologia();
 
     fireEvent.click(screen.getByRole("button", { name: /Nuevo panel/i }));
 
@@ -235,6 +281,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("muestra el mensaje CONFLICT del server al crear un panel con código duplicado", () => {
     renderPage();
+    goToRadiologia();
 
     fireEvent.click(screen.getByRole("button", { name: /Nuevo panel/i }));
 
@@ -250,6 +297,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("muestra el mensaje FORBIDDEN del server si una acción sobre catálogo global falla", () => {
     renderPage();
+    goToRadiologia();
 
     const onError = mockPanelDeactivate.mock.calls.at(-1)?.[0]?.onError as (e: { message: string }) => void;
     act(() => {
@@ -271,6 +319,7 @@ describe("LaboratorioCatalogPage", () => {
       data: [makeTest({ standardPrice: "12.50" }), makeTest({ id: "55555555-5555-5555-5555-555555555555", code: "AVT-LAB-HEM-02", name: "Otro examen", standardPrice: null })],
     });
     renderPage();
+    goToRadiologia();
 
     expect(screen.getByText("$ 12.50")).toBeInTheDocument();
     expect(screen.getByText("—")).toBeInTheDocument();
@@ -280,6 +329,7 @@ describe("LaboratorioCatalogPage", () => {
 
   it("CC-0013 — 'Nuevo examen' incluye el campo Precio estándar y lo envía en el create", () => {
     renderPage();
+    goToRadiologia();
 
     fireEvent.click(screen.getByRole("button", { name: "Nuevo examen" }));
     expect(screen.getByLabelText(/Precio estándar/)).toBeInTheDocument();

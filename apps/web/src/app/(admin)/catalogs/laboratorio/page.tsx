@@ -10,6 +10,12 @@
  * vez de una tabla plana. Router/schemas ya existían en la rama:
  * `packages/trpc/src/routers/lis.router.ts` (sub-routers panel y test) +
  * `packages/contracts/src/schemas/lis-catalogo.ts`.
+ *
+ * Rediseño lab 2026-09 — el área LABORATORIO reemplaza el master-detail
+ * genérico por `<LabMaintenance>` (4 sub-tabs: Pruebas/Secciones/Tipos/
+ * Subtipos, fiel al comportamiento de `#mantScreen` del mockup
+ * `design/mockup/mockup_examenes_laboratorio.html`). RADIOLOGIA/CARDIOLOGIA
+ * conservan el master-detail existente (fuera de alcance del rediseño).
  */
 import * as React from "react";
 import { FlaskConical } from "lucide-react";
@@ -17,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger } from "@his/ui/components/tabs";
 import { labCatalogAreaEnum, type LabCatalogArea } from "@his/contracts";
 import { AREA_LABEL, PanelList, type LabPanelRow } from "./_components/panel-list";
 import { TestTable } from "./_components/test-table";
+import { LabMaintenance } from "./_components/lab-maintenance";
 
 const AREA_OPTIONS = labCatalogAreaEnum.options;
 
@@ -51,14 +58,18 @@ export default function LaboratorioCatalogPage() {
         </TabsList>
       </Tabs>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,420px)_1fr]">
-        <PanelList
-          area={area}
-          selectedPanelId={selectedPanel?.id ?? null}
-          onSelect={setSelectedPanel}
-        />
-        <TestTable panel={selectedPanel} />
-      </div>
+      {area === "LABORATORIO" ? (
+        <LabMaintenance />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,420px)_1fr]">
+          <PanelList
+            area={area}
+            selectedPanelId={selectedPanel?.id ?? null}
+            onSelect={setSelectedPanel}
+          />
+          <TestTable panel={selectedPanel} />
+        </div>
+      )}
     </div>
   );
 }

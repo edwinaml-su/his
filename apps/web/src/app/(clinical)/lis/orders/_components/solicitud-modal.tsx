@@ -103,6 +103,9 @@ export function SolicitudModal({ cuenta, onClose, onSaved }: SolicitudModalProps
                     <th className="px-2 py-1.5 text-left" style={{ color: "#2a4650" }}>
                       Sección
                     </th>
+                    <th className="px-2 py-1.5 text-center" style={{ color: "#2a4650" }}>
+                      Cant.
+                    </th>
                     <th className="px-2 py-1.5 text-left" style={{ color: "#2a4650" }}>
                       Estado
                     </th>
@@ -124,6 +127,7 @@ export function SolicitudModal({ cuenta, onClose, onSaved }: SolicitudModalProps
                           {r.seccion}
                         </span>
                       </td>
+                      <td className="px-2 py-1.5 text-center tabular-nums">{r.quantity}</td>
                       <td className="px-2 py-1.5">
                         <select
                           className="w-full rounded border px-1.5 py-1"
