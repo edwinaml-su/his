@@ -23,6 +23,7 @@
  *  - BarcodeScanner (US.F2.6.43/45) — alterna cámara/pistola por paso.
  */
 
+import * as React from "react";
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "@/lib/trpc/react";
@@ -253,7 +254,7 @@ export function AdministrationWizard({
 
       // Validar 5 correctos
       try {
-        await validate5Correct.mutateAsync({
+        const vres = await validate5Correct.mutateAsync({
           patientGsrn: currentScans.patientGsrn!,
           nurseGsrn:   currentScans.nurseGsrn!,
           gtin,
@@ -261,6 +262,17 @@ export function AdministrationWizard({
           expiry,
           indicationId,
         });
+        // El procedure NO lanza en fallo de validación: devuelve
+        // { ok:false, hardStop, reason } (bedside.router.ts, ValidateResult).
+        // Ignorar ok era un bypass del hard-stop BCMA: administration.record
+        // asume los 5 correctos ya validados y no re-valida.
+        if (!vres.ok) {
+          setWizardState({
+            phase: "hardStop",
+            reason: `${vres.hardStop}: ${vres.reason}`,
+          });
+          return;
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setWizardState({ phase: "hardStop", reason: extractHardStopReason(message) });
