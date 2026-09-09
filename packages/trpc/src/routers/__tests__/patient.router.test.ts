@@ -396,7 +396,9 @@ describe("patientRouter", () => {
         prisma.$queryRaw
           .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_expediente
           .mockResolvedValueOnce([{ n: 1 }] as never) // fn_next_no_identificado
-          .mockResolvedValue([] as never); // hook: existencia / colisión / insert
+          .mockResolvedValueOnce([] as never) // hook: existencia → no existe
+          .mockResolvedValueOnce([{ id: "ece-estab-b" }] as never) // hook: puente establecimiento (ADR 0022)
+          .mockResolvedValue([] as never); // hook: colisión / insert
         prisma.patient.create.mockResolvedValue({ id: "nn-3", expediente: "2222600001" } as never);
 
         const caller = patientRouter.createCaller(makeCtx({ prisma }));
@@ -405,8 +407,9 @@ describe("patientRouter", () => {
           isUnknown: true,
         } as never);
 
-        // Llamada #5 (índice 4): INSERT INTO ece.paciente dentro del hook.
-        const insertCall = prisma.$queryRaw.mock.calls[4];
+        // Llamada #6 (índice 5): INSERT INTO ece.paciente dentro del hook
+        // (índice corrido por la query del puente de establecimiento, ADR 0022).
+        const insertCall = prisma.$queryRaw.mock.calls[5];
         const allArgs = insertCall?.flat().map(String).join(" ");
         expect(allArgs).toContain("desconocido");
       });

@@ -1,6 +1,9 @@
 # ADR 0023 — Punto único de prescripción de medicamentos (R06)
 
-- **Estado:** Propuesto — requiere decisión de Edwin (dirección) antes de ejecutar
+- **Estado:** ACEPTADO — Opción A aprobada por Edwin (dirección) el 2026-09-09.
+  `/pharmacy/new` se CONSERVA solo para recetas ambulatorias/de salida (misma
+  decisión). El backfill de precios de laboratorio quedó descartado: carga
+  manual posterior desde el mantenimiento admin (decisión del mismo día).
 - **Fecha:** 2026-09-09
 - **Decisores:** @Orq/@AS (proponentes), @DrHIS (evaluación clínica base), pendiente Edwin
 - **Insumos:** `docs/qa/drhis/R06-evaluacion-datos-farmacologicos.md` (6 hallazgos, 2 críticos),

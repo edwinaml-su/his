@@ -5,9 +5,14 @@
  *   - Cada hook recibe el cliente Prisma (puede ser una tx o el cliente raíz).
  *   - Usan raw SQL porque ece.* no está en schema.prisma (Opción B bridge).
  *   - Son idempotentes: verifican existencia antes de insertar.
- *   - Nunca lanzan — los errores se loguean y el caller continúa (non-fatal).
- *     Excepción: hookEcePacienteAfterCreate lanza si se llama dentro de una tx
- *     que no puede tolerar el fallo (el caller decide con try/catch).
+ *   - PUEDEN lanzar: la política de tolerancia la decide el CALLER.
+ *     P0-4 (decisión de dirección 2026-09-09, ADR 0024): la ADMISIÓN es
+ *     fail-fast — corre el hook dentro de su misma transacción y revierte si
+ *     falla (no existe admisión sin episodio NTEC). Otros callers (alta de
+ *     Patient) pueden seguir envolviendo en try/catch (backfillable).
+ *   - ADR 0022 (SQL 217): ece.paciente.establecimiento_id ahora es FK a
+ *     ece.establecimiento (espacio B) — el hook resuelve el puente
+ *     internamente a partir del public."Establishment".id que recibe.
  *
  * Schema real (verificado 2026-05-29 via MCP):
  *   ece.paciente.establecimiento_id → FK a public."Establishment" (directo)
@@ -84,11 +89,25 @@ export async function hookEcePacienteAfterCreate(
     return existing[0]!.id;
   }
 
+  // ADR 0022 (SQL 217): la FK de ece.paciente apunta a ece.establecimiento
+  // (espacio B). Resolver el puente aquí — acepta cualquiera de los dos
+  // espacios, igual que ece.set_ece_context (sql/216). Sin fila puente no se
+  // puede crear el expediente ECE.
+  const estabRows = await (tx.$queryRaw as PrismaLike["$queryRaw"])`
+    SELECT id::text FROM ece.establecimiento
+    WHERE id = ${establishmentId}::uuid OR establishment_id = ${establishmentId}::uuid
+    LIMIT 1
+  ` as Array<{ id: string }>;
+  const eceEstabId = estabRows[0]?.id;
+  if (!eceEstabId) {
+    return null;
+  }
+
   // Verificar colisión de numero_expediente en este establecimiento.
   // Raro pero defensivo para data importada o seeds.
   const mrnConflict = await (tx.$queryRaw as PrismaLike["$queryRaw"])`
     SELECT id FROM ece.paciente
-    WHERE establecimiento_id = ${establishmentId}::uuid
+    WHERE establecimiento_id = ${eceEstabId}::uuid
       AND numero_expediente = ${mrn}
     LIMIT 1
   ` as Array<{ id: string }>;
@@ -107,7 +126,7 @@ export async function hookEcePacienteAfterCreate(
     )
     VALUES (
       ${patientId}::uuid,
-      ${establishmentId}::uuid,
+      ${eceEstabId}::uuid,
       ${expediente},
       ${tipoRegistroIdentidad},
       'activo',

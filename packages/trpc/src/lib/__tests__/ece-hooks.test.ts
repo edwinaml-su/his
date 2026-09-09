@@ -45,6 +45,7 @@ describe("hookEcePacienteAfterCreate", () => {
   it("inserta y retorna id nuevo si no existe registro previo", async () => {
     const tx = makeTxMock([
       [], // SELECT public_patient_id → no existe
+      [{ id: "ece-estab-b" }], // ADR 0022: resolver puente ece.establecimiento
       [], // SELECT numero_expediente colisión → no colisión
       [{ id: "ece-pac-new" }], // INSERT RETURNING
     ]);
@@ -55,13 +56,14 @@ describe("hookEcePacienteAfterCreate", () => {
       "MRN-002",
     );
     expect(result).toBe("ece-pac-new");
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(4);
   });
 
   it("usa expediente con sufijo si hay colisión de MRN", async () => {
     const patientId = "aabbccdd-0000-0000-0000-000000000000";
     const tx = makeTxMock([
       [],                            // SELECT public_patient_id → no existe
+      [{ id: "ece-estab-b" }],       // ADR 0022: puente establecimiento
       [{ id: "other-paciente" }],    // SELECT MRN → colisión
       [{ id: "ece-pac-suffix" }],    // INSERT RETURNING
     ]);
@@ -71,7 +73,7 @@ describe("hookEcePacienteAfterCreate", () => {
     tx.$queryRaw.mockImplementation((...args: unknown[]) => {
       insertArgs.push(args);
       const call = tx.$queryRaw.mock.calls.length - 1;
-      const responses = [[], [{ id: "other-paciente" }], [{ id: "ece-pac-suffix" }]];
+      const responses = [[], [{ id: "ece-estab-b" }], [{ id: "other-paciente" }], [{ id: "ece-pac-suffix" }]];
       return Promise.resolve(responses[call] ?? []);
     });
 
@@ -83,7 +85,7 @@ describe("hookEcePacienteAfterCreate", () => {
     );
     expect(result).toBe("ece-pac-suffix");
     // El expediente en el INSERT debe contener el prefijo del patientId
-    const insertCall = tx.$queryRaw.mock.calls[2];
+    const insertCall = tx.$queryRaw.mock.calls[3];
     // El tag template literal tiene los args separados: verificamos que
     // "MRN-003-aabbccdd" aparezca en los valores pasados al tagged template.
     const allArgs = insertCall?.flat().map(String).join(" ");
@@ -94,6 +96,7 @@ describe("hookEcePacienteAfterCreate", () => {
   it("usa tipo_registro_identidad='desconocido' cuando se pasa explícito (paciente no identificado)", async () => {
     const tx = makeTxMock([
       [], // SELECT public_patient_id → no existe
+      [{ id: "ece-estab-b" }], // ADR 0022: puente establecimiento
       [], // SELECT numero_expediente colisión → no colisión
       [{ id: "ece-pac-nn" }], // INSERT RETURNING
     ]);
@@ -105,15 +108,15 @@ describe("hookEcePacienteAfterCreate", () => {
       "desconocido",
     );
     expect(result).toBe("ece-pac-nn");
-    const insertCall = tx.$queryRaw.mock.calls[2];
+    const insertCall = tx.$queryRaw.mock.calls[3];
     const allArgs = insertCall?.flat().map(String).join(" ");
     expect(allArgs).toContain("desconocido");
   });
 
   it("usa tipo_registro_identidad='sin_documento' por default cuando no se pasa el parámetro", async () => {
-    const tx = makeTxMock([[], [], [{ id: "ece-pac-default" }]]);
+    const tx = makeTxMock([[], [{ id: "ece-estab-b" }], [], [{ id: "ece-pac-default" }]]);
     await hookEcePacienteAfterCreate(tx, "patient-uuid-default", "establishment-uuid", "MRN-004");
-    const insertCall = tx.$queryRaw.mock.calls[2];
+    const insertCall = tx.$queryRaw.mock.calls[3];
     const allArgs = insertCall?.flat().map(String).join(" ");
     expect(allArgs).toContain("sin_documento");
   });
@@ -163,6 +166,7 @@ describe("hookEceEpisodioAfterAdmit", () => {
       [],                             // SELECT episodio → no existe
       [],                             // SELECT paciente ECE → no existe (fallback)
       [],                             // hookEcePacienteAfterCreate: SELECT public_patient_id → no existe
+      [{ id: "ece-estab-b" }],        // hookEcePacienteAfterCreate: puente establecimiento (ADR 0022)
       [],                             // hookEcePacienteAfterCreate: SELECT MRN colisión → no
       [{ id: "ece-pac-fallback" }],   // hookEcePacienteAfterCreate: INSERT RETURNING
       [{ id: "episodio-fallback" }],  // INSERT episodio RETURNING
