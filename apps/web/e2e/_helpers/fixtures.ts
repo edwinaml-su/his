@@ -38,9 +38,9 @@ export const E2E_GS1 = {
   /** GSRN-18 de un badge de enfermera revocado (activo=false). */
   gsrnEnfermeraRevocada: "801874130000010089",
   /** GTIN-14 de Amoxicilina 500mg — coincide con el item de la indicación. */
-  gtinAmoxicilina500: "07501000001233",
+  gtinAmoxicilina500: "07501000001231",
   /** GTIN-14 de Ibuprofeno 400mg — NO coincide con la indicación (hard-stop). */
-  gtinIbuprofeno400: "07501000009998",
+  gtinIbuprofeno400: "07501000009992",
   /**
    * GSRN-18 (formato válido, 18 dígitos) que nunca fue sembrado en
    * ece.gs1_gsrn — bedside.router.ts no valida checksum GS1, solo

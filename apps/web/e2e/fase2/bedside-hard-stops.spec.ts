@@ -75,9 +75,17 @@ async function scan(page: Page, testId: string, value: string) {
   await page.getByTestId(testId).fill(value);
 }
 
-/** Construye el DataMatrix GS1 (AI 01/10/17) que espera parseGs1DataMatrix. */
+/**
+ * Construye el DataMatrix GS1 en el formato RAW que `parseGs1String` espera
+ * (apps/web/src/lib/gs1/parse-ai.ts): AIs concatenados SIN paréntesis —
+ * AI 01 (longitud fija) + AI 10 (variable, terminado con FNC1 \x1D) + AI 17.
+ * El formato "humano" (01)…(10)… NO es aceptado por el parser (solo strips
+ * de prefijos de simbología ]d2/]C1/]e0) — con paréntesis el front muestra
+ * "DataMatrix incompleto" y el flujo nunca llega al servidor (visto en el
+ * run 34370023608).
+ */
 function dataMatrix(gtin: string, lote: string, vencimientoYYMMDD: string) {
-  return `(01)${gtin}(10)${lote}(17)${vencimientoYYMMDD}`;
+  return `01${gtin}10${lote}\x1D17${vencimientoYYMMDD}`;
 }
 
 async function assertHardStop(page: Page, textFragment: RegExp) {
