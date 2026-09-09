@@ -82,8 +82,8 @@ const IDS = {
 const GSRN_PACIENTE       = '801874130000000011'; // PAC HS-01
 const GSRN_ENFERMERA      = '801874130000010010'; // ENF HS-01 (activa)
 const GSRN_ENF_REVOCADA   = '801874130000010089'; // ENF HS-08 (revocada)
-const GTIN_AMOXICILINA500 = '07501000001233';
-const GTIN_IBUPROFENO400  = '07501000009998';
+const GTIN_AMOXICILINA500 = '07501000001231';
+const GTIN_IBUPROFENO400  = '07501000009992';
 
 try {
   // ─── Resolver catálogos del seed base ─────────────────────────────────────
