@@ -34,6 +34,13 @@
  *     Ver mar-consumer.ts para el porqué de este destino (no
  *     PrescriptionItem/MedicationAdministration ni administracion_medicamento)
  *     y el contrato de fallo (si falla, la firma completa revierte).
+ *     Acto seguido (misma transacción), `materializePrescripcionFromIndicacion`
+ *     (../../ece/prescription-consumer.ts) — ADR 0023 Opción A, punto único de
+ *     prescripción — genera `Prescription`+`PrescriptionItem` para los ítems
+ *     MEDICAMENTO con `drug_id` (CC-0026, SQL 211) y auto-concilia la fila
+ *     recién insertada en la cola de arriba (`estado='RECONCILIADO'` +
+ *     `prescription_item_id`). Ítems de texto libre (sin drug_id) NO generan
+ *     Prescription — la cola queda PENDIENTE_REVISION_FARMACIA como antes.
  *
  * ---------------------------------------------------------------------------
  * ROLES
@@ -79,6 +86,7 @@ import { withEceContext } from "../../ece/rls-context";
 import { materializeIndicacionFirmadaToFarmacia } from "../../ece/mar-consumer";
 import { materializeCareTasksFromIndicacion } from "../../ece/care-task-consumer";
 import { materializeOrdenesFromIndicacion } from "../../ece/order-consumer";
+import { materializePrescripcionFromIndicacion } from "../../ece/prescription-consumer";
 import { resolveEceEstablecimientoId } from "../../lib/ece-hooks";
 import { emitDomainEvent } from "@his/database";
 import { abacGuard } from "../../abac";
@@ -731,10 +739,24 @@ export const indicacionesMedicasRouter = router({
           // para materializar CareTask/LabOrder/ImagingRequest por ítem (ver
           // más abajo) — `detalle` es el payload estructurado del CPOE
           // (ESP-MOCKUP-0026) que discrimina lab/gabinete de los demás tipos.
+          // ADR 0023 Ola 1 — drug_id/dosis/via/frecuencia/duracion se piden
+          // acá también (misma query, sin costo extra) para
+          // `materializePrescripcionFromIndicacion` más abajo.
           const items = await tx.$queryRaw<
-            { id: string; tipo: string; descripcion: string; detalle: Record<string, unknown> | null }[]
+            {
+              id: string;
+              tipo: string;
+              descripcion: string;
+              detalle: Record<string, unknown> | null;
+              drug_id: string | null;
+              dosis: string | null;
+              via: string | null;
+              frecuencia: string | null;
+              duracion: string | null;
+            }[]
           >`
-            SELECT id::text, tipo, descripcion, detalle
+            SELECT id::text, tipo, descripcion, detalle,
+                   drug_id::text AS drug_id, dosis, via, frecuencia, duracion
             FROM ece.indicacion_item
             WHERE indicacion_id = ${input.id}::uuid
           `;
@@ -878,6 +900,44 @@ export const indicacionesMedicasRouter = router({
             });
           }
 
+          // ADR 0023 Opción A (punto único de prescripción) — genera
+          // Prescription+PrescriptionItem para los ítems MEDICAMENTO con
+          // drug_id y auto-concilia la fila de la cola R04 que acaba de
+          // insertar materializeIndicacionFirmadaToFarmacia (arriba). Mismo
+          // contrato de fallo: si falla, la firma completa revierte — nunca
+          // queda "firmada" con una Rx a medio generar.
+          let prescripcionResult: {
+            prescriptionId: string | null;
+            itemsPrescritos: number;
+            itemsOmitidos: { descripcion: string; motivo: string }[];
+          };
+          try {
+            prescripcionResult = await materializePrescripcionFromIndicacion(tx, {
+              indicacionId: input.id,
+              episodioId: indicacion.episodio_id,
+              prescriberId: indicacion.medico_prescriptor,
+              items: items.map((it) => ({
+                id: it.id,
+                tipo: it.tipo,
+                descripcion: it.descripcion,
+                dosis: it.dosis,
+                via: it.via,
+                frecuencia: it.frecuencia,
+                duracion: it.duracion,
+                drugId: it.drug_id,
+              })),
+            });
+          } catch (err) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message:
+                "No se pudo firmar la indicación: falló la generación automática " +
+                "de la receta (Prescription). La firma no se aplicó — reintente; " +
+                "si persiste, contacte soporte.",
+              cause: err,
+            });
+          }
+
           return {
             id: input.id,
             estadoRegistro: "firmado" as const,
@@ -891,6 +951,10 @@ export const indicacionesMedicasRouter = router({
             labOrdersCreated: ordenesResult.labOrdersCreated,
             imagingRequestsCreated: ordenesResult.imagingRequestsCreated,
             ordenesOmitidas: ordenesResult.ordenesOmitidas,
+            // ADR 0023 Ola 1 — receta automática generada al firmar.
+            prescriptionId: prescripcionResult.prescriptionId,
+            itemsPrescritos: prescripcionResult.itemsPrescritos,
+            itemsPrescripcionOmitidos: prescripcionResult.itemsOmitidos,
           };
         },
         // CC-0026 — escritura cross-espacio: LabOrder/ImagingRequest/ImagingOrder
