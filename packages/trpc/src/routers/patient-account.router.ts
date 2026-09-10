@@ -170,7 +170,12 @@ export const patientAccountRouter = router({
    * - Área actual: encuentro abierto (dischargedAt NULL) → unidad + cama activa;
    *   sin encuentro abierto → null (la UI muestra "Egresado").
    *
-   * El saldo se deriva solo de Invoice porque PatientAccount no tiene estado.
+   * docs/48 Ola 4b (H-18) — comentario corregido: `PatientAccount.status` SÍ
+   * existe desde Ola 1 (C1-5, ABIERTA/PENDIENTE_REGULARIZAR/CERRADA), pero es
+   * administrativo y no refleja saldo pendiente de pago — eso lo determina
+   * `Invoice.status`/`paidAmount`. El saldo se deriva de `Invoice` (no de
+   * `PatientAccount`, que ni siquiera se joinea aquí) por eso, no porque a
+   * `PatientAccount` le falte estado.
    */
   listarWorklist: tenantProcedure
     .input(
@@ -296,6 +301,13 @@ export const patientAccountRouter = router({
    *      (devolución sin reversión) — en el flujo normal `cancelReservation`
    *      ya revierte el cargo en la misma tx (docs/48 C2-4); esto atrapa
    *      anomalías (datos pre-Ola-2, intervención manual).
+   *   4. docs/48 Ola 4b (H-16) — Cargos DISPENSACION_FARMACIA VIGENTE sin
+   *      StockMovement OUT asociado (espejo de
+   *      `conciliacion-cargos.cargosSinMovimiento`, acotado a esta cuenta).
+   *   5. docs/48 Ola 4b (H-16) — Reservas de farmacia de este paciente con
+   *      StockMovement OUT confirmado pero sin cargo en esta cuenta (espejo
+   *      de `conciliacion-cargos.dispensadoSinCargo`, vínculo estructural
+   *      StockMovement↔PharmacyReservation de H-15).
    * Sin causas → CERRADA + closedAt/closedBy. No hay reapertura: decisión
    * administrativa futura, fuera de alcance de este plan.
    */
@@ -374,6 +386,93 @@ export const patientAccountRouter = router({
             mensaje: `${devolucionesSinReversion.length} cargo(s) VIGENTE con reserva de farmacia CANCELLED sin línea de reversión.`,
             count: devolucionesSinReversion.length,
             cargoIds: devolucionesSinReversion.map((c) => c.id),
+          });
+        }
+
+        // 4. docs/48 Ola 4b (H-16) — cargos DISPENSACION_FARMACIA VIGENTE sin
+        // StockMovement OUT asociado (espejo de
+        // conciliacion-cargos.cargosSinMovimiento). Reutiliza
+        // `cargosDispensacionVigentes`/`referenciaIds` del punto 3 — no
+        // vuelve a consultar los cargos de la cuenta.
+        let cargosSinMovimiento: typeof cargosDispensacionVigentes = [];
+        if (referenciaIds.length > 0) {
+          const movimientosConfirmados = await tx.stockMovement.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              type: "OUT",
+              referenceCode: { in: referenciaIds },
+            },
+            select: { referenceCode: true },
+          });
+          const referenciasConMovimiento = new Set(
+            movimientosConfirmados
+              .map((m) => m.referenceCode)
+              .filter((c): c is string => c !== null),
+          );
+          cargosSinMovimiento = cargosDispensacionVigentes.filter(
+            (c) => c.referenciaId !== null && !referenciasConMovimiento.has(c.referenciaId),
+          );
+        }
+        if (cargosSinMovimiento.length > 0) {
+          causas.push({
+            tipo: "CARGOS_SIN_MOVIMIENTO",
+            mensaje: `${cargosSinMovimiento.length} cargo(s) de dispensación sin movimiento de inventario asociado.`,
+            count: cargosSinMovimiento.length,
+            cargoIds: cargosSinMovimiento.map((c) => c.id),
+          });
+        }
+
+        // 5. docs/48 Ola 4b (H-16) — dispensado sin cargo, acotado a esta
+        // cuenta (espejo de conciliacion-cargos.dispensadoSinCargo): reservas
+        // de farmacia de ESTE paciente con StockMovement OUT confirmado
+        // (vínculo estructural StockMovement↔PharmacyReservation de H-15)
+        // pero sin ningún cargo de esta cuenta cuya referenciaId apunte a
+        // esa reserva.
+        const reservasPaciente = await tx.pharmacyReservation.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            patientId: account.patientId,
+            status: { notIn: ["CANCELLED", "EXPIRED"] },
+          },
+          select: { id: true },
+        });
+        let dispensadoSinCargo: string[] = [];
+        if (reservasPaciente.length > 0) {
+          const reservaIds = reservasPaciente.map((r) => r.id);
+          const movimientosDeReservas = await tx.stockMovement.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              type: "OUT",
+              referenceCode: { in: reservaIds },
+            },
+            select: { referenceCode: true },
+          });
+          const reservaIdsConMovimiento = [
+            ...new Set(
+              movimientosDeReservas
+                .map((m) => m.referenceCode)
+                .filter((id): id is string => id !== null),
+            ),
+          ];
+          if (reservaIdsConMovimiento.length > 0) {
+            const cargosDeEstaCuenta = await tx.patientAccountService.findMany({
+              where: { accountId: account.id, referenciaId: { in: reservaIdsConMovimiento } },
+              select: { referenciaId: true },
+            });
+            const reservaIdsConCargo = new Set(
+              cargosDeEstaCuenta.map((c) => c.referenciaId).filter((id): id is string => id !== null),
+            );
+            dispensadoSinCargo = reservaIdsConMovimiento.filter(
+              (id) => !reservaIdsConCargo.has(id),
+            );
+          }
+        }
+        if (dispensadoSinCargo.length > 0) {
+          causas.push({
+            tipo: "DISPENSADO_SIN_CARGO",
+            mensaje: `${dispensadoSinCargo.length} dispensación(es) con movimiento de inventario confirmado sin cargo en esta cuenta.`,
+            count: dispensadoSinCargo.length,
+            reservationIds: dispensadoSinCargo,
           });
         }
 

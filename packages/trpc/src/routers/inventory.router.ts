@@ -310,8 +310,13 @@ export const inventoryRouter = router({
     /**
      * OUT movement with FEFO enforcement — §19 rule 2.
      * Uses movement.create internally after FEFO check.
+     *
+     * docs/48 Ola 4b (H-15) — sin `requireRole`: cualquier `tenantProcedure`
+     * podía descontar stock. Mismo trío que las escrituras hermanas del
+     * dominio de inventario/GS1 (`gs1-catalogos.router.ts create/update`,
+     * `gs1-medication.router.ts update`): ADMIN/PHARM/LOGISTIC.
      */
-    out: tenantProcedure
+    out: requireRole(["ADMIN", "PHARM", "LOGISTIC"])
       .input(stockMovementCreateInput)
       .mutation(async ({ ctx, input }) => {
         if (input.type !== "OUT") {
@@ -393,7 +398,8 @@ export const inventoryRouter = router({
      * docs/48 §3 C3-3). No se importa `capturarCargo` en este archivo: la
      * garantía es estructural, no un `if` que se pueda olvidar.
      */
-    consumo: tenantProcedure
+    // docs/48 Ola 4b (H-15) — mismo gate que movement.out (ver arriba).
+    consumo: requireRole(["ADMIN", "PHARM", "LOGISTIC"])
       .input(stockConsumptionCreateInput)
       .mutation(async ({ ctx, input }) => {
         const est = await ctx.prisma.establishment.findFirst({

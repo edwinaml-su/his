@@ -19,9 +19,17 @@
  *     RESERVED y nunca transiciona a CONFIRMED/DISPATCHED — se interpreta
  *     "completado" como "reserva activa, no cancelada/expirada"
  *     (`status NOT IN ('CANCELLED','EXPIRED')`).
- *   - "StockMovement OUT de dispensación" → `type='OUT'` con `reason ILIKE
- *     '%dispensaci%'` (ambos textos que graba `dispensation.router.ts`:
- *     "Dispensación GS1 bedside..." y "Reserva dispensación GS1...").
+ *   - "StockMovement OUT de dispensación" → docs/48 Ola 4b (H-15): antes se
+ *     identificaba por `reason ILIKE '%dispensaci%'` (frágil — cualquier
+ *     cambio de texto en `dispensation.router.ts` lo rompía en silencio).
+ *     Ahora se identifica por el vínculo ESTRUCTURAL: `type='OUT'` con un
+ *     `StockMovement.referenceCode` que matchea el `id` de una
+ *     `PharmacyReservation` (`reserveItem` graba `referenceCode =
+ *     reservation.id`, SQL 214/dispensation.router.ts). El scan directo
+ *     (`scanItem`, sin caller real hoy — ver H-14) graba `referenceCode =
+ *     prescription.id`, que no es una PharmacyReservation — queda fuera de
+ *     este reporte hasta que ese camino tenga un caller real; no se
+ *     reintroduce el `ILIKE` para cubrirlo.
  *   - El vínculo `PatientAccountService.referenciaId` ↔ `StockMovement.
  *     referenceCode` se compara como texto: `referenceCode` es
  *     `varchar(80)` de uso libre (también guarda "nro factura"/ajustes no
@@ -150,9 +158,11 @@ export const conciliacionCargosRouter = router({
              sm.quantity::text  AS "quantity"
            FROM "StockMovement" sm
            JOIN "StockItem" si ON si.id = sm."itemId"
+           JOIN "PharmacyReservation" pr
+             ON pr.id::text = sm."referenceCode"
+            AND pr."organizationId" = sm."organizationId"
            WHERE sm."organizationId" = $1
              AND sm.type = 'OUT'
-             AND sm.reason ILIKE '%dispensaci%'
              AND sm."performedAt" BETWEEN $2 AND $3
              AND NOT EXISTS (
                SELECT 1 FROM "PatientAccountService" pas
@@ -308,9 +318,11 @@ export const conciliacionCargosRouter = router({
            )::text AS indicaciones_sin_dispensa,
            (SELECT count(*) FROM "StockMovement" sm
               JOIN "StockItem" si ON si.id = sm."itemId"
+              JOIN "PharmacyReservation" pr
+                ON pr.id::text = sm."referenceCode"
+               AND pr."organizationId" = sm."organizationId"
              WHERE sm."organizationId" = $1
                AND sm.type = 'OUT'
-               AND sm.reason ILIKE '%dispensaci%'
                AND sm."performedAt" BETWEEN $2 AND $3
                AND NOT EXISTS (
                  SELECT 1 FROM "PatientAccountService" pas

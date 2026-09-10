@@ -45,15 +45,30 @@
  * Dependencia @DBA (bloqueante para GTIN_NO_COINCIDE_CON_RECETA completo):
  *   - Drug.gtin (campo GTIN-14 en catálogo) → cuando exista, se valida coincidencia.
  *   - MedicationGtin (tabla con lot/recallStatus) → check recall live.
+ *
+ * docs/48 Ola 4b (H-13) — libro de controlados alimentado desde el flujo REAL:
+ * `pharmacy.router.ts dispense.create` (el que persiste isControlled/witness/
+ * justification) no lo invoca ninguna pantalla — la dispensación real pasa
+ * por `reserveItem` (y, si algún día se cablea, `scanItem`). Cuando el ítem
+ * resuelto de la receta es RX_CONTROLLED, ambos exigen witnessUserId +
+ * witnessPin + controlledJustification (2-eyes con PIN, mismo patrón
+ * `verifyPinOrThrow` de `pathology.router.ts`/ECE contra
+ * `ece.firma_electronica`) y crean la fila `MedicationDispense` — se elige
+ * ESA tabla (no columnas nuevas en `PharmacyReservation`) porque ya tiene las
+ * 3 columnas de controlados (Ola 4 C4-4) y `pharmacy.libroControlados` ya la
+ * consulta: no duplica el modelo ni obliga a unir dos formas de fila.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
 import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
+import { isControlledDispensingClass } from "@his/contracts";
+import { argon2 } from "@his/infrastructure";
 import { router, tenantProcedure, requireRole } from "../../trpc";
 import { withTenantContext } from "../../rls-context";
 import { abacGuard } from "../../abac";
 import { capturarCargo, revertirCargo } from "../../lib/charge-capture";
+import { requirePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Helpers internos (sin dependencias cross-package)
@@ -234,6 +249,135 @@ function codigoCargoDispensacion(stock: StockDecrementResult | null, gtin: strin
 }
 
 // ---------------------------------------------------------------------------
+// docs/48 Ola 4b (H-13) — 2-eyes con PIN para fármacos RX_CONTROLLED.
+//
+// Replica el patrón `verifyPinOrThrow` de `pathology.router.ts` (mismo
+// argon2id contra `ece.firma_electronica`, vía `personal_id` resuelto por
+// `requirePersonalSalud`) pero parametrizado por `witnessUserId` en vez de
+// `ctx.user.id` — el PIN que se valida es el DEL TESTIGO, no el del
+// dispensador que ejecuta la mutación.
+// ---------------------------------------------------------------------------
+
+const WITNESS_PIN_LOCKOUT_MAX = 5;
+
+interface FirmaElectronicaRow {
+  id: string;
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+}
+
+async function verifyWitnessPin(
+  tx: PrismaClient,
+  witnessUserId: string,
+  pin: string,
+): Promise<void> {
+  const personal = await requirePersonalSalud(tx, witnessUserId, {
+    action: "actuar como testigo de dispensación de fármaco controlado",
+  });
+
+  const firmaRows = await (tx.$queryRaw as (
+    q: TemplateStringsArray,
+    ...v: unknown[]
+  ) => Promise<FirmaElectronicaRow[]>)`
+    SELECT id::text, pin_hash, failed_attempts, locked_until
+    FROM ece.firma_electronica
+    WHERE personal_id = ${personal.id}::uuid AND revoked_at IS NULL
+    LIMIT 1
+  `;
+  const firma = firmaRows[0] ?? null;
+  if (!firma) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "El testigo no tiene firma electrónica (PIN) configurada.",
+    });
+  }
+
+  if (firma.locked_until !== null && new Date(firma.locked_until) > new Date()) {
+    const mins = Math.ceil((new Date(firma.locked_until).getTime() - Date.now()) / 60_000);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Firma del testigo bloqueada. Inténtelo en ${mins} min.`,
+    });
+  }
+
+  const valid = await argon2.verify(firma.pin_hash, pin);
+  if (!valid) {
+    await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+      UPDATE ece.firma_electronica
+      SET failed_attempts = failed_attempts + 1
+      WHERE id = ${firma.id}::uuid
+    `;
+    const remaining = WITNESS_PIN_LOCKOUT_MAX - (firma.failed_attempts + 1);
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      message:
+        remaining > 0
+          ? `PIN de testigo incorrecto. Intentos restantes: ${remaining}.`
+          : "PIN de testigo incorrecto. La firma quedará bloqueada.",
+    });
+  }
+
+  await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
+    UPDATE ece.firma_electronica SET failed_attempts = 0 WHERE id = ${firma.id}::uuid
+  `;
+}
+
+/**
+ * docs/48 Ola 4b (H-13) — valida los campos de 2-eyes exigidos cuando el
+ * fármaco resuelto de la receta es RX_CONTROLLED, y verifica el PIN del
+ * testigo. No hace nada si `isControlled` es false (comportamiento idéntico
+ * al actual para el 100% de las dispensaciones no controladas).
+ */
+async function enforceControlledWitness(
+  tx: PrismaClient,
+  params: {
+    isControlled: boolean;
+    dispenserId: string;
+    prescriberId: string;
+    genericName: string;
+    witnessUserId?: string;
+    witnessPin?: string;
+    controlledJustification?: string;
+  },
+): Promise<void> {
+  if (!params.isControlled) return;
+
+  if (!params.witnessUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Fármaco controlado (${params.genericName}) requiere usuario testigo (witnessUserId).`,
+    });
+  }
+  if (params.witnessUserId === params.dispenserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "El testigo de fármaco controlado debe ser distinto del dispensador.",
+    });
+  }
+  if (params.witnessUserId === params.prescriberId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "El testigo de fármaco controlado debe ser distinto del prescriptor.",
+    });
+  }
+  if (!params.witnessPin) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Fármaco controlado requiere PIN del testigo (witnessPin).",
+    });
+  }
+  if (!params.controlledJustification) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Fármaco controlado requiere justificación documentada (controlledJustification).",
+    });
+  }
+
+  await verifyWitnessPin(tx, params.witnessUserId, params.witnessPin);
+}
+
+// ---------------------------------------------------------------------------
 // Input schemas
 // ---------------------------------------------------------------------------
 
@@ -242,6 +386,24 @@ const checkPreconditionsInput = z.object({
   /** ID de la Prescription en HIS a validar como receta activa. */
   indicationId: z.string().uuid(),
 });
+
+/**
+ * docs/48 Ola 4b (H-13) — 2-eyes para RX_CONTROLLED. Opcionales en Zod: se
+ * exigen recién cuando `enforceControlledWitness` resuelve el fármaco como
+ * RX_CONTROLLED — para el resto de las dispensaciones son ignorados.
+ */
+const controlledWitnessFields = {
+  /** Usuario testigo (distinto del dispensador y del prescriptor). */
+  witnessUserId: z.string().uuid().optional(),
+  /** PIN de firma electrónica del testigo (mismo formato que firma.verify). */
+  witnessPin: z
+    .string()
+    .trim()
+    .regex(/^\d{6,8}$/, "El PIN debe tener entre 6 y 8 dígitos numéricos.")
+    .optional(),
+  /** Justificación legal de la dispensación de fármaco controlado. */
+  controlledJustification: z.string().trim().min(10).max(500).optional(),
+};
 
 const scanItemInput = z.object({
   /** ID de la Prescription que actúa como pharmacy order. */
@@ -256,6 +418,7 @@ const scanItemInput = z.object({
   serial: z.string().max(20).optional(),
   /** String GS1 original para registro de auditoría. */
   gs1Raw: z.string().max(2000).optional(),
+  ...controlledWitnessFields,
 });
 
 const orderDetailInput = z.object({
@@ -273,6 +436,7 @@ const reserveItemInput = z.object({
   lote: z.string().min(1).max(80),
   serie: z.string().max(80).optional(),
   patientId: z.string().uuid({ message: "patientId debe ser UUID" }),
+  ...controlledWitnessFields,
 });
 
 const cancelReservationInput = z.object({
@@ -394,9 +558,20 @@ export const dispensationRouter = router({
    *   2. Validar vencimiento (MEDICAMENTO_VENCIDO + outbox).
    *   3. Verificar recall de lote si MedicationGtin existe en schema.
    *   4. Devolver ok con datos del ítem.
+   *
+   * docs/48 Ola 4b (H-14) — sin caller real hoy: la página
+   * `/pharmacy/dispense/[orderId]` solo invoca `reserveItem` (`scanItem` solo
+   * aparece mockeado en `e2e/fase2/pharmacy-picking.spec.ts`, un spec
+   * placeholder que nunca ejercitó la UI real — ver LEE de apps/web previa a
+   * este cambio). Este endpoint captura cargo y descuenta inventario real
+   * exactamente igual que `reserveItem` (mismo dominio, mismo header de
+   * archivo: "US.F2.6.6-9: Dispensación Farmacia"), así que lleva el MISMO
+   * gate — no queda abierto a `tenantProcedure` desnudo a la espera de un
+   * caller futuro.
    */
-  scanItem: tenantProcedure
+  scanItem: requireRole(["PHARM", "ADMIN"])
     .input(scanItemInput)
+    .use(abacGuard("dispensation", "dispense"))
     .mutation(async ({ ctx, input }) => {
       const result = await withTenantContext(
         ctx.prisma,
@@ -418,7 +593,7 @@ export const dispensationRouter = router({
                 select: {
                   id: true,
                   drug: {
-                    select: { id: true, genericName: true },
+                    select: { id: true, genericName: true, dispensingClass: true },
                   },
                 },
               },
@@ -555,6 +730,22 @@ export const dispensationRouter = router({
             });
           }
 
+          // docs/48 Ola 4b (H-13) — 2-eyes con PIN si el ítem resuelto es
+          // RX_CONTROLLED. Corre ANTES de capturar el cargo: un scan de
+          // controlado sin testigo/PIN válido no debe generar cargo ni
+          // MedicationDispense (throw revierte también el descuento de stock
+          // del Paso 3.5, misma transacción).
+          const isControlled = isControlledDispensingClass(matchedItem.drug.dispensingClass);
+          await enforceControlledWitness(tx, {
+            isControlled,
+            dispenserId: ctx.user.id,
+            prescriberId: prescription.prescriberId,
+            genericName: matchedItem.drug.genericName,
+            witnessUserId: input.witnessUserId,
+            witnessPin: input.witnessPin,
+            controlledJustification: input.controlledJustification,
+          });
+
           // docs/48 Ola 2 (C2-2) — captura de cargo en la MISMA transacción que
           // el descuento de inventario (RN-HIS-BOT-001 R5/H-01). Sin reserva
           // propia, `referenciaId` ancla a la Prescription (la orden de
@@ -571,6 +762,26 @@ export const dispensationRouter = router({
             referenciaId: prescription.id,
             actorId: ctx.user.id,
           });
+
+          // docs/48 Ola 4b (H-13) — libro de controlados: solo se crea la fila
+          // MedicationDispense cuando el fármaco es RX_CONTROLLED (evita
+          // duplicar el registro de TODA dispensación, que ya vive en
+          // PharmacyReservation/StockMovement/capturarCargo).
+          if (isControlled) {
+            await tx.medicationDispense.create({
+              data: {
+                prescriptionItemId: matchedItem.id,
+                dispensedById: ctx.user.id,
+                quantity: 1,
+                batchNumber: input.lot ?? null,
+                expiryDate: null,
+                notes: `Dispensación GS1 scan: Prescription ${prescription.id}`,
+                isControlled: true,
+                witnessUserId: input.witnessUserId ?? null,
+                controlledJustification: input.controlledJustification ?? null,
+              },
+            });
+          }
 
           return {
             ok: true as const,
@@ -670,7 +881,21 @@ export const dispensationRouter = router({
             patientId: input.patientId,
             status: { in: ["SIGNED", "PARTIALLY_DISPENSED"] },
           },
-          select: { id: true, encounterId: true, prescriberId: true },
+          select: {
+            id: true,
+            encounterId: true,
+            prescriberId: true,
+            // docs/48 Ola 4b (H-13) — mismo patrón de scanItem: sin
+            // prescriptionItemId en el input, se toma el primer ítem de la
+            // receta para resolver el fármaco (libro de controlados + FK a
+            // MedicationDispense). Pendiente Drug.gtin para matchear exacto.
+            items: {
+              select: {
+                id: true,
+                drug: { select: { genericName: true, dispensingClass: true } },
+              },
+            },
+          },
         });
 
         if (!prescription) {
@@ -720,6 +945,23 @@ export const dispensationRouter = router({
             });
           }
         }
+
+        // docs/48 Ola 4b (H-13) — 2-eyes con PIN si el ítem resuelto es
+        // RX_CONTROLLED. Corre ANTES de crear la reserva: sin testigo/PIN
+        // válido no debe quedar reserva, descuento de stock ni cargo.
+        const matchedItem = prescription.items?.[0] ?? null;
+        const isControlled = matchedItem
+          ? isControlledDispensingClass(matchedItem.drug.dispensingClass)
+          : false;
+        await enforceControlledWitness(tx, {
+          isControlled,
+          dispenserId: tenant.userId,
+          prescriberId: prescription.prescriberId,
+          genericName: matchedItem?.drug.genericName ?? `GTIN ${input.gtin}`,
+          witnessUserId: input.witnessUserId,
+          witnessPin: input.witnessPin,
+          controlledJustification: input.controlledJustification,
+        });
 
         const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000); // +4h
 
@@ -775,6 +1017,29 @@ export const dispensationRouter = router({
           referenciaId: reservation.id,
           actorId: tenant.userId,
         });
+
+        // docs/48 Ola 4b (H-13) — libro de controlados: se crea la fila
+        // MedicationDispense SOLO para RX_CONTROLLED (H-13 en pharmacy.ts
+        // dispense.create nunca la alimentaba porque ninguna pantalla la
+        // invoca; el flujo real es este). No se crea para dispensaciones
+        // no-controladas: esas ya quedan registradas en PharmacyReservation +
+        // StockMovement + el cargo — duplicarlas en MedicationDispense no
+        // aporta y complicaría `libroControlados` sin necesidad.
+        if (isControlled && matchedItem) {
+          await tx.medicationDispense.create({
+            data: {
+              prescriptionItemId: matchedItem.id,
+              dispensedById: tenant.userId,
+              quantity: 1,
+              batchNumber: input.lote,
+              expiryDate: null,
+              notes: `Reserva GS1: ${reservation.id}`,
+              isControlled: true,
+              witnessUserId: input.witnessUserId ?? null,
+              controlledJustification: input.controlledJustification ?? null,
+            },
+          });
+        }
 
         // Emit domain event para outbox Beta.15
         await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
