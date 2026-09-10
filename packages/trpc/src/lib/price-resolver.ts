@@ -18,9 +18,13 @@
  *      la forma del 99.9% de las reglas reales de Odoo. Una regla explícita
  *      de nivel `item` para el mismo código le gana; una de categoría o
  *      global, no.
- *   2. Fallback: LabTest.standardPrice (CC-0013), primero override del tenant
+ *   2. Lista DEFAULT de la organización (`ServicePriceList.isDefault`, SQL 228
+ *      — decisión Edwin 2026-09-10: "Precios Avante Complejo Hospitalario"):
+ *      se evalúa con el mismo motor cuando la cuenta no tiene lista asignada o
+ *      la asignada no produjo precio para el código.
+ *   3. Fallback: LabTest.standardPrice (CC-0013), primero override del tenant
  *      y luego catálogo global.
- *   3. null — el llamador debe pedir precio manual con aviso.
+ *   4. null — el llamador debe pedir precio manual con aviso.
  *
  * Cuando se pasa `labTestId`, se prueba antes `ImagingTestAttrs.codigoTarifario`
  * como ALIAS del código de tarifario (CC-0016) — sin `labTestId` el
@@ -164,6 +168,12 @@ SELECT i."unitPrice", i."estimatedCost"
  WHERE i."priceListId" = $1::uuid AND i.code = $2::text AND i.active = true
  LIMIT 1`;
 
+const SQL_LISTA_DEFAULT = `
+SELECT l.id
+  FROM "ServicePriceList" l
+ WHERE l."organizationId" = $1::uuid AND l."isDefault" = true AND l.active = true
+ LIMIT 1`;
+
 /** Redondea a centavos (la moneda de todas las listas reales es USD). */
 function aCentavos(valor: number): number {
   return Math.round(valor * 100) / 100;
@@ -229,6 +239,20 @@ export async function resolverPriceListIdDeCuenta(
     where: { id: cuenta.tipoCuentaId, organizationId },
   });
   return tipo?.priceListId ?? null;
+}
+
+/**
+ * Lista de precios DEFAULT de la organización (`isDefault`, SQL 228).
+ * Única por org (índice parcial); null si la org no definió una.
+ */
+export async function resolverDefaultPriceListId(
+  tx: TxForPriceResolver,
+  organizationId: string,
+): Promise<string | null> {
+  // `?.`: tolera mocks de tests que no configuran esta query ($queryRawUnsafe
+  // real siempre devuelve array).
+  const filas = await tx.$queryRawUnsafe<Array<{ id: string }>>(SQL_LISTA_DEFAULT, organizationId);
+  return filas?.[0]?.id ?? null;
 }
 
 /**
@@ -412,7 +436,15 @@ export async function resolverPrecio(
 
   const priceListId = await resolverPriceListIdDeCuenta(tx, organizationId, cuentaId);
 
-  if (priceListId) {
+  // SQL 228 — la lista default de la org se evalúa después de la asignada
+  // (o directamente, si la cuenta no tiene lista). Se deduplica: si la
+  // asignada ES la default, se evalúa una sola vez.
+  const defaultListId = await resolverDefaultPriceListId(tx, organizationId);
+  const listas = [priceListId, defaultListId !== priceListId ? defaultListId : null].filter(
+    (id): id is string => id != null,
+  );
+
+  if (listas.length > 0) {
     // CC-0016 — alias de facturación: se prueba ANTES que el `code` nativo.
     const codigos: string[] = [];
     if (labTestId && tx.imagingTestAttrs) {
@@ -421,15 +453,17 @@ export async function resolverPrecio(
     }
     codigos.push(code);
 
-    for (const candidato of codigos) {
-      const resultado = await resolverEnLista(tx, priceListId, candidato, ctx);
-      if (resultado) {
-        return {
-          precio: resultado.precio,
-          fuente: resultado.fuente,
-          priceListId,
-          reglaId: resultado.reglaId,
-        };
+    for (const lista of listas) {
+      for (const candidato of codigos) {
+        const resultado = await resolverEnLista(tx, lista, candidato, ctx);
+        if (resultado) {
+          return {
+            precio: resultado.precio,
+            fuente: resultado.fuente,
+            priceListId: lista,
+            reglaId: resultado.reglaId,
+          };
+        }
       }
     }
   }
