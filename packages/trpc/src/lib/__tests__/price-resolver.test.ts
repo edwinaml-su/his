@@ -8,13 +8,20 @@
  * aparte con packages/database/sql/__tests__/204_motor_precios_smoke.sql.
  */
 import { describe, it, expect, vi } from "vitest";
-import { resolverPrecio, resolverPrecioEnLista, resolverPriceListIdDeCuenta, calcularPrecioRegla } from "../price-resolver";
+import {
+  resolverPrecio,
+  resolverPrecioEnLista,
+  resolverPriceListIdDeCuenta,
+  resolverDefaultPriceListId,
+  calcularPrecioRegla,
+} from "../price-resolver";
 
 const ORG_ID = "00000000-0000-0000-0000-000000000001";
 const CUENTA_ID = "00000000-0000-0000-0000-000000000002";
 const TIPO_CUENTA_ID = "00000000-0000-0000-0000-000000000003";
 const PRICE_LIST_ID = "00000000-0000-0000-0000-000000000004";
 const BASE_LIST_ID = "00000000-0000-0000-0000-000000000005";
+const DEFAULT_LIST_ID = "00000000-0000-0000-0000-000000000006";
 
 type ItemFake = { unitPrice: string; estimatedCost?: string | null };
 type ReglaFake = {
@@ -65,11 +72,17 @@ function makeTx(opts: {
   labTestTenant?: { standardPrice: unknown } | null;
   labTestGlobal?: { standardPrice: unknown } | null;
   imagingAttrs?: { codigoTarifario: string | null } | null;
+  /** Lista default de la org (SQL 228); null/omitido = la org no definió una. */
+  defaultPriceListId?: string | null;
 }) {
   const items = opts.items ?? {};
   const reglas = opts.reglas ?? {};
 
   const queryRawUnsafe = vi.fn(async (sql: string, ...args: unknown[]) => {
+    if (sql.includes('"isDefault"')) {
+      return opts.defaultPriceListId ? [{ id: opts.defaultPriceListId }] : [];
+    }
+
     const key = `${String(args[0])}|${String(args[1])}`;
 
     if (sql.includes('"ServicePriceRule"')) {
@@ -218,6 +231,77 @@ describe("resolverPrecio", () => {
       priceListId: null,
       reglaId: null,
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // SQL 228 — lista default de la organización
+  // -------------------------------------------------------------------------
+
+  it("cuenta sin lista asignada resuelve por la lista default de la org", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: null },
+      defaultPriceListId: DEFAULT_LIST_ID,
+      items: { [`${DEFAULT_LIST_ID}|GLU`]: { unitPrice: "12.00" } },
+    });
+
+    expect(await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "GLU" })).toEqual({
+      precio: 12,
+      fuente: "lista",
+      priceListId: DEFAULT_LIST_ID,
+      reglaId: null,
+    });
+  });
+
+  it("si la lista asignada no produce precio para el código, cae a la default ANTES que al estándar", async () => {
+    const tx = makeTx({
+      ...cuentaConLista,
+      defaultPriceListId: DEFAULT_LIST_ID,
+      items: { [`${DEFAULT_LIST_ID}|GLU`]: { unitPrice: "12.00" } },
+      labTestTenant: { standardPrice: 99 },
+    });
+
+    expect(await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "GLU" })).toEqual({
+      precio: 12,
+      fuente: "lista",
+      priceListId: DEFAULT_LIST_ID,
+      reglaId: null,
+    });
+  });
+
+  it("la lista asignada gana a la default cuando ambas tienen el código", async () => {
+    const tx = makeTx({
+      ...cuentaConLista,
+      defaultPriceListId: DEFAULT_LIST_ID,
+      items: {
+        [`${PRICE_LIST_ID}|GLU`]: { unitPrice: "8.00" },
+        [`${DEFAULT_LIST_ID}|GLU`]: { unitPrice: "12.00" },
+      },
+    });
+
+    expect(await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "GLU" })).toMatchObject({
+      precio: 8,
+      priceListId: PRICE_LIST_ID,
+    });
+  });
+
+  it("si la default tampoco produce precio, cae al estándar", async () => {
+    const tx = makeTx({
+      patientAccount: { tipoCuentaId: null },
+      defaultPriceListId: DEFAULT_LIST_ID,
+      labTestTenant: { standardPrice: 15 },
+    });
+
+    expect(await resolverPrecio(tx as never, { organizationId: ORG_ID, cuentaId: CUENTA_ID, code: "GLU" })).toEqual({
+      precio: 15,
+      fuente: "estandar",
+      priceListId: null,
+      reglaId: null,
+    });
+  });
+
+  it("resolverDefaultPriceListId devuelve null cuando la org no definió default", async () => {
+    const tx = makeTx({});
+    expect(await resolverDefaultPriceListId(tx as never, ORG_ID)).toBeNull();
   });
 
   // -------------------------------------------------------------------------
