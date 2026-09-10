@@ -49,6 +49,11 @@ describe("patientAccountRouter", () => {
     prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
     // CC-0015 — crear valida el tipoCuenta antes de generar el correlativo.
     prisma.tipoCuenta.findFirst.mockResolvedValue(FAKE_TIPO_CUENTA as never);
+    // docs/48 Ola 4b (H-16) — baseline para las 2 causas nuevas de `cerrar`
+    // (CARGOS_SIN_MOVIMIENTO / DISPENSADO_SIN_CARGO): "sin reservas/sin
+    // movimientos" es el default correcto para los tests que no las ejercitan.
+    prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
+    prisma.stockMovement.findMany.mockResolvedValue([] as never);
   }
 
   beforeEach(() => {
@@ -284,6 +289,9 @@ describe("patientAccountRouter", () => {
       return {
         id: ACCOUNT_ID,
         organizationId: MOCK_TENANT.organizationId,
+        // docs/48 Ola 4b (H-16) — patientId requerido por las causas 4/5
+        // (`account.patientId` ancla la búsqueda de PharmacyReservation).
+        patientId: PATIENT_ID,
         status: overrides.status ?? "ABIERTA",
       };
     }
@@ -331,7 +339,15 @@ describe("patientAccountRouter", () => {
         closedBy: MOCK_USER_ADMIN.id,
       });
       expect(updateArgs.data.closedAt).toBeInstanceOf(Date);
-      expect(prisma.pharmacyReservation.findMany).not.toHaveBeenCalled();
+      // docs/48 Ola 4b (H-16) — causa 5 (DISPENSADO_SIN_CARGO) SIEMPRE
+      // consulta las reservas del paciente (barato: 1 query, sin filas →
+      // no dispara más queries). Causas 3/4 siguen sin correr porque
+      // `cargosDispensacionVigentes` (2do mock de patientAccountService)
+      // fue [] → `referenciaIds` vacío.
+      expect(prisma.pharmacyReservation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ patientId: PATIENT_ID }) }),
+      );
+      expect(prisma.stockMovement.findMany).not.toHaveBeenCalled();
     });
 
     it("bloquea listando cargos PENDIENTE_TARIFA (conteo + primeros codes)", async () => {
@@ -404,6 +420,10 @@ describe("patientAccountRouter", () => {
         .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never);
       // La query real filtra status='CANCELLED' — simulamos que no matcheó nada.
       prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
+      // docs/48 Ola 4b (H-16) — cargo-1 SÍ tiene su movimiento de inventario
+      // confirmado (dispensación real), así que causa 4 (CARGOS_SIN_MOVIMIENTO)
+      // no debe dispararse en este escenario — solo se está probando causa 3.
+      prisma.stockMovement.findMany.mockResolvedValue([{ referenceCode: "res-1" }] as never);
       prisma.patientAccount.update.mockResolvedValue(mockAccount({ status: "CERRADA" }) as never);
 
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
@@ -419,6 +439,9 @@ describe("patientAccountRouter", () => {
         .mockResolvedValueOnce([{ code: "MED-001" }] as never)
         .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never);
       prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-1" }] as never);
+      // stockMovement.findMany queda en el baseline [] de setupTx() — cargo-1
+      // no tiene movimiento confirmado, así que CARGOS_SIN_MOVIMIENTO
+      // (causa 4) también dispara junto con las otras 3.
 
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
@@ -429,9 +452,68 @@ describe("patientAccountRouter", () => {
           "CARGOS_PENDIENTE_TARIFA",
           "CUENTA_PENDIENTE_REGULARIZAR",
           "DEVOLUCION_SIN_REVERSION",
+          "CARGOS_SIN_MOVIMIENTO",
         ]),
       );
-      expect(causas).toHaveLength(3);
+      expect(causas).toHaveLength(4);
+    });
+
+    // docs/48 Ola 4b (H-16) — causa 4: cargo DISPENSACION_FARMACIA VIGENTE
+    // sin StockMovement OUT asociado (espejo de conciliacion-cargos, acotado
+    // a esta cuenta).
+    it("bloquea por CARGOS_SIN_MOVIMIENTO (cargo de dispensación sin movimiento de inventario)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([{ id: "cargo-1", referenciaId: "res-1" }] as never); // cargosDispensacionVigentes
+      // pharmacyReservation.findMany y stockMovement.findMany quedan en el
+      // baseline [] de setupTx(): la reserva no está CANCELLED (sin
+      // DEVOLUCION_SIN_REVERSION) y no hay movimiento para "res-1".
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({
+          tipo: "CARGOS_SIN_MOVIMIENTO",
+          count: 1,
+          cargoIds: ["cargo-1"],
+        }),
+      );
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    // docs/48 Ola 4b (H-16) — causa 5: reserva de farmacia de este paciente
+    // con StockMovement OUT confirmado pero sin cargo en esta cuenta (espejo
+    // de conciliacion-cargos.dispensadoSinCargo, vínculo estructural de H-15).
+    it("bloquea por DISPENSADO_SIN_CARGO (reserva con movimiento confirmado sin cargo en la cuenta)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([] as never) // cargosDispensacionVigentes: nada en esta cuenta
+        .mockResolvedValueOnce([] as never); // cause 5: ningún cargo referencia "res-2"
+      // reserva activa (no CANCELLED/EXPIRED) de este paciente:
+      prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-2" }] as never);
+      // con StockMovement OUT confirmado (referenceCode = "res-2"):
+      prisma.stockMovement.findMany.mockResolvedValue([{ referenceCode: "res-2" }] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({
+          tipo: "DISPENSADO_SIN_CARGO",
+          count: 1,
+          reservationIds: ["res-2"],
+        }),
+      );
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
     });
   });
 

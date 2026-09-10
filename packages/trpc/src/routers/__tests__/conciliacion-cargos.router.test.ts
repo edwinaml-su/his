@@ -78,7 +78,10 @@ describe("conciliacionCargosRouter", () => {
       expect(result).toEqual(rows);
       const sql = String(prisma.$queryRawUnsafe.mock.calls[0]![0]);
       expect(sql).toContain("StockMovement");
-      expect(sql).toContain("dispensaci");
+      // docs/48 Ola 4b (H-15) — vínculo estructural (PharmacyReservation),
+      // ya no el ILIKE frágil sobre `reason`.
+      expect(sql).toContain("PharmacyReservation");
+      expect(sql).not.toContain("ILIKE");
     });
   });
 

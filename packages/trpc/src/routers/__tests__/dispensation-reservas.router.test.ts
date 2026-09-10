@@ -62,8 +62,19 @@ vi.mock("../../lib/charge-capture", () => ({
   revertirCargo: vi.fn().mockResolvedValue({ reversionId: "reversion-default" }),
 }));
 
+// docs/48 Ola 4b (H-13) — mismo mock que pathology.router.test.ts: controla
+// el resultado de `argon2.verify` para los tests del PIN de testigo.
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn().mockResolvedValue(true), // PIN correcto por defecto
+    hash: vi.fn().mockResolvedValue("$argon2id$mock"),
+    argon2id: 2,
+  },
+}));
+
 import { dispensationRouter } from "../pharmacy/dispensation.router";
 import { capturarCargo, revertirCargo } from "../../lib/charge-capture";
+import { argon2 } from "@his/infrastructure";
 
 const capturarCargoMock = vi.mocked(capturarCargo);
 const revertirCargoMock = vi.mocked(revertirCargo);
@@ -500,6 +511,176 @@ describe("dispensationRouter — reservas consolidadas", () => {
       // de inventario recién creados — aquí se confirma que el error de
       // capturarCargo se propaga sin ser tragado por el router.
       expect(capturarCargoMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // docs/48 Ola 4b (H-13) — libro de controlados alimentado desde reserveItem
+  // (el flujo REAL de dispensación GS1; `pharmacy.router.ts dispense.create`
+  // no lo invoca ninguna pantalla).
+  // -------------------------------------------------------------------------
+  describe("reserveItem — H-13 libro de controlados (RX_CONTROLLED)", () => {
+    const OTHER_USER = "00000000-0000-0000-0000-000000000008";
+    const PRESCRIBER = "00000000-0000-0000-0000-000000000099";
+    const ITEM_ID = "00000000-0000-0000-0000-0000000000f1";
+    const PERSONAL_ID = "00000000-0000-0000-0000-0000000000f2";
+    const FIRMA_ID = "00000000-0000-0000-0000-0000000000f3";
+    const JUSTIFICACION = "Justificación de prueba con más de 10 caracteres";
+
+    function controlledPrescription(dispensingClass = "RX_CONTROLLED") {
+      return {
+        id: ORDER,
+        encounterId: null,
+        prescriberId: PRESCRIBER,
+        items: [
+          {
+            id: ITEM_ID,
+            drug: { genericName: "Morfina 10mg", dispensingClass },
+          },
+        ],
+      };
+    }
+
+    /** Simula personal_salud + firma_electronica válidos (verifyWitnessPin). */
+    function wireWitnessPinLookup() {
+      let call = 0;
+      prisma.$queryRaw.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) return [{ id: PERSONAL_ID, nombre_completo: "Testigo" }];
+        return [
+          { id: FIRMA_ID, pin_hash: "$argon2id$mock", failed_attempts: 0, locked_until: null },
+        ];
+      });
+    }
+
+    beforeEach(() => {
+      prisma.prescription.findFirst.mockResolvedValue(controlledPrescription() as never);
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
+      prisma.pharmacyReservation.create.mockResolvedValue(makeReservation() as never);
+      // Sin StockItem cargado (SIN_CATALOGO) — no interfiere con R07.
+      prisma.stockItem.findFirst.mockResolvedValue(null as never);
+    });
+
+    it("sin witnessUserId, rechaza con FORBIDDEN antes de crear la reserva", async () => {
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
+    it("witnessUserId igual al dispensador, rechaza con FORBIDDEN", async () => {
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+          witnessUserId: MOCK_USER_ADMIN.id,
+          witnessPin: "123456",
+          controlledJustification: JUSTIFICACION,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
+    it("witnessUserId igual al prescriptor, rechaza con FORBIDDEN", async () => {
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+          witnessUserId: PRESCRIBER,
+          witnessPin: "123456",
+          controlledJustification: JUSTIFICACION,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
+    it("sin controlledJustification, rechaza con FORBIDDEN", async () => {
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+          witnessUserId: OTHER_USER,
+          witnessPin: "123456",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
+    it("PIN de testigo incorrecto, rechaza con UNAUTHORIZED y no crea la reserva", async () => {
+      wireWitnessPinLookup();
+      vi.mocked(argon2.verify).mockResolvedValueOnce(false);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+          witnessUserId: OTHER_USER,
+          witnessPin: "000000",
+          controlledJustification: JUSTIFICACION,
+        }),
+      ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+      expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+    });
+
+    it("con testigo válido, crea la reserva Y persiste MedicationDispense con los datos de controlados", async () => {
+      wireWitnessPinLookup();
+      prisma.medicationDispense.create.mockResolvedValue({ id: "md-1" } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        patientId: PATIENT,
+        witnessUserId: OTHER_USER,
+        witnessPin: "123456",
+        controlledJustification: JUSTIFICACION,
+      });
+
+      expect(prisma.pharmacyReservation.create).toHaveBeenCalledOnce();
+      expect(prisma.medicationDispense.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            prescriptionItemId: ITEM_ID,
+            isControlled: true,
+            witnessUserId: OTHER_USER,
+            controlledJustification: JUSTIFICACION,
+          }),
+        }),
+      );
+    });
+
+    it("fármaco no controlado (dispensingClass distinto), no exige testigo ni crea MedicationDispense", async () => {
+      prisma.prescription.findFirst.mockResolvedValue(controlledPrescription("OTC") as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await caller.reserveItem({
+        pharmacyOrderId: ORDER,
+        gtin: GTIN,
+        lote: LOTE,
+        patientId: PATIENT,
+      });
+
+      expect(prisma.pharmacyReservation.create).toHaveBeenCalledOnce();
+      expect(prisma.medicationDispense.create).not.toHaveBeenCalled();
     });
   });
 

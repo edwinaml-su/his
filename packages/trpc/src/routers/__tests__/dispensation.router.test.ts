@@ -26,7 +26,7 @@ vi.mock("../../lib/charge-capture", () => ({
 
 import { dispensationRouter } from "../pharmacy/dispensation.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN } from "@his/test-utils";
+import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -246,6 +246,35 @@ describe("dispensationRouter.scanItem", () => {
       caller.scanItem({ pharmacyOrderId: PRESCRIPTION, gtin: VALID_GTIN }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// docs/48 Ola 4b (H-14) — scanItem lleva el MISMO gate de rol que reserveItem
+// (requireRole PHARM/ADMIN + abacGuard dispensation/dispense): no tiene
+// caller real hoy (ver comentario del router), pero captura cargo y
+// descuenta inventario igual que reserveItem — no debía quedar abierto a
+// cualquier rol.
+// ---------------------------------------------------------------------------
+describe("dispensationRouter.scanItem — H-14 gate de rol", () => {
+  it("FORBIDDEN sin rol PHARM/ADMIN", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    const caller = dispensationRouter.createCaller(
+      makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN", "TRIAGIST"] } }),
+    );
+    await expect(
+      caller.scanItem({ pharmacyOrderId: PRESCRIPTION, gtin: VALID_GTIN }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(prisma.stockLot.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("permite con rol PHARM", async () => {
+    prisma.prescription.findFirst.mockResolvedValue(basePrescription() as never);
+    const caller = dispensationRouter.createCaller(
+      makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHARM"] } }),
+    );
+    const res = await caller.scanItem({ pharmacyOrderId: PRESCRIPTION, gtin: VALID_GTIN });
+    expect(res).toMatchObject({ ok: true });
   });
 });
 
