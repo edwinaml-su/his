@@ -51,7 +51,7 @@ const formSchema = z.object({
     .regex(/^\d{13}$/, "Solo dígitos numéricos")
     .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido"),
   descripcion: z.string().min(1, "Requerido").max(500),
-  tipo: z.enum(["proveedor", "deposito", "farmacia", "servicio", "cama"]),
+  tipo: z.enum(["entidad", "establecimiento", "proveedor", "deposito", "farmacia", "servicio", "cama"]),
 });
 
 type FormState = {
@@ -61,6 +61,9 @@ type FormState = {
 };
 
 const TIPO_OPTIONS = [
+  // Niveles 1-2 del maestro de ubicaciones GS1 (SQL 229).
+  { value: "entidad",         label: "Entidad legal" },
+  { value: "establecimiento", label: "Establecimiento" },
   { value: "proveedor", label: "Proveedor" },
   { value: "deposito",  label: "Almacén / Depósito" },
   { value: "farmacia",  label: "Farmacia" },
