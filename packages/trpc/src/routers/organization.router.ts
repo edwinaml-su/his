@@ -1,11 +1,21 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { Prisma } from "@his/database";
 import {
   setFunctionalCurrencyInputSchema,
   setFunctionalCurrencyResultSchema,
 } from "@his/contracts";
 import { router, protectedProcedure, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+/** Input de `updateFiscalIdentity` — identidad fiscal editable desde el admin. */
+export const updateFiscalIdentityInputSchema = z.object({
+  organizationId: z.string().uuid(),
+  legalName: z.string().trim().min(2).max(200),
+  tradeName: z.string().trim().min(2).max(200).nullable().optional(),
+  taxId: z.string().trim().min(1).max(40),
+  nrc: z.string().trim().min(1).max(20).nullable().optional(),
+});
 
 /** Zod schema compartido: gs1CompanyPrefix nullable 7-9 dígitos. */
 export const gs1CompanyPrefixSchema = z
@@ -287,6 +297,67 @@ export const organizationRouter = router({
       );
 
       return { ok: true, organizationId: updated.id, gs1CompanyPrefix: updated.gs1CompanyPrefix };
+    }),
+
+  /**
+   * Parametrización admin (2026-09-10) — identidad fiscal de la organización
+   * (razón social, nombre comercial, NIT, NRC). Antes SQL 227 la sembraba por
+   * SQL directo; ahora es editable desde /organizations.
+   *
+   * Reglas (mismo patrón de autorización que `setFunctionalCurrency`):
+   *   1) El usuario debe ser ADMIN vigente en esa org.
+   *   2) `Organization_countryId_taxId_key` (UNIQUE) rechaza un NIT duplicado
+   *      dentro del mismo país — se traduce a CONFLICT con mensaje claro.
+   *   3) Usa withTenantContext para que RLS aplique en la actualización.
+   */
+  updateFiscalIdentity: protectedProcedure
+    .input(updateFiscalIdentityInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const now = new Date();
+      const adminMembership = await ctx.prisma.userOrganizationRole.findFirst({
+        where: {
+          userId: ctx.user.id,
+          organizationId: input.organizationId,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gte: now } }],
+          role: { code: "ADMIN" },
+        },
+      });
+      if (!adminMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Requiere rol ADMIN en la organización.",
+        });
+      }
+
+      try {
+        const updated = await withTenantContext(
+          ctx.prisma,
+          { userId: ctx.user.id, organizationId: input.organizationId },
+          async (tx) => {
+            return tx.organization.update({
+              where: { id: input.organizationId },
+              data: {
+                legalName: input.legalName,
+                tradeName: input.tradeName ?? null,
+                taxId: input.taxId,
+                nrc: input.nrc ?? null,
+                updatedBy: ctx.user.id,
+              },
+              select: { id: true, legalName: true, tradeName: true, taxId: true, nrc: true },
+            });
+          },
+        );
+        return { ok: true, ...updated };
+      } catch (err) {
+        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Ya existe otra organización con ese NIT en el mismo país.",
+          });
+        }
+        throw err;
+      }
     }),
 
   /**
