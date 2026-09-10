@@ -16,7 +16,6 @@ import { z } from "zod";
 import {
   imagingModalityCreateInput,
   imagingModalityListInput,
-  imagingOrderCreateInput,
   imagingOrderListInput,
   imagingOrderUpdateStatusInput,
   imagingOrderCancelInput,
@@ -29,8 +28,6 @@ import {
 } from "@his/contracts";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
-// CC-0016: extraído a lib compartida — también lo usa imaging-request.router.ts.
-import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
 
 export const imagingRouter = router({
   modality: router({
@@ -142,70 +139,11 @@ export const imagingRouter = router({
         });
       }),
 
-    create: tenantProcedure
-      .input(imagingOrderCreateInput)
-      .mutation(async ({ ctx, input }) => {
-        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-          const enc = await tx.encounter.findFirst({
-            where: {
-              id: input.encounterId,
-              organizationId: ctx.tenant.organizationId,
-            },
-            select: { id: true, patientId: true },
-          });
-          if (!enc) {
-            throw new TRPCError({
-              code: "NOT_FOUND",
-              message: "Encuentro no existe en la organización.",
-            });
-          }
-          if (enc.patientId !== input.patientId) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "patientId no coincide con encounter.",
-            });
-          }
-
-          // Resolver ejecutorCostCenterId: usa el explícito o lo deduce de modalidad.
-          let ejecutorCostCenterId = input.ejecutorCostCenterId ?? null;
-          if (!ejecutorCostCenterId) {
-            const executorCode = MODALITY_EXECUTOR_CODE[input.modalityType];
-            if (executorCode) {
-              const cc = await tx.costCenter.findFirst({
-                where: {
-                  organizationId: ctx.tenant.organizationId,
-                  code: executorCode,
-                  active: true,
-                },
-                select: { id: true },
-              });
-              ejecutorCostCenterId = cc?.id ?? null;
-            }
-          }
-
-          return tx.imagingOrder.create({
-            data: {
-              organizationId: ctx.tenant.organizationId,
-              establishmentId: input.establishmentId,
-              encounterId: input.encounterId,
-              patientId: input.patientId,
-              modalityId: input.modalityId ?? null,
-              modalityType: input.modalityType,
-              orderingProviderId: ctx.user.id,
-              studyDescription: input.studyDescription,
-              bodySite: input.bodySite ?? null,
-              clinicalIndication: input.clinicalIndication,
-              priority: input.priority,
-              scheduledAt: input.scheduledAt ?? null,
-              notes: input.notes ?? null,
-              createdBy: ctx.user.id,
-              costCenterId: input.costCenterId ?? null,
-              ejecutorCostCenterId,
-            },
-          });
-        });
-      }),
-
+    // Sin `create`: la creación de órdenes vive en `imagingRequest.crear`
+    // (CC-0016, catálogo LabTest) que captura el cargo en la misma tx
+    // (docs/48 Ola 3 C3-1 / RN-HIS-BOT-001 H-01). El `order.create` legado
+    // (texto libre, sin código de catálogo) creaba órdenes sin cargo y no
+    // tenía callers — eliminado.
     updateStatus: tenantProcedure
       .input(imagingOrderUpdateStatusInput)
       .mutation(async ({ ctx, input }) => {
