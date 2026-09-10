@@ -175,4 +175,23 @@ La mitad financiera del circuito de botiquín, que antes no existía como códig
 
 ---
 
+## 7. Addendum Ola 4b (2026-09-09, mismo día) — cierre de H-13…H-18
+
+Los 6 hallazgos residuales de la sección 4 se corrigieron en la Ola 4b (mismo PR que integra este documento). Sin SQL nuevo — H-13 reutiliza las columnas de `MedicationDispense` creadas por SQL 226.
+
+| Hallazgo | Resolución |
+|---|---|
+| **H-13** (crítico) | Opción (a) de la recomendación: la verificación 2-eyes de controlados se movió al flujo real. `dispensation.router.ts` ahora resuelve `Drug.dispensingClass` del ítem y, si es `RX_CONTROLLED`, exige `witnessUserId` (validado por PIN contra `ece.firma_electronica`, mismo patrón que `pathology.router.ts`) + `controlledJustification` en `reserveItem` y `scanItem`, persistiendo la fila estructurada en `MedicationDispense` — la misma tabla que `pharmacy.libroControlados` ya consulta, así que el libro se alimenta del camino real sin cambios en el reporte. 6 tests nuevos de 2-eyes. |
+| **H-14** (alto) | `scanItem` lleva ahora el mismo gate que `reserveItem`: `requireRole(["PHARM","ADMIN"])` + `abacGuard("dispensation","dispense")`. Evidencia del caller: la única pantalla real (`/pharmacy/dispense/[orderId]`) solo invoca `reserveItem`; `scanItem` no tiene caller de producción hoy y por diseño es el sibling farmacéutico — mismo candado. 2 tests de gate. |
+| **H-15** (medio) | `inventory.out` y `inventory.consumo` exigen `requireRole(["ADMIN","PHARM","LOGISTIC"])` (mismo trío que las escrituras hermanas GS1). La conciliación "dispensado sin cargo" abandonó `reason ILIKE '%dispensaci%'` por un join estructural: `PharmacyReservation.id::text = StockMovement."referenceCode"` (en `dispensadoSinCargo` y en el subquery de `resumen`). |
+| **H-16** (bajo) | `patientAccount.cerrar` bloquea ahora por las **5** causas de R11: se agregaron `CARGOS_SIN_MOVIMIENTO` y `DISPENSADO_SIN_CARGO` (scoped por paciente, mismo join estructural de H-15). 2 tests nuevos de causas 4/5. |
+| **H-17** (bajo) | La UI de facturación manual (`finance/invoices/nuevo`) se partió en Server Component (resuelve roles vía `getTenantContext()`) + shell cliente; el diálogo de override con justificación solo es visible para ADMIN/DIR. Lógica pura extraída a `invoice-override.ts` con 11 tests + 9 tests del shell. |
+| **H-18** (cosmético) | Comentario de `listarWorklist` corregido (el saldo se deriva de `Invoice` porque esa es la fuente real de saldo, no por falta de `status`). |
+
+Con esto, **R9 pasa a Cumple** (gate de rol + identidad en ambos endpoints), **R10 pasa a Cumple en el camino real** (2-eyes + libro alimentado por el flujo que dispensa de verdad; `pharmacy.dispense.create` queda como ruta legada sin caller, señalada para limpieza) y **R11 pasa a Cumple** (5/5 causas bloquean el cierre). Conteo R1-R13 resultante: **9 Cumple · 3 Parcial (R1, R5, R12 — acotados por `inventory.out` legado documentado y C5-1 datos) · 1 No cumple (R6, fuera de alcance por decisión) · 0 No verificado**.
+
+Quedan deliberadamente abiertos: C3-2 (disparadores estancia/quirófano), C5-1 (datos reales HE/CM/US), deducible/coaseguro (CC posterior) y R6 — todos requieren decisión o datos de Edwin, no código.
+
+---
+
 *Documento producido por @DrHIS. No se modificó código ni se escribió en la base de datos de producción durante esta re-verificación — todas las consultas SQL fueron `SELECT`.*
