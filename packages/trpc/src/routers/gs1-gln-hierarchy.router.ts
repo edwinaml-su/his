@@ -49,7 +49,9 @@ const glnSchema = z
   .regex(/^\d{13}$/, "GLN-13: 13 dígitos numéricos")
   .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido");
 
-const tipoGlnEnum = z.enum(["proveedor", "deposito", "farmacia", "servicio", "cama"]);
+// "entidad" (persona jurídica) y "establecimiento" (ubicación primaria) los
+// introduce el maestro de ubicaciones GS1 (SQL 229) — niveles 1 y 2 del árbol.
+const tipoGlnEnum = z.enum(["entidad", "establecimiento", "proveedor", "deposito", "farmacia", "servicio", "cama"]);
 
 // ---------------------------------------------------------------------------
 // Tipos internos de resultado
