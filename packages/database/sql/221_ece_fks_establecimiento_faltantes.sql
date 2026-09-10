@@ -56,8 +56,11 @@ BEGIN
   END IF;
 
   INSERT INTO ece.establecimiento (id, institucion_id, codigo, nombre, nivel_atencion, establishment_id)
+  -- 'tercer': el CHECK establecimiento_nivel_atencion_check solo acepta
+  -- primer|segundo|tercer ('hospitalario' rompía todo INSERT de Establishment;
+  -- corregido en prod vía SQL 227).
   SELECT gen_random_uuid(), v_institucion, 'EST-' || left(NEW.id::text, 8),
-         NEW.name, 'hospitalario', NEW.id
+         NEW.name, 'tercer', NEW.id
   WHERE NOT EXISTS (
     SELECT 1 FROM ece.establecimiento e WHERE e.establishment_id = NEW.id);
 
@@ -73,7 +76,7 @@ CREATE TRIGGER trg_establishment_ece_bridge
 -- Backfill: Establishments existentes sin fila puente (hoy 0 esperados en
 -- prod — el único tiene puente desde ADR 0022 — pero idempotente por si acaso).
 INSERT INTO ece.establecimiento (id, institucion_id, codigo, nombre, nivel_atencion, establishment_id)
-SELECT gen_random_uuid(), i.id, 'EST-' || left(est.id::text, 8), est.name, 'hospitalario', est.id
+SELECT gen_random_uuid(), i.id, 'EST-' || left(est.id::text, 8), est.name, 'tercer', est.id
 FROM public."Establishment" est
 JOIN ece.institucion i ON i.organization_id = est."organizationId"
 WHERE NOT EXISTS (SELECT 1 FROM ece.establecimiento e WHERE e.establishment_id = est.id);

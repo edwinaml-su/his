@@ -413,6 +413,7 @@ model Organization {
   legalName          String   @db.VarChar(200)
   tradeName          String?  @db.VarChar(200)
   taxId              String   @db.VarChar(40) /// NIT.
+  nrc                String?  @db.VarChar(20) /// NRC (Registro de Contribuyente, Hacienda SV) — SQL 227.
   functionalCurrency String   @db.Uuid
   reportingCurrency  String?  @db.Uuid
   active             Boolean  @default(true)
