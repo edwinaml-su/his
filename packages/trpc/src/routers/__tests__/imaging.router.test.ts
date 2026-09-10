@@ -132,45 +132,6 @@ describe("imagingRouter", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // order.create
-  // ---------------------------------------------------------------------------
-
-  describe("order.create", () => {
-    it("BAD_REQUEST si patientId no coincide", async () => {
-      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: v } as never);
-      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
-      await expect(
-        caller.order.create({
-          encounterId: u,
-          establishmentId: u,
-          patientId: u,
-          modalityType: "CR",
-          studyDescription: "Rx",
-          clinicalIndication: "Tos",
-        }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    });
-
-    it("inyecta orderingProviderId desde contexto", async () => {
-      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
-      prisma.imagingOrder.create.mockResolvedValue({ id: u } as never);
-      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
-      await caller.order.create({
-        encounterId: u,
-        establishmentId: u,
-        patientId: u,
-        modalityType: "CT",
-        studyDescription: "TC cráneo",
-        clinicalIndication: "TCE",
-        priority: "STAT",
-      });
-      const args = prisma.imagingOrder.create.mock.calls[0]![0];
-      expect(args.data.orderingProviderId).toBeTruthy();
-      expect((args.data as { priority: string }).priority).toBe("STAT");
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // order.updateStatus — state machine enforcement
   // ---------------------------------------------------------------------------
 
@@ -379,24 +340,6 @@ describe("imagingRouter", () => {
       prisma.imagingOrder.findMany.mockResolvedValue([] as never);
       const caller = imagingRouter.createCaller(makeCtx({ prisma }));
       await caller.order.list({ limit: 10 });
-      expect(prisma.$transaction).toHaveBeenCalled();
-      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
-      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
-      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
-    });
-
-    it("order.create — demote a authenticated + set_tenant_context", async () => {
-      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
-      prisma.imagingOrder.create.mockResolvedValue({ id: u } as never);
-      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
-      await caller.order.create({
-        encounterId: u,
-        establishmentId: u,
-        patientId: u,
-        modalityType: "CT",
-        studyDescription: "TC cráneo",
-        clinicalIndication: "TCE",
-      });
       expect(prisma.$transaction).toHaveBeenCalled();
       const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
       expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);

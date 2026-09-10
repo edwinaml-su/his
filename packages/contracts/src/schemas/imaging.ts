@@ -97,24 +97,6 @@ export const imagingModalityListInput = z.object({
   limit: z.number().int().min(1).max(200).default(50),
 });
 
-export const imagingOrderCreateInput = z.object({
-  encounterId: z.string().uuid(),
-  establishmentId: z.string().uuid(),
-  patientId: z.string().uuid(),
-  modalityId: z.string().uuid().optional(),
-  modalityType: imagingModalityTypeEnum,
-  studyDescription: z.string().trim().min(1).max(400),
-  bodySite: z.string().trim().max(120).optional(),
-  clinicalIndication: z.string().trim().min(1).max(4000),
-  priority: imagingPriorityEnum.default("ROUTINE"),
-  scheduledAt: z.coerce.date().optional(),
-  notes: z.string().trim().max(4000).optional(),
-  /** UUID del centro de costo solicitante (productivo o intermedio). */
-  costCenterId: z.string().uuid().optional(),
-  /** UUID del centro ejecutor. Si no se envía, el router lo resuelve según modalidad. */
-  ejecutorCostCenterId: z.string().uuid().optional(),
-});
-
 export const imagingOrderListInput = z.object({
   status: imagingOrderStatusEnum.optional(),
   priority: imagingPriorityEnum.optional(),
@@ -167,7 +149,6 @@ export const imagingReportValidateInput = z.object({
 });
 
 export type ImagingModalityCreateInput = z.infer<typeof imagingModalityCreateInput>;
-export type ImagingOrderCreateInput = z.infer<typeof imagingOrderCreateInput>;
 export type ImagingOrderListInput = z.infer<typeof imagingOrderListInput>;
 export type ImagingOrderUpdateStatusInput = z.infer<typeof imagingOrderUpdateStatusInput>;
 export type ImagingReportCreateInput = z.infer<typeof imagingReportCreateInput>;

@@ -10,7 +10,6 @@ import {
   imagingPriorityEnum,
   imagingModalityCreateInput,
   imagingModalityListInput,
-  imagingOrderCreateInput,
   imagingOrderListInput,
   imagingOrderUpdateStatusInput,
   imagingOrderCancelInput,
@@ -155,46 +154,6 @@ describe("imagingModalityCreateInput — with dicomCode", () => {
       expect(r.data.limit).toBe(50);
     }
   });
-});
-
-describe("imagingOrderCreateInput", () => {
-  it("acepta orden mínima con default priority=ROUTINE", () => {
-    const r = imagingOrderCreateInput.safeParse({
-      encounterId: u,
-      establishmentId: u,
-      patientId: u,
-      modalityType: "CR",
-      studyDescription: "Rx tórax PA",
-      clinicalIndication: "Tos persistente",
-    });
-    expect(r.success).toBe(true);
-    if (r.success) expect(r.data.priority).toBe("ROUTINE");
-  });
-
-  it("rechaza clinicalIndication vacía", () =>
-    expect(
-      imagingOrderCreateInput.safeParse({
-        encounterId: u,
-        establishmentId: u,
-        patientId: u,
-        modalityType: "CR",
-        studyDescription: "x",
-        clinicalIndication: "",
-      }).success,
-    ).toBe(false));
-
-  it("acepta priority STAT", () =>
-    expect(
-      imagingOrderCreateInput.safeParse({
-        encounterId: u,
-        establishmentId: u,
-        patientId: u,
-        modalityType: "CT",
-        studyDescription: "TC cráneo s/c",
-        clinicalIndication: "TCE severo",
-        priority: "STAT",
-      }).success,
-    ).toBe(true));
 });
 
 describe("imagingOrderListInput", () => {

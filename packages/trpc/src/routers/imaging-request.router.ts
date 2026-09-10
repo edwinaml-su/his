@@ -418,7 +418,8 @@ export const imagingRequestRouter = router({
    * (IMAGING_TO_REPORT/IMAGING_TO_VALIDATE/STUDY_TO_SCHEDULE) enlazan a
    * `/imaging?id={imagingOrderId}` (ver workflow-inbox.router.ts). Resuelve
    * el requestId padre si la orden se creó vía este módulo; null si es una
-   * orden legada creada por `imaging.router.ts#order.create` (sin solicitud).
+   * orden legada sin solicitud (creada por el extinto `imaging.order.create`,
+   * eliminado en docs/48 Ola 3 por crear órdenes sin cargo — H-01).
    */
   resolverDeepLink: tenantProcedure
     .input(z.object({ orderId: z.string().uuid() }))
