@@ -6,20 +6,24 @@
  * Implementa:
  *   tree(rootId?)         — CTE recursiva devuelve árbol completo o subárbol.
  *   createChild(input)    — alta GLN hija con validación módulo-10 y unicidad cross-org.
+ *   update(input)         — edita descripcion/tipo (codigo es identidad, inmutable).
+ *   setActivo(input)      — activa/desactiva un nodo; bloquea desactivar con hijos activos.
  *
  * Seguridad:
  *   Lectura:   tenantProcedure (cualquier usuario autenticado del tenant).
  *   Escritura: requireRole(["ADMIN","LOGISTIC"]).
  *
- *   `ece.gs1_gln` tiene RLS propia (SQL 200_ece_gs1_gln_rls.sql), NO la de
- *   `withTenantContext` — sus policies leen el GUC `app.ece_establecimiento_id`
- *   (namespace `ece`, ver packages/trpc/src/ece/rls-context.ts), distinto del
- *   `app.current_org_id` que setea `withTenantContext` (packages/trpc/src/rls-context.ts).
+ *   `ece.gs1_gln` tiene RLS propia (SQL 200_ece_gs1_gln_rls.sql + 230
+ *   _ece_gs1_gln_update_rls.sql), NO la de `withTenantContext` — sus policies
+ *   leen el GUC `app.ece_establecimiento_id` (namespace `ece`, ver
+ *   packages/trpc/src/ece/rls-context.ts), distinto del `app.current_org_id`
+ *   que setea `withTenantContext` (packages/trpc/src/rls-context.ts).
  *   Por eso todas las queries corren bajo `withEceContext`, con el
  *   `ece.establecimiento.id` resuelto desde `ctx.tenant.establishmentId` vía
  *   `resolveEceEstablecimientoId`. La raíz corporativa (`establecimiento_id
  *   IS NULL`) es visible a cualquier establecimiento (policy de SELECT); la
- *   escritura exige que el nodo pertenezca al establecimiento activo.
+ *   escritura (INSERT/UPDATE) exige que el nodo pertenezca al establecimiento
+ *   activo — la raíz corporativa NO es editable desde este router.
  */
 
 import { z } from "zod";
@@ -248,5 +252,127 @@ export const glnHierarchyRouter = router({
       });
 
       return { id };
+    }),
+
+  /**
+   * update — edita descripcion y/o tipo de un GLN existente.
+   * `codigo` es identidad GS1, no se expone como editable.
+   * Requiere que el nodo pertenezca al establecimiento activo (RLS +
+   * verificación explícita vía RETURNING).
+   */
+  update: requireRole(["ADMIN", "LOGISTIC"])
+    .input(
+      z
+        .object({
+          id: z.string().uuid(),
+          descripcion: z.string().min(1).max(500).optional(),
+          tipo: tipoGlnEnum.optional(),
+        })
+        .refine((v) => v.descripcion !== undefined || v.tipo !== undefined, {
+          message: "Indica al menos un campo a actualizar (descripción o tipo).",
+        }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      type IdRow = { id: string };
+
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Selecciona un establecimiento activo para editar un GLN.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        ctx.tenant.establishmentId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ECE no inicializado para este establecimiento.",
+        });
+      }
+
+      return withEceContext(ctx.prisma, ctx.user.id, eceEstablecimientoId, async (tx) => {
+        const sets: string[] = ["actualizado_en = now()"];
+        const params: unknown[] = [input.id];
+        if (input.descripcion !== undefined) {
+          params.push(input.descripcion);
+          sets.push(`descripcion = $${params.length}`);
+        }
+        if (input.tipo !== undefined) {
+          params.push(input.tipo);
+          sets.push(`tipo = $${params.length}`);
+        }
+
+        const rows = await tx.$queryRawUnsafe<IdRow[]>(
+          `UPDATE ece.gs1_gln SET ${sets.join(", ")} WHERE id = $1::uuid RETURNING id`,
+          ...params,
+        );
+        if (rows.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "GLN no encontrado o fuera de tu establecimiento.",
+          });
+        }
+        return { id: rows[0]!.id };
+      });
+    }),
+
+  /**
+   * setActivo — activa/reactiva o desactiva un GLN.
+   * Desactivar con hijos activos está bloqueado (no cascada silenciosa) —
+   * primero hay que desactivar los hijos. Reactivar siempre se permite.
+   */
+  setActivo: requireRole(["ADMIN", "LOGISTIC"])
+    .input(z.object({ id: z.string().uuid(), activo: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      type IdRow = { id: string };
+      type CountRow = { count: string };
+
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Selecciona un establecimiento activo para editar un GLN.",
+        });
+      }
+      const eceEstablecimientoId = await resolveEceEstablecimientoId(
+        ctx.prisma,
+        ctx.tenant.establishmentId,
+      );
+      if (!eceEstablecimientoId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "ECE no inicializado para este establecimiento.",
+        });
+      }
+
+      return withEceContext(ctx.prisma, ctx.user.id, eceEstablecimientoId, async (tx) => {
+        if (!input.activo) {
+          const childRows = await tx.$queryRawUnsafe<CountRow[]>(
+            `SELECT COUNT(*)::text AS count FROM ece.gs1_gln WHERE parent_id = $1::uuid AND activo = true`,
+            input.id,
+          );
+          if (parseInt(childRows[0]?.count ?? "0", 10) > 0) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message:
+                "No se puede desactivar: tiene sub-ubicaciones activas. Desactívalas primero.",
+            });
+          }
+        }
+
+        const rows = await tx.$queryRawUnsafe<IdRow[]>(
+          `UPDATE ece.gs1_gln SET activo = $2, actualizado_en = now() WHERE id = $1::uuid RETURNING id`,
+          input.id,
+          input.activo,
+        );
+        if (rows.length === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "GLN no encontrado o fuera de tu establecimiento.",
+          });
+        }
+        return { id: rows[0]!.id, activo: input.activo };
+      });
     }),
 });
