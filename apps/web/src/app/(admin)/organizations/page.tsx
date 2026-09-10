@@ -17,15 +17,19 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
+import Link from "next/link";
+import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 import { OrganizationRow, type OrgRowData } from "./organization-row";
 import { OrganizationCurrencyDialog } from "./organization-currency-dialog";
 import { OrganizationGs1PrefixDialog } from "./organization-gs1-prefix-dialog";
+import { OrganizationFiscalDialog } from "./organization-fiscal-dialog";
 
 export default function OrganizationsPage() {
   const query = trpc.organization.listAll.useQuery();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [gs1DialogOpen, setGs1DialogOpen] = React.useState(false);
+  const [fiscalDialogOpen, setFiscalDialogOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<OrgRowData | null>(null);
 
   function handleEdit(org: OrgRowData) {
@@ -38,14 +42,24 @@ export default function OrganizationsPage() {
     setGs1DialogOpen(true);
   }
 
+  function handleEditFiscal(org: OrgRowData) {
+    setSelected(org);
+    setFiscalDialogOpen(true);
+  }
+
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">Organizaciones</h1>
-        <p className="text-sm text-muted-foreground">
-          Listado de organizaciones donde tienes membresía. Cambiar la moneda
-          funcional requiere rol ADMIN.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Organizaciones</h1>
+          <p className="text-sm text-muted-foreground">
+            Listado de organizaciones donde tienes membresía. Cambiar la moneda
+            funcional requiere rol ADMIN.
+          </p>
+        </div>
+        <Button asChild variant="outline">
+          <Link href="/organizations/establecimientos">Establecimientos</Link>
+        </Button>
       </div>
 
       <Card>
@@ -87,6 +101,7 @@ export default function OrganizationsPage() {
                     org={org as OrgRowData}
                     onEditCurrency={handleEdit}
                     onEditGs1Prefix={handleEditGs1Prefix}
+                    onEditFiscal={handleEditFiscal}
                   />
                 ))}
               </TableBody>
@@ -104,6 +119,12 @@ export default function OrganizationsPage() {
       <OrganizationGs1PrefixDialog
         open={gs1DialogOpen}
         onOpenChange={setGs1DialogOpen}
+        organization={selected}
+      />
+
+      <OrganizationFiscalDialog
+        open={fiscalDialogOpen}
+        onOpenChange={setFiscalDialogOpen}
         organization={selected}
       />
     </div>

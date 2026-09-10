@@ -253,4 +253,74 @@ describe("servicePriceListRouter", () => {
       expect(prisma.patientAccount.findFirst).not.toHaveBeenCalled();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // setDefault — parametrización admin de la lista default del resolver (SQL 228)
+  // ---------------------------------------------------------------------------
+
+  describe("setDefault", () => {
+    it("exige que el tarifario sea del tenant", async () => {
+      setupTx();
+      prisma.$queryRawUnsafe.mockResolvedValue([] as never);
+
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setDefault({ priceListId: PRICE_LIST_ID, isDefault: true }),
+      ).rejects.toThrow("Tarifario no encontrado");
+    });
+
+    it("rechaza marcar como default un tarifario inactivo", async () => {
+      setupTx();
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: PRICE_LIST_ID, active: false }] as never);
+
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setDefault({ priceListId: PRICE_LIST_ID, isDefault: true }),
+      ).rejects.toThrow(/activo/i);
+    });
+
+    it("desmarca cualquier default previo de la org antes de marcar la nueva", async () => {
+      setupTx();
+      const calls: string[] = [];
+      prisma.$queryRawUnsafe.mockImplementation((async (sql: string) => {
+        calls.push(String(sql));
+        if (String(sql).startsWith("SELECT")) return [{ id: PRICE_LIST_ID, active: true }];
+        return undefined;
+      }) as never);
+
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setDefault({ priceListId: PRICE_LIST_ID, isDefault: true });
+
+      expect(result).toEqual({ id: PRICE_LIST_ID, isDefault: true });
+      const unsetIdx = calls.findIndex((sql) => sql.includes('"isDefault" = false'));
+      const setIdx = calls.findIndex((sql) => sql.includes('"isDefault" = $1'));
+      expect(unsetIdx).toBeGreaterThanOrEqual(0);
+      expect(setIdx).toBeGreaterThan(unsetIdx);
+    });
+
+    it("desmarcar (isDefault=false) no toca otras listas de la org", async () => {
+      setupTx();
+      const calls: string[] = [];
+      prisma.$queryRawUnsafe.mockImplementation((async (sql: string) => {
+        calls.push(String(sql));
+        if (String(sql).startsWith("SELECT")) return [{ id: PRICE_LIST_ID, active: true }];
+        return undefined;
+      }) as never);
+
+      const caller = servicePriceListRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setDefault({ priceListId: PRICE_LIST_ID, isDefault: false });
+
+      expect(result).toEqual({ id: PRICE_LIST_ID, isDefault: false });
+      expect(calls.some((sql) => sql.includes('"isDefault" = false'))).toBe(false);
+    });
+
+    it("lanza FORBIDDEN si el rol no es ADMIN/DIR", async () => {
+      const caller = servicePriceListRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ACCOUNTANT"] } }),
+      );
+      await expect(
+        caller.setDefault({ priceListId: PRICE_LIST_ID, isDefault: true }),
+      ).rejects.toThrow(/Rol requerido/);
+    });
+  });
 });

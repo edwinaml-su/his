@@ -24,6 +24,7 @@ export type OrgRowData = {
   legalName: string;
   tradeName: string | null;
   taxId: string;
+  nrc: string | null;
   active: boolean;
   functionalCurrency: string;
   gs1CompanyPrefix: string | null;
@@ -37,9 +38,10 @@ type Props = {
   org: OrgRowData;
   onEditCurrency: (org: OrgRowData) => void;
   onEditGs1Prefix: (org: OrgRowData) => void;
+  onEditFiscal: (org: OrgRowData) => void;
 };
 
-export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix }: Props) {
+export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix, onEditFiscal }: Props) {
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -101,6 +103,21 @@ export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix }: Props)
       </TableCell>
       <TableCell className="text-right">
         <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onEditFiscal(org)}
+            disabled={!org.isAdmin || !org.active}
+            title={
+              !org.isAdmin
+                ? "Requiere rol ADMIN en esta organización"
+                : !org.active
+                  ? "Organización inactiva"
+                  : "Editar identidad fiscal"
+            }
+          >
+            Identidad fiscal
+          </Button>
           <Button
             size="sm"
             variant="outline"

@@ -41,6 +41,8 @@ interface PriceListRow {
   validTo: Date | null;
   active: boolean;
   notes: string | null;
+  /** Lista default de la org (SQL 228) — única por índice parcial. */
+  isDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -147,6 +149,8 @@ async function assertReglaDelTenant(tx: TxForGuards, id: string, organizationId:
 
 const readerProc = tenantProcedure;
 const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
+/** setDefault cambia el fallback de precios de TODO el tenant — solo ADMIN/DIR. */
+const defaultProc = requireRole(["ADMIN", "DIR"]);
 
 const listInput = z
   .object({
@@ -196,6 +200,9 @@ const updateItemInput = z.object({
 const setItemActiveInput = z.object({ id: z.string().uuid(), active: z.boolean() });
 const setListActiveInput = z.object({ id: z.string().uuid(), active: z.boolean() });
 
+// Parametrización admin — lista default del resolver (SQL 228).
+const setDefaultInput = z.object({ priceListId: z.string().uuid(), isDefault: z.boolean() });
+
 // CC-0015 — filtro opcional por lista (usado por finance/invoices/nuevo cuando
 // hay una cuenta con tipoCuenta.priceListId seleccionada).
 const listActiveItemsInput = z
@@ -235,7 +242,7 @@ export const servicePriceListRouter = router({
 
       const rows = await tx.$queryRawUnsafe<PriceListWithCount[]>(
         `SELECT pl.id, pl."organizationId", pl.name, pl."currencyId",
-                pl."validFrom", pl."validTo", pl.active, pl.notes,
+                pl."validFrom", pl."validTo", pl.active, pl.notes, pl."isDefault",
                 pl."createdAt", pl."updatedAt",
                 COUNT(i.id) AS "itemCount"
            FROM "ServicePriceList" pl
@@ -260,7 +267,7 @@ export const servicePriceListRouter = router({
     return withTenantContext(prisma, tenant, async (tx) => {
       const lists = await tx.$queryRawUnsafe<PriceListRow[]>(
         `SELECT id, "organizationId", name, "currencyId", "validFrom", "validTo",
-                active, notes, "createdAt", "updatedAt"
+                active, notes, "isDefault", "createdAt", "updatedAt"
            FROM "ServicePriceList"
           WHERE id = $1 AND "organizationId" = $2`,
         input.id,
@@ -569,6 +576,55 @@ export const servicePriceListRouter = router({
       );
 
       return { id: input.id, active: input.active };
+    });
+  }),
+
+  /**
+   * Marca (o desmarca) el tarifario como lista DEFAULT de la org (SQL 228) —
+   * el resolver de precios (`price-resolver.ts`) cae a ella cuando la cuenta
+   * no tiene lista asignada o la asignada no produce precio para el código.
+   * Antes se fijaba por SQL directo; ahora es parametrizable desde el admin.
+   *
+   * Solo ADMIN/DIR: afecta el fallback de precios de TODO el tenant.
+   */
+  setDefault: defaultProc.input(setDefaultInput).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+
+    return withTenantContext(prisma, tenant, async (tx) => {
+      const rows = await tx.$queryRawUnsafe<Array<{ id: string; active: boolean }>>(
+        `SELECT id, active FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+        input.priceListId,
+        tenant.organizationId,
+      );
+      const lista = rows[0];
+      if (!lista) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Tarifario no encontrado." });
+      }
+      if (input.isDefault && !lista.active) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Solo un tarifario activo puede marcarse como lista por defecto.",
+        });
+      }
+
+      if (input.isDefault) {
+        // El índice parcial único ServicePriceList_org_default_key (SQL 228)
+        // exige desmarcar cualquier otra lista default de la org ANTES de
+        // marcar la nueva, o el UPDATE siguiente viola la constraint.
+        await tx.$queryRawUnsafe(
+          `UPDATE "ServicePriceList" SET "isDefault" = false, "updatedAt" = now()
+            WHERE "organizationId" = $1 AND "isDefault" = true`,
+          tenant.organizationId,
+        );
+      }
+
+      await tx.$queryRawUnsafe(
+        `UPDATE "ServicePriceList" SET "isDefault" = $1, "updatedAt" = now() WHERE id = $2`,
+        input.isDefault,
+        input.priceListId,
+      );
+
+      return { id: input.priceListId, isDefault: input.isDefault };
     });
   }),
 

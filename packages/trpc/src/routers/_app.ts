@@ -233,6 +233,8 @@ import { careTaskRouter } from "./care-task.router";
 import { careBoardRouter } from "./care-board.router";
 // docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera (RN-HIS-BOT-001 R11)
 import { conciliacionCargosRouter } from "./conciliacion-cargos.router";
+// Parametrización admin (2026-09-10) — CRUD de Establecimientos (antes solo por SQL)
+import { establishmentRouter } from "./establishment.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -465,6 +467,8 @@ export const appRouter = router({
   careBoard: careBoardRouter,
   // docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera
   conciliacionCargos: conciliacionCargosRouter,
+  // Parametrización admin (2026-09-10) — CRUD de Establecimientos
+  establishment: establishmentRouter,
 });
 
 export type AppRouter = typeof appRouter;
