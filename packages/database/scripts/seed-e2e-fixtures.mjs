@@ -365,6 +365,270 @@ try {
   );
   console.log('receta=SIGNED conciliacion=RECONCILIADO');
 
+  // ─── 7. RN-HIS-BOT-001 (docs/48 C5-2) — tarifario de prueba + cuentas ────
+  // Fixtures para las 8 pruebas de aceptación de docs/47 §4 (spec:
+  // apps/web/e2e/cargos-rn-bot-001.spec.ts). "ServicePriceList"/
+  // "ServicePriceListItem"/"ServicePriceRule" son tablas fuera de
+  // schema.prisma (drift documentado, sql/133 + sql/204 + sql/228) — el
+  // workflow E2E las crea con `prisma db execute` ANTES de este seeder (ver
+  // .github/workflows/e2e.yml / e2e-smoke.yml, paso "Bootstrap RLS
+  // helpers"). Si corrés este script localmente sin ese paso, fallará con
+  // "relation \"ServicePriceList\" does not exist".
+  //
+  // 7 pacientes dedicados, uno por escenario de precio — NO se reutiliza un
+  // solo paciente con varias cuentas: `capturarCargo`→`resolverCuentaActiva`
+  // (packages/trpc/src/lib/charge-capture.ts) cae a "la cuenta ACTIVA más
+  // reciente del paciente" cuando no hay match de encounterId, así que dos
+  // cuentas del mismo paciente harían que el escenario más viejo se
+  // resolviera contra la cuenta del más nuevo — un paciente por escenario
+  // elimina esa ambigüedad por diseño, no por disciplina de test.
+  //
+  // Ids deterministas con prefijo e2ef2000 (namespace propio, no colisiona
+  // con el bloque e2ef1000 de arriba): botId(escena, rol), escena 1-7 en el
+  // orden de `BOT_SCENARIOS`, rol de 2 dígitos por tipo de fila. Espejado en
+  // apps/web/e2e/_helpers/fixtures.ts (E2E_BOT) — mismo esquema en ambos
+  // archivos, actualizar los dos en el mismo commit.
+  function botId(escena, rol) {
+    return `e2ef2000-0000-4000-8000-000000000${escena}${rol}`;
+  }
+
+  const BOT = {
+    isbmTipo: 'e2ef2000-0000-4000-8000-000000000801',
+    mapfreTipo: 'e2ef2000-0000-4000-8000-000000000802',
+    doctorsvTipo: 'e2ef2000-0000-4000-8000-000000000803',
+    isbmList: 'e2ef2000-0000-4000-8000-000000000901',
+    mapfreList: 'e2ef2000-0000-4000-8000-000000000902',
+    doctorsvList: 'e2ef2000-0000-4000-8000-000000000903',
+    defaultList: 'e2ef2000-0000-4000-8000-000000000904',
+    isbmRule: 'e2ef2000-0000-4000-8000-000000000a01',
+    tarifaHoyRule: 'e2ef2000-0000-4000-8000-000000000a02',
+    mapfreItem: 'e2ef2000-0000-4000-8000-000000000b01',
+    doctorsvItem: 'e2ef2000-0000-4000-8000-000000000b02',
+    defaultItem: 'e2ef2000-0000-4000-8000-000000000b03',
+    devolucionItem: 'e2ef2000-0000-4000-8000-000000000b04',
+  };
+
+  // 4 listas de precio: ISBM (via ServicePriceRule — cubre el camino
+  // "regla" del resolver) + MAPFRE/DoctorSV (via ServicePriceListItem plano
+  // — cubre el camino "lista") + DEFAULT (isDefault=true, org-wide,
+  // resuelve la cuenta de emergencia sin tipoCuentaId).
+  const priceLists = [
+    { id: BOT.isbmList, name: 'E2E — ISBM Licitación', isDefault: false },
+    { id: BOT.mapfreList, name: 'E2E — MAPFRE Seguro', isDefault: false },
+    { id: BOT.doctorsvList, name: 'E2E — DoctorSV', isDefault: false },
+    { id: BOT.defaultList, name: 'E2E — Default Complejo', isDefault: true },
+  ];
+  for (const pl of priceLists) {
+    await c.query(
+      `INSERT INTO "ServicePriceList" (id, "organizationId", name, "currencyId", active, "isDefault")
+       VALUES ($1::uuid, $2::uuid, $3, $4::uuid, true, $5)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, "isDefault" = EXCLUDED."isDefault"`,
+      [pl.id, orgId, pl.name, currency.id, pl.isDefault],
+    );
+  }
+
+  const tiposCuenta = [
+    { id: BOT.isbmTipo, code: 'ISBM_TEST', nombre: 'ISBM (E2E test)', priceListId: BOT.isbmList },
+    { id: BOT.mapfreTipo, code: 'MAPFRE_TEST', nombre: 'MAPFRE (E2E test)', priceListId: BOT.mapfreList },
+    { id: BOT.doctorsvTipo, code: 'DOCTORSV_TEST', nombre: 'DoctorSV (E2E test)', priceListId: BOT.doctorsvList },
+  ];
+  for (const tc of tiposCuenta) {
+    await c.query(
+      `INSERT INTO "TipoCuenta" (id, "organizationId", code, nombre, "priceListId", "esParticular", active)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, false, true)
+       ON CONFLICT (id) DO UPDATE SET "priceListId" = EXCLUDED."priceListId", nombre = EXCLUDED.nombre`,
+      [tc.id, orgId, tc.code, tc.nombre, tc.priceListId],
+    );
+  }
+
+  // Ítems planos — prueba #2 (MAPFRE), #3 (DoctorSV), #7 (default de
+  // emergencia) y el insumo de #6 (devolución, misma lista MAPFRE).
+  const flatItems = [
+    { id: BOT.mapfreItem, list: BOT.mapfreList, code: 'BOT-E2E-MAPFRE', desc: 'Insumo E2E — MAPFRE', price: 18.75 },
+    { id: BOT.doctorsvItem, list: BOT.doctorsvList, code: 'BOT-E2E-DOCTORSV', desc: 'Insumo E2E — DoctorSV', price: 9.99 },
+    { id: BOT.defaultItem, list: BOT.defaultList, code: 'BOT-E2E-EMERGENCIA', desc: 'Insumo E2E — Emergencia (lista default)', price: 5.00 },
+    { id: BOT.devolucionItem, list: BOT.mapfreList, code: 'BOT-E2E-DEVOLUCION', desc: 'Insumo E2E — Devolución', price: 7.25 },
+  ];
+  for (const it of flatItems) {
+    await c.query(
+      `INSERT INTO "ServicePriceListItem" (id, "priceListId", code, description, "unitPrice", active)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::numeric, true)
+       ON CONFLICT (id) DO UPDATE SET "unitPrice" = EXCLUDED."unitPrice"`,
+      [it.id, it.list, it.code, it.desc, it.price],
+    );
+  }
+
+  // Reglas explícitas — prueba #1 (ISBM, camino "regla" del resolver) y el
+  // precio INICIAL de #8 (tarifahoy; el spec agrega una 2ª regla "hoy" vía
+  // servicePriceList.addRule, la API real — no seed). dateStart=ayer: la
+  // regla ya está vigente cuando el spec corre "hoy".
+  const ayer = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const rules = [
+    { id: BOT.isbmRule, list: BOT.isbmList, code: 'BOT-E2E-ISBM', price: 12.50 },
+    { id: BOT.tarifaHoyRule, list: BOT.isbmList, code: 'BOT-E2E-TARIFAHOY', price: 15.00 },
+  ];
+  for (const r of rules) {
+    await c.query(
+      `INSERT INTO "ServicePriceRule"
+         (id, "priceListId", "appliedOn", "itemCode", "minQuantity", "dateStart",
+          "computePrice", "fixedPrice", base, active)
+       VALUES ($1::uuid, $2::uuid, 'item', $3, 0, $4::timestamptz, 'fixed', $5::numeric, 'list_price', true)
+       ON CONFLICT (id) DO UPDATE SET "fixedPrice" = EXCLUDED."fixedPrice"`,
+      [r.id, r.list, r.code, ayer, r.price],
+    );
+  }
+  console.log(`priceLists=${priceLists.length} tiposCuenta=${tiposCuenta.length} items=${flatItems.length} rules=${rules.length}`);
+
+  // 7 escenarios — un paciente+cuenta+receta+lote GS1 dedicados por prueba.
+  // GTIN-14 con checksum GS1 válido (mismo algoritmo mod10 que los GTIN de
+  // §4 arriba — verificado con Node antes de escribir este archivo).
+  const BOT_SCENARIOS = [
+    { escena: 1, key: 'isbm', mrn: 'E2E-BOT-ISBM-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-ISBM', gtin: '07501000020010',
+      lote: 'LOTE-E2E-ISBM-01', drugName: 'Botiquín E2E — ISBM' },
+    { escena: 2, key: 'mapfre', mrn: 'E2E-BOT-MAPFRE-01', tipoCuentaId: BOT.mapfreTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-MAPFRE', gtin: '07501000030019',
+      lote: 'LOTE-E2E-MAPFRE-01', drugName: 'Botiquín E2E — MAPFRE' },
+    { escena: 3, key: 'doctorsv', mrn: 'E2E-BOT-DOCTORSV-01', tipoCuentaId: BOT.doctorsvTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-DOCTORSV', gtin: '07501000040018',
+      lote: 'LOTE-E2E-DOCTORSV-01', drugName: 'Botiquín E2E — DoctorSV' },
+    { escena: 4, key: 'sinprecio', mrn: 'E2E-BOT-SINPRECIO-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-SINPRECIO', gtin: '07501000050017',
+      lote: 'LOTE-E2E-SINPRECIO-01', drugName: 'Botiquín E2E — Sin Precio' },
+    { escena: 5, key: 'devolucion', mrn: 'E2E-BOT-DEVOLUCION-01', tipoCuentaId: BOT.mapfreTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-DEVOLUCION', gtin: '07501000060016',
+      lote: 'LOTE-E2E-DEVOLUCION-01', drugName: 'Botiquín E2E — Devolución' },
+    { escena: 6, key: 'emergencia', mrn: 'E2E-BOT-EMERGENCIA-01', tipoCuentaId: null, accountStatus: 'PENDIENTE_REGULARIZAR',
+      admissionType: 'EMERGENCY', code: 'BOT-E2E-EMERGENCIA', gtin: '07501000070015',
+      lote: 'LOTE-E2E-EMERGENCIA-01', drugName: 'Botiquín E2E — Emergencia' },
+    { escena: 7, key: 'tarifahoy', mrn: 'E2E-BOT-TARIFAHOY-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-TARIFAHOY', gtin: '07501000080014',
+      lote: 'LOTE-E2E-TARIFAHOY-01', drugName: 'Botiquín E2E — Tarifario Hoy' },
+  ];
+
+  if (!qaPhysician) {
+    throw new Error(
+      'qa.physician@his.test no existe en public."User" — corré seed-test-users.mjs antes de este script (RN-HIS-BOT-001 necesita un prescriptor real).',
+    );
+  }
+
+  for (const s of BOT_SCENARIOS) {
+    const patientIdBot = botId(s.escena, '01');
+    const encounterIdBot = botId(s.escena, '03');
+    const accountIdBot = botId(s.escena, '02');
+    const drugIdBot = botId(s.escena, '06');
+    const prescriptionIdBot = botId(s.escena, '04');
+    const prescriptionItemIdBot = botId(s.escena, '05');
+    const stockItemIdBot = botId(s.escena, '07');
+    const stockLotIdBot = botId(s.escena, '08');
+
+    await c.query(
+      `INSERT INTO public."Patient"
+         (id, "organizationId", mrn, "firstName", "lastName", "biologicalSexId",
+          "isUnknown", "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3, 'Paciente', $4, $5::uuid, false, now(), now())
+       ON CONFLICT ("organizationId", mrn) DO UPDATE SET "updatedAt" = now()`,
+      [patientIdBot, orgId, s.mrn, `RN-BOT-001 (${s.key})`, sex.id],
+    );
+
+    // Prescription exige encounterId NOT NULL (FK) — un Encounter dedicado
+    // por escenario, ya cerrado (dischargedAt=now()) para no aparecer en
+    // /transfers ni en conteos de "encuentros abiertos" de otros specs.
+    await c.query(
+      `INSERT INTO public."Encounter"
+         (id, "countryId", "organizationId", "establishmentId", "serviceUnitId",
+          "patientId", "admissionType", "encounterNumber", "admittedAt",
+          "dischargedAt", "currencyId", "exchangeRateToFunc", "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
+               $7::"AdmissionType", $8, now(), now(), $9::uuid, 1.0, now(), now())
+       ON CONFLICT (id) DO NOTHING`,
+      [encounterIdBot, country.id, orgId, estab.id, unitHosp.id, patientIdBot,
+        s.admissionType, `ENC-${new Date().getUTCFullYear()}-0002${String(s.escena).padStart(2, '0')}`, currency.id],
+    );
+
+    await c.query(
+      `INSERT INTO public."PatientAccount"
+         (id, "organizationId", "patientId", "numeroCuenta", "tipoCuentaId", status, "createdAt")
+       VALUES ($1::uuid, $2::uuid, $3::uuid, 'CTA00001', $4::uuid, $5::"AccountStatus", now())
+       ON CONFLICT (id) DO UPDATE SET "tipoCuentaId" = EXCLUDED."tipoCuentaId", status = EXCLUDED.status`,
+      [accountIdBot, orgId, patientIdBot, s.tipoCuentaId, s.accountStatus],
+    );
+
+    await c.query(
+      `INSERT INTO public."Drug"
+         (id, "genericName", "pharmaceuticalForm", "strengthValue", "strengthUnit",
+          "dispensingClass", active, "alertLevel", "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2, 'TABLET'::"PharmaceuticalForm", 500, 'mg',
+               'RX'::"DispensingClass", true, 'standard', now(), now())
+       ON CONFLICT (id) DO NOTHING`,
+      [drugIdBot, s.drugName],
+    );
+
+    // prescriberId = qaPhysician (ya resuelto arriba, §3) — R9 exige que sea
+    // distinto de quien dispensa; los specs dispensan logueados como "admin".
+    await c.query(
+      `INSERT INTO public."Prescription"
+         (id, "organizationId", "encounterId", "prescriberId", "patientId",
+          status, "signedAt", "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
+               'SIGNED'::"PrescriptionStatus", now(), now(), now())
+       ON CONFLICT (id) DO NOTHING`,
+      [prescriptionIdBot, orgId, encounterIdBot, qaPhysician.id, patientIdBot],
+    );
+
+    await c.query(
+      `INSERT INTO public."PrescriptionItem"
+         (id, "prescriptionId", "drugId", dosage, route, frequency, "prescribedQty")
+       VALUES ($1::uuid, $2::uuid, $3::uuid, '1 tableta', 'ORAL'::"AdminRoute", 'cada 8 horas', 10)
+       ON CONFLICT (id) DO NOTHING`,
+      [prescriptionItemIdBot, prescriptionIdBot, drugIdBot],
+    );
+
+    // StockItem.sku = el `code` del tarifario — así `capturarCargo` (que usa
+    // sku como código de cargo cuando el GTIN resuelve a un StockItem real,
+    // ver dispensation.router.ts codigoCargoDispensacion) llega exactamente
+    // al code sembrado arriba en ServicePriceListItem/Rule.
+    await c.query(
+      `INSERT INTO public."StockItem"
+         (id, "organizationId", sku, name, "unitOfMeasure", category, "trackLots", gtin, active, "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3, $4, 'UN', 'MEDICAMENTO', true, $5, true, now(), now())
+       ON CONFLICT ("organizationId", sku) DO UPDATE SET gtin = EXCLUDED.gtin`,
+      [stockItemIdBot, orgId, s.code, s.drugName, s.gtin],
+    );
+
+    await c.query(
+      `INSERT INTO public."StockLot"
+         (id, "organizationId", "establishmentId", "itemId", "lotNumber",
+          "gtinFisico", "expiryDate", "qualityStatus", "quantityOnHand", active, "createdAt", "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, (CURRENT_DATE + interval '1 year'),
+               'AVAILABLE', 20, true, now(), now())
+       ON CONFLICT ("organizationId", "establishmentId", "itemId", "lotNumber")
+         DO UPDATE SET "quantityOnHand" = 20, "qualityStatus" = 'AVAILABLE'`,
+      [stockLotIdBot, orgId, estab.id, stockItemIdBot, s.lote, s.gtin],
+    );
+  }
+  console.log(`RN-HIS-BOT-001: ${BOT_SCENARIOS.length} escenarios sembrados (patient+encounter+cuenta+receta+stock)`);
+
+  const { rows: [chkBot] } = await c.query(
+    `SELECT
+       (SELECT count(*)::int FROM "ServicePriceList" WHERE id = ANY($1::uuid[]))     AS listas,
+       (SELECT count(*)::int FROM "TipoCuenta" WHERE id = ANY($2::uuid[]))           AS tipos,
+       (SELECT count(*)::int FROM public."StockLot" lot
+          JOIN public."StockItem" si ON si.id = lot."itemId"
+         WHERE si.sku = ANY($3::text[]) AND lot."quantityOnHand" >= 10)              AS lotes,
+       (SELECT count(*)::int FROM public."PatientAccount" WHERE id = ANY($4::uuid[])) AS cuentas`,
+    [
+      priceLists.map((p) => p.id),
+      tiposCuenta.map((t) => t.id),
+      BOT_SCENARIOS.map((s) => s.code),
+      BOT_SCENARIOS.map((s) => botId(s.escena, '02')),
+    ],
+  );
+  console.log(`check RN-HIS-BOT-001: listas=${chkBot.listas} tipos=${chkBot.tipos} lotes=${chkBot.lotes} cuentas=${chkBot.cuentas}`);
+  if (chkBot.listas < 4 || chkBot.tipos < 3 || chkBot.lotes < 7 || chkBot.cuentas < 7) {
+    throw new Error('Verificación de fixtures RN-HIS-BOT-001 falló — revisar salida anterior');
+  }
+
   // ─── Verificación final ───────────────────────────────────────────────────
   const { rows: [chk] } = await c.query(
     `SELECT

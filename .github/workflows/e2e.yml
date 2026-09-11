@@ -161,6 +161,31 @@ jobs:
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/216_ece_contexto_espacio_ids.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
           npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
+          # docs/48 C5-2 — "ServicePriceList"/"ServicePriceListItem"/
+          # "ServiceCategory"/"ServicePriceRule" son tablas fuera de
+          # schema.prisma por diseño (drift documentado en CLAUDE.md): `db
+          # push` NUNCA las crea. Sin esto, capturarCargo→resolverPrecio
+          # (packages/trpc/src/lib/price-resolver.ts) revienta con "relation
+          # \"ServicePriceList\" does not exist" en cualquier spec que
+          # dispense de verdad (cargos-rn-bot-001.spec.ts). Los 3 SQL son
+          # DDL idempotente (CREATE/ALTER ... IF NOT EXISTS). 228 agrega
+          # "isDefault" — resolverPrecio la consulta SIEMPRE (no solo en el
+          # fallback), así que sin esta columna CUALQUIER resolución de
+          # precio revienta, no solo el camino default.
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/133_service_price_list_tarifario.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/204_cc0021_motor_reglas_precios.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/228_lista_precio_default.sql
+          # Re-aplicar el bootstrap: su `GRANT ALL PRIVILEGES ON ALL TABLES IN
+          # SCHEMA public...` corrió ANTES de que 133/204 crearan estas 4
+          # tablas nuevas — un GRANT ON ALL TABLES IN SCHEMA es de efecto
+          # inmediato, no retroactivo. 133 tampoco trae su propio GRANT a
+          # `authenticated` (204 sí, para ServiceCategory/ServicePriceRule) —
+          # sin este segundo pase, "ServicePriceList"/"ServicePriceListItem"
+          # quedan con RLS habilitado y política, pero sin grant, y
+          # `withTenantContext` (rol `authenticated`) falla con "permission
+          # denied for table ServicePriceList". Archivo idempotente — seguro
+          # de correr dos veces (ver su propio comentario de cabecera).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
 
       - name: Seed minimal data
         run: npm run db:seed
