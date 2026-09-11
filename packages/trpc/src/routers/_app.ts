@@ -235,6 +235,8 @@ import { careBoardRouter } from "./care-board.router";
 import { conciliacionCargosRouter } from "./conciliacion-cargos.router";
 // Parametrización admin (2026-09-10) — CRUD de Establecimientos (antes solo por SQL)
 import { establishmentRouter } from "./establishment.router";
+// Modelo de camas — habitaciones espejo Odoo ACS HMS (encargo Edwin 2026-09-11)
+import { roomRouter } from "./room.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -469,6 +471,8 @@ export const appRouter = router({
   conciliacionCargos: conciliacionCargosRouter,
   // Parametrización admin (2026-09-10) — CRUD de Establecimientos
   establishment: establishmentRouter,
+  // Modelo de camas — habitaciones espejo Odoo ACS HMS (encargo Edwin 2026-09-11)
+  room: roomRouter,
 });
 
 export type AppRouter = typeof appRouter;

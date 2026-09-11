@@ -436,6 +436,7 @@ model Organization {
   encounters                Encounter[]
   triages                   TriageEvaluation[]
   beds                      Bed[]
+  rooms                     Room[]
   services                  ServiceUnit[]
   vaccinations              PatientVaccination[]
   outpatientAppointments    OutpatientAppointment[]    @relation("OrgAppointments")
@@ -537,6 +538,7 @@ model Establishment {
   organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   serviceUnits           ServiceUnit[]
   beds                   Bed[]
+  rooms                  Room[]
   encounters             Encounter[]
   triages                TriageEvaluation[]
   outpatientAppointments OutpatientAppointment[] @relation("EstAppointments")
@@ -1110,6 +1112,7 @@ model ServiceUnit {
   establishment Establishment      @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
   specialty     MedicalSpecialty?  @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
   beds          Bed[]
+  rooms         Room[]
   encounters    Encounter[]
   triages       TriageEvaluation[]
   // Finance — sql/127
@@ -1632,6 +1635,9 @@ model Bed {
   establishmentId String    @db.Uuid
   serviceUnitId   String    @db.Uuid
   code            String    @db.VarChar(40)
+  /// Nombre de habitación en texto libre — DEPRECADO en favor de `roomId`
+  /// (modelo Room, sql/231). Se conserva por compatibilidad histórica; no
+  /// escribir en campos nuevos, usar `roomId`.
   room            String?   @db.VarChar(40)
   status          BedStatus @default(FREE)
   isolation       String?   @db.VarChar(40) /// contacto, gotitas, respiratorio, protector.
@@ -1641,14 +1647,84 @@ model Bed {
   /// GLN (GS1 Global Location Number) de la cama — ADR 0019 D8. FK a ece.gs1_gln(codigo),
   /// sql/199_epcis_patient_movement.sql. Nullable mientras el catálogo no esté sembrado.
   glnCodigo       String?   @db.VarChar(13)
+  /// Habitación a la que pertenece la cama (modelo Room espejo Odoo ACS HMS,
+  /// sql/231). Nullable durante la transición desde el campo texto `room`.
+  roomId          String?   @db.Uuid
+  /// Tipo de cama — espejo del vocabulario `hospital.bed` de Odoo ACS HMS.
+  /// Vocabulario cerrado por CHECK (sql/231), no enum Postgres.
+  bedType         String?   @db.VarChar(20)
+  /// Clase de facturación — espejo del custom `camas.config` de Odoo.
+  /// Vocabulario cerrado por CHECK (sql/231), no enum Postgres.
+  billingClass    String?   @db.VarChar(10)
 
   organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   establishment Establishment   @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
   serviceUnit   ServiceUnit     @relation(fields: [serviceUnitId], references: [id], onDelete: Restrict)
+  roomRef       Room?           @relation(fields: [roomId], references: [id], onDelete: SetNull)
   assignments   BedAssignment[]
 
   @@unique([establishmentId, code])
   @@index([status])
+  @@index([roomId])
+  @@schema("public")
+}
+
+/// Habitación — espejo del modelo `hospital.ward` de Odoo ACS HMS (+ el
+/// custom `camas.config` para atributos de facturación). Encargo de Edwin
+/// 2026-09-11: modelar habitaciones como entidad propia (antes solo existía
+/// `Bed.room` como texto libre). Cuelga de `ServiceUnit` porque en Odoo el
+/// ward cuelga de `department` y aquí el equivalente funcional es la unidad
+/// de servicio. sql/231_room_bed_odoo_mirror.sql.
+model Room {
+  id              String   @id @default(uuid()) @db.Uuid
+  organizationId  String   @db.Uuid
+  establishmentId String   @db.Uuid
+  serviceUnitId   String   @db.Uuid
+  code            String   @db.VarChar(40)
+  name            String   @db.VarChar(120)
+  floor           String?  @db.VarChar(10)
+  /// Vocabulario cerrado por CHECK (sql/231), no enum Postgres (patrón
+  /// CC-0026 ServiceUnit.areaType — más barato de ampliar).
+  roomType        String   @default("GENERAL") @db.VarChar(20)
+  genderPolicy    String   @default("UNISEX") @db.VarChar(10)
+  private         Boolean  @default(false)
+  bioHazard       Boolean  @default(false)
+  // Amenidades — espejo 1:1 de hospital.ward (Odoo ACS HMS).
+  airConditioning Boolean  @default(false)
+  television      Boolean  @default(false)
+  telephone       Boolean  @default(false)
+  privateBathroom Boolean  @default(false)
+  internet        Boolean  @default(false)
+  refrigerator    Boolean  @default(false)
+  microwave       Boolean  @default(false)
+  guestSofa       Boolean  @default(false)
+  /// Código de tarifario del cargo de habitación/estancia — equivale al
+  /// product_id facturable del ward en Odoo. NO cableado a charge-capture
+  /// todavía; queda a la espera de que Edwin defina el disparador (origen
+  /// HABITACION, próximo CC).
+  chargeCode      String?  @db.VarChar(40)
+  /// DIA | HORA — espejo de invoice_policy full/hourly de Odoo.
+  invoicePolicy   String   @default("DIA") @db.VarChar(10)
+  /// GLN (GS1 Global Location Number) de la habitación — en el maestro GS1
+  /// la habitación ES la ubicación secundaria tipo 'cama'. FK a
+  /// ece.gs1_gln(codigo), sql/231 (mismo patrón que Bed.glnCodigo, sql/199).
+  glnCodigo       String?  @db.VarChar(13)
+  notes           String?  @db.Text
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+  createdBy       String?  @db.Uuid
+  updatedAt       DateTime @updatedAt @db.Timestamptz()
+  updatedBy       String?  @db.Uuid
+
+  organization  Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment Establishment @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  serviceUnit   ServiceUnit   @relation(fields: [serviceUnitId], references: [id], onDelete: Restrict)
+  beds          Bed[]
+
+  @@unique([establishmentId, code])
+  @@index([organizationId])
+  @@index([establishmentId])
+  @@index([serviceUnitId])
   @@schema("public")
 }
 

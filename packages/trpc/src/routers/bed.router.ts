@@ -1,17 +1,35 @@
 import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import { Prisma } from "@his/database";
 import {
   bedListSchema,
   bedUpdateStatusSchema,
   bedFindAvailableSchema,
   bedAssignToEncounterSchema,
   bedReleaseSchema,
+  bedCreateSchema,
+  bedUpdateSchema,
+  bedSetActiveSchema,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
+import { assertGlnAsignable } from "../lib/gln-validation";
+
+const adminProc = requireRole(["ADMIN", "DIR"]);
+
+function rethrowUniqueCode(err: unknown, code: string): never {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `El código ${code} ya existe en este establecimiento.`,
+    });
+  }
+  throw err;
+}
 
 export const bedRouter = router({
   list: tenantProcedure.input(bedListSchema).query(async ({ ctx, input }) => {
@@ -278,4 +296,125 @@ export const bedRouter = router({
         return { ok: true, releasedAssignmentId: active?.id ?? null };
       });
     }),
+
+  /**
+   * Parametrización admin (2026-09-11) — tabla `/organizations/camas`.
+   * A diferencia de `list` (tenant clínico, scope Nivel B, solo activas),
+   * esta lectura es admin-only: cruza establecimientos, incluye inactivas y
+   * trae habitación/servicio/establecimiento para la tabla de mantenimiento.
+   */
+  adminList: adminProc
+    .input(
+      z.object({
+        establishmentId: z.string().uuid().optional(),
+        roomId: z.string().uuid().optional(),
+        activeOnly: z.boolean().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { tenant, prisma } = ctx;
+      return withTenantContext(prisma, tenant, (tx) =>
+        tx.bed.findMany({
+          where: {
+            organizationId: tenant.organizationId,
+            ...(input.establishmentId ? { establishmentId: input.establishmentId } : {}),
+            ...(input.roomId ? { roomId: input.roomId } : {}),
+            ...(input.activeOnly ? { active: true } : {}),
+          },
+          include: {
+            establishment: { select: { id: true, code: true, name: true } },
+            serviceUnit: { select: { id: true, code: true, name: true } },
+            roomRef: { select: { id: true, code: true, name: true } },
+          },
+          orderBy: [{ establishmentId: "asc" }, { code: "asc" }],
+        }),
+      );
+    }),
+
+  /**
+   * Parametrización admin (2026-09-11) — alta de cama.
+   * `roomId`/`bedType`/`billingClass`/`glnCodigo` son el espejo Odoo ACS HMS
+   * (hospital.bed + custom camas.config, sql/231). ADMIN/DIR bypasean el
+   * scope de servicio (Nivel B) — son roles cross-servicio.
+   */
+  create: adminProc.input(bedCreateSchema).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+    if (input.glnCodigo) {
+      await assertGlnAsignable(prisma, input.glnCodigo, ["cama"]);
+    }
+    try {
+      return await withTenantContext(prisma, tenant, (tx) =>
+        tx.bed.create({
+          data: {
+            organizationId: tenant.organizationId,
+            establishmentId: input.establishmentId,
+            serviceUnitId: input.serviceUnitId,
+            code: input.code,
+            roomId: input.roomId ?? null,
+            isolation: input.isolation ?? null,
+            bedType: input.bedType ?? null,
+            billingClass: input.billingClass ?? null,
+            glnCodigo: input.glnCodigo ?? null,
+          },
+        }),
+      );
+    } catch (err) {
+      rethrowUniqueCode(err, input.code);
+    }
+  }),
+
+  /** Parametrización admin — edición de cama (código, servicio, habitación, tipo, GLN). */
+  update: adminProc.input(bedUpdateSchema).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+    if (input.glnCodigo) {
+      await assertGlnAsignable(prisma, input.glnCodigo, ["cama"]);
+    }
+    return withTenantContext(prisma, tenant, async (tx) => {
+      const existing = await tx.bed.findFirst({
+        where: { id: input.id, organizationId: tenant.organizationId },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Cama no encontrada." });
+      }
+
+      try {
+        return await tx.bed.update({
+          where: { id: input.id },
+          data: {
+            ...(input.code !== undefined ? { code: input.code } : {}),
+            ...(input.serviceUnitId !== undefined ? { serviceUnitId: input.serviceUnitId } : {}),
+            ...(input.roomId !== undefined ? { roomId: input.roomId } : {}),
+            ...(input.isolation !== undefined ? { isolation: input.isolation } : {}),
+            ...(input.bedType !== undefined ? { bedType: input.bedType } : {}),
+            ...(input.billingClass !== undefined ? { billingClass: input.billingClass } : {}),
+            ...(input.glnCodigo !== undefined ? { glnCodigo: input.glnCodigo } : {}),
+          },
+        });
+      } catch (err) {
+        rethrowUniqueCode(err, input.code ?? "");
+      }
+    });
+  }),
+
+  /** Parametrización admin — activa/desactiva una cama (no hay DELETE). */
+  setActive: adminProc.input(bedSetActiveSchema).mutation(async ({ ctx, input }) => {
+    const { tenant, prisma } = ctx;
+    return withTenantContext(prisma, tenant, async (tx) => {
+      const existing = await tx.bed.findFirst({
+        where: { id: input.id, organizationId: tenant.organizationId },
+        select: { id: true, active: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Cama no encontrada." });
+      }
+      if (existing.active === input.active) {
+        return existing; // idempotente
+      }
+      return tx.bed.update({
+        where: { id: input.id },
+        data: { active: input.active },
+      });
+    });
+  }),
 });
