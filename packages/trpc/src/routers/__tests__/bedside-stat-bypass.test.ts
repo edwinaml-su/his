@@ -88,6 +88,9 @@ beforeEach(() => {
   (prisma as any).$transaction = vi.fn().mockImplementation((cb: (tx: unknown) => unknown) =>
     cb(prisma),
   );
+  // SQL 232 — cierre por administración: baseline "sin reserva abierta que
+  // matchee" (este archivo no ejercita farmacia).
+  prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
 });
 
 /** Mocks por SQL (dispatcher) para el flujo validate5Correctos. */

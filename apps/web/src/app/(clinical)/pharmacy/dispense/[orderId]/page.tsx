@@ -16,6 +16,14 @@
  *  3. checkDuplicate → Hard Stop si ítem ya dispensado en ventana terapéutica.
  *  4. reserveItem → hard stop de inventario + bloquea el serial al paciente.
  *  5. Botón "Cancelar Reserva" con confirmación + motivo (repone stock).
+ *  6. SQL 232 — Botón "Registrar devolución" (returnItem): cierra el ciclo
+ *     de la requisición cuando lo ya dispensado (reserva activa == la
+ *     única fuente de "despachado" que produce este flujo hoy, ver
+ *     dispensation.router.ts RETURN_ITEM_OPEN_STATUSES) NO se administra
+ *     (alta/incumplimiento/vencimiento/otro) y regresa al botiquín. Motivo
+ *     catalogado + testigo/PIN/justificación si el ítem es RX_CONTROLLED
+ *     (no hay UI previa que capture esos campos — se construye aquí desde
+ *     cero, ver nota en el componente).
  */
 import * as React from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -28,6 +36,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { Textarea } from "@his/ui/components/textarea";
 import { Form, FormError, FormField } from "@his/ui/components/form";
 import {
   Dialog,
@@ -156,6 +165,18 @@ export default function GS1DispensePage(): React.ReactElement {
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [checkPending, setCheckPending] = React.useState(false);
 
+  // SQL 232 — devolución post-despacho (returnItem). Los campos de testigo
+  // son opcionales en el formulario (el servidor los exige solo si el ítem
+  // resuelve RX_CONTROLLED) — no hay UI previa en el proyecto que capture
+  // 2-eyes de controlados para replicar; este es el primer caso.
+  const [returnOpen, setReturnOpen] = React.useState(false);
+  const [returnMotivo, setReturnMotivo] = React.useState("");
+  const [returnNotas, setReturnNotas] = React.useState("");
+  const [returnWitnessUserId, setReturnWitnessUserId] = React.useState("");
+  const [returnWitnessPin, setReturnWitnessPin] = React.useState("");
+  const [returnJustification, setReturnJustification] = React.useState("");
+  const [returnError, setReturnError] = React.useState<string | null>(null);
+
   // Sustitución genérico-comercial (US.F2.6.11) — bloquea el despacho del
   // ítem hasta que el médico prescriptor autorice.
   const [substitutionTarget, setSubstitutionTarget] =
@@ -221,6 +242,21 @@ export default function GS1DispensePage(): React.ReactElement {
       setCancelError(null);
     },
     onError: (err: { message: string }) => setCancelError(err.message),
+  });
+
+  const returnMutation = trpcAny.dispensation.returnItem.useMutation({
+    onSuccess: () => {
+      setReservationId(null);
+      setReservedAt(null);
+      setReturnOpen(false);
+      setReturnMotivo("");
+      setReturnNotas("");
+      setReturnWitnessUserId("");
+      setReturnWitnessPin("");
+      setReturnJustification("");
+      setReturnError(null);
+    },
+    onError: (err: { message: string }) => setReturnError(err.message),
   });
 
   // Mientras haya una sustitución propuesta para el ítem actual, consulta si
@@ -309,6 +345,22 @@ export default function GS1DispensePage(): React.ReactElement {
     });
   }
 
+  function handleReturnConfirm() {
+    if (!returnMotivo) {
+      setReturnError("Seleccione el motivo de la devolución");
+      return;
+    }
+    if (!reservationId) return;
+    returnMutation.mutate({
+      reservationId,
+      motivo: returnMotivo,
+      notas: returnNotas.trim() || undefined,
+      witnessUserId: returnWitnessUserId.trim() || undefined,
+      witnessPin: returnWitnessPin.trim() || undefined,
+      controlledJustification: returnJustification.trim() || undefined,
+    });
+  }
+
   /**
    * Abre el modal de sustitución para el GTIN/ítem actuales cuando el
    * farmacéutico determina que no hay stock del medicamento original.
@@ -387,14 +439,24 @@ export default function GS1DispensePage(): React.ReactElement {
             Reserva activa — expira en{" "}
             <strong>{minutosRestantes} min</strong>
           </p>
-          <Button
-            type="button"
-            variant="destructive"
-            size="sm"
-            onClick={() => setCancelOpen(true)}
-          >
-            Cancelar reserva
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setReturnOpen(true)}
+            >
+              Registrar devolución
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={() => setCancelOpen(true)}
+            >
+              Cancelar reserva
+            </Button>
+          </div>
         </div>
       ) : null}
 
@@ -644,6 +706,105 @@ export default function GS1DispensePage(): React.ReactElement {
               onClick={handleCancelConfirm}
             >
               {cancelMutation.isPending ? "Cancelando…" : "Confirmar cancelación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SQL 232 — Dialog devolución post-despacho (returnItem) */}
+      <Dialog open={returnOpen} onOpenChange={setReturnOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Registrar devolución</DialogTitle>
+            <DialogDescription>
+              El medicamento/insumo ya despachado NO se administró (o debe
+              regresar al botiquín). Esto cierra el ciclo de la requisición y
+              revierte el cargo de la cuenta del paciente.
+            </DialogDescription>
+          </DialogHeader>
+
+          <FormField>
+            <Label htmlFor="return-motivo">
+              Motivo <span className="text-destructive">*</span>
+            </Label>
+            <Select value={returnMotivo} onValueChange={setReturnMotivo}>
+              <SelectTrigger id="return-motivo">
+                <SelectValue placeholder="Seleccione el motivo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="NO_ADMINISTRADO">No administrado</SelectItem>
+                <SelectItem value="ALTA">Alta del paciente</SelectItem>
+                <SelectItem value="INCUMPLIMIENTO">Incumplimiento</SelectItem>
+                <SelectItem value="VENCIMIENTO">Vencimiento</SelectItem>
+                <SelectItem value="OTRO">Otro</SelectItem>
+              </SelectContent>
+            </Select>
+          </FormField>
+
+          <FormField>
+            <Label htmlFor="return-notas">Notas (opcional)</Label>
+            <Textarea
+              id="return-notas"
+              value={returnNotas}
+              onChange={(e) => setReturnNotas(e.target.value)}
+              placeholder="Detalle adicional de la devolución"
+              maxLength={1000}
+            />
+          </FormField>
+
+          <div className="rounded-md border border-muted-foreground/20 p-3">
+            <p className="text-xs text-muted-foreground">
+              Solo si el medicamento es controlado (RX_CONTROLLED): testigo
+              distinto del dispensador y del prescriptor, con PIN de firma
+              electrónica.
+            </p>
+            <FormField>
+              <Label htmlFor="return-witness-id">ID de usuario testigo</Label>
+              <Input
+                id="return-witness-id"
+                value={returnWitnessUserId}
+                onChange={(e) => setReturnWitnessUserId(e.target.value)}
+                placeholder="UUID del testigo"
+              />
+            </FormField>
+            <FormField>
+              <Label htmlFor="return-witness-pin">PIN del testigo</Label>
+              <Input
+                id="return-witness-pin"
+                type="password"
+                value={returnWitnessPin}
+                onChange={(e) => setReturnWitnessPin(e.target.value)}
+                maxLength={8}
+              />
+            </FormField>
+            <FormField>
+              <Label htmlFor="return-justification">Justificación</Label>
+              <Textarea
+                id="return-justification"
+                value={returnJustification}
+                onChange={(e) => setReturnJustification(e.target.value)}
+                placeholder="Justificación legal de la devolución de fármaco controlado"
+                maxLength={500}
+              />
+            </FormField>
+          </div>
+
+          {returnError ? <FormError>{returnError}</FormError> : null}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setReturnOpen(false)}
+            >
+              Volver
+            </Button>
+            <Button
+              type="button"
+              disabled={returnMutation.isPending}
+              onClick={handleReturnConfirm}
+            >
+              {returnMutation.isPending ? "Registrando…" : "Confirmar devolución"}
             </Button>
           </DialogFooter>
         </DialogContent>

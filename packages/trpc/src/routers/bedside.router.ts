@@ -601,6 +601,33 @@ const administrationRouter = router({
           select: { id: true },
         });
 
+        // SQL 232 — cierre del ciclo de dispensación por administración
+        // (RN-HIS-BOT-001): si existe EXACTAMENTE UNA reserva de farmacia
+        // "abierta" (RESERVED/DISPATCHED — ver `RETURN_ITEM_OPEN_STATUSES`
+        // en dispensation.router.ts, mismo hallazgo: el flujo real solo
+        // produce RESERVED) del mismo paciente+GTIN+lote, se cierra a
+        // ADMINISTERED. Best-effort: 0 coincidencias (nunca se reservó por
+        // este flujo, p.ej. carro de paro) o >1 (ambigüedad — mismo GTIN/lote
+        // reservado más de una vez para el paciente) NO bloquean el registro
+        // de la administración; la conciliación (despachadoSinCierre) reporta
+        // esos casos para cierre manual.
+        const reservasAbiertas = await tx.pharmacyReservation.findMany({
+          where: {
+            organizationId: orgId,
+            patientId,
+            gtin: input.medicamentoGtin,
+            lote: input.lote,
+            status: { in: ["RESERVED", "DISPATCHED"] },
+          },
+          select: { id: true },
+        });
+        if (reservasAbiertas.length === 1) {
+          await tx.pharmacyReservation.update({
+            where: { id: reservasAbiertas[0]!.id },
+            data: { status: "ADMINISTERED", closedAt: new Date() },
+          });
+        }
+
         // Modo STAT (US.F2.6.47): si hay sesión STAT abierta para esta
         // indicación, enlazar server-side la administración registrada — el
         // rastro de auditoría no depende de que el cliente llame

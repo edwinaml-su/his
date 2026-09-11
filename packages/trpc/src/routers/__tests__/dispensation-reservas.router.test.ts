@@ -821,6 +821,214 @@ describe("dispensationRouter — reservas consolidadas", () => {
   });
 
   // -------------------------------------------------------------------------
+  // SQL 232 — returnItem: devolución post-despacho que cierra el ciclo
+  // (RN-HIS-BOT-001). Ver nota en dispensation.router.ts
+  // RETURN_ITEM_OPEN_STATUSES: opera sobre RESERVED (el único estado que el
+  // flujo real produce) y DISPATCHED (forward-compat) — NO sobre CONFIRMED
+  // (no existe en el enum de prod).
+  // -------------------------------------------------------------------------
+  describe("returnItem", () => {
+    const PRESCRIBER = "00000000-0000-0000-0000-000000000099";
+    const ITEM_ID = "00000000-0000-0000-0000-0000000000f1";
+    const WITNESS = "00000000-0000-0000-0000-000000000008";
+    const PERSONAL_ID = "00000000-0000-0000-0000-0000000000f2";
+    const FIRMA_ID = "00000000-0000-0000-0000-0000000000f3";
+    const JUSTIFICACION = "Justificación de prueba con más de 10 caracteres";
+
+    function prescriptionFixture(dispensingClass = "OTC") {
+      return {
+        prescriberId: PRESCRIBER,
+        items: [
+          {
+            id: ITEM_ID,
+            drug: { genericName: "Amoxicilina 500mg", dispensingClass },
+          },
+        ],
+      };
+    }
+
+    function wireWitnessPinLookup() {
+      let call = 0;
+      prisma.$queryRaw.mockImplementation(async () => {
+        call += 1;
+        if (call === 1) return [{ id: PERSONAL_ID, nombre_completo: "Testigo" }];
+        return [
+          { id: FIRMA_ID, pin_hash: "$argon2id$mock", failed_attempts: 0, locked_until: null },
+        ];
+      });
+    }
+
+    beforeEach(() => {
+      prisma.prescription.findFirst.mockResolvedValue(prescriptionFixture() as never);
+      prisma.pharmacyReservation.update.mockResolvedValue(
+        makeReservation({ status: "RETURNED" }) as never,
+      );
+      // Reingreso de inventario: sin StockMovement OUT previo por defecto
+      // (algunos tests lo sobrescriben).
+      prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+      // Cargo VIGENTE presente por defecto (happy path).
+      prisma.patientAccountService.findFirst.mockResolvedValue({ id: "cargo-1" } as never);
+    });
+
+    it("happy path: reserva RESERVED → RETURNED, repone stock y revierte el cargo", async () => {
+      const existing = makeReservation({ status: "RESERVED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+      prisma.stockMovement.findFirst.mockResolvedValue({
+        itemId: STOCK_ITEM_ID,
+        lotId: STOCK_LOT_ID,
+        quantity: 1,
+        establishmentId: ESTABLISHMENT,
+      } as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.returnItem({
+        reservationId: RES,
+        motivo: "NO_ADMINISTRADO",
+        notas: "El paciente rechazó la dosis",
+      });
+
+      expect(result.status).toBe("RETURNED");
+      expect(prisma.stockLot.updateMany).toHaveBeenCalledWith({
+        where: { id: STOCK_LOT_ID },
+        data: { quantityOnHand: { increment: 1 } },
+      });
+      expect(prisma.stockMovement.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "IN",
+            referenceCode: RES,
+            reason: expect.stringContaining("returnItem"),
+          }),
+        }),
+      );
+      expect(revertirCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ cargoId: "cargo-1", actorId: expect.any(String) }),
+      );
+      const updateArg = prisma.pharmacyReservation.update.mock.calls[0]![0].data;
+      expect(updateArg.status).toBe("RETURNED");
+      expect(updateArg.closeReason).toBe("NO_ADMINISTRADO");
+      expect(updateArg.closeNotes).toBe("El paciente rechazó la dosis");
+      expect(updateArg.closedBy).toEqual(expect.any(String));
+    });
+
+    it("acepta también reservas DISPATCHED (forward-compat)", async () => {
+      const existing = makeReservation({ status: "DISPATCHED" });
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.returnItem({
+        reservationId: RES,
+        motivo: "ALTA",
+      });
+
+      expect(result.status).toBe("RETURNED");
+    });
+
+    it.each(["CANCELLED", "EXPIRED", "ADMINISTERED", "RETURNED"])(
+      "PRECONDITION_FAILED si la reserva está en estado %s (no dispensada-abierta)",
+      async (status) => {
+        prisma.pharmacyReservation.findFirst.mockResolvedValue(
+          makeReservation({ status }) as never,
+        );
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.returnItem({ reservationId: RES, motivo: "OTRO" }),
+        ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+        expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it("NOT_FOUND si la reserva no existe en el tenant", async () => {
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.returnItem({ reservationId: RES, motivo: "OTRO" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("CONFLICT (doble devolución) si no hay cargo VIGENTE para revertir", async () => {
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(
+        makeReservation({ status: "RESERVED" }) as never,
+      );
+      prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
+
+      const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.returnItem({ reservationId: RES, motivo: "OTRO" }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
+      expect(revertirCargoMock).not.toHaveBeenCalled();
+    });
+
+    describe("controlado (RX_CONTROLLED) — 2-eyes", () => {
+      beforeEach(() => {
+        prisma.prescription.findFirst.mockResolvedValue(
+          prescriptionFixture("RX_CONTROLLED") as never,
+        );
+        prisma.pharmacyReservation.findFirst.mockResolvedValue(
+          makeReservation({ status: "RESERVED" }) as never,
+        );
+      });
+
+      it("sin witnessUserId, rechaza con FORBIDDEN y no toca inventario/cargo/reserva", async () => {
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.returnItem({ reservationId: RES, motivo: "VENCIMIENTO" }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+        expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
+        expect(revertirCargoMock).not.toHaveBeenCalled();
+      });
+
+      it("PIN de testigo incorrecto, rechaza con UNAUTHORIZED", async () => {
+        wireWitnessPinLookup();
+        vi.mocked(argon2.verify).mockResolvedValueOnce(false);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.returnItem({
+            reservationId: RES,
+            motivo: "VENCIMIENTO",
+            witnessUserId: WITNESS,
+            witnessPin: "000000",
+            controlledJustification: JUSTIFICACION,
+          }),
+        ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+        expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
+      });
+
+      it("con testigo válido, cierra la reserva Y persiste MedicationDispense con cantidad negativa", async () => {
+        wireWitnessPinLookup();
+        prisma.medicationDispense.create.mockResolvedValue({ id: "md-return-1" } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.returnItem({
+          reservationId: RES,
+          motivo: "INCUMPLIMIENTO",
+          witnessUserId: WITNESS,
+          witnessPin: "123456",
+          controlledJustification: JUSTIFICACION,
+        });
+
+        expect(prisma.pharmacyReservation.update).toHaveBeenCalledOnce();
+        expect(prisma.medicationDispense.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              prescriptionItemId: ITEM_ID,
+              quantity: -1,
+              isControlled: true,
+              witnessUserId: WITNESS,
+              controlledJustification: JUSTIFICACION,
+            }),
+          }),
+        );
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // US.F2.6.9 — checkDuplicate
   // -------------------------------------------------------------------------
   describe("checkDuplicate", () => {

@@ -134,6 +134,8 @@ export const EVENT_TYPES = [
   // Fase 2 (S7) — GS1 Proceso D: Reserva lógica de serial/lote (US.F2.6.8)
   "pharmacy.reservation.created",
   "pharmacy.reservation.cancelled",
+  // SQL 232 — devolución post-despacho cierra el ciclo (RN-HIS-BOT-001)
+  "pharmacy.reservation.returned",
   // S1 HD-30 — ECE URPA: alta post-anestésica otorgada (NTEC Art. 36)
   "ece.urpa.alta_otorgada",
   // S8 — HI-10/11: Trazabilidad lote + recall RTCA (NTEC RTCA + TDR §19)
