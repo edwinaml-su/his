@@ -123,6 +123,49 @@ function buildTree(rows: GlnFlatRow[]): GlnTreeNode[] {
 
 export const glnHierarchyRouter = router({
   /**
+   * glnsDisponibles({ tipos }) — lista GLN activos de los tipos pedidos, para
+   * selectores de UI (Room/Bed, sql/231). Espejo Odoo ACS HMS, encargo Edwin
+   * 2026-09-11.
+   *
+   * NO filtra por establecimiento: los GLN tipo 'cama' cuelgan de un GLN
+   * 'servicio' (padre), no de un 'establecimiento' directo — su columna
+   * `establecimiento_id` quedó NULL en la carga del maestro (sql/229, solo se
+   * pobló para nodos establecimiento/servicio de primer nivel). Resolverlo
+   * exigiría una CTE recursiva por cada fila; con 72 GLN tipo 'cama' en todo
+   * el catálogo, listar sin filtrar y dejar que el usuario busque es más
+   * simple y no bloquea la transición.
+   *
+   * Marca cada GLN con `asignadoA` ('room' | 'bed' | null) consultando
+   * `Room.glnCodigo`/`Bed.glnCodigo` de la org del tenant — así el selector
+   * puede mostrar (no ocultar) los ya tomados, incluyendo el de la propia
+   * entidad en edición.
+   */
+  glnsDisponibles: tenantProcedure
+    .input(z.object({ tipos: z.array(tipoGlnEnum).min(1) }))
+    .query(async ({ ctx, input }) => {
+      type GlnRow = { codigo: string; descripcion: string; tipo: string };
+      const rows = await ctx.prisma.$queryRawUnsafe<GlnRow[]>(
+        `SELECT codigo, descripcion, tipo FROM ece.gs1_gln
+          WHERE tipo = ANY($1::text[]) AND activo = true
+          ORDER BY descripcion`,
+        input.tipos,
+      );
+
+      type AssignedRow = { glnCodigo: string; entity: "room" | "bed" };
+      const assigned = await ctx.prisma.$queryRawUnsafe<AssignedRow[]>(
+        `SELECT "glnCodigo", 'room' AS entity FROM public."Room"
+          WHERE "organizationId" = $1 AND "glnCodigo" IS NOT NULL
+         UNION ALL
+         SELECT "glnCodigo", 'bed' AS entity FROM public."Bed"
+          WHERE "organizationId" = $1 AND "glnCodigo" IS NOT NULL`,
+        ctx.tenant.organizationId,
+      );
+      const assignedMap = new Map(assigned.map((a) => [a.glnCodigo, a.entity]));
+
+      return rows.map((r) => ({ ...r, asignadoA: assignedMap.get(r.codigo) ?? null }));
+    }),
+
+  /**
    * tree(rootId?) — devuelve el árbol completo de GLNs o el subárbol bajo rootId.
    * Usa CTE recursiva `WITH RECURSIVE` para una sola query.
    */

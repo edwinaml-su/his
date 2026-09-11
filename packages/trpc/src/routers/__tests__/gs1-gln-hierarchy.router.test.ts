@@ -387,3 +387,42 @@ describe("glnHierarchy.setActivo", () => {
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// glnsDisponibles — selector Room/Bed (sql/231, encargo Edwin 2026-09-11)
+// ---------------------------------------------------------------------------
+describe("glnHierarchyRouter.glnsDisponibles", () => {
+  it("lista GLN activos de los tipos pedidos y marca los ya asignados", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { codigo: "7410398000262", descripcion: "Sydney", tipo: "cama" },
+        { codigo: "7410398000279", descripcion: "Tarawa", tipo: "cama" },
+      ])
+      .mockResolvedValueOnce([{ glnCodigo: "7410398000262", entity: "bed" }]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.glnsDisponibles({ tipos: ["cama"] });
+
+    expect(result).toEqual([
+      { codigo: "7410398000262", descripcion: "Sydney", tipo: "cama", asignadoA: "bed" },
+      { codigo: "7410398000279", descripcion: "Tarawa", tipo: "cama", asignadoA: null },
+    ]);
+    expect(prisma.$queryRawUnsafe).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("ece.gs1_gln"),
+      ["cama"],
+    );
+  });
+
+  it("no filtra por establecimiento (los GLN cama no tienen establecimiento_id propio)", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+    const caller = glnHierarchyRouter.createCaller(
+      makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+    );
+    await expect(caller.glnsDisponibles({ tipos: ["cama"] })).resolves.toEqual([]);
+  });
+});

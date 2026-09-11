@@ -57,9 +57,17 @@ export default function OrganizationsPage() {
             funcional requiere rol ADMIN.
           </p>
         </div>
-        <Button asChild variant="outline">
-          <Link href="/organizations/establecimientos">Establecimientos</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/organizations/establecimientos">Establecimientos</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/organizations/habitaciones">Habitaciones</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/organizations/camas">Camas</Link>
+          </Button>
+        </div>
       </div>
 
       <Card>

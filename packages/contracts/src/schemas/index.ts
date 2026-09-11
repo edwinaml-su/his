@@ -79,6 +79,7 @@ export * from "./patient";
 export * from "./patient-history";
 export * from "./pharmacy";
 export * from "./rbac";
+export * from "./room";
 export * from "./session";
 export * from "./sso";
 export * from "./surgery";
