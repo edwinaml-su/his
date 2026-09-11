@@ -158,8 +158,36 @@ describe("conciliacionCargosRouter", () => {
     });
   });
 
+  // SQL 232 — RN-HIS-BOT-001: devolución post-despacho cierra el ciclo.
+  describe("despachadoSinCierre", () => {
+    it("devuelve reservas RESERVED/DISPATCHED sin ADMINISTERED/RETURNED", async () => {
+      const rows = [
+        {
+          reservationId: "res-1",
+          patientId: "pat-1",
+          status: "RESERVED",
+          gtin: "07501000001234",
+          lote: "L2024A",
+          createdAt: new Date(),
+          horasTranscurridas: 5.5,
+        },
+      ];
+      prisma.$queryRawUnsafe.mockResolvedValue(rows as never);
+
+      const caller = conciliacionCargosRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.despachadoSinCierre(RANGE);
+
+      expect(result).toEqual(rows);
+      const sql = String(prisma.$queryRawUnsafe.mock.calls[0]![0]);
+      expect(sql).toContain("PharmacyReservation");
+      expect(sql).toContain("'RESERVED', 'DISPATCHED'");
+      // No debe referenciar CONFIRMED — no existe en el enum de prod (SQL 232a).
+      expect(sql).not.toContain("CONFIRMED");
+    });
+  });
+
   describe("resumen", () => {
-    it("devuelve los 5 conteos convertidos a number", async () => {
+    it("devuelve los 6 conteos convertidos a number", async () => {
       prisma.$queryRawUnsafe.mockResolvedValue([
         {
           indicaciones_sin_dispensa: "3",
@@ -167,6 +195,7 @@ describe("conciliacionCargosRouter", () => {
           cargos_sin_movimiento: "0",
           cargos_sin_tarifa: "7",
           devoluciones_sin_reversion: "2",
+          despachado_sin_cierre: "4",
         },
       ] as never);
 
@@ -179,6 +208,7 @@ describe("conciliacionCargosRouter", () => {
         cargosSinMovimiento: 0,
         cargosSinTarifa: 7,
         devolucionesSinReversion: 2,
+        despachadoSinCierre: 4,
       });
     });
   });

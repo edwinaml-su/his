@@ -3,9 +3,12 @@
 /**
  * docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera (RN-HIS-BOT-001 R11).
  *
- * Resumen (5 conteos) + los 5 bloques de detalle, cada uno con su propia
+ * Resumen (6 conteos) + los 6 bloques de detalle, cada uno con su propia
  * tabla. UI mínima — patrón de `finance/reportes` (DateRangePicker + tablas
  * Shadcn), sin export (no pedido para esta pantalla).
+ *
+ * Bloque 6 (SQL 232) — despachadoSinCierre: devolución post-despacho
+ * (RN-HIS-BOT-001) que cierra el ciclo de la requisición.
  */
 import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -44,6 +47,7 @@ export default function ConciliacionPage() {
   const cargosSinMovQ = trpcAny.conciliacionCargos.cargosSinMovimiento.useQuery(search);
   const sinTarifaQ = trpcAny.conciliacionCargos.cargosSinTarifa.useQuery(search);
   const devolucionesQ = trpcAny.conciliacionCargos.devolucionesSinReversion.useQuery(search);
+  const despachadoSinCierreQ = trpcAny.conciliacionCargos.despachadoSinCierre.useQuery(search);
 
   const loading = resumenQ.isLoading;
 
@@ -53,6 +57,7 @@ export default function ConciliacionPage() {
     { key: "cargosSinMovimiento", count: resumenQ.data?.cargosSinMovimiento, label: "Cargos sin movimiento" },
     { key: "cargosSinTarifa", count: resumenQ.data?.cargosSinTarifa, label: "Cargos sin tarifa" },
     { key: "devolucionesSinReversion", count: resumenQ.data?.devolucionesSinReversion, label: "Devoluciones sin reversión" },
+    { key: "despachadoSinCierre", count: resumenQ.data?.despachadoSinCierre, label: "Despachado sin cierre" },
   ];
 
   return (
@@ -78,7 +83,7 @@ export default function ConciliacionPage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {bloques.map((b) => (
           <Card key={b.key} className={b.count ? "border-warning" : undefined}>
             <CardContent className="pt-4 text-center">
@@ -235,6 +240,49 @@ export default function ConciliacionPage() {
                     <TableCell>{fmtFecha(r.createdAt)}</TableCell>
                   </TableRow>
                 ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>6. Despachado sin cierre</CardTitle></CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Reserva</TableHead>
+                <TableHead>GTIN / Lote</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead className="text-right">Horas transcurridas</TableHead>
+                <TableHead>Fecha</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {despachadoSinCierreQ.isLoading ? (
+                <SkeletonRows cols={5} />
+              ) : (despachadoSinCierreQ.data ?? []).length === 0 ? (
+                <EmptyState />
+              ) : (
+                (despachadoSinCierreQ.data ?? []).map(
+                  (r: {
+                    reservationId: string;
+                    status: string;
+                    gtin: string;
+                    lote: string;
+                    horasTranscurridas: number;
+                    createdAt: string;
+                  }) => (
+                    <TableRow key={r.reservationId}>
+                      <TableCell className="font-mono text-xs">{r.reservationId}</TableCell>
+                      <TableCell className="font-mono text-xs">{r.gtin} / {r.lote}</TableCell>
+                      <TableCell>{r.status}</TableCell>
+                      <TableCell className="text-right font-mono">{Math.round(r.horasTranscurridas)}</TableCell>
+                      <TableCell>{fmtFecha(r.createdAt)}</TableCell>
+                    </TableRow>
+                  ),
+                )
               )}
             </TableBody>
           </Table>

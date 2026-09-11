@@ -1,8 +1,10 @@
 /**
  * docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera (RN-HIS-BOT-001 R11).
  *
- * 5 reportes de brecha entre el acto clínico y su reflejo financiero, más un
- * `resumen` con los 5 conteos para el tablero. Todas las queries usan
+ * 6 reportes de brecha entre el acto clínico y su reflejo financiero (5
+ * originales + `despachadoSinCierre`, SQL 232 — RN-HIS-BOT-001 devolución
+ * post-despacho), más un `resumen` con los 6 conteos para el tablero. Todas
+ * las queries usan
  * `$queryRawUnsafe` porque cruzan `Prescription`/`PharmacyReservation`/
  * `StockMovement`/`PatientAccountService` sin relaciones Prisma declaradas
  * entre sí (mismo patrón que `finance-reports.router.ts`).
@@ -92,6 +94,16 @@ interface DevolucionSinReversionRow {
   cancelMotivo: string | null;
   totalPrice: string | null;
   createdAt: Date;
+}
+
+interface DespachadoSinCierreRow {
+  reservationId: string;
+  patientId: string;
+  status: string;
+  gtin: string;
+  lote: string;
+  createdAt: Date;
+  horasTranscurridas: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +299,45 @@ export const conciliacionCargosRouter = router({
     }),
 
   /**
-   * Resumen — los 5 conteos de una vez, para el tablero.
+   * 6. SQL 232 — reservas despachadas sin cierre: `PharmacyReservation` en
+   * estado RESERVED/DISPATCHED (ver hallazgo en dispensation.router.ts
+   * `RETURN_ITEM_OPEN_STATUSES` — el flujo real solo produce RESERVED, nunca
+   * transiciona a CONFIRMED/DISPATCHED) que nunca se cerraron a ADMINISTERED
+   * (bedside.router administration.record) ni RETURNED (dispensation.router
+   * returnItem). Espejo de la 6ª causa de bloqueo en `patientAccount.cerrar`
+   * (DISPENSACION_SIN_CIERRE), pero global.
+   */
+  despachadoSinCierre: readerProc
+    .input(dateRangeInput)
+    .query(async ({ ctx, input }) => {
+      const { tenant, prisma } = ctx;
+      const desde = `${input.fechaDesde}T00:00:00`;
+      const hasta = `${input.fechaHasta}T23:59:59`;
+
+      return withTenantContext(prisma, tenant, async (tx) =>
+        tx.$queryRawUnsafe<DespachadoSinCierreRow[]>(
+          `SELECT
+             pr.id            AS "reservationId",
+             pr."patientId"   AS "patientId",
+             pr.status::text  AS "status",
+             pr.gtin          AS "gtin",
+             pr.lote          AS "lote",
+             pr."createdAt"   AS "createdAt",
+             EXTRACT(EPOCH FROM (now() - pr."createdAt")) / 3600 AS "horasTranscurridas"
+           FROM "PharmacyReservation" pr
+           WHERE pr."organizationId" = $1
+             AND pr.status IN ('RESERVED', 'DISPATCHED')
+             AND pr."createdAt" BETWEEN $2 AND $3
+           ORDER BY pr."createdAt" ASC`,
+          tenant.organizationId,
+          desde,
+          hasta,
+        ),
+      );
+    }),
+
+  /**
+   * Resumen — los 6 conteos de una vez, para el tablero.
    */
   resumen: readerProc.input(dateRangeInput).query(async ({ ctx, input }) => {
     const { tenant, prisma } = ctx;
@@ -302,6 +352,7 @@ export const conciliacionCargosRouter = router({
           cargos_sin_movimiento: string;
           cargos_sin_tarifa: string;
           devoluciones_sin_reversion: string;
+          despachado_sin_cierre: string;
         }>
       >(
         `SELECT
@@ -357,7 +408,12 @@ export const conciliacionCargosRouter = router({
                AND pas.status = 'VIGENTE'
                AND pr.status = 'CANCELLED'
                AND pas."createdAt" BETWEEN $2 AND $3
-           )::text AS devoluciones_sin_reversion`,
+           )::text AS devoluciones_sin_reversion,
+           (SELECT count(*) FROM "PharmacyReservation" pr
+             WHERE pr."organizationId" = $1
+               AND pr.status IN ('RESERVED', 'DISPATCHED')
+               AND pr."createdAt" BETWEEN $2 AND $3
+           )::text AS despachado_sin_cierre`,
         tenant.organizationId,
         desde,
         hasta,
@@ -370,6 +426,7 @@ export const conciliacionCargosRouter = router({
         cargosSinMovimiento: Number(r.cargos_sin_movimiento),
         cargosSinTarifa: Number(r.cargos_sin_tarifa),
         devolucionesSinReversion: Number(r.devoluciones_sin_reversion),
+        despachadoSinCierre: Number(r.despachado_sin_cierre),
       };
     });
   }),

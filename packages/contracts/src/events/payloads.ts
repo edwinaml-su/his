@@ -1048,11 +1048,26 @@ export const pharmacyReservationCancelledPayloadSchema = z.object({
   organizationId: z.string().uuid(),
 });
 
+// SQL 232 — devolución post-despacho que cierra el ciclo de la requisición
+// (RN-HIS-BOT-001). Emitido por dispensation.router.ts returnItem.
+export const pharmacyReservationReturnedPayloadSchema = z.object({
+  reservationId: z.string().uuid(),
+  motivo: z.enum(["NO_ADMINISTRADO", "ALTA", "INCUMPLIMIENTO", "VENCIMIENTO", "OTRO"]),
+  notas: z.string().max(1000).nullable(),
+  returnedBy: z.string().uuid(),
+  patientId: z.string().uuid(),
+  isControlled: z.boolean(),
+  organizationId: z.string().uuid(),
+});
+
 export type PharmacyReservationCreatedPayload = z.infer<
   typeof pharmacyReservationCreatedPayloadSchema
 >;
 export type PharmacyReservationCancelledPayload = z.infer<
   typeof pharmacyReservationCancelledPayloadSchema
+>;
+export type PharmacyReservationReturnedPayload = z.infer<
+  typeof pharmacyReservationReturnedPayloadSchema
 >;
 
 // -----------------------------------------------------------------------------
@@ -1555,6 +1570,11 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("pharmacy.reservation.cancelled"),
     payload: pharmacyReservationCancelledPayloadSchema,
+  }),
+  // SQL 232 — devolución post-despacho cierra el ciclo (RN-HIS-BOT-001)
+  z.object({
+    eventType: z.literal("pharmacy.reservation.returned"),
+    payload: pharmacyReservationReturnedPayloadSchema,
   }),
   // S1 HD-30 — ECE URPA: alta post-anestésica (NTEC Art. 36)
   z.object({

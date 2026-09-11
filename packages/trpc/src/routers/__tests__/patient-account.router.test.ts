@@ -441,7 +441,10 @@ describe("patientAccountRouter", () => {
       prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-1" }] as never);
       // stockMovement.findMany queda en el baseline [] de setupTx() — cargo-1
       // no tiene movimiento confirmado, así que CARGOS_SIN_MOVIMIENTO
-      // (causa 4) también dispara junto con las otras 3.
+      // (causa 4) también dispara junto con las otras 3. SQL 232 — el mismo
+      // blanket mock de pharmacyReservation.findMany alimenta también la
+      // causa 6 (DISPENSACION_SIN_CIERRE): "res-1" queda como RESERVED/
+      // DISPATCHED sin cerrar.
 
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
@@ -453,9 +456,36 @@ describe("patientAccountRouter", () => {
           "CUENTA_PENDIENTE_REGULARIZAR",
           "DEVOLUCION_SIN_REVERSION",
           "CARGOS_SIN_MOVIMIENTO",
+          "DISPENSACION_SIN_CIERRE",
         ]),
       );
-      expect(causas).toHaveLength(4);
+      expect(causas).toHaveLength(5);
+    });
+
+    // SQL 232 — causa 6: reservas de farmacia de este paciente despachadas
+    // (RESERVED/DISPATCHED) sin cerrar a ADMINISTERED/RETURNED.
+    it("bloquea por DISPENSACION_SIN_CIERRE (reserva despachada sin administración ni devolución)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccount() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([] as never); // cargosDispensacionVigentes: nada en esta cuenta
+      // Única reserva del paciente: RESERVED, nunca cerrada.
+      prisma.pharmacyReservation.findMany.mockResolvedValue([{ id: "res-3" }] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller.cerrar({ accountId: ACCOUNT_ID }).catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(
+        expect.objectContaining({
+          tipo: "DISPENSACION_SIN_CIERRE",
+          count: 1,
+          reservationIds: ["res-3"],
+        }),
+      );
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
     });
 
     // docs/48 Ola 4b (H-16) — causa 4: cargo DISPENSACION_FARMACIA VIGENTE

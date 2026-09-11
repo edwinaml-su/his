@@ -2296,6 +2296,16 @@ model PharmacyReservation {
   createdAt       DateTime                  @default(now()) @db.Timestamptz()
   updatedAt       DateTime                  @updatedAt @db.Timestamptz()
 
+  /// SQL 232b — devolución post-despacho que cierra el ciclo de la
+  /// requisición (RN-HIS-BOT-001). Motivo catalogado de la devolución
+  /// (returnItem) — NULL para reservas nunca devueltas/cerradas.
+  closeReason          String?   @db.VarChar(30)
+  closeNotes           String?   @db.Text
+  closedAt             DateTime? @db.Timestamptz()
+  closedBy             String?   @db.Uuid
+  /// Testigo 2-eyes cuando el ítem devuelto es RX_CONTROLLED (returnItem).
+  returnWitnessUserId  String?   @db.Uuid
+
   organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
   pharmacyOrder Prescription   @relation("RxPharmacyReservations", fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
   patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
@@ -2312,6 +2322,15 @@ enum PharmacyReservationStatus {
   DISPATCHED
   CANCELLED
   EXPIRED
+  /// SQL 232a — cierre del ciclo de dispensación (RN-HIS-BOT-001): el
+  /// paciente/servicio recibió y administró el medicamento (bedside closure,
+  /// best-effort desde bedside.router administration.record).
+  ADMINISTERED
+  /// SQL 232a — el medicamento/insumo despachado por requisición interna NO
+  /// se administró (o debe regresar por alta/incumplimiento/vencimiento/otro)
+  /// y se devolvió al botiquín sobre la MISMA reserva (dispensation.router
+  /// returnItem).
+  RETURNED
 
   @@schema("public")
 }

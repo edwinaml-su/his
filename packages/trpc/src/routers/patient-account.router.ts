@@ -308,6 +308,9 @@ export const patientAccountRouter = router({
    *      StockMovement OUT confirmado pero sin cargo en esta cuenta (espejo
    *      de `conciliacion-cargos.dispensadoSinCargo`, vínculo estructural
    *      StockMovement↔PharmacyReservation de H-15).
+   *   6. SQL 232 — Reservas de farmacia de este paciente despachadas
+   *      (RESERVED/DISPATCHED) sin cerrar a ADMINISTERED/RETURNED (espejo de
+   *      `conciliacion-cargos.despachadoSinCierre`).
    * Sin causas → CERRADA + closedAt/closedBy. No hay reapertura: decisión
    * administrativa futura, fuera de alcance de este plan.
    */
@@ -473,6 +476,28 @@ export const patientAccountRouter = router({
             mensaje: `${dispensadoSinCargo.length} dispensación(es) con movimiento de inventario confirmado sin cargo en esta cuenta.`,
             count: dispensadoSinCargo.length,
             reservationIds: dispensadoSinCargo,
+          });
+        }
+
+        // 6. SQL 232 — dispensación sin cierre: reservas de farmacia de ESTE
+        // paciente en estado RESERVED/DISPATCHED (ver hallazgo en
+        // dispensation.router.ts RETURN_ITEM_OPEN_STATUSES — el flujo real
+        // solo produce RESERVED) que nunca se cerraron a ADMINISTERED ni
+        // RETURNED. Espejo acotado de conciliacion-cargos.despachadoSinCierre.
+        const reservasSinCierre = await tx.pharmacyReservation.findMany({
+          where: {
+            organizationId: ctx.tenant.organizationId,
+            patientId: account.patientId,
+            status: { in: ["RESERVED", "DISPATCHED"] },
+          },
+          select: { id: true },
+        });
+        if (reservasSinCierre.length > 0) {
+          causas.push({
+            tipo: "DISPENSACION_SIN_CIERRE",
+            mensaje: `${reservasSinCierre.length} dispensación(es) despachada(s) sin registrar administración ni devolución.`,
+            count: reservasSinCierre.length,
+            reservationIds: reservasSinCierre.map((r) => r.id),
           });
         }
 

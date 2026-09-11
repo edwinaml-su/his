@@ -10,7 +10,13 @@
  *            hard stop R07 que scanItem).
  * US.F2.6.9: checkDuplicate — ventana terapéutica vs última dispensación.
  * orderDetail: datos de la receta para la estación de despacho.
+ * SQL 232: returnItem — devolución post-despacho que cierra el ciclo de la
+ *          requisición (RN-HIS-BOT-001). Ver comentario de
+ *          `RETURN_ITEM_OPEN_STATUSES` para el hallazgo de por qué opera
+ *          sobre RESERVED (no solo DISPATCHED/CONFIRMED como el diseño
+ *          original preveía).
  *
+
  * Semántica de "orden de farmacia": la Prescription firmada ACTÚA como
  * pharmacy order (FK de PharmacyReservation re-apuntada en SQL 214).
  *
@@ -442,6 +448,52 @@ const reserveItemInput = z.object({
 const cancelReservationInput = z.object({
   reservationId: z.string().uuid(),
   motivo: z.string().min(1, "El motivo de cancelación es requerido"),
+});
+
+/**
+ * SQL 232 — catálogo cerrado del motivo de devolución post-despacho
+ * (returnItem). Distinto del `motivo` libre de `cancelReservation` (esa
+ * cancela una reserva que NUNCA se entregó; returnItem cierra una que sí se
+ * entregó/descontó de inventario pero regresa al botiquín).
+ */
+const RETURN_ITEM_CLOSE_REASONS = [
+  "NO_ADMINISTRADO",
+  "ALTA",
+  "INCUMPLIMIENTO",
+  "VENCIMIENTO",
+  "OTRO",
+] as const;
+
+/**
+ * Estados sobre los que puede operar `returnItem`.
+ *
+ * Hallazgo (confirmado en 3 lugares: comentario propio de
+ * conciliacion-cargos.router.ts, el código de `reserveItem` abajo, y al
+ * aplicar SQL 232a contra prod — el enum ni siquiera TENÍA el valor
+ * 'CONFIRMED' en la base real): el flujo cableado hoy SOLO crea reservas en
+ * estado RESERVED; nunca existió un paso intermedio que transicione a
+ * CONFIRMED/DISPATCHED. `reserveItem` ya descuenta inventario y captura el
+ * cargo de forma síncrona — en la práctica, RESERVED young es el estado
+ * terminal de una dispensación completa en este sistema, no un estado
+ * "todavía no entregado" a la espera de un paso posterior.
+ *
+ * Por eso, a diferencia del diseño original (que reservaba `returnItem` solo
+ * para DISPATCHED/CONFIRMED y redirigía RESERVED a `cancelReservation`), este
+ * endpoint acepta RESERVED — de lo contrario sería código muerto: ninguna
+ * reserva alcanzaría jamás el precondition y la regla de negocio de Edwin
+ * ("la devolución debe cerrar el ciclo") seguiría incumplida. `DISPATCHED`
+ * se deja en la lista por compatibilidad futura (si algún día se cablea un
+ * paso explícito de confirmación de despacho). `CONFIRMED` NO se incluye:
+ * no existe en el enum de prod, y referenciarlo en un `where` de Prisma
+ * lanza 22P02 (invalid input value for enum) en runtime.
+ */
+const RETURN_ITEM_OPEN_STATUSES = ["RESERVED", "DISPATCHED"] as const;
+
+const returnItemInput = z.object({
+  reservationId: z.string().uuid(),
+  motivo: z.enum(RETURN_ITEM_CLOSE_REASONS),
+  notas: z.string().trim().max(1000).optional(),
+  ...controlledWitnessFields,
 });
 
 const checkDuplicateInput = z.object({
@@ -1174,6 +1226,238 @@ export const dispensationRouter = router({
             motivo: input.motivo,
             cancelledBy: tenant.userId,
             patientId: reservation.patientId,
+            organizationId: tenant.organizationId,
+          },
+        });
+
+        return updated;
+      });
+    }),
+
+  /**
+   * SQL 232 — Devolución post-despacho que CIERRA el ciclo de la
+   * requisición (RN-HIS-BOT-001): medicamentos/insumos ya dispensados que
+   * NO se administran (o deben regresar por alta/incumplimiento/vencimiento/
+   * otro motivo) se devuelven sobre la MISMA reserva.
+   *
+   * Precondición de estado: ver `RETURN_ITEM_OPEN_STATUSES` — cubre
+   * RESERVED (el único estado que el flujo real produce hoy) y DISPATCHED
+   * (por compatibilidad futura). CANCELLED/EXPIRED/ADMINISTERED/RETURNED se
+   * rechazan (ya cerradas o nunca llegaron a despacharse — para el caso
+   * "nunca se entregó", el endpoint correcto sigue siendo
+   * `cancelReservation`).
+   *
+   * Pasos, todos en la MISMA transacción (withTenantContext):
+   *   1. Reserva debe existir y estar en un estado abierto.
+   *   2. Si el ítem resuelto es RX_CONTROLLED, 2-eyes con PIN del testigo
+   *      (mismo helper que reserveItem/scanItem) + fila `MedicationDispense`
+   *      con cantidad NEGATIVA (misma granularidad de 1 unidad por reserva
+   *      que el resto del flujo GS1) para que quede visible en
+   *      `pharmacy.libroControlados` sin tocar esa query.
+   *   3. Reingreso de inventario: repone la MISMA unidad descontada al
+   *      reservar (StockMovement OUT con referenceCode=reservationId),
+   *      mismo patrón que `cancelReservation`.
+   *   4. Reversión del cargo VIGENTE con referenciaId=reservationId. Si no
+   *      hay cargo VIGENTE (ya revertido, o nunca se capturó como tal) →
+   *      CONFLICT explícito — a diferencia de `cancelReservation`, este
+   *      endpoint NO hace no-op silencioso: una devolución que no puede
+   *      revertir su cargo es una anomalía, no un caso normal.
+   *   5. Cierra la reserva: status=RETURNED + closeReason/closeNotes/
+   *      closedAt/closedBy/returnWitnessUserId.
+   */
+  returnItem: requireRole(["PHARM", "ADMIN"])
+    .input(returnItemInput)
+    .use(abacGuard("dispensation", "dispense"))
+    .mutation(async ({ ctx, input }) => {
+      const { prisma, tenant } = ctx;
+      return withTenantContext(prisma, tenant, async (tx) => {
+        const reservation = await tx.pharmacyReservation.findFirst({
+          where: {
+            id: input.reservationId,
+            organizationId: tenant.organizationId,
+          },
+        });
+
+        if (!reservation) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Reserva no encontrada.",
+          });
+        }
+
+        if (
+          !(RETURN_ITEM_OPEN_STATUSES as readonly string[]).includes(
+            reservation.status,
+          )
+        ) {
+          const detalle =
+            reservation.status === "CANCELLED"
+              ? " (la reserva ya fue cancelada)."
+              : reservation.status === "EXPIRED"
+                ? " (la reserva expiró)."
+                : " (ya tiene un cierre registrado — no se puede duplicar la devolución).";
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              `Solo se puede registrar devolución de una reserva dispensada y sin cerrar. ` +
+              `Estado actual: ${reservation.status}${detalle}`,
+          });
+        }
+
+        // Resolver el ítem/fármaco de la receta que originó la reserva — la
+        // reserva no tiene FK directa a PrescriptionItem/Drug. Mismo patrón
+        // (y misma limitación documentada: primer ítem) que reserveItem.
+        const prescription = await tx.prescription.findFirst({
+          where: {
+            id: reservation.pharmacyOrderId,
+            organizationId: tenant.organizationId,
+          },
+          select: {
+            prescriberId: true,
+            items: {
+              select: {
+                id: true,
+                drug: { select: { genericName: true, dispensingClass: true } },
+              },
+            },
+          },
+        });
+
+        if (!prescription) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "No se pudo resolver la receta de origen de esta reserva.",
+          });
+        }
+
+        const matchedItem = prescription.items?.[0] ?? null;
+        const isControlled = matchedItem
+          ? isControlledDispensingClass(matchedItem.drug.dispensingClass)
+          : false;
+
+        // 2-eyes con PIN si el ítem es RX_CONTROLLED — ANTES de tocar
+        // inventario/cargo (un throw revierte todo, misma tx).
+        await enforceControlledWitness(tx, {
+          isControlled,
+          dispenserId: tenant.userId,
+          prescriberId: prescription.prescriberId,
+          genericName: matchedItem?.drug.genericName ?? `GTIN ${reservation.gtin}`,
+          witnessUserId: input.witnessUserId,
+          witnessPin: input.witnessPin,
+          controlledJustification: input.controlledJustification,
+        });
+
+        // Reingreso de inventario: repone la unidad descontada al reservar,
+        // igual patrón que cancelReservation.
+        const outMovement = await tx.stockMovement.findFirst({
+          where: {
+            organizationId: tenant.organizationId,
+            referenceCode: input.reservationId,
+            type: "OUT",
+          },
+          select: {
+            itemId: true,
+            lotId: true,
+            quantity: true,
+            establishmentId: true,
+          },
+        });
+
+        if (outMovement?.lotId) {
+          await tx.stockLot.updateMany({
+            where: { id: outMovement.lotId },
+            data: { quantityOnHand: { increment: outMovement.quantity } },
+          });
+          await tx.stockMovement.create({
+            data: {
+              organizationId: tenant.organizationId,
+              establishmentId: outMovement.establishmentId,
+              itemId: outMovement.itemId,
+              lotId: outMovement.lotId,
+              type: "IN",
+              quantity: outMovement.quantity,
+              reason: "Devolución a botiquín (dispensation.returnItem)",
+              referenceCode: input.reservationId,
+              gtinFisico: reservation.gtin,
+              performedById: tenant.userId,
+            },
+          });
+        }
+
+        // Reversión del cargo VIGENTE — a diferencia de cancelReservation,
+        // aquí es un error explícito (no un no-op) si no hay nada que
+        // revertir: una devolución sin cargo VIGENTE es una anomalía.
+        const cargoVigente = await tx.patientAccountService.findFirst({
+          where: {
+            referenciaId: input.reservationId,
+            status: "VIGENTE",
+            account: { organizationId: tenant.organizationId },
+          },
+          select: { id: true },
+        });
+
+        if (!cargoVigente) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "No hay un cargo VIGENTE asociado a esta reserva (ya fue revertido, o nunca se " +
+              "capturó como VIGENTE) — no se puede duplicar la reversión.",
+          });
+        }
+
+        await revertirCargo(tx, {
+          cargoId: cargoVigente.id,
+          motivo: `Devolución post-despacho (${input.motivo})${input.notas ? `: ${input.notas}` : ""}`,
+          actorId: tenant.userId,
+        });
+
+        // docs/48 Ola 4b (H-13) — libro de controlados: fila de DEVOLUCIÓN
+        // con cantidad negativa (misma granularidad de 1 unidad/reserva que
+        // el resto del flujo GS1). `pharmacy.libroControlados` selecciona
+        // `quantity` tal cual — no requiere cambios de query para mostrarla.
+        if (isControlled && matchedItem) {
+          await tx.medicationDispense.create({
+            data: {
+              prescriptionItemId: matchedItem.id,
+              dispensedById: tenant.userId,
+              quantity: -1,
+              batchNumber: reservation.lote,
+              expiryDate: null,
+              notes:
+                `[DEVOLUCION] Devolución post-despacho: reserva ${reservation.id}, ` +
+                `motivo ${input.motivo}${input.notas ? ` — ${input.notas}` : ""}`,
+              isControlled: true,
+              witnessUserId: input.witnessUserId ?? null,
+              controlledJustification: input.controlledJustification ?? null,
+            },
+          });
+        }
+
+        const updated = await tx.pharmacyReservation.update({
+          where: { id: input.reservationId },
+          data: {
+            status: "RETURNED",
+            closeReason: input.motivo,
+            closeNotes: input.notas ?? null,
+            closedAt: new Date(),
+            closedBy: tenant.userId,
+            returnWitnessUserId: input.witnessUserId ?? null,
+          },
+        });
+
+        await emitDomainEvent(tx as unknown as EmitDomainEventTx, {
+          eventType: "pharmacy.reservation.returned",
+          aggregateType: "PharmacyReservation",
+          aggregateId: input.reservationId,
+          emittedById: tenant.userId,
+          organizationId: tenant.organizationId,
+          payload: {
+            reservationId: input.reservationId,
+            motivo: input.motivo,
+            notas: input.notas ?? null,
+            returnedBy: tenant.userId,
+            patientId: reservation.patientId,
+            isControlled,
             organizationId: tenant.organizationId,
           },
         });

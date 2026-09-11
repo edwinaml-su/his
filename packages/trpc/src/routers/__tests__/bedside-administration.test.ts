@@ -86,6 +86,10 @@ beforeEach(() => {
   // $queryRawUnsafe retorna [] por defecto; cada test configura lo necesario
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (prisma as any).$queryRawUnsafe = vi.fn().mockResolvedValue([]);
+  // SQL 232 — cierre por administración: baseline "sin reserva abierta que
+  // matchee" (el caso normal para la mayoría de tests, que no ejercitan
+  // farmacia). Los tests de cierre lo sobrescriben explícitamente.
+  prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
 });
 
 // ---------------------------------------------------------------------------
@@ -153,6 +157,80 @@ describe("bedside.administration.record", () => {
     await expect(
       caller.administration.record(baseAdminInput()),
     ).rejects.toThrow(TRPCError);
+  });
+
+  // SQL 232 — cierre del ciclo de dispensación por administración.
+  it("cierra a ADMINISTERED la ÚNICA reserva abierta del mismo paciente+GTIN+lote", async () => {
+    const UUID_RESERVATION = "ab000000-0000-0000-0000-000000000002";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe
+      .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])
+      .mockResolvedValueOnce([{ user_id: UUID_USER }])
+      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }])
+      .mockResolvedValue([{ current_user: "authenticated" }]);
+    prisma.medicationAdministration.create.mockResolvedValue({ id: UUID_ADMIN } as never);
+    prisma.pharmacyReservation.findMany.mockResolvedValue([
+      { id: UUID_RESERVATION },
+    ] as never);
+    prisma.pharmacyReservation.update.mockResolvedValue({ id: UUID_RESERVATION } as never);
+
+    const caller = makeCaller();
+    await caller.administration.record(baseAdminInput());
+
+    expect(prisma.pharmacyReservation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: UUID_ORG,
+          patientId: UUID_PATIENT,
+          gtin: GTIN_14,
+          lote: "L2024A",
+          status: { in: ["RESERVED", "DISPATCHED"] },
+        }),
+      }),
+    );
+    expect(prisma.pharmacyReservation.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: UUID_RESERVATION },
+        data: expect.objectContaining({ status: "ADMINISTERED" }),
+      }),
+    );
+  });
+
+  it("no cierra ninguna reserva (best-effort) cuando hay 0 coincidencias", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe
+      .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])
+      .mockResolvedValueOnce([{ user_id: UUID_USER }])
+      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }])
+      .mockResolvedValue([{ current_user: "authenticated" }]);
+    prisma.medicationAdministration.create.mockResolvedValue({ id: UUID_ADMIN } as never);
+    prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
+
+    const caller = makeCaller();
+    const result = await caller.administration.record(baseAdminInput());
+
+    expect(result.administrationId).toBe(UUID_ADMIN);
+    expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
+  });
+
+  it("no cierra ninguna reserva (best-effort, ambigüedad) cuando hay >1 coincidencias", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRawUnsafe
+      .mockResolvedValueOnce([{ referencia_id: UUID_PATIENT }])
+      .mockResolvedValueOnce([{ user_id: UUID_USER }])
+      .mockResolvedValueOnce([{ prescription_item_id: UUID_PRESC }])
+      .mockResolvedValue([{ current_user: "authenticated" }]);
+    prisma.medicationAdministration.create.mockResolvedValue({ id: UUID_ADMIN } as never);
+    prisma.pharmacyReservation.findMany.mockResolvedValue([
+      { id: "res-a" },
+      { id: "res-b" },
+    ] as never);
+
+    const caller = makeCaller();
+    const result = await caller.administration.record(baseAdminInput());
+
+    expect(result.administrationId).toBe(UUID_ADMIN);
+    expect(prisma.pharmacyReservation.update).not.toHaveBeenCalled();
   });
 
   // 3. indicación sin conciliación de farmacia → bloqueo fail-safe
