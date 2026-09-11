@@ -27,7 +27,11 @@ const trpcAny = trpc as any;
 
 const ROLES_ADMIN_ESTABLECIMIENTOS = ["ADMIN", "DIR"];
 
-type EstablishmentRow = EstablishmentData & { active: boolean };
+type EstablishmentRow = EstablishmentData & {
+  active: boolean;
+  glnCodigo: string | null;
+  glnDescripcion: string | null;
+};
 
 export function EstablecimientosShell({ roleCodes }: { roleCodes: string[] }) {
   const canManage = roleCodes.some((r) => ROLES_ADMIN_ESTABLECIMIENTOS.includes(r));
@@ -96,6 +100,7 @@ export function EstablecimientosShell({ roleCodes }: { roleCodes: string[] }) {
                   <TableHead>Nombre</TableHead>
                   <TableHead>Dirección</TableHead>
                   <TableHead className="w-36">Teléfono</TableHead>
+                  <TableHead className="w-36">GLN</TableHead>
                   <TableHead className="w-24">Estado</TableHead>
                   <TableHead className="w-48 text-right">Acciones</TableHead>
                 </TableRow>
@@ -103,7 +108,7 @@ export function EstablecimientosShell({ roleCodes }: { roleCodes: string[] }) {
               <TableBody>
                 {rows.length === 0 && !query.isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center text-sm text-muted-foreground">
                       Sin establecimientos registrados.
                     </TableCell>
                   </TableRow>
@@ -116,6 +121,12 @@ export function EstablecimientosShell({ roleCodes }: { roleCodes: string[] }) {
                       {row.addressLine ?? "—"}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{row.phone ?? "—"}</TableCell>
+                    <TableCell
+                      className="font-mono text-xs text-muted-foreground"
+                      title={row.glnDescripcion ?? undefined}
+                    >
+                      {row.glnCodigo ?? "—"}
+                    </TableCell>
                     <TableCell>
                       {row.active ? (
                         <Badge variant="success">Activo</Badge>

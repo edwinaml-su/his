@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * GlnForm — dialog para dar de alta un GLN hijo o raíz.
+ * GlnForm — dialog para dar de alta un GLN hijo/raíz, o editar uno existente.
  *
  * Validación: estado controlado + z.safeParse en submit (sin react-hook-form).
- * Dígito verificador GLN-13 validado en cliente antes de enviar al router.
+ * Dígito verificador GLN-13 validado en cliente antes de enviar al router
+ * (solo aplica en modo alta — en modo edición `codigo` es de solo lectura,
+ * es identidad GS1 y el router no la expone como editable).
  */
 
 import * as React from "react";
@@ -51,7 +53,7 @@ const formSchema = z.object({
     .regex(/^\d{13}$/, "Solo dígitos numéricos")
     .refine(gs1CheckDigitValid, "Dígito verificador GS1 inválido"),
   descripcion: z.string().min(1, "Requerido").max(500),
-  tipo: z.enum(["proveedor", "deposito", "farmacia", "servicio", "cama"]),
+  tipo: z.enum(["entidad", "establecimiento", "proveedor", "deposito", "farmacia", "servicio", "cama"]),
 });
 
 type FormState = {
@@ -61,6 +63,9 @@ type FormState = {
 };
 
 const TIPO_OPTIONS = [
+  // Niveles 1-2 del maestro de ubicaciones GS1 (SQL 229).
+  { value: "entidad",         label: "Entidad legal" },
+  { value: "establecimiento", label: "Establecimiento" },
   { value: "proveedor", label: "Proveedor" },
   { value: "deposito",  label: "Almacén / Depósito" },
   { value: "farmacia",  label: "Farmacia" },
@@ -74,11 +79,20 @@ const DEFAULT_STATE: FormState = { codigo: "", descripcion: "", tipo: "servicio"
 // Componente
 // ---------------------------------------------------------------------------
 
+export interface GlnEditTarget {
+  id: string;
+  codigo: string;
+  descripcion: string;
+  tipo: string;
+}
+
 interface GlnFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   parentGlnId?: string;
   parentDescripcion?: string;
+  /** Si viene definido, el dialog abre en modo edición sobre este nodo. */
+  editTarget?: GlnEditTarget;
   onSuccess?: () => void;
 }
 
@@ -87,19 +101,26 @@ export function GlnForm({
   onOpenChange,
   parentGlnId,
   parentDescripcion,
+  editTarget,
   onSuccess,
 }: GlnFormProps) {
+  const isEdit = Boolean(editTarget);
   const [values, setValues] = React.useState<FormState>(DEFAULT_STATE);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   const [serverError, setServerError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (open) {
-      setValues(DEFAULT_STATE);
+      setValues(
+        editTarget
+          ? { codigo: editTarget.codigo, descripcion: editTarget.descripcion, tipo: editTarget.tipo }
+          : DEFAULT_STATE,
+      );
       setErrors({});
       setServerError(null);
     }
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editTarget?.id]);
 
   const utils = trpc.useUtils();
   const createMutation = trpc.gs1GlnHierarchy.createChild.useMutation({
@@ -110,6 +131,15 @@ export function GlnForm({
     },
     onError: (err) => setServerError(err.message),
   });
+  const updateMutation = trpc.gs1GlnHierarchy.update.useMutation({
+    onSuccess: () => {
+      void utils.gs1GlnHierarchy.tree.invalidate();
+      onOpenChange(false);
+      onSuccess?.();
+    },
+    onError: (err) => setServerError(err.message),
+  });
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   const setField = <K extends keyof FormState>(key: K, v: FormState[K]) => {
     setValues((prev) => ({ ...prev, [key]: v }));
@@ -119,6 +149,30 @@ export function GlnForm({
     e.preventDefault();
     setErrors({});
     setServerError(null);
+
+    if (isEdit && editTarget) {
+      // Modo edición: solo descripcion/tipo — codigo es de solo lectura.
+      const editSchema = z.object({
+        descripcion: formSchema.shape.descripcion,
+        tipo: formSchema.shape.tipo,
+      });
+      const parsed = editSchema.safeParse({ descripcion: values.descripcion, tipo: values.tipo });
+      if (!parsed.success) {
+        const fe: Record<string, string> = {};
+        for (const issue of parsed.error.errors) {
+          const k = String(issue.path[0] ?? "");
+          if (k && !fe[k]) fe[k] = issue.message;
+        }
+        setErrors(fe);
+        return;
+      }
+      updateMutation.mutate({
+        id: editTarget.id,
+        descripcion: parsed.data.descripcion,
+        tipo: parsed.data.tipo,
+      });
+      return;
+    }
 
     const parsed = formSchema.safeParse(values);
     if (!parsed.success) {
@@ -143,18 +197,24 @@ export function GlnForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" aria-describedby="gln-form-desc">
         <DialogHeader>
-          <DialogTitle>Nueva ubicación GLN</DialogTitle>
-          {parentDescripcion && (
+          <DialogTitle>{isEdit ? "Editar ubicación GLN" : "Nueva ubicación GLN"}</DialogTitle>
+          {isEdit ? (
             <p id="gln-form-desc" className="text-sm text-muted-foreground">
-              Hija de: <span className="font-medium">{parentDescripcion}</span>
+              El código GLN no es editable — es la identidad GS1 del nodo.
             </p>
+          ) : (
+            parentDescripcion && (
+              <p id="gln-form-desc" className="text-sm text-muted-foreground">
+                Hija de: <span className="font-medium">{parentDescripcion}</span>
+              </p>
+            )
           )}
         </DialogHeader>
 
         <Form onSubmit={handleSubmit}>
           <FormField>
             <Label htmlFor="gln-codigo">
-              Código GLN-13 <span className="text-destructive">*</span>
+              Código GLN-13 {!isEdit && <span className="text-destructive">*</span>}
             </Label>
             <Input
               id="gln-codigo"
@@ -163,10 +223,15 @@ export function GlnForm({
               placeholder="0000000000000"
               maxLength={13}
               inputMode="numeric"
+              disabled={isEdit}
               aria-invalid={Boolean(errors.codigo)}
               data-testid="input-gln-codigo"
             />
-            <FormHint>13 dígitos numéricos con dígito verificador GS1.</FormHint>
+            <FormHint>
+              {isEdit
+                ? "Identidad GS1 — no editable."
+                : "13 dígitos numéricos con dígito verificador GS1."}
+            </FormHint>
             <FormError>{errors.codigo}</FormError>
           </FormField>
 
@@ -218,16 +283,16 @@ export function GlnForm({
               type="button"
               variant="outline"
               onClick={() => onOpenChange(false)}
-              disabled={createMutation.isPending}
+              disabled={isPending}
             >
               Cancelar
             </Button>
             <Button
               type="submit"
-              disabled={createMutation.isPending}
+              disabled={isPending}
               data-testid="btn-gln-guardar"
             >
-              {createMutation.isPending ? "Guardando…" : "Guardar"}
+              {isPending ? "Guardando…" : "Guardar"}
             </Button>
           </DialogFooter>
         </Form>

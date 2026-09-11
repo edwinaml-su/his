@@ -3,7 +3,7 @@
  * Cubre RBAC (ADMIN/DIR), tenant-scoping y el conflicto de código único
  * (@@unique([organizationId, code])).
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@his/database";
@@ -44,6 +44,36 @@ describe("establishmentRouter", () => {
           where: { organizationId: MOCK_TENANT.organizationId, active: true },
         }),
       );
+    });
+
+    it("enriquece cada fila con el GLN asociado (join ece.gs1_gln)", async () => {
+      prisma.establishment.findMany.mockResolvedValue([
+        { id: EST_ID, code: "HE" },
+        { id: "00000000-0000-0000-0000-000000000041", code: "CM" },
+      ] as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma as any).$queryRawUnsafe = vi.fn().mockResolvedValue([
+        { establishment_id: EST_ID, codigo: "7410398000026", descripcion: "Avante Hospital Especializado" },
+      ]);
+
+      const caller = establishmentRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.list();
+
+      expect(result).toEqual([
+        { id: EST_ID, code: "HE", glnCodigo: "7410398000026", glnDescripcion: "Avante Hospital Especializado" },
+        { id: "00000000-0000-0000-0000-000000000041", code: "CM", glnCodigo: null, glnDescripcion: null },
+      ]);
+    });
+
+    it("no consulta GLN si la lista de establecimientos está vacía", async () => {
+      prisma.establishment.findMany.mockResolvedValue([] as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma as any).$queryRawUnsafe = vi.fn();
+
+      const caller = establishmentRouter.createCaller(makeCtx({ prisma }));
+      await caller.list();
+
+      expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
     });
   });
 

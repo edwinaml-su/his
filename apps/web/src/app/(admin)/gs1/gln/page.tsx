@@ -8,7 +8,7 @@
  */
 
 import * as React from "react";
-import { MapPin, Plus } from "lucide-react";
+import { MapPin, Plus, Pencil, Ban, RotateCcw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
@@ -19,11 +19,20 @@ import { GlnForm } from "./_components/gln-form";
 export default function GlnPage() {
   const [selected, setSelected] = React.useState<GlnNode | undefined>(undefined);
   const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [editDialogOpen, setEditDialogOpen] = React.useState(false);
 
+  const utils = trpc.useUtils();
   const { data: tree, isLoading, isError } = trpc.gs1GlnHierarchy.tree.useQuery(
     { rootId: undefined },
     { staleTime: 30_000 },
   );
+
+  const setActivoMutation = trpc.gs1GlnHierarchy.setActivo.useMutation({
+    onSuccess: () => {
+      void utils.gs1GlnHierarchy.tree.invalidate();
+      setSelected(undefined);
+    },
+  });
 
   function handleAddRoot() {
     setSelected(undefined);
@@ -32,6 +41,20 @@ export default function GlnPage() {
 
   function handleAddChild() {
     setDialogOpen(true);
+  }
+
+  function handleEdit() {
+    setEditDialogOpen(true);
+  }
+
+  function handleToggleActivo() {
+    if (!selected) return;
+    const next = !selected.activo;
+    const msg = next
+      ? `¿Reactivar "${selected.descripcion}"?`
+      : `¿Desactivar "${selected.descripcion}"? Las sub-ubicaciones activas deben desactivarse primero.`;
+    if (!window.confirm(msg)) return;
+    setActivoMutation.mutate({ id: selected.id, activo: next });
   }
 
   return (
@@ -136,6 +159,39 @@ export default function GlnPage() {
                   </div>
                 </dl>
 
+                {setActivoMutation.error && (
+                  <p
+                    className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"
+                    role="alert"
+                  >
+                    {setActivoMutation.error.message}
+                  </p>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleEdit}
+                    data-testid="btn-editar-gln"
+                  >
+                    <Pencil className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    Editar
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleToggleActivo}
+                    disabled={setActivoMutation.isPending}
+                    data-testid="btn-toggle-activo-gln"
+                  >
+                    {selected.activo ? (
+                      <Ban className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <RotateCcw className="mr-1.5 h-4 w-4" aria-hidden="true" />
+                    )}
+                    {selected.activo ? "Desactivar" : "Reactivar"}
+                  </Button>
+                </div>
+
                 <Button
                   className="w-full"
                   variant="outline"
@@ -166,6 +222,15 @@ export default function GlnPage() {
         parentDescripcion={selected?.descripcion}
         onSuccess={() => setSelected(undefined)}
       />
+
+      {/* Dialog edición GLN — codigo readonly, descripcion/tipo editables */}
+      {selected && (
+        <GlnForm
+          open={editDialogOpen}
+          onOpenChange={setEditDialogOpen}
+          editTarget={selected}
+        />
+      )}
     </div>
   );
 }

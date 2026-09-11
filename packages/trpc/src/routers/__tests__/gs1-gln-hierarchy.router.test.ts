@@ -243,3 +243,147 @@ describe("glnHierarchy.createChild", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// update
+// ---------------------------------------------------------------------------
+
+describe("glnHierarchy.update", () => {
+  it("rechaza si no envía ni descripcion ni tipo (Zod refine)", async () => {
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(caller.update({ id: UUID_A })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("actualiza descripcion y tipo, devuelve el id", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ id: UUID_A }]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.update({ id: UUID_A, descripcion: "Nueva desc", tipo: "farmacia" });
+
+    expect(result).toEqual({ id: UUID_A });
+    const [sql, ...params] = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      ...unknown[],
+    ];
+    expect(sql).toContain("UPDATE ece.gs1_gln SET");
+    expect(sql).not.toContain("codigo =");
+    expect(params).toEqual([UUID_A, "Nueva desc", "farmacia"]);
+  });
+
+  it("actualiza solo el campo enviado (descripcion)", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ id: UUID_A }]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await caller.update({ id: UUID_A, descripcion: "Solo desc" });
+
+    const [, ...params] = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      ...unknown[],
+    ];
+    expect(params).toEqual([UUID_A, "Solo desc"]);
+  });
+
+  it("NOT_FOUND si el nodo no existe o es de otro establecimiento (RETURNING vacío)", async () => {
+    prisma.$queryRawUnsafe = mockQuery([]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.update({ id: UUID_A, descripcion: "X" }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("sin establecimiento activo: BAD_REQUEST, no toca prisma", async () => {
+    const caller = glnHierarchyRouter.createCaller(
+      makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+    );
+    await expect(
+      caller.update({ id: UUID_A, descripcion: "X" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("ECE no inicializado para el establecimiento: PRECONDITION_FAILED", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRaw = vi.fn().mockResolvedValue([]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.update({ id: UUID_A, descripcion: "X" }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setActivo
+// ---------------------------------------------------------------------------
+
+describe("glnHierarchy.setActivo", () => {
+  it("desactiva un nodo sin hijos activos", async () => {
+    let callCount = 0;
+    prisma.$queryRawUnsafe = vi.fn().mockImplementation(async () => {
+      callCount++;
+      // 1er call: COUNT de hijos activos = 0. 2do call: UPDATE RETURNING id.
+      return callCount === 1 ? [{ count: "0" }] : [{ id: UUID_A }];
+    });
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.setActivo({ id: UUID_A, activo: false });
+
+    expect(result).toEqual({ id: UUID_A, activo: false });
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+  });
+
+  it("bloquea desactivar un nodo con hijos activos (PRECONDITION_FAILED)", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ count: "2" }]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.setActivo({ id: UUID_A, activo: false }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
+  it("reactivar no consulta hijos — un solo UPDATE", async () => {
+    prisma.$queryRawUnsafe = mockQuery([{ id: UUID_A }]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.setActivo({ id: UUID_A, activo: true });
+
+    expect(result).toEqual({ id: UUID_A, activo: true });
+    expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    const sql = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(sql).toContain("UPDATE ece.gs1_gln SET activo");
+  });
+
+  it("NOT_FOUND si el nodo no existe o es de otro establecimiento (RETURNING vacío)", async () => {
+    let callCount = 0;
+    prisma.$queryRawUnsafe = vi.fn().mockImplementation(async () => {
+      callCount++;
+      return callCount === 1 ? [{ count: "0" }] : [];
+    });
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.setActivo({ id: UUID_A, activo: false }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("sin establecimiento activo: BAD_REQUEST, no toca prisma", async () => {
+    const caller = glnHierarchyRouter.createCaller(
+      makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+    );
+    await expect(
+      caller.setActivo({ id: UUID_A, activo: false }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("ECE no inicializado para el establecimiento: PRECONDITION_FAILED", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$queryRaw = vi.fn().mockResolvedValue([]);
+
+    const caller = glnHierarchyRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.setActivo({ id: UUID_A, activo: false }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+});
