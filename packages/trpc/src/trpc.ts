@@ -24,6 +24,17 @@ const t = initTRPC.context<TRPCContext>().create({
       "alerts" in error.cause
         ? (error.cause as { alerts: unknown }).alerts
         : null;
+    // RN-HIS-BOT-001 R11 — `patientAccount.cerrar` bloquea con
+    // PRECONDITION_FAILED y `cause: { causas }` (las 5 causas de bloqueo:
+    // PENDIENTE_TARIFA, PENDIENTE_REGULARIZAR, DEVOLUCION_SIN_REVERSION,
+    // CARGOS_SIN_MOVIMIENTO, DISPENSADO_SIN_CARGO). Mismo reenvío quirúrgico
+    // que `interactionAlerts`: sin esto la UI solo ve el mensaje plano.
+    const causas =
+      error.cause !== null &&
+      typeof error.cause === "object" &&
+      "causas" in error.cause
+        ? (error.cause as { causas: unknown }).causas
+        : null;
     return {
       ...shape,
       data: {
@@ -31,6 +42,7 @@ const t = initTRPC.context<TRPCContext>().create({
         zodError:
           error.cause instanceof ZodError ? error.cause.flatten() : null,
         interactionAlerts,
+        causas,
       },
     };
   },
