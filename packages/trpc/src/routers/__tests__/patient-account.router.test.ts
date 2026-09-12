@@ -614,4 +614,322 @@ describe("patientAccountRouter", () => {
       expect(prisma.patientAccount.update).not.toHaveBeenCalled();
     });
   });
+
+  // CC-0027 — liquidación de cuenta (base de las 2 rutas de alta administrativa).
+  describe("liquidacion", () => {
+    it("calcula saldo = cargos VIGENTE - pagos - cobertura aprobada", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT_ID } as never);
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 500 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([{ id: "inv-1" }, { id: "inv-2" }] as never);
+      prisma.invoicePayment.aggregate.mockResolvedValue({ _sum: { amount: 150 } } as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 100 } } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.liquidacion({ accountId: ACCOUNT_ID });
+
+      expect(result).toMatchObject({
+        totalCargos: 500,
+        totalPagos: 150,
+        coberturaAprobada: 100,
+        saldo: 250,
+      });
+      const invoicePaymentArgs = prisma.invoicePayment.aggregate.mock.calls[0]![0];
+      expect(invoicePaymentArgs.where).toMatchObject({ invoiceId: { in: ["inv-1", "inv-2"] } });
+    });
+
+    it("no consulta InvoicePayment si la cuenta no tiene facturas (saldo = cargos)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT_ID } as never);
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 80 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.liquidacion({ accountId: ACCOUNT_ID });
+
+      expect(prisma.invoicePayment.aggregate).not.toHaveBeenCalled();
+      expect(result.saldo).toBe(80);
+    });
+
+    it("NOT_FOUND si la cuenta no existe en el tenant", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.liquidacion({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+  });
+
+  // CC-0027 — alta administrativa (Fase 2 del alta hospitalaria en dos fases).
+  describe("altaAdministrativa", () => {
+    function mockAccountAA(
+      overrides: Partial<{ status: string; encounterId: string | null }> = {},
+    ) {
+      return {
+        id: ACCOUNT_ID,
+        organizationId: MOCK_TENANT.organizationId,
+        patientId: PATIENT_ID,
+        encounterId: overrides.encounterId === undefined ? null : overrides.encounterId,
+        status: overrides.status ?? "ABIERTA",
+      };
+    }
+
+    /** Deja las 6 causas de bloqueo de `cerrar` limpias. */
+    function mockCausasLimpias() {
+      prisma.patientAccountService.findMany.mockResolvedValue([] as never);
+      prisma.pharmacyReservation.findMany.mockResolvedValue([] as never);
+      prisma.stockMovement.findMany.mockResolvedValue([] as never);
+    }
+
+    it("NOT_FOUND si la cuenta no existe en el tenant", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("PRECONDITION_FAILED si la cuenta ya está cerrada", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA({ status: "CERRADA" }) as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    });
+
+    it("rechaza si el encuentro asociado no tiene alta médica (Fase 1 pendiente)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(
+        mockAccountAA({ encounterId: ENCOUNTER_ID }) as never,
+      );
+      prisma.encounter.findFirst.mockResolvedValue({ dischargedAt: null } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("rechaza si quedan causas de bloqueo pendientes (reutiliza las de `cerrar`)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA() as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([{ code: "MED-001" }] as never) // pendientesTarifa
+        .mockResolvedValueOnce([] as never); // cargosDispensacionVigentes
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const err = await caller
+        .altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" })
+        .catch((e) => e);
+
+      expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+      const causas = (err.cause as { causas: Array<Record<string, unknown>> }).causas;
+      expect(causas).toContainEqual(expect.objectContaining({ tipo: "CARGOS_PENDIENTE_TARIFA" }));
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("ruta CANCELACION_TOTAL cierra la cuenta cuando el saldo es 0 (pagado/cubierto 100%)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA() as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 100 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([{ id: "inv-1" }] as never);
+      prisma.invoicePayment.aggregate.mockResolvedValue({ _sum: { amount: 100 } } as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccount.update.mockResolvedValue({ ...mockAccountAA(), status: "CERRADA" } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" });
+
+      expect(result.account.status).toBe("CERRADA");
+      const updateArgs = prisma.patientAccount.update.mock.calls[0]![0];
+      expect(updateArgs.data).toMatchObject({
+        status: "CERRADA",
+        altaRuta: "CANCELACION_TOTAL",
+        altaAdministrativaBy: MOCK_USER_ADMIN.id,
+      });
+      expect(prisma.accountReceivable.create).not.toHaveBeenCalled();
+    });
+
+    it("ruta CANCELACION_TOTAL rechaza si el saldo es mayor a 0", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA() as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 500 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.patientAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("ruta CXC crea AccountReceivable con el saldo pendiente cuando el saldo > 0", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA() as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 300 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccount.update.mockResolvedValue({ ...mockAccountAA(), status: "CERRADA" } as never);
+      prisma.accountReceivable.create.mockResolvedValue({ id: "cxc-1", saldoInicial: 300 } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.altaAdministrativa({
+        accountId: ACCOUNT_ID,
+        ruta: "CXC",
+        documento: {
+          documentoTipo: "PAGARE",
+          folioDocumento: "PAG-001",
+          firmanteTipo: "PACIENTE",
+          firmanteNombre: "Juan Pérez",
+          firmanteDocumento: "01234567-8",
+        },
+      });
+
+      expect(result.cxc).toMatchObject({ id: "cxc-1" });
+      const createArgs = prisma.accountReceivable.create.mock.calls[0]![0];
+      expect(createArgs.data).toMatchObject({
+        accountId: ACCOUNT_ID,
+        saldoInicial: 300,
+        saldoActual: 300,
+        documentoTipo: "PAGARE",
+        firmanteTipo: "PACIENTE",
+      });
+      const updateArgs = prisma.patientAccount.update.mock.calls[0]![0];
+      expect(updateArgs.data).toMatchObject({ status: "CERRADA", altaRuta: "CXC" });
+    });
+
+    it("ruta CXC rechaza si el saldo es 0 (debe usar CANCELACION_TOTAL)", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue(mockAccountAA() as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 0 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.altaAdministrativa({
+          accountId: ACCOUNT_ID,
+          ruta: "CXC",
+          documento: {
+            documentoTipo: "CONVENIO_PAGO",
+            folioDocumento: "CNV-01",
+            firmanteTipo: "FIADOR",
+            firmanteNombre: "María López",
+            firmanteDocumento: "9876543-2",
+          },
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.accountReceivable.create).not.toHaveBeenCalled();
+    });
+
+    it("libera la cama y marca egresoAutorizadoAt cuando no quedan otras cuentas activas del encuentro", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst
+        .mockResolvedValueOnce(mockAccountAA({ encounterId: ENCOUNTER_ID }) as never) // cuenta
+        .mockResolvedValueOnce(null as never); // sin otra cuenta activa del encuentro
+      prisma.encounter.findFirst.mockResolvedValue({ dischargedAt: new Date() } as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 0 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccount.update.mockResolvedValue({
+        ...mockAccountAA({ encounterId: ENCOUNTER_ID }),
+        status: "CERRADA",
+      } as never);
+      prisma.bedAssignment.findFirst.mockResolvedValue({ id: "ba-1", bedId: "bed-1" } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" });
+
+      expect(prisma.encounter.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: ENCOUNTER_ID },
+          data: expect.objectContaining({ egresoAutorizadoBy: MOCK_USER_ADMIN.id }),
+        }),
+      );
+      expect(prisma.bedAssignment.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "ba-1" } }),
+      );
+      expect(prisma.bed.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "bed-1" }, data: { status: "DIRTY" } }),
+      );
+    });
+
+    it("NO libera la cama si otra cuenta del mismo encuentro sigue activa", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst
+        .mockResolvedValueOnce(mockAccountAA({ encounterId: ENCOUNTER_ID }) as never) // cuenta
+        .mockResolvedValueOnce({ id: "otra-cuenta" } as never); // otra cuenta activa del encuentro
+      prisma.encounter.findFirst.mockResolvedValue({ dischargedAt: new Date() } as never);
+      mockCausasLimpias();
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 0 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccount.update.mockResolvedValue({
+        ...mockAccountAA({ encounterId: ENCOUNTER_ID }),
+        status: "CERRADA",
+      } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await caller.altaAdministrativa({ accountId: ACCOUNT_ID, ruta: "CANCELACION_TOTAL" });
+
+      expect(prisma.encounter.update).not.toHaveBeenCalled();
+      expect(prisma.bedAssignment.update).not.toHaveBeenCalled();
+    });
+  });
+
+  // CC-0027 — carta de cobertura / finiquito (insumo de la ruta CANCELACION_TOTAL).
+  describe("registrarCartaCobertura", () => {
+    it("crea la carta de cobertura vinculada a la cuenta", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT_ID, status: "ABIERTA" } as never);
+      prisma.coverageLetter.create.mockResolvedValue({ id: "cl-1" } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.registrarCartaCobertura({
+        accountId: ACCOUNT_ID,
+        tipo: "FINIQUITO",
+        montoAprobado: 1000,
+        folio: "FIN-001",
+      });
+
+      expect(result).toMatchObject({ id: "cl-1" });
+      const createArgs = prisma.coverageLetter.create.mock.calls[0]![0];
+      expect(createArgs.data).toMatchObject({
+        accountId: ACCOUNT_ID,
+        tipo: "FINIQUITO",
+        montoAprobado: 1000,
+        folio: "FIN-001",
+      });
+    });
+
+    it("PRECONDITION_FAILED si la cuenta ya está cerrada", async () => {
+      setupTx();
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT_ID, status: "CERRADA" } as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.registrarCartaCobertura({
+          accountId: ACCOUNT_ID,
+          tipo: "CARTA_COBERTURA",
+          montoAprobado: 500,
+          folio: "CC-001",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.coverageLetter.create).not.toHaveBeenCalled();
+    });
+  });
 });

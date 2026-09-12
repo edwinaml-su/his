@@ -77,6 +77,7 @@ import {
   CreditCard,
   GitCompare,
   Lock,
+  HandCoins,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -358,6 +359,8 @@ export const SECTIONS: NavSection[] = [
         description: "7 reportes regulatorios MINSAL: estado de resultados, costo por paciente, etc." },
       { href: "/finance/conciliacion", label: "Conciliación Clínico-Financiera", icon: GitCompare,
         description: "Brechas entre el acto clínico y su reflejo financiero (RN-HIS-BOT-001 R11)." },
+      { href: "/finance/cuentas-por-cobrar", label: "Cuentas por Cobrar", icon: HandCoins,
+        description: "CC-0027 — CxC de la ruta B del alta administrativa: pagaré/convenio/reconocimiento de deuda." },
       { href: "/notifications", label: "Notificaciones", icon: BellRing,
         description: "Centro de notificaciones del usuario: alertas y eventos del sistema." },
     ],

@@ -110,6 +110,10 @@ export const encounterTransferRouter = router({
         const fromServiceId = enc.serviceUnitId ?? null;
 
         // 2) Cerrar BedAssignment activo y marcar cama como DIRTY.
+        // CC-0027 — exenta del gate de egreso físico a propósito: es un
+        // traslado interno (el paciente sigue dentro del establecimiento),
+        // no un egreso (ver lib/egreso-fisico-gate.ts). Release inline, no
+        // pasa por bed.router.release.
         if (activeAssignment) {
           await tx.bedAssignment.update({
             where: { id: activeAssignment.id },

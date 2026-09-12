@@ -37,6 +37,7 @@ import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
 import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
+import { hasCuentaActiva } from "../lib/egreso-fisico-gate";
 
 /**
  * Heurística para identificar el sistema CIE-10 entre los CodeSystem
@@ -102,16 +103,33 @@ export const encounterDischargeRouter = router({
         }
 
         // 2) Cerrar BedAssignment activo + cama DIRTY.
+        // CC-0027 — si el encuentro tiene una PatientAccount activa (no
+        // CERRADA), la liberación de cama se DIFIERE hasta que
+        // `patientAccount.altaAdministrativa` (Fase 2) la libere: el alta
+        // médica (Fase 1) no falla por esto, solo pospone el egreso físico
+        // (ver lib/egreso-fisico-gate.ts). `active` se preserva para el
+        // resto de la función (EPCIS usa su bedId como read point) sea que
+        // la cama se haya liberado ya o no.
         const active = enc.bedAssignments[0];
         if (active) {
-          await tx.bedAssignment.update({
-            where: { id: active.id },
-            data: { releasedAt: new Date() },
+          const cuentaActiva = await hasCuentaActiva(tx, {
+            organizationId: ctx.tenant.organizationId,
+            encounterId: enc.id,
           });
-          await tx.bed.update({
-            where: { id: active.bedId },
-            data: { status: "DIRTY" },
-          });
+          if (cuentaActiva) {
+            console.info(
+              `[CC-0027] cuenta activa — se difiere liberación de cama hasta alta administrativa (encounter=${enc.id}).`,
+            );
+          } else {
+            await tx.bedAssignment.update({
+              where: { id: active.id },
+              data: { releasedAt: new Date() },
+            });
+            await tx.bed.update({
+              where: { id: active.bedId },
+              data: { status: "DIRTY" },
+            });
+          }
         }
 
         // 3) Resolver diagnóstico por código sobre ClinicalConcept.

@@ -57,6 +57,47 @@ describe("deathCertificateRouter", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
+    // CC-0027 — la defunción está exenta del gate de egreso físico a
+    // propósito (no hay alta administrativa que la condicione): libera la
+    // cama inline sin consultar PatientAccount, sea que el encuentro tenga
+    // una cuenta activa o no.
+    it("libera la cama sin consultar PatientAccount (exención CC-0027)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        patientId: "p1",
+        admittedAt: new Date("2026-01-01T00:00:00Z"),
+        dischargedAt: null,
+        patient: { id: "p1", deletedAt: null },
+        bedAssignments: [{ id: "ba-1", bedId: "bed-1" }],
+      } as never);
+      prisma.deathCertificate.findUnique.mockResolvedValue(null as never);
+      prisma.deathCertificate.create.mockResolvedValue({
+        id: "dc-1",
+        encounterId: "e1",
+        patientId: "p1",
+      } as never);
+      prisma.bedAssignment.update.mockResolvedValue({} as never);
+      prisma.bed.update.mockResolvedValue({} as never);
+      prisma.encounter.update.mockResolvedValue({} as never);
+      prisma.auditLog.create.mockResolvedValue({} as never);
+
+      const caller = deathCertificateRouter.createCaller(makeCtx({ prisma }));
+      await caller.create({
+        encounterId: "00000000-0000-0000-0000-000000000010",
+        occurredAt: new Date("2026-01-15T08:00:00Z"),
+        basicCauseCode: "I46.9",
+        basicCauseDesc: "Paro cardíaco no especificado",
+      });
+
+      expect(prisma.bedAssignment.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "ba-1" } }),
+      );
+      expect(prisma.bed.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "bed-1" }, data: { status: "DIRTY" } }),
+      );
+      expect(prisma.patientAccount.findFirst).not.toHaveBeenCalled();
+    });
+
     it("rechaza si el usuario no tiene rol PHYSICIAN (FORBIDDEN)", async () => {
       const caller = deathCertificateRouter.createCaller(
         makeCtx({

@@ -222,6 +222,7 @@ import { srsRegistroRouter } from "./srs-registro.router";
 import { cie11Router } from "./cie11.router";
 // CC-0002 §7 — Cuentas y Servicios de Paciente
 import { patientAccountRouter } from "./patient-account.router";
+import { accountReceivableRouter } from "./account-receivable.router";
 // CC-0015 — Tipo de Cuenta del paciente (pivote de lista de precios)
 import { tipoCuentaRouter } from "./tipo-cuenta.router";
 // CC-0009 — Calculadoras y Fórmulas Clínicas (ECE-CALC-001)
@@ -459,6 +460,8 @@ export const appRouter = router({
   workflowInbox: workflowInboxRouter,
   // CC-0002 §7 — Cuentas y Servicios de Paciente
   patientAccount: patientAccountRouter,
+  // CC-0027 — Cuentas por Cobrar (ruta B del alta administrativa)
+  cxc: accountReceivableRouter,
   // CC-0015 — Tipo de Cuenta del paciente (pivote de lista de precios)
   tipoCuenta: tipoCuentaRouter,
   // CC-0009 — Calculadoras y Fórmulas Clínicas
