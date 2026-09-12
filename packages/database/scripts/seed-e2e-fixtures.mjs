@@ -434,9 +434,9 @@ try {
   ];
   for (const tc of tiposCuenta) {
     await c.query(
-      `INSERT INTO "TipoCuenta" (id, "organizationId", code, nombre, "priceListId", "esParticular", active)
-       VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, false, true)
-       ON CONFLICT (id) DO UPDATE SET "priceListId" = EXCLUDED."priceListId", nombre = EXCLUDED.nombre`,
+      `INSERT INTO "TipoCuenta" (id, "organizationId", code, nombre, "priceListId", "esParticular", active, "updatedAt")
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::uuid, false, true, now())
+       ON CONFLICT (id) DO UPDATE SET "priceListId" = EXCLUDED."priceListId", nombre = EXCLUDED.nombre, "updatedAt" = now()`,
       [tc.id, orgId, tc.code, tc.nombre, tc.priceListId],
     );
   }
