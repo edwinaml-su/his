@@ -133,6 +133,48 @@ enum ChargeStatus {
   @@schema("public")
 }
 
+/// CC-0027 — ruta de cierre del alta administrativa (Fase 2 del alta hospitalaria).
+enum AltaRuta {
+  CANCELACION_TOTAL
+  CXC
+
+  @@schema("public")
+}
+
+/// CC-0027 — tipo de documento formal que constituye la CxC (ruta B).
+enum DocumentoDeudaTipo {
+  PAGARE
+  CONVENIO_PAGO
+  RECONOCIMIENTO_DEUDA
+
+  @@schema("public")
+}
+
+/// CC-0027 — quién firma el documento de aceptación de deuda.
+enum FirmanteTipo {
+  PACIENTE
+  FIADOR
+
+  @@schema("public")
+}
+
+/// CC-0027 — estado de una cuenta por cobrar.
+enum CxcEstado {
+  ABIERTA
+  PAGADA
+  INCOBRABLE
+
+  @@schema("public")
+}
+
+/// CC-0027 — carta de cobertura (aprobación parcial) vs finiquito (100% de la cuenta).
+enum CartaCoberturaTipo {
+  CARTA_COBERTURA
+  FINIQUITO
+
+  @@schema("public")
+}
+
 /// TDR §8.1 — clase de identificador del paciente en MPI.
 enum PatientIdentifierKind {
   DUI
@@ -510,6 +552,9 @@ model Organization {
   patientAccounts           PatientAccount[]           @relation("PatientAccountOrg")
   // CC-0015 — tipos de cuenta (pivote de lista de precios) por organización
   tiposCuenta               TipoCuenta[]               @relation("TipoCuentaOrg")
+  // CC-0027 — cuentas por cobrar y cartas de cobertura/finiquito por organización
+  accountsReceivable        AccountReceivable[]        @relation("AccountReceivableOrg")
+  coverageLetters           CoverageLetter[]           @relation("CoverageLetterOrg")
   // CC-0017 F2 — reglas ABAC persistidas por organización
   abacRules                 AbacRule[]                 @relation("AbacRuleOrg")
   // CC-0026 — tareas de tablero generadas al firmar indicaciones/órdenes
@@ -1744,6 +1789,12 @@ model Encounter {
   admittedAt         DateTime       @db.Timestamptz()
   dischargedAt       DateTime?      @db.Timestamptz()
   dischargeType      DischargeType?
+  /// CC-0027 — autorización de egreso físico (Fase 2, alta administrativa
+  /// concluida). Gatea la liberación de cama para encuentros con PatientAccount
+  /// activa (ver packages/trpc/src/lib/egreso-fisico-gate.ts). Excepciones que
+  /// NO pasan por esta columna: defunción, traslado interno de cama.
+  egresoAutorizadoAt DateTime?      @db.Timestamptz()
+  egresoAutorizadoBy String?        @db.Uuid
   primaryDiagnosisId String?        @db.Uuid /// ClinicalConcept (CIE-10/11).
   currencyId         String         @db.Uuid
   exchangeRateToFunc Decimal        @db.Decimal(18, 8)
@@ -3605,6 +3656,8 @@ model Insurer {
   insuranceClaims InsuranceClaim[] @relation("ClaimInsurer")
   // CC-0015 — tipos de cuenta vinculados a esta aseguradora (opcional)
   tiposCuenta     TipoCuenta[]    @relation("TipoCuentaInsurer")
+  // CC-0027 — cartas de cobertura/finiquito emitidas por esta aseguradora (opcional)
+  coverageLetters CoverageLetter[] @relation("CoverageLetterInsurer")
 
   @@unique([organizationId, code])
   @@index([active])
@@ -8177,6 +8230,11 @@ model PatientAccount {
   status         AccountStatus @default(ABIERTA)
   closedAt       DateTime? @db.Timestamptz()
   closedBy       String?  @db.Uuid
+  /// CC-0027 — alta administrativa (Fase 2): fecha/usuario que concluyó la
+  /// conciliación financiera, y la ruta por la que se cerró.
+  altaAdministrativaAt DateTime? @db.Timestamptz()
+  altaAdministrativaBy String?   @db.Uuid
+  altaRuta             AltaRuta?
   createdAt      DateTime @default(now()) @db.Timestamptz()
   createdBy      String?  @db.Uuid
 
@@ -8194,6 +8252,9 @@ model PatientAccount {
   imagingRequests ImagingRequest[] @relation("ImagingRequestPatientAccount")
   /// CC-0026 — tareas de tablero ancladas a esta cuenta.
   careTasks       CareTask[]
+  /// CC-0027 — cuentas por cobrar y cartas de cobertura/finiquito de esta cuenta.
+  accountsReceivable AccountReceivable[]
+  coverageLetters    CoverageLetter[]
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])
@@ -8273,6 +8334,68 @@ model TipoCuenta {
 
   @@unique([organizationId, code])
   @@index([organizationId, active])
+  @@schema("public")
+}
+
+/// CC-0027 — Cuenta por Cobrar (ruta B del alta administrativa): el paciente
+/// o un fiador solidario firma un documento formal de aceptación de deuda
+/// (pagaré, convenio de pago o reconocimiento de deuda) cuando no hay liquidez
+/// inmediata para el saldo pendiente. Es lo que formaliza la CxC Y otorga la
+/// autorización de egreso físico (Encounter.egresoAutorizadoAt).
+/// SQL 234 — tabla financiera: RLS tenant estándar + trigger de auditoría
+/// hash-chain (patrón SQL 224, TDR §6.3).
+model AccountReceivable {
+  id             String    @id @default(uuid()) @db.Uuid
+  organizationId String    @db.Uuid
+  accountId      String    @db.Uuid
+  saldoInicial   Decimal   @db.Decimal(14, 2)
+  saldoActual    Decimal   @db.Decimal(14, 2)
+  documentoTipo  DocumentoDeudaTipo
+  folioDocumento String    @db.VarChar(80)
+  firmanteTipo     FirmanteTipo
+  firmanteNombre   String  @db.VarChar(200)
+  firmanteDocumento String @db.VarChar(40) /// DUI/pasaporte del firmante.
+  plazoDias      Int?
+  estado         CxcEstado @default(ABIERTA)
+  notas          String?   @db.Text
+  createdAt      DateTime  @default(now()) @db.Timestamptz()
+  createdBy      String?   @db.Uuid
+  updatedAt      DateTime  @updatedAt @db.Timestamptz()
+  updatedBy      String?   @db.Uuid
+
+  organization Organization   @relation("AccountReceivableOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  account      PatientAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@index([accountId])
+  @@index([organizationId, estado])
+  @@schema("public")
+}
+
+/// CC-0027 — carta de cobertura (aprobación parcial de una aseguradora) o
+/// finiquito (aprobación del 100% de la cuenta). Ruta A del alta
+/// administrativa cuando cubre el saldo completo junto con los pagos
+/// registrados. SQL 234 — tabla financiera: RLS tenant estándar + trigger de
+/// auditoría hash-chain (patrón SQL 224, TDR §6.3).
+model CoverageLetter {
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  accountId      String             @db.Uuid
+  insurerId      String?            @db.Uuid
+  tipo           CartaCoberturaTipo
+  montoAprobado  Decimal            @db.Decimal(14, 2)
+  folio          String             @db.VarChar(80)
+  emitidaAt      DateTime           @default(now()) @db.Timestamptz()
+  notas          String?            @db.Text
+  createdAt      DateTime           @default(now()) @db.Timestamptz()
+  createdBy      String?            @db.Uuid
+
+  organization Organization   @relation("CoverageLetterOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  account      PatientAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  insurer      Insurer?       @relation("CoverageLetterInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([accountId])
   @@schema("public")
 }
 

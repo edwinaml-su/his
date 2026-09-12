@@ -170,6 +170,10 @@ export const deathCertificateRouter = router({
         });
 
         // Liberación de cama: el ciclo de limpieza espera DIRTY.
+        // CC-0027 — exenta del gate de egreso físico a propósito: el óbito
+        // no tiene alta administrativa que lo condicione (ver
+        // lib/egreso-fisico-gate.ts). Release inline, no pasa por
+        // bed.router.release.
         const activeAssignment = encounter.bedAssignments[0];
         if (activeAssignment) {
           await tx.bedAssignment.update({
