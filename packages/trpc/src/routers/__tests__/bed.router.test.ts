@@ -12,9 +12,23 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@his/database";
-import { bedRouter } from "../bed.router";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
+
+// docs/48 §5 C3-2 — capturarCargo ya tiene su propia suite (charge-capture.test.ts);
+// aquí solo importa que assignToEncounter la invoque con code/origen/referenciaId
+// correctos, mismo patrón que imaging-request.router.test.ts.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
+import { bedRouter } from "../bed.router";
 
 const BED_ID = "00000000-0000-0000-0000-000000000060";
 const GLN_ACTIVO = "7410398000262";
@@ -25,6 +39,7 @@ describe("bedRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     installTenantContextMock(prisma);
+    capturarCargoMock.mockClear();
   });
 
   describe("list", () => {
@@ -96,6 +111,86 @@ describe("bedRouter", () => {
       // Cuando se implemente: FREE → OCCUPIED debe requerir BedAssignment;
       // OCCUPIED → FREE debe pasar por DIRTY primero, etc.
       expect.fail("Habilitar cuando @Dev implemente bedStateMachine.");
+    });
+  });
+
+  // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la asignación de cama
+  // dispara el cargo de estancia.
+  describe("assignToEncounter", () => {
+    const ENCOUNTER_ID = "00000000-0000-0000-0000-000000000080";
+    const ASSIGNMENT_ID = "00000000-0000-0000-0000-000000000081";
+    const PATIENT_ID = "00000000-0000-0000-0000-000000000082";
+
+    it("captura cargo HABITACION con el chargeCode de la Room de la cama", async () => {
+      prisma.bed.findFirst.mockResolvedValue({
+        id: BED_ID,
+        code: "CAMA-101",
+        status: "FREE",
+        serviceUnitId: null,
+        roomRef: { chargeCode: "TARIFA-HAB-GENERAL", roomType: "GENERAL" },
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: ENCOUNTER_ID,
+        patientId: PATIENT_ID,
+        bedAssignments: [],
+      } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: ASSIGNMENT_ID } as never);
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await caller.assignToEncounter({ bedId: BED_ID, encounterId: ENCOUNTER_ID });
+
+      expect(capturarCargoMock).toHaveBeenCalledTimes(1);
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          patientId: PATIENT_ID,
+          encounterId: ENCOUNTER_ID,
+          code: "TARIFA-HAB-GENERAL",
+          origen: "HABITACION",
+          referenciaId: ASSIGNMENT_ID,
+          quantity: 1,
+        }),
+      );
+    });
+
+    it("code sintético HAB-<roomType|SIN_HABITACION> cuando la cama no tiene Room con chargeCode", async () => {
+      prisma.bed.findFirst.mockResolvedValue({
+        id: BED_ID,
+        code: "CAMA-102",
+        status: "FREE",
+        serviceUnitId: null,
+        roomRef: null,
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: ENCOUNTER_ID,
+        patientId: PATIENT_ID,
+        bedAssignments: [],
+      } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: ASSIGNMENT_ID } as never);
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await caller.assignToEncounter({ bedId: BED_ID, encounterId: ENCOUNTER_ID });
+
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ code: "HAB-SIN_HABITACION" }),
+      );
+    });
+
+    it("CONFLICT si la cama no está FREE — no captura cargo", async () => {
+      prisma.bed.findFirst.mockResolvedValue({
+        id: BED_ID,
+        code: "CAMA-103",
+        status: "OCCUPIED",
+        serviceUnitId: null,
+        roomRef: null,
+      } as never);
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.assignToEncounter({ bedId: BED_ID, encounterId: ENCOUNTER_ID }),
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+      expect(capturarCargoMock).not.toHaveBeenCalled();
     });
   });
 

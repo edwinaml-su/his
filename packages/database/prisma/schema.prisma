@@ -3112,6 +3112,10 @@ model OperatingRoom {
   code            String   @db.VarChar(40)
   name            String   @db.VarChar(120)
   active          Boolean  @default(true)
+  /// Código de tarifario del cargo de reserva de sala (USO_INSTALACIONES) —
+  /// docs/48 C3-2, sql/233. NULL ⇒ el router usa el sintético
+  /// QX-<code|SIN_SALA> (PENDIENTE_TARIFA visible, nunca cargo en 0).
+  chargeCode      String?  @db.VarChar(40)
   createdAt       DateTime @default(now()) @db.Timestamptz()
   updatedAt       DateTime @updatedAt @db.Timestamptz()
 

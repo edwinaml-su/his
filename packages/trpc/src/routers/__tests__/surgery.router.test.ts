@@ -8,11 +8,27 @@
  * - state machine: cancel, postpone (con OR conflict)
  * - anesthesia tracking
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { surgeryRouter } from "../surgery.router";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
+
+// docs/48 §5 C3-2 — capturarCargo/revertirCargo ya tienen su propia suite
+// (charge-capture.test.ts); aquí solo importa que case.create/case.cancel las
+// invoquen con code/origen/referenciaId correctos, mismo patrón que
+// imaging-request.router.test.ts / dispensation.router.test.ts.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+const revertirCargoMock = vi.fn().mockResolvedValue({ reversionId: "reversion-default" });
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: (...args: unknown[]) => revertirCargoMock(...args),
+}));
+
+import { surgeryRouter } from "../surgery.router";
 
 const u = "00000000-0000-0000-0000-000000000001";
 const v = "00000000-0000-0000-0000-000000000002";
@@ -24,6 +40,8 @@ describe("surgeryRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     installTenantContextMock(prisma);
+    capturarCargoMock.mockClear();
+    revertirCargoMock.mockClear();
   });
 
   // --------------------------------------------------------------------------
@@ -152,6 +170,8 @@ describe("surgeryRouter", () => {
       expect(args.data.createdBy).toBeTruthy();
       // No conflict check called (no operatingRoomId)
       expect(prisma.surgeryCase.findFirst.mock.calls.length).toBe(0);
+      // docs/48 §5 C3-2 — sin sala reservada, no hay disparador de cargo.
+      expect(capturarCargoMock).not.toHaveBeenCalled();
     });
 
     it("OK crea caso con quirófano libre", async () => {
@@ -174,6 +194,64 @@ describe("surgeryRouter", () => {
       expect(prisma.surgeryCase.findFirst.mock.calls.length).toBe(1);
       const conflictArgs = prisma.surgeryCase.findFirst.mock.calls[0]![0];
       expect((conflictArgs!.where as { operatingRoomId: string }).operatingRoomId).toBe(v);
+    });
+
+    // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la reserva de sala (este
+    // create, cuando trae operatingRoomId) es el disparador del cargo.
+    it("captura cargo USO_INSTALACIONES con el chargeCode de la sala reservada", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
+      prisma.surgeryCase.create.mockResolvedValue({ id: "case-1" } as never);
+      prisma.operatingRoom.findUnique.mockResolvedValue({
+        code: "QX-1",
+        chargeCode: "TARIFA-QX-1",
+      } as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.create({
+        encounterId: u,
+        establishmentId: u,
+        patientId: u,
+        primarySurgeonId: u,
+        operatingRoomId: v,
+        procedureDescription: "Hernioplastia",
+        scheduledStart: start,
+        scheduledEnd: end,
+      });
+      expect(capturarCargoMock).toHaveBeenCalledTimes(1);
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          code: "TARIFA-QX-1",
+          origen: "USO_INSTALACIONES",
+          referenciaId: "case-1",
+          quantity: 1,
+        }),
+      );
+    });
+
+    it("code sintético QX-<code> cuando la sala reservada no tiene chargeCode", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.surgeryCase.findFirst.mockResolvedValue(null as never);
+      prisma.surgeryCase.create.mockResolvedValue({ id: "case-2" } as never);
+      prisma.operatingRoom.findUnique.mockResolvedValue({
+        code: "QX-5",
+        chargeCode: null,
+      } as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.create({
+        encounterId: u,
+        establishmentId: u,
+        patientId: u,
+        primarySurgeonId: u,
+        operatingRoomId: v,
+        procedureDescription: "Colecistectomía",
+        scheduledStart: start,
+        scheduledEnd: end,
+      });
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ code: "QX-QX-5" }),
+      );
     });
   });
 
@@ -360,10 +438,13 @@ describe("surgeryRouter", () => {
       await expect(
         caller.case.cancel({ id: u, cancelReason: "Desistió" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // No se llega a mirar el cargo si el caso no era cancelable.
+      expect(revertirCargoMock).not.toHaveBeenCalled();
     });
 
     it("OK guarda cancelReason y status CANCELLED", async () => {
       prisma.surgeryCase.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
       const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
       await caller.case.cancel({ id: u, cancelReason: "Paciente desistió" });
       const args = prisma.surgeryCase.updateMany.mock.calls[0]![0];
@@ -372,6 +453,52 @@ describe("surgeryRouter", () => {
       // Allows cancellation from POSTPONED too
       const where = args.where as { status: { in: string[] } };
       expect(where.status.in).toContain("POSTPONED");
+    });
+
+    // docs/48 §5 C3-2 — cancelación de la reserva revierte el cargo VIGENTE
+    // (si lo hubo). Patrón cancelReservation de dispensation.router.ts: no-op
+    // silencioso si no hay cargo (caso creado sin operatingRoomId nunca tuvo
+    // uno) — no es una anomalía, a diferencia de un returnItem sin cargo.
+    it("revierte el cargo VIGENTE de la reserva al cancelar", async () => {
+      prisma.surgeryCase.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue({ id: "cargo-1" } as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.cancel({ id: u, cancelReason: "Sala no disponible" });
+      expect(revertirCargoMock).toHaveBeenCalledTimes(1);
+      expect(revertirCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ cargoId: "cargo-1" }),
+      );
+    });
+
+    it("no-op silencioso si el caso cancelado nunca tuvo sala reservada (sin cargo)", async () => {
+      prisma.surgeryCase.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.cancel({ id: u, cancelReason: "Desistió" });
+      expect(revertirCargoMock).not.toHaveBeenCalled();
+    });
+
+    // Nota de implementación (desviación documentada del plan original): la
+    // "doble cancelación" NO produce CONFLICT — produce NOT_FOUND, porque la
+    // máquina de estados PRE-EXISTENTE de este router (updateMany con
+    // status.in=[SCHEDULED,CONFIRMED,POSTPONED]) ya impide cancelar dos veces
+    // el MISMO caso antes de que el código de reversión de cargo se alcance.
+    // Cambiar ese guard a CONFLICT sería una modificación no solicitada de
+    // una máquina de estados preexistente y no relacionada con cargos.
+    it("doble cancelación del mismo caso: NOT_FOUND (máquina de estados preexistente, no CONFLICT)", async () => {
+      prisma.surgeryCase.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+      prisma.patientAccountService.findFirst.mockResolvedValueOnce({ id: "cargo-1" } as never);
+      const caller = surgeryRouter.createCaller(makeCtx({ prisma }));
+      await caller.case.cancel({ id: u, cancelReason: "Primera cancelación" });
+      expect(revertirCargoMock).toHaveBeenCalledTimes(1);
+
+      prisma.surgeryCase.updateMany.mockResolvedValueOnce({ count: 0 } as never);
+      await expect(
+        caller.case.cancel({ id: u, cancelReason: "Segunda cancelación" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      // No se intenta revertir dos veces.
+      expect(revertirCargoMock).toHaveBeenCalledTimes(1);
     });
   });
 
