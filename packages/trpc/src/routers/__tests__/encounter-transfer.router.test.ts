@@ -13,8 +13,22 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
-import { encounterTransferRouter } from "../encounter-transfer.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+
+// docs/48 §5 C3-2 — capturarCargo ya tiene su propia suite (charge-capture.test.ts);
+// aquí solo importa que transferEncounter la invoque al crear el nuevo
+// BedAssignment del traslado.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
+import { encounterTransferRouter } from "../encounter-transfer.router";
 
 function fn<T>(returnValue: T) {
   return vi.fn().mockResolvedValue(returnValue);
@@ -37,6 +51,7 @@ describe("encounterTransferRouter", () => {
     // $executeRawUnsafe. transferEncounter/confirmReceipt NO se migraron
     // (ver comentario en el router) y siguen sin pasar por aquí.
     prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    capturarCargoMock.mockClear();
   });
 
   describe("transferEncounter", () => {
@@ -145,6 +160,67 @@ describe("encounterTransferRouter", () => {
         }),
       ).rejects.toMatchObject({ code: "CONFLICT" });
       expect(prisma.encounterTransfer.create).not.toHaveBeenCalled();
+    });
+
+    // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: un traslado de cama ES una
+    // nueva asignación ⇒ nuevo cargo de estancia (no revierte el anterior:
+    // la estancia previa ya se consumió).
+    it("traslado con cama destino: crea un SEGUNDO cargo HABITACION (no revierte el anterior)", async () => {
+      const encId = "00000000-0000-0000-0000-000000000e02";
+      const patientId = "00000000-0000-0000-0000-000000000abc";
+      const bedOldId = "00000000-0000-0000-0000-000000000b01";
+      const bedNewId = "00000000-0000-0000-0000-000000000b02";
+      const assignmentNewId = "00000000-0000-0000-0000-000000000a02";
+
+      const svcOldId = "00000000-0000-0000-0000-000000000501";
+      const svcNewId = "00000000-0000-0000-0000-000000000502";
+
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: encId,
+        patientId,
+        dischargedAt: null,
+        serviceUnitId: svcOldId,
+        bedAssignments: [{ id: "a-old", bedId: bedOldId }],
+        patient: { gsrn: null },
+      } as never);
+      prisma.bed.findFirst.mockResolvedValue({
+        id: bedNewId,
+        code: "CAMA-DEST",
+        status: "FREE",
+        serviceUnitId: svcNewId,
+        roomRef: { chargeCode: "TARIFA-HAB-UCI", roomType: "UCI" },
+      } as never);
+      prisma.encounterTransfer.create.mockResolvedValue({
+        id: "00000000-0000-0000-0000-000000000e03",
+        occurredAt: new Date("2026-09-12T10:00:00Z"),
+      } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: assignmentNewId } as never);
+      prisma.encounter.update.mockResolvedValue({ id: encId } as never);
+
+      const caller = encounterTransferRouter.createCaller(makeCtx({ prisma }));
+      await caller.transferEncounter({
+        encounterId: "00000000-0000-0000-0000-000000000010",
+        toServiceUnitId: svcNewId,
+        toBedId: bedNewId,
+        reason: "Traslado a UCI",
+      });
+
+      // Cierra la asignación anterior (release), sin revertir su cargo.
+      expect(prisma.bedAssignment.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "a-old" } }),
+      );
+      // Nuevo cargo, independiente del anterior.
+      expect(capturarCargoMock).toHaveBeenCalledTimes(1);
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          patientId,
+          code: "TARIFA-HAB-UCI",
+          origen: "HABITACION",
+          referenciaId: assignmentNewId,
+          quantity: 1,
+        }),
+      );
     });
 
     // Gap detectado por @QA: la única cobertura previa de la rama EPCIS de

@@ -37,6 +37,8 @@ import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
 import { resolveEceEstablecimientoId } from "../lib/ece-hooks";
+import { capturarCargo } from "../lib/charge-capture";
+import type { PrismaClient } from "@prisma/client";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado (ADR 0019 D1/D6, mismo valor que encounter.router.ts). */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -120,12 +122,21 @@ export const encounterTransferRouter = router({
         }
 
         // 3) Validar cama destino si aplica.
+        // docs/48 §5 C3-2 — se guarda fuera del `if` para reusarla al crear
+        // el nuevo BedAssignment (código de tarifario de la Room, si tiene).
+        let bedDestino: {
+          code: string;
+          roomRef: { chargeCode: string | null; roomType: string | null } | null;
+        } | null = null;
         if (input.toBedId) {
           const bed = await tx.bed.findFirst({
             where: {
               id: input.toBedId,
               organizationId: ctx.tenant.organizationId,
               active: true,
+            },
+            include: {
+              roomRef: { select: { chargeCode: true, roomType: true } },
             },
           });
           if (!bed) {
@@ -147,6 +158,7 @@ export const encounterTransferRouter = router({
                 "La cama destino no pertenece al servicio destino seleccionado.",
             });
           }
+          bedDestino = bed;
         }
 
         // 4) Registrar transferencia. status='SENT' por default (sql/56).
@@ -239,7 +251,7 @@ export const encounterTransferRouter = router({
 
         // 5) Crear nuevo BedAssignment y ocupar cama destino.
         if (input.toBedId) {
-          await tx.bedAssignment.create({
+          const assignment = await tx.bedAssignment.create({
             data: {
               encounterId: enc.id,
               bedId: input.toBedId,
@@ -250,6 +262,26 @@ export const encounterTransferRouter = router({
           await tx.bed.update({
             where: { id: input.toBedId },
             data: { status: "OCCUPIED" },
+          });
+
+          // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: un traslado de cama
+          // ES una nueva asignación ⇒ nuevo cargo de estancia (no revierte
+          // el anterior: la estancia previa ya se consumió). Fallback
+          // sintético si la cama no tiene Room o la Room no tiene
+          // chargeCode — nunca cargo en 0, nunca silencio (R3).
+          const roomChargeCode =
+            bedDestino?.roomRef?.chargeCode ??
+            `HAB-${bedDestino?.roomRef?.roomType ?? "SIN_HABITACION"}`;
+          await capturarCargo(tx as unknown as PrismaClient, {
+            organizationId: ctx.tenant.organizationId,
+            patientId: enc.patientId,
+            encounterId: enc.id,
+            code: roomChargeCode,
+            descripcion: `Estancia — cama ${bedDestino?.code ?? input.toBedId} (traslado)`,
+            quantity: 1,
+            origen: "HABITACION",
+            referenciaId: assignment.id,
+            actorId: ctx.user.id,
           });
         }
 

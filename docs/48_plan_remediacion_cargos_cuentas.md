@@ -34,7 +34,7 @@ La mitad clínica/inventario del circuito existe y está bien hecha (dispensaci�
 | C2-3 `invoice.create` re-resuelve server-side; `unitPrice` manual = **override** con rol autorizado + motivo, auditado | **H-03**, R3 | Alta | API directa con precio arbitrario sin rol/motivo ⇒ rechazo |
 | C2-4 Reversión de cargo en devolución: `cancelReservation` genera línea de reversión (nunca borra la original), motivo/autorizador/hora | R7, paso 14 | Alta | Devolver ⇒ reingreso mismo lote + línea negativa enlazada |
 | C3-1 Consumir `capturarCargo` desde **laboratorio** (al crear la orden, por examen) e **imágenes** — sus catálogos ya tienen precio/tarifario | encargo "y servicios" | Alta | Orden de lab ⇒ N líneas de cargo congeladas |
-| C3-2 Consumir desde **estancia/cama** (cargo diario por censo u ocupación) y **quirófano** (SQL 207 `centro_costo_id` → cargo del acto) — alcance exacto a definir con Edwin | encargo "y servicios" | Media | Definido el disparador, mismo gate que C3-1 |
+| C3-2 Consumir desde **estancia/cama** (al asignar cama) y **quirófano** (al reservar sala) — **IMPLEMENTADO 2026-09-12**: `bed.router.ts assignToEncounter`, `encounter.router.ts admit`, `encounter-transfer.router.ts transferEncounter`, `inpatient.router.ts admission.create/confirmarRecepcionFisica` (HABITACION); `surgery.router.ts case.create/case.cancel` (USO_INSTALACIONES, SQL 233 `OperatingRoom.chargeCode`) | encargo "y servicios" | Media | Definido el disparador, mismo gate que C3-1 |
 | C3-3 Taxonomía de tipos de cargo/ingreso (amplía el enum de 2 valores: consumo, hoja de gastos, hoja gastos SOP/UCI, terapia respiratoria, uso de instalaciones, habitación) + anclaje al acto de respaldo por tipo | pasos 3/6, R2 | Media | Cada tipo con su respaldo obligatorio |
 | C4-1 `patientAccount.cerrar` con **bloqueos**: líneas PENDIENTE_TARIFA, cuenta PENDIENTE_REGULARIZAR, devoluciones sin reversión | R11, paso 23, prueba 4/7 | Alta | Cerrar con excepción abierta ⇒ PRECONDITION_FAILED listando causas |
 | C4-2 Conciliación clínico-financiera: los 5 reportes de R11 (indicación sin dispensa, entregado sin cargo, cargo sin movimiento, precio 0/sin tarifa, devolución sin reversión) como procedures + tablero | R11 | Media | Reportes con datos de prueba; excepción visible bloquea cierre |
@@ -58,7 +58,7 @@ Modelo actual (Edwin + agentes SDLC). Cada ola = 1–2 PRs con CI verde y SQL ap
 ## 5. Decisiones que necesita tomar Edwin
 
 1. **Aprobar este plan** (o ajustar alcance/orden).
-2. **C3-2**: ¿qué dispara el cargo de estancia (censo nocturno diario vs. al alta) y el de quirófano (al firmar acto quirúrgico)?
+2. **C3-2 — TOMADA 2026-09-12**: el disparador de estancia es **la asignación de cama en una admisión u hospitalización** (NO censo nocturno, NO alta — la asignación es el acto administrativo que cobra); el de quirófano es **la reserva de sala** (acto administrativo — la reserva se carga a la cuenta del paciente), NO el acto quirúrgico (puramente médico, sin cargo). Implementado en el mismo PR que cierra esta fila — ver §3 C3-2.
 3. **C5-1**: datos reales de HE/CM/US (razones sociales, establecimientos, qué tarifarios rigen en cada una) — sin esto la Ola 5 no arranca.
 4. Confirmar que deducible/coaseguro queda para un CC posterior (recomendado).
 

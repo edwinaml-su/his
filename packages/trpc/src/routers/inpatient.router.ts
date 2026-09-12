@@ -42,6 +42,7 @@ import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
+import { capturarCargo } from "../lib/charge-capture";
 
 /**
  * Beta.15 — mapping del shape interno de `evaluateVitalAlerts`
@@ -171,6 +172,12 @@ export const inpatientRouter = router({
           }
 
           // Beta.1 — validar cama si viene en el input (debe ser misma org + status FREE).
+          // docs/48 §5 C3-2 — se guarda fuera del `if` para reusarla al crear
+          // el BedAssignment (código de tarifario de la Room, si tiene).
+          let bedParaAsignar: {
+            code: string;
+            roomRef: { chargeCode: string | null; roomType: string | null } | null;
+          } | null = null;
           if (input.bedId) {
             const bed = await tx.bed.findFirst({
               where: {
@@ -178,7 +185,13 @@ export const inpatientRouter = router({
                 organizationId: ctx.tenant.organizationId,
                 active: true,
               },
-              select: { id: true, status: true, establishmentId: true },
+              select: {
+                id: true,
+                code: true,
+                status: true,
+                establishmentId: true,
+                roomRef: { select: { chargeCode: true, roomType: true } },
+              },
             });
             if (!bed) {
               throw new TRPCError({
@@ -199,6 +212,7 @@ export const inpatientRouter = router({
                   "La cama pertenece a un establecimiento distinto del de la admisión.",
               });
             }
+            bedParaAsignar = bed;
           }
 
           const admission = await tx.inpatientAdmission.create({
@@ -217,7 +231,7 @@ export const inpatientRouter = router({
           });
 
           if (input.bedId) {
-            await tx.bedAssignment.create({
+            const assignment = await tx.bedAssignment.create({
               data: {
                 encounterId: input.encounterId,
                 bedId: input.bedId,
@@ -228,6 +242,25 @@ export const inpatientRouter = router({
             await tx.bed.update({
               where: { id: input.bedId },
               data: { status: "OCCUPIED" },
+            });
+
+            // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la asignación de
+            // cama es el disparador del cargo de estancia. Fallback sintético
+            // si la cama no tiene Room o la Room no tiene chargeCode — nunca
+            // cargo en 0, nunca silencio (R3): cae a PENDIENTE_TARIFA.
+            const roomChargeCode =
+              bedParaAsignar?.roomRef?.chargeCode ??
+              `HAB-${bedParaAsignar?.roomRef?.roomType ?? "SIN_HABITACION"}`;
+            await capturarCargo(tx, {
+              organizationId: ctx.tenant.organizationId,
+              patientId: input.patientId,
+              encounterId: input.encounterId,
+              code: roomChargeCode,
+              descripcion: `Estancia — cama ${bedParaAsignar?.code ?? input.bedId}`,
+              quantity: 1,
+              origen: "HABITACION",
+              referenciaId: assignment.id,
+              actorId: ctx.user.id,
             });
           }
 
@@ -380,6 +413,7 @@ export const inpatientRouter = router({
               notes: true,
               bedId: true,
               encounterId: true,
+              patientId: true,
               encounter: { select: { serviceUnitId: true } },
             },
           });
@@ -424,7 +458,7 @@ export const inpatientRouter = router({
             },
           });
           // Compat legacy: BedAssignment + Bed.status=OCCUPIED.
-          await tx.bedAssignment.create({
+          const assignment = await tx.bedAssignment.create({
             data: {
               encounterId: adm.encounterId,
               bedId: adm.bedId!,
@@ -436,6 +470,30 @@ export const inpatientRouter = router({
             where: { id: adm.bedId! },
             data: { status: "OCCUPIED" },
           });
+
+          // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la asignación de
+          // cama (este BedAssignment, "día-cama" real) es el disparador del
+          // cargo de estancia. Fallback sintético si la cama no tiene Room o
+          // la Room no tiene chargeCode — nunca cargo en 0, nunca silencio
+          // (R3): cae a PENDIENTE_TARIFA.
+          const bedInfo = await tx.bed.findUnique({
+            where: { id: adm.bedId! },
+            select: { code: true, roomRef: { select: { chargeCode: true, roomType: true } } },
+          });
+          const roomChargeCode =
+            bedInfo?.roomRef?.chargeCode ?? `HAB-${bedInfo?.roomRef?.roomType ?? "SIN_HABITACION"}`;
+          await capturarCargo(tx, {
+            organizationId: ctx.tenant.organizationId,
+            patientId: adm.patientId,
+            encounterId: adm.encounterId,
+            code: roomChargeCode,
+            descripcion: `Estancia — cama ${bedInfo?.code ?? adm.bedId}`,
+            quantity: 1,
+            origen: "HABITACION",
+            referenciaId: assignment.id,
+            actorId: ctx.user.id,
+          });
+
           return updated;
         });
       }),

@@ -32,6 +32,7 @@ import {
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
+import { capturarCargo, revertirCargo } from "../lib/charge-capture";
 import type { PrismaClient } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
@@ -214,7 +215,7 @@ export const surgeryRouter = router({
             }
           }
 
-          return tx.surgeryCase.create({
+          const surgeryCase = await tx.surgeryCase.create({
             data: {
               organizationId: ctx.tenant.organizationId,
               establishmentId: input.establishmentId,
@@ -232,6 +233,36 @@ export const surgeryRouter = router({
               createdBy: ctx.user.id,
             },
           });
+
+          // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: el disparador del
+          // cargo de quirófano es la RESERVA de sala (este create, cuando
+          // trae operatingRoomId), no el acto quirúrgico (puramente médico,
+          // ver surgery.router signIn/start/signOut/complete — sin cargo).
+          // Sin operatingRoomId todavía no hay sala reservada → sin cargo.
+          if (input.operatingRoomId) {
+            const or = await tx.operatingRoom.findUnique({
+              where: { id: input.operatingRoomId },
+              select: { code: true, chargeCode: true },
+            });
+            // Fallback sintético determinista si la sala no tiene chargeCode
+            // configurado — nunca cargo en 0, nunca silencio (R3): el
+            // resolver no encuentra el code y capturarCargo cae a
+            // PENDIENTE_TARIFA, visible y bloqueante de cierre.
+            const code = or?.chargeCode ?? `QX-${or?.code ?? "SIN_SALA"}`;
+            await capturarCargo(tx, {
+              organizationId: ctx.tenant.organizationId,
+              patientId: input.patientId,
+              encounterId: input.encounterId,
+              code,
+              descripcion: `Reserva de quirófano — ${input.procedureDescription}`,
+              quantity: 1,
+              origen: "USO_INSTALACIONES",
+              referenciaId: surgeryCase.id,
+              actorId: ctx.user.id,
+            });
+          }
+
+          return surgeryCase;
         });
       }),
 
@@ -500,6 +531,29 @@ export const surgeryRouter = router({
               message: "Caso no existe o ya inició / fue cancelado.",
             });
           }
+
+          // docs/48 §5 C3-2 — revierte el cargo de reserva de sala si lo
+          // hubo (operatingRoomId pudo no estar seteado al crear). No-op
+          // silencioso si no hay cargo VIGENTE — mismo patrón que
+          // dispensation.router.ts cancelReservation (a diferencia de
+          // returnItem, esto NO es una anomalía: muchos casos se cancelan
+          // sin sala reservada nunca).
+          const cargoVigente = await tx.patientAccountService.findFirst({
+            where: {
+              referenciaId: input.id,
+              status: "VIGENTE",
+              account: { organizationId: ctx.tenant.organizationId },
+            },
+            select: { id: true },
+          });
+          if (cargoVigente) {
+            await revertirCargo(tx, {
+              cargoId: cargoVigente.id,
+              motivo: `Cancelación de cirugía: ${input.cancelReason}`,
+              actorId: ctx.user.id,
+            });
+          }
+
           return { ok: true as const };
         });
       }),

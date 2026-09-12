@@ -5,9 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-    paths:
-      - 'apps/web/**'
-      - '.github/workflows/a11y.yml'
+    # SIN filtro de paths a propósito: este check es REQUERIDO en branch
+    # protection y, con enforce_admins=true, un PR que no toque apps/web
+    # jamás recibiría el check y quedaría inmergeable (deadlock detectado
+    # 2026-09-12 en #644). Los ~4 min por PR son el costo de tenerlo como gate.
   schedule:
     # Nightly 06:00 UTC = 00:00 America/El_Salvador (UTC-6)
     - cron: '0 6 * * *'

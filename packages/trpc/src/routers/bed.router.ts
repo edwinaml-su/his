@@ -18,6 +18,7 @@ import {
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
 import { assertGlnAsignable } from "../lib/gln-validation";
+import { capturarCargo } from "../lib/charge-capture";
 
 const adminProc = requireRole(["ADMIN", "DIR"]);
 
@@ -181,6 +182,9 @@ export const bedRouter = router({
             organizationId: ctx.tenant.organizationId,
             active: true,
           },
+          include: {
+            roomRef: { select: { chargeCode: true, roomType: true } },
+          },
         });
         if (!bed) {
           throw new TRPCError({
@@ -238,6 +242,26 @@ export const bedRouter = router({
           where: { id: input.bedId },
           data: { status: "OCCUPIED" },
         });
+
+        // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la asignación de cama
+        // (este BedAssignment) es el disparador del cargo de estancia, no el
+        // alta ni el censo nocturno. Fallback sintético determinista si la
+        // cama no tiene Room o la Room no tiene chargeCode — nunca cargo en
+        // 0, nunca silencio (R3): cae a PENDIENTE_TARIFA, visible.
+        const roomChargeCode =
+          bed.roomRef?.chargeCode ?? `HAB-${bed.roomRef?.roomType ?? "SIN_HABITACION"}`;
+        await capturarCargo(tx, {
+          organizationId: ctx.tenant.organizationId,
+          patientId: encounter.patientId,
+          encounterId: input.encounterId,
+          code: roomChargeCode,
+          descripcion: `Estancia — cama ${bed.code}`,
+          quantity: 1,
+          origen: "HABITACION",
+          referenciaId: assignment.id,
+          actorId: ctx.user.id,
+        });
+
         return assignment;
       });
     }),
@@ -251,6 +275,13 @@ export const bedRouter = router({
    * `DIRTY → FREE` tras sanitizar.
    *
    * Si no existe asignación activa, la respuesta es noop (idempotente).
+   *
+   * docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la liberación por alta NO
+   * revierte el cargo de estancia (la estancia ya se consumió). No existe
+   * hoy una operación específica de "cancelar asignación errónea" (distinta
+   * del alta) sobre BedAssignment — la reversión de un cargo mal capturado
+   * se hace hoy vía el flujo de devoluciones/conciliación de cuentas
+   * (patientAccount.router.ts / revertirCargo manual), no desde este router.
    */
   release: tenantProcedure
     .input(bedReleaseSchema)
