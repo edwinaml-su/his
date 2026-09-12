@@ -8,15 +8,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
-import { encounterRouter } from "../encounter.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
 import { MOCK_TENANT, MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
+
+// docs/48 §5 C3-2 — capturarCargo ya tiene su propia suite (charge-capture.test.ts);
+// aquí solo importa que admit() la invoque cuando trae bedId, con
+// code/origen/referenciaId correctos, mismo patrón que otros routers.
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
+import { encounterRouter } from "../encounter.router";
 
 describe("encounterRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    capturarCargoMock.mockClear();
   });
 
   describe("admit", () => {
@@ -98,6 +113,7 @@ describe("encounterRouter", () => {
       } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({ id: "e2" } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: "assignment-1" } as never);
       const at = new Date("2026-01-15T08:00:00Z");
 
       const caller = encounterRouter.createCaller(makeCtx({ prisma }));
@@ -153,6 +169,90 @@ describe("encounterRouter", () => {
           currencyId: "00000000-0000-0000-0000-000000000020",
         } as never),
       ).rejects.toBeInstanceOf(TRPCError);
+    });
+
+    // docs/48 §5 C3-2 — decisión Edwin 2026-09-12: la asignación de cama EN
+    // LA ADMISIÓN dispara el cargo de estancia.
+    it("captura cargo HABITACION con el chargeCode de la Room al admitir con bedId", async () => {
+      setupAdmitHappyPath();
+      prisma.bed.findFirst.mockResolvedValue({
+        id: "b1",
+        code: "C-01",
+        status: "FREE",
+        roomRef: { chargeCode: "TARIFA-HAB-GENERAL", roomType: "GENERAL" },
+      } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "e2",
+        patientId: "00000000-0000-0000-0000-000000000010",
+      } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: "assignment-1" } as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "SCHEDULED",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+        bedId: "00000000-0000-0000-0000-000000000099",
+      } as never);
+
+      expect(capturarCargoMock).toHaveBeenCalledTimes(1);
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          patientId: "00000000-0000-0000-0000-000000000010",
+          code: "TARIFA-HAB-GENERAL",
+          origen: "HABITACION",
+          quantity: 1,
+        }),
+      );
+    });
+
+    it("code sintético HAB-<roomType|SIN_HABITACION> cuando la cama admitida no tiene Room", async () => {
+      setupAdmitHappyPath();
+      prisma.bed.findFirst.mockResolvedValue({
+        id: "b1",
+        code: "C-02",
+        status: "FREE",
+        roomRef: null,
+      } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "e3",
+        patientId: "00000000-0000-0000-0000-000000000010",
+      } as never);
+      prisma.bedAssignment.create.mockResolvedValue({ id: "assignment-2" } as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "SCHEDULED",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+        bedId: "00000000-0000-0000-0000-000000000099",
+      } as never);
+
+      expect(capturarCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ code: "HAB-SIN_HABITACION" }),
+      );
+    });
+
+    it("EMERGENCY sin bedId no captura cargo de habitación al admitir", async () => {
+      setupAdmitHappyPath();
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "e4",
+        patientId: "00000000-0000-0000-0000-000000000010",
+      } as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "EMERGENCY",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      expect(capturarCargoMock).not.toHaveBeenCalled();
     });
   });
 
