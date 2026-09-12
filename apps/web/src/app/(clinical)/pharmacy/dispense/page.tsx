@@ -60,16 +60,14 @@ export default function PharmacyPickingQueuePage(): React.ReactElement {
   const router = useRouter();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
+  // Cliente imperativo para queries inline (checkPreconditions). El proxy de
+  // hooks (`trpc.<path>`) NO expone `.fetch()` — solo useUtils() lo tiene.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const utilsAny = trpc.useUtils() as any;
   const list = trpcAny.pharmacy.prescription.list.useQuery({});
 
   const [startingId, setStartingId] = React.useState<string | null>(null);
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
-
-  const checkPreconditions =
-    trpcAny.dispensation.checkPreconditions.useQuery as (
-      args: { patientId: string; indicationId: string },
-      opts: { enabled: boolean; retry: false },
-    ) => { isLoading: boolean; error: { message: string } | null; data: unknown };
 
   const all = (list.data?.items ?? list.data ?? []) as PrescriptionListItem[];
   const queue = all.filter((rx) => ELIGIBLE_STATUSES.includes(rx.status));
@@ -79,7 +77,7 @@ export default function PharmacyPickingQueuePage(): React.ReactElement {
     setStartingId(rx.id);
     try {
       // Verificar pre-condición server-side antes de navegar.
-      await trpcAny.dispensation.checkPreconditions.fetch({
+      await utilsAny.dispensation.checkPreconditions.fetch({
         patientId: rx.patient.id,
         indicationId: rx.id,
       });

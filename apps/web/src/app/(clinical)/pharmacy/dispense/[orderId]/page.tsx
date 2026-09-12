@@ -117,6 +117,10 @@ export default function GS1DispensePage(): React.ReactElement {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
+  // Cliente imperativo para queries inline (checkDuplicate). El proxy de hooks
+  // (`trpc.<path>`) NO expone `.fetch()` — solo useUtils() lo tiene.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const utilsAny = trpc.useUtils() as any;
 
   // Centros de costo: carga todos los intermedios (2-XXX-XXX) + pre-selecciona 2-FAR-HOS.
   const costCentersQuery = trpcAny.costCenter.list.useQuery(
@@ -295,7 +299,7 @@ export default function GS1DispensePage(): React.ReactElement {
       // 1. checkDuplicate primero (US.F2.6.9)
       // Usamos fetch directo para query síncrona inline sin hook condicional
       const checkResult = await (
-        trpcAny.dispensation.checkDuplicate.fetch({
+        utilsAny.dispensation.checkDuplicate.fetch({
           patientId: order.patientId,
           prescriptionItemId: form.prescriptionItemId,
           gtin: form.gtin,
