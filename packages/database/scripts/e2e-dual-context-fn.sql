@@ -10,6 +10,17 @@
 -- cambiar acá). Depende de public.current_org_id() (04_rls_session_helpers)
 -- y ece.current_establecimiento_id_safe() (62b_ece_context_helpers), ambas
 -- aplicadas antes en el workflow.
+-- Dependencia: helper del GUC ece (copia literal de sql/65:34-40 — la BD
+-- efímera no aplica el 65 completo y las funciones LANGUAGE sql validan su
+-- cuerpo al crearse).
+CREATE OR REPLACE FUNCTION ece.current_establecimiento_id_safe()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+AS $$
+  SELECT NULLIF(current_setting('app.ece_establecimiento_id', true), '')::uuid
+$$;
+
 CREATE OR REPLACE FUNCTION public.current_org_id_or_ece_context()
 RETURNS uuid
 LANGUAGE sql
