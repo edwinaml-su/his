@@ -60,6 +60,11 @@ export default function PharmacyPickingQueuePage(): React.ReactElement {
   const router = useRouter();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const trpcAny = trpc as any;
+  // El proxy de hooks (`trpc.*`) NO tiene `.fetch()` imperativo — eso vive en
+  // useUtils(). Llamarlo sobre el proxy lanza TypeError en runtime y dejaba
+  // caída la entrada a dispensación (hallazgo E2E RN-HIS-BOT-001, 2026-09-12).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const utilsAny = trpc.useUtils() as any;
   const list = trpcAny.pharmacy.prescription.list.useQuery({});
 
   const [startingId, setStartingId] = React.useState<string | null>(null);
@@ -79,7 +84,7 @@ export default function PharmacyPickingQueuePage(): React.ReactElement {
     setStartingId(rx.id);
     try {
       // Verificar pre-condición server-side antes de navegar.
-      await trpcAny.dispensation.checkPreconditions.fetch({
+      await utilsAny.dispensation.checkPreconditions.fetch({
         patientId: rx.patient.id,
         indicationId: rx.id,
       });
