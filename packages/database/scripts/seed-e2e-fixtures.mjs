@@ -599,11 +599,11 @@ try {
     await c.query(
       `INSERT INTO public."StockLot"
          (id, "organizationId", "establishmentId", "itemId", "lotNumber",
-          "gtinFisico", "expiryDate", "qualityStatus", "quantityOnHand", active, "createdAt", "updatedAt")
+          gtin_fisico, "expiryDate", quality_status, "quantityOnHand", active, "createdAt", "updatedAt")
        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, (CURRENT_DATE + interval '1 year'),
                'AVAILABLE', 20, true, now(), now())
        ON CONFLICT ("organizationId", "establishmentId", "itemId", "lotNumber")
-         DO UPDATE SET "quantityOnHand" = 20, "qualityStatus" = 'AVAILABLE'`,
+         DO UPDATE SET "quantityOnHand" = 20, quality_status = 'AVAILABLE'`,
       [stockLotIdBot, orgId, estab.id, stockItemIdBot, s.lote, s.gtin],
     );
   }
