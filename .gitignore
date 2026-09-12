@@ -47,7 +47,8 @@ test-results/
 # Skills instaladas con `npx skills add`: contenido de terceros, se reinstala
 # desde skills-lock.json (que SÍ se versiona). Mismo criterio que node_modules.
 .agents/
-.claude/skills/
+.claude/skills/*
+!.claude/skills/pre-pr-review/
 
 # Archivos temporales con credenciales para configuración manual de Vercel/etc.
 # (se generan con node, se copian al dashboard, y se borran)
