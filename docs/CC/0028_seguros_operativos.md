@@ -194,6 +194,58 @@ commitear.
   desglose asegurado/paciente de `coberturaEstimada` bajo el resumen de
   liquidación existente, marcado explícitamente como estimado/no-descuenta.
 
+### CC-0028c — mantenimiento admin de pólizas (2026-09-14)
+
+Hasta CC-0028b el alta de `PatientCoverage` sólo existía en el tab "Seguros"
+del paciente — sin vista transversal para que admin (roles `ADMIN`/`DIR`,
+precedente #616, no existe `SUPER_ADMIN`) audite/edite pólizas de todos los
+pacientes. Este CC agrega:
+
+- **`coverage.update`** (`coverageWriterProc`, mismo gate que `coverage.create`)
+  — edita `planId`/`policyNumber`/`carnet`/`contratante`/`priceListId`/
+  `validFrom`/`validTo` de una póliza existente. `patientCoverageUpdateInput`
+  (`packages/contracts/src/schemas/insurance.ts`) **no declara `patientId`** a
+  propósito — una póliza no se transfiere de paciente (se desactiva con
+  `coverage.deactivate` y se crea una nueva con `coverage.create`); al no
+  existir el campo en el schema Zod, ni siquiera un caller no tipado puede
+  colarlo (Zod lo descarta silenciosamente, `unknownKeys: "strip"` por
+  default). La validación `validTo > validFrom` no puede vivir en el
+  `.refine()` del schema (la edición es parcial) — el router la resuelve
+  comparando contra los valores YA guardados cuando el caller sólo envía uno
+  de los dos campos.
+- **`coverage.list`** gana `insurerId` (vía `plan.insurerId`, no hay columna
+  directa en `PatientCoverage`), `vigentesA` (`validFrom<=X` y `(validTo IS
+  NULL OR validTo>=X)`) y `search` (policyNumber o nombre/MRN del paciente,
+  `insensitive`) + `offset` (mismo patrón offset/limit que
+  `patientAccount.listarWorklist`). Todos compuestos con `AND: filters` (no
+  spreads sueltos) — mismo patrón que `insurer.list` en este router, para no
+  repetir el bug Wave 6 donde el `OR` de un filtro nuevo pisaba el `OR` de
+  tenancy.
+- `apps/web/src/app/(admin)/insurance/polizas/page.tsx` (nueva) — tabla
+  transversal (paciente/aseguradora/plan/póliza/carnet/vigencia con badge
+  VIGENTE·VENCIDA·FUTURA/activo) + dialog alta (reusa `BuscadorPaciente` de
+  `apps/web/src/components/pacientes/BuscadorPaciente.tsx`, el mismo buscador
+  de `/emergency/new`) + dialog edición (mismos campos, paciente read-only) +
+  desactivar con `window.confirm` (patrón ya usado en
+  `/admin/workflow-overrides`). Enlazada desde `/insurance` (botón
+  "Pólizas", junto a "Planes" — sin entrada nueva de sidebar, mismo patrón
+  que `/insurance/plans`). No es duplicado de `patients/[id]/insurance.tsx`:
+  ese tab es alta/consulta acotada a UN paciente durante atención clínica;
+  esta pantalla es mantenimiento/auditoría transversal de TODAS las pólizas
+  del tenant — mismo par admin/clínico que ya coexiste en `/insurance` vs.
+  el tab del paciente para `InsurancePlan`.
+
+Sin UI test dedicado (ningún archivo bajo `apps/web/src/app/(admin)/insurance/`
+tenía uno antes de este CC — `list`/`plans`/`plans/[id]` tampoco); cobertura
+en `packages/trpc/src/routers/__tests__/insurance.router.test.ts` (feliz,
+`NOT_FOUND` cross-tenant, `patientId` no cambia, `priceListId` ajeno
+rechazado, filtros nuevos de `list`) y
+`packages/contracts/src/schemas/__tests__/insurance.test.ts`. **@QA debe
+automatizar a nivel E2E**: alta de póliza desde `/insurance/polizas`
+(buscador de paciente → aseguradora → plan → guardar), edición, desactivar
+con confirmación, y los 3 filtros nuevos (búsqueda, aseguradora, sólo
+vigentes).
+
 ## Importador desde Odoo (one-shot, idempotente, NO ejecutado)
 
 `packages/database/scripts/import-odoo-seguros.mjs` — reutiliza el cliente

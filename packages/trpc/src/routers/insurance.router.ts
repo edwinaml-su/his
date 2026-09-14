@@ -18,6 +18,7 @@ import {
   insurancePlanCreateInput,
   insurancePlanListInput,
   patientCoverageCreateInput,
+  patientCoverageUpdateInput,
   patientCoverageListInput,
   patientCoverageDeactivateInput,
   authorizationRequestCreateInput,
@@ -258,17 +259,44 @@ export const insuranceRouter = router({
   }),
 
   coverage: router({
+    /**
+     * CC-0028c — lista transversal para el mantenimiento admin
+     * (/insurance/polizas): además de patientId/planId/activeOnly, agrega
+     * insurerId (vía plan.insurerId), vigentesA (validFrom<=X y (validTo
+     * null o >=X)) y search (policyNumber o nombre/MRN del paciente).
+     * Usa el patrón `AND: filters` (no spreads sueltos) para que el OR
+     * interno de `search`/`vigentesA` no se mezcle con la tenancy —
+     * lección Wave 6, ya aplicada en insurer.list de este mismo router.
+     */
     list: tenantProcedure
       .input(patientCoverageListInput)
       .query(async ({ ctx, input }) => {
+        const filters: object[] = [{ organizationId: ctx.tenant.organizationId }];
+        if (input.patientId) filters.push({ patientId: input.patientId });
+        if (input.planId) filters.push({ planId: input.planId });
+        if (input.insurerId) filters.push({ plan: { insurerId: input.insurerId } });
+        if (input.activeOnly) filters.push({ active: true });
+        if (input.vigentesA) {
+          filters.push({
+            validFrom: { lte: input.vigentesA },
+            OR: [{ validTo: null }, { validTo: { gte: input.vigentesA } }],
+          });
+        }
+        if (input.search) {
+          const s = input.search;
+          filters.push({
+            OR: [
+              { policyNumber: { contains: s, mode: "insensitive" as const } },
+              { patient: { firstName: { contains: s, mode: "insensitive" as const } } },
+              { patient: { lastName: { contains: s, mode: "insensitive" as const } } },
+              { patient: { secondLastName: { contains: s, mode: "insensitive" as const } } },
+              { patient: { mrn: { contains: s, mode: "insensitive" as const } } },
+            ],
+          });
+        }
         return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
           tx.patientCoverage.findMany({
-            where: {
-              organizationId: ctx.tenant.organizationId,
-              ...(input.patientId && { patientId: input.patientId }),
-              ...(input.planId && { planId: input.planId }),
-              ...(input.activeOnly && { active: true }),
-            },
+            where: { AND: filters },
             include: {
               patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
               plan: {
@@ -282,6 +310,7 @@ export const insuranceRouter = router({
             },
             orderBy: { validFrom: "desc" },
             take: input.limit,
+            skip: input.offset,
           }),
         );
       }),
@@ -343,7 +372,81 @@ export const insuranceRouter = router({
         });
       }),
 
-    deactivate: tenantProcedure
+    /**
+     * CC-0028c — edición de una póliza existente (mantenimiento admin).
+     * `patientCoverageUpdateInput` no incluye `patientId` a propósito: una
+     * póliza no se transfiere de paciente — se desactiva (`deactivate`) y se
+     * crea una nueva con `create`. `validFrom`/`validTo` se validan contra
+     * los valores YA guardados cuando el caller sólo envía uno de los dos
+     * (mismo criterio que el `.refine` de `patientCoverageCreateInput`, pero
+     * aquí no puede vivir en el schema porque el update es parcial).
+     */
+    update: coverageWriterProc
+      .input(patientCoverageUpdateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const existing = await tx.patientCoverage.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            select: { validFrom: true, validTo: true },
+          });
+          if (!existing) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Póliza no existe en la organización.",
+            });
+          }
+
+          if (input.planId) {
+            const plan = await tx.insurancePlan.findFirst({
+              where: {
+                id: input.planId,
+                insurer: {
+                  OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+                },
+              },
+              select: { id: true },
+            });
+            if (!plan) {
+              throw new TRPCError({
+                code: "NOT_FOUND",
+                message: "Plan de aseguradora no visible para el tenant.",
+              });
+            }
+          }
+          if (input.priceListId) {
+            await assertPriceListVisible(tx, input.priceListId, ctx.tenant.organizationId);
+          }
+
+          const effectiveFrom = input.validFrom ?? existing.validFrom;
+          // undefined = no tocar (usa la existente); null = borrar la fecha
+          // fin (sin vencimiento) — por eso NO se usa `??` aquí.
+          const effectiveTo = input.validTo === undefined ? existing.validTo : input.validTo;
+          if (effectiveTo && effectiveTo <= effectiveFrom) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "validTo debe ser posterior a validFrom",
+            });
+          }
+
+          return tx.patientCoverage.update({
+            where: { id: input.id },
+            data: {
+              planId: input.planId,
+              policyNumber: input.policyNumber,
+              carnet: input.carnet,
+              contratante: input.contratante,
+              priceListId: input.priceListId,
+              validFrom: input.validFrom,
+              validTo: input.validTo,
+              updatedBy: ctx.user.id,
+            },
+          });
+        });
+      }),
+
+    // CC-0028c (pre-pr-review): mismo gate que create/update — desactivar una
+    // póliza es acción financiera, no de cualquier rol del tenant.
+    deactivate: coverageWriterProc
       .input(patientCoverageDeactivateInput)
       .mutation(async ({ ctx, input }) => {
         const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>

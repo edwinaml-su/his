@@ -61,6 +61,9 @@ export default function InsurancePage() {
           <Button variant="outline" asChild>
             <Link href="/insurance/plans">Planes</Link>
           </Button>
+          <Button variant="outline" asChild>
+            <Link href="/insurance/polizas">Pólizas</Link>
+          </Button>
           <Button asChild>
             <Link href="/insurance/new">Nueva aseguradora</Link>
           </Button>

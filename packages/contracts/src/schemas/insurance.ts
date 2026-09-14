@@ -162,12 +162,41 @@ export const patientCoverageCreateInput = z
 export const patientCoverageListInput = z.object({
   patientId: z.string().uuid().optional(),
   planId: z.string().uuid().optional(),
+  /** CC-0028c — filtro por aseguradora, resuelto vía plan.insurerId. */
+  insurerId: z.string().uuid().optional(),
+  /** CC-0028c — pólizas vigentes a una fecha: validFrom<=X y (validTo null o >=X). */
+  vigentesA: z.coerce.date().optional(),
+  /** CC-0028c — búsqueda libre: nombre/MRN del paciente o nº de póliza. */
+  search: z.string().trim().min(1).max(80).optional(),
   activeOnly: z.boolean().default(true),
   limit: z.number().int().min(1).max(200).default(50),
+  /** CC-0028c — mismo patrón offset/limit que patientAccount.listarWorklist. */
+  offset: z.number().int().min(0).default(0),
 });
 
 export const patientCoverageDeactivateInput = z.object({
   id: z.string().uuid(),
+});
+
+/**
+ * CC-0028c — edición de una póliza existente. `patientId` deliberadamente NO
+ * es editable: una póliza no se transfiere de paciente (se desactiva y se
+ * crea una nueva) — ver docs/CC/0028_seguros_operativos.md. El router valida
+ * tenancy de `id`/`planId`/`priceListId` y que `validTo` (si viene, o el ya
+ * guardado) sea posterior a `validFrom` (si viene, o el ya guardado).
+ */
+export const patientCoverageUpdateInput = z.object({
+  id: z.string().uuid(),
+  planId: z.string().uuid().optional(),
+  policyNumber: z.string().trim().min(1).max(80).optional(),
+  carnet: z.string().trim().max(80).optional(),
+  contratante: z.string().trim().max(200).optional(),
+  priceListId: z.string().uuid().optional(),
+  validFrom: z.coerce.date().optional(),
+  // nullable: `null` explícito = borrar la fecha fin (póliza sin vencimiento);
+  // `undefined` = no tocar. Sin esto, vaciar el campo en la UI era un falso
+  // éxito (Prisma ignora undefined) — hallazgo pre-pr-review CC-0028c.
+  validTo: z.coerce.date().nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -311,6 +340,8 @@ export const getExpiringAuthorizationsInput = z.object({
 export type InsurerCreateInput = z.infer<typeof insurerCreateInput>;
 export type InsurancePlanCreateInput = z.infer<typeof insurancePlanCreateInput>;
 export type PatientCoverageCreateInput = z.infer<typeof patientCoverageCreateInput>;
+export type PatientCoverageUpdateInput = z.infer<typeof patientCoverageUpdateInput>;
+export type PatientCoverageListInput = z.infer<typeof patientCoverageListInput>;
 export type AuthorizationRequestCreateInput = z.infer<typeof authorizationRequestCreateInput>;
 export type AuthorizationApproveInput = z.infer<typeof authorizationApproveInput>;
 export type AuthorizationDenyInput = z.infer<typeof authorizationDenyInput>;

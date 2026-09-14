@@ -16,6 +16,7 @@ import {
   insurancePlanCreateInput,
   insurancePlanListInput,
   patientCoverageCreateInput,
+  patientCoverageUpdateInput,
   patientCoverageListInput,
   patientCoverageDeactivateInput,
   authorizationRequestCreateInput,
@@ -232,6 +233,50 @@ describe("patientCoverageCreateInput", () => {
     const r = patientCoverageListInput.safeParse({});
     if (r.success) expect(r.data.activeOnly).toBe(true);
   });
+
+  it("list acepta insurerId/vigentesA/search/offset (CC-0028c)", () =>
+    expect(
+      patientCoverageListInput.safeParse({
+        insurerId: u,
+        vigentesA: from,
+        search: "gonzalez",
+        offset: 25,
+      }).success,
+    ).toBe(true));
+
+  it("list default offset=0", () => {
+    const r = patientCoverageListInput.safeParse({});
+    if (r.success) expect(r.data.offset).toBe(0);
+  });
+});
+
+describe("patientCoverageUpdateInput (CC-0028c)", () => {
+  it("acepta sólo id (todos los demás campos opcionales)", () =>
+    expect(patientCoverageUpdateInput.safeParse({ id: u }).success).toBe(true));
+
+  it("acepta edición parcial de policyNumber/carnet", () =>
+    expect(
+      patientCoverageUpdateInput.safeParse({
+        id: u,
+        policyNumber: "POL-NUEVA",
+        carnet: "C-1",
+      }).success,
+    ).toBe(true));
+
+  it("no tiene campo patientId en el schema", () => {
+    const r = patientCoverageUpdateInput.safeParse({ id: u, patientId: u });
+    // patientId no está declarado -> zod lo descarta silenciosamente (unknownKeys: strip).
+    expect(r.success).toBe(true);
+    if (r.success) expect((r.data as Record<string, unknown>).patientId).toBeUndefined();
+  });
+
+  it("rechaza id no-uuid", () =>
+    expect(patientCoverageUpdateInput.safeParse({ id: "abc" }).success).toBe(false));
+
+  it("rechaza policyNumber vacío cuando se envía", () =>
+    expect(
+      patientCoverageUpdateInput.safeParse({ id: u, policyNumber: "" }).success,
+    ).toBe(false));
 });
 
 describe("authorizationRequest", () => {
