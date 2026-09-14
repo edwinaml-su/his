@@ -26,9 +26,19 @@ import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { nextCuenta } from "../lib/cuenta-numbering";
+import {
+  resolverCobertura,
+  type Ambito,
+  type LineaEntrada,
+  type OrigenCobertura,
+  type ResultadoCobertura,
+} from "../lib/coverage-resolver";
+import { insertarFacturaConItems, type InvoiceItemParaInsertar } from "../lib/invoice-writer";
 
 const tipoServicioEnum = z.enum(["HOSPITALARIO", "NO_HOSPITALARIO"]);
 const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
+/** CC-0028b — mismo trío de roles que `coverageWriterProc` en insurance.router.ts. */
+const facturacionDualProc = requireRole(["ADMIN", "ACCOUNTANT", "BILLING"]);
 
 /** CC-0027 — documento de aceptación de deuda que formaliza la ruta CXC. */
 const documentoCxcInput = z.object({
@@ -284,6 +294,163 @@ async function computeLiquidacion(tx: PrismaClient, accountId: string): Promise<
     coberturaAprobada,
     saldo: totalCargos - totalPagos - coberturaAprobada,
   };
+}
+
+/**
+ * CC-0028 — mapea el `origen` congelado del cargo (ver docs/48 Ola 2) al
+ * ámbito del motor de cobertura. Único origen de farmacia hoy en el código
+ * es "DISPENSACION_FARMACIA" (dispensation.router.ts); todo lo demás
+ * (HABITACION, IMAGENES, LABORATORIO, USO_INSTALACIONES, AJUSTE, MANUAL,
+ * null) se trata como CONSULTA. Heurística v1 — documentada en docs/CC/0028.
+ */
+function mapOrigenAAmbito(origen: string | null): Ambito {
+  return origen === "DISPENSACION_FARMACIA" ? "FARMACIA" : "CONSULTA";
+}
+
+/**
+ * CC-0028 — categoría de servicio de un código de tarifario, para que las
+ * CoverageRule ruleOn=CATEGORIA puedan aplicar. Mismo criterio que
+ * price-resolver.ts (categoria_base): primero el ítem de la lista congelada
+ * en el cargo (`priceListId`), luego LabTest (tenant, después global). Sin
+ * traversal de ancestros (a diferencia del ranking de precios) — CoverageRule
+ * matchea la categoría exacta del código, no sus subcategorías (v1).
+ */
+const SQL_CATEGORIA_POR_CODIGO = `
+SELECT COALESCE(
+  (SELECT i."categoryId" FROM "ServicePriceListItem" i
+    WHERE i."priceListId" = $1::uuid AND i.code = $2::text AND i.active = true LIMIT 1),
+  (SELECT lt."categoryId" FROM "LabTest" lt
+    WHERE lt.code = $2::text AND (lt."organizationId" = $3::uuid OR lt."organizationId" IS NULL)
+    ORDER BY (lt."organizationId" IS NULL) LIMIT 1)
+) AS "categoryId"`;
+
+/** Cargo VIGENTE de una cuenta, con la categoría de su código de tarifario ya
+ *  resuelta y los campos de congelamiento de precio (CC-0028b los hereda en
+ *  las 2 InvoiceItem espejo de `facturacionDual`). */
+interface CargoConCobertura {
+  id: string;
+  code: string | null;
+  descripcion: string | null;
+  quantity: number;
+  totalPrice: number;
+  ambito: Ambito;
+  categoria: string | null;
+  priceListId: string | null;
+  priceRuleId: string | null;
+  resolvedAt: Date | null;
+  priceSource: string | null;
+}
+
+/**
+ * CC-0028 — carga los cargos VIGENTE (con precio resuelto) de la cuenta y
+ * resuelve, por cada uno, la categoría de servicio de su código (misma
+ * consulta `SQL_CATEGORIA_POR_CODIGO` que usa `resolverPrecio`) y el ámbito
+ * (`mapOrigenAAmbito`) — ambos insumos de `resolverCobertura`. Extraído de
+ * `computeCoberturaEstimada` para que CC-0028b (`facturacionDual`) reutilice
+ * exactamente el mismo criterio de categoría/ámbito en vez de reimplementarlo.
+ */
+async function cargarCargosVigentesConCategoria(
+  tx: PrismaClient,
+  organizationId: string,
+  accountId: string,
+): Promise<CargoConCobertura[]> {
+  const servicios = await tx.patientAccountService.findMany({
+    where: { accountId, status: "VIGENTE", totalPrice: { not: null } },
+    select: {
+      id: true,
+      code: true,
+      descripcion: true,
+      quantity: true,
+      totalPrice: true,
+      priceListId: true,
+      priceRuleId: true,
+      resolvedAt: true,
+      priceSource: true,
+      origen: true,
+    },
+  });
+
+  const cargos: CargoConCobertura[] = [];
+  for (const s of servicios) {
+    const ambito = mapOrigenAAmbito(s.origen);
+    let categoria: string | null = null;
+    if (s.code) {
+      const filas = await tx.$queryRawUnsafe<Array<{ categoryId: string | null }>>(
+        SQL_CATEGORIA_POR_CODIGO,
+        s.priceListId,
+        s.code,
+        organizationId,
+      );
+      categoria = filas[0]?.categoryId ?? null;
+    }
+    cargos.push({
+      id: s.id,
+      code: s.code,
+      descripcion: s.descripcion,
+      quantity: Number(s.quantity),
+      totalPrice: Number(s.totalPrice),
+      ambito,
+      categoria,
+      priceListId: s.priceListId,
+      priceRuleId: s.priceRuleId,
+      resolvedAt: s.resolvedAt,
+      priceSource: s.priceSource,
+    });
+  }
+  return cargos;
+}
+
+/**
+ * CC-0028 — desglose de cobertura ESTIMADA (asegurado vs paciente) de los
+ * cargos VIGENTE de la cuenta, cuando el paciente tiene una PatientCoverage
+ * vigente hoy. Es informativo/de negociación con la aseguradora: NO
+ * descuenta el saldo de `computeLiquidacion` — el único descuento real de
+ * cobertura sigue siendo la CoverageLetter (carta/finiquito) de la ruta A,
+ * igual que en Odoo (la cobertura es aritmética de liquidación, no de
+ * captura). Devuelve null si no hay cargos o no hay póliza vigente.
+ */
+async function computeCoberturaEstimada(
+  tx: PrismaClient,
+  organizationId: string,
+  accountId: string,
+): Promise<ResultadoCobertura | null> {
+  const account = await tx.patientAccount.findFirst({
+    where: { id: accountId },
+    select: { patientId: true },
+  });
+  if (!account) return null;
+
+  const cargos = await cargarCargosVigentesConCategoria(tx, organizationId, accountId);
+  if (cargos.length === 0) return null;
+
+  const lineas: LineaEntrada[] = cargos.map((c) => ({
+    code: c.code ?? "",
+    categoria: c.categoria,
+    ambito: c.ambito,
+    total: c.totalPrice,
+  }));
+
+  const resultado = await resolverCobertura(tx, {
+    organizationId,
+    patientId: account.patientId,
+    fecha: new Date(),
+    lineas,
+  });
+  return resultado.polizaId ? resultado : null;
+}
+
+/** Redondeo a centavo — mismo criterio que coverage-resolver.ts `aCentavos`. */
+function aCentavos(valor: number): number {
+  return Math.round(valor * 100) / 100;
+}
+
+/** Marcador estable en `Invoice.notes` — único mecanismo disponible para
+ *  identificar facturas generadas por `facturacionDual` sin agregar columnas
+ *  (Invoice no tiene modelo Prisma; agregar una columna exigiría SQL 236
+ *  solo para esto). `lado` distingue la factura del paciente de la de la
+ *  aseguradora al leer las notas. */
+function marcadorFacturacionDual(accountId: string, lado: "PACIENTE" | "ASEGURADORA"): string {
+  return `[FACTURACION_DUAL accountId=${accountId} lado=${lado}]`;
 }
 
 /** Fila del worklist de cobro: 1 por expediente con saldo agregado + área actual. */
@@ -654,6 +821,11 @@ export const patientAccountRouter = router({
    * CC-0027 — desglose de liquidación de la cuenta: total cargos VIGENTE −
    * pagos − cobertura aprobada = saldo. Base para las dos rutas de alta
    * administrativa (ver `computeLiquidacion`).
+   *
+   * CC-0028 — agrega `coberturaEstimada` (asegurado vs paciente, por línea)
+   * cuando el paciente tiene póliza vigente. NO participa del cálculo de
+   * `saldo` (ver `computeCoberturaEstimada`) — es la base para negociar con
+   * la aseguradora, no un descuento automático.
    */
   liquidacion: tenantProcedure
     .input(z.object({ accountId: z.string().uuid() }))
@@ -666,7 +838,13 @@ export const patientAccountRouter = router({
         if (!account) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no encontrada." });
         }
-        return computeLiquidacion(tx, account.id);
+        const liquidacion = await computeLiquidacion(tx, account.id);
+        const coberturaEstimada = await computeCoberturaEstimada(
+          tx,
+          ctx.tenant.organizationId,
+          account.id,
+        );
+        return { ...liquidacion, coberturaEstimada };
       });
     }),
 
@@ -863,6 +1041,307 @@ export const patientAccountRouter = router({
             createdBy: ctx.user.id,
           },
         });
+      });
+    }),
+
+  /**
+   * CC-0028b — Facturación dual de coaseguro (regla de negocio de Edwin,
+   * 2026-09-14): parte el total VIGENTE de la cuenta en 2 facturas
+   * automáticas — una al paciente (`insurerId` NULL) y otra a la aseguradora
+   * (`insurerId` de la póliza vigente) — usando el mismo split
+   * cubierto/paciente que ya informa `liquidacion.coberturaEstimada`
+   * (CC-0028, `resolverCobertura`). A diferencia de `invoice.create`
+   * (factura manual de líneas nuevas con precio resuelto por
+   * `resolverPrecio`), esto SIEMPRE parte cargos YA capturados en la cuenta
+   * — mismo insumo que `computeCoberturaEstimada`/`computeLiquidacion`.
+   *
+   * Decisiones de diseño (documentadas porque el brief las dejaba abiertas):
+   *   - Ámbito por línea: reutiliza `cargarCargosVigentesConCategoria` (el
+   *     mismo helper de `computeCoberturaEstimada`) — no se reimplementa el
+   *     mapeo origen→ámbito ni la resolución de categoría.
+   *   - `totalPrice` de cada InvoiceItem es AUTORITATIVO (el split
+   *     cubierto/paciente que devuelve `resolverCobertura`, ya redondeado a
+   *     centavo); `unitPrice` se DERIVA de `totalPrice / quantity` solo para
+   *     mostrar un precio unitario coherente — nunca al revés. Por
+   *     construcción (`coverage-resolver.ts`: `paciente = total - cubierto`
+   *     en cada línea) la suma de `paciente_i` ya reconcilia exactamente con
+   *     `resultado.totalPaciente`, así que el ajuste de residual en la
+   *     última línea de la factura del paciente (pedido explícitamente) es
+   *     una red de seguridad ante artefactos de punto flotante, no una
+   *     corrección esperada en el camino feliz.
+   *   - `costCenterId` por línea: `PatientAccountService` NO tiene columna
+   *     `costCenterId` propia (a diferencia de Encounter/LabOrder/
+   *     SurgeryCase/ImagingOrder) — no hay de dónde heredarlo por cargo. Se
+   *     usa el primer `CostCenter` activo de la organización para TODAS las
+   *     líneas de ambas facturas, mismo patrón que ya usa `invoice.create`
+   *     para resolver `establishmentId` (`SELECT ... LIMIT 1`). Asignar un
+   *     centro de costo propio por cargo queda fuera de alcance v1.
+   *   - `currencyId`: `Organization.functionalCurrency` (no hay selector de
+   *     moneda en esta mutation — a diferencia de `invoice.create`, que la
+   *     recibe del formulario).
+   *   - IVA: NO se aplica (`taxAmount = 0`). `invoice.create` sí calcula 13%
+   *     porque factura un precio de tarifario nuevo; acá se está partiendo
+   *     un cargo YA congelado (`PatientAccountService.totalPrice`, que
+   *     tampoco lleva IVA — ver `capturarCargo`/price-resolver). Aplicar IVA
+   *     aquí inflaría `totalAmount` por encima del total de la cuenta y
+   *     rompería la reconciliación con `computeLiquidacion` (cargos = pagos
+   *     + cobertura + saldo).
+   *   - Idempotencia: marcador estable en `Invoice.notes`
+   *     (`marcadorFacturacionDual`) — Invoice no tiene columna de "origen"
+   *     y agregar una solo para esto no se justificó (SQL 236 evitado).
+   */
+  facturacionDual: facturacionDualProc
+    .input(z.object({ accountId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const organizationId = ctx.tenant.organizationId;
+
+        // `FOR UPDATE` (no `patientAccount.findFirst`) — cierra la ventana
+        // TOCTOU del check de idempotencia de abajo: una 2da llamada
+        // concurrente a la MISMA cuenta (doble clic, doble tab) queda
+        // bloqueada en este SELECT hasta que la 1ra transacción haga commit,
+        // momento en el que el SELECT del marcador en `notes` ya la ve y
+        // responde CONFLICT — en vez de que ambas pasen el check "no existe
+        // todavía" y facturen dos veces. Hallazgo de la revisión pre-PR
+        // (`pre-pr-review`, 2026-09-14): el costo de una duplicación acá es
+        // dinero facturado dos veces, no solo un documento repetido.
+        type AccountRow = { id: string; patientId: string; status: string; encounterId: string | null };
+        const accountRows = await tx.$queryRawUnsafe<AccountRow[]>(
+          `SELECT id, "patientId", status, "encounterId" FROM "PatientAccount"
+            WHERE id = $1 AND "organizationId" = $2 FOR UPDATE`,
+          input.accountId,
+          organizationId,
+        );
+        const account = accountRows[0];
+        if (!account) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no encontrada." });
+        }
+        // PENDIENTE_REGULARIZAR (pagador/tipoCuenta sin definir, R1) se
+        // acepta a propósito: la póliza de seguro (`PatientCoverage`) es del
+        // PACIENTE, independiente del pagador/tipoCuenta de la cuenta — un
+        // ingreso de emergencia sin pagador resuelto puede seguir teniendo
+        // una póliza vigente en el sistema. Mismo criterio explícito del
+        // brief de esta feature (no el de `cerrar`, que sí exige
+        // `regularizar` primero porque ahí el pagador determina la lista de
+        // precios de los cargos, algo que `facturacionDual` no toca).
+        if (!["ABIERTA", "PENDIENTE_REGULARIZAR"].includes(account.status)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Solo cuentas ABIERTA o PENDIENTE_REGULARIZAR pueden facturarse (estado actual: ${account.status}).`,
+          });
+        }
+
+        // Idempotencia — ¿ya existe una facturación dual no anulada de esta cuenta?
+        type IdRow = { id: string };
+        const existentes = await tx.$queryRawUnsafe<IdRow[]>(
+          `SELECT id FROM "Invoice"
+            WHERE "patientAccountId" = $1 AND status != 'VOIDED'::invoice_status
+              AND notes LIKE '%[FACTURACION_DUAL%'`,
+          account.id,
+        );
+        if (existentes.length > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "La cuenta ya tiene facturas generadas por facturación dual. Anule las facturas existentes antes de refacturar (fuera de alcance v1).",
+          });
+        }
+
+        // Ningún cargo sin tarifa resuelta — no se parte lo que no tiene precio.
+        const pendientesTarifa = await tx.patientAccountService.findMany({
+          where: { accountId: account.id, status: "PENDIENTE_TARIFA" },
+          select: { id: true },
+        });
+        if (pendientesTarifa.length > 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `${pendientesTarifa.length} cargo(s) sin tarifa resuelta — resuélvalos antes de facturar.`,
+          });
+        }
+
+        const cargos = await cargarCargosVigentesConCategoria(tx, organizationId, account.id);
+        if (cargos.length === 0) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "La cuenta no tiene cargos VIGENTE para facturar.",
+          });
+        }
+
+        const lineas: LineaEntrada[] = cargos.map((c) => ({
+          code: c.code ?? "",
+          categoria: c.categoria,
+          ambito: c.ambito,
+          total: c.totalPrice,
+        }));
+        const resultado = await resolverCobertura(tx, {
+          organizationId,
+          patientId: account.patientId,
+          fecha: new Date(),
+          lineas,
+        });
+        if (!resultado.polizaId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "El paciente no tiene una póliza de seguro vigente.",
+          });
+        }
+
+        const poliza = await tx.patientCoverage.findFirst({
+          where: { id: resultado.polizaId },
+          select: { plan: { select: { insurerId: true } } },
+        });
+        const insurerId = poliza?.plan.insurerId;
+        if (!insurerId) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "No se pudo resolver la aseguradora de la póliza vigente.",
+          });
+        }
+
+        const org = await tx.organization.findFirst({
+          where: { id: organizationId },
+          select: { functionalCurrency: true },
+        });
+        const currencyId = org?.functionalCurrency;
+        if (!currencyId) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "La organización no tiene moneda funcional configurada.",
+          });
+        }
+
+        const estabs = await tx.$queryRawUnsafe<IdRow[]>(
+          `SELECT id FROM "Establishment" WHERE "organizationId" = $1 LIMIT 1`,
+          organizationId,
+        );
+        const establishmentId = estabs[0]?.id;
+        if (!establishmentId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "No hay establecimiento activo para la organización.",
+          });
+        }
+
+        const costCenters = await tx.$queryRawUnsafe<IdRow[]>(
+          `SELECT id FROM "CostCenter" WHERE "organizationId" = $1 AND active = true ORDER BY code LIMIT 1`,
+          organizationId,
+        );
+        const costCenterId = costCenters[0]?.id;
+        if (!costCenterId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "No hay centro de costo activo para la organización — requerido para las líneas de factura.",
+          });
+        }
+
+        // --- Split por línea (ver docstring: totalPrice autoritativo) ---
+        const facturaPacienteItems: InvoiceItemParaInsertar[] = [];
+        const facturaAseguradoraItems: InvoiceItemParaInsertar[] = [];
+        const detalle: Array<{
+          cargoId: string;
+          descripcion: string | null;
+          total: number;
+          cubierto: number;
+          paciente: number;
+          reglaAplicada: OrigenCobertura;
+        }> = [];
+
+        cargos.forEach((cargo, i) => {
+          const linea = resultado.porLinea[i]!;
+          const qty = cargo.quantity > 0 ? cargo.quantity : 1;
+          const descripcion = cargo.descripcion?.trim() || cargo.code || "Cargo sin descripción";
+          const congelamiento = {
+            priceListId: cargo.priceListId,
+            priceRuleId: cargo.priceRuleId,
+            resolvedAt: cargo.resolvedAt,
+            priceSource: cargo.priceSource,
+          };
+
+          facturaPacienteItems.push({
+            description: descripcion,
+            quantity: qty,
+            unitPrice: aCentavos(linea.paciente / qty),
+            totalPrice: linea.paciente,
+            costCenterId,
+            ...congelamiento,
+          });
+          facturaAseguradoraItems.push({
+            description: descripcion,
+            quantity: qty,
+            unitPrice: aCentavos(linea.cubierto / qty),
+            totalPrice: linea.cubierto,
+            costCenterId,
+            ...congelamiento,
+          });
+          detalle.push({
+            cargoId: cargo.id,
+            descripcion: cargo.descripcion ?? cargo.code,
+            total: cargo.totalPrice,
+            cubierto: linea.cubierto,
+            paciente: linea.paciente,
+            reglaAplicada: linea.reglaAplicada,
+          });
+        });
+
+        // Red de seguridad de redondeo (ver docstring): ajusta la ÚLTIMA
+        // línea de la factura del paciente si la suma de líneas no reconcilia
+        // exactamente con el total agregado.
+        const sumaPaciente = aCentavos(
+          facturaPacienteItems.reduce((acc, it) => acc + it.totalPrice, 0),
+        );
+        const residual = aCentavos(resultado.totalPaciente - sumaPaciente);
+        if (residual !== 0 && facturaPacienteItems.length > 0) {
+          const ultima = facturaPacienteItems[facturaPacienteItems.length - 1]!;
+          ultima.totalPrice = aCentavos(ultima.totalPrice + residual);
+          ultima.unitPrice = aCentavos(ultima.totalPrice / (ultima.quantity || 1));
+        }
+
+        // Secuencial (no Promise.all): ambos INSERT corren sobre la MISMA tx
+        // (una conexión reservada por withTenantContext) — dos INSERT
+        // RETURNING concurrentes en la misma transacción interactiva de
+        // Prisma no es un patrón usado en el resto del código.
+        const factura = await insertarFacturaConItems(tx, {
+          organizationId,
+          establishmentId,
+          patientId: account.patientId,
+          encounterId: account.encounterId ?? null,
+          insurerId: null,
+          costCenterId: null,
+          currencyId,
+          patientAccountId: account.id,
+          status: "ISSUED",
+          subtotal: resultado.totalPaciente,
+          taxAmount: 0,
+          totalAmount: resultado.totalPaciente,
+          notes: marcadorFacturacionDual(account.id, "PACIENTE"),
+          items: facturaPacienteItems,
+        });
+        const facturaAseguradora = await insertarFacturaConItems(tx, {
+          organizationId,
+          establishmentId,
+          patientId: account.patientId,
+          encounterId: account.encounterId ?? null,
+          insurerId,
+          costCenterId: null,
+          currencyId,
+          patientAccountId: account.id,
+          status: "ISSUED",
+          subtotal: resultado.totalAsegurado,
+          taxAmount: 0,
+          totalAmount: resultado.totalAsegurado,
+          notes: marcadorFacturacionDual(account.id, "ASEGURADORA"),
+          items: facturaAseguradoraItems,
+        });
+
+        return {
+          facturaPacienteId: factura.id,
+          facturaPacienteNumero: factura.invoiceNumber,
+          facturaAseguradoraId: facturaAseguradora.id,
+          facturaAseguradoraNumero: facturaAseguradora.invoiceNumber,
+          totalPaciente: resultado.totalPaciente,
+          totalAsegurado: resultado.totalAsegurado,
+          detalle,
+        };
       });
     }),
 });

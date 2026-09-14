@@ -24,6 +24,7 @@ import { z } from "zod";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { resolverPrecio, mapFuenteAPriceSource } from "../lib/price-resolver";
+import { insertarFacturaConItems } from "../lib/invoice-writer";
 
 /**
  * docs/48 Ola 2 (C2-3/H-03) — roles autorizados a forzar un `unitPrice`
@@ -200,17 +201,6 @@ interface CostCenterRow {
   id: string;
   code: string;
   name: string;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: genera invoiceNumber único (YYYYMMDD-NNNNN)
-// ---------------------------------------------------------------------------
-
-function buildInvoiceNumber(): string {
-  const d = new Date();
-  const date = d.toISOString().slice(0, 10).replace(/-/g, "");
-  const rand = Math.floor(Math.random() * 100000).toString().padStart(5, "0");
-  return `${date}-${rand}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,62 +450,38 @@ export const invoiceRouter = router({
       const totalAmount = parseFloat((subtotal + taxAmount).toFixed(2));
       const subtotalFixed = parseFloat(subtotal.toFixed(2));
 
-      const invoiceNumber = buildInvoiceNumber();
       const notes = overrideNotes.length > 0 ? overrideNotes.join("\n") : null;
 
-      type IdRow = { id: string };
-
-      const inserted = await tx.$queryRawUnsafe<IdRow[]>(
-        `INSERT INTO "Invoice" (
-           "organizationId", "establishmentId", "patientId", "encounterId",
-           "insurerId", "costCenterId", "currencyId", "invoiceNumber",
-           subtotal, "taxAmount", "totalAmount", status, "patientAccountId", notes
-         ) VALUES (
-           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13, $14
-         ) RETURNING id`,
-        tenant.organizationId,
+      // Insertar Invoice + items con el precio congelado (docs/48 Ola 1, H-05).
+      // Helper compartido con patientAccount.facturacionDual (CC-0028b) — ver
+      // lib/invoice-writer.ts.
+      const { id: invoiceId, invoiceNumber } = await insertarFacturaConItems(tx, {
+        organizationId: tenant.organizationId,
         establishmentId,
-        input.patientId,
-        input.encounterId ?? null,
-        input.insurerId ?? null,
-        input.costCenterId ?? null,
-        input.currencyId,
-        invoiceNumber,
-        subtotalFixed,
+        patientId: input.patientId,
+        encounterId: input.encounterId ?? null,
+        insurerId: input.insurerId ?? null,
+        costCenterId: input.costCenterId ?? null,
+        currencyId: input.currencyId,
+        patientAccountId: input.patientAccountId,
+        status: input.status,
+        subtotal: subtotalFixed,
         taxAmount,
         totalAmount,
-        input.status,
-        input.patientAccountId,
         notes,
-      );
-
-      const invoiceId = inserted[0]?.id;
-      if (!invoiceId) {
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al crear factura." });
-      }
-
-      // Insertar items con el precio congelado (docs/48 Ola 1, H-05).
-      for (const item of resolvedItems) {
-        const totalPrice = parseFloat((item.quantity * item.unitPrice).toFixed(2));
-        await tx.$queryRawUnsafe(
-          `INSERT INTO "InvoiceItem" (
-             "invoiceId", description, quantity, "unitPrice", "totalPrice",
-             "costCenterId", "serviceUnitId", "priceListId", "priceRuleId",
-             "resolvedAt", "priceSource"
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-          invoiceId,
-          item.description,
-          item.quantity,
-          item.unitPrice,
-          totalPrice,
-          item.costCenterId,
-          item.serviceUnitId ?? null,
-          item.priceListId,
-          item.priceRuleId,
-          item.resolvedAt,
-          item.priceSource,
-        );
-      }
+        items: resolvedItems.map((item) => ({
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          totalPrice: parseFloat((item.quantity * item.unitPrice).toFixed(2)),
+          costCenterId: item.costCenterId,
+          serviceUnitId: item.serviceUnitId ?? null,
+          priceListId: item.priceListId,
+          priceRuleId: item.priceRuleId,
+          resolvedAt: item.resolvedAt,
+          priceSource: item.priceSource,
+        })),
+      });
 
       return { id: invoiceId, invoiceNumber };
     });

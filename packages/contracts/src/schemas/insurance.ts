@@ -74,6 +74,9 @@ export const insurancePlanCreateInput = z.object({
   description: z.string().trim().max(400).optional(),
   copayPct: z.number().min(0).max(100).optional(),
   coveredProcedures: z.array(coveredProcedureEntry).optional(),
+  /** CC-0028 — FK lógica a ServicePriceList (sin relación Prisma). */
+  priceListId: z.string().uuid().optional(),
+  sequence: z.number().int().min(0).default(0),
 });
 
 export const insurancePlanListInput = z.object({
@@ -81,6 +84,57 @@ export const insurancePlanListInput = z.object({
   activeOnly: z.boolean().default(true),
   limit: z.number().int().min(1).max(200).default(50),
 });
+
+// ---------------------------------------------------------------------------
+// CC-0028 — config de cobertura por ámbito (InsurancePlanCoverage /
+// PatientCoverageOverride comparten la misma forma — ver SQL 235).
+// ---------------------------------------------------------------------------
+
+export const ambitoEnum = z.enum(["CONSULTA", "FARMACIA", "GENERAL"]);
+export const coverageTypeEnum = z.enum(["PORCENTAJE", "MONTO_FIJO", "PORCENTAJE_CON_TOPE"]);
+
+export type AmbitoType = z.infer<typeof ambitoEnum>;
+export type CoverageTypeType = z.infer<typeof coverageTypeEnum>;
+
+/**
+ * Espejo del CHECK `insurance_plan_coverage_fields_check`/
+ * `patient_coverage_override_fields_check` (SQL 235): el campo requerido
+ * depende de `coverageType`.
+ */
+function refineAmbitoConfig<T extends { coverageType: CoverageTypeType; insuredPercentage?: number; copayAmount?: number; coverageLimit?: number }>(
+  data: T,
+  ctx: z.RefinementCtx,
+) {
+  if (data.coverageType === "PORCENTAJE" && data.insuredPercentage === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "insuredPercentage requerido para PORCENTAJE", path: ["insuredPercentage"] });
+  }
+  if (data.coverageType === "MONTO_FIJO" && data.copayAmount === undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "copayAmount requerido para MONTO_FIJO", path: ["copayAmount"] });
+  }
+  if (data.coverageType === "PORCENTAJE_CON_TOPE" && (data.insuredPercentage === undefined || data.coverageLimit === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "insuredPercentage y coverageLimit requeridos para PORCENTAJE_CON_TOPE",
+      path: ["coverageLimit"],
+    });
+  }
+}
+
+const ambitoConfigBase = {
+  ambito: ambitoEnum,
+  coverageType: coverageTypeEnum,
+  insuredPercentage: z.number().min(0).max(100).optional(),
+  copayAmount: z.number().min(0).optional(),
+  coverageLimit: z.number().min(0).optional(),
+};
+
+export const insurancePlanCoverageUpsertInput = z
+  .object({ planId: z.string().uuid(), ...ambitoConfigBase })
+  .superRefine(refineAmbitoConfig);
+
+export const patientCoverageOverrideUpsertInput = z
+  .object({ coverageId: z.string().uuid(), ...ambitoConfigBase })
+  .superRefine(refineAmbitoConfig);
 
 // ---------------------------------------------------------------------------
 // PatientCoverage
@@ -91,6 +145,12 @@ export const patientCoverageCreateInput = z
     patientId: z.string().uuid(),
     planId: z.string().uuid(),
     policyNumber: z.string().trim().min(1).max(80),
+    /** CC-0028 — número de carnet físico de la aseguradora. */
+    carnet: z.string().trim().max(80).optional(),
+    /** CC-0028 — contratante de la póliza (puede diferir del paciente). */
+    contratante: z.string().trim().max(200).optional(),
+    /** CC-0028 — override de InsurancePlan.priceListId para esta póliza. */
+    priceListId: z.string().uuid().optional(),
     validFrom: z.coerce.date(),
     validTo: z.coerce.date().optional(),
   })
@@ -102,12 +162,41 @@ export const patientCoverageCreateInput = z
 export const patientCoverageListInput = z.object({
   patientId: z.string().uuid().optional(),
   planId: z.string().uuid().optional(),
+  /** CC-0028c — filtro por aseguradora, resuelto vía plan.insurerId. */
+  insurerId: z.string().uuid().optional(),
+  /** CC-0028c — pólizas vigentes a una fecha: validFrom<=X y (validTo null o >=X). */
+  vigentesA: z.coerce.date().optional(),
+  /** CC-0028c — búsqueda libre: nombre/MRN del paciente o nº de póliza. */
+  search: z.string().trim().min(1).max(80).optional(),
   activeOnly: z.boolean().default(true),
   limit: z.number().int().min(1).max(200).default(50),
+  /** CC-0028c — mismo patrón offset/limit que patientAccount.listarWorklist. */
+  offset: z.number().int().min(0).default(0),
 });
 
 export const patientCoverageDeactivateInput = z.object({
   id: z.string().uuid(),
+});
+
+/**
+ * CC-0028c — edición de una póliza existente. `patientId` deliberadamente NO
+ * es editable: una póliza no se transfiere de paciente (se desactiva y se
+ * crea una nueva) — ver docs/CC/0028_seguros_operativos.md. El router valida
+ * tenancy de `id`/`planId`/`priceListId` y que `validTo` (si viene, o el ya
+ * guardado) sea posterior a `validFrom` (si viene, o el ya guardado).
+ */
+export const patientCoverageUpdateInput = z.object({
+  id: z.string().uuid(),
+  planId: z.string().uuid().optional(),
+  policyNumber: z.string().trim().min(1).max(80).optional(),
+  carnet: z.string().trim().max(80).optional(),
+  contratante: z.string().trim().max(200).optional(),
+  priceListId: z.string().uuid().optional(),
+  validFrom: z.coerce.date().optional(),
+  // nullable: `null` explícito = borrar la fecha fin (póliza sin vencimiento);
+  // `undefined` = no tocar. Sin esto, vaciar el campo en la UI era un falso
+  // éxito (Prisma ignora undefined) — hallazgo pre-pr-review CC-0028c.
+  validTo: z.coerce.date().nullable().optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -160,6 +249,63 @@ export const authorizationDenyInput = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// CC-0028 — CoverageRule ("Patient Share Rules", acs.insurance.policy.rule).
+// ---------------------------------------------------------------------------
+
+export const ruleOnEnum = z.enum(["CATEGORIA", "CODIGO"]);
+export const ruleTypeEnum = z.enum(["PORCENTAJE", "MONTO"]);
+
+export type RuleOnType = z.infer<typeof ruleOnEnum>;
+export type RuleTypeType = z.infer<typeof ruleTypeEnum>;
+
+export const coverageRuleCreateInput = z
+  .object({
+    /** Exactamente uno de planId/coverageId (XOR, CHECK en SQL 235). */
+    planId: z.string().uuid().optional(),
+    coverageId: z.string().uuid().optional(),
+    ruleOn: ruleOnEnum,
+    serviceCategoryId: z.string().uuid().optional(),
+    code: z.string().trim().min(1).max(40).optional(),
+    ruleType: ruleTypeEnum,
+    percentage: z.number().min(0).max(100).optional(),
+    amount: z.number().min(0).optional(),
+    fullCover: z.boolean().default(false),
+    sequence: z.number().int().min(0).default(0),
+  })
+  .superRefine((d, ctx) => {
+    if ((d.planId == null) === (d.coverageId == null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Exactamente uno de planId o coverageId es requerido",
+        path: ["planId"],
+      });
+    }
+    if (d.ruleOn === "CATEGORIA" && !d.serviceCategoryId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "serviceCategoryId requerido para ruleOn=CATEGORIA", path: ["serviceCategoryId"] });
+    }
+    if (d.ruleOn === "CODIGO" && !d.code) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "code requerido para ruleOn=CODIGO", path: ["code"] });
+    }
+    if (!d.fullCover) {
+      if (d.ruleType === "PORCENTAJE" && d.percentage === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "percentage requerido para ruleType=PORCENTAJE (o fullCover=true)", path: ["percentage"] });
+      }
+      if (d.ruleType === "MONTO" && d.amount === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "amount requerido para ruleType=MONTO (o fullCover=true)", path: ["amount"] });
+      }
+    }
+  });
+
+export const coverageRuleListInput = z.object({
+  planId: z.string().uuid().optional(),
+  coverageId: z.string().uuid().optional(),
+  activeOnly: z.boolean().default(true),
+  limit: z.number().int().min(1).max(200).default(50),
+});
+
+export const coverageRuleDeactivateInput = z.object({ id: z.string().uuid() });
+
+// ---------------------------------------------------------------------------
 // b14 — checkCoverage (plan-procedure coverage check)
 // ---------------------------------------------------------------------------
 
@@ -194,8 +340,14 @@ export const getExpiringAuthorizationsInput = z.object({
 export type InsurerCreateInput = z.infer<typeof insurerCreateInput>;
 export type InsurancePlanCreateInput = z.infer<typeof insurancePlanCreateInput>;
 export type PatientCoverageCreateInput = z.infer<typeof patientCoverageCreateInput>;
+export type PatientCoverageUpdateInput = z.infer<typeof patientCoverageUpdateInput>;
+export type PatientCoverageListInput = z.infer<typeof patientCoverageListInput>;
 export type AuthorizationRequestCreateInput = z.infer<typeof authorizationRequestCreateInput>;
 export type AuthorizationApproveInput = z.infer<typeof authorizationApproveInput>;
 export type AuthorizationDenyInput = z.infer<typeof authorizationDenyInput>;
 export type CheckCoverageInput = z.infer<typeof checkCoverageInput>;
 export type GetExpiringAuthorizationsInput = z.infer<typeof getExpiringAuthorizationsInput>;
+export type InsurancePlanCoverageUpsertInput = z.infer<typeof insurancePlanCoverageUpsertInput>;
+export type PatientCoverageOverrideUpsertInput = z.infer<typeof patientCoverageOverrideUpsertInput>;
+export type CoverageRuleCreateInput = z.infer<typeof coverageRuleCreateInput>;
+export type CoverageRuleListInput = z.infer<typeof coverageRuleListInput>;

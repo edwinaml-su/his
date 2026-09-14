@@ -16,6 +16,7 @@ import {
   insurancePlanCreateInput,
   insurancePlanListInput,
   patientCoverageCreateInput,
+  patientCoverageUpdateInput,
   patientCoverageListInput,
   patientCoverageDeactivateInput,
   authorizationRequestCreateInput,
@@ -25,6 +26,9 @@ import {
   coveredProcedureEntry,
   checkCoverageInput,
   getExpiringAuthorizationsInput,
+  insurancePlanCoverageUpsertInput,
+  patientCoverageOverrideUpsertInput,
+  coverageRuleCreateInput,
 } from "../insurance";
 
 const u = "00000000-0000-0000-0000-000000000001";
@@ -229,6 +233,50 @@ describe("patientCoverageCreateInput", () => {
     const r = patientCoverageListInput.safeParse({});
     if (r.success) expect(r.data.activeOnly).toBe(true);
   });
+
+  it("list acepta insurerId/vigentesA/search/offset (CC-0028c)", () =>
+    expect(
+      patientCoverageListInput.safeParse({
+        insurerId: u,
+        vigentesA: from,
+        search: "gonzalez",
+        offset: 25,
+      }).success,
+    ).toBe(true));
+
+  it("list default offset=0", () => {
+    const r = patientCoverageListInput.safeParse({});
+    if (r.success) expect(r.data.offset).toBe(0);
+  });
+});
+
+describe("patientCoverageUpdateInput (CC-0028c)", () => {
+  it("acepta sólo id (todos los demás campos opcionales)", () =>
+    expect(patientCoverageUpdateInput.safeParse({ id: u }).success).toBe(true));
+
+  it("acepta edición parcial de policyNumber/carnet", () =>
+    expect(
+      patientCoverageUpdateInput.safeParse({
+        id: u,
+        policyNumber: "POL-NUEVA",
+        carnet: "C-1",
+      }).success,
+    ).toBe(true));
+
+  it("no tiene campo patientId en el schema", () => {
+    const r = patientCoverageUpdateInput.safeParse({ id: u, patientId: u });
+    // patientId no está declarado -> zod lo descarta silenciosamente (unknownKeys: strip).
+    expect(r.success).toBe(true);
+    if (r.success) expect((r.data as Record<string, unknown>).patientId).toBeUndefined();
+  });
+
+  it("rechaza id no-uuid", () =>
+    expect(patientCoverageUpdateInput.safeParse({ id: "abc" }).success).toBe(false));
+
+  it("rechaza policyNumber vacío cuando se envía", () =>
+    expect(
+      patientCoverageUpdateInput.safeParse({ id: u, policyNumber: "" }).success,
+    ).toBe(false));
 });
 
 describe("authorizationRequest", () => {
@@ -352,4 +400,131 @@ describe("b14: getExpiringAuthorizationsInput", () => {
     expect(
       getExpiringAuthorizationsInput.safeParse({ daysAhead: 0 }).success,
     ).toBe(false));
+});
+
+// ---------------------------------------------------------------------------
+// CC-0028 — InsurancePlanCoverage / PatientCoverageOverride / CoverageRule
+// ---------------------------------------------------------------------------
+
+describe("insurancePlanCoverageUpsertInput", () => {
+  it("acepta PORCENTAJE con insuredPercentage", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "CONSULTA",
+        coverageType: "PORCENTAJE",
+        insuredPercentage: 80,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza PORCENTAJE sin insuredPercentage", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "CONSULTA",
+        coverageType: "PORCENTAJE",
+      }).success,
+    ).toBe(false));
+
+  it("acepta MONTO_FIJO con copayAmount", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "FARMACIA",
+        coverageType: "MONTO_FIJO",
+        copayAmount: 5,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza PORCENTAJE_CON_TOPE sin coverageLimit", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "GENERAL",
+        coverageType: "PORCENTAJE_CON_TOPE",
+        insuredPercentage: 90,
+      }).success,
+    ).toBe(false));
+
+  it("acepta PORCENTAJE_CON_TOPE completo", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "GENERAL",
+        coverageType: "PORCENTAJE_CON_TOPE",
+        insuredPercentage: 90,
+        coverageLimit: 500,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza ambito inválido", () =>
+    expect(
+      insurancePlanCoverageUpsertInput.safeParse({
+        planId: u,
+        ambito: "ODONTOLOGIA",
+        coverageType: "PORCENTAJE",
+        insuredPercentage: 80,
+      }).success,
+    ).toBe(false));
+});
+
+describe("patientCoverageOverrideUpsertInput", () => {
+  it("misma forma que insurancePlanCoverageUpsertInput pero con coverageId", () =>
+    expect(
+      patientCoverageOverrideUpsertInput.safeParse({
+        coverageId: u,
+        ambito: "CONSULTA",
+        coverageType: "PORCENTAJE",
+        insuredPercentage: 100,
+      }).success,
+    ).toBe(true));
+});
+
+describe("coverageRuleCreateInput", () => {
+  const base = { ruleOn: "CODIGO" as const, code: "COD1", ruleType: "PORCENTAJE" as const, percentage: 80 };
+
+  it("acepta planId con ruleOn=CODIGO", () =>
+    expect(coverageRuleCreateInput.safeParse({ ...base, planId: u }).success).toBe(true));
+
+  it("acepta coverageId con ruleOn=CODIGO", () =>
+    expect(coverageRuleCreateInput.safeParse({ ...base, coverageId: u }).success).toBe(true));
+
+  it("rechaza cuando faltan planId Y coverageId", () =>
+    expect(coverageRuleCreateInput.safeParse({ ...base }).success).toBe(false));
+
+  it("rechaza cuando vienen planId Y coverageId a la vez", () =>
+    expect(coverageRuleCreateInput.safeParse({ ...base, planId: u, coverageId: u }).success).toBe(false));
+
+  it("rechaza ruleOn=CATEGORIA sin serviceCategoryId", () =>
+    expect(
+      coverageRuleCreateInput.safeParse({ planId: u, ruleOn: "CATEGORIA", ruleType: "PORCENTAJE", percentage: 50 })
+        .success,
+    ).toBe(false));
+
+  it("acepta ruleOn=CATEGORIA con serviceCategoryId", () =>
+    expect(
+      coverageRuleCreateInput.safeParse({
+        planId: u,
+        ruleOn: "CATEGORIA",
+        serviceCategoryId: u,
+        ruleType: "PORCENTAJE",
+        percentage: 50,
+      }).success,
+    ).toBe(true));
+
+  it("rechaza ruleType=MONTO sin amount (y sin fullCover)", () =>
+    expect(
+      coverageRuleCreateInput.safeParse({ planId: u, ruleOn: "CODIGO", code: "X", ruleType: "MONTO" }).success,
+    ).toBe(false));
+
+  it("acepta fullCover=true sin percentage/amount", () =>
+    expect(
+      coverageRuleCreateInput.safeParse({
+        planId: u,
+        ruleOn: "CODIGO",
+        code: "X",
+        ruleType: "PORCENTAJE",
+        fullCover: true,
+      }).success,
+    ).toBe(true));
 });

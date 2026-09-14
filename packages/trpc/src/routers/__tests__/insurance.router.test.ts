@@ -129,10 +129,12 @@ describe("insuranceRouter", () => {
       prisma.patientCoverage.findMany.mockResolvedValue([] as never);
       const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
       await caller.coverage.list({ activeOnly: true, limit: 50 });
-      const where = prisma.patientCoverage.findMany.mock.calls[0]![0]!.where as {
-        organizationId: string;
-      };
-      expect(where.organizationId).toBeTruthy();
+      // CC-0028c: el where pasó a `{ AND: filters }` (mismo patrón que insurer.list).
+      const and = (prisma.patientCoverage.findMany.mock.calls[0]![0]!.where as {
+        AND: Array<{ organizationId?: string }>;
+      }).AND;
+      const tenancyFilter = and.find((c) => c.organizationId !== undefined);
+      expect(tenancyFilter?.organizationId).toBeTruthy();
     });
 
     it("create NOT_FOUND si paciente no pertenece al tenant", async () => {
@@ -192,6 +194,153 @@ describe("insuranceRouter", () => {
       const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.coverage.deactivate({ id: u });
       expect(r.ok).toBe(true);
+    });
+
+    // -----------------------------------------------------------------------
+    // CC-0028c — filtros nuevos de coverage.list (mantenimiento admin)
+    // -----------------------------------------------------------------------
+
+    it("list compone search (policyNumber/paciente) en AND, no sobreescribe tenancy", async () => {
+      prisma.patientCoverage.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.list({ activeOnly: true, search: "gonzalez", limit: 20 });
+      const and = (prisma.patientCoverage.findMany.mock.calls[0]![0]!.where as {
+        AND: object[];
+      }).AND;
+      expect(and.some((c) => "organizationId" in c)).toBe(true);
+      expect(and.some((c) => "OR" in c)).toBe(true);
+    });
+
+    it("list filtra por insurerId vía plan.insurerId", async () => {
+      prisma.patientCoverage.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.list({ activeOnly: true, insurerId: u, limit: 20 });
+      const and = (prisma.patientCoverage.findMany.mock.calls[0]![0]!.where as {
+        AND: object[];
+      }).AND;
+      expect(and).toContainEqual({ plan: { insurerId: u } });
+    });
+
+    it("list filtra por vigentesA: validFrom<=X y (validTo null o >=X)", async () => {
+      prisma.patientCoverage.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.list({ activeOnly: false, vigentesA: from, limit: 20 });
+      const and = (prisma.patientCoverage.findMany.mock.calls[0]![0]!.where as {
+        AND: Array<{ validFrom?: { lte: Date }; OR?: object[] }>;
+      }).AND;
+      const vigenciaFilter = and.find((c) => c.validFrom !== undefined);
+      expect(vigenciaFilter?.validFrom).toEqual({ lte: from });
+      expect(vigenciaFilter?.OR).toEqual([{ validTo: null }, { validTo: { gte: from } }]);
+    });
+
+    it("list respeta offset además de limit", async () => {
+      prisma.patientCoverage.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.list({ activeOnly: true, limit: 20, offset: 40 });
+      const call = prisma.patientCoverage.findMany.mock.calls[0]![0]!;
+      expect(call.take).toBe(20);
+      expect(call.skip).toBe(40);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  describe("coverage.update", () => {
+    it("NOT_FOUND si la póliza no es del tenant", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.coverage.update({ id: u, policyNumber: "NUEVA" }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("OK: edita policyNumber/carnet manteniendo vigencia existente", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: to,
+      } as never);
+      prisma.patientCoverage.update.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.update({ id: u, policyNumber: "POL-EDITADA", carnet: "C-99" });
+      const call = prisma.patientCoverage.update.mock.calls[0]![0]!;
+      expect(call.where).toEqual({ id: u });
+      const data = call.data as { policyNumber: string; carnet: string; updatedBy: string };
+      expect(data.policyNumber).toBe("POL-EDITADA");
+      expect(data.carnet).toBe("C-99");
+      expect(data.updatedBy).toBeTruthy();
+    });
+
+    it("no permite cambiar patientId aunque el caller lo envíe (campo fuera de schema)", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: null,
+      } as never);
+      prisma.patientCoverage.update.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      // Simula un caller no tipado (p. ej. JSON crudo) intentando colar patientId.
+      await caller.coverage.update({ id: u, policyNumber: "X", ...( { patientId: "otro-paciente" } as object) });
+      const data = prisma.patientCoverage.update.mock.calls[0]![0]!.data as Record<string, unknown>;
+      expect(data.patientId).toBeUndefined();
+    });
+
+    it("BAD_REQUEST si el nuevo validTo no es posterior al validFrom existente", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: null,
+      } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      const antesDeFrom = new Date("2025-01-01");
+      await expect(
+        caller.coverage.update({ id: u, validTo: antesDeFrom }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("BAD_REQUEST si el nuevo validFrom supera el validTo existente", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: to,
+      } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      const despuesDeTo = new Date("2028-01-01");
+      await expect(
+        caller.coverage.update({ id: u, validFrom: despuesDeTo }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("NOT_FOUND si el nuevo planId no es visible para el tenant", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: null,
+      } as never);
+      prisma.insurancePlan.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.coverage.update({ id: u, planId: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("NOT_FOUND si priceListId no pertenece al tenant (assertPriceListVisible)", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: null,
+      } as never);
+      prisma.$queryRawUnsafe.mockResolvedValue([] as never); // ServicePriceList: sin filas
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.coverage.update({ id: u, priceListId: u }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("OK: priceListId visible se guarda", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        validFrom: from,
+        validTo: null,
+      } as never);
+      prisma.$queryRawUnsafe.mockResolvedValue([{ id: u }] as never); // ServicePriceList del tenant
+      prisma.patientCoverage.update.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverage.update({ id: u, priceListId: u });
+      const data = prisma.patientCoverage.update.mock.calls[0]![0]!.data as { priceListId: string };
+      expect(data.priceListId).toBe(u);
     });
   });
 
@@ -444,6 +593,116 @@ describe("insuranceRouter", () => {
       await expect(
         caller.checkCoverage({ planId: u, procedureCode: "MRI" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0028 — planCoverage / coverageOverride / rule
+  // ---------------------------------------------------------------------------
+
+  describe("planCoverage.upsert", () => {
+    it("NOT_FOUND si el plan no es visible para el tenant", async () => {
+      prisma.insurancePlan.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.planCoverage.upsert({ planId: u, ambito: "CONSULTA", coverageType: "PORCENTAJE", insuredPercentage: 80 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("upsert por (planId, ambito) cuando el plan es visible", async () => {
+      prisma.insurancePlan.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.insurancePlanCoverage.upsert.mockResolvedValue({ id: "cov-1" } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.planCoverage.upsert({
+        planId: u,
+        ambito: "FARMACIA",
+        coverageType: "MONTO_FIJO",
+        copayAmount: 5,
+      });
+      const args = prisma.insurancePlanCoverage.upsert.mock.calls[0]![0]!;
+      expect(args.where).toEqual({ planId_ambito: { planId: u, ambito: "FARMACIA" } });
+      expect(args.create).toMatchObject({ planId: u, ambito: "FARMACIA", coverageType: "MONTO_FIJO", copayAmount: 5 });
+    });
+  });
+
+  describe("planCoverage.list", () => {
+    it("filtra por planId", async () => {
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.planCoverage.list({ planId: u });
+      expect(prisma.insurancePlanCoverage.findMany.mock.calls[0]![0]!.where).toEqual({ planId: u });
+    });
+  });
+
+  describe("coverageOverride.upsert", () => {
+    it("NOT_FOUND si la póliza no existe en la organización", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.coverageOverride.upsert({
+          coverageId: u,
+          ambito: "CONSULTA",
+          coverageType: "PORCENTAJE",
+          insuredPercentage: 100,
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("upsert por (coverageId, ambito) cuando la póliza es del tenant", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.patientCoverageOverride.upsert.mockResolvedValue({ id: "ov-1" } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.coverageOverride.upsert({
+        coverageId: u,
+        ambito: "CONSULTA",
+        coverageType: "PORCENTAJE",
+        insuredPercentage: 100,
+      });
+      const args = prisma.patientCoverageOverride.upsert.mock.calls[0]![0]!;
+      expect(args.where).toEqual({ coverageId_ambito: { coverageId: u, ambito: "CONSULTA" } });
+    });
+  });
+
+  describe("rule.create", () => {
+    it("NOT_FOUND si planId no es visible para el tenant", async () => {
+      prisma.insurancePlan.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.rule.create({ planId: u, ruleOn: "CODIGO", code: "X", ruleType: "PORCENTAJE", percentage: 50 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("NOT_FOUND si coverageId no existe en la organización", async () => {
+      prisma.patientCoverage.findFirst.mockResolvedValue(null as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.rule.create({ coverageId: u, ruleOn: "CODIGO", code: "X", ruleType: "PORCENTAJE", percentage: 50 }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("crea la regla con organizationId del tenant cuando el plan es visible", async () => {
+      prisma.insurancePlan.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.coverageRule.create.mockResolvedValue({ id: "rule-1" } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.rule.create({ planId: u, ruleOn: "CODIGO", code: "X", ruleType: "PORCENTAJE", percentage: 90 });
+      const data = prisma.coverageRule.create.mock.calls[0]![0]!.data as { organizationId: string; planId: string };
+      expect(data.organizationId).toBeTruthy();
+      expect(data.planId).toBe(u);
+    });
+  });
+
+  describe("rule.deactivate", () => {
+    it("NOT_FOUND si la regla no existe o ya está inactiva", async () => {
+      prisma.coverageRule.updateMany.mockResolvedValue({ count: 0 } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.rule.deactivate({ id: u })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("desactiva la regla del tenant", async () => {
+      prisma.coverageRule.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.rule.deactivate({ id: u });
+      expect(result).toEqual({ ok: true });
     });
   });
 });
