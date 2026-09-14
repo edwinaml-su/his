@@ -2,7 +2,7 @@
 
 /**
  * §20 Services & Equipment — Detalle de equipo biomédico.
- * Extiende el legacy con sección "Identificación GS1" (GIAI + GLN).
+ * Extiende el legacy con sección "Identificación GS1" (GIAI + GLN) — CC-0029.
  */
 import * as React from "react";
 import { useParams } from "next/navigation";
@@ -10,17 +10,24 @@ import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/car
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
-// Componente stub — captura manual de código GIAI/GLN (reemplazable con
+// Componente stub — captura manual de código GIAI (reemplazable con
 // lector HW real).
 //
 // NO es el `Gs1Scanner` de `@/components/gs1-scanner` (decodifica imágenes
 // GS1 vía cámara/worker y extrae GTIN+lote+vencimiento+serie) ni el
 // `HidScanInput` de `gs1/transfers/_components` (captura HID de un valor
 // crudo con Enter). Este campo es un input controlado de un único código
-// GIAI/GLN editable por el operador; el botón "Escanear" es un punto de
+// GIAI editable por el operador; el botón "Escanear" es un punto de
 // extensión sin implementar todavía. El nombre distinto evita sugerir
 // equivalencia funcional entre los tres (inventario huérfanos 2026-08-26).
 // ---------------------------------------------------------------------------
@@ -71,6 +78,12 @@ export default function EquipmentDetailPage() {
 
   const equipmentQuery = trpc.servicesEquipment.equipment.get.useQuery({ id: equipmentId });
 
+  // CC-0029: catálogo de ubicaciones GLN tipo servicio/depósito — un equipo
+  // biomédico vive en una sala de servicio o en una bodega, no en una cama.
+  const glnsQuery = trpc.gs1GlnHierarchy.glnsDisponibles.useQuery({
+    tipos: ["servicio", "deposito"],
+  });
+
   const [giaiCode, setGiaiCode] = React.useState("");
   const [glnUbicacion, setGlnUbicacion] = React.useState("");
   const [bizStep, setBizStep] = React.useState("storing");
@@ -82,6 +95,14 @@ export default function EquipmentDetailPage() {
   const registrarGiai = trpc.servicesEquipment.equipment.registrarGiai.useMutation({
     onSuccess: () => {
       setGiaiCode("");
+      setGiaiError(null);
+      void utils.servicesEquipment.equipment.get.invalidate({ id: equipmentId });
+    },
+    onError: (e) => setGiaiError(e.message),
+  });
+
+  const generarGiai = trpc.servicesEquipment.equipment.generarGiai.useMutation({
+    onSuccess: () => {
       setGiaiError(null);
       void utils.servicesEquipment.equipment.get.invalidate({ id: equipmentId });
     },
@@ -117,9 +138,7 @@ export default function EquipmentDetailPage() {
   const equipment = equipmentQuery.data;
   if (!equipment) return null;
 
-  // Los campos GS1 provienen de la BD pero Prisma aún no los tipifica
-  // (columnas agregadas vía ALTER TABLE sin regenerar client).
-  const equipmentRaw = equipment as Record<string, unknown>;
+  const yaTieneGiai = Boolean(equipment.giaiCode);
 
   return (
     <div className="space-y-6">
@@ -162,45 +181,60 @@ export default function EquipmentDetailPage() {
           <CardTitle>Identificación GS1</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* GIAI actual */}
+          {/* GIAI/GLN actuales */}
           <div className="space-y-1">
             <p className="text-sm text-muted-foreground">
               <strong>GIAI actual:</strong>{" "}
-              <span className="font-mono">
-                {(equipmentRaw.giai_code as string | null) ?? "No asignado"}
-              </span>
+              <span className="font-mono">{equipment.giaiCode ?? "No asignado"}</span>
             </p>
             <p className="text-sm text-muted-foreground">
               <strong>GLN ubicación actual:</strong>{" "}
-              <span className="font-mono">
-                {(equipmentRaw.gln_ubicacion_actual as string | null) ?? "No asignado"}
-              </span>
+              <span className="font-mono">{equipment.glnUbicacionActual ?? "No asignado"}</span>
             </p>
           </div>
 
-          {/* Registrar GIAI */}
-          <form
-            className="space-y-3"
-            onSubmit={(e) => {
-              e.preventDefault();
-              registrarGiai.mutate({ equipmentId, giaiCode });
-            }}
-          >
-            <ManualGs1CodeField
-              label="Registrar GIAI (18 dígitos)"
-              value={giaiCode}
-              onChange={setGiaiCode}
-              placeholder="000000000000000000"
-            />
+          {/* Registrar / generar GIAI */}
+          <div className="space-y-3">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={generarGiai.isPending || yaTieneGiai}
+              onClick={() => generarGiai.mutate({ equipmentId })}
+            >
+              {generarGiai.isPending ? "Generando…" : "Generar automático"}
+            </Button>
+            {yaTieneGiai && (
+              <p className="text-xs text-muted-foreground">
+                El equipo ya tiene GIAI asignado — use el campo manual de abajo para
+                reasignarlo.
+              </p>
+            )}
+            {/* Compartido: registrarGiai y generarGiai escriben ambos a giaiError. */}
             {giaiError && (
               <p role="alert" className="text-sm text-destructive">
                 {giaiError}
               </p>
             )}
-            <Button type="submit" size="sm" disabled={registrarGiai.isPending || !giaiCode.trim()}>
-              {registrarGiai.isPending ? "Guardando…" : "Registrar GIAI"}
-            </Button>
-          </form>
+
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                registrarGiai.mutate({ equipmentId, giaiCode });
+              }}
+            >
+              <ManualGs1CodeField
+                label="Registrar GIAI manualmente (prefijo GS1 + referencia)"
+                value={giaiCode}
+                onChange={setGiaiCode}
+                placeholder="7410398AT001"
+              />
+              <Button type="submit" size="sm" disabled={registrarGiai.isPending || !giaiCode.trim()}>
+                {registrarGiai.isPending ? "Guardando…" : "Registrar GIAI"}
+              </Button>
+            </form>
+          </div>
 
           {/* Actualizar ubicación */}
           <form
@@ -210,12 +244,21 @@ export default function EquipmentDetailPage() {
               actualizarUbicacion.mutate({ equipmentId, glnUbicacion, bizStep });
             }}
           >
-            <ManualGs1CodeField
-              label="GLN nueva ubicación (13 dígitos)"
-              value={glnUbicacion}
-              onChange={setGlnUbicacion}
-              placeholder="0000000000000"
-            />
+            <div className="space-y-1.5">
+              <Label htmlFor="gln-ubicacion">GLN nueva ubicación</Label>
+              <Select value={glnUbicacion} onValueChange={setGlnUbicacion}>
+                <SelectTrigger id="gln-ubicacion">
+                  <SelectValue placeholder="Selecciona una ubicación…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(glnsQuery.data ?? []).map((g) => (
+                    <SelectItem key={g.codigo} value={g.codigo}>
+                      {g.codigo} — {g.descripcion}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="biz-step">bizStep EPCIS</Label>
               <Input

@@ -50,12 +50,52 @@ import {
   calibrationLogListInput,
   isValidTransition,
   registrarGiaiInput,
+  generarGiaiInput,
   actualizarUbicacionInput,
   historialUbicacionesInput,
+  buildGIAI,
   type EquipmentStatusType,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+// Prefijo GS1 de fallback cuando la org no tiene gs1CompanyPrefix configurado
+// (mismo fallback que packages/trpc/src/routers/pharmacy/gsrn-pulsera.router.ts).
+const FALLBACK_GS1_PREFIX = "7503000";
+
+type GiaiCatalogData = {
+  descripcion: string;
+  fabricante: string;
+  modelo: string;
+  serial: string;
+};
+
+/**
+ * Upsertea el catálogo `ece.gs1_giai` (Cat-E: SELECT abierto a authenticated,
+ * INSERT/UPDATE solo service_role — ver sql/76_gs1_catalogos.sql). Por eso
+ * corre sobre `prisma` DIRECTO (rol BYPASSRLS), fuera de `withTenantContext`
+ * (que demota a `authenticated`, que NO tiene policy de escritura ahí) —
+ * mismo patrón ya establecido en `gs1CatalogosRouter.giai` (gs1-catalogos.router.ts).
+ * `ece.gs1_giai` no es tenant-scoped (catálogo global de activos), así que no
+ * hace falta `withEceContext` tampoco.
+ */
+async function upsertGiaiCatalog(
+  prisma: { $executeRawUnsafe: (query: string, ...values: unknown[]) => Promise<unknown> },
+  codigo: string,
+  data: GiaiCatalogData,
+): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO ece.gs1_giai (codigo, descripcion, fabricante, modelo, serial)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (codigo) DO UPDATE SET
+       descripcion = EXCLUDED.descripcion,
+       fabricante = EXCLUDED.fabricante,
+       modelo = EXCLUDED.modelo,
+       serial = EXCLUDED.serial,
+       actualizado_en = now()`,
+    codigo, data.descripcion, data.fabricante, data.modelo, data.serial,
+  );
+}
 
 export const servicesEquipmentRouter = router({
   equipment: router({
@@ -253,22 +293,27 @@ export const servicesEquipmentRouter = router({
     // GS1 — GIAI + GLN + EPCIS
     // ------------------------------------------------------------------
 
-    registrarGiai: tenantProcedure
+    // CC-0029: registrarGiai (manual) y generarGiai (automático) comparten
+    // el mismo gate de rol que el árbol GLN (gs1-gln-hierarchy.router.ts).
+    registrarGiai: requireRole(["ADMIN", "EQUIPOS"])
       .input(registrarGiaiInput)
       .mutation(async ({ ctx, input }) => {
+        let equipment: {
+          name: string; manufacturer: string | null; model: string | null; serialNumber: string | null;
+        };
         try {
-          await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          equipment = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
             const eq = await tx.biomedicalEquipment.findFirst({
               where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
-              select: { id: true },
+              select: { id: true, name: true, manufacturer: true, model: true, serialNumber: true },
             });
             if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
 
             await tx.biomedicalEquipment.update({
               where: { id: input.equipmentId },
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              data: { giai_code: input.giaiCode } as any,
+              data: { giaiCode: input.giaiCode },
             });
+            return eq;
           });
         } catch (err: unknown) {
           if (err instanceof TRPCError) throw err;
@@ -281,7 +326,90 @@ export const servicesEquipmentRouter = router({
           }
           throw err;
         }
-        return { ok: true as const };
+
+        // ece.gs1_giai es Cat-E (catálogo global, ver upsertGiaiCatalog) —
+        // corre fuera de withTenantContext, sobre ctx.prisma directo.
+        await upsertGiaiCatalog(ctx.prisma, input.giaiCode, {
+          descripcion: equipment.name,
+          fabricante: equipment.manufacturer ?? "N/D",
+          modelo: equipment.model ?? "N/D",
+          serial: equipment.serialNumber ?? "N/D",
+        });
+
+        return { ok: true as const, giaiCode: input.giaiCode };
+      }),
+
+    // CC-0029: genera el GIAI automáticamente (prefijo GS1 de la org +
+    // referencia derivada de assetTag, sin dígito verificador — ver
+    // buildGIAI). Hard Stop si el equipo ya tiene GIAI asignado (mismo
+    // patrón que gsrnPulsera.assign) — para reasignar, usar registrarGiai.
+    generarGiai: requireRole(["ADMIN", "EQUIPOS"])
+      .input(generarGiaiInput)
+      .mutation(async ({ ctx, input }) => {
+        let result: {
+          giaiCode: string;
+          equipment: { name: string; manufacturer: string | null; model: string | null; serialNumber: string | null };
+        };
+        try {
+          result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+            const eq = await tx.biomedicalEquipment.findFirst({
+              where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
+              select: {
+                id: true, assetTag: true, giaiCode: true,
+                name: true, manufacturer: true, model: true, serialNumber: true,
+              },
+            });
+            if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
+            if (eq.giaiCode) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message: `El equipo ya tiene GIAI asignado: ${eq.giaiCode}. Use registrarGiai para reasignar manualmente.`,
+              });
+            }
+
+            const org = await tx.organization.findUnique({
+              where: { id: ctx.tenant.organizationId },
+              select: { gs1CompanyPrefix: true },
+            });
+            const prefix = org?.gs1CompanyPrefix ?? FALLBACK_GS1_PREFIX;
+            let giaiCode: string;
+            try {
+              giaiCode = buildGIAI(prefix, eq.assetTag);
+            } catch (buildErr: unknown) {
+              // assetTag sin caracteres alfanuméricos utilizables (p.ej. "---") —
+              // caso raro pero posible dado que equipmentCreateInput solo exige
+              // min(1) tras trim. Mensaje claro en vez de un 500 genérico.
+              const message = buildErr instanceof Error ? buildErr.message : "No se pudo generar el GIAI.";
+              throw new TRPCError({ code: "BAD_REQUEST", message });
+            }
+
+            await tx.biomedicalEquipment.update({
+              where: { id: input.equipmentId },
+              data: { giaiCode },
+            });
+
+            return { giaiCode, equipment: eq };
+          });
+        } catch (err: unknown) {
+          if (err instanceof TRPCError) throw err;
+          const pg = err as { code?: string };
+          if (pg.code === "23505") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "El GIAI generado ya está asignado a otro equipo.",
+            });
+          }
+          throw err;
+        }
+
+        await upsertGiaiCatalog(ctx.prisma, result.giaiCode, {
+          descripcion: result.equipment.name,
+          fabricante: result.equipment.manufacturer ?? "N/D",
+          modelo: result.equipment.model ?? "N/D",
+          serial: result.equipment.serialNumber ?? "N/D",
+        });
+
+        return { equipmentId: input.equipmentId, giaiCode: result.giaiCode };
       }),
 
     // R02: `ece.epcis_event_equipment` no tiene RLS (ver comentario de
@@ -296,16 +424,14 @@ export const servicesEquipmentRouter = router({
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
           const eq = await tx.biomedicalEquipment.findFirst({
             where: { id: input.equipmentId, organizationId: ctx.tenant.organizationId },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            select: { id: true, gln_ubicacion_actual: true } as any,
+            select: { id: true, glnUbicacionActual: true },
           });
           if (!eq) throw new TRPCError({ code: "NOT_FOUND", message: "Equipo no encontrado." });
 
           // Actualiza columna GLN en el equipo
           await tx.biomedicalEquipment.update({
             where: { id: input.equipmentId },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            data: { gln_ubicacion_actual: input.glnUbicacion } as any,
+            data: { glnUbicacionActual: input.glnUbicacion },
           });
 
           // Registra evento EPCIS en ece.epcis_event_equipment vía raw query
@@ -315,7 +441,7 @@ export const servicesEquipmentRouter = router({
               (equipment_id, gln_origen, gln_destino, biz_step, recorded_by)
             VALUES (
               ${input.equipmentId}::uuid,
-              ${(eq as Record<string, unknown>).gln_ubicacion_actual as string | null},
+              ${eq.glnUbicacionActual},
               ${input.glnUbicacion},
               ${input.bizStep ?? "storing"},
               ${ctx.user.id}::uuid

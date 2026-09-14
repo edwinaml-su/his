@@ -21,6 +21,7 @@ import {
   isValidTransition,
   EQUIPMENT_STATUS_TRANSITIONS,
   registrarGiaiInput,
+  generarGiaiInput,
   actualizarUbicacionInput,
   historialUbicacionesInput,
 } from "../services-equipment";
@@ -247,31 +248,74 @@ describe("pmScheduleCreateInput / complete / cancel", () => {
 });
 
 describe("GS1 — registrarGiaiInput", () => {
-  it("acepta GIAI de 18 dígitos", () =>
-    expect(
-      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "123456789012345678" }).success,
-    ).toBe(true));
+  it("acepta GIAI con prefijo 7 dígitos + referencia alfanumérica", () => {
+    const r = registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "7410398AT001" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.giaiCode).toBe("7410398AT001");
+  });
 
-  it("rechaza GIAI con 17 dígitos", () =>
+  it("normaliza entrada escaneada cruda con AI explícito (8004<giai>) SOLO cuando es inequívoca", () => {
+    // Inequívoca: la cadena completa NO es un GIAI válido (>30 chars) pero el
+    // resto tras el AI sí — se despoja el 8004.
+    const giaiLargo = "7410398" + "B".repeat(21); // 28 chars, GIAI válido
+    const r = registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "8004" + giaiLargo });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.giaiCode).toBe(giaiLargo);
+  });
+
+  it("NO despoja el 8004 cuando la cadena completa ya es un GIAI válido (prefijo de empresa que empieza con 8004)", () => {
+    // Ambigua: "80047410398AT001" es un GIAI válido por sí mismo (prefijo
+    // numérico de 11 dígitos + referencia) — recortarlo a ciegas corrompería
+    // un código legítimo (hallazgo pre-pr-review CC-0029).
+    const r = registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "80047410398AT001" });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.giaiCode).toBe("80047410398AT001");
+  });
+
+  it("acepta longitud total exactamente 30 caracteres", () => {
+    const giai = "7410398" + "A".repeat(23);
     expect(
-      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "12345678901234567" }).success,
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: giai }).success,
+    ).toBe(true);
+  });
+
+  it("rechaza GIAI con más de 30 caracteres", () => {
+    const giai = "7410398" + "A".repeat(24);
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: giai }).success,
+    ).toBe(false);
+  });
+
+  it("rechaza GIAI con prefijo de menos de 7 dígitos", () =>
+    expect(
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "741039AT001" }).success,
     ).toBe(false));
 
-  it("rechaza GIAI con letras", () =>
+  it("rechaza GIAI sin referencia de activo (solo prefijo)", () =>
     expect(
-      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "12345678901234AB18" }).success,
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "7410398" }).success,
     ).toBe(false));
 
-  it("rechaza GIAI con 19 dígitos", () =>
+  it("rechaza GIAI con caracteres fuera de alfanumérico", () =>
     expect(
-      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "1234567890123456789" }).success,
+      registrarGiaiInput.safeParse({ equipmentId: u, giaiCode: "7410398AT-001" }).success,
     ).toBe(false));
 
   it("requiere equipmentId UUID", () =>
     expect(
-      registrarGiaiInput.safeParse({ equipmentId: "no-uuid", giaiCode: "123456789012345678" })
-        .success,
+      registrarGiaiInput.safeParse({ equipmentId: "no-uuid", giaiCode: "7410398AT001" }).success,
     ).toBe(false));
+});
+
+describe("GS1 — generarGiaiInput", () => {
+  it("acepta equipmentId UUID", () =>
+    expect(generarGiaiInput.safeParse({ equipmentId: u }).success).toBe(true));
+
+  it("rechaza equipmentId no-UUID", () =>
+    expect(generarGiaiInput.safeParse({ equipmentId: "no-uuid" }).success).toBe(false));
+
+  it("rechaza input vacío", () =>
+    expect(generarGiaiInput.safeParse({}).success).toBe(false));
 });
 
 describe("GS1 — actualizarUbicacionInput", () => {

@@ -140,6 +140,8 @@ export interface Gs1Data {
   /** Formato YYMMDD (GS1), ya validado que sea parseable. */
   expiry?: string;
   serial?: string;
+  /** AI 8004 — GIAI (Global Individual Asset Identifier), ver §CC-0029 abajo. */
+  giai?: string;
 }
 
 export interface Gs1ParseError {
@@ -235,7 +237,10 @@ export function parseGs1String(raw: string): Gs1ParseResult {
       pos += 3 + len;
     } else {
       // Variable-length AI: leer hasta FNC1 o fin de string.
-      const aiLen = ai3.startsWith("39") || ai3.startsWith("71") ? 3 : 2;
+      // AI 8004 (GIAI) es de 4 dígitos — se detecta explícitamente porque no
+      // encaja en la heurística de 2/3 dígitos usada para el resto de AIs.
+      const ai4 = input.substring(pos, pos + 4);
+      const aiLen = ai4 === "8004" ? 4 : ai3.startsWith("39") || ai3.startsWith("71") ? 3 : 2;
       const ai = input.substring(pos, pos + aiLen);
       pos += aiLen;
       const end = input.indexOf(FNC1, pos);
@@ -281,6 +286,9 @@ function applyAi(result: Gs1Data, ai: string, value: string): void {
       break;
     case "21":
       result.serial = value;
+      break;
+    case "8004":
+      result.giai = value;
       break;
     // Otros AIs ignorados — extensible sin romper API.
   }
@@ -395,4 +403,64 @@ export function gs1CheckDigitValid(code: string): boolean {
   }
   const expected = (10 - (sum % 10)) % 10;
   return expected === Number.parseInt(code.charAt(len - 1), 10);
+}
+
+// =============================================================================
+// CC-0029 — AI 8004 (GIAI, Global Individual Asset Identifier)
+//
+// A diferencia de GTIN/SSCC/GSRN/GRAI, el GIAI NO lleva dígito verificador
+// (GS1 General Specifications §"AI 8004" — longitud y check digit quedan a
+// discreción del emisor). Estructura usada aquí: prefijo GS1 de empresa
+// (numérico, 7-12 dígitos, igual rango que Organization.gs1CompanyPrefix) +
+// referencia de activo alfanumérica (1-23 caracteres), total ≤30 caracteres
+// — mismo tope que define GS1 para el AI. Por eso vive en su propia sección
+// en vez de sumarse a `GS1_MOD10_AI_LENGTHS`/`validateGS1Checksum` (esas son
+// específicas de AIs con Módulo-10).
+// =============================================================================
+
+const GIAI_MAX_LENGTH = 30;
+const GIAI_REGEX = /^\d{7,12}[A-Za-z0-9]{1,23}$/;
+
+/**
+ * Valida la estructura de un GIAI (AI 8004): prefijo GS1 numérico (7-12
+ * dígitos) + referencia de activo alfanumérica, longitud total ≤30
+ * caracteres. Sin dígito verificador — GS1 no lo exige para este AI.
+ */
+export function validateGIAI(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const clean = value.trim();
+  return clean.length <= GIAI_MAX_LENGTH && GIAI_REGEX.test(clean);
+}
+
+/**
+ * Genera un GIAI determinista: prefijo GS1 de empresa + referencia de activo
+ * derivada de un identificador propio (p.ej. `assetTag`). Sanea la
+ * referencia a alfanumérico y la trunca para respetar el tope de 30
+ * caracteres totales — la unicidad la garantiza que el identificador de
+ * origen ya sea único dentro de su ámbito (p.ej. `assetTag` es único por
+ * organización) combinado con el prefijo GS1, que también es propio de cada
+ * organización.
+ *
+ * @param companyPrefix - prefijo GS1 de la empresa (7-12 dígitos)
+ * @param assetReference - identificador de origen del activo (se sanea)
+ * @throws si companyPrefix no es numérico de 7-12 dígitos, o si no queda
+ *   ningún carácter alfanumérico utilizable en assetReference
+ */
+export function buildGIAI(companyPrefix: string, assetReference: string): string {
+  if (!/^\d{7,12}$/.test(companyPrefix)) {
+    throw new Error(
+      `companyPrefix debe tener entre 7 y 12 dígitos numéricos (recibido: "${companyPrefix}")`,
+    );
+  }
+  const clean = assetReference.replace(/[^0-9A-Za-z]/g, "");
+  if (clean.length === 0) {
+    throw new Error("assetReference no contiene caracteres alfanuméricos utilizables.");
+  }
+  const maxRefLength = GIAI_MAX_LENGTH - companyPrefix.length;
+  const giai = companyPrefix + clean.slice(0, maxRefLength);
+  if (!validateGIAI(giai)) {
+    // Defensivo — no debería ocurrir dado el saneo/truncado anteriores.
+    throw new Error("GIAI generado no pasó validación estructural.");
+  }
+  return giai;
 }

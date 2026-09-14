@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@his/ui/components/table";
+import { Badge } from "@his/ui/components/badge";
 import { Button } from "@his/ui/components/button";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
@@ -134,6 +135,7 @@ export default function EquipmentPage() {
                   <TableHead>Modelo</TableHead>
                   <TableHead>Ubicación</TableHead>
                   <TableHead>Estado</TableHead>
+                  <TableHead>GIAI</TableHead>
                   <TableHead className="w-20 text-right" aria-label="Acciones" />
                 </TableRow>
               </TableHeader>
@@ -146,6 +148,16 @@ export default function EquipmentPage() {
                     <TableCell>{e.model ?? "—"}</TableCell>
                     <TableCell>{e.location ?? "—"}</TableCell>
                     <TableCell>{e.status}</TableCell>
+                    <TableCell>
+                      {/* CC-0029: identificación GS1 del activo (AI 8004). */}
+                      {e.giaiCode ? (
+                        <Badge variant="success" className="font-mono">
+                          {e.giaiCode}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">Sin etiquetar</Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
                       {/* HI-31: link al detalle PM + calibraciones + EPCIS. */}
                       <Button asChild size="sm" variant="outline">
