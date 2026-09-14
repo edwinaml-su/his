@@ -40,4 +40,11 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION public.current_org_id_or_ece_context() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.current_org_id_or_ece_context() TO authenticated;
+-- El rol authenticated lo crea e2e-rls-bootstrap.sql, que corre DESPUÉS de
+-- este archivo en el workflow — grant condicional para no explotar antes.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    GRANT EXECUTE ON FUNCTION public.current_org_id_or_ece_context() TO authenticated;
+  END IF;
+END $$;
