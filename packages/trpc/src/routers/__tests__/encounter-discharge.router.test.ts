@@ -93,6 +93,72 @@ describe("encounterDischargeRouter", () => {
       expect(auditArgs.data.action).toBe("SIGN");
     });
 
+    // CC-0027 — la liberación de cama se DIFIERE si el encuentro tiene una
+    // PatientAccount activa (Fase 2 aún no concluye): el alta médica igual
+    // se completa (dischargedAt se setea), solo el egreso físico espera.
+    it("difiere la liberación de cama si el encuentro tiene PatientAccount activa", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        organizationId: "org",
+        dischargedAt: null,
+        bedAssignments: [{ id: "ba-1", bedId: "bed-1" }],
+        patient: { gsrn: null },
+      } as never);
+      prisma.clinicalConcept.findFirst.mockResolvedValue({
+        id: "concept-1",
+        display: "Insuficiencia cardíaca",
+      } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: "acc-1" } as never); // cuenta activa
+      prisma.encounter.update.mockResolvedValue({ id: "e1" } as never);
+      prisma.auditLog.create.mockResolvedValue({ id: "a1" } as never);
+
+      const caller = encounterDischargeRouter.createCaller(makeCtx({ prisma }));
+      await caller.dischargeEncounter({
+        encounterId: "00000000-0000-0000-0000-000000000010",
+        dischargeType: "MEDICAL",
+        primaryDiagnosisCode: "I50.9",
+        primaryDiagnosisDesc: "Insuficiencia cardíaca",
+      });
+
+      expect(prisma.encounter.update).toHaveBeenCalled(); // Fase 1 igual concluye
+      expect(prisma.bedAssignment.update).not.toHaveBeenCalled();
+      expect(prisma.bed.update).not.toHaveBeenCalled();
+    });
+
+    it("libera la cama de inmediato si el encuentro NO tiene PatientAccount activa", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({
+        id: "e1",
+        organizationId: "org",
+        dischargedAt: null,
+        bedAssignments: [{ id: "ba-1", bedId: "bed-1" }],
+        patient: { gsrn: null },
+      } as never);
+      prisma.clinicalConcept.findFirst.mockResolvedValue({
+        id: "concept-1",
+        display: "Insuficiencia cardíaca",
+      } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never); // sin cuenta activa
+      prisma.encounter.update.mockResolvedValue({ id: "e1" } as never);
+      prisma.bedAssignment.update.mockResolvedValue({} as never);
+      prisma.bed.update.mockResolvedValue({} as never);
+      prisma.auditLog.create.mockResolvedValue({ id: "a1" } as never);
+
+      const caller = encounterDischargeRouter.createCaller(makeCtx({ prisma }));
+      await caller.dischargeEncounter({
+        encounterId: "00000000-0000-0000-0000-000000000010",
+        dischargeType: "MEDICAL",
+        primaryDiagnosisCode: "I50.9",
+        primaryDiagnosisDesc: "Insuficiencia cardíaca",
+      });
+
+      expect(prisma.bedAssignment.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "ba-1" } }),
+      );
+      expect(prisma.bed.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: "bed-1" }, data: { status: "DIRTY" } }),
+      );
+    });
+
     // Caso borde antes solo mencionado en el legacy (que ni siquiera lo
     // validaba): no se puede dar de alta dos veces al mismo encuentro.
     it("rechaza egreso duplicado si el encuentro ya tiene alta (CONFLICT)", async () => {

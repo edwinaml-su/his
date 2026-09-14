@@ -19,6 +19,7 @@ import {
 } from "../lib/service-unit-scope";
 import { assertGlnAsignable } from "../lib/gln-validation";
 import { capturarCargo } from "../lib/charge-capture";
+import { assertEgresoFisicoAutorizado } from "../lib/egreso-fisico-gate";
 
 const adminProc = requireRole(["ADMIN", "DIR"]);
 
@@ -306,6 +307,15 @@ export const bedRouter = router({
         });
 
         if (active) {
+          // CC-0027 — gate de egreso físico: bloquea la liberación manual de
+          // cama de un encuentro con PatientAccount activa sin alta
+          // administrativa concluida (ver lib/egreso-fisico-gate.ts). Las
+          // excepciones (defunción, traslado interno) no llegan aquí — esos
+          // flujos liberan la cama inline, sin pasar por esta mutation.
+          await assertEgresoFisicoAutorizado(tx, {
+            organizationId: ctx.tenant.organizationId,
+            encounterId: active.encounterId,
+          });
           await tx.bedAssignment.update({
             where: { id: active.id },
             data: {

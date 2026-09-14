@@ -194,6 +194,63 @@ describe("bedRouter", () => {
     });
   });
 
+  // CC-0027 — gate de egreso físico (lib/egreso-fisico-gate.ts).
+  describe("release", () => {
+    const ENCOUNTER_ID = "00000000-0000-0000-0000-0000000000e1";
+
+    it("bloquea la liberación si el encuentro tiene cuenta activa sin alta administrativa", async () => {
+      prisma.bed.findFirst.mockResolvedValue({ id: BED_ID, status: "OCCUPIED" } as never);
+      prisma.bedAssignment.findFirst.mockResolvedValue({
+        id: "ba-1",
+        encounterId: ENCOUNTER_ID,
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: "acc-1" } as never); // cuenta activa
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.release({ bedId: BED_ID, reason: "Liberación manual" }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.bedAssignment.update).not.toHaveBeenCalled();
+      expect(prisma.bed.update).not.toHaveBeenCalled();
+    });
+
+    it("permite liberar cuando el encuentro ya tiene egresoAutorizadoAt", async () => {
+      prisma.bed.findFirst.mockResolvedValue({ id: BED_ID, status: "OCCUPIED" } as never);
+      prisma.bedAssignment.findFirst.mockResolvedValue({
+        id: "ba-1",
+        encounterId: ENCOUNTER_ID,
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: new Date() } as never);
+      prisma.bedAssignment.update.mockResolvedValue({} as never);
+      prisma.bed.update.mockResolvedValue({} as never);
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.release({ bedId: BED_ID, reason: "Liberación manual" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(prisma.patientAccount.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("permite liberar cuando el encuentro no tiene ninguna cuenta activa", async () => {
+      prisma.bed.findFirst.mockResolvedValue({ id: BED_ID, status: "OCCUPIED" } as never);
+      prisma.bedAssignment.findFirst.mockResolvedValue({
+        id: "ba-1",
+        encounterId: ENCOUNTER_ID,
+      } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never); // sin cuenta activa
+      prisma.bedAssignment.update.mockResolvedValue({} as never);
+      prisma.bed.update.mockResolvedValue({} as never);
+
+      const caller = bedRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.release({ bedId: BED_ID, reason: "Liberación manual" }),
+      ).resolves.toMatchObject({ ok: true });
+      expect(prisma.bedAssignment.update).toHaveBeenCalled();
+    });
+  });
+
   // Parametrización admin (2026-09-11) — espejo Odoo ACS HMS (roomId/bedType/
   // billingClass/glnCodigo), sql/231_room_bed_odoo_mirror.sql.
   describe("adminList", () => {
