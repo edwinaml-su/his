@@ -83,7 +83,7 @@ jobs:
       # que entrena a ignorar la alerta.
       - name: Abrir/actualizar issue si hay CRITICAL
         if: steps.advisors.outputs.exit_code == '2'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
