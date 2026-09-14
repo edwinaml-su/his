@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@his/test-utils": "*",
-    "@types/node": "^22.19.20",
+    "@types/node": "^22.20.2",
     "@types/qrcode": "^1.5.5",
     "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.6.3",
