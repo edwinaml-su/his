@@ -18,9 +18,17 @@
  *   causas de `cerrar` server-side — las causas se muestran igual que en
  *   "Cerrar cuenta". Al concluir: badge de ruta + "Egreso autorizado" si
  *   el encuentro ya quedó liberado.
+ * - "Facturación dual (coaseguro)" (CC-0028b, regla de negocio de Edwin
+ *   2026-09-14) → visible solo cuando hay póliza vigente (`coberturaEstimada`
+ *   no nulo). Confirma el split (reusa `coberturaEstimada.totalAsegurado`/
+ *   `totalPaciente`, ya calculado por `liquidacion`) y, al confirmar, llama
+ *   `facturacionDual` — que parte los cargos VIGENTE en 2 facturas
+ *   (paciente + aseguradora) en una sola transacción. Muestra los 2 números
+ *   de factura con link a `/finance/invoices` al terminar.
  */
 
 import * as React from "react";
+import Link from "next/link";
 import { Badge } from "@his/ui/components/badge";
 import { Button } from "@his/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -107,6 +115,15 @@ export function PatientCuentas({ patientId }: { patientId: string }) {
   const [rutaB, setRutaB] = React.useState(RUTA_B_INICIAL);
   const [cobertura, setCobertura] = React.useState(COBERTURA_INICIAL);
 
+  // CC-0028b — confirmación + resultado de facturación dual (una cuenta a la vez).
+  const [mostrarFacturacionDual, setMostrarFacturacionDual] = React.useState(false);
+  const [resultadoFacturacionDual, setResultadoFacturacionDual] = React.useState<{
+    facturaPacienteId: string;
+    facturaPacienteNumero: string;
+    facturaAseguradoraId: string;
+    facturaAseguradoraNumero: string;
+  } | null>(null);
+
   const liquidacionQ = trpc.patientAccount.liquidacion.useQuery(
     { accountId: altaAdminId ?? "" },
     { enabled: altaAdminId !== null },
@@ -174,6 +191,23 @@ export function PatientCuentas({ patientId }: { patientId: string }) {
     onSuccess: () => {
       setCobertura(COBERTURA_INICIAL);
       setMostrarCobertura(false);
+      setServerError(null);
+      void liquidacionQ.refetch();
+    },
+    onError: (err) => setServerError(err.message),
+  });
+
+  // CC-0028b — facturación dual de coaseguro: factura-paciente (insurerId
+  // NULL) + factura-aseguradora, en una sola transacción server-side.
+  const facturacionDualMutation = trpc.patientAccount.facturacionDual.useMutation({
+    onSuccess: (data) => {
+      setResultadoFacturacionDual({
+        facturaPacienteId: data.facturaPacienteId,
+        facturaPacienteNumero: data.facturaPacienteNumero,
+        facturaAseguradoraId: data.facturaAseguradoraId,
+        facturaAseguradoraNumero: data.facturaAseguradoraNumero,
+      });
+      setMostrarFacturacionDual(false);
       setServerError(null);
       void liquidacionQ.refetch();
     },
@@ -284,6 +318,8 @@ export function PatientCuentas({ patientId }: { patientId: string }) {
                             setMostrarCobertura(false);
                             setRutaB(RUTA_B_INICIAL);
                             setCobertura(COBERTURA_INICIAL);
+                            setMostrarFacturacionDual(false);
+                            setResultadoFacturacionDual(null);
                             setServerError(null);
                             setCausasCierre(null);
                           }}
@@ -440,6 +476,90 @@ export function PatientCuentas({ patientId }: { patientId: string }) {
                     ${fmt(liquidacionQ.data.coberturaEstimada.totalPaciente)}
                   </dd>
                 </dl>
+              </div>
+            ) : null}
+
+            {/* CC-0028b — facturación dual de coaseguro: visible solo con
+                póliza vigente (mismo gate que el bloque de cobertura
+                estimada de arriba). */}
+            {liquidacionQ.data?.coberturaEstimada ? (
+              <div className="space-y-3 rounded-md border border-border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-foreground">
+                    Facturación dual (coaseguro)
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setMostrarFacturacionDual((v) => !v);
+                      setResultadoFacturacionDual(null);
+                    }}
+                  >
+                    {mostrarFacturacionDual ? "Ocultar" : "Facturación dual (coaseguro)"}
+                  </Button>
+                </div>
+
+                {mostrarFacturacionDual ? (
+                  <div className="space-y-3 rounded-md border border-dashed border-border bg-muted/20 p-3 text-sm">
+                    <p className="text-xs text-muted-foreground">
+                      Se crearán 2 facturas a partir de los cargos vigentes de la cuenta: una al
+                      paciente y otra a la aseguradora, con el porcentaje que corresponde a cada
+                      una según la póliza vigente. Esta acción no se puede deshacer desde aquí
+                      (requiere anular las facturas manualmente).
+                    </p>
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-2">
+                      <dt className="text-muted-foreground">Factura aseguradora</dt>
+                      <dd className="font-mono">
+                        ${fmt(liquidacionQ.data.coberturaEstimada.totalAsegurado)}
+                      </dd>
+                      <dt className="text-muted-foreground">Factura paciente</dt>
+                      <dd className="font-mono">
+                        ${fmt(liquidacionQ.data.coberturaEstimada.totalPaciente)}
+                      </dd>
+                    </dl>
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setMostrarFacturacionDual(false)}
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={facturacionDualMutation.isPending}
+                        onClick={() => facturacionDualMutation.mutate({ accountId: altaAdminId })}
+                      >
+                        {facturacionDualMutation.isPending ? "Facturando…" : "Confirmar facturación dual"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {resultadoFacturacionDual ? (
+                  <div className="space-y-1 rounded-md border border-emerald-600/40 bg-emerald-600/10 p-3 text-sm">
+                    <p className="font-medium text-emerald-700">Facturación dual concluida.</p>
+                    <p>
+                      Factura paciente:{" "}
+                      <Link
+                        className="underline"
+                        href={`/finance/invoices/${resultadoFacturacionDual.facturaPacienteId}`}
+                      >
+                        {resultadoFacturacionDual.facturaPacienteNumero}
+                      </Link>
+                    </p>
+                    <p>
+                      Factura aseguradora:{" "}
+                      <Link
+                        className="underline"
+                        href={`/finance/invoices/${resultadoFacturacionDual.facturaAseguradoraId}`}
+                      >
+                        {resultadoFacturacionDual.facturaAseguradoraNumero}
+                      </Link>
+                    </p>
+                  </div>
+                ) : null}
               </div>
             ) : null}
 

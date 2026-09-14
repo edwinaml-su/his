@@ -976,4 +976,431 @@ describe("patientAccountRouter", () => {
       expect(prisma.coverageLetter.create).not.toHaveBeenCalled();
     });
   });
+
+  // CC-0028b — facturación dual de coaseguro (regla de negocio de Edwin,
+  // 2026-09-14): parte el total VIGENTE de la cuenta en factura-paciente
+  // (insurerId NULL) + factura-aseguradora (insurerId de la póliza), usando
+  // el mismo split de resolverCobertura que ya informa coberturaEstimada.
+  describe("facturacionDual", () => {
+    const INSURER_ID = "00000000-0000-0000-0000-000000000010";
+    const CURRENCY_ID = "00000000-0000-0000-0000-000000000011";
+    const ESTAB_ID = "00000000-0000-0000-0000-000000000012";
+    const COST_CENTER_ID = "00000000-0000-0000-0000-000000000013";
+    const PLAN_ID = "00000000-0000-0000-0000-000000000014";
+    const POLIZA_ID = "00000000-0000-0000-0000-000000000015";
+
+    /** Fila cruda que devuelve el `SELECT ... FOR UPDATE` de PatientAccount
+     *  (no pasa por `patientAccount.findFirst` — ver comentario en el router
+     *  sobre por qué se usa un lock de fila acá). */
+    function accountRowFD(overrides: Partial<{ status: string; encounterId: string | null }> = {}) {
+      return {
+        id: ACCOUNT_ID,
+        patientId: PATIENT_ID,
+        status: overrides.status ?? "ABIERTA",
+        encounterId: overrides.encounterId === undefined ? null : overrides.encounterId,
+      };
+    }
+
+    const POLIZA_ROW = {
+      id: POLIZA_ID,
+      planId: PLAN_ID,
+      organizationId: MOCK_TENANT.organizationId,
+      validFrom: new Date("2020-01-01"),
+      createdAt: new Date("2020-01-01"),
+    };
+
+    /** Deja los "preflight" comunes en orden: SELECT...FOR UPDATE de la
+     *  cuenta, idempotencia limpia, categoría por cargo, establecimiento,
+     *  centro de costo y el INSERT de la factura-paciente. Cada test define
+     *  sus propios `cargos` + config de cobertura sobre esta base. */
+    function setupPreflight(
+      queryMock: ReturnType<typeof vi.fn>,
+      cantidadCargosConCodigo: number,
+      accountRow: ReturnType<typeof accountRowFD> = accountRowFD(),
+    ) {
+      queryMock.mockResolvedValueOnce([accountRow]); // SELECT ... FOR UPDATE
+      queryMock.mockResolvedValueOnce([]); // idempotencia: sin facturas previas
+      for (let i = 0; i < cantidadCargosConCodigo; i++) {
+        queryMock.mockResolvedValueOnce([{ categoryId: null }]); // categoría por cargo
+      }
+      queryMock.mockResolvedValueOnce([{ id: ESTAB_ID }]); // Establishment
+      queryMock.mockResolvedValueOnce([{ id: COST_CENTER_ID }]); // CostCenter
+      queryMock.mockResolvedValueOnce([{ id: "inv-pac-1" }]); // INSERT Invoice paciente
+      // 1 InvoiceItem por cargo en la factura paciente — el llamador agrega
+      // más mockResolvedValueOnce si `cantidadCargosConCodigo` > 1.
+    }
+
+    function mockComunes(overrides: { insurerId?: string | null } = {}) {
+      prisma.patientCoverage.findMany.mockResolvedValue([POLIZA_ROW] as never);
+      prisma.patientCoverageOverride.findMany.mockResolvedValue([] as never);
+      prisma.patientCoverage.findFirst.mockResolvedValue({
+        plan: { insurerId: overrides.insurerId === undefined ? INSURER_ID : overrides.insurerId },
+      } as never);
+      prisma.organization.findFirst.mockResolvedValue({ functionalCurrency: CURRENCY_ID } as never);
+    }
+
+    it("porcentaje simple — parte 1 cargo en factura-paciente (insurerId NULL) y factura-aseguradora", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE", insuredPercentage: 70, copayAmount: null, coverageLimit: null },
+      ] as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Consulta médica",
+            quantity: 1,
+            totalPrice: 100,
+            priceListId: "list-1",
+            priceRuleId: null,
+            resolvedAt: new Date("2026-09-01"),
+            priceSource: "standard",
+            origen: null,
+          },
+        ] as never); // cargos VIGENTE
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined) // INSERT InvoiceItem paciente
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }]) // INSERT Invoice aseguradora
+        .mockResolvedValueOnce(undefined); // INSERT InvoiceItem aseguradora
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      expect(result).toMatchObject({
+        facturaPacienteId: "inv-pac-1",
+        facturaAseguradoraId: "inv-ase-1",
+        totalPaciente: 30,
+        totalAsegurado: 70,
+      });
+      expect(result.facturaPacienteNumero).toMatch(/^\d{8}-\d{5}$/);
+      expect(result.facturaAseguradoraNumero).toMatch(/^\d{8}-\d{5}$/);
+      expect(result.detalle).toEqual([
+        expect.objectContaining({ cargoId: "cargo-1", total: 100, cubierto: 70, paciente: 30 }),
+      ]);
+
+      // Orden real de $queryRawUnsafe: [0] SELECT...FOR UPDATE, [1] idempotencia,
+      // [2] categoría, [3] Establishment, [4] CostCenter, [5] INSERT Invoice
+      // paciente, [6] INSERT InvoiceItem paciente, [7] INSERT Invoice
+      // aseguradora, [8] INSERT InvoiceItem aseguradora.
+      const insertPaciente = queryMock.mock.calls[5]!;
+      expect(insertPaciente[5]).toBeNull(); // insurerId
+      expect(String(insertPaciente[14])).toContain("[FACTURACION_DUAL");
+      expect(String(insertPaciente[14])).toContain("PACIENTE");
+      expect(insertPaciente[9]).toBe(30); // subtotal
+      expect(insertPaciente[11]).toBe(30); // totalAmount
+      expect(insertPaciente[10]).toBe(0); // taxAmount — CC-0028b no aplica IVA
+
+      const insertAseguradora = queryMock.mock.calls[7]!;
+      expect(insertAseguradora[5]).toBe(INSURER_ID);
+      expect(String(insertAseguradora[14])).toContain("ASEGURADORA");
+      expect(insertAseguradora[11]).toBe(70);
+    });
+
+    it("copago fijo (MONTO_FIJO) — paciente paga el copago, aseguradora el resto", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "MONTO_FIJO", insuredPercentage: null, copayAmount: 20, coverageLimit: null },
+      ] as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Examen",
+            quantity: 1,
+            totalPrice: 100,
+            priceListId: null,
+            priceRuleId: null,
+            resolvedAt: null,
+            priceSource: null,
+            origen: null,
+          },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      expect(result).toMatchObject({ totalPaciente: 20, totalAsegurado: 80 });
+    });
+
+    it("tope de presupuesto (PORCENTAJE_CON_TOPE) — cubierto topado al límite restante", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE_CON_TOPE", insuredPercentage: 50, copayAmount: null, coverageLimit: 30 },
+      ] as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Procedimiento",
+            quantity: 1,
+            totalPrice: 100,
+            priceListId: null,
+            priceRuleId: null,
+            resolvedAt: null,
+            priceSource: null,
+            origen: null,
+          },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      // 50% de 100 = 50, pero el presupuesto restante es 30 -> cubierto = 30.
+      expect(result).toMatchObject({ totalAsegurado: 30, totalPaciente: 70 });
+    });
+
+    it("regla por código (nivel más específico) prevalece sobre la config de ámbito", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([
+        {
+          id: "regla-1",
+          planId: PLAN_ID,
+          coverageId: null,
+          ruleOn: "CODIGO",
+          serviceCategoryId: null,
+          code: "COD1",
+          ruleType: "PORCENTAJE",
+          percentage: 90,
+          amount: null,
+          fullCover: false,
+        },
+      ] as never);
+      // Config de ámbito GENERAL presente pero NO debe aplicarse — la regla
+      // por código es más específica.
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE", insuredPercentage: 10, copayAmount: null, coverageLimit: null },
+      ] as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Cirugía ambulatoria",
+            quantity: 1,
+            totalPrice: 100,
+            priceListId: null,
+            priceRuleId: null,
+            resolvedAt: null,
+            priceSource: null,
+            origen: null,
+          },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      expect(result).toMatchObject({ totalAsegurado: 90, totalPaciente: 10 });
+      expect(result.detalle[0]).toMatchObject({
+        reglaAplicada: { tipo: "regla_codigo", nivel: "plan", reglaId: "regla-1" },
+      });
+    });
+
+    // Redondeo — un total que no reparte exacto en el porcentaje configurado
+    // (10.01 * 33% = 3.3033) debe reconciliar centavo a centavo: cubierto +
+    // paciente == total del cargo, sin fuga de centavos. El ajuste de
+    // residual sobre la ÚLTIMA línea de la factura del paciente (ver
+    // docstring de `facturacionDual`) es una red de seguridad adicional que
+    // no se ejercita aquí: `totalPrice` de cada InvoiceItem es el split
+    // autoritativo de `resolverCobertura` (no se deriva de unitPrice*qty),
+    // así que por construcción no hay drift que corregir en el camino feliz.
+    it("redondeo — cubierto + paciente reconcilian exacto con el total cuando el % no cae en centavos", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE", insuredPercentage: 33, copayAmount: null, coverageLimit: null },
+      ] as never);
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Laboratorio",
+            quantity: 1,
+            totalPrice: 10.01,
+            priceListId: null,
+            priceRuleId: null,
+            resolvedAt: null,
+            priceSource: null,
+            origen: null,
+          },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      expect(result.totalAsegurado + result.totalPaciente).toBeCloseTo(10.01, 2);
+      expect(result.detalle[0]!.cubierto + result.detalle[0]!.paciente).toBeCloseTo(10.01, 2);
+    });
+
+    it("hereda priceListId/priceRuleId/resolvedAt/priceSource del cargo en las InvoiceItem de AMBAS facturas", async () => {
+      setupTx();
+      mockComunes();
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE", insuredPercentage: 50, copayAmount: null, coverageLimit: null },
+      ] as never);
+      const resolvedAt = new Date("2026-09-01T10:00:00Z");
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([
+          {
+            id: "cargo-1",
+            code: "COD1",
+            descripcion: "Consulta",
+            quantity: 1,
+            totalPrice: 100,
+            priceListId: "list-1",
+            priceRuleId: "rule-1",
+            resolvedAt,
+            priceSource: "lista",
+            origen: null,
+          },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      setupPreflight(queryMock, 1);
+      queryMock
+        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce([{ id: "inv-ase-1" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await caller.facturacionDual({ accountId: ACCOUNT_ID });
+
+      // INSERT InvoiceItem paciente = call index 6; INSERT InvoiceItem
+      // aseguradora = call index 8. Params: invoiceId, description, quantity,
+      // unitPrice, totalPrice, costCenterId, serviceUnitId, priceListId,
+      // priceRuleId, resolvedAt, priceSource (índices 1..11 tras el sql).
+      const itemPaciente = queryMock.mock.calls[6]!;
+      const itemAseguradora = queryMock.mock.calls[8]!;
+      for (const call of [itemPaciente, itemAseguradora]) {
+        expect(call[8]).toBe("list-1"); // priceListId
+        expect(call[9]).toBe("rule-1"); // priceRuleId
+        expect(call[10]).toBe(resolvedAt); // resolvedAt
+        expect(call[11]).toBe("lista"); // priceSource
+      }
+    });
+
+    it("PRECONDITION_FAILED si el paciente no tiene póliza vigente", async () => {
+      setupTx();
+      prisma.patientCoverage.findMany.mockResolvedValue([] as never); // sin póliza
+      prisma.patientAccountService.findMany
+        .mockResolvedValueOnce([] as never) // pendientesTarifa
+        .mockResolvedValueOnce([
+          { id: "cargo-1", code: "COD1", descripcion: "X", quantity: 1, totalPrice: 100, priceListId: null, priceRuleId: null, resolvedAt: null, priceSource: null, origen: null },
+        ] as never);
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([accountRowFD()]) // SELECT ... FOR UPDATE
+        .mockResolvedValueOnce([]) // idempotencia
+        .mockResolvedValueOnce([{ categoryId: null }]); // categoría del cargo
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.facturacionDual({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(prisma.organization.findFirst).not.toHaveBeenCalled();
+    });
+
+    it("PRECONDITION_FAILED si hay cargos PENDIENTE_TARIFA", async () => {
+      setupTx();
+      prisma.patientAccountService.findMany.mockResolvedValueOnce([{ id: "cargo-x" }] as never); // pendientesTarifa
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([accountRowFD()]) // SELECT ... FOR UPDATE
+        .mockResolvedValueOnce([]); // idempotencia
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.facturacionDual({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(prisma.patientCoverage.findMany).not.toHaveBeenCalled();
+    });
+
+    it("CONFLICT si la cuenta ya tiene facturas generadas por facturación dual no anuladas", async () => {
+      setupTx();
+
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([accountRowFD()]) // SELECT ... FOR UPDATE
+        .mockResolvedValueOnce([{ id: "inv-previa-1" }]); // idempotencia: ya existe
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.facturacionDual({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(prisma.patientAccountService.findMany).not.toHaveBeenCalled();
+    });
+
+    it("PRECONDITION_FAILED si la cuenta no está ABIERTA/PENDIENTE_REGULARIZAR", async () => {
+      setupTx();
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock.mockResolvedValueOnce([accountRowFD({ status: "CERRADA" })]); // SELECT ... FOR UPDATE
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.facturacionDual({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+    });
+
+    it("NOT_FOUND si la cuenta no existe en el tenant", async () => {
+      setupTx();
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock.mockResolvedValueOnce([]); // SELECT ... FOR UPDATE — sin filas
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.facturacionDual({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+  });
 });
