@@ -555,6 +555,8 @@ model Organization {
   // CC-0027 — cuentas por cobrar y cartas de cobertura/finiquito por organización
   accountsReceivable        AccountReceivable[]        @relation("AccountReceivableOrg")
   coverageLetters           CoverageLetter[]           @relation("CoverageLetterOrg")
+  // CC-0028 — reglas de cobertura de seguros (patient share rules) por organización
+  coverageRules             CoverageRule[]              @relation("OrgCoverageRules")
   // CC-0017 F2 — reglas ABAC persistidas por organización
   abacRules                 AbacRule[]                 @relation("AbacRuleOrg")
   // CC-0026 — tareas de tablero generadas al firmar indicaciones/órdenes
@@ -3665,6 +3667,13 @@ model Insurer {
 }
 
 /// TDR §25.2 — plan/producto comercial de una aseguradora.
+/// CC-0028 (SQL 235) — espejo de `acs.insurance.plan` de Odoo: `priceListId`
+/// (lista de precios propia del plan, FK lógica igual que TipoCuenta.priceListId
+/// — el tarifario vive fuera de schema.prisma) + `sequence` (orden de
+/// evaluación/listado) + `coverages` (config por ámbito, tabla hija nueva).
+/// `copayPct`/`coveredProcedures` son el modelo plano de Beta.14 — se
+/// conservan para `checkCoverage`/`AuthorizationRequest` (no se tocan); el
+/// modelo por-ámbito de CC-0028 es la vía nueva, no un reemplazo.
 model InsurancePlan {
   id                String   @id @default(uuid()) @db.Uuid
   insurerId         String   @db.Uuid
@@ -3673,25 +3682,65 @@ model InsurancePlan {
   description       String?  @db.VarChar(400)
   copayPct          Decimal? @db.Decimal(5, 2) /// % a cargo del paciente.
   coveredProcedures Json? /// b14: JSONB [{"code": "MRI", "maxCoverage": 1500.00}] estructura.
+  /// CC-0028 — FK lógica a "ServicePriceList" (sin relación Prisma — ver TipoCuenta.priceListId).
+  priceListId       String?  @db.Uuid
+  sequence          Int      @default(0)
   active            Boolean  @default(true)
   createdAt         DateTime @default(now()) @db.Timestamptz()
   updatedAt         DateTime @updatedAt @db.Timestamptz()
 
-  insurer   Insurer           @relation(fields: [insurerId], references: [id], onDelete: Restrict)
-  coverages PatientCoverage[]
+  insurer        Insurer                 @relation(fields: [insurerId], references: [id], onDelete: Restrict)
+  coverages      PatientCoverage[]
+  ambitoConfig   InsurancePlanCoverage[]
+  coverageRules  CoverageRule[]
 
   @@unique([insurerId, code])
   @@index([insurerId])
   @@schema("public")
 }
 
+/// CC-0028 (SQL 235) — config de cobertura por ámbito de un InsurancePlan,
+/// espejo de la separación cita/farmacia de `acs.insurance.plan` en Odoo.
+/// `ambito = 'GENERAL'` es el default para ámbitos no configurados
+/// explícitamente (extensión sobre Odoo, ver docs/CC/0028). Tenancy heredada
+/// del plan → insurer (sin columna organizationId propia, mismo patrón RLS
+/// que `insurance_plan_inherit_insurer`).
+model InsurancePlanCoverage {
+  id     String @id @default(uuid()) @db.Uuid
+  planId String @db.Uuid
+  /// CONSULTA | FARMACIA | GENERAL — CHECK en SQL 235.
+  ambito String @db.VarChar(20)
+  /// PORCENTAJE | MONTO_FIJO | PORCENTAJE_CON_TOPE — CHECK en SQL 235.
+  coverageType      String   @db.VarChar(24)
+  insuredPercentage Decimal? @db.Decimal(5, 2)
+  copayAmount       Decimal? @db.Decimal(12, 2)
+  coverageLimit     Decimal? @db.Decimal(14, 2)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz()
+  updatedAt         DateTime @updatedAt @db.Timestamptz()
+
+  plan InsurancePlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, ambito])
+  @@schema("public")
+}
+
 /// TDR §25.3 — vinculación paciente↔plan (póliza vigente).
+/// CC-0028 (SQL 235) — espejo de `hms.patient.insurance`: `carnet` +
+/// `contratante` (quién contrata la póliza, puede diferir del paciente) +
+/// `priceListId` override (misma FK lógica que InsurancePlan.priceListId).
 model PatientCoverage {
   id             String    @id @default(uuid()) @db.Uuid
   organizationId String    @db.Uuid
   patientId      String    @db.Uuid
   planId         String    @db.Uuid
   policyNumber   String    @db.VarChar(80)
+  /// CC-0028 — número de carnet físico de la aseguradora (puede diferir de policyNumber).
+  carnet         String?   @db.VarChar(80)
+  /// CC-0028 — persona/entidad contratante de la póliza (puede ser distinta al paciente).
+  contratante    String?   @db.VarChar(200)
+  /// CC-0028 — override de la lista de precios del plan para esta póliza. FK lógica.
+  priceListId    String?   @db.Uuid
   validFrom      DateTime  @db.Timestamptz()
   validTo        DateTime? @db.Timestamptz()
   active         Boolean   @default(true)
@@ -3700,15 +3749,81 @@ model PatientCoverage {
   updatedAt      DateTime  @updatedAt @db.Timestamptz()
   updatedBy      String?   @db.Uuid
 
-  organization   Organization           @relation("OrgPatientCoverages", fields: [organizationId], references: [id], onDelete: Restrict)
-  patient        Patient                @relation("PatCoverages", fields: [patientId], references: [id], onDelete: Restrict)
-  plan           InsurancePlan          @relation(fields: [planId], references: [id], onDelete: Restrict)
+  organization   Organization              @relation("OrgPatientCoverages", fields: [organizationId], references: [id], onDelete: Restrict)
+  patient        Patient                   @relation("PatCoverages", fields: [patientId], references: [id], onDelete: Restrict)
+  plan           InsurancePlan             @relation(fields: [planId], references: [id], onDelete: Restrict)
   authorizations AuthorizationRequest[]
+  ambitoOverride PatientCoverageOverride[]
+  coverageRules  CoverageRule[]
 
   @@unique([organizationId, patientId, policyNumber])
   @@index([organizationId, patientId])
   @@index([planId])
   @@index([active])
+  @@schema("public")
+}
+
+/// CC-0028 (SQL 235) — override de PatientCoverage sobre la config por ámbito
+/// del plan (tabla hija espejo de InsurancePlanCoverage). Tenancy heredada de
+/// PatientCoverage.organizationId (que sí es NOT NULL — pólizas de paciente
+/// nunca son catálogo global).
+model PatientCoverageOverride {
+  id         String @id @default(uuid()) @db.Uuid
+  coverageId String @db.Uuid
+  /// CONSULTA | FARMACIA | GENERAL — CHECK en SQL 235.
+  ambito String @db.VarChar(20)
+  /// PORCENTAJE | MONTO_FIJO | PORCENTAJE_CON_TOPE — CHECK en SQL 235.
+  coverageType      String   @db.VarChar(24)
+  insuredPercentage Decimal? @db.Decimal(5, 2)
+  copayAmount       Decimal? @db.Decimal(12, 2)
+  coverageLimit     Decimal? @db.Decimal(14, 2)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz()
+  updatedAt         DateTime @updatedAt @db.Timestamptz()
+
+  coverage PatientCoverage @relation(fields: [coverageId], references: [id], onDelete: Cascade)
+
+  @@unique([coverageId, ambito])
+  @@schema("public")
+}
+
+/// CC-0028 (SQL 235) — "Patient Share Rules" de Odoo (`acs.insurance.policy.rule`):
+/// % o monto cubierto por código de tarifario o por categoría de servicio,
+/// a nivel de plan (planId) o de póliza específica (coverageId) — mutuamente
+/// excluyentes (XOR forzado en SQL 235). `fullCover` = 100% sin importar
+/// ruleType/percentage/amount. `serviceCategoryId` es FK lógica a
+/// "ServiceCategory" (tabla creada en SQL crudo — CC-0021 — sin modelo Prisma,
+/// mismo patrón que ServicePriceRule.categoryId).
+model CoverageRule {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String  @db.Uuid
+  planId         String? @db.Uuid
+  coverageId     String? @db.Uuid
+  /// CATEGORIA | CODIGO — CHECK en SQL 235.
+  ruleOn String @db.VarChar(12)
+  /// FK lógica a "ServiceCategory" (requerido si ruleOn = CATEGORIA).
+  serviceCategoryId String? @db.Uuid
+  /// código de tarifario (requerido si ruleOn = CODIGO).
+  code String? @db.VarChar(40)
+  /// PORCENTAJE | MONTO — CHECK en SQL 235.
+  ruleType   String   @db.VarChar(12)
+  percentage Decimal? @db.Decimal(5, 2)
+  amount     Decimal? @db.Decimal(12, 2)
+  fullCover  Boolean  @default(false)
+  sequence   Int      @default(0)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz()
+  createdBy  String?  @db.Uuid
+  updatedAt  DateTime @updatedAt @db.Timestamptz()
+  updatedBy  String?  @db.Uuid
+
+  organization Organization     @relation("OrgCoverageRules", fields: [organizationId], references: [id], onDelete: Restrict)
+  plan         InsurancePlan?   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  coverage     PatientCoverage? @relation(fields: [coverageId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([planId])
+  @@index([coverageId])
   @@schema("public")
 }
 

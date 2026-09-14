@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@his/ui/components/tab
 import { trpc } from "@/lib/trpc/react";
 import { PatientConsents } from "./consents";
 import { PatientCuentas } from "./cuentas";
+import { PatientInsurance } from "./insurance";
 
 const dateTimeFmt = new Intl.DateTimeFormat("es-SV", {
   day: "2-digit",
@@ -80,6 +81,7 @@ export default function PatientDetailPage() {
           <TabsTrigger value="contact">Contacto</TabsTrigger>
           <TabsTrigger value="admisiones">Admisiones</TabsTrigger>
           <TabsTrigger value="cuentas">Cuentas</TabsTrigger>
+          <TabsTrigger value="seguros">Seguros</TabsTrigger>
           <TabsTrigger value="consentimientos">Consentimientos</TabsTrigger>
         </TabsList>
         <TabsContent value="general">
@@ -251,6 +253,9 @@ export default function PatientDetailPage() {
         </TabsContent>
         <TabsContent value="cuentas">
           <PatientCuentas patientId={params.id} />
+        </TabsContent>
+        <TabsContent value="seguros">
+          <PatientInsurance patientId={params.id} />
         </TabsContent>
         <TabsContent value="consentimientos">
           <PatientConsents patientId={params.id} />

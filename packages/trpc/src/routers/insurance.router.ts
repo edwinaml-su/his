@@ -28,12 +28,54 @@ import {
   getExpiringAuthorizationsInput,
   coveredProcedureEntry,
   type CoveredProcedureEntry,
+  // CC-0028
+  insurancePlanCoverageUpsertInput,
+  patientCoverageOverrideUpsertInput,
+  coverageRuleCreateInput,
+  coverageRuleListInput,
+  coverageRuleDeactivateInput,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 // b14: states that are treated as "open" for transitions.
 const OPEN_STATES = ["PENDING", "REQUESTED"] as const;
+
+// CC-0028 — config de planes/reglas de cobertura: mismo par de roles que
+// patient-account.router (ADMIN/ACCOUNTANT) para las escrituras financieras.
+const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
+
+// CC-0028 — registro de póliza de paciente (coverage.create): mismo set que
+// invoice.router (ADMIN/ACCOUNTANT/BILLING) — a diferencia de la config de
+// planes/reglas, el alta de una póliza en admisión es trabajo de facturación
+// del día a día, no configuración financiera de catálogo.
+const coverageWriterProc = requireRole(["ADMIN", "ACCOUNTANT", "BILLING"]);
+
+/**
+ * CC-0028 — "ServicePriceList" no tiene modelo Prisma (CC-0015, sql/133 —
+ * mismo motivo que "ServiceCategory"): valida por raw SQL que el
+ * `priceListId` recibido (InsurancePlan/PatientCoverage) pertenece al
+ * tenant antes de guardarlo como FK lógica, para no repetir el gap
+ * preexistente de `TipoCuenta.priceListId` (sin validar tenancy) en las
+ * dos columnas nuevas de este CC.
+ */
+async function assertPriceListVisible(
+  tx: { $queryRawUnsafe: <T>(query: string, ...values: unknown[]) => Promise<T> },
+  priceListId: string,
+  organizationId: string,
+): Promise<void> {
+  const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
+    priceListId,
+    organizationId,
+  );
+  if (rows.length === 0) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Lista de precios no existe en la organización.",
+    });
+  }
+}
 
 /**
  * Parse and validate coveredProcedures JSON from the DB.
@@ -171,7 +213,9 @@ export const insuranceRouter = router({
         );
       }),
 
-    create: tenantProcedure
+    // CC-0028: sube a writerProc (ADMIN/ACCOUNTANT) porque este create ahora
+    // acepta priceListId — mismo gate que planCoverage/coverageOverride/rule.
+    create: writerProc
       .input(insurancePlanCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -192,6 +236,9 @@ export const insuranceRouter = router({
               message: "Aseguradora no visible para el tenant.",
             });
           }
+          if (input.priceListId) {
+            await assertPriceListVisible(tx, input.priceListId, ctx.tenant.organizationId);
+          }
           return tx.insurancePlan.create({
             data: {
               insurerId: input.insurerId,
@@ -201,6 +248,9 @@ export const insuranceRouter = router({
               copayPct: input.copayPct ?? null,
               // Store as JSON if provided; Prisma requires Prisma.DbNull para NULL en columna Json?.
               coveredProcedures: input.coveredProcedures ?? Prisma.DbNull,
+              // CC-0028
+              priceListId: input.priceListId ?? null,
+              sequence: input.sequence,
             },
           });
         });
@@ -236,7 +286,9 @@ export const insuranceRouter = router({
         );
       }),
 
-    create: tenantProcedure
+    // CC-0028: sube a coverageWriterProc porque este create ahora acepta
+    // carnet/contratante/priceListId (antes: cualquier tenantProcedure).
+    create: coverageWriterProc
       .input(patientCoverageCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -270,12 +322,19 @@ export const insuranceRouter = router({
               message: "Plan de aseguradora no visible para el tenant.",
             });
           }
+          if (input.priceListId) {
+            await assertPriceListVisible(tx, input.priceListId, ctx.tenant.organizationId);
+          }
           return tx.patientCoverage.create({
             data: {
               organizationId: ctx.tenant.organizationId,
               patientId: input.patientId,
               planId: input.planId,
               policyNumber: input.policyNumber,
+              // CC-0028
+              carnet: input.carnet ?? null,
+              contratante: input.contratante ?? null,
+              priceListId: input.priceListId ?? null,
               validFrom: input.validFrom,
               validTo: input.validTo ?? null,
               createdBy: ctx.user.id,
@@ -502,6 +561,193 @@ export const insuranceRouter = router({
             take: input.limit,
           }),
         );
+      }),
+  }),
+
+  /**
+   * CC-0028 — config de cobertura por ámbito del plan (InsurancePlanCoverage).
+   * `upsert` reemplaza la fila del ámbito si ya existe (unique [planId, ambito]).
+   */
+  planCoverage: router({
+    list: tenantProcedure
+      .input(z.object({ planId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.insurancePlanCoverage.findMany({
+            where: { planId: input.planId },
+            orderBy: { ambito: "asc" },
+          }),
+        );
+      }),
+
+    upsert: writerProc
+      .input(insurancePlanCoverageUpsertInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const plan = await tx.insurancePlan.findFirst({
+            where: {
+              id: input.planId,
+              insurer: {
+                OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+              },
+            },
+            select: { id: true },
+          });
+          if (!plan) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Plan no visible para el tenant." });
+          }
+          return tx.insurancePlanCoverage.upsert({
+            where: { planId_ambito: { planId: input.planId, ambito: input.ambito } },
+            create: {
+              planId: input.planId,
+              ambito: input.ambito,
+              coverageType: input.coverageType,
+              insuredPercentage: input.insuredPercentage ?? null,
+              copayAmount: input.copayAmount ?? null,
+              coverageLimit: input.coverageLimit ?? null,
+            },
+            update: {
+              coverageType: input.coverageType,
+              insuredPercentage: input.insuredPercentage ?? null,
+              copayAmount: input.copayAmount ?? null,
+              coverageLimit: input.coverageLimit ?? null,
+              active: true,
+            },
+          });
+        });
+      }),
+  }),
+
+  /**
+   * CC-0028 — override de PatientCoverageOverride sobre la config del plan,
+   * a nivel de una póliza específica.
+   */
+  coverageOverride: router({
+    list: tenantProcedure
+      .input(z.object({ coverageId: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.patientCoverageOverride.findMany({
+            where: { coverageId: input.coverageId },
+            orderBy: { ambito: "asc" },
+          }),
+        );
+      }),
+
+    upsert: writerProc
+      .input(patientCoverageOverrideUpsertInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const coverage = await tx.patientCoverage.findFirst({
+            where: { id: input.coverageId, organizationId: ctx.tenant.organizationId },
+            select: { id: true },
+          });
+          if (!coverage) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Póliza no existe en la organización." });
+          }
+          return tx.patientCoverageOverride.upsert({
+            where: { coverageId_ambito: { coverageId: input.coverageId, ambito: input.ambito } },
+            create: {
+              coverageId: input.coverageId,
+              ambito: input.ambito,
+              coverageType: input.coverageType,
+              insuredPercentage: input.insuredPercentage ?? null,
+              copayAmount: input.copayAmount ?? null,
+              coverageLimit: input.coverageLimit ?? null,
+            },
+            update: {
+              coverageType: input.coverageType,
+              insuredPercentage: input.insuredPercentage ?? null,
+              copayAmount: input.copayAmount ?? null,
+              coverageLimit: input.coverageLimit ?? null,
+              active: true,
+            },
+          });
+        });
+      }),
+  }),
+
+  /**
+   * CC-0028 — "Patient Share Rules" (CoverageRule): % o monto cubierto por
+   * código o categoría, a nivel de plan XOR de una póliza específica.
+   */
+  rule: router({
+    list: tenantProcedure
+      .input(coverageRuleListInput)
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.coverageRule.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.planId && { planId: input.planId }),
+              ...(input.coverageId && { coverageId: input.coverageId }),
+              ...(input.activeOnly && { active: true }),
+            },
+            orderBy: [{ sequence: "desc" }, { createdAt: "desc" }],
+            take: input.limit,
+          }),
+        );
+      }),
+
+    create: writerProc
+      .input(coverageRuleCreateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          if (input.planId) {
+            const plan = await tx.insurancePlan.findFirst({
+              where: {
+                id: input.planId,
+                insurer: {
+                  OR: [{ organizationId: null }, { organizationId: ctx.tenant.organizationId }],
+                },
+              },
+              select: { id: true },
+            });
+            if (!plan) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Plan no visible para el tenant." });
+            }
+          }
+          if (input.coverageId) {
+            const coverage = await tx.patientCoverage.findFirst({
+              where: { id: input.coverageId, organizationId: ctx.tenant.organizationId },
+              select: { id: true },
+            });
+            if (!coverage) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Póliza no existe en la organización." });
+            }
+          }
+          return tx.coverageRule.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              planId: input.planId ?? null,
+              coverageId: input.coverageId ?? null,
+              ruleOn: input.ruleOn,
+              serviceCategoryId: input.serviceCategoryId ?? null,
+              code: input.code ?? null,
+              ruleType: input.ruleType,
+              percentage: input.percentage ?? null,
+              amount: input.amount ?? null,
+              fullCover: input.fullCover,
+              sequence: input.sequence,
+              createdBy: ctx.user.id,
+            },
+          });
+        });
+      }),
+
+    deactivate: writerProc
+      .input(coverageRuleDeactivateInput)
+      .mutation(async ({ ctx, input }) => {
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.coverageRule.updateMany({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, active: true },
+            data: { active: false, updatedBy: ctx.user.id },
+          }),
+        );
+        if (updated.count === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Regla no existe o ya está inactiva." });
+        }
+        return { ok: true as const };
       }),
   }),
 

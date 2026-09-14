@@ -624,6 +624,8 @@ describe("patientAccountRouter", () => {
       prisma.invoice.findMany.mockResolvedValue([{ id: "inv-1" }, { id: "inv-2" }] as never);
       prisma.invoicePayment.aggregate.mockResolvedValue({ _sum: { amount: 150 } } as never);
       prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 100 } } as never);
+      // CC-0028 — sin cargos VIGENTE para el motor de cobertura -> coberturaEstimada null.
+      prisma.patientAccountService.findMany.mockResolvedValue([] as never);
 
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.liquidacion({ accountId: ACCOUNT_ID });
@@ -633,6 +635,7 @@ describe("patientAccountRouter", () => {
         totalPagos: 150,
         coberturaAprobada: 100,
         saldo: 250,
+        coberturaEstimada: null,
       });
       const invoicePaymentArgs = prisma.invoicePayment.aggregate.mock.calls[0]![0];
       expect(invoicePaymentArgs.where).toMatchObject({ invoiceId: { in: ["inv-1", "inv-2"] } });
@@ -644,6 +647,7 @@ describe("patientAccountRouter", () => {
       prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 80 } } as never);
       prisma.invoice.findMany.mockResolvedValue([] as never);
       prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccountService.findMany.mockResolvedValue([] as never);
 
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.liquidacion({ accountId: ACCOUNT_ID });
@@ -659,6 +663,46 @@ describe("patientAccountRouter", () => {
       const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.liquidacion({ accountId: ACCOUNT_ID })).rejects.toMatchObject({
         code: "NOT_FOUND",
+      });
+    });
+
+    it("CC-0028: incluye coberturaEstimada cuando el paciente tiene póliza vigente y cargos VIGENTE", async () => {
+      setupTx();
+      // 1ra llamada (router): valida la cuenta en el tenant. 2da llamada
+      // (computeCoberturaEstimada): trae el patientId de la cuenta.
+      prisma.patientAccount.findFirst
+        .mockResolvedValueOnce({ id: ACCOUNT_ID } as never)
+        .mockResolvedValueOnce({ patientId: PATIENT_ID } as never);
+      prisma.patientAccountService.aggregate.mockResolvedValue({ _sum: { totalPrice: 100 } } as never);
+      prisma.invoice.findMany.mockResolvedValue([] as never);
+      prisma.coverageLetter.aggregate.mockResolvedValue({ _sum: { montoAprobado: 0 } } as never);
+      prisma.patientAccountService.findMany.mockResolvedValue([
+        { code: "COD1", totalPrice: 100, priceListId: null, origen: "IMAGENES" },
+      ] as never);
+      prisma.$queryRawUnsafe.mockResolvedValue([{ categoryId: null }] as never);
+      prisma.patientCoverage.findMany.mockResolvedValue([
+        {
+          id: "cov-1",
+          planId: "plan-1",
+          organizationId: MOCK_TENANT.organizationId,
+          validFrom: new Date("2020-01-01"),
+          createdAt: new Date("2020-01-01"),
+        },
+      ] as never);
+      prisma.coverageRule.findMany.mockResolvedValue([] as never);
+      prisma.insurancePlanCoverage.findMany.mockResolvedValue([
+        { ambito: "GENERAL", coverageType: "PORCENTAJE", insuredPercentage: 70, copayAmount: null, coverageLimit: null },
+      ] as never);
+      prisma.patientCoverageOverride.findMany.mockResolvedValue([] as never);
+
+      const caller = patientAccountRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.liquidacion({ accountId: ACCOUNT_ID });
+
+      expect(result.saldo).toBe(100); // CC-0028 no descuenta el saldo.
+      expect(result.coberturaEstimada).toMatchObject({
+        polizaId: "cov-1",
+        totalAsegurado: 70,
+        totalPaciente: 30,
       });
     });
   });

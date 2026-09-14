@@ -57,9 +57,14 @@ export default function InsurancePage() {
             Convenios y planes de aseguradoras (§25).
           </p>
         </div>
-        <Button asChild>
-          <Link href="/insurance/new">Nueva aseguradora</Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/insurance/plans">Planes</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/insurance/new">Nueva aseguradora</Link>
+          </Button>
+        </div>
       </div>
 
       <Card>

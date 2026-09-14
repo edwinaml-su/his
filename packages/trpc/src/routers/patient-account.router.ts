@@ -26,6 +26,7 @@ import type { PrismaClient } from "@prisma/client";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { nextCuenta } from "../lib/cuenta-numbering";
+import { resolverCobertura, type Ambito, type LineaEntrada, type ResultadoCobertura } from "../lib/coverage-resolver";
 
 const tipoServicioEnum = z.enum(["HOSPITALARIO", "NO_HOSPITALARIO"]);
 const writerProc = requireRole(["ADMIN", "ACCOUNTANT"]);
@@ -284,6 +285,86 @@ async function computeLiquidacion(tx: PrismaClient, accountId: string): Promise<
     coberturaAprobada,
     saldo: totalCargos - totalPagos - coberturaAprobada,
   };
+}
+
+/**
+ * CC-0028 — mapea el `origen` congelado del cargo (ver docs/48 Ola 2) al
+ * ámbito del motor de cobertura. Único origen de farmacia hoy en el código
+ * es "DISPENSACION_FARMACIA" (dispensation.router.ts); todo lo demás
+ * (HABITACION, IMAGENES, LABORATORIO, USO_INSTALACIONES, AJUSTE, MANUAL,
+ * null) se trata como CONSULTA. Heurística v1 — documentada en docs/CC/0028.
+ */
+function mapOrigenAAmbito(origen: string | null): Ambito {
+  return origen === "DISPENSACION_FARMACIA" ? "FARMACIA" : "CONSULTA";
+}
+
+/**
+ * CC-0028 — categoría de servicio de un código de tarifario, para que las
+ * CoverageRule ruleOn=CATEGORIA puedan aplicar. Mismo criterio que
+ * price-resolver.ts (categoria_base): primero el ítem de la lista congelada
+ * en el cargo (`priceListId`), luego LabTest (tenant, después global). Sin
+ * traversal de ancestros (a diferencia del ranking de precios) — CoverageRule
+ * matchea la categoría exacta del código, no sus subcategorías (v1).
+ */
+const SQL_CATEGORIA_POR_CODIGO = `
+SELECT COALESCE(
+  (SELECT i."categoryId" FROM "ServicePriceListItem" i
+    WHERE i."priceListId" = $1::uuid AND i.code = $2::text AND i.active = true LIMIT 1),
+  (SELECT lt."categoryId" FROM "LabTest" lt
+    WHERE lt.code = $2::text AND (lt."organizationId" = $3::uuid OR lt."organizationId" IS NULL)
+    ORDER BY (lt."organizationId" IS NULL) LIMIT 1)
+) AS "categoryId"`;
+
+/**
+ * CC-0028 — desglose de cobertura ESTIMADA (asegurado vs paciente) de los
+ * cargos VIGENTE de la cuenta, cuando el paciente tiene una PatientCoverage
+ * vigente hoy. Es informativo/de negociación con la aseguradora: NO
+ * descuenta el saldo de `computeLiquidacion` — el único descuento real de
+ * cobertura sigue siendo la CoverageLetter (carta/finiquito) de la ruta A,
+ * igual que en Odoo (la cobertura es aritmética de liquidación, no de
+ * captura). Devuelve null si no hay cargos o no hay póliza vigente.
+ */
+async function computeCoberturaEstimada(
+  tx: PrismaClient,
+  organizationId: string,
+  accountId: string,
+): Promise<ResultadoCobertura | null> {
+  const account = await tx.patientAccount.findFirst({
+    where: { id: accountId },
+    select: { patientId: true },
+  });
+  if (!account) return null;
+
+  const servicios = await tx.patientAccountService.findMany({
+    where: { accountId, status: "VIGENTE", totalPrice: { not: null } },
+    select: { code: true, totalPrice: true, priceListId: true, origen: true },
+  });
+  if (servicios.length === 0) return null;
+
+  const lineas: LineaEntrada[] = [];
+  for (const s of servicios) {
+    const ambito = mapOrigenAAmbito(s.origen);
+    const total = Number(s.totalPrice);
+    if (!s.code) {
+      lineas.push({ code: "", ambito, total });
+      continue;
+    }
+    const filas = await tx.$queryRawUnsafe<Array<{ categoryId: string | null }>>(
+      SQL_CATEGORIA_POR_CODIGO,
+      s.priceListId,
+      s.code,
+      organizationId,
+    );
+    lineas.push({ code: s.code, categoria: filas[0]?.categoryId ?? null, ambito, total });
+  }
+
+  const resultado = await resolverCobertura(tx, {
+    organizationId,
+    patientId: account.patientId,
+    fecha: new Date(),
+    lineas,
+  });
+  return resultado.polizaId ? resultado : null;
 }
 
 /** Fila del worklist de cobro: 1 por expediente con saldo agregado + área actual. */
@@ -654,6 +735,11 @@ export const patientAccountRouter = router({
    * CC-0027 — desglose de liquidación de la cuenta: total cargos VIGENTE −
    * pagos − cobertura aprobada = saldo. Base para las dos rutas de alta
    * administrativa (ver `computeLiquidacion`).
+   *
+   * CC-0028 — agrega `coberturaEstimada` (asegurado vs paciente, por línea)
+   * cuando el paciente tiene póliza vigente. NO participa del cálculo de
+   * `saldo` (ver `computeCoberturaEstimada`) — es la base para negociar con
+   * la aseguradora, no un descuento automático.
    */
   liquidacion: tenantProcedure
     .input(z.object({ accountId: z.string().uuid() }))
@@ -666,7 +752,13 @@ export const patientAccountRouter = router({
         if (!account) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no encontrada." });
         }
-        return computeLiquidacion(tx, account.id);
+        const liquidacion = await computeLiquidacion(tx, account.id);
+        const coberturaEstimada = await computeCoberturaEstimada(
+          tx,
+          ctx.tenant.organizationId,
+          account.id,
+        );
+        return { ...liquidacion, coberturaEstimada };
       });
     }),
 

@@ -421,6 +421,28 @@ export function PatientCuentas({ patientId }: { patientId: string }) {
               )}
             </div>
 
+            {/* CC-0028 — desglose de cobertura ESTIMADA (para negociar con la
+                aseguradora). No descuenta el saldo: el único descuento real
+                sigue siendo la CoverageLetter de la Ruta A. */}
+            {liquidacionQ.data?.coberturaEstimada ? (
+              <div className="rounded-md border border-dashed border-border bg-muted/20 p-3 text-sm">
+                <p className="mb-2 text-xs font-medium text-muted-foreground">
+                  Cobertura estimada (póliza vigente) — no descuenta el saldo, base para
+                  negociar con la aseguradora.
+                </p>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-2">
+                  <dt className="text-muted-foreground">Asegurado</dt>
+                  <dd className="font-mono">
+                    ${fmt(liquidacionQ.data.coberturaEstimada.totalAsegurado)}
+                  </dd>
+                  <dt className="text-muted-foreground">Paciente</dt>
+                  <dd className="font-mono">
+                    ${fmt(liquidacionQ.data.coberturaEstimada.totalPaciente)}
+                  </dd>
+                </dl>
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 size="sm"
