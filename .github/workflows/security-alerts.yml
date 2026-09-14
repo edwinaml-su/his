@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload report
         if: env.SUPABASE_ACCESS_TOKEN != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: supabase-advisors-report
           path: advisors-report.json
@@ -219,7 +219,7 @@ jobs:
 
       - name: Upload rate-limit report
         if: always() && env.DIRECT_URL != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rate-limit-spike-report
           path: rate-limit-spike.txt
