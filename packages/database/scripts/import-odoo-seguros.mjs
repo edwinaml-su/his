@@ -588,7 +588,10 @@ function imprimirReporte(plan) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { PrismaClient } = await import("@his/database");
+  // @prisma/client directo (NO "@his/database": su main es src/index.ts TS
+  // con imports sin extensión — irresoluble bajo `node` puro; mismo patrón
+  // que seed-tarifario-odoo.mjs).
+  const { PrismaClient } = await import("@prisma/client");
   const prisma = new PrismaClient();
   try {
     const datos = await extraerDeOdoo();
