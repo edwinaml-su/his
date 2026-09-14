@@ -116,7 +116,7 @@ type TxForGuards = { $queryRawUnsafe: <T>(query: string, ...values: unknown[]) =
 
 async function assertListaDelTenant(tx: TxForGuards, id: string, organizationId: string): Promise<void> {
   const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-    `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+    `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
     id,
     organizationId,
   );
@@ -125,7 +125,7 @@ async function assertListaDelTenant(tx: TxForGuards, id: string, organizationId:
 
 async function assertCategoriaDelTenant(tx: TxForGuards, id: string, organizationId: string): Promise<void> {
   const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-    `SELECT id FROM "ServiceCategory" WHERE id = $1 AND "organizationId" = $2`,
+    `SELECT id FROM "ServiceCategory" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
     id,
     organizationId,
   );
@@ -136,7 +136,7 @@ async function assertReglaDelTenant(tx: TxForGuards, id: string, organizationId:
   const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
     `SELECT r.id FROM "ServicePriceRule" r
        JOIN "ServicePriceList" pl ON pl.id = r."priceListId"
-      WHERE r.id = $1 AND pl."organizationId" = $2`,
+      WHERE r.id = $1::uuid AND pl."organizationId" = $2::uuid`,
     id,
     organizationId,
   );
@@ -231,7 +231,7 @@ export const servicePriceListRouter = router({
     const { tenant, prisma } = ctx;
 
     return withTenantContext(prisma, tenant, async (tx) => {
-      const conditions: string[] = [`pl."organizationId" = $1`];
+      const conditions: string[] = [`pl."organizationId" = $1::uuid`];
       const params: unknown[] = [tenant.organizationId];
       let idx = 2;
 
@@ -269,7 +269,7 @@ export const servicePriceListRouter = router({
         `SELECT id, "organizationId", name, "currencyId", "validFrom", "validTo",
                 active, notes, "isDefault", "createdAt", "updatedAt"
            FROM "ServicePriceList"
-          WHERE id = $1 AND "organizationId" = $2`,
+          WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.id,
         tenant.organizationId,
       );
@@ -286,7 +286,7 @@ export const servicePriceListRouter = router({
                 cc.code AS "costCenterCode", cc.name AS "costCenterName"
            FROM "ServicePriceListItem" i
            LEFT JOIN "CostCenter" cc ON cc.id = i."suggestedCostCenterId"
-          WHERE i."priceListId" = $1
+          WHERE i."priceListId" = $1::uuid
           ORDER BY i.code NULLS LAST, i.description`,
         input.id,
       );
@@ -311,7 +311,7 @@ export const servicePriceListRouter = router({
       const params: unknown[] = [tenant.organizationId];
       let filterSql = "";
       if (input?.priceListId) {
-        filterSql = `AND pl.id = $2`;
+        filterSql = `AND pl.id = $2::uuid`;
         params.push(input.priceListId);
       }
 
@@ -337,7 +337,7 @@ export const servicePriceListRouter = router({
            FROM "ServicePriceListItem" i
            JOIN "ServicePriceList" pl
              ON pl.id = i."priceListId"
-            AND pl."organizationId" = $1
+            AND pl."organizationId" = $1::uuid
             AND pl.active = true
            LEFT JOIN "CostCenter" cc ON cc.id = i."suggestedCostCenterId"
           WHERE i.active = true ${filterSql}
@@ -411,7 +411,7 @@ export const servicePriceListRouter = router({
       // Verificar pertenencia al tenant
       type CheckRow = { id: string };
       const check = await tx.$queryRawUnsafe<CheckRow[]>(
-        `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.id,
         tenant.organizationId,
       );
@@ -450,7 +450,7 @@ export const servicePriceListRouter = router({
       // Verificar que el tarifario pertenece al tenant
       type CheckRow = { id: string };
       const check = await tx.$queryRawUnsafe<CheckRow[]>(
-        `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.priceListId,
         tenant.organizationId,
       );
@@ -494,7 +494,7 @@ export const servicePriceListRouter = router({
       const check = await tx.$queryRawUnsafe<CheckRow[]>(
         `SELECT i.id FROM "ServicePriceListItem" i
            JOIN "ServicePriceList" pl ON pl.id = i."priceListId"
-          WHERE i.id = $1 AND pl."organizationId" = $2`,
+          WHERE i.id = $1::uuid AND pl."organizationId" = $2::uuid`,
         input.id,
         tenant.organizationId,
       );
@@ -534,7 +534,7 @@ export const servicePriceListRouter = router({
       const check = await tx.$queryRawUnsafe<CheckRow[]>(
         `SELECT i.id FROM "ServicePriceListItem" i
            JOIN "ServicePriceList" pl ON pl.id = i."priceListId"
-          WHERE i.id = $1 AND pl."organizationId" = $2`,
+          WHERE i.id = $1::uuid AND pl."organizationId" = $2::uuid`,
         input.id,
         tenant.organizationId,
       );
@@ -543,7 +543,7 @@ export const servicePriceListRouter = router({
       }
 
       await tx.$queryRawUnsafe(
-        `UPDATE "ServicePriceListItem" SET active = $1, "updatedAt" = now() WHERE id = $2`,
+        `UPDATE "ServicePriceListItem" SET active = $1, "updatedAt" = now() WHERE id = $2::uuid`,
         input.active,
         input.id,
       );
@@ -561,7 +561,7 @@ export const servicePriceListRouter = router({
     return withTenantContext(prisma, tenant, async (tx) => {
       type CheckRow = { id: string };
       const check = await tx.$queryRawUnsafe<CheckRow[]>(
-        `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.id,
         tenant.organizationId,
       );
@@ -570,7 +570,7 @@ export const servicePriceListRouter = router({
       }
 
       await tx.$queryRawUnsafe(
-        `UPDATE "ServicePriceList" SET active = $1, "updatedAt" = now() WHERE id = $2`,
+        `UPDATE "ServicePriceList" SET active = $1, "updatedAt" = now() WHERE id = $2::uuid`,
         input.active,
         input.id,
       );
@@ -592,7 +592,7 @@ export const servicePriceListRouter = router({
 
     return withTenantContext(prisma, tenant, async (tx) => {
       const rows = await tx.$queryRawUnsafe<Array<{ id: string; active: boolean }>>(
-        `SELECT id, active FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT id, active FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.priceListId,
         tenant.organizationId,
       );
@@ -613,13 +613,13 @@ export const servicePriceListRouter = router({
         // marcar la nueva, o el UPDATE siguiente viola la constraint.
         await tx.$queryRawUnsafe(
           `UPDATE "ServicePriceList" SET "isDefault" = false, "updatedAt" = now()
-            WHERE "organizationId" = $1 AND "isDefault" = true`,
+            WHERE "organizationId" = $1::uuid AND "isDefault" = true`,
           tenant.organizationId,
         );
       }
 
       await tx.$queryRawUnsafe(
-        `UPDATE "ServicePriceList" SET "isDefault" = $1, "updatedAt" = now() WHERE id = $2`,
+        `UPDATE "ServicePriceList" SET "isDefault" = $1, "updatedAt" = now() WHERE id = $2::uuid`,
         input.isDefault,
         input.priceListId,
       );
@@ -645,7 +645,7 @@ export const servicePriceListRouter = router({
                   WHERE r."categoryId" = sc.id AND r.active = true)::int AS "ruleCount"
            FROM "ServiceCategory" sc
            LEFT JOIN "ServiceCategory" p ON p.id = sc."parentId"
-          WHERE sc."organizationId" = $1 ${filtro}
+          WHERE sc."organizationId" = $1::uuid ${filtro}
           ORDER BY sc.code`,
         tenant.organizationId,
       );
@@ -726,7 +726,7 @@ export const servicePriceListRouter = router({
            FROM "ServicePriceRule" r
            LEFT JOIN "ServiceCategory" sc ON sc.id = r."categoryId"
            LEFT JOIN "ServicePriceList" bl ON bl.id = r."basePriceListId"
-          WHERE r."priceListId" = $1 ${filtro}
+          WHERE r."priceListId" = $1::uuid ${filtro}
           ORDER BY CASE r."appliedOn" WHEN 'item' THEN 0 WHEN 'category' THEN 1 ELSE 2 END,
                    r."minQuantity" DESC, r.sequence DESC, r."createdAt" DESC`,
         input.priceListId,
@@ -845,7 +845,7 @@ export const servicePriceListRouter = router({
       asignar("updatedBy", ctx.user?.id ?? null, "::uuid");
 
       params.push(input.id);
-      await tx.$queryRawUnsafe(`UPDATE "ServicePriceRule" SET ${sets.join(", ")} WHERE id = $${idx}`, ...params);
+      await tx.$queryRawUnsafe(`UPDATE "ServicePriceRule" SET ${sets.join(", ")} WHERE id = $${idx}::uuid`, ...params);
 
       return { id: input.id };
     });
@@ -858,7 +858,7 @@ export const servicePriceListRouter = router({
       await assertReglaDelTenant(tx, input.id, tenant.organizationId);
 
       await tx.$queryRawUnsafe(
-        `UPDATE "ServicePriceRule" SET active = $1, "updatedAt" = now() WHERE id = $2`,
+        `UPDATE "ServicePriceRule" SET active = $1, "updatedAt" = now() WHERE id = $2::uuid`,
         input.active,
         input.id,
       );
@@ -872,7 +872,7 @@ export const servicePriceListRouter = router({
 
     return withTenantContext(prisma, tenant, async (tx) => {
       await assertReglaDelTenant(tx, input.id, tenant.organizationId);
-      await tx.$queryRawUnsafe(`DELETE FROM "ServicePriceRule" WHERE id = $1`, input.id);
+      await tx.$queryRawUnsafe(`DELETE FROM "ServicePriceRule" WHERE id = $1::uuid`, input.id);
       return { id: input.id };
     });
   }),
