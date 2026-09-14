@@ -37,6 +37,11 @@ const m = command.match(/gh\s+pr\s+merge\s+(\d+)/);
 if (!m) process.exit(0); // no es un merge — no opinar
 const pr = m[1];
 
+// `--auto` es seguro por definición: GitHub solo ejecuta el merge cuando los
+// required checks se ponen verdes (enforce_admins activo) — bloquearlo solo
+// obliga a esperar sin ganancia. El guard aplica al merge INMEDIATO.
+if (/\s--auto(\s|$)/.test(command)) process.exit(0);
+
 try {
   const info = JSON.parse(
     sh(`gh pr view ${pr} --json state,headRefOid,headRefName`),
