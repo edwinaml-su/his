@@ -10,7 +10,7 @@
     "dbt:debug": "dbt debug"
   },
   "devDependencies": {
-    "@types/node": "^22.19.20"
+    "@types/node": "^22.20.2"
   },
   "engines": {
     "node": ">=20.0.0"

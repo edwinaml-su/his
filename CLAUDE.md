@@ -15,7 +15,7 @@ Versiones instaladas (verificado 2026-08-18 — si tocás una, actualizá esta t
 | Pieza | Versión | Nota |
 |---|---|---|
 | Node / npm | 24.x / 11.9.0 | Alineado en `engines`, `ci.yml`, `Dockerfile` y K8s. Next 16 exige ≥ 20.9 |
-| Next.js | 16.3.1 | Migrado desde 14 en #534 (2026-08-17). `headers()` es **async** |
+| Next.js | 16.3.5 | Migrado desde 14 en #534; patch 16.3.5 en barrido Dependabot 2026-09-14. `headers()` es **async** |
 | React / React DOM | 19.2.8 | Pineado exacto vía `overrides` en la raíz |
 | TypeScript | 5.9.3 | Declarado `^5.6.3`; Dependabot ignora el mayor a 6 |
 | Turborepo | 2.9.16 | |
