@@ -4014,6 +4014,10 @@ model BiomedicalEquipment {
   criticality            CriticalityLevel @default(MEDIUM)
   certificationExpiresAt DateTime?        @db.Timestamptz() /// vencimiento de certificación regulatoria.
   maintenanceReason      String?          @db.VarChar(500) /// obligatorio cuando criticality=CRITICAL y status=UNDER_MAINTENANCE.
+  /// CC-0029 — GS1 GIAI (AI 8004): prefijo empresa + referencia de activo, ≤30 chars, sin dígito verificador. Único global (sql/236).
+  giaiCode               String?          @unique
+  /// CC-0029 — GLN (ece.gs1_gln.codigo) de la ubicación física actual del activo; FK deferrable (sql/236).
+  glnUbicacionActual     String?
   active                 Boolean          @default(true)
   createdAt              DateTime         @default(now()) @db.Timestamptz()
   createdBy              String?          @db.Uuid

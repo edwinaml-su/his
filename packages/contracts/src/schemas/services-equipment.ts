@@ -8,6 +8,7 @@
  *   - getOverduePmInput / getExpiringCertificationsInput helpers.
  */
 import { z } from "zod";
+import { validateGIAI } from "../validators/gs1";
 
 const EQUIPMENT_STATUS = [
   "OPERATIONAL",
@@ -173,17 +174,44 @@ export type GetExpiringCertificationsInput = z.infer<typeof getExpiringCertifica
 // GS1 — GIAI + GLN
 // ---------------------------------------------------------------------------
 
-/** GIAI GS1: 18 dígitos numéricos */
-const GIAI_REGEX = /^\d{18}$/;
 /** GLN GS1: 13 dígitos numéricos */
 const GLN_REGEX = /^\d{13}$/;
+
+/**
+ * Acepta tanto un GIAI crudo como una lectura de escáner con el AI explícito
+ * ("8004<giai>") — se normaliza quitando el prefijo "8004" antes de validar.
+ * CC-0029: el GIAI real (AI 8004) no es de 18 dígitos fijos — ver
+ * `validateGIAI` en @his/contracts/validators/gs1 (prefijo GS1 7-12 dígitos +
+ * referencia alfanumérica, ≤30 caracteres, sin dígito verificador).
+ */
+function normalizeGiaiScan(raw: string): string {
+  const trimmed = raw.trim();
+  // Solo se despoja el "8004" cuando es inequívocamente el AI de una lectura
+  // de escáner: si la cadena completa YA es un GIAI válido, se respeta tal
+  // cual — un prefijo GS1 de empresa puede legítimamente empezar con 8004 y
+  // recortarlo a ciegas corrompería el código (hallazgo pre-pr-review).
+  if (validateGIAI(trimmed)) return trimmed;
+  if (trimmed.startsWith("8004") && validateGIAI(trimmed.slice(4))) {
+    return trimmed.slice(4);
+  }
+  return trimmed;
+}
 
 export const registrarGiaiInput = z.object({
   equipmentId: z.string().uuid(),
   giaiCode: z
     .string()
     .trim()
-    .regex(GIAI_REGEX, "GIAI debe tener exactamente 18 dígitos numéricos"),
+    .transform(normalizeGiaiScan)
+    .refine(
+      validateGIAI,
+      "GIAI inválido: prefijo GS1 numérico (7-12 dígitos) + referencia alfanumérica, máximo 30 caracteres",
+    ),
+});
+
+/** generarGiai — solo requiere el equipo; el GIAI se deriva del assetTag + prefijo GS1 de la org. */
+export const generarGiaiInput = z.object({
+  equipmentId: z.string().uuid(),
 });
 
 export const actualizarUbicacionInput = z.object({
@@ -201,5 +229,6 @@ export const historialUbicacionesInput = z.object({
 });
 
 export type RegistrarGiaiInput = z.infer<typeof registrarGiaiInput>;
+export type GenerarGiaiInput = z.infer<typeof generarGiaiInput>;
 export type ActualizarUbicacionInput = z.infer<typeof actualizarUbicacionInput>;
 export type HistorialUbicacionesInput = z.infer<typeof historialUbicacionesInput>;
