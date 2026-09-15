@@ -44,8 +44,8 @@
 -- (mismo hecho que motivó 202/210 — el módulo nunca corrió end-to-end). No
 -- hace falta backfill.
 --
--- NO aplicado a prod por este archivo — pendiente de review de @Orq (mismo
--- criterio que 209/210, que este archivo acompaña).
+-- ⚠️ APLICADO a prod (verificado 2026-09-15: columnas drug_id y detalle
+-- presentes) — NO re-aplicar. La cabecera anterior quedó stale.
 -- Idempotente. Aplicar vía Supabase SQL Editor o mcp__supabase__apply_migration.
 -- =============================================================================
 

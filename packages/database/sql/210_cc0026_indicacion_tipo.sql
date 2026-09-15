@@ -24,8 +24,8 @@
 -- prod (el módulo nunca corrió end-to-end — ver REQ-CC-0026 §Hechos
 -- verificados). No hace falta backfill de datos.
 --
--- NO aplicado a prod por este archivo — pendiente de review de @Orq (mismo
--- criterio que sql/209, que este archivo acompaña).
+-- ⚠️ APLICADO a prod (verificado 2026-09-15: columnas tipo_indicacion y
+-- fecha_firma presentes) — NO re-aplicar. La cabecera anterior quedó stale.
 -- Idempotente. Aplicar vía mcp__supabase__apply_migration en transacción.
 -- =============================================================================
 

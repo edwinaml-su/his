@@ -81,7 +81,8 @@
 --     cubre el INSERT (mismo patrón que ImagingRequest, sql/192).
 --
 -- Idempotente. Aplicar vía mcp__supabase__apply_migration en transacción.
--- NO aplicado a prod por este archivo — pendiente de review de @Orq.
+-- ⚠️ APLICADO a prod (verificado 2026-09-15: tabla CareTask + 3 policies
+-- presentes) — NO re-aplicar. La cabecera anterior quedó stale.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
