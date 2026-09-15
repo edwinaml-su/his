@@ -1029,6 +1029,308 @@ describe("dispensationRouter — reservas consolidadas", () => {
   });
 
   // -------------------------------------------------------------------------
+  // CC-0030 — R6 de RN-HIS-BOT-001 (docs/47 §4, SQL 237): "se carga la
+  // cantidad ENTREGADA, no la solicitada". Cubre el hard stop ITEM_COMPLETO
+  // en reserveItem, el recompute de Prescription.status en AMBAS
+  // direcciones (reservar sube, devolver/cancelar baja) y prescribedQty=0
+  // (recetas legacy) sin tope.
+  // -------------------------------------------------------------------------
+  describe("CC-0030 — R6 cantidad efectiva de entrega (SQL 237)", () => {
+    const ITEM_ID_QTY = "00000000-0000-0000-0000-0000000000q1";
+
+    function prescriptionWithQty(prescribedQty: number, dispensedQty: number) {
+      return {
+        id: ORDER,
+        encounterId: null,
+        prescriberId: "00000000-0000-0000-0000-000000000099",
+        items: [
+          {
+            id: ITEM_ID_QTY,
+            prescribedQty,
+            dispensedQty,
+            drug: { genericName: "Amoxicilina 500mg", dispensingClass: "OTC" },
+          },
+        ],
+      };
+    }
+
+    beforeEach(() => {
+      prisma.pharmacyReservation.findFirst.mockResolvedValue(null as never);
+      prisma.pharmacyReservation.create.mockResolvedValue(makeReservation() as never);
+      // Sin StockItem cargado (SIN_CATALOGO) — no interfiere con R07.
+      prisma.stockItem.findFirst.mockResolvedValue(null as never);
+    });
+
+    describe("reserveItem — hard stop ITEM_COMPLETO", () => {
+      it("CONFLICT ITEM_COMPLETO cuando dispensedQty ya alcanzó prescribedQty", async () => {
+        prisma.prescription.findFirst.mockResolvedValue(
+          prescriptionWithQty(3, 3) as never,
+        );
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.reserveItem({
+            pharmacyOrderId: ORDER,
+            gtin: GTIN,
+            lote: LOTE,
+            patientId: PATIENT,
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT", message: "ITEM_COMPLETO" });
+        expect(prisma.pharmacyReservation.create).not.toHaveBeenCalled();
+      });
+
+      it("secuencial: 3 reservas completan prescribedQty=3, la 4ª es CONFLICT ITEM_COMPLETO", async () => {
+        let dispensedQty = 0;
+        const prescribedQty = 3;
+
+        prisma.prescription.findFirst.mockImplementation(
+          async () => prescriptionWithQty(prescribedQty, dispensedQty) as never,
+        );
+        prisma.prescriptionItem.findUnique.mockImplementation(
+          async () =>
+            ({ id: ITEM_ID_QTY, prescriptionId: ORDER, dispensedQty }) as never,
+        );
+        prisma.prescriptionItem.update.mockImplementation(async (args: unknown) => {
+          dispensedQty = Number((args as { data: { dispensedQty: number } }).data.dispensedQty);
+          return {} as never;
+        });
+        prisma.prescriptionItem.findMany.mockImplementation(
+          async () => [{ prescribedQty, dispensedQty }] as never,
+        );
+        prisma.prescription.findUnique.mockImplementation(
+          async () => ({ status: "SIGNED" }) as never,
+        );
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+
+        for (let i = 0; i < 3; i += 1) {
+          const result = await caller.reserveItem({
+            pharmacyOrderId: ORDER,
+            gtin: GTIN,
+            lote: LOTE,
+            patientId: PATIENT,
+          });
+          expect(result.status).toBe("RESERVED");
+        }
+        expect(dispensedQty).toBe(3);
+
+        await expect(
+          caller.reserveItem({
+            pharmacyOrderId: ORDER,
+            gtin: GTIN,
+            lote: LOTE,
+            patientId: PATIENT,
+          }),
+        ).rejects.toMatchObject({ code: "CONFLICT", message: "ITEM_COMPLETO" });
+      });
+
+      it("prescribedQty=0 (receta legacy sin cantidad capturada) nunca dispara ITEM_COMPLETO", async () => {
+        prisma.prescription.findFirst.mockResolvedValue(
+          prescriptionWithQty(0, 500) as never,
+        );
+        prisma.prescriptionItem.findUnique.mockResolvedValue({
+          id: ITEM_ID_QTY,
+          prescriptionId: ORDER,
+          dispensedQty: 500,
+        } as never);
+        prisma.prescriptionItem.update.mockResolvedValue({} as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { prescribedQty: 0, dispensedQty: 501 },
+        ] as never);
+        prisma.prescription.findUnique.mockResolvedValue({ status: "SIGNED" } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        const result = await caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+        });
+        expect(result.status).toBe("RESERVED");
+      });
+    });
+
+    describe("reserveItem — enlace + recompute de Prescription.status", () => {
+      it("setea prescriptionItemId en la reserva y +1 sobre dispensedQty del ítem resuelto", async () => {
+        prisma.prescription.findFirst.mockResolvedValue(
+          prescriptionWithQty(3, 1) as never,
+        );
+        prisma.prescriptionItem.findUnique.mockResolvedValue({
+          id: ITEM_ID_QTY,
+          prescriptionId: ORDER,
+          dispensedQty: 1,
+        } as never);
+        prisma.prescriptionItem.update.mockResolvedValue({} as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { prescribedQty: 3, dispensedQty: 2 },
+        ] as never);
+        prisma.prescription.findUnique.mockResolvedValue({ status: "SIGNED" } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+        });
+
+        const createArg = prisma.pharmacyReservation.create.mock.calls[0]![0].data;
+        expect(createArg.prescriptionItemId).toBe(ITEM_ID_QTY);
+        expect(prisma.prescriptionItem.update).toHaveBeenCalledWith({
+          where: { id: ITEM_ID_QTY },
+          data: { dispensedQty: 2 },
+        });
+        // 2 de 3 — todavía pendiente: SIGNED → PARTIALLY_DISPENSED.
+        expect(prisma.prescription.update).toHaveBeenCalledWith({
+          where: { id: ORDER },
+          data: { status: "PARTIALLY_DISPENSED" },
+        });
+      });
+
+      it("recompute a DISPENSED cuando el ítem (único de la receta) completa prescribedQty", async () => {
+        prisma.prescription.findFirst.mockResolvedValue(
+          prescriptionWithQty(3, 2) as never,
+        );
+        prisma.prescriptionItem.findUnique.mockResolvedValue({
+          id: ITEM_ID_QTY,
+          prescriptionId: ORDER,
+          dispensedQty: 2,
+        } as never);
+        prisma.prescriptionItem.update.mockResolvedValue({} as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { prescribedQty: 3, dispensedQty: 3 },
+        ] as never);
+        prisma.prescription.findUnique.mockResolvedValue({
+          status: "PARTIALLY_DISPENSED",
+        } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.reserveItem({
+          pharmacyOrderId: ORDER,
+          gtin: GTIN,
+          lote: LOTE,
+          patientId: PATIENT,
+        });
+
+        expect(prisma.prescription.update).toHaveBeenCalledWith({
+          where: { id: ORDER },
+          data: { status: "DISPENSED" },
+        });
+      });
+    });
+
+    describe("returnItem — decrementa dispensedQty y reabre el status", () => {
+      function prescriptionFixtureOTC() {
+        return {
+          prescriberId: "00000000-0000-0000-0000-000000000099",
+          items: [
+            {
+              id: ITEM_ID_QTY,
+              drug: { genericName: "Amoxicilina 500mg", dispensingClass: "OTC" },
+            },
+          ],
+        };
+      }
+
+      it("decrementa dispensedQty del ítem enlazado y recomputa DISPENSED → PARTIALLY_DISPENSED", async () => {
+        const existing = {
+          ...makeReservation({ status: "RESERVED" }),
+          prescriptionItemId: ITEM_ID_QTY,
+        };
+        prisma.prescription.findFirst.mockResolvedValue(prescriptionFixtureOTC() as never);
+        prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+        prisma.pharmacyReservation.update.mockResolvedValue(
+          { ...existing, status: "RETURNED" } as never,
+        );
+        prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+        prisma.patientAccountService.findFirst.mockResolvedValue({ id: "cargo-1" } as never);
+
+        prisma.prescriptionItem.findUnique.mockResolvedValue({
+          id: ITEM_ID_QTY,
+          prescriptionId: ORDER,
+          dispensedQty: 3,
+        } as never);
+        prisma.prescriptionItem.update.mockResolvedValue({} as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { prescribedQty: 3, dispensedQty: 2 },
+        ] as never);
+        prisma.prescription.findUnique.mockResolvedValue({ status: "DISPENSED" } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.returnItem({ reservationId: RES, motivo: "NO_ADMINISTRADO" });
+
+        expect(prisma.prescriptionItem.update).toHaveBeenCalledWith({
+          where: { id: ITEM_ID_QTY },
+          data: { dispensedQty: 2 },
+        });
+        expect(prisma.prescription.update).toHaveBeenCalledWith({
+          where: { id: ORDER },
+          data: { status: "PARTIALLY_DISPENSED" },
+        });
+      });
+
+      it("reserva legacy sin prescriptionItemId: no intenta decrementar nada", async () => {
+        const existing = makeReservation({ status: "RESERVED" });
+        prisma.prescription.findFirst.mockResolvedValue(prescriptionFixtureOTC() as never);
+        prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+        prisma.pharmacyReservation.update.mockResolvedValue(
+          { ...existing, status: "RETURNED" } as never,
+        );
+        prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+        prisma.patientAccountService.findFirst.mockResolvedValue({ id: "cargo-1" } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.returnItem({ reservationId: RES, motivo: "OTRO" });
+
+        expect(prisma.prescriptionItem.findUnique).not.toHaveBeenCalled();
+        expect(prisma.prescriptionItem.update).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("cancelReservation — decrementa dispensedQty (floor 0)", () => {
+      it("decrementa dispensedQty del ítem enlazado y recomputa PARTIALLY_DISPENSED → SIGNED", async () => {
+        const existing = {
+          ...makeReservation({ status: "RESERVED" }),
+          prescriptionItemId: ITEM_ID_QTY,
+        };
+        prisma.pharmacyReservation.findFirst.mockResolvedValue(existing as never);
+        prisma.pharmacyReservation.update.mockResolvedValue(
+          { ...existing, status: "CANCELLED" } as never,
+        );
+        prisma.stockMovement.findFirst.mockResolvedValue(null as never);
+        prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
+
+        // dispensedQty ya en 0 (única reserva del ítem, recién creada) —
+        // el decremento no debe bajar de 0 (floor).
+        prisma.prescriptionItem.findUnique.mockResolvedValue({
+          id: ITEM_ID_QTY,
+          prescriptionId: ORDER,
+          dispensedQty: 0,
+        } as never);
+        prisma.prescriptionItem.update.mockResolvedValue({} as never);
+        prisma.prescriptionItem.findMany.mockResolvedValue([
+          { prescribedQty: 3, dispensedQty: 0 },
+        ] as never);
+        prisma.prescription.findUnique.mockResolvedValue({
+          status: "PARTIALLY_DISPENSED",
+        } as never);
+
+        const caller = dispensationRouter.createCaller(makeCtx({ prisma }));
+        await caller.cancelReservation({ reservationId: RES, motivo: "x" });
+
+        expect(prisma.prescriptionItem.update).toHaveBeenCalledWith({
+          where: { id: ITEM_ID_QTY },
+          data: { dispensedQty: 0 },
+        });
+        expect(prisma.prescription.update).toHaveBeenCalledWith({
+          where: { id: ORDER },
+          data: { status: "SIGNED" },
+        });
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // US.F2.6.9 — checkDuplicate
   // -------------------------------------------------------------------------
   describe("checkDuplicate", () => {

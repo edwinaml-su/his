@@ -80,6 +80,13 @@ interface OrderDetail {
     route: string;
     frequency: string;
     drug: { id: string; genericName: string };
+    // CC-0030 (RN-HIS-BOT-001 R6) — opcionales: `orderDetail` siempre los
+    // manda hoy, pero se dejan opcionales para no exigirlos en mocks de test
+    // pre-existentes. `pendiente=null` ⇒ receta legacy sin prescribedQty
+    // capturada (sin tope, "pendiente" no aplica).
+    prescribedQty?: unknown;
+    dispensedQty?: unknown;
+    pendiente?: number | null;
   }>;
 }
 
@@ -95,7 +102,18 @@ const HARD_STOP_DETAIL: Record<string, string> = {
     "El lote escaneado nunca ingresó al inventario de esta bodega.",
   LOTE_NO_DISPONIBLE_INVENTARIO:
     "El lote está bloqueado (cuarentena/recall) y no puede dispensarse.",
+  // CC-0030 (RN-HIS-BOT-001 R6)
+  ITEM_COMPLETO:
+    "Ya se entregó la cantidad total prescrita de este medicamento. No se puede reservar otra unidad.",
 };
+
+/** CC-0030 (RN-HIS-BOT-001 R6) — "Entregado X de Y — pendiente Z" por ítem. */
+function entregaLabel(it: OrderDetail["items"][number]): string | null {
+  if (it.pendiente == null) return null;
+  const prescribedQty = Number(it.prescribedQty ?? 0);
+  const dispensedQty = Number(it.dispensedQty ?? 0);
+  return `Entregado ${dispensedQty} de ${prescribedQty} — pendiente ${it.pendiente}`;
+}
 
 interface HardStop {
   reason: string;
@@ -221,11 +239,20 @@ export default function GS1DispensePage(): React.ReactElement {
   const selectedItem =
     order?.items.find((it) => it.id === form.prescriptionItemId) ?? null;
 
+  // CC-0030 (RN-HIS-BOT-001 R6) — pendiente=0 con prescribedQty capturada
+  // (pendiente!=null) ⇒ ya se entregó todo, el servidor rechazaría con
+  // ITEM_COMPLETO. Se deshabilita el escaneo antes de someter la petición.
+  const selectedItemComplete =
+    selectedItem != null && selectedItem.pendiente != null && selectedItem.pendiente <= 0;
+
   const reserveMutation = trpcAny.dispensation.reserveItem.useMutation({
     onSuccess: (data: { id: string }) => {
       setReservationId(data.id);
       setReservedAt(new Date());
       setServerError(null);
+      // CC-0030 (RN-HIS-BOT-001 R6) — refresca "Entregado X de Y — pendiente
+      // Z" con la qty recién entregada (orderDetail quedaría stale si no).
+      void utilsAny.dispensation.orderDetail.invalidate({ pharmacyOrderId: orderId });
     },
     onError: (err: { message: string }) => {
       const msg = err.message;
@@ -245,6 +272,7 @@ export default function GS1DispensePage(): React.ReactElement {
       setCancelOpen(false);
       setCancelMotivo("");
       setCancelError(null);
+      void utilsAny.dispensation.orderDetail.invalidate({ pharmacyOrderId: orderId });
     },
     onError: (err: { message: string }) => setCancelError(err.message),
   });
@@ -260,6 +288,7 @@ export default function GS1DispensePage(): React.ReactElement {
       setReturnWitnessPin("");
       setReturnJustification("");
       setReturnError(null);
+      void utilsAny.dispensation.orderDetail.invalidate({ pharmacyOrderId: orderId });
     },
     onError: (err: { message: string }) => setReturnError(err.message),
   });
@@ -616,15 +645,43 @@ export default function GS1DispensePage(): React.ReactElement {
                   />
                 </SelectTrigger>
                 <SelectContent>
-                  {(order?.items ?? []).map((it) => (
-                    <SelectItem key={it.id} value={it.id}>
-                      {it.drug.genericName} — {it.dosage} · {it.frequency}
-                    </SelectItem>
-                  ))}
+                  {(order?.items ?? []).map((it) => {
+                    const entrega = entregaLabel(it);
+                    return (
+                      <SelectItem key={it.id} value={it.id}>
+                        {it.drug.genericName} — {it.dosage} · {it.frequency}
+                        {entrega ? ` · ${entrega}` : ""}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
               <FormError>{errors.prescriptionItemId}</FormError>
             </FormField>
+
+            {/* CC-0030 (RN-HIS-BOT-001 R6) — badge "Entregado X de Y —
+                pendiente Z" del ítem seleccionado. */}
+            {selectedItem && entregaLabel(selectedItem) ? (
+              <p
+                className={
+                  selectedItemComplete
+                    ? "text-sm font-medium text-destructive"
+                    : "text-sm text-muted-foreground"
+                }
+              >
+                {entregaLabel(selectedItem)}
+              </p>
+            ) : null}
+
+            {selectedItemComplete ? (
+              <div
+                role="alert"
+                aria-live="assertive"
+                className="rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              >
+                {HARD_STOP_DETAIL["ITEM_COMPLETO"]}
+              </div>
+            ) : null}
 
             {serverError ? (
               <p
@@ -639,7 +696,9 @@ export default function GS1DispensePage(): React.ReactElement {
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="submit"
-                  disabled={isPending || !order || isCurrentItemBlocked}
+                  disabled={
+                    isPending || !order || isCurrentItemBlocked || selectedItemComplete
+                  }
                 >
                   {isPending ? "Verificando…" : "Validar y reservar"}
                 </Button>

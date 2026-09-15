@@ -105,6 +105,8 @@ export const E2E_BOT = {
   emergencia: scenario(6, "BOT-E2E-EMERGENCIA", "07501000070015", "LOTE-E2E-EMERGENCIA-01", "Botiquín E2E — Emergencia"),
   /** Prueba #8 — regla ISBM inicial $15.00 (dateStart=ayer); el spec agrega una 2ª regla "hoy". */
   tarifaHoy: scenario(7, "BOT-E2E-TARIFAHOY", "07501000080014", "LOTE-E2E-TARIFAHOY-01", "Botiquín E2E — Tarifario Hoy"),
+  /** Prueba #5 — CC-0030 (R6): prescribedQty=3 (seed-e2e-fixtures.mjs §7) — dedicado a entrega parcial. */
+  entregaParcial: scenario(8, "BOT-E2E-ENTREGAPARCIAL", "07501000090013", "LOTE-E2E-ENTREGAPARCIAL-01", "Botiquín E2E — Entrega Parcial"),
   /** ServicePriceList — usados para comparar `servicio.priceListId` exacto en las aserciones. */
   priceLists: {
     isbm: "e2ef2000-0000-4000-8000-000000000901",

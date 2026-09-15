@@ -406,6 +406,7 @@ try {
     doctorsvItem: 'e2ef2000-0000-4000-8000-000000000b02',
     defaultItem: 'e2ef2000-0000-4000-8000-000000000b03',
     devolucionItem: 'e2ef2000-0000-4000-8000-000000000b04',
+    entregaParcialItem: 'e2ef2000-0000-4000-8000-000000000b05',
   };
 
   // 4 listas de precio: ISBM (via ServicePriceRule — cubre el camino
@@ -442,12 +443,14 @@ try {
   }
 
   // Ítems planos — prueba #2 (MAPFRE), #3 (DoctorSV), #7 (default de
-  // emergencia) y el insumo de #6 (devolución, misma lista MAPFRE).
+  // emergencia), el insumo de #6 (devolución, misma lista MAPFRE) y #5
+  // (entrega parcial, CC-0030 — lista ISBM porque tipoCuentaId=isbmTipo).
   const flatItems = [
     { id: BOT.mapfreItem, list: BOT.mapfreList, code: 'BOT-E2E-MAPFRE', desc: 'Insumo E2E — MAPFRE', price: 18.75 },
     { id: BOT.doctorsvItem, list: BOT.doctorsvList, code: 'BOT-E2E-DOCTORSV', desc: 'Insumo E2E — DoctorSV', price: 9.99 },
     { id: BOT.defaultItem, list: BOT.defaultList, code: 'BOT-E2E-EMERGENCIA', desc: 'Insumo E2E — Emergencia (lista default)', price: 5.00 },
     { id: BOT.devolucionItem, list: BOT.mapfreList, code: 'BOT-E2E-DEVOLUCION', desc: 'Insumo E2E — Devolución', price: 7.25 },
+    { id: BOT.entregaParcialItem, list: BOT.isbmList, code: 'BOT-E2E-ENTREGAPARCIAL', desc: 'Insumo E2E — Entrega Parcial', price: 6.00 },
   ];
   for (const it of flatItems) {
     await c.query(
@@ -479,9 +482,15 @@ try {
   }
   console.log(`priceLists=${priceLists.length} tiposCuenta=${tiposCuenta.length} items=${flatItems.length} rules=${rules.length}`);
 
-  // 7 escenarios — un paciente+cuenta+receta+lote GS1 dedicados por prueba.
+  // 8 escenarios — un paciente+cuenta+receta+lote GS1 dedicados por prueba.
   // GTIN-14 con checksum GS1 válido (mismo algoritmo mod10 que los GTIN de
   // §4 arriba — verificado con Node antes de escribir este archivo).
+  //
+  // `prescribedQty` (CC-0030, SQL 237, RN-HIS-BOT-001 R6) — default 10 para
+  // los 7 originales (ninguno dispensa más de 2 unidades, nunca chocan con
+  // el hard stop ITEM_COMPLETO). Escena 8 (entregaparcial) es la ÚNICA con
+  // prescribedQty=3 chico a propósito — es el fixture dedicado de la prueba
+  // de aceptación #5.
   const BOT_SCENARIOS = [
     { escena: 1, key: 'isbm', mrn: 'E2E-BOT-ISBM-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
       admissionType: 'SCHEDULED', code: 'BOT-E2E-ISBM', gtin: '07501000020010',
@@ -504,6 +513,9 @@ try {
     { escena: 7, key: 'tarifahoy', mrn: 'E2E-BOT-TARIFAHOY-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
       admissionType: 'SCHEDULED', code: 'BOT-E2E-TARIFAHOY', gtin: '07501000080014',
       lote: 'LOTE-E2E-TARIFAHOY-01', drugName: 'Botiquín E2E — Tarifario Hoy' },
+    { escena: 8, key: 'entregaparcial', mrn: 'E2E-BOT-ENTREGAPARCIAL-01', tipoCuentaId: BOT.isbmTipo, accountStatus: 'ABIERTA',
+      admissionType: 'SCHEDULED', code: 'BOT-E2E-ENTREGAPARCIAL', gtin: '07501000090013',
+      lote: 'LOTE-E2E-ENTREGAPARCIAL-01', drugName: 'Botiquín E2E — Entrega Parcial', prescribedQty: 3 },
   ];
 
   if (!qaPhysician) {
@@ -566,22 +578,30 @@ try {
 
     // prescriberId = qaPhysician (ya resuelto arriba, §3) — R9 exige que sea
     // distinto de quien dispensa; los specs dispensan logueados como "admin".
+    //
+    // ON CONFLICT DO UPDATE status=SIGNED (CC-0030) — un reseed sobre una BD
+    // que ya corrió la suite deja status en PARTIALLY_DISPENSED/DISPENSED
+    // (dispensation.router.ts recompute) para escena 8; reforzar SIGNED aquí
+    // hace la fixture idempotente entre corridas locales repetidas.
     await c.query(
       `INSERT INTO public."Prescription"
          (id, "organizationId", "encounterId", "prescriberId", "patientId",
           status, "signedAt", "createdAt", "updatedAt")
        VALUES ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid,
                'SIGNED'::"PrescriptionStatus", now(), now(), now())
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO UPDATE SET status = 'SIGNED'::"PrescriptionStatus"`,
       [prescriptionIdBot, orgId, encounterIdBot, qaPhysician.id, patientIdBot],
     );
 
+    // ON CONFLICT DO UPDATE resetea prescribedQty Y dispensedQty=0 (CC-0030)
+    // — un reseed debe devolver el ítem a "nada entregado todavía", mismo
+    // motivo que el reset de status arriba.
     await c.query(
       `INSERT INTO public."PrescriptionItem"
          (id, "prescriptionId", "drugId", dosage, route, frequency, "prescribedQty")
-       VALUES ($1::uuid, $2::uuid, $3::uuid, '1 tableta', 'ORAL'::"AdminRoute", 'cada 8 horas', 10)
-       ON CONFLICT (id) DO NOTHING`,
-      [prescriptionItemIdBot, prescriptionIdBot, drugIdBot],
+       VALUES ($1::uuid, $2::uuid, $3::uuid, '1 tableta', 'ORAL'::"AdminRoute", 'cada 8 horas', $4)
+       ON CONFLICT (id) DO UPDATE SET "prescribedQty" = EXCLUDED."prescribedQty", "dispensedQty" = 0`,
+      [prescriptionItemIdBot, prescriptionIdBot, drugIdBot, s.prescribedQty ?? 10],
     );
 
     // StockItem.sku = el `code` del tarifario — así `capturarCargo` (que usa
