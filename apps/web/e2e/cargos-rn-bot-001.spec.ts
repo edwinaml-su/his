@@ -280,7 +280,12 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
     expect(primera.ok, primera.errorMessage ?? "").toBeTruthy();
     expect(primera.data?.cargo.status).toBe("VIGENTE");
     expect(decimalToNumber(primera.data?.cargo.unitPrice)).toBeCloseTo(6.0, 2);
-    await expect(page.getByText(/Entregado 1 de 3 — pendiente 2/)).toBeVisible();
+    // El texto también aparece en la opción del Select y en el trigger del
+    // ítem seleccionado (strict mode violation con getByText — corrida real
+    // del smoke en #661): se apunta al badge por testid.
+    await expect(page.getByTestId("entrega-parcial-badge")).toHaveText(
+      /Entregado 1 de 3 — pendiente 2/,
+    );
 
     // 2ª unidad — nueva navegación (mismo patrón que `dispensar()`), mismo
     // GTIN/lote, sin serie ⇒ no hay conflicto de serial, se crea OTRA
@@ -293,7 +298,9 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
       drugName: s.drugName,
     });
     expect(segunda.ok, segunda.errorMessage ?? "").toBeTruthy();
-    await expect(page.getByText(/Entregado 2 de 3 — pendiente 1/)).toBeVisible();
+    await expect(page.getByTestId("entrega-parcial-badge")).toHaveText(
+      /Entregado 2 de 3 — pendiente 1/,
+    );
 
     // 3ª unidad — completa prescribedQty. UI pasa a "pendiente 0" y bloquea
     // el escaneo (botón deshabilitado + alerta ITEM_COMPLETO), sin esperar
@@ -305,7 +312,9 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
       drugName: s.drugName,
     });
     expect(tercera.ok, tercera.errorMessage ?? "").toBeTruthy();
-    await expect(page.getByText(/Entregado 3 de 3 — pendiente 0/)).toBeVisible();
+    await expect(page.getByTestId("entrega-parcial-badge")).toHaveText(
+      /Entregado 3 de 3 — pendiente 0/,
+    );
     await expect(page.getByText(/cantidad total prescrita/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Validar y reservar" })).toBeDisabled();
 
