@@ -71,7 +71,7 @@ jobs:
 
       - name: Upload report
         if: env.SUPABASE_ACCESS_TOKEN != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: supabase-advisors-report
           path: advisors-report.json
@@ -83,7 +83,7 @@ jobs:
       # que entrena a ignorar la alerta.
       - name: Abrir/actualizar issue si hay CRITICAL
         if: steps.advisors.outputs.exit_code == '2'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
@@ -219,7 +219,7 @@ jobs:
 
       - name: Upload rate-limit report
         if: always() && env.DIRECT_URL != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rate-limit-spike-report
           path: rate-limit-spike.txt
