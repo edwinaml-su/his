@@ -11,6 +11,7 @@ import {
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { applyWorkflowContext } from "../workflow/context";
 import {
   isOutOfServiceUnitScope,
   serviceUnitWhereFragment,
@@ -83,49 +84,69 @@ export const encounterRouter = router({
       });
     }
 
-    // 1) Paciente válido y vivo (deletedAt actúa también como marcador de baja).
-    const patient = await ctx.prisma.patient.findFirst({
-      where: {
-        id: input.patientId,
-        organizationId: ctx.tenant.organizationId,
-        deletedAt: null,
-      },
-      select: { id: true, active: true },
-    });
-    if (!patient) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Paciente no encontrado o inactivo.",
+    // CC-0033 (P0-1) — TODA la lógica de admit (incluidos los reads que
+    // gatean la mutación y el camino de idempotencia) corre dentro del
+    // mismo contexto RLS — antes las lecturas 1/2/3 corrían sobre
+    // `ctx.prisma` directo (rol BYPASSRLS), con el `where: organizationId`
+    // en JS como única defensa (hallazgo P0-1: exactamente el antipatrón
+    // que CLAUDE.md §Contrato RLS marca como ya bypaseado en el pasado). El
+    // camino de idempotencia (`existingOpen`) en particular retornaba sin
+    // pasar nunca por RLS.
+    //
+    // La tx mezcla tablas public.* (Patient, Encounter, BedAssignment, Bed,
+    // Organization) Y ece.* (episodio_atencion/paciente/establecimiento, vía
+    // los hooks de abajo) — necesita AMBOS espacios de GUC antes del demote
+    // (patrón dual documentado en sql/209_cc0026_care_task.sql / 213). Se
+    // setea el tenant context SIN demotar (demoteRole:false) y luego el ECE
+    // context (que sí demota) como primera línea del callback — un solo
+    // demote, ambos espacios activos para el resto de la transacción.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      await applyWorkflowContext(tx, {
+        personalId: ctx.user.id,
+        establecimientoId: ctx.tenant.establishmentId!,
       });
-    }
 
-    // 2) Idempotencia: encuentro abierto preexistente.
-    const existingOpen = await ctx.prisma.encounter.findFirst({
-      where: {
-        organizationId: ctx.tenant.organizationId,
-        patientId: input.patientId,
-        dischargedAt: null,
-      },
-      orderBy: { admittedAt: "desc" },
-    });
-    if (existingOpen) {
-      return existingOpen;
-    }
-
-    const org = await ctx.prisma.organization.findUnique({
-      where: { id: ctx.tenant.organizationId },
-      select: { functionalCurrency: true },
-    });
-    const currencyId = input.currencyId ?? org?.functionalCurrency;
-    if (!currencyId) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: "Moneda no definida para la organización.",
+      // 1) Paciente válido y vivo (deletedAt actúa también como marcador de baja).
+      const patient = await tx.patient.findFirst({
+        where: {
+          id: input.patientId,
+          organizationId: ctx.tenant.organizationId,
+          deletedAt: null,
+        },
+        select: { id: true, active: true },
       });
-    }
+      if (!patient) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Paciente no encontrado o inactivo.",
+        });
+      }
 
-    // 3) Transacción atómica.
-    return ctx.prisma.$transaction(async (tx) => {
+      // 2) Idempotencia: encuentro abierto preexistente.
+      const existingOpen = await tx.encounter.findFirst({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          patientId: input.patientId,
+          dischargedAt: null,
+        },
+        orderBy: { admittedAt: "desc" },
+      });
+      if (existingOpen) {
+        return existingOpen;
+      }
+
+      const org = await tx.organization.findUnique({
+        where: { id: ctx.tenant.organizationId },
+        select: { functionalCurrency: true },
+      });
+      const currencyId = input.currencyId ?? org?.functionalCurrency;
+      if (!currencyId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Moneda no definida para la organización.",
+        });
+      }
+
       // docs/48 §5 C3-2 — se guarda fuera del `if` para reusarla al crear el
       // BedAssignment (código de tarifario de la Room, si tiene).
       let bedParaAsignar: {
@@ -279,7 +300,7 @@ export const encounterRouter = router({
       }
 
       return encounter;
-    }).then(async (encounter) => {
+    }, { demoteRole: false }).then(async (encounter) => {
 
       // Hook US.F2.6.1: asignar GSRN al confirmar admisión hospitalaria.
       // TX separada — no bloquea la admisión si el GSRN falla.
@@ -366,35 +387,40 @@ export const encounterRouter = router({
   }),
 
   list: tenantProcedure.input(encounterListSchema).query(async ({ ctx, input }) => {
-    const where = {
-      organizationId: ctx.tenant.organizationId,
-      ...(input.patientId ? { patientId: input.patientId } : {}),
-      ...(input.costCenterId ? { costCenterId: input.costCenterId } : {}),
-      ...(input.status === "OPEN" ? { dischargedAt: null } : {}),
-      ...(input.status === "CLOSED" ? { dischargedAt: { not: null } } : {}),
-    };
-    const [items, total] = await Promise.all([
-      ctx.prisma.encounter.findMany({
-        where,
-        skip: (input.page - 1) * input.pageSize,
-        take: input.pageSize,
-        orderBy: { admittedAt: "desc" },
-        include: {
-          patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
-          serviceUnit: true,
-          // Ubicación para el segundo header del paciente (PatientContextBar):
-          // establecimiento + cama activa (asignación sin releasedAt).
-          establishment: { select: { id: true, name: true } },
-          bedAssignments: {
-            where: { releasedAt: null },
-            take: 1,
-            include: { bed: { select: { id: true, code: true } } },
+    // CC-0033 (P0-1) — antes leía por `ctx.prisma` directo (rol BYPASSRLS): el
+    // filtro `organizationId` en `where` era la ÚNICA defensa. withTenantContext
+    // demota a `authenticated` para que RLS real también aplique.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const where = {
+        organizationId: ctx.tenant.organizationId,
+        ...(input.patientId ? { patientId: input.patientId } : {}),
+        ...(input.costCenterId ? { costCenterId: input.costCenterId } : {}),
+        ...(input.status === "OPEN" ? { dischargedAt: null } : {}),
+        ...(input.status === "CLOSED" ? { dischargedAt: { not: null } } : {}),
+      };
+      const [items, total] = await Promise.all([
+        tx.encounter.findMany({
+          where,
+          skip: (input.page - 1) * input.pageSize,
+          take: input.pageSize,
+          orderBy: { admittedAt: "desc" },
+          include: {
+            patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+            serviceUnit: true,
+            // Ubicación para el segundo header del paciente (PatientContextBar):
+            // establecimiento + cama activa (asignación sin releasedAt).
+            establishment: { select: { id: true, name: true } },
+            bedAssignments: {
+              where: { releasedAt: null },
+              take: 1,
+              include: { bed: { select: { id: true, code: true } } },
+            },
           },
-        },
-      }),
-      ctx.prisma.encounter.count({ where }),
-    ]);
-    return { items, total, page: input.page, pageSize: input.pageSize };
+        }),
+        tx.encounter.count({ where }),
+      ]);
+      return { items, total, page: input.page, pageSize: input.pageSize };
+    });
   }),
 
   /**
@@ -436,27 +462,30 @@ export const encounterRouter = router({
             }
           : {}),
       };
-      const [items, total] = await Promise.all([
-        ctx.prisma.encounter.findMany({
-          where,
-          skip: (input.page - 1) * input.pageSize,
-          take: input.pageSize,
-          orderBy: { admittedAt: "desc" },
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+      // CC-0033 (P0-1) — RLS real (ver `list` arriba para el detalle).
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [items, total] = await Promise.all([
+          tx.encounter.findMany({
+            where,
+            skip: (input.page - 1) * input.pageSize,
+            take: input.pageSize,
+            orderBy: { admittedAt: "desc" },
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              serviceUnit: { select: { id: true, code: true, name: true } },
+              bedAssignments: {
+                where: { releasedAt: null },
+                include: { bed: { select: { id: true, code: true, status: true } } },
+                take: 1,
+              },
             },
-            serviceUnit: { select: { id: true, code: true, name: true } },
-            bedAssignments: {
-              where: { releasedAt: null },
-              include: { bed: { select: { id: true, code: true, status: true } } },
-              take: 1,
-            },
-          },
-        }),
-        ctx.prisma.encounter.count({ where }),
-      ]);
-      return { items, total, page: input.page, pageSize: input.pageSize };
+          }),
+          tx.encounter.count({ where }),
+        ]);
+        return { items, total, page: input.page, pageSize: input.pageSize };
+      });
     }),
 
   /**
@@ -486,47 +515,50 @@ export const encounterRouter = router({
         ...scopedSU,
       };
 
-      const [items, byService, byAdmissionType] = await Promise.all([
-        ctx.prisma.encounter.findMany({
-          where,
-          include: {
-            patient: {
-              select: { id: true, firstName: true, lastName: true, mrn: true },
+      // CC-0033 (P0-1) — RLS real (ver `list` arriba para el detalle).
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const [items, byService, byAdmissionType] = await Promise.all([
+          tx.encounter.findMany({
+            where,
+            include: {
+              patient: {
+                select: { id: true, firstName: true, lastName: true, mrn: true },
+              },
+              serviceUnit: true,
+              bedAssignments: {
+                where: { releasedAt: null },
+                include: { bed: true },
+                take: 1,
+              },
             },
-            serviceUnit: true,
-            bedAssignments: {
-              where: { releasedAt: null },
-              include: { bed: true },
-              take: 1,
-            },
-          },
-          orderBy: { admittedAt: "asc" },
-        }),
-        ctx.prisma.encounter.groupBy({
-          by: ["serviceUnitId"],
-          where,
-          _count: { _all: true },
-        }),
-        ctx.prisma.encounter.groupBy({
-          by: ["admissionType"],
-          where,
-          _count: { _all: true },
-        }),
-      ]);
+            orderBy: { admittedAt: "asc" },
+          }),
+          tx.encounter.groupBy({
+            by: ["serviceUnitId"],
+            where,
+            _count: { _all: true },
+          }),
+          tx.encounter.groupBy({
+            by: ["admissionType"],
+            where,
+            _count: { _all: true },
+          }),
+        ]);
 
-      return {
-        items,
-        breakdown: {
-          byService: byService.map((b) => ({
-            serviceUnitId: b.serviceUnitId,
-            count: b._count._all,
-          })),
-          byAdmissionType: byAdmissionType.map((b) => ({
-            admissionType: b.admissionType,
-            count: b._count._all,
-          })),
-          total: items.length,
-        },
-      };
+        return {
+          items,
+          breakdown: {
+            byService: byService.map((b) => ({
+              serviceUnitId: b.serviceUnitId,
+              count: b._count._all,
+            })),
+            byAdmissionType: byAdmissionType.map((b) => ({
+              admissionType: b.admissionType,
+              count: b._count._all,
+            })),
+            total: items.length,
+          },
+        };
+      });
     }),
 });

@@ -174,6 +174,23 @@ describe("eceActoQuirurgicoRouter", () => {
     expect(result.nextCursor).toBeNull();
   });
 
+  // CC-0033 (P0-2) — la query debe correr DENTRO del callback de
+  // withWorkflowContext real (workflow/context.ts: SET LOCAL
+  // app.ece_personal_id/app.ece_establecimiento_id + demote), no sobre
+  // prisma directo (antes: stub ece/workflow-context.ts sin SET LOCAL).
+  it("list aplica RLS real — ece.set_ece_context dentro de la tx", async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([AQ_ROW_BORRADOR] as never);
+
+    const caller = eceActoQuirurgicoRouter.createCaller(
+      makeCtx({ prisma, tenant: ESP_TENANT, user: ESP_USER }),
+    );
+    await caller.list({ limit: 20 });
+
+    expect(prisma.$transaction).toHaveBeenCalled();
+    const executeRawUnsafeCalls = prisma.$executeRawUnsafe.mock.calls.map((args) => String(args[0]));
+    expect(executeRawUnsafeCalls.some((sql) => sql.includes("ece.set_ece_context"))).toBe(true);
+  });
+
   // 6 — get NOT_FOUND
   it("get lanza NOT_FOUND cuando acto no existe", async () => {
     prisma.$queryRaw.mockResolvedValueOnce([] as never);

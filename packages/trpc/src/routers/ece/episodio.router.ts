@@ -45,7 +45,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
-import { withWorkflowContext } from "../../ece/workflow-context";
+import { withWorkflowContext } from "../../workflow/context";
 import { emitDomainEvent } from "@his/database";
 
 // ─── Schemas Zod (definidos localmente — patrón seguido por routers ECE) ─────
@@ -107,6 +107,12 @@ const liberarCamaInput = z.object({
 /**
  * Construye el contexto ECE (establecimientoId + personalId) a partir del ctx tRPC.
  * Lanza BAD_REQUEST si no hay establecimiento activo.
+ *
+ * CC-0033 (P0-2) — este objeto ya tenía la forma exacta de `EceContext`
+ * (`packages/trpc/src/workflow/context.ts`); el router solo lo pasaba a medias
+ * (`ece.establecimientoId`) al stub `withWorkflowContext` de `ece/workflow-context.ts`,
+ * que no seteaba ningún GUC. Ahora se pasa completo al `withWorkflowContext`
+ * REAL (mismo import que ~30 routers ECE ya usan en producción).
  */
 function withEceContext(ctx: {
   user: { id: string };
@@ -175,7 +181,7 @@ export const eceEpisodioRouter = router({
     .query(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         const rows = await tx.$queryRaw<EpisodioRow[]>`
           SELECT
             ea.id::text,
@@ -217,7 +223,7 @@ export const eceEpisodioRouter = router({
     .query(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         const rows = await tx.$queryRaw<EpisodioHospitalarioRow[]>`
           SELECT
             ea.id::text,
@@ -259,7 +265,7 @@ export const eceEpisodioRouter = router({
   get: readBase.input(getEpisodioInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<EpisodioRow[]>`
         SELECT
           ea.id::text,
@@ -299,7 +305,7 @@ export const eceEpisodioRouter = router({
       const ece = withEceContext(ctx);
       const fechaApertura = (input.fechaApertura ?? new Date()).toISOString();
 
-      const rows = await withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      const rows = await withWorkflowContext(ctx.prisma, ece, async (tx) => {
         return tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.episodio_atencion
             (paciente_id, modalidad, servicio_categoria, estado, motivo,
@@ -351,7 +357,7 @@ export const eceEpisodioRouter = router({
       const ece = withEceContext(ctx);
       const fechaIngreso = (input.fechaIngreso ?? new Date()).toISOString();
 
-      const result = await withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      const result = await withWorkflowContext(ctx.prisma, ece, async (tx) => {
         // 1. Insertar episodio base.
         // servicio_categoria NOT NULL: 'hospitalizacion' es el valor correcto para hospitalario.
         const atencionRows = await tx.$queryRaw<{ id: string }[]>`
@@ -439,7 +445,7 @@ export const eceEpisodioRouter = router({
     .mutation(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      await withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      await withWorkflowContext(ctx.prisma, ece, async (tx) => {
         // 1. Leer estado actual
         const rows = await tx.$queryRaw<{ id: string; estado: string }[]>`
           SELECT id::text, estado
@@ -538,7 +544,7 @@ export const eceEpisodioRouter = router({
     .mutation(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         // Verificar que no haya asignación activa duplicada
         // asignacion_cama usa episodio_id (FK a episodio_atencion) y desde/hasta para el rango.
         // "Activa" = hasta IS NULL. episodioHospitalarioId en este router es el episodio_atencion.id
@@ -581,7 +587,7 @@ export const eceEpisodioRouter = router({
     .mutation(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         const rows = await tx.$queryRaw<{ id: string }[]>`
           UPDATE ece.asignacion_cama
           SET hasta = ${input.fechaLiberacion.toISOString()}::timestamptz,

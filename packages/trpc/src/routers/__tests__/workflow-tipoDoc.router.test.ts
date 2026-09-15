@@ -2,14 +2,16 @@
  * Tests unitarios del router workflow.tipoDoc.
  *
  * Estrategia de mock:
- *  - withWorkflowContext (Stream 11, forward-dep) se mockea para ejecutar el
- *    callback directamente con el prisma mock, evitando la transacción real.
+ *  - withWorkflowContext (`workflow/context.ts`, CC-0033 — antes stub Stream 11)
+ *    se mockea para ejecutar el callback directamente con el prisma mock,
+ *    evitando la transacción real.
  *  - ctx.prisma.$queryRaw y $executeRaw se reemplazan por vi.fn().
  *  - El tenant siempre incluye DIR o WORKFLOW_DESIGNER en roleCodes para pasar
  *    requireRole.
  *
  * Cobertura objetivo: happy-paths de list/get/create/deactivate + CONFLICT
- * y NOT_FOUND en create/deactivate.
+ * y NOT_FOUND en create/deactivate + verificación de que las queries corren
+ * dentro del callback de `withWorkflowContext` (CC-0033 P0-2).
  */
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import type { TRPCContext } from "../../context";
@@ -17,16 +19,19 @@ import { workflowTipoDocRouter } from "../workflow-tipoDoc.router";
 import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 // ---------------------------------------------------------------------------
-// Mock de forward-dependency (Stream 11)
+// Mock de withWorkflowContext real (packages/trpc/src/workflow/context.ts)
 // ---------------------------------------------------------------------------
-vi.mock("../../ece/workflow-context", () => ({
-  withWorkflowContext: vi.fn(
-    async (
-      _prisma: unknown,
-      _estabId: unknown,
-      fn: (tx: unknown) => Promise<unknown>,
-    ) => fn(_prisma),
-  ),
+const withWorkflowContextMock = vi.fn(
+  async (
+    _prisma: unknown,
+    _eceCtx: unknown,
+    fn: (tx: unknown) => Promise<unknown>,
+  ) => fn(_prisma),
+);
+vi.mock("../../workflow/context", () => ({
+  withWorkflowContext: (...args: unknown[]) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (withWorkflowContextMock as any)(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -108,6 +113,25 @@ describe("workflowTipoDocRouter", () => {
       const result = await caller.list({ soloActivos: false });
 
       expect(result).toHaveLength(0);
+    });
+
+    // CC-0033 (P0-2) — la query real debe correr DENTRO del callback de
+    // withWorkflowContext (RLS real), no directo sobre ctx.prisma.
+    it("ejecuta la query dentro del callback de withWorkflowContext, con el EceContext del tenant", async () => {
+      const ctx = makeCtx({ queryRawRows: [SAMPLE_ROW] });
+      const caller = workflowTipoDocRouter.createCaller(ctx);
+
+      await caller.list({});
+
+      expect(withWorkflowContextMock).toHaveBeenCalledTimes(1);
+      expect(withWorkflowContextMock).toHaveBeenCalledWith(
+        ctx.prisma,
+        expect.objectContaining({
+          personalId: TENANT_DIR.userId,
+          establecimientoId: TENANT_DIR.establishmentId,
+        }),
+        expect.any(Function),
+      );
     });
   });
 

@@ -141,6 +141,10 @@ describe("Suite 2: encounterRouter.listOpenByOrg — Nivel B scope (campo nullab
 
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
+    // CC-0033 (P0-1) — listOpenByOrg ahora corre dentro de withTenantContext
+    // (antes: ctx.prisma directo); sin el passthrough, $transaction no
+    // invoca el callback y encounter.findMany nunca se llama.
+    installTenantContextMock(prisma);
     prisma.encounter.findMany.mockResolvedValue([] as never);
     prisma.encounter.count.mockResolvedValue(0 as never);
   });

@@ -26,7 +26,7 @@ import { TRPCError } from "@trpc/server";
 import { argon2 } from "@his/infrastructure";
 import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
-import { withWorkflowContext } from "../../ece/workflow-context";
+import { withWorkflowContext, type EceContext } from "../../workflow/context";
 // emitDomainEvent: mismo import que consentimiento.router.ts / episodio-hospitalario.router.ts.
 // El error TS2724 es pre-existente en el worktree (stub @his/database desincronizado).
 import { emitDomainEvent } from "@his/database";
@@ -101,13 +101,20 @@ function requireEstablishment(ctx: {
 // Alias semántico para el cliente dentro del callback withWorkflowContext.
 type Tx = PrismaClient;
 
-// Wrapper semántico que delega a withWorkflowContext del worktree ECE.
+/**
+ * Wrapper semántico sobre `withWorkflowContext` real (`workflow/context.ts`).
+ *
+ * CC-0033 (P0-2) — antes delegaba al stub `ece/workflow-context.ts` (sin
+ * SET LOCAL ni demote de rol); ahora usa la misma implementación que ya
+ * corre en ~30 routers ECE en producción (SET LOCAL de app.ece_personal_id /
+ * app.ece_establecimiento_id + demote a `authenticated`).
+ */
 async function withEce<T>(
   prisma: PrismaClient,
-  establecimientoId: string,
+  ece: EceContext,
   fn: (tx: Tx) => Promise<T>,
 ): Promise<T> {
-  return withWorkflowContext(prisma, establecimientoId, fn);
+  return withWorkflowContext(prisma, ece, fn);
 }
 
 // =============================================================================
@@ -317,7 +324,7 @@ export const eceActoQuirurgicoRouter = router({
   list: readerProc.input(actoQxListSchema).query(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<ActoQxRow[]>`
         SELECT
           aq.id::text,
@@ -369,7 +376,7 @@ export const eceActoQuirurgicoRouter = router({
   get: readerProc.input(actoQxGetSchema).query(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<ActoQxRow[]>`
         SELECT
           aq.id::text,
@@ -425,7 +432,7 @@ export const eceActoQuirurgicoRouter = router({
   create: surgeonProc.input(actoQxCreateSchema).mutation(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       // 1. Resolver tipo de documento ACT_QX
       const tipoRows = await tx.$queryRaw<{ tipo_doc_id: string; estado_inicial_id: string }[]>`
         SELECT td.id::text AS tipo_doc_id, fe.id::text AS estado_inicial_id
@@ -543,7 +550,7 @@ export const eceActoQuirurgicoRouter = router({
   update: surgeonProc.input(actoQxUpdateSchema).mutation(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const aq = await findActoQx(tx, input.id);
       if (!aq) {
         throw new TRPCError({
@@ -592,7 +599,7 @@ export const eceActoQuirurgicoRouter = router({
   firmar: surgeonProc.input(actoQxFirmarSchema).mutation(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const aq = await findActoQx(tx, input.id);
       if (!aq) {
         throw new TRPCError({
@@ -661,7 +668,7 @@ export const eceActoQuirurgicoRouter = router({
   validar: chiefProc.input(actoQxValidarSchema).mutation(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const aq = await findActoQx(tx, input.id);
       if (!aq) {
         throw new TRPCError({
@@ -707,7 +714,7 @@ export const eceActoQuirurgicoRouter = router({
   anular: chiefProc.input(actoQxAnularSchema).mutation(async ({ ctx, input }) => {
     const ece = requireEstablishment(ctx);
 
-    return withEce(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withEce(ctx.prisma, ece, async (tx) => {
       const aq = await findActoQx(tx, input.id);
       if (!aq) {
         throw new TRPCError({
