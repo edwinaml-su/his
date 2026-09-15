@@ -663,6 +663,7 @@ export default function GS1DispensePage(): React.ReactElement {
                 pendiente Z" del ítem seleccionado. */}
             {selectedItem && entregaLabel(selectedItem) ? (
               <p
+                data-testid="entrega-parcial-badge"
                 className={
                   selectedItemComplete
                     ? "text-sm font-medium text-destructive"
