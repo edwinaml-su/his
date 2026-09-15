@@ -153,6 +153,18 @@ async function resolveRecipients(
       const user = await loadUser(payload.prescriberId, organizationId);
       return user ? [user] : [];
     }
+    // CC-0035 (auditoría C6 2026-09-15, P0-10/P0-11) — cierra el wiring del
+    // médico tratante para `critical_result.emitted` (motor de valor
+    // crítico con SLA + read-back, IPSG.2 ME 2). El payload usa
+    // `medicoTratanteUserId` (User.id) para resolver directo, igual que
+    // `lab.criticalValue`/`prescriberId` — `medicoTratanteId` (FK a
+    // ece.personal_salud) queda solo para la fila de
+    // ece.critical_result_notification, no sirve para loadUser().
+    case "critical_result.emitted": {
+      if (typeof payload?.medicoTratanteUserId !== "string") return [];
+      const user = await loadUser(payload.medicoTratanteUserId, organizationId);
+      return user ? [user] : [];
+    }
     // CC-0031 — puente tarea→notificación (4 eventTypes, mismo resolver).
     case "task.action_required":
     case "task.sla_warning":

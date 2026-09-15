@@ -149,6 +149,11 @@ export function mapEventTypeToSeverity(
     }
     case "allergy.mismatch":
       return "CRITICAL";
+    // CC-0035 (auditoría C6 2026-09-15, P0-10) — motor de valor crítico con
+    // SLA + read-back digital (IPSG.2 ME 2). Espejo del case agregado en
+    // dispatcher.ts (Node).
+    case "critical_result.emitted":
+      return "CRITICAL";
     // CC-0031 — puente tarea→notificación (ver dispatcher.ts Node, mismo mapeo).
     case "task.action_required":
       return "INFO";
@@ -210,6 +215,14 @@ export function validatePayloadShallow(
       ) {
         return "missing_prescriberId";
       }
+      return null;
+    }
+    // CC-0035 — medicoTratanteUserId puede faltar (emisores que no lo tienen
+    // a mano todavía) — el evento se valida igual; `resolveRecipients` lo
+    // trata como "no-recipient" cuando falta, no como payload inválido.
+    case "critical_result.emitted": {
+      if (typeof payload.labResultId !== "string") return "missing_labResultId";
+      if (typeof payload.severidad !== "string") return "missing_severidad";
       return null;
     }
     // CC-0031 — task.action_required/sla_warning/sla_exceeded/escalated comparten shape.
@@ -399,6 +412,46 @@ export function buildAllergyMismatchTemplate(
   return { subject, html, text };
 }
 
+// CC-0035 (auditoría C6 2026-09-15, P0-10/P0-11) — critical_result.emitted.
+// Motor de valor crítico con SLA + read-back digital (IPSG.2 ME 2).
+export function buildCriticalResultEmittedTemplate(
+  payload: any,
+  patientName?: string | null,
+): RenderedTemplate {
+  const valorCritico = payload?.valorCritico ?? {};
+  const testCode = String(valorCritico?.testCode ?? "");
+  const value = valorCritico?.value;
+  const unit = valorCritico?.unit ? ` ${escape(String(valorCritico.unit))}` : "";
+  const slaMin = typeof payload?.slaMin === "number" ? payload.slaMin : 60;
+  const patientFragment = patientName ? ` — paciente ${patientName}` : "";
+  const subject = `[CRITICO] Valor critico ${testCode}${patientFragment} — read-back en ${slaMin} min`;
+
+  const html = [
+    `<h2>Valor critico — read-back digital requerido</h2>`,
+    patientName ? `<p><strong>Paciente:</strong> ${escape(patientName)}</p>` : "",
+    `<p><strong>Prueba:</strong> ${escape(testCode)}</p>`,
+    `<p><strong>Resultado:</strong> ${String(value ?? "")}${unit}</p>`,
+    `<p><strong>SLA read-back:</strong> ${slaMin} min</p>`,
+    `<p>IPSG.2 ME 2 — confirma la lectura con tu PIN de firma electronica en el HIS.</p>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const text = [
+    `Valor critico — read-back digital requerido`,
+    patientName ? `Paciente: ${patientName}` : "",
+    `Prueba: ${testCode}`,
+    `Resultado: ${value ?? ""}${valorCritico?.unit ? ` ${valorCritico.unit}` : ""}`,
+    `SLA read-back: ${slaMin} min`,
+    ``,
+    `Confirma la lectura con tu PIN de firma electronica en el HIS.`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+
+  return { subject, html, text };
+}
+
 // CC-0031 — task.action_required / task.sla_warning / task.sla_exceeded / task.escalated.
 // Espejo de `buildTaskNotificationTemplate` (packages/infrastructure/src/notifications/templates.ts).
 const TASK_EVENT_LABEL: Record<string, { subject: string; badge: string }> = {
@@ -483,6 +536,8 @@ export function renderTemplate(
       return buildDrugInteractionTemplate(payload, patientName);
     case "allergy.mismatch":
       return buildAllergyMismatchTemplate(payload, patientName);
+    case "critical_result.emitted":
+      return buildCriticalResultEmittedTemplate(payload, patientName);
     case "task.action_required":
     case "task.sla_warning":
     case "task.sla_exceeded":

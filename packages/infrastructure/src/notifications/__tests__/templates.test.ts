@@ -21,6 +21,7 @@ import {
   buildLabCriticalValueTemplate,
   buildDrugInteractionTemplate,
   buildAllergyMismatchTemplate,
+  buildCriticalResultEmittedTemplate,
   escape,
 } from "../templates";
 
@@ -249,6 +250,58 @@ describe("buildLabCriticalValueTemplate", () => {
     const { html } = buildLabCriticalValueTemplate(labPayload);
     expect(html).toContain("HIS Multipaís");
     expect(html).toContain("Inversiones Avante");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// critical_result.emitted (CC-0035, auditoría C6 2026-09-15)
+// ---------------------------------------------------------------------------
+
+describe("buildCriticalResultEmittedTemplate", () => {
+  const criticalResultPayload = {
+    labResultId: "11111111-1111-1111-1111-111111111111",
+    pacienteId: "22222222-2222-2222-2222-222222222222",
+    medicoTratanteId: "33333333-3333-3333-3333-333333333333",
+    medicoTratanteUserId: "44444444-4444-4444-4444-444444444444",
+    severidad: "crítica",
+    slaMin: 60,
+    valorCritico: { testCode: "K+", value: 7.2, unit: "mEq/L" },
+  };
+
+  it("produce output completo con payload válido", () => {
+    const { subject, html, text } = buildCriticalResultEmittedTemplate(criticalResultPayload);
+    expect(subject).toContain("[CRÍTICO]");
+    expect(subject).toContain("K+");
+    expect(subject).toContain("60 min");
+    expect(html.length).toBeGreaterThan(0);
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("incluye testCode, valor y SLA en body", () => {
+    const { html, text } = buildCriticalResultEmittedTemplate(criticalResultPayload);
+    expect(html).toContain("K+");
+    expect(html).toContain("7.2");
+    expect(html).toContain("60 min");
+    expect(text).toContain("K+");
+    expect(text).toContain("7.2");
+  });
+
+  it("XSS — testCode con caracteres peligrosos escapado en html", () => {
+    const xssPayload = {
+      ...criticalResultPayload,
+      valorCritico: { ...criticalResultPayload.valorCritico, testCode: '<b onclick="alert()">K+</b>' },
+    };
+    const { html } = buildCriticalResultEmittedTemplate(xssPayload);
+    expect(html).not.toContain("<b onclick=");
+    expect(html).toContain("&lt;b");
+  });
+
+  it("incluye patientName cuando se provee", () => {
+    const { subject, html } = buildCriticalResultEmittedTemplate(criticalResultPayload, {
+      patientName: "Juan Pérez",
+    });
+    expect(subject).toContain("Juan Pérez");
+    expect(html).toContain("Juan Pérez");
   });
 });
 

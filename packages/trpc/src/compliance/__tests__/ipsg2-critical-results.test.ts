@@ -9,18 +9,38 @@
  * Cubre:
  *   1. emit → notificación creada con sla_min=60 y notificado_en poblado.
  *   2. confirmReadback dentro de SLA → ok=true, read_back_at populado, dentroSla=true.
- *   3. PIN incorrecto → UNAUTHORIZED + pin_fail_count incrementado.
- *   4. PIN incorrecto 5 veces → bloqueado.
+ *   3. PIN incorrecto → UNAUTHORIZED (checkPin incrementa failed_attempts de la firma).
+ *   4. Firma bloqueada (locked_until futuro) → TOO_MANY_REQUESTS.
  *   5. read-back ya confirmado → CONFLICT (idempotencia segura).
  *   6. pending → lista solo notificaciones sin read-back.
  *   7. escalate manual → ok=true + evento emitido.
  *   8. confirmReadback fuera de SLA → ok=true pero dentroSla=false.
+ *
+ * CC-0035 (P0-2b, auditoría C6 2026-09-15) — confirmReadback ya NO usa la
+ * verificación PIN "dummy" (comparaba contra `ece.personal_salud.pin_hash`,
+ * columna nunca poblada): usa `checkPin` de `firma-electronica.router.ts`
+ * (argon2id + lockout + bitácora sobre `ece.firma_electronica`, el mismo
+ * mecanismo que la firma de historia clínica). Los tests 2-4-8 se
+ * reescribieron para mockear esa cadena real en vez de la dummy.
  */
 import { describe, it, expect, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { criticalResultRouter } from "../../routers/ece/critical-result.router";
 import { makeCtx } from "../../__tests__/helpers/caller";
+
+// ---------------------------------------------------------------------------
+// argon2 mock — mismo patrón que firma-electronica.test.ts: reemplaza
+// hash/verify por operaciones triviales, la lógica (PIN correcto/incorrecto)
+// se controla vía el pin_hash devuelto por el mock de $queryRaw (findFirma).
+// ---------------------------------------------------------------------------
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    argon2id: 2,
+    hash: vi.fn(async (pin: string) => `hashed:${pin}`),
+    verify: vi.fn(async (storedHash: string, pin: string) => storedHash === `hashed:${pin}`),
+  },
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -33,8 +53,9 @@ const PACIENTE_ID  = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const MEDICO_ID    = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const ESCALADO_ID  = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 const PERSONAL_ID  = "ffffffff-ffff-ffff-ffff-ffffffffffff";
-const PIN_CORRECTO = "1234";
-const PIN_MALO     = "9999";
+const FIRMA_ID     = "11111111-2222-3333-4444-555555555555";
+const PIN_CORRECTO = "123456";
+const PIN_MALO     = "999999";
 
 const NOTIF_ROW = {
   id: NOTIF_ID,
@@ -53,10 +74,30 @@ const NOTIF_ROW = {
   escalado_en: null,
 };
 
+/** Fila `ece.personal_salud` — resolvePersonalSalud (id, nombre_completo). */
 const PERSONAL_ROW = {
   id: PERSONAL_ID,
-  pin_hash: null, // sin hash: cualquier PIN ≥4 chars es válido (ver TODO en router)
+  nombre_completo: "Dra. Test",
 };
+
+/** Fila `ece.firma_electronica` activa, sin bloqueo, PIN correcto = PIN_CORRECTO. */
+function firmaRow(overrides: Partial<{
+  pin_hash: string;
+  failed_attempts: number;
+  locked_until: Date | null;
+  revoked_at: Date | null;
+}> = {}) {
+  return {
+    id: FIRMA_ID,
+    personal_id: PERSONAL_ID,
+    pin_hash: `hashed:${PIN_CORRECTO}`,
+    salt_extra: "aabbcc",
+    failed_attempts: 0,
+    locked_until: null,
+    revoked_at: null,
+    ...overrides,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -151,11 +192,13 @@ describe("IPSG.2 ME 2 — Notificación de resultados críticos: SLA + read-back
     setupQueryRaw(prisma, [
       // findNotification
       [notifReciente],
-      // findPersonalByHisUser
+      // resolvePersonalSalud (llamada directa del router, para read_back_por_id)
       [PERSONAL_ROW],
-      // verifyPin: SELECT pin_fail_count
-      [{ pin_fail_count: 0 }],
-      // emitDomainEvent INSERT outbox
+      // resolvePersonalSalud (dentro de checkPin → findPersonal)
+      [PERSONAL_ROW],
+      // findFirma (checkPin) — pin_hash matchea PIN_CORRECTO vía mock de argon2
+      [firmaRow()],
+      // emitDomainEvent → ctxRows check (current_org_id_or_ece_context)
       [],
     ]);
 
@@ -177,17 +220,19 @@ describe("IPSG.2 ME 2 — Notificación de resultados críticos: SLA + read-back
     expect(result.minutosTranscurridos).toBeLessThanOrEqual(60);
   });
 
-  // 3. PIN incorrecto → UNAUTHORIZED + contador incrementado
-  it("PIN incorrecto → UNAUTHORIZED (pin_fail_count se incrementa)", async () => {
+  // 3. PIN incorrecto → UNAUTHORIZED (checkPin incrementa failed_attempts de la firma)
+  it("PIN incorrecto → UNAUTHORIZED (checkPin de firma-electronica.router.ts)", async () => {
     const prisma = makePrisma();
 
     setupQueryRaw(prisma, [
       // findNotification
       [NOTIF_ROW],
-      // findPersonalByHisUser — pin_hash='HASH_REAL' → PIN_MALO no coincide
-      [{ ...PERSONAL_ROW, pin_hash: "HASH_REAL" }],
-      // verifyPin: SELECT pin_fail_count
-      [{ pin_fail_count: 0 }],
+      // resolvePersonalSalud (router)
+      [PERSONAL_ROW],
+      // resolvePersonalSalud (checkPin)
+      [PERSONAL_ROW],
+      // findFirma — pin_hash de PIN_CORRECTO, pero se envía PIN_MALO
+      [firmaRow()],
     ]);
 
     // JCI Standard: IPSG.2 ME 2 — PIN incorrecto debe bloquear confirmación
@@ -205,21 +250,23 @@ describe("IPSG.2 ME 2 — Notificación de resultados críticos: SLA + read-back
         }),
     ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
-    // El UPDATE de incremento debe haberse llamado
+    // checkPin incrementa failed_attempts vía $executeRaw
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
-  // 4. PIN incorrecto 5 veces → bloqueado
-  it("5 intentos PIN fallidos → UNAUTHORIZED bloqueado", async () => {
+  // 4. Firma bloqueada por intentos previos → TOO_MANY_REQUESTS
+  it("firma bloqueada (locked_until futuro) → TOO_MANY_REQUESTS", async () => {
     const prisma = makePrisma();
 
     setupQueryRaw(prisma, [
       // findNotification
       [NOTIF_ROW],
-      // findPersonalByHisUser — con hash real
-      [{ ...PERSONAL_ROW, pin_hash: "HASH_REAL" }],
-      // verifyPin: pin_fail_count ya en límite
-      [{ pin_fail_count: 5 }],
+      // resolvePersonalSalud (router)
+      [PERSONAL_ROW],
+      // resolvePersonalSalud (checkPin)
+      [PERSONAL_ROW],
+      // findFirma — bloqueada tras 5 intentos previos
+      [firmaRow({ failed_attempts: 5, locked_until: new Date(Date.now() + 10 * 60 * 1000) })],
     ]);
 
     // JCI Standard: IPSG.2 ME 2 — bloqueo tras intentos excesivos protege contra brute-force
@@ -236,9 +283,35 @@ describe("IPSG.2 ME 2 — Notificación de resultados críticos: SLA + read-back
           pin: PIN_MALO,
         }),
     ).rejects.toMatchObject({
-      code: "UNAUTHORIZED",
+      code: "TOO_MANY_REQUESTS",
       message: expect.stringContaining("bloqueada"),
     });
+  });
+
+  // 4b. Sin perfil ece.personal_salud vinculado → PRECONDITION_FAILED
+  it("sin perfil ece.personal_salud vinculado → PRECONDITION_FAILED (no llega a verificar PIN)", async () => {
+    const prisma = makePrisma();
+
+    setupQueryRaw(prisma, [
+      // findNotification
+      [NOTIF_ROW],
+      // resolvePersonalSalud (router) — sin fila
+      [],
+    ]);
+
+    await expect(
+      criticalResultRouter
+        .createCaller(
+          makeCtx({
+            prisma,
+            tenant: { ...makeCtx().tenant, roleCodes: ["MC"] },
+          }),
+        )
+        .confirmReadback({
+          notificationId: NOTIF_ID,
+          pin: PIN_CORRECTO,
+        }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
   // 5. read-back ya confirmado → CONFLICT
@@ -334,7 +407,8 @@ describe("IPSG.2 ME 2 — Notificación de resultados críticos: SLA + read-back
     setupQueryRaw(prisma, [
       [notifFueraSla],
       [PERSONAL_ROW],
-      [{ pin_fail_count: 0 }],
+      [PERSONAL_ROW],
+      [firmaRow()],
       [],
     ]);
 
