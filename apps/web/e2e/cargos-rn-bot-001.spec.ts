@@ -256,7 +256,7 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
     expect(cierre.errorCode).toBe("PRECONDITION_FAILED");
   });
 
-  test("@smoke 5. Entrega parcial: prescribedQty=3 ⇒ cargo por unidad, pendiente visible, 4ª rechazada ITEM_COMPLETO", async ({
+  test("@smoke 5. Entrega parcial: prescribedQty=3 ⇒ cargo por unidad, pendiente visible, 4ª rechazada server-side", async ({
     page,
   }) => {
     // CC-0030 (RN-HIS-BOT-001 R6, 2026-09-15) cierra el gap que dejó esta
@@ -336,6 +336,14 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
     // esta llamada ejercita el hard stop SERVER-SIDE directamente (mismo
     // patrón que las pruebas #4/#7 para `patientAccount.cerrar`) — el
     // enforcement no puede depender solo de que la UI no deje hacer clic.
+    //
+    // Con receta MONO-ÍTEM (este fixture), completar el ítem recomputa
+    // `Prescription.status` a DISPENSED (CC-0030), y `reserveItem` filtra
+    // por status ANTES del check de ítem ⇒ el rechazo determinista es
+    // SIN_RECETA_ACTIVA (PRECONDITION_FAILED), no ITEM_COMPLETO — corrida
+    // real del smoke en #666. ITEM_COMPLETO (CONFLICT) es el camino de
+    // receta multi-ítem aún dispensable, cubierto por los unit tests de
+    // dispensation.router. Ambos son hard stops server-side de R6.
     const cuarta = await trpcMutate(page.request, "dispensation.reserveItem", {
       pharmacyOrderId: s.prescriptionId,
       gtin: s.gtin,
@@ -343,8 +351,8 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
       patientId: s.patientId,
     });
     expect(cuarta.ok).toBe(false);
-    expect(cuarta.errorCode).toBe("CONFLICT");
-    expect(cuarta.errorMessage).toContain("ITEM_COMPLETO");
+    expect(cuarta.errorCode).toBe("PRECONDITION_FAILED");
+    expect(cuarta.errorMessage).toContain("SIN_RECETA_ACTIVA");
   });
 
   test("6. Devolución ⇒ reingreso al mismo lote y línea REVERSION negativa enlazada, original nunca borrada", async ({
