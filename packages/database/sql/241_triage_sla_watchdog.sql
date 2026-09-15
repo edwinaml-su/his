@@ -6,7 +6,7 @@
 -- de espera venció sin que se le haya iniciado atención NO genera ninguna
 -- alerta activa — la única "protección" es que alguien mire el wallboard.
 --
--- ⚠️ ⚠️ APLICADO a prod 2026-09-15 vía MCP (triage_sla_watchdog_241) — NO re-aplicar. Verificado: cron */5 activo, columna de guarda e índice creados; 28 triages de prueba vencidos al aplicar (tanda inicial única) — @Orq lo aplica a prod vía MCP (patrón del repo:
+-- ⚠️ ⚠️ APLICADO a prod 2026-09-15 vía MCP (triage_sla_watchdog_241) — NO re-aplicar. Verificado: cron */5 activo (re-programado con el fix 241b del dedup), columna de guarda e índice creados; 28 triages de prueba vencidos al aplicar (tanda inicial única) — @Orq lo aplica a prod vía MCP (patrón del repo:
 -- @Dev no ejecuta apply_migration). Requiere sql/238 y sql/238b ya aplicados
 -- (roles TRIAGE_NURSE/ADMIN_CLINICO + dispatcher `task.sla_exceeded` ya
 -- resuelven por `assignedRoleCode`, ver dispatcher.ts:159-176).
@@ -145,13 +145,19 @@ SELECT cron.schedule(
       -- Evento primario: rol asignado original (TRIAGE_NURSE).
       SELECT id, "organizationId", "establishmentId", "serviceUnitId",
              "completedAt", color, "levelName", "maxWaitMinutes",
-             'TRIAGE_NURSE'::text AS "assignedRoleCode"
+             'TRIAGE_NURSE'::text AS "assignedRoleCode",
+             'task.sla_exceeded'::text AS "eventType"
       FROM marked
       UNION ALL
       -- Escalamiento inmediato ROJO/NARANJA: segundo evento al rol escalado.
+      -- 241b (2026-09-15): usa eventType 'task.escalated' — con
+      -- 'task.sla_exceeded' el par compartía (organizationId, aggregateId,
+      -- eventType) y chocaba con uq_domain_event_pending_dedup (sql/97),
+      -- revirtiendo el tick completo (cazado por la primera corrida real).
       SELECT id, "organizationId", "establishmentId", "serviceUnitId",
              "completedAt", color, "levelName", "maxWaitMinutes",
-             'ADMIN_CLINICO'::text AS "assignedRoleCode"
+             'ADMIN_CLINICO'::text AS "assignedRoleCode",
+             'task.escalated'::text AS "eventType"
       FROM marked
       WHERE color IN ('RED', 'ORANGE')
     )
@@ -161,7 +167,7 @@ SELECT cron.schedule(
     )
     SELECT
       "organizationId",
-      'task.sla_exceeded',
+      "eventType",
       'TriageEvaluation',
       id,
       NULL,
