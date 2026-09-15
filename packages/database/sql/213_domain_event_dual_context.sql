@@ -90,7 +90,10 @@
 -- comportamiento sin cambios.
 --
 -- Idempotente. Aplicar vía mcp__supabase__apply_migration en transacción.
--- NO aplicado a prod por este archivo — pendiente de review de @Orq.
+-- ⚠️ APLICADO a prod (verificado 2026-09-15: policies de DomainEvent usan
+-- current_org_id_or_ece_context()) — NO re-aplicar. Cabecera anterior stale;
+-- el outbox en 0 filas se explica por falta de uso real, no por RLS
+-- (docs/audit/2026-09-15_cobertura/04 §2).
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
