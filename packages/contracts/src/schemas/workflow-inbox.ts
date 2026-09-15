@@ -19,6 +19,7 @@ export const taskTypeEnum = z.enum([
   "PRESCRIPTION_TO_SIGN",         // Receta DRAFT pendiente de firma médica (MC)
   "PRESCRIPTION_TO_DISPENSE",     // Receta SIGNED lista para dispensar (PHARM)
   "TRIAGE_IN_PROGRESS",           // Triage IN_PROGRESS pendiente de completar
+  "TRIAGE_REVIEW_SLA",            // C8 — triage COMPLETED sin atención dentro del SLA Manchester (emitido por sql/241, no por CareTask)
   "LAB_TO_PROCESS",               // LabOrder ORDERED/COLLECTED para procesar
   "LAB_TO_VALIDATE",              // LabOrder RESULTED para validar
   "IMAGING_TO_REPORT",            // ImagingOrder COMPLETED para reportar
@@ -122,6 +123,10 @@ export const TASK_SLA_MINUTES: Record<TaskType, number | null> = {
   PRESCRIPTION_TO_SIGN:      30,
   PRESCRIPTION_TO_DISPENSE:  60,
   TRIAGE_IN_PROGRESS:        10,
+  // Sin SLA fijo: el umbral es `TriageLevel.maxWaitMinutes` por color
+  // (ROJO=0+5min gracia, NARANJA=10, AMARILLO=60, VERDE=120, AZUL=240),
+  // evaluado por sql/241 — no aplica un único valor por TaskType.
+  TRIAGE_REVIEW_SLA:        null,
   LAB_TO_PROCESS:           120,
   LAB_TO_VALIDATE:           60,
   IMAGING_TO_REPORT:        240,
@@ -196,6 +201,7 @@ export const TASK_REQUIRED_ROLES: Record<TaskType, string[]> = {
   PRESCRIPTION_TO_SIGN:      ["MC", "PHYSICIAN"],
   PRESCRIPTION_TO_DISPENSE:  ["PHARM", "PHARMACIST"],
   TRIAGE_IN_PROGRESS:        ["TRIAGIST", "NURSE", "ENF"],
+  TRIAGE_REVIEW_SLA:         ["TRIAGE_NURSE"],
   LAB_TO_PROCESS:            ["LAB_TECH", "LAB"],
   LAB_TO_VALIDATE:           ["LAB_VALIDATOR", "MC", "PHYSICIAN"],
   IMAGING_TO_REPORT:         ["RAD", "RADIOLOGO"],
@@ -270,6 +276,7 @@ export const TASK_TYPE_LABEL: Record<TaskType, string> = {
   PRESCRIPTION_TO_SIGN:      "Firmar receta",
   PRESCRIPTION_TO_DISPENSE:  "Dispensar medicación",
   TRIAGE_IN_PROGRESS:        "Completar triage",
+  TRIAGE_REVIEW_SLA:         "Revisar triage con SLA de espera vencido",
   LAB_TO_PROCESS:            "Procesar muestra de laboratorio",
   LAB_TO_VALIDATE:           "Validar resultado de laboratorio",
   IMAGING_TO_REPORT:         "Reportar estudio de imagen",

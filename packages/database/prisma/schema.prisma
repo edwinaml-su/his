@@ -2025,6 +2025,12 @@ model TriageEvaluation {
   status                 TriageStatus @default(IN_PROGRESS)
   startedAt              DateTime     @default(now()) @db.Timestamptz()
   completedAt            DateTime?    @db.Timestamptz()
+  /// C8 (audit 2026-09-15 P0-7) — guarda de idempotencia del watchdog SQL 241
+  /// (`triage_sla_watchdog`, cron cada 5 min): seteado la primera vez que se
+  /// emite `task.sla_exceeded` para esta evaluación COMPLETED sin atención
+  /// dentro del `TriageLevel.maxWaitMinutes` — nunca se resetea (mismo patrón
+  /// que `CareTask.slaExceededEmittedAt`, sql/238b).
+  slaExceededEmittedAt   DateTime?    @db.Timestamptz()
   reTriageOfId           String?      @db.Uuid /// si es re-triage, apunta al original.
   triagistUserId         String?      @db.Uuid
   createdAt              DateTime     @default(now()) @db.Timestamptz()
