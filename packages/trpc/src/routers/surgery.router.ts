@@ -32,37 +32,9 @@ import {
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
-import { capturarCargo, revertirCargo } from "../lib/charge-capture";
-import type { PrismaClient } from "@prisma/client";
-
-// ---------------------------------------------------------------------------
-// OR conflict detection helper
-// ---------------------------------------------------------------------------
-
-// Non-terminal statuses that occupy an OR slot.
-const OR_ACTIVE_STATUSES = ["SCHEDULED", "CONFIRMED", "IN_PROGRESS", "POST_OP"] as const;
-
-async function detectOrConflict(
-  prisma: PrismaClient,
-  operatingRoomId: string,
-  scheduledStart: Date,
-  scheduledEnd: Date,
-  excludeCaseId?: string,
-): Promise<boolean> {
-  const conflict = await prisma.surgeryCase.findFirst({
-    where: {
-      operatingRoomId,
-      deletedAt: null,
-      status: { in: [...OR_ACTIVE_STATUSES] },
-      ...(excludeCaseId && { id: { not: excludeCaseId } }),
-      // Overlap: existing.start < newEnd AND existing.end > newStart
-      scheduledStart: { lt: scheduledEnd },
-      scheduledEnd: { gt: scheduledStart },
-    },
-    select: { id: true },
-  });
-  return conflict !== null;
-}
+import { revertirCargo } from "../lib/charge-capture";
+import { hayConflictoQuirofano } from "../lib/quirofano-conflicto";
+import { capturarCargoReservaQuirofano } from "../lib/quirofano-reserva-cargo";
 
 // ---------------------------------------------------------------------------
 // Router
@@ -200,12 +172,11 @@ export const surgeryRouter = router({
 
           // OR conflict detection (only if an OR was specified)
           if (input.operatingRoomId) {
-            const conflict = await detectOrConflict(
-              tx,
-              input.operatingRoomId,
-              input.scheduledStart,
-              input.scheduledEnd,
-            );
+            const conflict = await hayConflictoQuirofano(tx, {
+              operatingRoomId: input.operatingRoomId,
+              scheduledStart: input.scheduledStart,
+              scheduledEnd: input.scheduledEnd,
+            });
             if (conflict) {
               throw new TRPCError({
                 code: "CONFLICT",
@@ -239,24 +210,20 @@ export const surgeryRouter = router({
           // trae operatingRoomId), no el acto quirúrgico (puramente médico,
           // ver surgery.router signIn/start/signOut/complete — sin cargo).
           // Sin operatingRoomId todavía no hay sala reservada → sin cargo.
+          // C5 auditoría P0-4 — captura vía helper compartido con
+          // bridge-cirugia.router.ts (lib/quirofano-reserva-cargo.ts).
           if (input.operatingRoomId) {
             const or = await tx.operatingRoom.findUnique({
               where: { id: input.operatingRoomId },
               select: { code: true, chargeCode: true },
             });
-            // Fallback sintético determinista si la sala no tiene chargeCode
-            // configurado — nunca cargo en 0, nunca silencio (R3): el
-            // resolver no encuentra el code y capturarCargo cae a
-            // PENDIENTE_TARIFA, visible y bloqueante de cierre.
-            const code = or?.chargeCode ?? `QX-${or?.code ?? "SIN_SALA"}`;
-            await capturarCargo(tx, {
+            await capturarCargoReservaQuirofano(tx, {
               organizationId: ctx.tenant.organizationId,
               patientId: input.patientId,
               encounterId: input.encounterId,
-              code,
-              descripcion: `Reserva de quirófano — ${input.procedureDescription}`,
-              quantity: 1,
-              origen: "USO_INSTALACIONES",
+              descripcionProcedimiento: input.procedureDescription,
+              chargeCode: or?.chargeCode ?? null,
+              codigoSalaFallback: or?.code ?? "SIN_SALA",
               referenciaId: surgeryCase.id,
               actorId: ctx.user.id,
             });
@@ -590,13 +557,12 @@ export const surgeryRouter = router({
           }
 
           if (existing.operatingRoomId) {
-            const conflict = await detectOrConflict(
-              tx,
-              existing.operatingRoomId,
-              input.newScheduledStart,
-              input.newScheduledEnd,
-              input.id,
-            );
+            const conflict = await hayConflictoQuirofano(tx, {
+              operatingRoomId: existing.operatingRoomId,
+              scheduledStart: input.newScheduledStart,
+              scheduledEnd: input.newScheduledEnd,
+              excludeSurgeryCaseId: input.id,
+            });
             if (conflict) {
               throw new TRPCError({
                 code: "CONFLICT",

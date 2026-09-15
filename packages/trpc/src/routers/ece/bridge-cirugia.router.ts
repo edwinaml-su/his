@@ -41,6 +41,9 @@ import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../../trpc";
 import { withWorkflowContext } from "../../workflow/context";
+import { hayConflictoQuirofano } from "../../lib/quirofano-conflicto";
+import { capturarCargoReservaQuirofano } from "../../lib/quirofano-reserva-cargo";
+import { revertirCargo } from "../../lib/charge-capture";
 
 // =============================================================================
 // Schemas Zod (inline — patrón establecido en bridge-admision.router.ts)
@@ -79,8 +82,6 @@ type PersonalSaludRow = {
   establecimiento_id: string;
 };
 
-type ReservaOverlapRow = { id: string };
-
 type OrdenQxRow = {
   id: string;
   paciente_id: string;
@@ -111,6 +112,33 @@ type RawClient = {
 // Helpers SQL
 // =============================================================================
 
+/**
+ * C5 auditoría P0-4 — trampa dual-GUC (ver CLAUDE.md, precedente SQL 209
+ * `current_org_id_or_ece_context()`). `withWorkflowContext`
+ * (packages/trpc/src/workflow/context.ts) solo setea los GUC del espacio
+ * ECE (`app.ece_establecimiento_id`/`app.ece_personal_id`) — NUNCA
+ * `app.current_org_id`/`app.current_user_id`. Las policies RLS de
+ * `public."PatientAccount"` / `public."PatientAccountService"`
+ * (178_cc0002_cuenta_servicio.sql) leen `app.current_org_id` DIRECTO (no
+ * vía la función puente `current_org_id_or_ece_context()`), así que
+ * capturarCargo/revertirCargo fallarían (GUC ausente → cast de '' a uuid,
+ * error de Postgres) si se llaman tal cual dentro de esta transacción.
+ *
+ * Reusa `public.set_tenant_context` (mismo helper que `withTenantContext`
+ * — `packages/trpc/src/rls-context.ts` — usa vía `applyTenantContext`), sin
+ * volver a demotar el rol (ya lo hizo `withWorkflowContext`). `SET LOCAL`:
+ * solo aplica al resto de ESTA transacción, no afecta otros routers que
+ * usan `withWorkflowContext`.
+ */
+async function forzarContextoOrgParaCargos(
+  tx: RawClient,
+  userId: string,
+  organizationId: string,
+  breakGlass: boolean,
+): Promise<void> {
+  await tx.$executeRaw`SELECT public.set_tenant_context(${userId}::uuid, ${organizationId}::uuid, ${breakGlass})`;
+}
+
 async function findPersonalSaludPorUsuario(
   prisma: RawClient,
   hisUserId: string,
@@ -129,52 +157,6 @@ async function findPersonalSaludPorUsuario(
     LIMIT 1
   `;
   return rows[0] ?? null;
-}
-
-/**
- * Verifica que la sala QX no tenga reservas activas que se superpongan
- * con el intervalo [fechaInicio, fechaFin). Una reserva se considera
- * activa si estado ∈ {'programado', 'confirmado', 'en_curso'}.
- *
- * Overlap: reserva.fecha_inicio < nuevaFin AND reserva.fecha_fin > nuevaInicio
- */
-async function detectarConflictoSala(
-  prisma: RawClient,
-  salaQxId: string,
-  fechaInicio: Date,
-  fechaFin: Date,
-  excluirOrdenId?: string,
-): Promise<boolean> {
-  let rows: ReservaOverlapRow[];
-  if (excluirOrdenId) {
-    rows = await (prisma.$queryRaw as (
-      tpl: TemplateStringsArray,
-      ...vals: unknown[]
-    ) => Promise<ReservaOverlapRow[]>)`
-      SELECT r.id
-      FROM ece.reserva_sala_qx r
-      WHERE r.sala_qx_id = ${salaQxId}::uuid
-        AND r.estado IN ('programado', 'confirmado', 'en_curso')
-        AND r.orden_qx_id <> ${excluirOrdenId}::uuid
-        AND r.fecha_inicio < ${fechaFin}::timestamptz
-        AND r.fecha_fin > ${fechaInicio}::timestamptz
-      LIMIT 1
-    `;
-  } else {
-    rows = await (prisma.$queryRaw as (
-      tpl: TemplateStringsArray,
-      ...vals: unknown[]
-    ) => Promise<ReservaOverlapRow[]>)`
-      SELECT r.id
-      FROM ece.reserva_sala_qx r
-      WHERE r.sala_qx_id = ${salaQxId}::uuid
-        AND r.estado IN ('programado', 'confirmado', 'en_curso')
-        AND r.fecha_inicio < ${fechaFin}::timestamptz
-        AND r.fecha_fin > ${fechaInicio}::timestamptz
-      LIMIT 1
-    `;
-  }
-  return rows.length > 0;
 }
 
 async function findOrdenQx(
@@ -229,12 +211,14 @@ export const eceBridgeCirugiaRouter = router({
       const fechaFin    = new Date(fechaInicio.getTime() + input.duracionEstimadaMin * 60_000);
 
       // ── 2. Verificar disponibilidad de sala QX (pre-tx) ────────────────
-      const hayConflicto = await detectarConflictoSala(
-        ctx.prisma as unknown as RawClient,
-        input.salaQxId,
-        fechaInicio,
-        fechaFin,
-      );
+      // C5 auditoría P0-5 — helper compartido con surgery.router.ts
+      // (lib/quirofano-conflicto.ts); ver ahí la limitación documentada de
+      // no cruzar contra public.SurgeryCase (contextos RLS distintos).
+      const hayConflicto = await hayConflictoQuirofano(ctx.prisma, {
+        salaQxId: input.salaQxId,
+        scheduledStart: fechaInicio,
+        scheduledEnd: fechaFin,
+      });
       if (hayConflicto) {
         throw new TRPCError({
           code: "CONFLICT",
@@ -253,6 +237,14 @@ export const eceBridgeCirugiaRouter = router({
         { personalId: personal.id, establecimientoId: personal.establecimiento_id },
         async (tx) => {
         const rawTx = tx as unknown as RawClient;
+        // C5 P0-4 — habilita RLS de public.PatientAccount* dentro de esta tx
+        // ECE (ver forzarContextoOrgParaCargos arriba).
+        await forzarContextoOrgParaCargos(
+          rawTx,
+          ctx.user.id,
+          ctx.tenant.organizationId,
+          ctx.tenant.breakGlass === true,
+        );
 
         const motivoTexto = input.motivoIngreso ?? `Procedimiento CIE-10: ${input.procedimientoCie10}`;
 
@@ -484,6 +476,46 @@ export const eceBridgeCirugiaRouter = router({
         const reservaId = reservaRows[0]?.id;
         if (!reservaId) throw new Error("No se pudo crear reserva_sala_qx.");
 
+        // Paso 6b: captura del cargo USO_INSTALACIONES de la reserva — C5
+        // auditoría P0-4. Antes de este cambio SOLO la vía legacy
+        // (surgery.router.ts case.create) generaba este cargo; la vía NTEC
+        // reservaba la sala sin facturar (fuga de ingreso). Mismo helper
+        // compartido (lib/quirofano-reserva-cargo.ts), mismo `origen`
+        // USO_INSTALACIONES, referenciaId=reservaId (idempotente).
+        //
+        // ece.paciente.id (input.pacienteId) no es el mismo espacio de id
+        // que public."Patient".id — se resuelve el puente
+        // (public_patient_id) para anclar el cargo a la cuenta HIS del
+        // paciente. Si el paciente ECE no tiene puente a un Patient HIS
+        // (o no tiene cuenta activa), capturarCargo/este bloque fallan con
+        // PRECONDITION_FAILED y abortan toda la transacción — no se
+        // permite programar una reserva de quirófano sin poder facturarla.
+        const pacienteBridge = await tx.ecePaciente.findUnique({
+          where: { id: input.pacienteId },
+          select: { publicPatientId: true },
+        });
+        if (!pacienteBridge?.publicPatientId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "El paciente ECE no tiene vínculo con un paciente HIS (public_patient_id). " +
+              "Complete el registro/bridge del paciente antes de programar la cirugía.",
+          });
+        }
+        const sala = await tx.eceSalaQx.findUnique({
+          where: { id: input.salaQxId },
+          select: { codigo: true },
+        });
+        await capturarCargoReservaQuirofano(tx, {
+          organizationId: ctx.tenant.organizationId,
+          patientId: pacienteBridge.publicPatientId,
+          descripcionProcedimiento: `Procedimiento CIE-10: ${input.procedimientoCie10}`,
+          chargeCode: null,
+          codigoSalaFallback: sala?.codigo ?? "SIN_SALA",
+          referenciaId: reservaId,
+          actorId: ctx.user.id,
+        });
+
         // Paso 7: vincular reserva en orden_ingreso
         await (rawTx.$executeRaw as (
           tpl: TemplateStringsArray,
@@ -651,6 +683,15 @@ export const eceBridgeCirugiaRouter = router({
         { personalId: personal.id, establecimientoId: personal.establecimiento_id },
         async (tx) => {
         const rawTx = tx as unknown as RawClient;
+        // C5 P0-4 — habilita RLS de public.PatientAccount* dentro de esta tx
+        // ECE (ver forzarContextoOrgParaCargos arriba) — necesario para el
+        // reverso del cargo en el Paso 1b.
+        await forzarContextoOrgParaCargos(
+          rawTx,
+          ctx.user.id,
+          ctx.tenant.organizationId,
+          ctx.tenant.breakGlass === true,
+        );
 
         // Paso 1: cancelar reserva_sala_qx
         if (orden.reserva_sala_qx_id) {
@@ -665,6 +706,25 @@ export const eceBridgeCirugiaRouter = router({
                 cancelado_por = ${personal.id}::uuid
             WHERE id = ${orden.reserva_sala_qx_id}::uuid
           `;
+
+          // Paso 1b: revertir el cargo VIGENTE de la reserva, si lo hubo
+          // (C5 auditoría P0-4 — mismo patrón que surgery.router.ts
+          // case.cancel). No-op silencioso si no hay cargo VIGENTE.
+          const cargoVigente = await tx.patientAccountService.findFirst({
+            where: {
+              referenciaId: orden.reserva_sala_qx_id,
+              status: "VIGENTE",
+              account: { organizationId: ctx.tenant.organizationId },
+            },
+            select: { id: true },
+          });
+          if (cargoVigente) {
+            await revertirCargo(tx, {
+              cargoId: cargoVigente.id,
+              motivo: `Cancelación de cirugía programada (NTEC): ${input.motivo}`,
+              actorId: ctx.user.id,
+            });
+          }
         }
 
         // Paso 2: cerrar episodio_atencion como cancelado.

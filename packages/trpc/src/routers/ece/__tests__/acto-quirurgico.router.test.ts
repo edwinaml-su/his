@@ -37,6 +37,8 @@ import {
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
 
+const PIN_CORRECTO = "123456";
+
 // ─── Mock outbox ──────────────────────────────────────────────────────────────
 
 vi.mock("@his/database", async (importOriginal) => {
@@ -46,6 +48,14 @@ vi.mock("@his/database", async (importOriginal) => {
     emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-mock-id" }),
   };
 });
+
+// C5 auditoría P0-5 — mismo patrón que certificado-defuncion.router.test.ts
+// para el happy-path de firmar (requiere verificar PIN vía argon2).
+vi.mock("@his/infrastructure", () => ({
+  argon2: {
+    verify: vi.fn(async (_hash: string, pin: string) => pin === PIN_CORRECTO),
+  },
+}));
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -306,6 +316,59 @@ describe("eceActoQuirurgicoRouter", () => {
     await expect(
       caller.firmar({ id: AQ_ID, pin: "123456" }),
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+  });
+
+  // 12b — C5 auditoría P0-5: hard stop de consentimiento informado
+  // quirúrgico. Bypass rechazado: sin consentimiento 'quirurgico' en
+  // estado 'firmado' para el mismo episodio, firmar NUNCA llega a
+  // verificar el PIN.
+  it("firmar lanza PRECONDITION_FAILED 'CONSENTIMIENTO_QUIRURGICO_FALTANTE' sin consentimiento firmado", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([AQ_ROW_BORRADOR] as never) // findActoQx
+      .mockResolvedValueOnce([] as never);                // consentimiento_informado → vacío
+
+    const caller = eceActoQuirurgicoRouter.createCaller(
+      makeCtx({ prisma, tenant: ESP_TENANT, user: ESP_USER }),
+    );
+
+    await expect(
+      caller.firmar({ id: AQ_ID, pin: PIN_CORRECTO }),
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "CONSENTIMIENTO_QUIRURGICO_FALTANTE",
+      cause: {
+        causas: [
+          expect.objectContaining({ codigo: "CONSENTIMIENTO_QUIRURGICO_FALTANTE" }),
+        ],
+      },
+    });
+    // No debe haber avanzado el workflow ni intentado verificar PIN.
+    expect(prisma.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  // 12c — camino feliz: con consentimiento firmado, el gate no bloquea y
+  // la firma se completa (avanza borrador → firmado + emite outbox).
+  it("firmar OK cuando existe consentimiento quirúrgico firmado para el episodio", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([AQ_ROW_BORRADOR] as never)         // 1. findActoQx
+      .mockResolvedValueOnce([{ id: "consent-1" }] as never)     // 2. consentimiento_informado → OK
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, nombre_completo: "Dr. Cirujano" }] as never) // 3. resolvePersonalSalud
+      .mockResolvedValueOnce([{
+        id: "firma-1",
+        pin_hash: "hash-irrelevante-mockeado",
+        failed_attempts: 0,
+        locked_until: null,
+        revoked_at: null,
+      }] as never)                                                // 4. findFirmaByPersonal
+      .mockResolvedValueOnce([{ estado_destino_id: ESTADO_ID }] as never); // 5. avanzarEstado: transiciones
+    prisma.$executeRaw.mockResolvedValue(1 as never);
+
+    const caller = eceActoQuirurgicoRouter.createCaller(
+      makeCtx({ prisma, tenant: ESP_TENANT, user: ESP_USER }),
+    );
+
+    const result = await caller.firmar({ id: AQ_ID, pin: PIN_CORRECTO });
+    expect(result.ok).toBe(true);
   });
 
   // 13 — validar CONFLICT estado no firmado

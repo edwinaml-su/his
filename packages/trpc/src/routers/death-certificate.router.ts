@@ -173,7 +173,12 @@ export const deathCertificateRouter = router({
         // CC-0027 — exenta del gate de egreso físico a propósito: el óbito
         // no tiene alta administrativa que lo condicione (ver
         // lib/egreso-fisico-gate.ts). Release inline, no pasa por
-        // bed.router.release.
+        // bed.router.release. C5 auditoría (2026-09-15) verificó que esto
+        // NO deja la cuenta huérfana: dischargedAt queda seteado arriba, que
+        // es la única precondición de Fase 1 que exige
+        // patientAccount.altaAdministrativa — la cuenta sigue cerrable por
+        // la ruta administrativa normal post-óbito (ver egreso-fisico-
+        // gate.ts para el detalle completo).
         const activeAssignment = encounter.bedAssignments[0];
         if (activeAssignment) {
           await tx.bedAssignment.update({

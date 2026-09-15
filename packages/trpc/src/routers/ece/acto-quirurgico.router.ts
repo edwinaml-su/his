@@ -6,6 +6,11 @@
  *   firmado  → validado (acción 'validar', rol ESP/DIR/jefe servicio)
  *   borrador → anulado  (acción 'anular',  rol ESP/DIR)
  *
+ * C5 auditoría P0-5 (2026-09-15) — `firmar` exige consentimiento informado
+ * quirúrgico (`ece.consentimiento_informado`, tipo='quirurgico') en estado
+ * 'firmado' para el mismo episodio; sin él, PRECONDITION_FAILED
+ * 'CONSENTIMIENTO_QUIRURGICO_FALTANTE'.
+ *
  * La tabla ece.acto_quirurgico es INMUTABLE post-firma (NTEC §3.13).
  * Cualquier intento de UPDATE en estado != borrador lanza CONFLICT.
  *
@@ -619,6 +624,42 @@ export const eceActoQuirurgicoRouter = router({
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message: "Debe completar 'procedimiento_realizado' antes de firmar.",
+        });
+      }
+
+      // C5 auditoría P0-5 (2026-09-15) — hard stop de consentimiento
+      // informado quirúrgico. Antes de este cambio `firmar` no consultaba
+      // `ece.consentimiento_informado` en absoluto: el acta podía firmarse
+      // (y quedar INMUTABLE, NTEC Art. 40) sin que existiera consentimiento
+      // firmado. `ece.consentimiento_informado.estado` solo transiciona
+      // 'borrador' → 'firmado' (la validación DIR de consentimiento.router.ts
+      // avanza el estado del documento_instancia, NO esta columna — ver
+      // consentimiento.router.ts:validar), así que 'firmado' ya cubre ambos
+      // casos (validado o no). El booleano manual `preop_checklist.
+      // consentimiento_firmado` queda como registro informativo, no como gate.
+      const consentimientoRows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id
+        FROM ece.consentimiento_informado
+        WHERE episodio_id = ${aq.episodio_id}::uuid
+          AND tipo = 'quirurgico'
+          AND estado = 'firmado'
+        LIMIT 1
+      `;
+      if (consentimientoRows.length === 0) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "CONSENTIMIENTO_QUIRURGICO_FALTANTE",
+          cause: {
+            causas: [
+              {
+                codigo: "CONSENTIMIENTO_QUIRURGICO_FALTANTE",
+                detalle:
+                  "No existe un consentimiento informado quirúrgico (CONS_QX) " +
+                  "firmado para este episodio. Regístrelo y fírmelo antes de " +
+                  "firmar el acta quirúrgica (NTEC Art. 40).",
+              },
+            ],
+          } as unknown as Error,
         });
       }
 

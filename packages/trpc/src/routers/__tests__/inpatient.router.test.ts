@@ -360,13 +360,16 @@ describe("inpatientRouter", () => {
       ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
 
-    it("OK desde ACTIVE → DISCHARGED y libera camas activas", async () => {
+    it("OK desde ACTIVE → DISCHARGED y libera camas activas (sin cuenta activa)", async () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
         encounterId: u,
       } as never);
       prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      // C5 P0-3 — assertEgresoFisicoAutorizado: sin cuenta activa, no-op.
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
       prisma.bedAssignment.findMany.mockResolvedValue([
         { id: w, bedId: w },
       ] as never);
@@ -390,11 +393,58 @@ describe("inpatientRouter", () => {
         encounterId: u,
       } as never);
       prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
       prisma.bedAssignment.findMany.mockResolvedValue([] as never);
 
       const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.admission.discharge({ id: u });
       expect(r.ok).toBe(true);
+    });
+
+    // C5 auditoría P0-3 — el gate CC-0027 antes NO se invocaba en esta ruta
+    // (bypass): un encuentro con PatientAccount activa sin alta
+    // administrativa podía liberar la cama vía admission.discharge aunque
+    // bed.router.ts:release lo hubiera bloqueado.
+    it("PRECONDITION_FAILED (CC-0027) si hay PatientAccount activa sin egresoAutorizadoAt — NO libera la cama", async () => {
+      prisma.inpatientAdmission.findFirst.mockResolvedValue({
+        id: u,
+        status: "ACTIVE",
+        encounterId: u,
+      } as never);
+      prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: "acc-1" } as never);
+
+      const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admission.discharge({ id: u }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.bedAssignment.updateMany).not.toHaveBeenCalled();
+      expect(prisma.bed.update).not.toHaveBeenCalled();
+    });
+
+    it("OK si el encuentro ya tiene egresoAutorizadoAt (alta administrativa concluida)", async () => {
+      prisma.inpatientAdmission.findFirst.mockResolvedValue({
+        id: u,
+        status: "ACTIVE",
+        encounterId: u,
+      } as never);
+      prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      prisma.encounter.findFirst.mockResolvedValue({
+        egresoAutorizadoAt: new Date(),
+      } as never);
+      prisma.bedAssignment.findMany.mockResolvedValue([
+        { id: w, bedId: w },
+      ] as never);
+      prisma.bedAssignment.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.bed.update.mockResolvedValue({ id: w } as never);
+
+      const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.admission.discharge({ id: u });
+      expect(r.ok).toBe(true);
+      // egresoAutorizadoAt ya seteado → hasCuentaActiva ni se consulta.
+      expect(prisma.patientAccount.findFirst).not.toHaveBeenCalled();
     });
   });
 
@@ -506,7 +556,7 @@ describe("inpatientRouter", () => {
       ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
 
-    it("OK ACTIVE → TRANSFERRED_OUT y libera camas activas", async () => {
+    it("OK ACTIVE → TRANSFERRED_OUT y libera camas activas (sin cuenta activa)", async () => {
       prisma.inpatientAdmission.findFirst.mockResolvedValue({
         id: u,
         status: "ACTIVE",
@@ -514,6 +564,9 @@ describe("inpatientRouter", () => {
         encounterId: u,
       } as never);
       prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      // C5 P0-3 — assertEgresoFisicoAutorizado: sin cuenta activa, no-op.
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
       prisma.bedAssignment.findMany.mockResolvedValue([
         { id: w, bedId: w },
       ] as never);
@@ -532,6 +585,32 @@ describe("inpatientRouter", () => {
       const notes = (args.data as { notes: string }).notes;
       expect(notes).toContain("[TRANSFER_OUT to Hospital Bloom]");
       expect(notes).toContain("Trasplante hepático");
+    });
+
+    // C5 auditoría P0-3 — TRANSFERRED_OUT es egreso a otra organización
+    // (terminal), no un traslado interno: el gate CC-0027 antes NO se
+    // invocaba aquí (misma bypass que discharge).
+    it("PRECONDITION_FAILED (CC-0027) si hay PatientAccount activa sin egresoAutorizadoAt — NO libera la cama", async () => {
+      prisma.inpatientAdmission.findFirst.mockResolvedValue({
+        id: u,
+        status: "ACTIVE",
+        notes: null,
+        encounterId: u,
+      } as never);
+      prisma.inpatientAdmission.update.mockResolvedValue({ id: u } as never);
+      prisma.encounter.findFirst.mockResolvedValue({ egresoAutorizadoAt: null } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue({ id: "acc-1" } as never);
+
+      const caller = inpatientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.admission.transferOut({
+          id: u,
+          destinationName: "Hospital Bloom",
+          reason: "Trasplante hepático",
+        }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      expect(prisma.bedAssignment.updateMany).not.toHaveBeenCalled();
+      expect(prisma.bed.update).not.toHaveBeenCalled();
     });
   });
 

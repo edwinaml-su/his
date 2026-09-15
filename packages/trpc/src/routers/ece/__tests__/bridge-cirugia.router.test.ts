@@ -34,9 +34,34 @@ vi.mock("@his/database", () => ({
   emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-cirugia-0001" }),
 }));
 
+// C5 auditoría P0-4/P0-5 — helpers compartidos con surgery.router.ts, mismo
+// patrón de mock que surgery.router.test.ts (charge-capture): esta suite solo
+// verifica que programarCirugia/cancelarPrograma los invoquen con los
+// argumentos correctos, no su lógica interna (que tiene su propia suite).
+const hayConflictoQuirofanoMock = vi.fn().mockResolvedValue(false);
+vi.mock("../../../lib/quirofano-conflicto", () => ({
+  hayConflictoQuirofano: (...args: unknown[]) => hayConflictoQuirofanoMock(...args),
+}));
+
+const capturarCargoReservaQuirofanoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-default",
+  status: "VIGENTE",
+  unitPrice: 10,
+});
+vi.mock("../../../lib/quirofano-reserva-cargo", () => ({
+  capturarCargoReservaQuirofano: (...args: unknown[]) =>
+    capturarCargoReservaQuirofanoMock(...args),
+}));
+
+const revertirCargoMock = vi.fn().mockResolvedValue({ reversionId: "reversion-default" });
+vi.mock("../../../lib/charge-capture", () => ({
+  revertirCargo: (...args: unknown[]) => revertirCargoMock(...args),
+}));
+
 // ─── UUIDs constantes ────────────────────────────────────────────────────────
 const PERSONAL_ID       = "a1000000-0000-0000-0000-000000000001";
 const PACIENTE_ID       = "a2000000-0000-0000-0000-000000000002";
+const PUBLIC_PATIENT_ID = "a2100000-0000-0000-0000-000000000021";
 const SALA_QX_ID        = "a3000000-0000-0000-0000-000000000003";
 const CIRUJANO_ID       = "a4000000-0000-0000-0000-000000000004";
 const ANEST_ID          = "a5000000-0000-0000-0000-000000000005";
@@ -114,6 +139,21 @@ describe("eceBridgeCirugiaRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    hayConflictoQuirofanoMock.mockResolvedValue(false);
+    capturarCargoReservaQuirofanoMock.mockResolvedValue({
+      cargoId: "cargo-default",
+      status: "VIGENTE",
+      unitPrice: 10,
+    });
+    revertirCargoMock.mockResolvedValue({ reversionId: "reversion-default" });
+    // C5 P0-4 — puente ece.paciente → public.Patient + código de sala,
+    // usados por la captura de cargo (Paso 6b). Default happy-path; los
+    // tests que no llegan a ese paso (rollback antes de crear la reserva)
+    // no dependen de esto.
+    prisma.ecePaciente.findUnique.mockResolvedValue({
+      publicPatientId: PUBLIC_PATIENT_ID,
+    } as never);
+    prisma.eceSalaQx.findUnique.mockResolvedValue({ codigo: "QX-1" } as never);
   });
 
   // ─── programarCirugia ─────────────────────────────────────────────────────
@@ -128,15 +168,19 @@ describe("eceBridgeCirugiaRouter", () => {
     });
 
     it("2. CONFLICT si sala QX tiene overlap de horario", async () => {
-      // personal OK → detectarConflictoSala retorna reserva existente
-      prisma.$queryRaw
-        .mockResolvedValueOnce([PERSONAL_ROW])         // personal
-        .mockResolvedValueOnce([{ id: RESERVA_ID }]);  // overlap detectado
+      // personal OK → hayConflictoQuirofano (helper compartido, C5 P0-5)
+      // retorna true.
+      prisma.$queryRaw.mockResolvedValueOnce([PERSONAL_ROW]); // personal
+      hayConflictoQuirofanoMock.mockResolvedValueOnce(true);
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
       await expect(caller.programarCirugia(BASE_INPUT)).rejects.toMatchObject({
         code: "CONFLICT",
         message: expect.stringContaining("sala QX"),
       });
+      expect(hayConflictoQuirofanoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ salaQxId: SALA_QX_ID }),
+      );
     });
 
     it("3. Happy-path: retorna ordenId, episodioId, preOpId, reservaId", async () => {
@@ -148,19 +192,23 @@ describe("eceBridgeCirugiaRouter", () => {
       mockQuerySequence(
         prisma,
         [PERSONAL_ROW],                                              // 0: personal
-        [],                                                          // 1: detectarConflicto → sin overlap
+        // C5 P0-5 — hayConflictoQuirofano ahora es el helper compartido
+        // mockeado arriba (default: sin conflicto), ya NO consume $queryRaw.
         // dentro de tx:
-        [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }], // 2: SELECT ORD_ING tipo
-        [{ id: ORD_INSTANCIA_ID }],                                  // 3: INSERT documento_instancia (orden)
-        [{ id: ORDEN_ID }],                                          // 4: INSERT orden_ingreso
-        [{ id: EPISODIO_ID }],                                       // 5: INSERT episodio_atencion
-        // $executeRaw[0]: INSERT episodio_hospitalario
-        // $executeRaw[1]: UPDATE orden set episodio_id
-        [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 6: SELECT PREOP_CHECK
-        [{ id: INSTANCIA_ID }],                                      // 7: INSERT documento_instancia (preop)
-        [{ id: PREOP_ID }],                                          // 8: INSERT preop_checklist
-        [{ id: RESERVA_ID }],                                        // 9: INSERT reserva_sala_qx
-        // $executeRaw[2]: UPDATE orden set reserva_id
+        [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }], // 1: SELECT ORD_ING tipo
+        [{ id: ORD_INSTANCIA_ID }],                                  // 2: INSERT documento_instancia (orden)
+        [{ id: ORDEN_ID }],                                          // 3: INSERT orden_ingreso
+        [{ id: EPISODIO_ID }],                                       // 4: INSERT episodio_atencion
+        // $executeRaw[0]: SELECT set_tenant_context (C5 P0-4)
+        // $executeRaw[1]: INSERT episodio_hospitalario
+        // $executeRaw[2]: UPDATE orden set episodio_id
+        [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 5: SELECT PREOP_CHECK
+        [{ id: INSTANCIA_ID }],                                      // 6: INSERT documento_instancia (preop)
+        [{ id: PREOP_ID }],                                          // 7: INSERT preop_checklist
+        [{ id: RESERVA_ID }],                                        // 8: INSERT reserva_sala_qx
+        // Paso 6b (C5 P0-4): ecePaciente/eceSalaQx.findUnique (mockeados en
+        // beforeEach, no $queryRaw) + capturarCargoReservaQuirofano (mockeado).
+        // $executeRaw[3]: UPDATE orden set reserva_id
       );
       prisma.$executeRaw.mockResolvedValue(1);
 
@@ -171,6 +219,15 @@ describe("eceBridgeCirugiaRouter", () => {
       expect(result.episodioId).toBe(EPISODIO_ID);
       expect(result.preOpId).toBe(PREOP_ID);
       expect(result.reservaId).toBe(RESERVA_ID);
+
+      // C5 P0-4 — el cargo de reserva se captura con referenciaId=reservaId.
+      expect(capturarCargoReservaQuirofanoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          patientId: PUBLIC_PATIENT_ID,
+          referenciaId: RESERVA_ID,
+        }),
+      );
     });
 
     it("3b. HE-11/13: documento_instancia.episodio_id recibe el episodio_atencion.id (no hospitalario)", async () => {
@@ -186,7 +243,6 @@ describe("eceBridgeCirugiaRouter", () => {
         qrCall++;
         const responses: unknown[][] = [
           [PERSONAL_ROW],
-          [],
           [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }],
           [{ id: ORD_INSTANCIA_ID }],
           [{ id: ORDEN_ID }],
@@ -203,9 +259,38 @@ describe("eceBridgeCirugiaRouter", () => {
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
       await caller.programarCirugia(BASE_INPUT);
 
-      // 10 llamadas $queryRaw totales: personal, conflicto, ORD_ING tipo,
+      // 9 llamadas $queryRaw totales (C5 P0-5: el conflicto ya no consume
+      // $queryRaw, ver hayConflictoQuirofanoMock): personal, ORD_ING tipo,
       // orden instancia, orden, episodio, PREOP tipo, preop instancia, preop, reserva
-      expect(qrCall).toBe(10);
+      expect(qrCall).toBe(9);
+    });
+
+    // C5 auditoría P0-4 — antes de este cambio programarCirugia nunca
+    // generaba cargo (fuga de ingreso). Sin el puente ece.paciente →
+    // public.Patient no hay cuenta a la cual anclar el cargo: bloquear
+    // explícito en vez de reservar sala sin poder facturarla (R3).
+    it("3c. PRECONDITION_FAILED si ece.paciente no tiene public_patient_id (sin puente a cuenta HIS)", async () => {
+      setupTxWithRollback(prisma);
+      mockQuerySequence(
+        prisma,
+        [PERSONAL_ROW],
+        [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }],
+        [{ id: ORD_INSTANCIA_ID }],
+        [{ id: ORDEN_ID }],
+        [{ id: EPISODIO_ID }],
+        [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }],
+        [{ id: INSTANCIA_ID }],
+        [{ id: PREOP_ID }],
+        [{ id: RESERVA_ID }],
+      );
+      prisma.$executeRaw.mockResolvedValue(1);
+      prisma.ecePaciente.findUnique.mockResolvedValue({ publicPatientId: null } as never);
+
+      const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
+      await expect(caller.programarCirugia(BASE_INPUT)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(capturarCargoReservaQuirofanoMock).not.toHaveBeenCalled();
     });
 
     it("4. Rollback: INSERT episodio_hospitalario falla → tx rechaza", async () => {
@@ -213,17 +298,17 @@ describe("eceBridgeCirugiaRouter", () => {
       mockQuerySequence(
         prisma,
         [PERSONAL_ROW],
-        [],
         [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }], // ORD_ING tipo
         [{ id: ORD_INSTANCIA_ID }],                                       // orden instancia
         [{ id: ORDEN_ID }],    // INSERT orden OK
         [{ id: EPISODIO_ID }], // INSERT episodio OK
-        // executeRaw[0] = INSERT episodio_hospitalario → falla
+        // executeRaw[0] = SELECT set_tenant_context (C5 P0-4)
+        // executeRaw[1] = INSERT episodio_hospitalario → falla
       );
       let executeCall = 0;
       prisma.$executeRaw.mockImplementation(() => {
         executeCall++;
-        if (executeCall === 1) {
+        if (executeCall === 2) {
           return Promise.reject(new Error("FK constraint: episodio_hospitalario"));
         }
         return Promise.resolve(1);
@@ -246,14 +331,13 @@ describe("eceBridgeCirugiaRouter", () => {
         qrCall++;
         const responses: unknown[][] = [
           [PERSONAL_ROW],                                                      // 1: personal
-          [],                                                                   // 2: conflicto → sin overlap
-          [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }],     // 3: ORD_ING tipo
-          [{ id: ORD_INSTANCIA_ID }],                                           // 4: INSERT orden instancia
-          [{ id: ORDEN_ID }],                                                   // 5: INSERT orden
-          [{ id: EPISODIO_ID }],                                                // 6: INSERT episodio
-          [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 7: tipo_doc PREOP_CHECK
-          [{ id: INSTANCIA_ID }],                                               // 8: INSERT documento_instancia (preop)
-          [], // 9: INSERT preop_checklist RETURNING → vacío → throw
+          [{ tipo_doc_id: ORD_TIPO_ID, estado_inicial_id: ORD_ESTADO_ID }],     // 2: ORD_ING tipo
+          [{ id: ORD_INSTANCIA_ID }],                                           // 3: INSERT orden instancia
+          [{ id: ORDEN_ID }],                                                   // 4: INSERT orden
+          [{ id: EPISODIO_ID }],                                                // 5: INSERT episodio
+          [{ tipo_doc_id: TIPO_DOC_ID, estado_inicial_id: ESTADO_INICIAL_ID }], // 6: tipo_doc PREOP_CHECK
+          [{ id: INSTANCIA_ID }],                                               // 7: INSERT documento_instancia (preop)
+          [], // 8: INSERT preop_checklist RETURNING → vacío → throw
         ];
         return Promise.resolve(responses[qrCall - 1] ?? []);
       });
@@ -264,9 +348,11 @@ describe("eceBridgeCirugiaRouter", () => {
         "No se pudo crear preop_checklist.",
       );
 
-      // 9 llamadas: personal, conflicto, ORD_ING tipo, orden instancia, orden,
-      // episodio, PREOP tipo, preop instancia, preop. La reserva (call 10) nunca se ejecutó.
-      expect(qrCall).toBe(9);
+      // 8 llamadas: personal, ORD_ING tipo, orden instancia, orden, episodio,
+      // PREOP tipo, preop instancia, preop. La reserva (y el cargo, Paso 6b)
+      // nunca se ejecutan.
+      expect(qrCall).toBe(8);
+      expect(capturarCargoReservaQuirofanoMock).not.toHaveBeenCalled();
     });
   });
 
@@ -363,7 +449,7 @@ describe("eceBridgeCirugiaRouter", () => {
       });
     });
 
-    it("9. Happy-path: cascade soft-delete + evento ece.cirugia.cancelada", async () => {
+    it("9. Happy-path: cascade soft-delete + evento ece.cirugia.cancelada (sin cargo VIGENTE)", async () => {
       const ordenRow = {
         id: ORDEN_ID,
         paciente_id: PACIENTE_ID,
@@ -377,6 +463,9 @@ describe("eceBridgeCirugiaRouter", () => {
         .mockResolvedValueOnce([PERSONAL_ROW]) // personal
         .mockResolvedValueOnce([ordenRow]);    // findOrdenQx
       prisma.$executeRaw.mockResolvedValue(1);
+      // C5 P0-4 — sin cargo VIGENTE para esta reserva: no-op silencioso
+      // (mismo patrón que surgery.router.ts case.cancel).
+      prisma.patientAccountService.findFirst.mockResolvedValue(null as never);
 
       const { emitDomainEvent } = await import("@his/database");
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
@@ -385,9 +474,11 @@ describe("eceBridgeCirugiaRouter", () => {
       expect(result.ok).toBe(true);
       expect(result.ordenId).toBe(ORDEN_ID);
 
-      // Cascade mínimo alineado al DDL: 2 UPDATE (reserva + episodio). Ya NO se
-      // escribe estado_registro='cancelado' en preop/orden (CHECK vigente/rectificado).
-      expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
+      // C5 P0-4 — 3 $executeRaw: set_tenant_context + cascade mínimo (2
+      // UPDATE: reserva + episodio). Ya NO se escribe estado_registro=
+      // 'cancelado' en preop/orden (CHECK vigente/rectificado).
+      expect(prisma.$executeRaw).toHaveBeenCalledTimes(3);
+      expect(revertirCargoMock).not.toHaveBeenCalled();
 
       // Verificar evento emitido
       expect(emitDomainEvent).toHaveBeenCalledWith(
@@ -396,6 +487,38 @@ describe("eceBridgeCirugiaRouter", () => {
           eventType: "ece.cirugia.cancelada",
           aggregateId: ORDEN_ID,
         }),
+      );
+    });
+
+    // C5 auditoría P0-4 — antes de este cambio, cancelar una cirugía
+    // programada por la vía NTEC no revertía ningún cargo (nunca existía
+    // ninguno). Ahora que programarCirugia captura el cargo de reserva,
+    // cancelarPrograma debe revertirlo — mismo patrón que
+    // surgery.router.ts case.cancel.
+    it("9b. revierte el cargo VIGENTE de la reserva al cancelar", async () => {
+      const ordenRow = {
+        id: ORDEN_ID,
+        paciente_id: PACIENTE_ID,
+        episodio_id: EPISODIO_ID,
+        reserva_sala_qx_id: RESERVA_ID,
+        reserva_estado: "programado",
+      };
+
+      setupTx(prisma);
+      prisma.$queryRaw
+        .mockResolvedValueOnce([PERSONAL_ROW])
+        .mockResolvedValueOnce([ordenRow]);
+      prisma.$executeRaw.mockResolvedValue(1);
+      prisma.patientAccountService.findFirst.mockResolvedValue({ id: "cargo-1" } as never);
+
+      const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
+      const result = await caller.cancelarPrograma(CANCEL_INPUT);
+
+      expect(result.ok).toBe(true);
+      expect(revertirCargoMock).toHaveBeenCalledTimes(1);
+      expect(revertirCargoMock).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({ cargoId: "cargo-1" }),
       );
     });
   });

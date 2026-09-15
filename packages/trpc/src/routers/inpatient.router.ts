@@ -43,6 +43,7 @@ import {
   serviceUnitWhereFragment,
 } from "../lib/service-unit-scope";
 import { capturarCargo } from "../lib/charge-capture";
+import { assertEgresoFisicoAutorizado } from "../lib/egreso-fisico-gate";
 
 /**
  * Beta.15 — mapping del shape interno de `evaluateVitalAlerts`
@@ -594,6 +595,18 @@ export const inpatientRouter = router({
             },
           });
 
+          // C5 auditoría P0-3 — este router libera la MISMA cama
+          // (public.Bed, vía BedAssignment.encounterId) que
+          // bed.router.ts:release, pero sin pasar por el gate CC-0027. Un
+          // encuentro con PatientAccount activa sin alta administrativa
+          // concluida podía "salir" físicamente por esta ruta paralela.
+          // Egreso real del paciente (no un traslado interno) → exige el
+          // mismo gate que bed.release.
+          await assertEgresoFisicoAutorizado(tx, {
+            organizationId: ctx.tenant.organizationId,
+            encounterId: adm.encounterId,
+          });
+
           await releaseActiveBeds(tx, adm.encounterId);
 
           return { ok: true as const };
@@ -747,6 +760,15 @@ export const inpatientRouter = router({
               ),
               updatedBy: ctx.user.id,
             },
+          });
+
+          // C5 auditoría P0-3 — TRANSFERRED_OUT es egreso físico del
+          // paciente hacia OTRA organización (terminal, no un traslado
+          // interno de cama — ese es encounter-transfer.router.ts, exento
+          // a propósito). Mismo gate que discharge arriba.
+          await assertEgresoFisicoAutorizado(tx, {
+            organizationId: ctx.tenant.organizationId,
+            encounterId: adm.encounterId,
           });
 
           await releaseActiveBeds(tx, adm.encounterId);
