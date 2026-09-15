@@ -135,13 +135,14 @@ describe("conciliacionCargosRouter", () => {
   });
 
   describe("devolucionesSinReversion", () => {
-    it("devuelve cargos VIGENTE con reserva CANCELLED (global, todas las cuentas)", async () => {
+    it("devuelve cargos VIGENTE con reserva CANCELLED o EXPIRED (global, todas las cuentas)", async () => {
       const rows = [
         {
           cargoId: "cargo-1",
           accountId: "acc-1",
           reservationId: "res-1",
-          cancelMotivo: "Devolución",
+          reservationStatus: "EXPIRED",
+          cancelMotivo: null,
           totalPrice: "10.00",
           createdAt: new Date(),
         },
@@ -153,8 +154,11 @@ describe("conciliacionCargosRouter", () => {
 
       expect(result).toEqual(rows);
       const sql = String(prisma.$queryRawUnsafe.mock.calls[0]![0]);
-      expect(sql).toContain("CANCELLED");
+      // SQL 240 (auditoría 2026-09-15, C7/B23) — el filtro ahora cubre ambas
+      // causas de cierre de la reserva, no solo la cancelación manual.
+      expect(sql).toContain("'CANCELLED', 'EXPIRED'");
       expect(sql).toContain("VIGENTE");
+      expect(sql).toContain("reservationStatus");
     });
   });
 
@@ -244,6 +248,10 @@ describe("conciliacionCargosRouter", () => {
         despachadoSinCierre: 4,
         entregasParciales: 5,
       });
+      // SQL 240 — el conteo de devoluciones sin reversión también cuenta
+      // reservas EXPIRED, no solo CANCELLED.
+      const sql = String(prisma.$queryRawUnsafe.mock.calls[0]![0]);
+      expect(sql).toContain("'CANCELLED', 'EXPIRED'");
     });
   });
 });

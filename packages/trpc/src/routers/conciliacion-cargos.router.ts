@@ -9,6 +9,17 @@
  * `StockMovement`/`PatientAccountService` sin relaciones Prisma declaradas
  * entre sí (mismo patrón que `finance-reports.router.ts`).
  *
+ * SQL 240 (auditoría 2026-09-15, hallazgo C7/B23) — el cron de expiración de
+ * reservas (`expire_pharmacy_reservations`, antes sql/89, ahora sql/240)
+ * pasó a revertir stock+cargo+dispensedQty igual que `cancelReservation`, así
+ * que una reserva EXPIRED ya NO debería dejar un cargo VIGENTE huérfano bajo
+ * el cron nuevo. El reporte 5 (`devolucionesSinReversion`) amplía su filtro
+ * de `pr.status = 'CANCELLED'` a `IN ('CANCELLED', 'EXPIRED')` para seguir
+ * detectando: (a) cualquier regresión futura de esa reversión, y (b) el
+ * pasivo histórico dejado por el cron viejo antes de aplicar SQL 240 — no se
+ * agrega un desglose nuevo porque es la MISMA anomalía (cargo VIGENTE
+ * huérfano de una reserva ya cerrada), solo con otra causa de cierre.
+ *
  * Mapeo de conceptos del plan a modelos reales del repo (docs/48 §C4-2):
  *   - "indicación MEDICAMENTO firmada (con drug_id)" → `Prescription` firmada
  *     (signedAt IS NOT NULL) + su `PrescriptionItem.drugId`. El HIS legacy
@@ -91,6 +102,8 @@ interface DevolucionSinReversionRow {
   cargoId: string;
   accountId: string;
   reservationId: string;
+  /** SQL 240 — CANCELLED o EXPIRED; distingue la causa de cierre de la reserva. */
+  reservationStatus: string;
   cancelMotivo: string | null;
   totalPrice: string | null;
   createdAt: Date;
@@ -278,6 +291,9 @@ export const conciliacionCargosRouter = router({
   /**
    * 5. Devoluciones sin reversión — misma condición que el bloqueo 3 de
    * `patientAccount.cerrar`, pero global (todas las cuentas del tenant).
+   * SQL 240 — incluye reservas EXPIRED además de CANCELLED (ver nota de
+   * cabecera de este archivo): mismo pasivo (cargo VIGENTE de una reserva ya
+   * cerrada), dos causas de cierre posibles.
    */
   devolucionesSinReversion: readerProc
     .input(dateRangeInput)
@@ -292,6 +308,7 @@ export const conciliacionCargosRouter = router({
              pas.id            AS "cargoId",
              pas."accountId"   AS "accountId",
              pr.id             AS "reservationId",
+             pr.status::text   AS "reservationStatus",
              pr."cancelMotivo" AS "cancelMotivo",
              pas."totalPrice"::text AS "totalPrice",
              pas."createdAt"   AS "createdAt"
@@ -300,7 +317,7 @@ export const conciliacionCargosRouter = router({
            JOIN "PharmacyReservation" pr ON pr.id = pas."referenciaId"
            WHERE pa."organizationId" = $1
              AND pas.status = 'VIGENTE'
-             AND pr.status = 'CANCELLED'
+             AND pr.status IN ('CANCELLED', 'EXPIRED')
              AND pas."createdAt" BETWEEN $2 AND $3
            ORDER BY pas."createdAt" DESC`,
           tenant.organizationId,
@@ -462,7 +479,7 @@ export const conciliacionCargosRouter = router({
               JOIN "PharmacyReservation" pr ON pr.id = pas."referenciaId"
              WHERE pa."organizationId" = $1
                AND pas.status = 'VIGENTE'
-               AND pr.status = 'CANCELLED'
+               AND pr.status IN ('CANCELLED', 'EXPIRED')
                AND pas."createdAt" BETWEEN $2 AND $3
            )::text AS devoluciones_sin_reversion,
            (SELECT count(*) FROM "PharmacyReservation" pr
