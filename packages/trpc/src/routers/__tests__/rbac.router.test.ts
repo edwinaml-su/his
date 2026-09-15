@@ -11,8 +11,14 @@
  *   - listPermissions: devuelve catálogo filtrado/sin filtro.
  *   - setRolePermissions: reemplaza set, FORBIDDEN guards, BAD_REQUEST por FK inexistente.
  *
- * Patrón: tenantProcedure → makeCtx con MOCK_TENANT (roleCodes incluye ADMIN).
- * Super-admin: makeCtx con roleCodes:["super_admin"].
+ * Patrón: queries de solo lectura (listRoles/getRole/listPermissions/
+ * listRoleAliases) → makeCtx con MOCK_TENANT (roleCodes incluye ADMIN, ver
+ * requireRole(["SUPER_ADMIN","ADMIN","DIR"])).
+ * CC-0032 — TODAS las mutations (createRole/updateRole/deactivateRole/
+ * setRolePermissions/setRoleInheritance/setRoleAlias/deleteRoleAlias) exigen
+ * `requireRole(["SUPER_ADMIN"])`: usan `SUPER_ADMIN_TENANT` (roleCodes:
+ * ["SUPER_ADMIN"]). Ver describe "CC-0032 — gate SUPER_ADMIN..." al final
+ * para la cobertura explícita de FORBIDDEN con un ADMIN sin SUPER_ADMIN.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
@@ -27,8 +33,14 @@ const otherOrgId = MOCK_TENANT_OTHER_ORG.organizationId;
 const roleId = "00000000-0000-0000-0000-000000000001";
 const permId = "00000000-0000-0000-0000-000000000002";
 
-/** Tenant con super_admin para operaciones globales. */
-const SUPER_ADMIN_TENANT = { ...MOCK_TENANT, roleCodes: ["super_admin"] };
+/**
+ * CC-0032 — tenant con el rol SUPER_ADMIN (mayúsculas, el código real
+ * sembrado por sql/239). `isSuperAdmin()` sigue reconociéndolo (compara
+ * en minúsculas), así que este único tenant satisface tanto el gate nuevo
+ * `requireRole(["SUPER_ADMIN"])` como la lógica interna preexistente de
+ * roles/alias GLOBALES.
+ */
+const SUPER_ADMIN_TENANT = { ...MOCK_TENANT, roleCodes: ["SUPER_ADMIN"] };
 
 describe("rbacRouter", () => {
   let prisma: DeepMockProxy<PrismaClient>;
@@ -50,7 +62,10 @@ describe("rbacRouter", () => {
       const caller = rbacRouter.createCaller(makeCtx({ prisma }));
       await caller.listRoles({});
 
-      const args = prisma.role.findMany.mock.calls[0]![0];
+      // CC-0032: requireRole(["SUPER_ADMIN","ADMIN","DIR"]) también llama a
+      // prisma.role.findMany (getEffectiveRoleCodes) antes del handler — se
+      // toma la ÚLTIMA llamada, que es la query real del endpoint.
+      const args = prisma.role.findMany.mock.calls.at(-1)![0];
       // where.AND[0] debe incluir OR con organizationId: orgId y null
       const firstCond = (args.where as { AND: unknown[] }).AND[0];
       expect(JSON.stringify(firstCond)).toContain(orgId);
@@ -64,7 +79,7 @@ describe("rbacRouter", () => {
       const caller = rbacRouter.createCaller(makeCtx({ prisma }));
       await caller.listRoles({ includeGlobal: false });
 
-      const args = prisma.role.findMany.mock.calls[0]![0];
+      const args = prisma.role.findMany.mock.calls.at(-1)![0];
       const firstCond = (args.where as { AND: unknown[] }).AND[0];
       // Sin OR (organizationId directo)
       expect(JSON.stringify(firstCond)).toContain(`"organizationId":"${orgId}"`);
@@ -79,7 +94,7 @@ describe("rbacRouter", () => {
       const caller = rbacRouter.createCaller(makeCtx({ prisma }));
       await caller.listRoles({ search: "admin" });
 
-      const args = prisma.role.findMany.mock.calls[0]![0];
+      const args = prisma.role.findMany.mock.calls.at(-1)![0];
       const andArr = (args.where as { AND: unknown[] }).AND;
       expect(JSON.stringify(andArr)).toContain("admin");
     });
@@ -225,7 +240,7 @@ describe("rbacRouter", () => {
       const newRole = { id: roleId, organizationId: orgId, code: "medico", name: "Médico", description: null, active: true };
       prisma.role.create.mockResolvedValue(newRole as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.createRole({ code: "medico", name: "Médico" });
 
       expect(result.organizationId).toBe(orgId);
@@ -263,7 +278,7 @@ describe("rbacRouter", () => {
       // Verificamos que cualquier error de BD lanza una excepción (no silencia).
       prisma.role.create.mockRejectedValue(new Error("DB error") as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.createRole({ code: "dupe", name: "Duplicado" }),
       ).rejects.toThrow();
@@ -278,7 +293,7 @@ describe("rbacRouter", () => {
     it("NOT_FOUND si el rol no existe", async () => {
       prisma.role.findUnique.mockResolvedValue(null as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(caller.updateRole({ id: roleId, name: "Nuevo" })).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
@@ -330,7 +345,7 @@ describe("rbacRouter", () => {
         active: true,
       } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.updateRole({ id: roleId, name: "Admin Actualizado" });
 
       expect(result.name).toBe("Admin Actualizado");
@@ -344,7 +359,7 @@ describe("rbacRouter", () => {
   describe("deactivateRole", () => {
     it("NOT_FOUND si el rol no existe", async () => {
       prisma.role.findUnique.mockResolvedValue(null as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(caller.deactivateRole({ id: roleId })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
@@ -364,7 +379,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId, active: true } as never);
       prisma.role.update.mockResolvedValue({ id: roleId, active: false } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.deactivateRole({ id: roleId });
 
       expect(prisma.role.update).toHaveBeenCalledWith(
@@ -410,7 +425,7 @@ describe("rbacRouter", () => {
   describe("setRolePermissions", () => {
     it("NOT_FOUND si el rol no existe", async () => {
       prisma.role.findUnique.mockResolvedValue(null as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRolePermissions({ roleId, permissions: [] }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -436,7 +451,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
       prisma.$transaction.mockResolvedValue([{ count: 0 }, { count: 2 }] as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRolePermissions({
         roleId,
         permissions: [
@@ -454,7 +469,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
       prisma.$transaction.mockResolvedValue([null, null] as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRolePermissions({
         roleId,
         permissions: [
@@ -473,7 +488,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
       prisma.$transaction.mockRejectedValue(new Error("FK error") as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRolePermissions({
           roleId,
@@ -486,7 +501,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
       prisma.$transaction.mockResolvedValue([{ count: 3 }] as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRolePermissions({ roleId, permissions: [] });
 
       expect(result.count).toBe(0);
@@ -503,7 +518,7 @@ describe("rbacRouter", () => {
 
     it("NOT_FOUND si el rol no existe", async () => {
       prisma.role.findUnique.mockResolvedValue(null as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -529,7 +544,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
       prisma.role.update.mockResolvedValue({ id: roleId, inheritsFromRoleId: null } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRoleInheritance({ roleId, parentRoleId: null });
 
       expect(result.inheritsFromRoleId).toBeNull();
@@ -540,7 +555,7 @@ describe("rbacRouter", () => {
 
     it("BAD_REQUEST si parentRoleId === roleId (auto-herencia)", async () => {
       prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRoleInheritance({ roleId, parentRoleId: roleId }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -550,7 +565,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique
         .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never)
         .mockResolvedValueOnce(null as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
@@ -560,7 +575,7 @@ describe("rbacRouter", () => {
       prisma.role.findUnique
         .mockResolvedValueOnce({ id: roleId, organizationId: orgId } as never)
         .mockResolvedValueOnce({ id: parentId, organizationId: otherOrgId } as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
@@ -577,7 +592,7 @@ describe("rbacRouter", () => {
           inheritsFromRoleId: roleId, // parentId ya hereda de roleId -> ciclo
         } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(
         caller.setRoleInheritance({ roleId, parentRoleId: parentId }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -596,7 +611,7 @@ describe("rbacRouter", () => {
         inheritsFromRoleId: parentId,
       } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRoleInheritance({ roleId, parentRoleId: parentId });
 
       expect(result.inheritsFromRoleId).toBe(parentId);
@@ -619,7 +634,7 @@ describe("rbacRouter", () => {
         inheritsFromRoleId: parentId,
       } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRoleInheritance({ roleId, parentRoleId: parentId });
 
       expect(result.inheritsFromRoleId).toBe(parentId);
@@ -673,7 +688,7 @@ describe("rbacRouter", () => {
         canonicalCode: "PHYSICIAN",
       } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRoleAlias({ sourceCode: "MEDICO", canonicalCode: "PHYSICIAN" });
 
       expect(result.sourceCode).toBe("MEDICO");
@@ -694,7 +709,7 @@ describe("rbacRouter", () => {
         canonicalCode: "MC",
       } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.setRoleAlias({ sourceCode: "MEDICO", canonicalCode: "MC" });
 
       expect(result.canonicalCode).toBe("MC");
@@ -726,7 +741,7 @@ describe("rbacRouter", () => {
 
     it("NOT_FOUND si el alias no existe", async () => {
       prisma.roleCodeAlias.findUnique.mockResolvedValue(null as never);
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       await expect(caller.deleteRoleAlias({ id: aliasId })).rejects.toMatchObject({
         code: "NOT_FOUND",
       });
@@ -761,11 +776,97 @@ describe("rbacRouter", () => {
       } as never);
       prisma.roleCodeAlias.delete.mockResolvedValue({ id: aliasId } as never);
 
-      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
       const result = await caller.deleteRoleAlias({ id: aliasId });
 
       expect(result.ok).toBe(true);
       expect(prisma.roleCodeAlias.delete).toHaveBeenCalledWith({ where: { id: aliasId } });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0032 — gate SUPER_ADMIN explícito en las 7 mutations de administración
+  // de roles/permisos (P0-1, docs/audit/2026-09-15_cobertura/03-...md).
+  // Un ADMIN de la org (MOCK_TENANT, sin SUPER_ADMIN) debe recibir FORBIDDEN
+  // en todas — ni siquiera llega a evaluar el `where`/lógica de negocio.
+  // ---------------------------------------------------------------------------
+
+  describe("CC-0032 — gate SUPER_ADMIN en mutations RBAC", () => {
+    it("createRole: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.createRole({ code: "x", name: "X" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.role.create).not.toHaveBeenCalled();
+    });
+
+    it("updateRole: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.updateRole({ id: roleId, name: "X" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.role.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("deactivateRole: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.deactivateRole({ id: roleId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("setRolePermissions: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRolePermissions({ roleId, permissions: [] }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("setRoleInheritance: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleInheritance({ roleId, parentRoleId: null }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("setRoleAlias: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setRoleAlias({ sourceCode: "X", canonicalCode: "Y" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("deleteRoleAlias: ADMIN sin SUPER_ADMIN recibe FORBIDDEN", async () => {
+      const caller = rbacRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.deleteRoleAlias({ id: "00000000-0000-0000-0000-000000000009" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("SUPER_ADMIN sí puede llamar setRolePermissions (happy-path mínimo)", async () => {
+      prisma.role.findUnique.mockResolvedValue({ id: roleId, organizationId: orgId } as never);
+      prisma.$transaction.mockResolvedValue([{ count: 0 }] as never);
+
+      const caller = rbacRouter.createCaller(makeCtx({ prisma, tenant: SUPER_ADMIN_TENANT }));
+      const result = await caller.setRolePermissions({ roleId, permissions: [] });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it("listRoles: DIR (sin SUPER_ADMIN/ADMIN) puede leer, pero un rol no listado (NURSE) recibe FORBIDDEN", async () => {
+      prisma.role.findMany.mockResolvedValue([] as never);
+      prisma.permission.count.mockResolvedValue(0 as never);
+      prisma.userOrganizationRole.groupBy.mockResolvedValue([] as never);
+
+      const dirCaller = rbacRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["DIR"] } }),
+      );
+      await expect(dirCaller.listRoles({})).resolves.toBeDefined();
+
+      const nurseCaller = rbacRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(nurseCaller.listRoles({})).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 });
