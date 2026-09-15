@@ -64,7 +64,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
-import { withWorkflowContext } from "../../ece/workflow-context";
+import { withWorkflowContext } from "../../workflow/context";
 // emitDomainEvent: mismo import que episodio.router.ts (patrón establecido)
 import { emitDomainEvent } from "@his/database";
 
@@ -226,7 +226,7 @@ export const eceEpisodioHospitalarioRouter = router({
   listActivos: readBase.input(listActivosInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const fechaStr = input.fecha ? input.fecha.toISOString().split("T")[0] : null;
 
       const rows = await tx.$queryRaw<EpisodioActivoRow[]>`
@@ -281,7 +281,7 @@ export const eceEpisodioHospitalarioRouter = router({
   listAdmisiones: readBase.input(listAdmisionesInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const busqueda = input.busqueda?.trim() || null;
       return tx.$queryRaw<AdmisionRow[]>`
         SELECT
@@ -326,7 +326,7 @@ export const eceEpisodioHospitalarioRouter = router({
     .query(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         return tx.$queryRaw<AdmisionConContenidoRow[]>`
           SELECT
             ea.id::text,
@@ -388,7 +388,7 @@ export const eceEpisodioHospitalarioRouter = router({
     .query(async ({ ctx, input }) => {
       const ece = withEceContext(ctx);
 
-      return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+      return withWorkflowContext(ctx.prisma, ece, async (tx) => {
         const rows = await tx.$queryRaw<AdmisionDetalleRow[]>`
           SELECT
             ea.id::text,
@@ -451,7 +451,7 @@ export const eceEpisodioHospitalarioRouter = router({
   getDetalle: readBase.input(getDetalleInput).query(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       const rows = await tx.$queryRaw<EpisodioDetalleRow[]>`
         SELECT
           eh.episodio_id::text,
@@ -508,7 +508,7 @@ export const eceEpisodioHospitalarioRouter = router({
   iniciarAltaMedica: physicianBase.input(iniciarAltaMedicaInput).mutation(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       // 1. Leer episodio y validar estado
       const episodioRows = await tx.$queryRaw<
         { id: string; estado: string; paciente_id: string; episodio_hosp_id: string }[]
@@ -668,7 +668,7 @@ export const eceEpisodioHospitalarioRouter = router({
   confirmarAlta: physicianBase.input(confirmarAltaInput).mutation(async ({ ctx, input }) => {
     const ece = withEceContext(ctx);
 
-    return withWorkflowContext(ctx.prisma, ece.establecimientoId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
       // 1. Leer episodio + estado epicrisis en una query
       const rows = await tx.$queryRaw<{
         episodio_id: string;

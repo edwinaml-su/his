@@ -10,15 +10,16 @@
  * Todas las mutaciones registran en ece.bitacora_acceso (Art. 55-56 NTEC)
  * con tipo_acceso = 'escritura' y componente = 'workflow.tipoDoc'.
  *
- * NOTA: withWorkflowContext proviene de Stream 11 (ece/workflow-context.ts).
- * El import es un forward-dependency; el consolidador lo resuelve al integrar
- * los streams. Hasta entonces el runtime fallará si ese módulo no existe.
+ * CC-0033 (P0-2): usa `withWorkflowContext` real (`workflow/context.ts`, el
+ * mismo que ya corre en ~30 routers ECE en producción) — antes delegaba al
+ * stub `ece/workflow-context.ts` (Stream 11), que no seteaba ningún GUC ni
+ * demotaba el rol.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";
 import { router, requireRole } from "../trpc";
-import { withWorkflowContext } from "../ece/workflow-context";
+import { withWorkflowContext, type EceContext } from "../workflow/context";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -196,6 +197,27 @@ async function logBitacora(
   }
 }
 
+/**
+ * Construye el `EceContext` (personalId + establecimientoId + roles) para
+ * `withWorkflowContext`. Lanza BAD_REQUEST si no hay establecimiento activo
+ * (mismo criterio que `episodio.router.ts`/`acto-quirurgico.router.ts`).
+ */
+function buildEceCtx(ctx: {
+  tenant: { userId: string; establishmentId?: string; roleCodes: string[] };
+}): EceContext {
+  if (!ctx.tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar el motor de workflow ECE.",
+    });
+  }
+  return {
+    personalId: ctx.tenant.userId,
+    establecimientoId: ctx.tenant.establishmentId,
+    roles: ctx.tenant.roleCodes,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -208,7 +230,7 @@ export const workflowTipoDocRouter = router({
    * Filtros opcionales: soloActivos, modalidad, tipoRegistro.
    */
   list: workflowBase.input(listInput).query(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       const soloActivos = input.soloActivos ?? true;
 
       const rows = await tx.$queryRaw<TipoDocRow[]>(Prisma.sql`
@@ -238,7 +260,7 @@ export const workflowTipoDocRouter = router({
 
   /** Obtiene un tipo de documento por id. */
   get: workflowBase.input(idInput).query(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       const rows = await tx.$queryRaw<TipoDocRow[]>(Prisma.sql`
         SELECT
           id::text,
@@ -263,7 +285,7 @@ export const workflowTipoDocRouter = router({
 
   /** Crea un nuevo tipo de documento. Valida unicidad de código y dependencias. */
   create: workflowBase.input(createInput).mutation(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       // Validar unicidad de código (el UNIQUE constraint lo haría fallar igual,
       // pero devolvemos un mensaje legible antes de llegar a la BD).
       const existing = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
@@ -326,7 +348,7 @@ export const workflowTipoDocRouter = router({
 
   /** Actualiza campos del tipo de documento. No modifica el código (PK semántica). */
   update: workflowBase.input(updateInput).mutation(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       // Verificar que existe
       const existRows = await tx.$queryRaw<{ codigo: string }[]>(Prisma.sql`
         SELECT codigo FROM ece.tipo_documento WHERE id = ${input.id}::uuid LIMIT 1
@@ -403,7 +425,7 @@ export const workflowTipoDocRouter = router({
    * flujo_transicion y documento_instancia.
    */
   deactivate: workflowBase.input(idInput).mutation(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       const existRows = await tx.$queryRaw<{ activo: boolean }[]>(Prisma.sql`
         SELECT activo FROM ece.tipo_documento WHERE id = ${input.id}::uuid LIMIT 1
       `);

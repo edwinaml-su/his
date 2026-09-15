@@ -2,7 +2,9 @@
  * Tests unitarios del router ece.episodio (Fase 2 — ECE, Stream episodio).
  *
  * Estrategia:
- *   - withWorkflowContext se mockea para ejecutar el callback con el prisma mock.
+ *   - withWorkflowContext (`workflow/context.ts`, CC-0033 — antes stub Stream 11
+ *     en `ece/workflow-context.ts`) se mockea para ejecutar el callback con el
+ *     prisma mock.
  *   - emitDomainEvent se mockea para verificar payload sin tocar Prisma real.
  *   - ctx.prisma.$queryRaw y $executeRaw son vi.fn() controlados por test.
  *
@@ -26,14 +28,17 @@ import { MOCK_USER_ADMIN } from "@his/test-utils";
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock("../../ece/workflow-context", () => ({
-  withWorkflowContext: vi.fn(
-    async (
-      _prisma: unknown,
-      _estabId: unknown,
-      fn: (tx: unknown) => Promise<unknown>,
-    ) => fn(_prisma),
-  ),
+const withWorkflowContextMock = vi.fn(
+  async (
+    _prisma: unknown,
+    _eceCtx: unknown,
+    fn: (tx: unknown) => Promise<unknown>,
+  ) => fn(_prisma),
+);
+vi.mock("../../workflow/context", () => ({
+  withWorkflowContext: (...args: unknown[]) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (withWorkflowContextMock as any)(...args),
 }));
 
 vi.mock("@his/database", async (importOriginal) => {
@@ -126,6 +131,26 @@ describe("eceEpisodioRouter", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]!.id).toBe(EPISODIO_ID);
     expect(result.nextCursor).toBeNull();
+  });
+
+  // CC-0033 (P0-2) — la query real debe correr DENTRO del callback de
+  // withWorkflowContext (RLS real: SET LOCAL app.ece_personal_id/
+  // app.ece_establecimiento_id + demote), no directo sobre ctx.prisma.
+  it("listAmbulatorios ejecuta dentro del callback de withWorkflowContext con el EceContext del tenant", async () => {
+    const prisma = makePrisma([[EPISODIO_ROW]]);
+    const caller = eceEpisodioRouter.createCaller(makeCtx(prisma));
+
+    await caller.listAmbulatorios({ limit: 10 });
+
+    expect(withWorkflowContextMock).toHaveBeenCalledTimes(1);
+    expect(withWorkflowContextMock).toHaveBeenCalledWith(
+      prisma,
+      expect.objectContaining({
+        personalId: TENANT.userId,
+        establecimientoId: TENANT.establishmentId,
+      }),
+      expect.any(Function),
+    );
   });
 
   // ─── 2. get — happy path ────────────────────────────────────────────────────

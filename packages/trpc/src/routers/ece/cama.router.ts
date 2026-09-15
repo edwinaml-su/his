@@ -37,8 +37,9 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import type { PrismaClient } from "@his/database";
 import { router, requireRole } from "../../trpc";
-import { withWorkflowContext } from "../../ece/workflow-context";
+import { withEceContext } from "../../ece/rls-context";
 
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -128,6 +129,31 @@ function withEceCtx(ctx: {
   return ctx.tenant.establishmentId;
 }
 
+/**
+ * CC-0033 (P0-2) — este router mezcla schemas: `ece.asignacion_cama` /
+ * `ece.episodio_hospitalario` / `ece.episodio_atencion` (contexto ECE) Y
+ * `public."Bed"` / `public."ServiceUnit"` / `public."Patient"` (RLS estricta,
+ * SOLO `public.current_org_id()` — no aceptan el puente
+ * `current_org_id_or_ece_context()`, ver sql/01_rls_policies.sql líneas
+ * 120-147). El stub `withWorkflowContext` (`ece/workflow-context.ts`) no
+ * seteaba NINGÚN GUC — se reemplaza por `withEceContext` con `tenantContext`
+ * para setear AMBOS espacios (ECE + tenant) antes del único demote, mismo
+ * patrón que `firmar()` en `indicaciones-medicas.router.ts` (CC-0026).
+ */
+function withCamaContext<T>(
+  ctx: {
+    prisma: PrismaClient;
+    user: { id: string };
+    tenant: { userId: string; organizationId: string; establishmentId?: string };
+  },
+  fn: (tx: PrismaClient) => Promise<T>,
+): Promise<T> {
+  const establecimientoId = withEceCtx(ctx);
+  return withEceContext(ctx.prisma, ctx.user.id, establecimientoId, fn, {
+    tenantContext: { userId: ctx.tenant.userId, orgId: ctx.tenant.organizationId },
+  });
+}
+
 // ─── Tipos adicionales ────────────────────────────────────────────────────────
 
 export interface ServicioMapRow {
@@ -155,9 +181,7 @@ export const eceCamaRouter = router({
   listEstadoCamas: readBase
     .input(listEstadoCamasInput)
     .query(async ({ ctx, input }) => {
-      const establecimientoId = withEceCtx(ctx);
-
-      return withWorkflowContext(ctx.prisma, establecimientoId, async (tx) => {
+      return withCamaContext(ctx, async (tx) => {
         const rows = await tx.$queryRaw<CamaRaw[]>`
           SELECT
             b.id::text                               AS cama_id,
@@ -200,9 +224,7 @@ export const eceCamaRouter = router({
   estadoServicio: readBase
     .input(estadoServicioInput)
     .query(async ({ ctx, input }) => {
-      const establecimientoId = withEceCtx(ctx);
-
-      return withWorkflowContext(ctx.prisma, establecimientoId, async (tx) => {
+      return withCamaContext(ctx, async (tx) => {
         const rows = await tx.$queryRaw<MetricaRaw[]>`
           SELECT
             COUNT(*)                                          AS total,
@@ -244,9 +266,7 @@ export const eceCamaRouter = router({
    */
   mapCompleto: readBase
     .query(async ({ ctx }) => {
-      const establecimientoId = withEceCtx(ctx);
-
-      return withWorkflowContext(ctx.prisma, establecimientoId, async (tx) => {
+      return withCamaContext(ctx, async (tx) => {
         // Obtener servicios con camas activas
         const servicios = await tx.$queryRaw<ServicioRaw[]>`
           SELECT DISTINCT
@@ -319,9 +339,7 @@ export const eceCamaRouter = router({
   cambiarEstado: writeBase
     .input(cambiarEstadoInput)
     .mutation(async ({ ctx, input }) => {
-      const establecimientoId = withEceCtx(ctx);
-
-      return withWorkflowContext(ctx.prisma, establecimientoId, async (tx) => {
+      return withCamaContext(ctx, async (tx) => {
         // Verificar que la cama no esté ocupada
         const activas = await tx.$queryRaw<{ id: string }[]>`
           SELECT id::text

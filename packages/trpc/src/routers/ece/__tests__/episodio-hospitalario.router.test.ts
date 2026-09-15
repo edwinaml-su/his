@@ -137,6 +137,21 @@ describe("eceEpisodioHospitalarioRouter", () => {
       await expect(sinRol.listActivos({ limit: 10 })).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
+    // CC-0033 (P0-2) — la query debe correr DENTRO del callback de
+    // withWorkflowContext real (SET LOCAL app.ece_personal_id/
+    // app.ece_establecimiento_id + demote), no sobre prisma directo (antes:
+    // stub ece/workflow-context.ts sin SET LOCAL).
+    it("4. aplica RLS real — ece.set_ece_context dentro de la tx", async () => {
+      prisma.$queryRaw.mockResolvedValueOnce([ACTIVO_ROW]);
+
+      const caller = makeNurseCaller(prisma);
+      await caller.listActivos({ limit: 50 });
+
+      expect(prisma.$transaction).toHaveBeenCalled();
+      const executeRawUnsafeCalls = prisma.$executeRawUnsafe.mock.calls.map((args) => String(args[0]));
+      expect(executeRawUnsafeCalls.some((sql) => sql.includes("ece.set_ece_context"))).toBe(true);
+    });
+
     it("3b. input no acepta campo gravedad (eliminado HD-08)", () => {
       // El schema Zod ya no incluye gravedad — TS lo verifica en build.
       // Verificamos que el input omite el campo sin error de runtime.

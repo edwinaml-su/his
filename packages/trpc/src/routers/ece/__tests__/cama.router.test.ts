@@ -84,6 +84,24 @@ describe("eceCamaRouter", () => {
     });
   });
 
+  // CC-0033 (P0-2) — este router mezcla public.Bed/ServiceUnit/Patient (RLS
+  // estricta current_org_id()) con ece.*: la query debe correr DENTRO del
+  // callback de withEceContext con AMBOS espacios de GUC seteados (dual
+  // tenantContext), no sobre prisma directo (antes: stub sin SET LOCAL).
+  it("listEstadoCamas: aplica RLS real — ece.set_ece_context + set_tenant_context dual dentro de la tx", async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([CAMA_RAW_LIBRE]);
+
+    const caller = eceCamaRouter.createCaller(makeCtx({ prisma, tenant: NURSE_TENANT }));
+    await caller.listEstadoCamas({ servicioId: SERVICIO_ID });
+
+    expect(prisma.$transaction).toHaveBeenCalled();
+    const executeRawCalls = prisma.$executeRaw.mock.calls.map((args) =>
+      (args[0] as TemplateStringsArray).join(""),
+    );
+    expect(executeRawCalls.some((sql) => sql.includes("ece.set_ece_context"))).toBe(true);
+    expect(executeRawCalls.some((sql) => sql.includes("set_tenant_context"))).toBe(true);
+  });
+
   // 2 — BAD_REQUEST sin establishmentId
   it("listEstadoCamas: lanza BAD_REQUEST si no hay establecimiento activo", async () => {
     const caller = eceCamaRouter.createCaller(

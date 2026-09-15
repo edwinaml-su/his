@@ -32,6 +32,12 @@ describe("encounterRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     capturarCargoMock.mockClear();
+    // CC-0033 (P0-1) — list/listOpenByOrg/getCensus ahora corren dentro de
+    // withTenantContext (antes: ctx.prisma directo). Passthrough por default;
+    // los tests de `admit` que necesiten otro comportamiento lo sobreescriben
+    // con `.mockImplementation(...)` (sigue siendo un vi.fn real).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    prisma.$transaction = vi.fn(async (fn: any) => fn(prisma)) as any;
   });
 
   describe("admit", () => {
@@ -147,6 +153,12 @@ describe("encounterRouter", () => {
 
       expect((out as { id: string }).id).toBe("e-existing");
       expect(prisma.encounter.create).not.toHaveBeenCalled();
+      // CC-0033 (P0-1) — el camino de idempotencia (patient/encounter
+      // lookups + el propio return temprano) corre DENTRO de withTenantContext
+      // — antes de este fix corría 100% sobre ctx.prisma con rol BYPASSRLS.
+      // (2 llamadas: la tx de admit + la tx best-effort de asignación GSRN
+      // que corre en el `.then()` incluso en el camino de idempotencia.)
+      expect(prisma.$transaction).toHaveBeenCalled();
     });
 
     it("BIRTH/NEWBORN devuelven NOT_IMPLEMENTED en MVP", async () => {
@@ -426,6 +438,117 @@ describe("encounterRouter", () => {
 
       const args = prisma.encounter.findMany.mock.calls[0]![0];
       expect(args.where.dischargedAt).toEqual({ not: null });
+    });
+
+    // CC-0033 (P0-1) — la query debe correr DENTRO del callback de
+    // withTenantContext (RLS real), no directo sobre ctx.prisma.
+    it("ejecuta la query dentro del callback de withTenantContext (no sobre prisma directo)", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.count.mockResolvedValue(0);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.list({ page: 1, pageSize: 20 });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("listOpenByOrg", () => {
+    it("filtra encuentros abiertos por organización", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.count.mockResolvedValue(0);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.listOpenByOrg({ page: 1, pageSize: 20 });
+
+      const args = prisma.encounter.findMany.mock.calls[0]![0];
+      expect(args.where).toMatchObject({
+        organizationId: MOCK_TENANT.organizationId,
+        dischargedAt: null,
+      });
+    });
+
+    // CC-0033 (P0-1) — RLS real (ver `list` arriba para el detalle).
+    it("ejecuta la query dentro del callback de withTenantContext", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.count.mockResolvedValue(0);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.listOpenByOrg({ page: 1, pageSize: 20 });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("getCensus", () => {
+    it("agrupa el censo por servicio y tipo de admisión", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.groupBy.mockResolvedValue([] as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      const out = await caller.getCensus({});
+
+      expect(out.breakdown.total).toBe(0);
+    });
+
+    // CC-0033 (P0-1) — RLS real (ver `list` arriba para el detalle).
+    it("ejecuta la query dentro del callback de withTenantContext", async () => {
+      prisma.encounter.findMany.mockResolvedValue([] as never);
+      prisma.encounter.groupBy.mockResolvedValue([] as never);
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.getCensus({});
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("admit — RLS real (CC-0033 P0-1)", () => {
+    // La tx de admit mezcla public.* (Encounter/Bed/BedAssignment) y ece.*
+    // (vía los hooks ECE) — debe setear AMBOS espacios de GUC (tenant + ECE)
+    // antes de demotar, no correr bajo BYPASSRLS puro.
+    it("aplica set_tenant_context Y ece.set_ece_context dentro de la misma tx", async () => {
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: "p1", active: true } as never)
+        .mockResolvedValueOnce({ id: "p1", mrn: "MRN-001" } as never)
+        .mockResolvedValueOnce(null as never);
+      prisma.encounter.findFirst.mockResolvedValue(null as never);
+      prisma.organization.findUnique
+        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
+      prisma.encounter.count.mockResolvedValue(0);
+      prisma.encounter.create.mockResolvedValue({
+        id: "enc-uuid-rls",
+        admittedAt: new Date(),
+        admissionType: "EMERGENCY",
+      } as never);
+      let qraw = 0;
+      prisma.$queryRaw.mockImplementation(() => {
+        const responses = [
+          [{ id: "ece-estab-uuid" }],
+          [],
+          [{ id: "ece-pac-uuid" }],
+          [{ id: "episodio-new" }],
+        ];
+        return Promise.resolve(responses[qraw++] ?? []) as never;
+      });
+
+      const caller = encounterRouter.createCaller(makeCtx({ prisma }));
+      await caller.admit({
+        patientId: "00000000-0000-0000-0000-000000000010",
+        admissionType: "EMERGENCY",
+        currencyId: "00000000-0000-0000-0000-000000000020",
+      } as never);
+
+      const executeRawUnsafeCalls = prisma.$executeRawUnsafe.mock.calls.map((args) =>
+        String(args[0]),
+      );
+      expect(
+        executeRawUnsafeCalls.some((sql) => sql.includes("set_tenant_context")),
+      ).toBe(true);
+      expect(
+        executeRawUnsafeCalls.some((sql) => sql.includes("ece.set_ece_context")),
+      ).toBe(true);
     });
   });
 });

@@ -1,23 +1,34 @@
 /**
- * withWorkflowContext — stub para compilación mientras Stream 11 no está integrado.
+ * withWorkflowContext — DEPRECADO (CC-0033 / hallazgo P0-2, auditoría
+ * 2026-09-15). Este archivo era el stub "Stream 11" que no seteaba ningún GUC
+ * de sesión ni demotaba el rol — ejecutaba el callback bajo el rol Postgres
+ * con BYPASSRLS, es decir sin RLS real. Los 6 routers que lo usaban
+ * (episodio, episodio-hospitalario, acto-quirurgico, cama, workflow-tipoDoc,
+ * workflow-tipoDoc-override) ya migraron a la implementación REAL:
+ * `packages/trpc/src/workflow/context.ts` (mismo `withWorkflowContext`, otra
+ * firma — recibe un `EceContext` en vez de un `establecimientoId` suelto) o,
+ * para routers que mezclan schemas `public.*`/`ece.*`, a `withEceContext`
+ * (`packages/trpc/src/ece/rls-context.ts`).
  *
- * Stream 11 (ece-context) es el propietario real de este módulo.
- * Esta implementación mínima ejecuta el callback dentro de una transacción
- * Prisma y aplica el GUC del establecimiento (análogo a withTenantContext).
+ * Este export ahora LANZA en vez de ser un no-op silencioso — un router
+ * nuevo que importe este módulo por error debe fallar ruidosamente en tests/
+ * runtime, no correr bajo BYPASSRLS sin que nadie lo note (precedente:
+ * exactamente este stub estuvo así, sin ser detectado, hasta la auditoría).
  *
- * NOTA: El consolidador debe reemplazar este archivo con la implementación
- * completa de Stream 11, que incluirá SET LOCAL de app.establecimiento_id
- * y la demote de rol a `authenticated`.
- *
- * @see docs/backlog/fase2/02_as_arquitectura.md §9.1 withEceContext
+ * @see docs/audit/2026-09-15_cobertura/01-admision-emergencia-hosp-quirofano.md hallazgo B2/P0-2
  */
 import type { PrismaClient } from "@his/database";
 
 export async function withWorkflowContext<T>(
-  prisma: PrismaClient,
+  _prisma: PrismaClient,
   _establecimientoId: string | undefined,
-  fn: (tx: PrismaClient) => Promise<T>,
+  _fn: (tx: PrismaClient) => Promise<T>,
 ): Promise<T> {
-  // TODO(Stream 11): aplicar SET LOCAL app.establecimiento_id y demote de rol.
-  return prisma.$transaction(async (tx) => fn(tx as unknown as PrismaClient));
+  throw new Error(
+    "withWorkflowContext (ece/workflow-context.ts) está deprecado y ya no ejecuta el " +
+      "callback (CC-0033 P0-2): no seteaba GUC ni demotaba el rol, corría bajo BYPASSRLS. " +
+      "Usa withWorkflowContext de packages/trpc/src/workflow/context.ts (recibe un EceContext) " +
+      "o withEceContext de packages/trpc/src/ece/rls-context.ts si el router mezcla schemas " +
+      "public.*/ece.*.",
+  );
 }

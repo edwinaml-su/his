@@ -11,12 +11,16 @@
  *
  * Bitácora: cada escritura se registra en `ece.bitacora_acceso` (Art. 55-56
  * NTEC) con `componente = 'workflow.tipoDocOverride'`.
+ *
+ * CC-0033 (P0-2): usa `withWorkflowContext` real (`workflow/context.ts`) en
+ * vez del stub `ece/workflow-context.ts` — ver `workflow-tipoDoc.router.ts`
+ * para el detalle del hallazgo.
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { Prisma } from "@his/database";
 import { router, requireRole } from "../trpc";
-import { withWorkflowContext } from "../ece/workflow-context";
+import { withWorkflowContext, type EceContext } from "../workflow/context";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -86,6 +90,26 @@ async function logBitacora(
   }
 }
 
+/**
+ * Construye el `EceContext` (personalId + establecimientoId + roles) para
+ * `withWorkflowContext`. Lanza BAD_REQUEST si no hay establecimiento activo.
+ */
+function buildEceCtx(ctx: {
+  tenant: { userId: string; establishmentId?: string; roleCodes: string[] };
+}): EceContext {
+  if (!ctx.tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar el motor de workflow ECE.",
+    });
+  }
+  return {
+    personalId: ctx.tenant.userId,
+    establecimientoId: ctx.tenant.establishmentId,
+    roles: ctx.tenant.roleCodes,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -98,7 +122,7 @@ export const workflowTipoDocOverrideRouter = router({
    * Incluye join con tipo_documento para mostrar codigo + nombre.
    */
   list: dirOnly.query(async ({ ctx }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       const rows = await tx.$queryRaw<TipoDocOverrideRow[]>(Prisma.sql`
         SELECT
           tde.tipo_documento_id::text,
@@ -129,7 +153,7 @@ export const workflowTipoDocOverrideRouter = router({
    * (volver al valor global).
    */
   upsert: dirOnly.input(upsertInput).mutation(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       // Validar que el tipo_documento existe.
       const tipos = await tx.$queryRaw<{ codigo: string }[]>(Prisma.sql`
         SELECT codigo FROM ece.tipo_documento
@@ -214,7 +238,7 @@ export const workflowTipoDocOverrideRouter = router({
    * remove — elimina el override (revierte al valor global).
    */
   remove: dirOnly.input(deleteInput).mutation(async ({ ctx, input }) => {
-    return withWorkflowContext(ctx.prisma, ctx.tenant.establishmentId, async (tx) => {
+    return withWorkflowContext(ctx.prisma, buildEceCtx(ctx), async (tx) => {
       await tx.$executeRaw(Prisma.sql`
         DELETE FROM ece.tipo_documento_establecimiento
         WHERE tipo_documento_id = ${input.tipoDocumentoId}::uuid
