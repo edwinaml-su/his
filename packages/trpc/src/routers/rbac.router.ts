@@ -67,7 +67,7 @@ import {
   rbacSetRoleAliasInput,
   rbacDeleteRoleAliasInput,
 } from "@his/contracts";
-import { requirePermission, requireRole, router, tenantProcedure } from "../trpc";
+import { requirePermission, requireRole, router } from "../trpc";
 
 const SUPER_ADMIN_CODE = "super_admin";
 
@@ -96,7 +96,9 @@ export const rbacRouter = router({
    * Lista roles visibles desde el tenant: los de la org actual + los globales.
    * Trae contadores agregados (usuarios vigentes y permisos asignados).
    */
-  listRoles: tenantProcedure.input(rbacListRolesInput).query(async ({ ctx, input }) => {
+  listRoles: requireRole(["SUPER_ADMIN", "ADMIN", "DIR"])
+    .input(rbacListRolesInput)
+    .query(async ({ ctx, input }) => {
     // Si el caller pidió una org específica (multi-org admin asignando a
     // otra org), valida que tenga membresía vigente allí antes de devolver
     // roles. Esto evita que un user filtre roles de orgs sin acceso.
@@ -200,7 +202,9 @@ export const rbacRouter = router({
   }),
 
   /** Detalle del rol con sus RolePermission + Permission. */
-  getRole: tenantProcedure.input(rbacGetRoleInput).query(async ({ ctx, input }) => {
+  getRole: requireRole(["SUPER_ADMIN", "ADMIN", "DIR"])
+    .input(rbacGetRoleInput)
+    .query(async ({ ctx, input }) => {
     const role = await ctx.prisma.role.findUnique({
       where: { id: input.id },
       include: {
@@ -243,7 +247,9 @@ export const rbacRouter = router({
    * Crea un rol. Si organizationId === null → global (sólo super_admin).
    * Si undefined → la org actual del tenant.
    */
-  createRole: tenantProcedure.input(rbacCreateRoleInput).mutation(async ({ ctx, input }) => {
+  createRole: requireRole(["SUPER_ADMIN"])
+    .input(rbacCreateRoleInput)
+    .mutation(async ({ ctx, input }) => {
     const wantsGlobal = input.organizationId === null;
     if (wantsGlobal && !isSuperAdmin(ctx.tenant.roleCodes)) {
       throw new TRPCError({
@@ -274,7 +280,9 @@ export const rbacRouter = router({
   }),
 
   /** Edita un rol. Roles globales sólo super_admin. */
-  updateRole: tenantProcedure.input(rbacUpdateRoleInput).mutation(async ({ ctx, input }) => {
+  updateRole: requireRole(["SUPER_ADMIN"])
+    .input(rbacUpdateRoleInput)
+    .mutation(async ({ ctx, input }) => {
     const role = await ctx.prisma.role.findUnique({ where: { id: input.id } });
     if (!role) throw new TRPCError({ code: "NOT_FOUND", message: "Rol no encontrado." });
 
@@ -303,7 +311,7 @@ export const rbacRouter = router({
   }),
 
   /** Soft delete: active=false. NO borra UserOrganizationRole asociados (auditable). */
-  deactivateRole: tenantProcedure
+  deactivateRole: requireRole(["SUPER_ADMIN"])
     .input(rbacDeactivateRoleInput)
     .mutation(async ({ ctx, input }) => {
       const role = await ctx.prisma.role.findUnique({ where: { id: input.id } });
@@ -327,7 +335,7 @@ export const rbacRouter = router({
    * Catálogo completo de permisos disponible (Permission es seed global,
    * no tiene organizationId). Ordenado por resource+action para la UI matriz.
    */
-  listPermissions: tenantProcedure
+  listPermissions: requireRole(["SUPER_ADMIN", "ADMIN", "DIR"])
     .input(z.object({ search: z.string().trim().max(120).optional() }).default({}))
     .query(async ({ ctx, input }) => {
       const where: Prisma.PermissionWhereInput = input.search
@@ -352,7 +360,7 @@ export const rbacRouter = router({
    *  - Si un permissionId no existe en Permission, falla por FK (P2003)
    *    y devolvemos BAD_REQUEST.
    */
-  setRolePermissions: tenantProcedure
+  setRolePermissions: requireRole(["SUPER_ADMIN"])
     .input(rbacSetRolePermissionsInput)
     .mutation(async ({ ctx, input }) => {
       const role = await ctx.prisma.role.findUnique({ where: { id: input.roleId } });
@@ -410,7 +418,7 @@ export const rbacRouter = router({
    * Retorna una tabla pivot: usuario × recurso × acción con effect (ALLOW/DENY).
    * Solo super_admin o DIR pueden ver la matriz completa.
    */
-  permissionMatrix: requireRole(["DIR", "super_admin"])
+  permissionMatrix: requireRole(["SUPER_ADMIN", "DIR", "super_admin"])
     .input(z.object({
       // Filtro opcional por recurso
       resource: z.string().trim().max(120).optional(),
@@ -598,7 +606,7 @@ export const rbacRouter = router({
    * Guards: no auto-herencia, no ciclo (camino completo hacia arriba desde
    * `parentRoleId`), mismos boundaries tenant/global que el resto de RBAC.
    */
-  setRoleInheritance: tenantProcedure
+  setRoleInheritance: requireRole(["SUPER_ADMIN"])
     .input(rbacSetRoleInheritanceInput)
     .mutation(async ({ ctx, input }) => {
       const role = await ctx.prisma.role.findUnique({ where: { id: input.roleId } });
@@ -673,7 +681,7 @@ export const rbacRouter = router({
     }),
 
   /** Lista alias visibles: los de la org del tenant + los globales. */
-  listRoleAliases: tenantProcedure
+  listRoleAliases: requireRole(["SUPER_ADMIN", "ADMIN", "DIR"])
     .input(rbacListRoleAliasesInput)
     .query(async ({ ctx, input }) => {
       const orgId = input.organizationId ?? ctx.tenant.organizationId;
@@ -687,7 +695,7 @@ export const rbacRouter = router({
    * Crea o actualiza (idempotente por sourceCode+scope) un alias de código de
    * rol. Alias GLOBALES (organizationId null) sólo por super_admin.
    */
-  setRoleAlias: tenantProcedure
+  setRoleAlias: requireRole(["SUPER_ADMIN"])
     .input(rbacSetRoleAliasInput)
     .mutation(async ({ ctx, input }) => {
       const wantsGlobal = input.organizationId === null;
@@ -723,7 +731,7 @@ export const rbacRouter = router({
       });
     }),
 
-  deleteRoleAlias: tenantProcedure
+  deleteRoleAlias: requireRole(["SUPER_ADMIN"])
     .input(rbacDeleteRoleAliasInput)
     .mutation(async ({ ctx, input }) => {
       const alias = await ctx.prisma.roleCodeAlias.findUnique({ where: { id: input.id } });

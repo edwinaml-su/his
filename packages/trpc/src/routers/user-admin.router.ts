@@ -79,12 +79,43 @@ import {
   type UserAuthStatus,
 } from "@his/contracts";
 import { hashPin, logger, sendMail } from "@his/infrastructure";
-import { router, tenantProcedure, requirePermission } from "../trpc";
+import { router, tenantProcedure, requirePermission, requireRole } from "../trpc";
 import {
   createAuthUser,
   deleteAuthUser,
   generateAuthActionLink,
 } from "../lib/supabase-admin";
+
+/**
+ * CC-0032 — defensa en profundidad: un actor sin SUPER_ADMIN no puede
+ * modificar/desactivar/resetear el password de un usuario que tenga una
+ * membresía SUPER_ADMIN vigente. Evita que un ADMIN (con `requireRole`
+ * legítimo sobre estas mutations) se apodere de la cuenta del super admin
+ * único degradándola o cambiándole el password. SUPER_ADMIN sí puede actuar
+ * sobre cualquiera, incluido otro SUPER_ADMIN.
+ */
+async function assertActorCanTargetUser(
+  ctx: { prisma: Pick<PrismaClient, "userOrganizationRole">; effectiveRoleCodes?: string[] },
+  targetUserId: string,
+): Promise<void> {
+  if (ctx.effectiveRoleCodes?.includes("SUPER_ADMIN")) return;
+  const now = new Date();
+  const superAdminMembership = await ctx.prisma.userOrganizationRole.findFirst({
+    where: {
+      userId: targetUserId,
+      role: { code: "SUPER_ADMIN" },
+      validFrom: { lte: now },
+      OR: [{ validTo: null }, { validTo: { gte: now } }],
+    },
+    select: { id: true },
+  });
+  if (superAdminMembership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Solo SUPER_ADMIN puede modificar a un usuario con rol SUPER_ADMIN.",
+    });
+  }
+}
 
 /** Base pública de la app — usada para construir el `redirectTo` del enlace. */
 function resolveAppOrigin(): string {
@@ -403,7 +434,10 @@ export const userAdminRouter = router({
       }
     }),
 
-  update: tenantProcedure.input(userAdminUpdateInput).mutation(async ({ ctx, input }) => {
+  update: requireRole(["SUPER_ADMIN", "ADMIN"])
+    .input(userAdminUpdateInput)
+    .mutation(async ({ ctx, input }) => {
+    await assertActorCanTargetUser(ctx, input.id);
     try {
       return await ctx.prisma.user.update({
         where: { id: input.id },
@@ -472,6 +506,9 @@ export const userAdminRouter = router({
           message: "No se puede resetear password de un usuario inactivo. Reactívelo primero.",
         });
       }
+      // CC-0032 — un ADMIN (aquí vía requirePermission("user.manage")) no
+      // puede resetear el password del SUPER_ADMIN.
+      await assertActorCanTargetUser(ctx, target.id);
 
       // ── FUNCIONAL: actualizar la contraseña en Supabase Auth ──────────────
       // El login va por supabase.auth.signInWithPassword → auth.users. Resolvemos
@@ -555,7 +592,7 @@ export const userAdminRouter = router({
    * Soft-disable. NO revoca membresías vigentes (auditable). El login
    * verificará `active=false` y bloqueará.
    */
-  deactivate: tenantProcedure
+  deactivate: requireRole(["SUPER_ADMIN", "ADMIN"])
     .input(userAdminDeactivateInput)
     .mutation(async ({ ctx, input }) => {
       if (input.id === ctx.user.id) {
@@ -564,6 +601,7 @@ export const userAdminRouter = router({
           message: "No puedes desactivar tu propio usuario.",
         });
       }
+      await assertActorCanTargetUser(ctx, input.id);
       return ctx.prisma.user.update({
         where: { id: input.id },
         data: { active: false, updatedBy: ctx.user.id },
@@ -641,7 +679,7 @@ export const userAdminRouter = router({
    * Si existe una expirada (validTo < now) o la combinación @@unique ya
    * existe pero está cerrada, reactivamos extendiendo validTo a NULL.
    */
-  assignRole: tenantProcedure
+  assignRole: requireRole(["SUPER_ADMIN"])
     .input(userAdminAssignRoleInput)
     .mutation(async ({ ctx, input }) => {
       // Validar pertenencia del rol: rol global o de esa misma org.
@@ -653,6 +691,17 @@ export const userAdminRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "El rol no pertenece a la organización indicada.",
+        });
+      }
+      // CC-0032 — defensa en profundidad: SUPER_ADMIN NUNCA se otorga por API,
+      // ni siquiera por otro SUPER_ADMIN. Solo por SQL/DBA (ver
+      // sql/239_cc0032_super_admin_rbac_audit.sql). Esto evita que la propia
+      // pantalla de administración sea vector de phishing/CSRF para escalar
+      // al único super admin.
+      if (role.code === "SUPER_ADMIN") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El rol SUPER_ADMIN no se puede asignar desde la aplicación.",
         });
       }
 
@@ -697,7 +746,7 @@ export const userAdminRouter = router({
    * Revoca el rol vigente: setea validTo=now en la membresía.
    * Si no hay vigente, no-op (devolvemos null).
    */
-  revokeRole: tenantProcedure
+  revokeRole: requireRole(["SUPER_ADMIN"])
     .input(userAdminRevokeRoleInput)
     .mutation(async ({ ctx, input }) => {
       const now = new Date();
