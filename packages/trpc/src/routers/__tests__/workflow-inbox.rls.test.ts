@@ -138,6 +138,31 @@ describe("workflowInboxRouter — contexto RLS", () => {
     expectRlsApplied();
   });
 
+  it("CC-0031: escalar emite task.escalated al rol escalado (PHYSICIAN→DIR) cuando el taskId es UUID", async () => {
+    prisma.domainEvent.create.mockResolvedValue({ id: "evt-1" } as never);
+    prisma.$queryRaw.mockResolvedValue([{ hasTenantContext: false }] as never);
+    const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
+    const taskId = "3f1c9d4e-2b7a-4c1e-9f3b-1d2e3f4a5b6c";
+
+    await caller.escalar({
+      taskId,
+      taskType: "PRESCRIPTION_TO_SIGN", // TASK_REQUIRED_ROLES → ["MC","PHYSICIAN"] → resolveEscalationRole("MC") → DIR
+      reason: "carga desigual",
+    });
+
+    expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+    const eventArgs = prisma.domainEvent.create.mock.calls[0]![0] as {
+      data: { eventType: string; aggregateId: string; payload: Record<string, unknown> };
+    };
+    expect(eventArgs.data.eventType).toBe("task.escalated");
+    expect(eventArgs.data.aggregateId).toBe(taskId);
+    expect(eventArgs.data.payload).toMatchObject({
+      taskType: "PRESCRIPTION_TO_SIGN",
+      sourceId: taskId,
+      assignedRoleCode: "DIR",
+    });
+  });
+
   it("completar abre transacción y demota el rol", async () => {
     const caller = workflowInboxRouter.createCaller(makeCtx({ prisma }));
     await caller.completar({

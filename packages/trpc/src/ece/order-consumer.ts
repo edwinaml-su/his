@@ -60,7 +60,7 @@
  *     (no es motivo de omisión — el contrato NOT NULL que bloquea es el de
  *     `patientId`, no el de la cuenta).
  */
-import type { PrismaClient } from "@his/database";
+import { emitDomainEvent, type PrismaClient } from "@his/database";
 import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
 
 export interface OrderIndicacionItem {
@@ -307,7 +307,9 @@ export async function materializeOrdenesFromIndicacion(
     }
 
     const slaMinutes = SLA_MINUTES_BY_MOCKUP[prioridadMockup] ?? SLA_MINUTES_BY_MOCKUP.Rutina!;
-    await tx.careTask.create({
+    const dueAt = new Date(Date.now() + slaMinutes * 60_000);
+    const labTaskTitle = item.descripcion.slice(0, TITLE_MAX_LENGTH);
+    const labCareTask = await tx.careTask.create({
       data: {
         organizationId,
         establishmentId,
@@ -319,14 +321,44 @@ export async function materializeOrdenesFromIndicacion(
         sourceType: "LAB_ORDER",
         sourceId: order.id,
         taskType: "LAB_TO_PROCESS",
-        title: item.descripcion.slice(0, TITLE_MAX_LENGTH),
+        title: labTaskTitle,
         priority: CARE_TASK_PRIORITY_BY_MOCKUP[prioridadMockup] ?? "NORMAL",
         slaMinutes,
-        dueAt: new Date(Date.now() + slaMinutes * 60_000),
+        dueAt,
         status: "PENDIENTE",
         createdBy: userId,
       },
     });
+
+    // CC-0031 Fase 1(b) — puente tarea→notificación. Try/catch deliberado:
+    // ver nota de diseño en care-task-consumer.ts (mismo contrato — un fallo
+    // acá NO debe revertir la orden de laboratorio ya creada).
+    try {
+      await emitDomainEvent(tx, {
+        organizationId,
+        eventType: "task.action_required",
+        aggregateType: "CareTask",
+        aggregateId: labCareTask.id,
+        emittedById: userId,
+        payload: {
+          taskType: "LAB_TO_PROCESS",
+          sourceType: "LAB_ORDER",
+          sourceId: order.id,
+          assignedRoleCode: "LAB_TECHNICIAN",
+          establishmentId,
+          serviceUnitId: serviceUnit?.id ?? null,
+          dueAt: dueAt.toISOString(),
+          url: "/tareas",
+          resumen: labTaskTitle,
+        },
+      });
+    } catch (err) {
+      console.error(
+        `[CC-0031 order-consumer] emitDomainEvent(task.action_required) falló para CareTask ${labCareTask.id} (LAB) — ` +
+          "la tarea se creó igual, solo no se emitió la notificación.",
+        err,
+      );
+    }
   }
 
   // ─── Gabinete (imágenes) ────────────────────────────────────────────────
@@ -425,7 +457,9 @@ export async function materializeOrdenesFromIndicacion(
     }
 
     const slaMinutes = SLA_MINUTES_BY_MOCKUP[prioridadMockup] ?? SLA_MINUTES_BY_MOCKUP.Rutina!;
-    await tx.careTask.create({
+    const dueAt = new Date(Date.now() + slaMinutes * 60_000);
+    const imagingTaskTitle = item.descripcion.slice(0, TITLE_MAX_LENGTH);
+    const imagingCareTask = await tx.careTask.create({
       data: {
         organizationId,
         establishmentId,
@@ -437,14 +471,43 @@ export async function materializeOrdenesFromIndicacion(
         sourceType: "IMAGING_ORDER",
         sourceId: order.id,
         taskType: "IMAGING_TO_PERFORM",
-        title: item.descripcion.slice(0, TITLE_MAX_LENGTH),
+        title: imagingTaskTitle,
         priority: CARE_TASK_PRIORITY_BY_MOCKUP[prioridadMockup] ?? "NORMAL",
         slaMinutes,
-        dueAt: new Date(Date.now() + slaMinutes * 60_000),
+        dueAt,
         status: "PENDIENTE",
         createdBy: userId,
       },
     });
+
+    // CC-0031 Fase 1(b) — puente tarea→notificación. Try/catch deliberado —
+    // ver nota de diseño en care-task-consumer.ts.
+    try {
+      await emitDomainEvent(tx, {
+        organizationId,
+        eventType: "task.action_required",
+        aggregateType: "CareTask",
+        aggregateId: imagingCareTask.id,
+        emittedById: userId,
+        payload: {
+          taskType: "IMAGING_TO_PERFORM",
+          sourceType: "IMAGING_ORDER",
+          sourceId: order.id,
+          assignedRoleCode: "RAD_TECHNICIAN",
+          establishmentId,
+          serviceUnitId: serviceUnit?.id ?? null,
+          dueAt: dueAt.toISOString(),
+          url: "/tareas",
+          resumen: imagingTaskTitle,
+        },
+      });
+    } catch (err) {
+      console.error(
+        `[CC-0031 order-consumer] emitDomainEvent(task.action_required) falló para CareTask ${imagingCareTask.id} (IMAGING) — ` +
+          "la tarea se creó igual, solo no se emitió la notificación.",
+        err,
+      );
+    }
   }
 
   return result;

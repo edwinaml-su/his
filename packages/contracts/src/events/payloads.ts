@@ -1250,6 +1250,35 @@ export const cargoPendienteTarifaPayloadSchema = z.object({
 export type CargoPendienteTarifaPayload = z.infer<typeof cargoPendienteTarifaPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// task.action_required / task.sla_warning / task.sla_exceeded / task.escalated
+// (CC-0031 — puente Workflow Inbox `TASK_REQUIRED_ROLES` / `CareTask` →
+// `Notification`). Un único shape de payload para los 4 eventTypes: el
+// resolver genérico `resolveByRole` (dispatcher.ts + Edge Function) los trata
+// igual — solo cambia `assignedRoleCode` (en `task.escalated`/`sla_exceeded`
+// es el rol ESCALADO, no el asignado original) y la plantilla renderizada.
+// Ver docs/audit/2026-09-15_cobertura/04-resumen-ejecutivo-y-cc0031.md §4.
+// -----------------------------------------------------------------------------
+
+export const taskNotificationPayloadSchema = z.object({
+  /** `TaskType` de `workflow-inbox.ts` o `CareTask.taskType` — string libre, sin FK. */
+  taskType: z.string().min(1).max(60),
+  /** Origen polimórfico: INDICACION_ITEM|LAB_ORDER|IMAGING_ORDER|TRANSFER|MANUAL|... */
+  sourceType: z.string().min(1).max(30),
+  sourceId: z.string().uuid(),
+  /** Código de rol destino (post-alias) al que se notifica este evento. */
+  assignedRoleCode: z.string().min(1).max(40),
+  establishmentId: z.string().uuid().nullable().optional(),
+  serviceUnitId: z.string().uuid().nullable().optional(),
+  dueAt: z.string().datetime().nullable().optional(),
+  /** Deep-link a `/tareas` o al recurso origen. */
+  url: z.string().min(1).max(500),
+  /** Texto corto para subject/body del template (p.ej. "Firmar receta — Juan Pérez"). */
+  resumen: z.string().min(1).max(500),
+});
+
+export type TaskNotificationPayload = z.infer<typeof taskNotificationPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1711,6 +1740,23 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("cargo.pendiente_tarifa"),
     payload: cargoPendienteTarifaPayloadSchema,
+  }),
+  // CC-0031 — puente tarea→notificación (mismo payload para los 4 eventTypes).
+  z.object({
+    eventType: z.literal("task.action_required"),
+    payload: taskNotificationPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("task.sla_warning"),
+    payload: taskNotificationPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("task.sla_exceeded"),
+    payload: taskNotificationPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("task.escalated"),
+    payload: taskNotificationPayloadSchema,
   }),
 ]);
 

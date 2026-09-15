@@ -77,7 +77,7 @@
  *   - patientAccountId: SIEMPRE NULL — no forma parte del contrato D2 y
  *     depende de la misma cadena bloqueada que serviceUnitId (vía Encounter).
  */
-import type { PrismaClient } from "@his/database";
+import { emitDomainEvent, type PrismaClient } from "@his/database";
 import { categoriaUIDeItem } from "./order-consumer";
 
 export interface CareTaskIndicacionItem {
@@ -128,6 +128,26 @@ const TASK_TYPE_BY_TIPO: Record<string, string> = {
 
 /** tipo fuera del vocabulario conocido (drift BD↔código futuro) → categoría genérica en vez de crashear la firma. */
 const FALLBACK_TASK_TYPE = "IND_GENERAL";
+
+/**
+ * CC-0031 Fase 3(a) — SLA en minutos por `taskType` IND_*. No existe entrada
+ * en `TASK_SLA_MINUTES` (workflow-inbox.ts, contracts) para estos códigos —
+ * ese catálogo cubre los 69 tipos de la bandeja BPM, no el vocabulario propio
+ * de CareTask (`IND_MED_CUMPLIR`/`IND_DIETA`/...). Mapeo documentado aquí
+ * (criterio clínico aproximado, no normativo): medicación/procedimiento son
+ * los más urgentes; dieta/reposo toleran más margen. `IND_ESTUDIO` no debería
+ * ocurrir (excluido arriba, ver `categoriaUIDeItem`) pero se deja un default
+ * por si el discriminador cambia.
+ */
+const CARE_TASK_SLA_MINUTES_BY_TASK_TYPE: Record<string, number> = {
+  IND_MED_CUMPLIR: 60,
+  IND_PROCEDIMIENTO: 120,
+  IND_CUIDADOS: 120,
+  IND_DIETA: 240,
+  IND_REPOSO: 240,
+  IND_ESTUDIO: 240,
+  IND_GENERAL: 240,
+};
 
 /** JCI/mockup: STAT o "urgente" (cualquier capitalización) en la descripción sube la prioridad. */
 const HIGH_PRIORITY_PATTERN = /\bSTAT\b|urgente/i;
@@ -193,7 +213,12 @@ export async function materializeCareTasksFromIndicacion(
       continue;
     }
 
-    await tx.careTask.create({
+    const taskType = resolveTaskType(item.tipo);
+    const title = item.descripcion.slice(0, TITLE_MAX_LENGTH);
+    const slaMinutes = CARE_TASK_SLA_MINUTES_BY_TASK_TYPE[taskType] ?? CARE_TASK_SLA_MINUTES_BY_TASK_TYPE.IND_GENERAL!;
+    const dueAt = new Date(Date.now() + slaMinutes * 60_000);
+
+    const task = await tx.careTask.create({
       data: {
         organizationId,
         establishmentId,
@@ -205,14 +230,52 @@ export async function materializeCareTasksFromIndicacion(
         patientAccountId: null,
         sourceType: "INDICACION_ITEM",
         sourceId: item.id,
-        taskType: resolveTaskType(item.tipo),
-        title: item.descripcion.slice(0, TITLE_MAX_LENGTH),
+        taskType,
+        title,
         priority: resolvePriority(item.descripcion),
+        slaMinutes,
+        dueAt,
         status: "PENDIENTE",
         createdBy: userId,
       },
     });
     tasksCreated += 1;
+
+    // CC-0031 Fase 1(b) — puente tarea→notificación. Try/catch DELIBERADO:
+    // a diferencia del INSERT de CareTask arriba (que SÍ debe revertir la tx
+    // completa si falla, ver contrato de fallo en el header), un fallo acá
+    // NO debe tumbar `firmar()` — es la misma lección de CC-0026 (D2) que ya
+    // pagamos una vez con `DomainEvent` bajo `withEceContext` (sql/213: la
+    // policy exige `current_org_id()`, que nunca está seteado en este
+    // contexto — `current_org_id_or_ece_context()` ya lo resuelve, pero se
+    // mantiene el try/catch como defensa en profundidad porque emitir un
+    // evento es una mejora de UX, no un requisito de integridad de la firma).
+    try {
+      await emitDomainEvent(tx, {
+        organizationId,
+        eventType: "task.action_required",
+        aggregateType: "CareTask",
+        aggregateId: task.id,
+        emittedById: userId,
+        payload: {
+          taskType,
+          sourceType: "INDICACION_ITEM",
+          sourceId: item.id,
+          assignedRoleCode: "NURSE",
+          establishmentId,
+          serviceUnitId: null,
+          dueAt: dueAt.toISOString(),
+          url: "/tareas",
+          resumen: title,
+        },
+      });
+    } catch (err) {
+      console.error(
+        `[CC-0031 care-task-consumer] emitDomainEvent(task.action_required) falló para CareTask ${task.id} — ` +
+          "la tarea se creó igual, solo no se emitió la notificación.",
+        err,
+      );
+    }
   }
 
   return { tasksCreated };

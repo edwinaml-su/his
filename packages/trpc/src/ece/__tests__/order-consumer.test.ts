@@ -236,4 +236,38 @@ describe("materializeOrdenesFromIndicacion", () => {
       materializeOrdenesFromIndicacion(tx as never, baseParams([LAB_ITEM])),
     ).rejects.toThrow(dbError);
   });
+
+  // ---------------------------------------------------------------------------
+  // CC-0031 Fase 1(b) — puente tarea→notificación (task.action_required)
+  // ---------------------------------------------------------------------------
+  it("ítem lab: emite task.action_required con assignedRoleCode=LAB_TECHNICIAN", async () => {
+    const LAB_ORDER_UUID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const tx = makeTx() as MockTx & {
+      domainEvent: { create: ReturnType<typeof vi.fn> };
+      auditLog: { create: ReturnType<typeof vi.fn> };
+    };
+    tx.domainEvent = { create: vi.fn().mockResolvedValue({ id: "evt-1" }) };
+    tx.auditLog = { create: vi.fn().mockResolvedValue({}) };
+    tx.labOrder.create.mockResolvedValueOnce({ id: LAB_ORDER_UUID });
+    primeResolution(tx);
+    tx.labTest.findFirst.mockResolvedValueOnce({ id: LAB_TEST_ID });
+    // 3ra respuesta de $queryRaw: sonda de contexto de emitDomainEvent.
+    tx.$queryRaw.mockResolvedValueOnce([{ hasTenantContext: false }]);
+
+    await materializeOrdenesFromIndicacion(tx as never, baseParams([LAB_ITEM]));
+
+    expect(tx.domainEvent.create).toHaveBeenCalledTimes(1);
+    const eventArgs = tx.domainEvent.create.mock.calls[0]![0] as {
+      data: { eventType: string; aggregateId: string; payload: Record<string, unknown> };
+    };
+    expect(eventArgs.data.eventType).toBe("task.action_required");
+    // aggregateId = CareTask.id (no LabOrder.id) — mismo patrón que care-task-consumer.ts.
+    expect(eventArgs.data.aggregateId).toBe("task-1");
+    expect(eventArgs.data.payload).toMatchObject({
+      taskType: "LAB_TO_PROCESS",
+      sourceType: "LAB_ORDER",
+      sourceId: LAB_ORDER_UUID,
+      assignedRoleCode: "LAB_TECHNICIAN",
+    });
+  });
 });

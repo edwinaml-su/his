@@ -71,6 +71,7 @@ export * from "./locale";
 export * from "./medication-admin";
 export * from "./mfa";
 export * from "./newborn";
+export * from "./notification-roles";
 export * from "./notifications";
 export * from "./organization";
 export * from "./outpatient";

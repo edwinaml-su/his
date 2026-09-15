@@ -28,6 +28,8 @@ import type {
   AccountingPeriodClosedPayload,
   AccountingJournalPostedHighValuePayload,
   SecurityBreakGlassActivatedPayload,
+  TaskNotificationPayload,
+  CargoPendienteTarifaPayload,
 } from "@his/contracts";
 
 export interface RenderedTemplate {
@@ -925,6 +927,127 @@ ${infoRow("ID auditoría:", escape(payload.auditLogId))}
     ``,
     `Revisa el detalle completo en el módulo de Auditoría del HIS.`,
     ...(ctx.url ? [``, `Ver auditoría: ${ctx.url}`] : []),
+    ``,
+    `---`,
+    `Inversiones Avante — HIS Multipaís`,
+    `Mensaje automático. Ajusta tus preferencias en el HIS.`,
+  ];
+
+  return { subject, html, text: lines.join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// CC-0031 — task.action_required / task.sla_warning / task.sla_exceeded / task.escalated
+// Un solo builder para los 4 eventTypes — solo cambia el subject/badge, el
+// payload y el resto del cuerpo son idénticos (puente Workflow Inbox/CareTask).
+// ---------------------------------------------------------------------------
+
+const TASK_EVENT_LABEL: Record<string, { subject: string; badge: string; critical: boolean }> = {
+  "task.action_required": { subject: "Nueva tarea pendiente", badge: "ACCIÓN REQUERIDA", critical: false },
+  "task.sla_warning": { subject: "Tarea por vencer (70% del SLA)", badge: "SLA EN RIESGO", critical: false },
+  "task.sla_exceeded": { subject: "Tarea vencida — escalada", badge: "SLA VENCIDO", critical: true },
+  "task.escalated": { subject: "Tarea escalada a tu rol", badge: "ESCALADA", critical: true },
+};
+
+export function buildTaskNotificationTemplate(
+  eventType: "task.action_required" | "task.sla_warning" | "task.sla_exceeded" | "task.escalated",
+  payload: TaskNotificationPayload,
+  ctx: TemplateContext = {},
+): RenderedTemplate {
+  const meta = TASK_EVENT_LABEL[eventType] ?? TASK_EVENT_LABEL["task.action_required"]!;
+  const subject = `[${meta.badge}] ${payload.resumen}`;
+
+  const greeting = ctx.recipientName
+    ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">Estimado/a <strong>${escape(ctx.recipientName)}</strong>,</p>`
+    : "";
+
+  const html =
+    htmlHeader() +
+    `<tr><td>
+${greeting}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:16px;">
+<tr>
+<td style="font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:${COLOR.bodyText};padding-bottom:4px;">
+  ${severityBadge(meta.badge, meta.critical)}
+  <span style="margin-left:8px;">${escape(meta.subject)}</span>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">
+  ${escape(payload.resumen)}
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:20px;width:100%;max-width:400px;">
+${infoRow("Tipo de tarea:", escape(payload.taskType))}
+${payload.dueAt ? infoRow("Vence:", escape(payload.dueAt)) : ""}
+</table>
+</td></tr>` +
+    htmlFooter(ctx.url ?? payload.url);
+
+  const lines: string[] = [
+    `[${meta.badge}] ${payload.resumen}`,
+    `=======================================================`,
+    ...(ctx.recipientName ? [`Estimado/a ${ctx.recipientName},`, ``] : []),
+    payload.resumen,
+    `Tipo de tarea: ${payload.taskType}`,
+    ...(payload.dueAt ? [`Vence: ${payload.dueAt}`] : []),
+    ``,
+    `Ver tarea: ${ctx.url ?? payload.url}`,
+    ``,
+    `---`,
+    `Inversiones Avante — HIS Multipaís`,
+    `Mensaje automático. Ajusta tus preferencias en el HIS.`,
+  ];
+
+  return { subject, html, text: lines.join("\n") };
+}
+
+// ---------------------------------------------------------------------------
+// cargo.pendiente_tarifa  (docs/48 Ola 2, C2-1 — hasta CC-0031 esta notificación
+// se perdía: el evento se emitía pero ni dispatcher.ts ni la Edge Function lo
+// resolvían. Ver docs/audit/2026-09-15_cobertura/04-resumen-ejecutivo-y-cc0031.md §4).
+// ---------------------------------------------------------------------------
+
+export function buildCargoPendienteTarifaTemplate(
+  payload: CargoPendienteTarifaPayload,
+  ctx: TemplateContext = {},
+): RenderedTemplate {
+  const subject = `[ACCIÓN REQUERIDA] Cargo sin tarifa resuelta — ${payload.code}`;
+
+  const greeting = ctx.recipientName
+    ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">Estimado/a <strong>${escape(ctx.recipientName)}</strong>,</p>`
+    : "";
+
+  const html =
+    htmlHeader() +
+    `<tr><td>
+${greeting}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:16px;">
+<tr>
+<td style="font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:${COLOR.bodyText};padding-bottom:4px;">
+  ${severityBadge("PENDIENTE_TARIFA", false)}
+  <span style="margin-left:8px;">Cargo sin tarifa resuelta</span>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">
+  Un cargo se registró sin precio resoluble (RN-HIS-BOT-001 R3: nunca se factura a 0). Requiere que Facturación asigne la tarifa antes del cierre de cuenta.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:20px;width:100%;max-width:400px;">
+${infoRow("Código:", escape(payload.code))}
+${infoRow("Cantidad:", escape(String(payload.quantity)))}
+${infoRow("Origen:", escape(payload.origen))}
+</table>
+</td></tr>` +
+    htmlFooter(ctx.url);
+
+  const lines: string[] = [
+    `[ACCIÓN REQUERIDA] Cargo sin tarifa resuelta — ${payload.code}`,
+    `=======================================================`,
+    ...(ctx.recipientName ? [`Estimado/a ${ctx.recipientName},`, ``] : []),
+    `Un cargo se registró sin precio resoluble. Requiere que Facturación asigne la tarifa antes del cierre de cuenta.`,
+    `Código: ${payload.code}`,
+    `Cantidad: ${payload.quantity}`,
+    `Origen: ${payload.origen}`,
     ``,
     `---`,
     `Inversiones Avante — HIS Multipaís`,
