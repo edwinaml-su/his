@@ -315,6 +315,20 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
     await expect(page.getByTestId("entrega-parcial-badge")).toHaveText(
       /Entregado 3 de 3 — pendiente 0/,
     );
+
+    // Tras una reserva exitosa el botón "Validar y reservar" se DESMONTA
+    // (la página pasa a fase de confirmación: `!reservationId` en
+    // dispense/[orderId]/page.tsx) — primera corrida real del smoke en #662
+    // falló aquí con "element(s) not found". El bloqueo de UI del ítem
+    // completo se verifica como lo viviría el farmacéutico: entrando de
+    // nuevo a la orden con estado fresco.
+    await page.goto(`/pharmacy/dispense/${s.prescriptionId}`);
+    await expect(page.locator("#gs1-item")).toContainText(s.drugName, {
+      timeout: 8_000,
+    });
+    await expect(page.getByTestId("entrega-parcial-badge")).toHaveText(
+      /Entregado 3 de 3 — pendiente 0/,
+    );
     await expect(page.getByText(/cantidad total prescrita/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Validar y reservar" })).toBeDisabled();
 
