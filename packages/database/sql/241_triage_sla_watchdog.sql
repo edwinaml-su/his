@@ -6,7 +6,7 @@
 -- de espera venció sin que se le haya iniciado atención NO genera ninguna
 -- alerta activa — la única "protección" es que alguien mire el wallboard.
 --
--- ⚠️ PENDIENTE DE APLICAR — @Orq lo aplica a prod vía MCP (patrón del repo:
+-- ⚠️ ⚠️ APLICADO a prod 2026-09-15 vía MCP (triage_sla_watchdog_241) — NO re-aplicar. Verificado: cron */5 activo, columna de guarda e índice creados; 28 triages de prueba vencidos al aplicar (tanda inicial única) — @Orq lo aplica a prod vía MCP (patrón del repo:
 -- @Dev no ejecuta apply_migration). Requiere sql/238 y sql/238b ya aplicados
 -- (roles TRIAGE_NURSE/ADMIN_CLINICO + dispatcher `task.sla_exceeded` ya
 -- resuelven por `assignedRoleCode`, ver dispatcher.ts:159-176).
