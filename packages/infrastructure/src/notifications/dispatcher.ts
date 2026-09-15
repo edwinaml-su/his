@@ -49,6 +49,7 @@ import {
 } from "./routing";
 import {
   buildAllergyMismatchTemplate,
+  buildCriticalResultEmittedTemplate,
   buildDrugInteractionTemplate,
   buildLabCriticalValueTemplate,
   buildVitalCriticalTemplate,
@@ -142,6 +143,12 @@ async function resolveRecipientsAndSeverity(
       return resolveDrugInteraction(parsed.payload, event.organizationId, prisma);
     case "allergy.mismatch":
       return resolveAllergyMismatch(parsed.payload, event.organizationId, prisma);
+    case "critical_result.emitted":
+      return resolveCriticalResultEmitted(
+        parsed.payload as Record<string, unknown>,
+        event.organizationId,
+        prisma,
+      );
     case "transfusion.crossmatchFailed":
       return resolveTransfusionCrossmatchFailed(parsed.payload, event.organizationId, prisma);
     case "transfusion.adverseReaction":
@@ -281,6 +288,44 @@ async function resolveAllergyMismatch(
   if (!payload.prescriberId) return [];
   const user = await prisma.user.findUnique({
     where: { id: payload.prescriberId },
+    select: { id: true, email: true, fullName: true },
+  });
+  if (!user) return [];
+  const roleCode = await loadRoleCode(prisma, user.id, organizationId);
+  return [
+    {
+      userId: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      roleCode,
+      severity: "CRITICAL",
+    },
+  ];
+}
+
+/**
+ * CC-0035 (auditoría C6 2026-09-15, P0-10) — `critical_result.emitted`
+ * (motor de valor crítico con SLA + read-back, `ece/critical-result-notification.ts`)
+ * no tenía `case` en ninguno de los dos dispatchers. El payload no tiene
+ * schema tipado en `@his/contracts` (`z.object({}).passthrough()` — "rapid
+ * prototype", ver payloads.ts) así que se lee `Record<string, unknown>`
+ * acá en vez de tocar ese archivo (hotspot de conflicto documentado en
+ * CLAUDE.md) solo para esto.
+ *
+ * Resuelve directo por `medicoTratanteUserId` (public."User".id, incluido
+ * por el emisor junto al `medicoTratanteId` que es FK a
+ * ece.personal_salud) — mismo patrón que `resolveLabCriticalValue`/
+ * `prescriberId`, sin reimplementar el join personal_salud→User acá.
+ */
+async function resolveCriticalResultEmitted(
+  payload: Record<string, unknown>,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<ResolvedRecipient[]> {
+  const medicoTratanteUserId = payload["medicoTratanteUserId"];
+  if (typeof medicoTratanteUserId !== "string") return [];
+  const user = await prisma.user.findUnique({
+    where: { id: medicoTratanteUserId },
     select: { id: true, email: true, fullName: true },
   });
   if (!user) return [];
@@ -639,6 +684,8 @@ function renderTemplate(
       return buildDrugInteractionTemplate(event.payload as DrugInteractionPayload, ctx);
     case "allergy.mismatch":
       return buildAllergyMismatchTemplate(event.payload as AllergyMismatchPayload, ctx);
+    case "critical_result.emitted":
+      return buildCriticalResultEmittedTemplate(event.payload as Record<string, unknown>, ctx);
     case "transfusion.crossmatchFailed":
       return buildTransfusionCrossmatchFailedTemplate(event.payload as TransfusionCrossmatchFailedPayload, ctx);
     case "transfusion.adverseReaction":

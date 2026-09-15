@@ -66,9 +66,38 @@ import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { capturarCargo } from "../lib/charge-capture";
+import { resolvePersonalSalud } from "../lib/identity-resolver";
+import { createCriticalResultNotification } from "../ece/critical-result-notification";
 
 /** CC-0011 — CRUD del catálogo LIS (paneles/tests): solo administración. */
 const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
+
+/**
+ * CC-0035 (P0-3/P0-16, auditoría C6 2026-09-15) — antes de esto, todo el
+ * ciclo clínico legacy (`order.create`/`specimen.collect`/`specimen.reject`/
+ * `result.enter`/`result.validate`) corría en `tenantProcedure` sin
+ * `requireRole`: cualquier usuario con sesión de organización podía ordenar,
+ * tomar muestra, capturar o validar resultados. El motor ECE paralelo
+ * (`solicitud-estudio`/`resultado-estudio`, sin UI) ya tenía el diseño de
+ * rol correcto — se replica acá.
+ *
+ * `ADMIN` se incluye en los 4 gates como override operativo (mismo patrón
+ * que `critical-result.router.ts` `labProc`/`supervisorProc` y
+ * `catalogAdminProc` arriba), no solo por compatibilidad de tests: es el
+ * mismo criterio ya establecido en el resto del router.
+ *
+ * `order.create` incluye NURSE porque `/lis/orders/new` (el único caller de
+ * UI de este procedure, `seleccion-examenes.tsx`) no tiene gate de rol
+ * cliente — el ítem de sidebar "Laboratorio (LIS)" solo restringe por
+ * `requiredServiceUnits: ["LAB"]`, no por rol, así que hoy tanto médicos
+ * como enfermería pueden llegar a esa pantalla. Queda documentado como
+ * decisión abierta para @PO/@DrHIS: si la política clínica exige que solo
+ * PHYSICIAN ordene, hay que además cerrar la UI.
+ */
+const orderProc = requireRole(["PHYSICIAN", "NURSE", "ADMIN"]);
+const specimenProc = requireRole(["NURSE", "LAB_TECHNICIAN", "ADMIN"]);
+const resultEnterProc = requireRole(["LAB_TECHNICIAN", "ADMIN"]);
+const resultValidateProc = requireRole(["PHYSICIAN", "ADMIN"]);
 
 /** Convierte P2002 (unique violation) en CONFLICT con mensaje es-SV. */
 function rethrowCatalogPrisma(err: unknown): never {
@@ -938,7 +967,7 @@ export const lisRouter = router({
      *    reciente) para que la orden también aparezca en el tablero.
      * `patientAccountId` se persiste siempre que se logre resolver.
      */
-    create: tenantProcedure.input(labOrderCreateInput).mutation(async ({ ctx, input }) => {
+    create: orderProc.input(labOrderCreateInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         let encounterId: string | null = input.encounterId ?? null;
         let patientId: string;
@@ -1352,7 +1381,7 @@ export const lisRouter = router({
      * La evidencia de verificación se persiste en LabSpecimen y se emite
      * el evento jci.ipsg1.lab_bedside_verified dentro de la misma transacción.
      */
-    collect: tenantProcedure.input(specimenCollectInput).mutation(async ({ ctx, input }) => {
+    collect: specimenProc.input(specimenCollectInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const order = await tx.labOrder.findFirst({
           where: { id: input.orderId, organizationId: ctx.tenant.organizationId },
@@ -1461,7 +1490,7 @@ export const lisRouter = router({
       });
     }),
 
-    reject: tenantProcedure.input(specimenRejectInput).mutation(async ({ ctx, input }) => {
+    reject: specimenProc.input(specimenRejectInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const updated = await tx.labSpecimen.updateMany({
           where: {
@@ -1487,7 +1516,7 @@ export const lisRouter = router({
      * HH-06: withTenantContext provee la transacción y el demote de rol.
      * El outbox de emitDomainEvent ocurre dentro del mismo tx.
      */
-    enter: tenantProcedure
+    enter: resultEnterProc
       .input(resultEnterWithPatientContextInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1587,6 +1616,64 @@ export const lisRouter = router({
               emittedById: ctx.user.id,
               payload,
             });
+
+            // CC-0035 (P0-2/P0-11, auditoría C6 2026-09-15) — cierra el
+            // wiring LIS→critical-result documentado como pendiente en
+            // `critical-result.router.ts` ("el wiring LIS→emit se completa
+            // en sprint posterior"): además del evento `lab.criticalValue`
+            // de arriba (ya notifica al prescriptor vía el dispatcher real),
+            // se abre el seguimiento con SLA 60 min + read-back digital
+            // (IPSG.2 ME 2) — la fila que gobierna `criticalResult.pending`/
+            // `confirmReadback`.
+            //
+            // `medico_tratante_id` es FK NOT NULL a `ece.personal_salud(id)`
+            // (migración 114) — requiere que el prescriptor tenga perfil
+            // ECE vinculado (`his_user_id`). Si no lo tiene, se omite sin
+            // bloquear la captura del resultado, que ya quedó persistida
+            // arriba: `lab.criticalValue` sigue notificando igual. Ver R03
+            // (`packages/trpc/src/lib/identity-resolver.ts`) — mientras
+            // `ece.personal_salud` no tenga filas reales para el personal
+            // clínico, este bloque queda construido pero inerte en prod.
+            //
+            // NO se envuelve en try/catch (pre-pr-review lo señaló): un
+            // fallo genuino de Postgres (no el caso ya filtrado arriba) dentro
+            // de una transacción interactiva la deja abortada server-side —
+            // swallowear la excepción en JS no "salva" el COMMIT, solo
+            // oculta que la transacción completa (incluido `labResult.create`
+            // de arriba) igual se revierte, y el caller vería un falso
+            // "result.enter ok" con datos que nunca se persistieron. Ese
+            // riesgo de pérdida silenciosa es peor que el actual (falla
+            // visible, reintentable). Mismo trade-off ya aceptado para el
+            // `emitDomainEvent("lab.criticalValue")` de arriba, en la misma
+            // transacción — no es una regresión nueva, es consistente con
+            // el patrón existente del router.
+            const personalTratante = await resolvePersonalSalud(tx, item.order.prescriberId);
+            if (personalTratante) {
+              await createCriticalResultNotification(tx, {
+                organizationId: ctx.tenant.organizationId,
+                labResultId: result.id,
+                pacienteId: item.order.patientId,
+                medicoTratanteId: personalTratante.id,
+                medicoTratanteUserId: item.order.prescriberId,
+                valorCritico: {
+                  testCode: item.test.code,
+                  testName: item.test.name,
+                  flag: finalFlag,
+                  value: input.valueNumeric,
+                  unit: input.valueUnit ?? item.test.unit ?? null,
+                  referenceRange: {
+                    low: decimalToNullableNumber(item.test.refRangeLow),
+                    high: decimalToNullableNumber(item.test.refRangeHigh),
+                  },
+                },
+                // Ambos flags CRITICAL_LOW/CRITICAL_HIGH ya son el nivel más
+                // alto del enum de `LisResultFlag` — se mapean al nivel más
+                // alto de severidad de la notificación (mismo orden que usa
+                // `criticalResult.pending` para priorizar la bandeja).
+                severidad: "crítica",
+                emittedById: ctx.user.id,
+              });
+            }
           }
 
           return {
@@ -1612,7 +1699,7 @@ export const lisRouter = router({
      * Beta.3 — validate con 4-eyes + append-only history.
      * Las validaciones anteriores se mantienen en notes (formato auditable).
      */
-    validate: tenantProcedure.input(resultValidateInput).mutation(async ({ ctx, input }) => {
+    validate: resultValidateProc.input(resultValidateInput).mutation(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const result = await tx.labResult.findFirst({
           where: {

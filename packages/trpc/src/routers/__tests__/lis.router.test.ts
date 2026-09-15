@@ -42,6 +42,12 @@ function wireTransaction(prisma: DeepMockProxy<PrismaClient>): void {
     return cb;
   });
   prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+  // CC-0035 — default: sin fila ece.personal_salud (resolvePersonalSalud
+  // devuelve null), así que el wiring de critical-result-notification en
+  // result.enter se salta silenciosamente salvo que un test específico
+  // sobreescriba $queryRaw. Ver R03 (identity-resolver.ts): coherente con
+  // el estado real de producción (personal_salud sin filas al 2026-08-22).
+  prisma.$queryRaw.mockResolvedValue([] as never);
 }
 
 describe("lisRouter", () => {
@@ -132,6 +138,30 @@ describe("lisRouter", () => {
   });
 
   describe("order.create", () => {
+    // CC-0035 (P0-3/P0-16, auditoría C6 2026-09-15) — antes de esto,
+    // `order.create` corría en `tenantProcedure` sin `requireRole`.
+    it("FORBIDDEN sin rol PHYSICIAN/NURSE/ADMIN", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["TRIAGIST"] } }),
+      );
+      await expect(
+        caller.order.create({ encounterId: u, patientId: u, items: [{ testId: u }] }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("NURSE puede crear orden (caller real de /lis/orders/new hoy)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.order.create({ encounterId: u, patientId: u, items: [{ testId: u }] }),
+      ).resolves.toBeDefined();
+    });
+
     it("NOT_FOUND si encounter no es del tenant", async () => {
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -278,6 +308,27 @@ describe("lisRouter", () => {
   });
 
   describe("specimen.collect", () => {
+    // CC-0035 (P0-3/P0-16) — antes sin requireRole (tenantProcedure).
+    it("FORBIDDEN sin rol NURSE/LAB_TECHNICIAN/ADMIN", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["TRIAGIST"] } }),
+      );
+      await expect(
+        caller.specimen.collect({ orderId: u, type: "BLOOD", barcode: "B1" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("LAB_TECHNICIAN puede tomar la muestra", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labSpecimen.create.mockResolvedValue({ id: u } as never);
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["LAB_TECHNICIAN"] } }),
+      );
+      await expect(
+        caller.specimen.collect({ orderId: u, type: "BLOOD", barcode: "B1" }),
+      ).resolves.toBeDefined();
+    });
+
     it("NOT_FOUND si orden no existe", async () => {
       prisma.labOrder.findFirst.mockResolvedValue(null as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -298,6 +349,16 @@ describe("lisRouter", () => {
   });
 
   describe("specimen.reject", () => {
+    // CC-0035 (P0-3/P0-16) — antes sin requireRole (tenantProcedure).
+    it("FORBIDDEN sin rol NURSE/LAB_TECHNICIAN/ADMIN", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["TRIAGIST"] } }),
+      );
+      await expect(
+        caller.specimen.reject({ id: u, rejectionReason: "Hemolizada" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
     it("NOT_FOUND si specimen no existe en orden del tenant", async () => {
       prisma.labSpecimen.updateMany.mockResolvedValue({ count: 0 } as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -308,6 +369,17 @@ describe("lisRouter", () => {
   });
 
   describe("result.enter (Beta.3 auto-flag)", () => {
+    // CC-0035 (P0-3/P0-16) — antes sin requireRole (tenantProcedure); ahora
+    // solo LAB_TECHNICIAN/ADMIN capturan (segregación real vs result.validate).
+    it("FORBIDDEN sin rol LAB_TECHNICIAN/ADMIN", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["NURSE"] } }),
+      );
+      await expect(
+        caller.result.enter({ orderItemId: u, valueNumeric: 7.2, flag: "NORMAL" }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
     it("NOT_FOUND si orderItem no es del tenant", async () => {
       prisma.labOrderItem.findFirst.mockResolvedValue(null as never);
       const caller = lisRouter.createCaller(makeCtx({ prisma }));
@@ -590,6 +662,129 @@ describe("lisRouter", () => {
         expect(data.justification).toContain("lab.criticalValue");
       });
     });
+
+    /**
+     * CC-0035 (auditoría C6 2026-09-15, P0-2/P0-11) — cierra el wiring
+     * LIS→critical-result documentado como pendiente en
+     * `critical-result.router.ts` ("el wiring LIS→emit se completa en
+     * sprint posterior"). `result.enter` debe crear
+     * `ece.critical_result_notification` + emitir `critical_result.emitted`
+     * cuando el flag es crítico Y el prescriptor tiene `ece.personal_salud`
+     * vinculado (FK NOT NULL de la tabla); si no lo tiene, se omite sin
+     * bloquear la captura del resultado.
+     */
+    describe("CC-0035 — wiring critical-result-notification (P0-2/P0-11)", () => {
+      const PERSONAL_ID = "00000000-0000-0000-0000-0000000000aa";
+      const NOTIF_ID = "00000000-0000-0000-0000-0000000000bb";
+      const PATIENT_ID = "00000000-0000-0000-0000-0000000000cc";
+
+      function mockCriticalItem() {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: true,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v, patientId: PATIENT_ID },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+        prisma.domainEvent.create.mockResolvedValue({ id: w } as never);
+      }
+
+      it("crea la notificación + emite critical_result.emitted cuando el prescriptor tiene personal_salud vinculado", async () => {
+        mockCriticalItem();
+        // Dispatch por contenido del SQL en vez de orden posicional de
+        // llamadas — `emitDomainEvent` también hace su propio $queryRaw
+        // (ctxRows check) antes/después de cada evento, así que contar
+        // posiciones es frágil entre corridas (aislada vs. suite completa).
+        (prisma.$queryRaw as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+          (strings: TemplateStringsArray) => {
+            const sql = strings.join(" ");
+            if (sql.includes("ece.personal_salud")) {
+              return Promise.resolve([{ id: PERSONAL_ID, nombre_completo: "Dr. Test" }]);
+            }
+            if (sql.includes("INSERT INTO ece.critical_result_notification")) {
+              return Promise.resolve([{ id: NOTIF_ID, notificado_en: new Date() }]);
+            }
+            return Promise.resolve([]);
+          },
+        );
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 200,
+          flag: "NORMAL",
+          valueUnit: "mg/dL",
+        });
+
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(2);
+        const eventTypes = prisma.domainEvent.create.mock.calls.map(
+          (c) => (c[0] as { data: { eventType: string } }).data.eventType,
+        );
+        expect(eventTypes).toEqual(["lab.criticalValue", "critical_result.emitted"]);
+
+        const criticalPayload = (
+          prisma.domainEvent.create.mock.calls[1]![0] as {
+            data: { aggregateId: string; payload: Record<string, unknown> };
+          }
+        ).data;
+        expect(criticalPayload.aggregateId).toBe(NOTIF_ID);
+        expect(criticalPayload.payload.medicoTratanteId).toBe(PERSONAL_ID);
+        expect(criticalPayload.payload.medicoTratanteUserId).toBe(v);
+        expect(criticalPayload.payload.pacienteId).toBe(PATIENT_ID);
+        expect(criticalPayload.payload.severidad).toBe("crítica");
+      });
+
+      it("NO crea la notificación si el prescriptor no tiene personal_salud vinculado", async () => {
+        mockCriticalItem();
+        // beforeEach ya configura $queryRaw → [] (resolvePersonalSalud → null).
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 200,
+          flag: "NORMAL",
+          valueUnit: "mg/dL",
+        });
+
+        // Solo lab.criticalValue — sin segundo emitDomainEvent para critical_result.emitted.
+        expect(prisma.domainEvent.create).toHaveBeenCalledTimes(1);
+        expect(
+          (prisma.domainEvent.create.mock.calls[0]![0] as { data: { eventType: string } }).data
+            .eventType,
+        ).toBe("lab.criticalValue");
+      });
+
+      it("NO crea la notificación si el flag resultante no es crítico", async () => {
+        prisma.labOrderItem.findFirst.mockResolvedValue({
+          id: u,
+          test: {
+            code: "GLU",
+            name: "Glucosa",
+            refRangeLow: { toNumber: () => 70 },
+            refRangeHigh: { toNumber: () => 100 },
+            critical: false,
+            unit: "mg/dL",
+          },
+          order: { prescriberId: v, patientId: PATIENT_ID },
+        } as never);
+        prisma.labResult.create.mockResolvedValue({ id: u } as never);
+
+        const caller = lisRouter.createCaller(makeCtx({ prisma }));
+        await caller.result.enter({
+          orderItemId: u,
+          valueNumeric: 130,
+          flag: "NORMAL",
+        });
+
+        expect(prisma.domainEvent.create).not.toHaveBeenCalled();
+      });
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -636,6 +831,20 @@ describe("lisRouter", () => {
   });
 
   describe("result.validate (4-eyes + Beta.3 history)", () => {
+    // CC-0035 (P0-3/P0-16, auditoría C6 2026-09-15) — segregación real por
+    // ROL (no solo por identidad): antes cualquier tenantProcedure validaba
+    // con solo pasar el chequeo `resultedById !== ctx.user.id`. Un
+    // LAB_TECHNICIAN (el mismo rol que ahora exige `result.enter`) no puede
+    // validar aunque sea un usuario distinto del que capturó.
+    it("FORBIDDEN sin rol PHYSICIAN/ADMIN — LAB_TECHNICIAN no puede validar su propio pool", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["LAB_TECHNICIAN"] } }),
+      );
+      await expect(caller.result.validate({ resultId: u })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
     it("FORBIDDEN si el validador es el mismo que el resultador", async () => {
       prisma.labResult.findFirst.mockResolvedValue({
         id: u,

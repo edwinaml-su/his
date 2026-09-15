@@ -7,27 +7,24 @@
  * ---------------------------------------------------------------------------
  * FLUJO
  * ---------------------------------------------------------------------------
- *  1. LIS auto-flag detecta valor crítico → llama emit() → INSERT en
- *     ece.critical_result_notification con sla_min=60.
- *     (El wiring LIS→emit se completa en sprint posterior — ver TODO abajo.)
+ *  1. LIS auto-flag detecta valor crítico → `lis.router.ts result.enter` llama
+ *     al helper compartido `createCriticalResultNotification` (mismo INSERT
+ *     que hace `emit()` acá — ver `../../ece/critical-result-notification.ts`)
+ *     → INSERT en ece.critical_result_notification con sla_min=60. Cableado
+ *     CC-0035 (2026-09-15); `emit()` sigue disponible para LAB/RAD/ADMIN
+ *     (captura manual / RIS futuro).
  *
  *  2. Médico tratante recibe alerta (canal externo: push/email — ver notificationsRouter).
- *     Cuando confirma lectura, llama confirmReadback() con su PIN argon2id.
+ *     Cuando confirma lectura, llama confirmReadback() con su PIN. El PIN se
+ *     verifica con `checkPin` de `firma-electronica.router.ts` (argon2id +
+ *     lockout + bitácora sobre `ece.firma_electronica` — el mismo mecanismo
+ *     que la firma de historia clínica, CC-0011). Requiere que el usuario
+ *     tenga perfil `ece.personal_salud` + PIN configurado (`firma.setup`).
  *
  *  3. pg_cron watchdog cada 5 min (migración 114):
  *     - > 30 min sin read-back → emite 'critical_result.sla_warning' vía outbox.
  *     - > 60 min sin read-back → marca escalado_en + emite 'critical_result.sla_exceeded'.
  *     - escalate() permite escalación manual adicional.
- *
- * ---------------------------------------------------------------------------
- * TODO (sprint posterior — NO tocar LIS router directamente)
- * ---------------------------------------------------------------------------
- *  - Wiring LIS auto-flag: cuando LabResult se valida con valor_critico=true,
- *    el LIS router debe llamar emit() de este router (o emitir evento de dominio
- *    que este router consuma). Documentado en US.JCI.5.7-wiring.
- *  - PIN argon2id: integrar con MFA router para reutilizar el hash almacenado
- *    del médico (mfaRouter.verifyPin) en vez de recibir el PIN en texto plano.
- *    Por ahora, verificación dummy segura (ver nota en confirmReadback).
  *
  * ---------------------------------------------------------------------------
  * TABLAS BD (raw SQL — ece.* fuera de schema.prisma)
@@ -51,6 +48,9 @@ import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { applyTenantContext } from "../../rls-context";
 import { emitDomainEvent } from "@his/database";
+import { createCriticalResultNotification } from "../../ece/critical-result-notification";
+import { checkPin } from "../firma-electronica.router";
+import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
 // Schemas de input
@@ -67,8 +67,8 @@ const emitSchema = z.object({
 
 const confirmReadbackSchema = z.object({
   notificationId: z.string().uuid(),
-  /** PIN del médico — se verifica contra hash argon2id almacenado en ece.personal_salud.
-   *  TODO (sprint posterior): delegar verificación a mfaRouter.verifyPin. */
+  /** PIN del médico — verificado con `checkPin` (firma-electronica.router.ts)
+   *  contra el hash argon2id de `ece.firma_electronica` (CC-0035). */
   pin: z.string().min(4).max(32),
 });
 
@@ -101,11 +101,6 @@ interface NotificationRow {
   pin_fail_count: number;
   escalado_a_id: string | null;
   escalado_en: Date | null;
-}
-
-interface PersonalRow {
-  id: string;
-  pin_hash: string | null;
 }
 
 type RawTx = {
@@ -149,72 +144,6 @@ async function findNotification(
   return rows[0] ?? null;
 }
 
-async function findPersonalByHisUser(
-  tx: RawTx,
-  hisUserId: string,
-): Promise<PersonalRow | null> {
-  const rows = await (tx.$queryRaw as (
-    q: TemplateStringsArray,
-    ...v: unknown[]
-  ) => Promise<PersonalRow[]>)`
-    SELECT id::text, pin_hash
-    FROM ece.personal_salud
-    WHERE his_user_id = ${hisUserId}::uuid AND activo = true
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
-}
-
-// ---------------------------------------------------------------------------
-// PIN verification
-// ---------------------------------------------------------------------------
-
-/**
- * Verifica el PIN del médico.
- *
- * Implementación actual: verifica que el campo no sea vacío y que coincida con
- * pin_hash si está almacenado. El hash real argon2id se integra en sprint posterior
- * cuando se unifique con mfaRouter.verifyPin.
- *
- * Por seguridad: incrementa pin_fail_count en fallo y bloquea tras 5 intentos.
- */
-async function verifyPin(
-  tx: RawTx,
-  personal: PersonalRow,
-  notificationId: string,
-  pin: string,
-): Promise<{ ok: boolean; blocked: boolean }> {
-  // Obtener contador actual
-  const rows = await (tx.$queryRaw as (
-    q: TemplateStringsArray,
-    ...v: unknown[]
-  ) => Promise<Array<{ pin_fail_count: number }>>)`
-    SELECT pin_fail_count FROM ece.critical_result_notification
-    WHERE id = ${notificationId}::uuid
-    LIMIT 1
-  `;
-  const failCount = rows[0]?.pin_fail_count ?? 0;
-
-  if (failCount >= 5) {
-    return { ok: false, blocked: true };
-  }
-
-  // Si no hay pin_hash almacenado (usuario no configuró PIN), aceptar cualquier PIN
-  // no vacío. TODO: requerir pin_hash obligatorio tras integración con mfaRouter.
-  const pinOk = personal.pin_hash == null ? pin.length >= 4 : pin === personal.pin_hash;
-
-  if (!pinOk) {
-    await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
-      UPDATE ece.critical_result_notification
-      SET pin_fail_count = pin_fail_count + 1, updated_at = NOW()
-      WHERE id = ${notificationId}::uuid
-    `;
-    return { ok: false, blocked: false };
-  }
-
-  return { ok: true, blocked: false };
-}
-
 // ---------------------------------------------------------------------------
 // Procedures
 // ---------------------------------------------------------------------------
@@ -231,15 +160,16 @@ const supervisorProc = requireRole(["DIR", "ADMIN", "MC", "ESP"]);
 export const criticalResultRouter = router({
   /**
    * emit — Registra una notificación de resultado crítico.
-   * Llamado desde el LIS auto-flag (wiring pendiente — ver TODO de archivo).
+   * `lis.router.ts result.enter` llama al helper compartido directamente
+   * (no a este procedure) — `emit` queda para captura manual LAB/RAD/ADMIN
+   * y futuros callers (RIS, motor ECE de resultado-estudio).
    *
    * JCI Standard: IPSG.2 ME 2
    */
   emit: labProc.input(emitSchema).mutation(async ({ ctx, input }) => {
     const orgId = ctx.tenant.organizationId;
-    const valorJson = JSON.stringify(input.valorCritico);
 
-    const rows = await ctx.prisma.$transaction(async (tx) => {
+    return ctx.prisma.$transaction(async (tx) => {
       // R02 — El contexto RLS se aplica con applyTenantContext (`$executeRawUnsafe`).
       // El bloque anterior usaba `$executeRaw` con template + 3 sentencias, y
       // Postgres rechaza ambas cosas: `SET` no admite bind params ni forma parte
@@ -256,52 +186,23 @@ export const criticalResultRouter = router({
       // Quitar este opt-out en cuanto exista GRANT INSERT + policy de INSERT.
       await applyTenantContext(tx, ctx.tenant, { demoteRole: false });
 
-      const inserted = await (tx.$queryRaw as (
-        q: TemplateStringsArray,
-        ...v: unknown[]
-      ) => Promise<Array<{ id: string; notificado_en: Date }>>)`
-        INSERT INTO ece.critical_result_notification (
-          organization_id,
-          lab_result_id,
-          paciente_id,
-          medico_tratante_id,
-          valor_critico,
-          severidad,
-          sla_min
-        ) VALUES (
-          ${orgId}::uuid,
-          ${input.labResultId}::uuid,
-          ${input.pacienteId}::uuid,
-          ${input.medicoTratanteId}::uuid,
-          ${valorJson}::jsonb,
-          ${input.severidad},
-          ${input.slaMin}
-        )
-        RETURNING id::text, notificado_en
-      `;
-
-      const notif = inserted[0];
-      if (!notif) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Error al crear notificación." });
-
-      await emitDomainEvent(tx, {
+      // CC-0035 (P0-2/P0-11) — el INSERT + emitDomainEvent se extrajo a un
+      // helper compartido (`../../ece/critical-result-notification`) para
+      // que `lis.router.ts result.enter` lo reutilice sin duplicar la
+      // lógica (ver TODO original de este archivo sobre el wiring LIS→emit).
+      const { notificationId, notificadoEn } = await createCriticalResultNotification(tx, {
         organizationId: orgId,
-        eventType: "critical_result.emitted",
-        aggregateType: "CriticalResultNotification",
-        aggregateId: notif.id,
+        labResultId: input.labResultId,
+        pacienteId: input.pacienteId,
+        medicoTratanteId: input.medicoTratanteId,
+        valorCritico: input.valorCritico,
+        severidad: input.severidad,
+        slaMin: input.slaMin,
         emittedById: ctx.user.id,
-        payload: {
-          labResultId: input.labResultId,
-          pacienteId: input.pacienteId,
-          medicoTratanteId: input.medicoTratanteId,
-          severidad: input.severidad,
-          slaMin: input.slaMin,
-        },
       });
 
-      return notif;
+      return { notificationId, notificadoEn };
     });
-
-    return { notificationId: rows.id, notificadoEn: rows.notificado_en };
   }),
 
   /**
@@ -338,7 +239,7 @@ export const criticalResultRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "Read-back ya registrado." });
       }
 
-      const personal = await findPersonalByHisUser(tx, ctx.user.id);
+      const personal = await resolvePersonalSalud(tx, ctx.user.id);
       if (!personal) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -346,16 +247,22 @@ export const criticalResultRouter = router({
         });
       }
 
-      const { ok, blocked } = await verifyPin(tx, personal, input.notificationId, input.pin);
-      if (blocked) {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Cuenta bloqueada por exceso de intentos PIN. Contacte al administrador.",
-        });
-      }
-      if (!ok) {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "PIN incorrecto." });
-      }
+      // CC-0035 (P0-2b) — PIN real vía el mismo mecanismo que usa la firma
+      // de historia clínica (argon2id + lockout + bitácora de acceso en
+      // `ece.firma_electronica`, `checkPin` de `firma-electronica.router.ts`)
+      // en vez de la verificación "dummy" original (comparaba contra
+      // `ece.personal_salud.pin_hash`, columna que nunca se pobló). `checkPin`
+      // lanza TRPCError (PRECONDITION_FAILED/FORBIDDEN/TOO_MANY_REQUESTS/
+      // UNAUTHORIZED) en cualquier fallo — no hace falta reimplementar el
+      // conteo de intentos acá; `pin_fail_count` de esta tabla queda solo
+      // como snapshot informativo (se resetea a 0 al confirmar).
+      await checkPin(tx, {
+        userId: ctx.user.id,
+        pin: input.pin,
+        accion: "critical_result.readback",
+        contexto: `critical_result_notification:${input.notificationId}`,
+        ip: ctx.ip,
+      });
 
       await (tx.$executeRaw as (q: TemplateStringsArray, ...v: unknown[]) => Promise<number>)`
         UPDATE ece.critical_result_notification

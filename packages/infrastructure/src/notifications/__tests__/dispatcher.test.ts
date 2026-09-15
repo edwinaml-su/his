@@ -109,6 +109,26 @@ function makeDrugEvent(severity: "CRITICAL" | "WARNING"): DispatchInputEvent {
   };
 }
 
+/** CC-0035 (auditoría C6 2026-09-15) — critical_result.emitted. */
+function makeCriticalResultEvent(medicoTratanteUserId: string | null): DispatchInputEvent {
+  return {
+    id: EVENT_ID,
+    organizationId: ORG,
+    eventType: "critical_result.emitted",
+    aggregateType: "CriticalResultNotification",
+    aggregateId: NOTIF_ID,
+    payload: {
+      labResultId: VITALS_ID,
+      pacienteId: PATIENT_ID,
+      medicoTratanteId: NOTIF_ID,
+      medicoTratanteUserId,
+      severidad: "crítica",
+      slaMin: 60,
+      valorCritico: { testCode: "LOINC-1234", value: 999, unit: "mg/dL" },
+    },
+  };
+}
+
 function makeAllergyEvent(prescriberId: string | null): DispatchInputEvent {
   return {
     id: EVENT_ID,
@@ -290,6 +310,39 @@ describe("dispatchDomainEvent", () => {
     expect(result.notificationsCreated).toBe(2);
     expect(result.emailsSent).toBe(1);
     expect(provider.send).toHaveBeenCalledTimes(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // critical_result.emitted (CC-0035, auditoría C6 2026-09-15)
+  // ---------------------------------------------------------------------------
+
+  it("critical_result.emitted: resuelve User por medicoTratanteUserId → INBOX + EMAIL", async () => {
+    prisma.user.findUnique.mockResolvedValue(
+      stubUser({ id: PRESCRIBER_ID, email: "doc@his.test" }) as never,
+    );
+
+    const result = await dispatchDomainEvent(makeCriticalResultEvent(PRESCRIBER_ID), {
+      prisma,
+      emailProvider: provider,
+      fromEmail: "alerts@his.test",
+    });
+
+    expect(result.notificationsCreated).toBe(2);
+    expect(result.emailsSent).toBe(1);
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    const sendArg = provider.send.mock.calls[0]![0];
+    expect(sendArg.subject).toContain("CRÍTICO");
+  });
+
+  it("critical_result.emitted sin medicoTratanteUserId → no-recipient", async () => {
+    const result = await dispatchDomainEvent(makeCriticalResultEvent(null), {
+      prisma,
+      emailProvider: provider,
+      fromEmail: "alerts@his.test",
+    });
+
+    expect(result.skippedReason).toBe("no-recipient");
+    expect(prisma.notification.create).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------------

@@ -372,6 +372,83 @@ ${infoRow("Rango referencia:", `${refLow} – ${refHigh}${unit}`)}
 }
 
 // ---------------------------------------------------------------------------
+// critical_result.emitted — CC-0035 (auditoría C6 2026-09-15, P0-10/P0-11).
+// Motor de valor crítico con SLA + read-back digital (IPSG.2 ME 2). Payload
+// sin schema tipado en @his/contracts (`z.object({}).passthrough()`, ver
+// nota en dispatcher.ts) — se lee como `Record<string, unknown>` acá.
+// ---------------------------------------------------------------------------
+
+export function buildCriticalResultEmittedTemplate(
+  payload: Record<string, unknown>,
+  ctx: TemplateContext = {},
+): RenderedTemplate {
+  const valorCritico = (payload["valorCritico"] ?? {}) as Record<string, unknown>;
+  const testCode = typeof valorCritico["testCode"] === "string" ? valorCritico["testCode"] : "";
+  const value = valorCritico["value"];
+  const unitRaw = valorCritico["unit"];
+  const unitPlain = typeof unitRaw === "string" ? ` ${unitRaw}` : "";
+  const unit = typeof unitRaw === "string" ? ` ${escape(unitRaw)}` : "";
+  const slaMin = typeof payload["slaMin"] === "number" ? payload["slaMin"] : 60;
+  const patientFragment = ctx.patientName ? ` — ${ctx.patientName}` : "";
+  const subject = `[CRÍTICO] Valor crítico ${testCode}${patientFragment} — read-back en ${slaMin} min`;
+
+  const greeting = ctx.recipientName
+    ? `<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">Estimado/a <strong>${escape(ctx.recipientName)}</strong>,</p>`
+    : "";
+  const patientInfo = ctx.patientName ? infoRow("Paciente:", escape(ctx.patientName)) : "";
+
+  const html =
+    htmlHeader() +
+    `<tr><td>
+${greeting}
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="margin-bottom:16px;">
+<tr>
+<td style="font-family:Arial,sans-serif;font-size:20px;font-weight:bold;color:${COLOR.bodyText};padding-bottom:4px;">
+  ${severityBadge("CRÍTICO", true)}
+  <span style="margin-left:8px;">Valor crítico — read-back digital requerido</span>
+</td>
+</tr>
+</table>
+<p style="margin:0 0 16px;font-family:Arial,sans-serif;font-size:14px;color:${COLOR.bodyText};">
+  IPSG.2 ME 2 — confirme lectura en el HIS dentro de ${slaMin} minutos.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-bottom:20px;width:100%;max-width:400px;">
+${patientInfo}
+${infoRow("Prueba:", escape(testCode))}
+${infoRow("Resultado:", `<strong style="color:${COLOR.critical};">${value ?? ""}${unit}</strong>`)}
+${infoRow("SLA read-back:", `${slaMin} min`)}
+</table>
+<p style="margin:0;font-family:Arial,sans-serif;font-size:13px;color:${COLOR.footerText};">
+  Confirma la lectura con tu PIN de firma electrónica en el módulo de valor crítico del HIS.
+</p>
+</td></tr>` +
+    htmlFooter(ctx.url);
+
+  const lines: string[] = [
+    `[CRÍTICO] Valor crítico — read-back digital requerido`,
+    `=======================================================`,
+    ...(ctx.recipientName ? [`Estimado/a ${ctx.recipientName},`, ``] : []),
+    ...(ctx.patientName ? [`Paciente: ${ctx.patientName}`] : []),
+    `Prueba: ${testCode}`,
+    `Resultado: ${value ?? ""}${unitPlain}`,
+    `SLA read-back: ${slaMin} min`,
+    ``,
+    `Confirma la lectura con tu PIN de firma electrónica en el HIS.`,
+    ...(ctx.url ? [``, `Confirmar: ${ctx.url}`] : []),
+    ``,
+    `---`,
+    `Inversiones Avante — HIS Multipaís`,
+    `Mensaje automático. Ajusta tus preferencias en el HIS.`,
+  ];
+
+  return {
+    subject,
+    html,
+    text: lines.join("\n"),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // drug.interaction
 // ---------------------------------------------------------------------------
 

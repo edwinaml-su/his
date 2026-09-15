@@ -26,8 +26,25 @@ import {
   SLA_MINUTES,
   type ImagingOrderStatusType,
 } from "@his/contracts";
-import { router, tenantProcedure } from "../trpc";
+import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+
+/**
+ * CC-0035 (P0-4 acotado, auditoría C6 2026-09-15) — el ciclo clínico
+ * posterior a la solicitud (programar/realizar/dictar/firmar/validar)
+ * corría en `tenantProcedure` sin `requireRole`: `radiologistId=ctx.user.id`
+ * se asignaba a cualquier usuario tenant sin verificar rol. `ADMIN` se
+ * incluye como override operativo (mismo patrón que `lis.router.ts` y
+ * `critical-result.router.ts`).
+ *
+ * NO se toca `modality.list`/`modality.create` (catálogo, fuera del ciclo
+ * post-solicitud que pide el encargo) ni se agrega segregación firma≠valida
+ * en `report.validate` (el encargo pide "agrega requireRole", no rediseñar
+ * la regla de negocio) — documentado como pendiente para el CC de UI/RIS
+ * futuro (ver auditoría B35: sin segregación firma≠validación).
+ */
+const radTechnicianProc = requireRole(["RAD_TECHNICIAN", "ADMIN"]);
+const radiologistProc = requireRole(["PHYSICIAN", "ADMIN"]);
 
 export const imagingRouter = router({
   modality: router({
@@ -144,7 +161,7 @@ export const imagingRouter = router({
     // (docs/48 Ola 3 C3-1 / RN-HIS-BOT-001 H-01). El `order.create` legado
     // (texto libre, sin código de catálogo) creaba órdenes sin cargo y no
     // tenía callers — eliminado.
-    updateStatus: tenantProcedure
+    updateStatus: radTechnicianProc
       .input(imagingOrderUpdateStatusInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -185,7 +202,7 @@ export const imagingRouter = router({
         });
       }),
 
-    cancel: tenantProcedure
+    cancel: radTechnicianProc
       .input(imagingOrderCancelInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -267,7 +284,7 @@ export const imagingRouter = router({
   }),
 
   report: router({
-    create: tenantProcedure
+    create: radiologistProc
       .input(imagingReportCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -327,7 +344,7 @@ export const imagingRouter = router({
         });
       }),
 
-    sign: tenantProcedure
+    sign: radiologistProc
       .input(imagingReportSignInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -358,7 +375,7 @@ export const imagingRouter = router({
      * Validates a signed report, promoting the order to VALIDATED.
      * After validation the DB trigger blocks any further UPDATE/DELETE on the report.
      */
-    validate: tenantProcedure
+    validate: radiologistProc
       .input(imagingReportValidateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
