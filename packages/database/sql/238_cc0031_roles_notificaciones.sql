@@ -3,9 +3,9 @@
 -- CC-0031 Fase 0 — Roles + alias + defaults de notificación, prerequisito del
 -- puente Workflow Inbox / CareTask → Notification.
 --
--- ⚠️ PENDIENTE DE APLICAR — NO se aplicó a prod desde este agente. Lo aplica
--- @Orq vía MCP Supabase (mcp__supabase__apply_migration), como el resto de
--- SQL numerado del repo (ver CLAUDE.md §Motor de workflow / §MCPs).
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0031_roles_notificaciones_238) —
+-- NO re-aplicar. Verificado: 7 roles × orgs activas, 29 alias globales,
+-- 966 filas RoleNotificationDefault.
 --
 -- Motivación (docs/audit/2026-09-15_cobertura/00-inventario-infra-notificaciones.md
 -- §5.1): `TASK_REQUIRED_ROLES` (packages/contracts/src/schemas/workflow-inbox.ts)

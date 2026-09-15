@@ -2,9 +2,9 @@
 -- 238b_cc0031_sla_watchdog.sql
 -- CC-0031 Fase 3 — columnas de guarda + cron `caretask_sla_watchdog`.
 --
--- ⚠️ PENDIENTE DE APLICAR — NO se aplicó a prod desde este agente (mismo
--- criterio que sql/238; lo aplica @Orq vía MCP Supabase). Requiere sql/238
--- aplicado primero (roles/alias que resuelve `fn_cc0031_escalation_role`).
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0031_sla_watchdog_238b) — NO
+-- re-aplicar. Verificado: columnas de guarda, fn_cc0031_escalation_role y
+-- cron caretask_sla_watchdog (*/15) activos. Requiere sql/238 primero.
 --
 -- Patrón: espejo de sql/114 (critical_result_sla_watchdog) y sql/120
 -- (morse_sla_watchdog), pero con idempotencia por COLUMNA de guarda en vez de
