@@ -332,8 +332,13 @@ Deno.test("DEFAULT_ROLE_DEFAULTS — incluye PHYSICIAN, NURSE, PHARMACIST, ADMIN
 
 Deno.test("isDeadlockError — detecta código 40P01 y mensaje 'deadlock detected'", () => {
   assertEquals(isDeadlockError({ code: "40P01", message: "" }), true);
+  // Fallback por mensaje SOLO cuando code viene ausente (errores no tipificados).
   assertEquals(isDeadlockError({ message: "deadlock detected" }), true);
+  assertEquals(isDeadlockError({ code: null, message: "deadlock detected" }), true);
   assertEquals(isDeadlockError({ code: "23505", message: "duplicate key" }), false);
+  // Code presente manda: un error tipificado distinto NO se reintenta aunque
+  // el mensaje contenga el texto.
+  assertEquals(isDeadlockError({ code: "XX000", message: "deadlock detected" }), false);
   assertEquals(isDeadlockError(null), false);
   assertEquals(isDeadlockError(undefined), false);
 });

@@ -587,29 +587,38 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
 
       switch (sendResult.status) {
         case "sent": {
-          const { error: updErr } = await supabase
-            .from("Notification")
-            .update({
-              status: "SENT",
-              sentAt: new Date().toISOString(),
-              providerMessageId: sendResult.providerMessageId ?? null,
-              metadata: { provider: "resend" },
-            })
-            .eq("id", emailRow.id);
+          // withRetry también acá: el trigger AFTER UPDATE de Notification
+          // (sql/43) inserta en la hash chain de auditoría → mismo lock,
+          // mismo 40P01 bajo ráfagas. Perder este UPDATE deja la fila
+          // PENDING para siempre con el mail ya enviado. El UPDATE es
+          // idempotente → retry seguro.
+          const { error: updErr } = await withRetry(() =>
+            supabase
+              .from("Notification")
+              .update({
+                status: "SENT",
+                sentAt: new Date().toISOString(),
+                providerMessageId: sendResult.providerMessageId ?? null,
+                metadata: { provider: "resend" },
+              })
+              .eq("id", emailRow.id)
+          );
           if (updErr) console.error("[dispatch] SENT update failed", updErr);
           result.emailsSent += 1;
           break;
         }
         case "permanent": {
-          const { error: updErr } = await supabase
-            .from("Notification")
-            .update({
-              status: "FAILED",
-              failedAt: new Date().toISOString(),
-              attempts: 1,
-              failureReason: clip(`permanent: ${sendResult.reason ?? ""}`, 2000),
-            })
-            .eq("id", emailRow.id);
+          const { error: updErr } = await withRetry(() =>
+            supabase
+              .from("Notification")
+              .update({
+                status: "FAILED",
+                failedAt: new Date().toISOString(),
+                attempts: 1,
+                failureReason: clip(`permanent: ${sendResult.reason ?? ""}`, 2000),
+              })
+              .eq("id", emailRow.id)
+          );
           if (updErr) console.error("[dispatch] FAILED update failed", updErr);
           result.emailsFailed += 1;
           break;
@@ -617,26 +626,30 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
         case "transient": {
           // PENDING + attempts++ → el poller del outbox o un retry futuro
           // reprocesará. (En este PR, el poller no re-invoca; mejora futura.)
-          const { error: updErr } = await supabase
-            .from("Notification")
-            .update({
-              attempts: 1,
-              failureReason: clip(`transient: ${sendResult.reason ?? ""}`, 2000),
-            })
-            .eq("id", emailRow.id);
+          const { error: updErr } = await withRetry(() =>
+            supabase
+              .from("Notification")
+              .update({
+                attempts: 1,
+                failureReason: clip(`transient: ${sendResult.reason ?? ""}`, 2000),
+              })
+              .eq("id", emailRow.id)
+          );
           if (updErr) console.error("[dispatch] transient update failed", updErr);
           result.emailsFailed += 1;
           break;
         }
         case "no-api-key": {
-          const { error: updErr } = await supabase
-            .from("Notification")
-            .update({
-              status: "FAILED",
-              failedAt: new Date().toISOString(),
-              failureReason: "RESEND_API_KEY_NOT_CONFIGURED",
-            })
-            .eq("id", emailRow.id);
+          const { error: updErr } = await withRetry(() =>
+            supabase
+              .from("Notification")
+              .update({
+                status: "FAILED",
+                failedAt: new Date().toISOString(),
+                failureReason: "RESEND_API_KEY_NOT_CONFIGURED",
+              })
+              .eq("id", emailRow.id)
+          );
           if (updErr) console.error("[dispatch] no-api-key update failed", updErr);
           result.emailsFailed += 1;
           break;

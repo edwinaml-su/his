@@ -578,7 +578,10 @@ export interface PgErrorLike {
 
 export function isDeadlockError(error: PgErrorLike | null | undefined): boolean {
   if (!error) return false;
-  if (error.code === "40P01") return true;
+  // Con code presente, solo 40P01 garantiza que Postgres abortó y revirtió
+  // la tx (reintentar es seguro). El fallback por mensaje aplica únicamente
+  // cuando code viene ausente (errores que PostgREST no tipifica).
+  if (error.code != null) return error.code === "40P01";
   return /deadlock detected/i.test(error.message ?? "");
 }
 
@@ -597,8 +600,11 @@ export interface WithRetryOpts {
  * Reintenta `fn` mientras el resultado traiga un error de deadlock (40P01).
  * Cualquier otro error (o éxito) retorna de inmediato — el caller conserva
  * su manejo de errores intacto. Si los reintentos se agotan, retorna el
- * último resultado (con el error de deadlock) para que el caller lance y el
- * poller re-arme el evento.
+ * último resultado (con el error de deadlock) para que el caller lance.
+ * OJO: agotar los reintentos = notificación perdida — el poller marca
+ * `publishedAt` de forma OPTIMISTA (sql/44+242, fire-and-forget) y NUNCA
+ * re-arma; recuperar requiere re-armado manual
+ * (`UPDATE "DomainEvent" SET "publishedAt" = NULL`), como en el incidente.
  */
 export async function withRetry<T extends { error: PgErrorLike | null }>(
   fn: () => PromiseLike<T>,
