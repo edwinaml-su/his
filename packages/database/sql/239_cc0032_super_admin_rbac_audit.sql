@@ -4,8 +4,12 @@
 -- seguridad, docs/audit/2026-09-15_cobertura/03-facturacion-admin-seguridad.md
 -- P0-1/2/3 + 04-resumen-ejecutivo-y-cc0031.md §3).
 --
--- ⚠️ PENDIENTE DE APLICAR — @Orq la aplica vía MCP Supabase tras revisión.
--- NO aplicar contra prod desde este worktree.
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0032_super_admin_rbac_audit_239)
+-- — NO re-aplicar. Verificado: 21 roles SUPER_ADMIN (orgs activas), herencia
+-- SA→ADMIN enlazada en la org fiscal real (única activa con ADMIN),
+-- membresía SOLO para Edwin (21), 12 triggers (4 tablas × 3 eventos), y la
+-- cadena audit."AuditLog" capturó el propio apply (21 CREATE Role +
+-- 1 UPDATE + 21 CREATE UserOrganizationRole).
 --
 -- Decisión de Edwin Martinez (verbatim): "Procede solo Edwin Martinez es
 -- Super Admin" — la administración de roles/permisos queda restringida a un
