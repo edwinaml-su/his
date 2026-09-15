@@ -41,6 +41,8 @@ import {
   renderTemplate,
   resolveChannels,
   validatePayloadShallow,
+  type ChannelSet,
+  type RoleSeverityMatrix,
   type Severity,
 } from "./lib.ts";
 
@@ -110,16 +112,21 @@ function jsonResp(status: number, body: unknown): Response {
 // Recipient resolution por eventType
 // -----------------------------------------------------------------------------
 
-async function resolveRecipient(
+/**
+ * CC-0031 — resuelve N recipients para un eventType. Los 4 eventTypes
+ * pre-existentes siguen siendo single-recipient (envueltos en array de
+ * 0-1); `task.*`/`cargo.pendiente_tarifa` usan `resolveByRole` (N usuarios).
+ */
+async function resolveRecipients(
   eventType: string,
   payload: any,
   organizationId: string,
-): Promise<ResolvedRecipient | null> {
+): Promise<ResolvedRecipient[]> {
   switch (eventType) {
     case "vital.critical": {
       // Solo source = "InpatientVitals" + admissionId. VentilatorSession en Beta.16.
       if (payload?.source !== "InpatientVitals" || typeof payload?.admissionId !== "string") {
-        return null;
+        return [];
       }
       const { data: admission, error } = await supabase
         .from("InpatientAdmission")
@@ -128,24 +135,207 @@ async function resolveRecipient(
         .maybeSingle();
       if (error) {
         console.error("[dispatch] InpatientAdmission lookup failed", error);
-        return null;
+        return [];
       }
-      if (!admission) return null;
-      return loadUser(admission.attendingId, admission.organizationId);
+      if (!admission) return [];
+      const user = await loadUser(admission.attendingId, admission.organizationId);
+      return user ? [user] : [];
     }
     case "lab.criticalValue":
     case "drug.interaction": {
-      if (typeof payload?.prescriberId !== "string") return null;
-      return loadUser(payload.prescriberId, organizationId);
+      if (typeof payload?.prescriberId !== "string") return [];
+      const user = await loadUser(payload.prescriberId, organizationId);
+      return user ? [user] : [];
     }
     case "allergy.mismatch": {
-      if (payload?.prescriberId == null) return null; // skip explícito si null
-      if (typeof payload.prescriberId !== "string") return null;
-      return loadUser(payload.prescriberId, organizationId);
+      if (payload?.prescriberId == null) return []; // skip explícito si null
+      if (typeof payload.prescriberId !== "string") return [];
+      const user = await loadUser(payload.prescriberId, organizationId);
+      return user ? [user] : [];
     }
+    // CC-0031 — puente tarea→notificación (4 eventTypes, mismo resolver).
+    case "task.action_required":
+    case "task.sla_warning":
+    case "task.sla_exceeded":
+    case "task.escalated": {
+      if (typeof payload?.assignedRoleCode !== "string") return [];
+      return resolveByRole(payload.assignedRoleCode, organizationId);
+    }
+    // docs/48 Ola 2 (C2-1) — antes de CC-0031 este eventType no resolvía
+    // ningún recipient acá (00 §2.3, "el agujero").
+    case "cargo.pendiente_tarifa":
+      return resolveByRole("FACTURACION", organizationId);
     default:
-      return null;
+      return [];
   }
+}
+
+// -----------------------------------------------------------------------------
+// CC-0031 — resolver genérico por rol. Espejo de `resolveByRole` /
+// `resolveRoleIdsForCode` en packages/infrastructure/src/notifications/dispatcher.ts
+// (TS) — MISMA lógica (alias inverso + herencia transitiva + vigencia +
+// dedupe por userId), reimplementada con supabase-js porque Deno no puede
+// importar `@prisma/client`. Si cambias uno, cambia el otro — ver test de
+// paridad `packages/infrastructure/src/notifications/__tests__/resolve-by-role.test.ts`
+// y `supabase/functions/notifications-dispatch/lib.test.ts`.
+// -----------------------------------------------------------------------------
+
+const MAX_ROLE_INHERITANCE_DEPTH = 20;
+
+async function resolveRoleIdsForCode(
+  roleCode: string,
+  organizationId: string,
+): Promise<string[]> {
+  const { data: aliasRows, error: aliasErr } = await supabase
+    .from("RoleCodeAlias")
+    .select("sourceCode")
+    .eq("canonicalCode", roleCode)
+    .or(`organizationId.eq.${organizationId},organizationId.is.null`);
+  if (aliasErr) {
+    console.error("[dispatch] RoleCodeAlias lookup failed", aliasErr);
+  }
+  const codes = Array.from(
+    new Set([roleCode, ...((aliasRows ?? []) as Array<{ sourceCode: string }>).map((a) => a.sourceCode)]),
+  );
+
+  const { data: directRoles, error: roleErr } = await supabase
+    .from("Role")
+    .select("id")
+    .in("code", codes)
+    .or(`organizationId.eq.${organizationId},organizationId.is.null`);
+  if (roleErr) {
+    console.error("[dispatch] Role lookup failed", roleErr);
+    return [];
+  }
+  const allIds = new Set(((directRoles ?? []) as Array<{ id: string }>).map((r) => r.id));
+  if (allIds.size === 0) return [];
+
+  let frontier = Array.from(allIds);
+  let depth = 0;
+  while (frontier.length > 0 && depth < MAX_ROLE_INHERITANCE_DEPTH) {
+    depth++;
+    const { data: children, error: childErr } = await supabase
+      .from("Role")
+      .select("id")
+      .in("inheritsFromRoleId", frontier);
+    if (childErr) {
+      console.error("[dispatch] Role inheritance lookup failed", childErr);
+      break;
+    }
+    const newIds = ((children ?? []) as Array<{ id: string }>)
+      .map((c) => c.id)
+      .filter((id) => !allIds.has(id));
+    if (newIds.length === 0) break;
+    for (const id of newIds) allIds.add(id);
+    frontier = newIds;
+  }
+  return Array.from(allIds);
+}
+
+// -----------------------------------------------------------------------------
+// CC-0031 Fase 1(d) — `RoleNotificationDefault` en BD con fallback a
+// `resolveChannels` (mapa hardcodeado). Espejo de `resolveChannelsFromDb`
+// (packages/infrastructure/src/notifications/routing.ts) — el dispatcher Node
+// hoy NO tiene ningún caller de runtime (solo tests + mar-consumer.ts en
+// modo directo), así que ESTA es la ruta que de verdad ejecuta en prod
+// (poller pg_cron → pg_net → esta Edge Function). Sin este espejo, sembrar
+// `RoleNotificationDefault` (sql/238 §3) no tendría ningún efecto observable.
+// -----------------------------------------------------------------------------
+
+async function resolveChannelsFromDb(args: {
+  organizationId: string;
+  roleCode: string | null;
+  severity: Severity;
+  hasEmail: boolean;
+}): Promise<ChannelSet> {
+  const { organizationId, roleCode, severity, hasEmail } = args;
+  if (!roleCode) {
+    return resolveChannels({ roleCode, severity, hasEmail });
+  }
+  try {
+    const { data: role, error: roleErr } = await supabase
+      .from("Role")
+      .select("id")
+      .eq("code", roleCode)
+      .or(`organizationId.eq.${organizationId},organizationId.is.null`)
+      .limit(1)
+      .maybeSingle();
+    if (roleErr || !role) {
+      return resolveChannels({ roleCode, severity, hasEmail });
+    }
+    const { data: rows, error: rowsErr } = await supabase
+      .from("RoleNotificationDefault")
+      .select("severity, channel, enabled")
+      .eq("roleId", role.id);
+    if (rowsErr || !rows || rows.length === 0) {
+      return resolveChannels({ roleCode, severity, hasEmail });
+    }
+    const matrix: RoleSeverityMatrix = {
+      critical: pickRow(rows, "CRITICAL"),
+      warning: pickRow(rows, "WARNING"),
+      info: pickRow(rows, "INFO"),
+    };
+    return resolveChannels({
+      roleCode,
+      severity,
+      hasEmail,
+      overrides: new Map([[roleCode, matrix]]),
+    });
+  } catch (err) {
+    console.error("[dispatch] resolveChannelsFromDb failed (fail-safe: usando mapa hardcodeado)", err);
+    return resolveChannels({ roleCode, severity, hasEmail });
+  }
+}
+
+function pickRow(
+  rows: Array<{ severity: string; channel: string; enabled: boolean }>,
+  severity: string,
+): ChannelSet {
+  const get = (channel: "INBOX" | "EMAIL") => {
+    const row = rows.find((r) => r.severity === severity && r.channel === channel);
+    return row ? row.enabled : fallbackCellEnabled(severity, channel);
+  };
+  return { inbox: get("INBOX"), email: get("EMAIL") };
+}
+
+/** Mismo criterio que FALLBACK_DEFAULTS de lib.ts, para celdas ausentes en BD. */
+function fallbackCellEnabled(severity: string, channel: "INBOX" | "EMAIL"): boolean {
+  if (severity === "CRITICAL") return true;
+  return channel === "INBOX";
+}
+
+async function resolveByRole(
+  roleCode: string,
+  organizationId: string,
+): Promise<ResolvedRecipient[]> {
+  const roleIds = await resolveRoleIdsForCode(roleCode, organizationId);
+  if (roleIds.length === 0) return [];
+
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("UserOrganizationRole")
+    .select("userId, Role:roleId(code), User:userId(email, fullName)")
+    .eq("organizationId", organizationId)
+    .in("roleId", roleIds)
+    .lte("validFrom", nowIso)
+    .or(`validTo.is.null,validTo.gte.${nowIso}`);
+  if (error) {
+    console.error("[dispatch] UserOrganizationRole lookup failed (resolveByRole)", error);
+    return [];
+  }
+
+  // supabase-js no soporta `distinct` en este tipo de query — dedupe por userId en JS.
+  const byUser = new Map<string, ResolvedRecipient>();
+  for (const row of (data ?? []) as any[]) {
+    if (byUser.has(row.userId)) continue;
+    byUser.set(row.userId, {
+      userId: row.userId,
+      email: row.User?.email ?? null,
+      fullName: row.User?.fullName ?? null,
+      roleCode: row.Role?.code ?? null,
+    });
+  }
+  return Array.from(byUser.values());
 }
 
 async function loadUser(
@@ -286,13 +476,13 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
     return { ...result, skipped: `invalid-payload:${validationErr}` };
   }
 
-  // 3. Resolver recipient.
-  const recipient = await resolveRecipient(
+  // 3. Resolver recipients (CC-0031: 0..N — antes 0..1).
+  const recipients = await resolveRecipients(
     body.eventType,
     body.payload,
     body.organizationId,
   );
-  if (!recipient) {
+  if (recipients.length === 0) {
     return { ...result, skipped: "no-recipient" };
   }
 
@@ -302,16 +492,7 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
     return { ...result, skipped: "unknown-eventType" };
   }
 
-  // 5. Resolver canales. UserNotificationPreference NO se consulta en este PR
-  //    (simplification — defaults hardcoded por rol son suficientes para
-  //    Beta.15; preferences UI es US.B15.3.3 scope separado).
-  const channels = resolveChannels({
-    roleCode: recipient.roleCode,
-    severity,
-    hasEmail: !!recipient.email,
-  });
-
-  // 6. Construir template.
+  // 5. Construir template (una sola vez — mismo contenido para todos los recipients).
   const template = renderTemplate(body.eventType, body.payload, /*patientName*/ null);
   if (!template) {
     return { ...result, skipped: "no-template" };
@@ -319,117 +500,128 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
   const subject = clip(template.subject, 200);
   const bodyText = clip(template.text, 5000);
 
-  // 7. INSERT Notification por canal.
-  // Notification.id se genera con DEFAULT gen_random_uuid(); leemos el id
-  // de vuelta para luego UPDATE el estado del email.
-  if (channels.inbox) {
-    const { error: insertErr } = await supabase.from("Notification").insert({
+  // 6. Por cada recipient: resolver canales (UserNotificationPreference NO
+  //    se consulta acá — defaults hardcoded/BD son suficientes, preferences
+  //    UI es scope separado) + INSERT Notification por canal aplicable.
+  for (const recipient of recipients) {
+    const channels = await resolveChannelsFromDb({
       organizationId: body.organizationId,
-      eventId: body.eventId,
-      recipientUserId: recipient.userId,
-      channel: "INBOX",
+      roleCode: recipient.roleCode,
       severity,
-      subject,
-      body: bodyText,
-      status: "PENDING",
+      hasEmail: !!recipient.email,
     });
-    if (insertErr) {
-      console.error("[dispatch] INBOX insert failed", insertErr);
-      throw new Error(`inbox_insert_failed: ${insertErr.message}`);
-    }
-    result.notificationsCreated += 1;
-  }
 
-  if (channels.email && recipient.email) {
-    const { data: emailRow, error: emailInsertErr } = await supabase
-      .from("Notification")
-      .insert({
+    // Notification.id se genera con DEFAULT gen_random_uuid(); leemos el id
+    // de vuelta para luego UPDATE el estado del email.
+    if (channels.inbox) {
+      const { error: insertErr } = await supabase.from("Notification").insert({
         organizationId: body.organizationId,
         eventId: body.eventId,
         recipientUserId: recipient.userId,
-        channel: "EMAIL",
+        channel: "INBOX",
         severity,
         subject,
         body: bodyText,
         status: "PENDING",
-      })
-      .select("id")
-      .single();
-    if (emailInsertErr || !emailRow) {
-      console.error("[dispatch] EMAIL insert failed", emailInsertErr);
-      throw new Error(`email_insert_failed: ${emailInsertErr?.message ?? "no row"}`);
+      });
+      if (insertErr) {
+        console.error("[dispatch] INBOX insert failed", insertErr);
+        throw new Error(`inbox_insert_failed: ${insertErr.message}`);
+      }
+      result.notificationsCreated += 1;
     }
-    result.notificationsCreated += 1;
 
-    // 8. Envío Resend.
-    const sendResult = await sendEmailViaResend({
-      to: recipient.email,
-      from: FROM_EMAIL,
-      subject: template.subject,
-      html: template.html,
-      text: template.text,
-      tags: {
-        eventId: body.eventId,
-        eventType: body.eventType,
-        severity,
-      },
-    });
+    if (channels.email && recipient.email) {
+      const { data: emailRow, error: emailInsertErr } = await supabase
+        .from("Notification")
+        .insert({
+          organizationId: body.organizationId,
+          eventId: body.eventId,
+          recipientUserId: recipient.userId,
+          channel: "EMAIL",
+          severity,
+          subject,
+          body: bodyText,
+          status: "PENDING",
+        })
+        .select("id")
+        .single();
+      if (emailInsertErr || !emailRow) {
+        console.error("[dispatch] EMAIL insert failed", emailInsertErr);
+        throw new Error(`email_insert_failed: ${emailInsertErr?.message ?? "no row"}`);
+      }
+      result.notificationsCreated += 1;
 
-    switch (sendResult.status) {
-      case "sent": {
-        const { error: updErr } = await supabase
-          .from("Notification")
-          .update({
-            status: "SENT",
-            sentAt: new Date().toISOString(),
-            providerMessageId: sendResult.providerMessageId ?? null,
-            metadata: { provider: "resend" },
-          })
-          .eq("id", emailRow.id);
-        if (updErr) console.error("[dispatch] SENT update failed", updErr);
-        result.emailsSent += 1;
-        break;
-      }
-      case "permanent": {
-        const { error: updErr } = await supabase
-          .from("Notification")
-          .update({
-            status: "FAILED",
-            failedAt: new Date().toISOString(),
-            attempts: 1,
-            failureReason: clip(`permanent: ${sendResult.reason ?? ""}`, 2000),
-          })
-          .eq("id", emailRow.id);
-        if (updErr) console.error("[dispatch] FAILED update failed", updErr);
-        result.emailsFailed += 1;
-        break;
-      }
-      case "transient": {
-        // PENDING + attempts++ → el poller del outbox o un retry futuro
-        // reprocesará. (En este PR, el poller no re-invoca; mejora futura.)
-        const { error: updErr } = await supabase
-          .from("Notification")
-          .update({
-            attempts: 1,
-            failureReason: clip(`transient: ${sendResult.reason ?? ""}`, 2000),
-          })
-          .eq("id", emailRow.id);
-        if (updErr) console.error("[dispatch] transient update failed", updErr);
-        result.emailsFailed += 1;
-        break;
-      }
-      case "no-api-key": {
-        const { error: updErr } = await supabase
-          .from("Notification")
-          .update({
-            status: "FAILED",
-            failedAt: new Date().toISOString(),
-            failureReason: "RESEND_API_KEY_NOT_CONFIGURED",
-          })
-          .eq("id", emailRow.id);
-        if (updErr) console.error("[dispatch] no-api-key update failed", updErr);
-        result.emailsFailed += 1;
-        break;
+      // 7. Envío Resend.
+      const sendResult = await sendEmailViaResend({
+        to: recipient.email,
+        from: FROM_EMAIL,
+        subject: template.subject,
+        html: template.html,
+        text: template.text,
+        tags: {
+          eventId: body.eventId,
+          eventType: body.eventType,
+          severity,
+        },
+      });
+
+      switch (sendResult.status) {
+        case "sent": {
+          const { error: updErr } = await supabase
+            .from("Notification")
+            .update({
+              status: "SENT",
+              sentAt: new Date().toISOString(),
+              providerMessageId: sendResult.providerMessageId ?? null,
+              metadata: { provider: "resend" },
+            })
+            .eq("id", emailRow.id);
+          if (updErr) console.error("[dispatch] SENT update failed", updErr);
+          result.emailsSent += 1;
+          break;
+        }
+        case "permanent": {
+          const { error: updErr } = await supabase
+            .from("Notification")
+            .update({
+              status: "FAILED",
+              failedAt: new Date().toISOString(),
+              attempts: 1,
+              failureReason: clip(`permanent: ${sendResult.reason ?? ""}`, 2000),
+            })
+            .eq("id", emailRow.id);
+          if (updErr) console.error("[dispatch] FAILED update failed", updErr);
+          result.emailsFailed += 1;
+          break;
+        }
+        case "transient": {
+          // PENDING + attempts++ → el poller del outbox o un retry futuro
+          // reprocesará. (En este PR, el poller no re-invoca; mejora futura.)
+          const { error: updErr } = await supabase
+            .from("Notification")
+            .update({
+              attempts: 1,
+              failureReason: clip(`transient: ${sendResult.reason ?? ""}`, 2000),
+            })
+            .eq("id", emailRow.id);
+          if (updErr) console.error("[dispatch] transient update failed", updErr);
+          result.emailsFailed += 1;
+          break;
+        }
+        case "no-api-key": {
+          const { error: updErr } = await supabase
+            .from("Notification")
+            .update({
+              status: "FAILED",
+              failedAt: new Date().toISOString(),
+              failureReason: "RESEND_API_KEY_NOT_CONFIGURED",
+            })
+            .eq("id", emailRow.id);
+          if (updErr) console.error("[dispatch] no-api-key update failed", updErr);
+          result.emailsFailed += 1;
+          break;
+        }
       }
     }
   }

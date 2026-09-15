@@ -149,6 +149,16 @@ export function mapEventTypeToSeverity(
     }
     case "allergy.mismatch":
       return "CRITICAL";
+    // CC-0031 — puente tarea→notificación (ver dispatcher.ts Node, mismo mapeo).
+    case "task.action_required":
+      return "INFO";
+    case "task.sla_warning":
+      return "WARNING";
+    case "task.sla_exceeded":
+    case "task.escalated":
+      return "CRITICAL";
+    case "cargo.pendiente_tarifa":
+      return "WARNING";
     default:
       return null;
   }
@@ -200,6 +210,22 @@ export function validatePayloadShallow(
       ) {
         return "missing_prescriberId";
       }
+      return null;
+    }
+    // CC-0031 — task.action_required/sla_warning/sla_exceeded/escalated comparten shape.
+    case "task.action_required":
+    case "task.sla_warning":
+    case "task.sla_exceeded":
+    case "task.escalated": {
+      if (typeof payload.taskType !== "string") return "missing_taskType";
+      if (typeof payload.assignedRoleCode !== "string") return "missing_assignedRoleCode";
+      if (typeof payload.resumen !== "string") return "missing_resumen";
+      if (typeof payload.url !== "string") return "missing_url";
+      return null;
+    }
+    case "cargo.pendiente_tarifa": {
+      if (typeof payload.code !== "string") return "missing_code";
+      if (typeof payload.cargoId !== "string") return "missing_cargoId";
       return null;
     }
     default:
@@ -373,6 +399,76 @@ export function buildAllergyMismatchTemplate(
   return { subject, html, text };
 }
 
+// CC-0031 — task.action_required / task.sla_warning / task.sla_exceeded / task.escalated.
+// Espejo de `buildTaskNotificationTemplate` (packages/infrastructure/src/notifications/templates.ts).
+const TASK_EVENT_LABEL: Record<string, { subject: string; badge: string }> = {
+  "task.action_required": { subject: "Nueva tarea pendiente", badge: "ACCION REQUERIDA" },
+  "task.sla_warning": { subject: "Tarea por vencer (70% del SLA)", badge: "SLA EN RIESGO" },
+  "task.sla_exceeded": { subject: "Tarea vencida — escalada", badge: "SLA VENCIDO" },
+  "task.escalated": { subject: "Tarea escalada a tu rol", badge: "ESCALADA" },
+};
+
+export function buildTaskNotificationTemplate(
+  eventType: string,
+  payload: any,
+): RenderedTemplate {
+  const meta = TASK_EVENT_LABEL[eventType] ?? TASK_EVENT_LABEL["task.action_required"]!;
+  const resumen = String(payload?.resumen ?? "");
+  const taskType = String(payload?.taskType ?? "");
+  const dueAt = payload?.dueAt ? String(payload.dueAt) : null;
+  const subject = `[${meta.badge}] ${resumen}`;
+
+  const html = [
+    `<h2>${escape(meta.subject)}</h2>`,
+    `<p>${escape(resumen)}</p>`,
+    `<p><strong>Tipo de tarea:</strong> ${escape(taskType)}</p>`,
+    dueAt ? `<p><strong>Vence:</strong> ${escape(dueAt)}</p>` : "",
+    `<p>Revisa la bandeja de tareas del HIS.</p>`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const text = [
+    `[${meta.badge}] ${resumen}`,
+    `Tipo de tarea: ${taskType}`,
+    dueAt ? `Vence: ${dueAt}` : "",
+    ``,
+    `Revisa la bandeja de tareas del HIS.`,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+
+  return { subject, html, text };
+}
+
+// docs/48 Ola 2 (C2-1) — antes de CC-0031 este eventType no tenía template ni
+// resolución de recipient en la Edge Function (00 §2.3).
+export function buildCargoPendienteTarifaTemplate(payload: any): RenderedTemplate {
+  const code = String(payload?.code ?? "");
+  const quantity = String(payload?.quantity ?? "");
+  const origen = String(payload?.origen ?? "");
+  const subject = `[ACCION REQUERIDA] Cargo sin tarifa resuelta — ${code}`;
+
+  const html = [
+    `<h2>Cargo sin tarifa resuelta</h2>`,
+    `<p>Un cargo se registro sin precio resoluble (RN-HIS-BOT-001 R3: nunca se factura a 0).</p>`,
+    `<p><strong>Codigo:</strong> ${escape(code)}</p>`,
+    `<p><strong>Cantidad:</strong> ${escape(quantity)}</p>`,
+    `<p><strong>Origen:</strong> ${escape(origen)}</p>`,
+    `<p>Requiere que Facturacion asigne la tarifa antes del cierre de cuenta.</p>`,
+  ].join("\n");
+
+  const text = [
+    `Cargo sin tarifa resuelta — ${code}`,
+    `Cantidad: ${quantity}`,
+    `Origen: ${origen}`,
+    ``,
+    `Requiere que Facturacion asigne la tarifa antes del cierre de cuenta.`,
+  ].join("\n");
+
+  return { subject, html, text };
+}
+
 export function renderTemplate(
   eventType: string,
   payload: any,
@@ -387,6 +483,13 @@ export function renderTemplate(
       return buildDrugInteractionTemplate(payload, patientName);
     case "allergy.mismatch":
       return buildAllergyMismatchTemplate(payload, patientName);
+    case "task.action_required":
+    case "task.sla_warning":
+    case "task.sla_exceeded":
+    case "task.escalated":
+      return buildTaskNotificationTemplate(eventType, payload);
+    case "cargo.pendiente_tarifa":
+      return buildCargoPendienteTarifaTemplate(payload);
     default:
       return null;
   }

@@ -318,4 +318,78 @@ describe("materializeCareTasksFromIndicacion", () => {
       expect(data.data.sourceId).toBe("1");
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // CC-0031 Fase 1(b) — puente tarea→notificación (task.action_required)
+  // ---------------------------------------------------------------------------
+  describe("CC-0031 — emisión de task.action_required", () => {
+    const ITEM_ID = "77777777-7777-7777-7777-777777777777";
+    const TASK_ID = "88888888-8888-8888-8888-888888888888";
+
+    /** Tx con soporte completo para `emitDomainEvent` (domainEvent + auditLog). */
+    function makeFullTx() {
+      return {
+        $queryRaw: vi.fn(),
+        careTask: { create: vi.fn().mockResolvedValue({ id: TASK_ID }) },
+        domainEvent: { create: vi.fn().mockResolvedValue({ id: "evt-1" }) },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
+      };
+    }
+
+    it("con sourceId UUID válido, emite task.action_required con el payload esperado (NURSE)", async () => {
+      const tx = makeFullTx();
+      tx.$queryRaw
+        .mockResolvedValueOnce([{ org_id: ORG_ID }]) // resolución organizationId
+        .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }]) // bridge
+        .mockResolvedValueOnce([{ hasTenantContext: false }]); // emitDomainEvent: sonda de contexto
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([{ id: ITEM_ID, tipo: "MEDICAMENTO", descripcion: "Paracetamol 500mg VO c/8h" }]),
+      );
+
+      expect(result.tasksCreated).toBe(1);
+      expect(tx.domainEvent.create).toHaveBeenCalledTimes(1);
+      const eventArgs = tx.domainEvent.create.mock.calls[0]![0] as {
+        data: {
+          organizationId: string;
+          eventType: string;
+          aggregateType: string;
+          aggregateId: string;
+          payload: Record<string, unknown>;
+        };
+      };
+      expect(eventArgs.data.organizationId).toBe(ORG_ID);
+      expect(eventArgs.data.eventType).toBe("task.action_required");
+      expect(eventArgs.data.aggregateType).toBe("CareTask");
+      expect(eventArgs.data.aggregateId).toBe(TASK_ID);
+      expect(eventArgs.data.payload).toMatchObject({
+        taskType: "IND_MED_CUMPLIR",
+        sourceType: "INDICACION_ITEM",
+        sourceId: ITEM_ID,
+        assignedRoleCode: "NURSE",
+        establishmentId: ESTABLISHMENT_ID,
+        url: "/tareas",
+      });
+      expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("si emitDomainEvent falla (payload/BD), la CareTask ya creada NO se pierde", async () => {
+      const tx = makeFullTx();
+      tx.domainEvent.create.mockRejectedValue(new Error("insert failed"));
+      tx.$queryRaw
+        .mockResolvedValueOnce([{ org_id: ORG_ID }])
+        .mockResolvedValueOnce([{ encounter_id: null, patient_id: null }])
+        .mockResolvedValueOnce([{ hasTenantContext: false }]);
+
+      const result = await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([{ id: ITEM_ID, tipo: "DIETA", descripcion: "Dieta blanda" }]),
+      );
+
+      // La función NO relanza — tasksCreated refleja la CareTask ya persistida.
+      expect(result.tasksCreated).toBe(1);
+      expect(tx.careTask.create).toHaveBeenCalledTimes(1);
+    });
+  });
 });

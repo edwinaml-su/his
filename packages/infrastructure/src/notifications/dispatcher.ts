@@ -36,11 +36,14 @@ import {
   type AccountingPeriodClosedPayload,
   type AccountingJournalPostedHighValuePayload,
   type SecurityBreakGlassActivatedPayload,
+  type TaskNotificationPayload,
+  type CargoPendienteTarifaPayload,
 } from "@his/contracts";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
 import {
   resolveChannels,
+  resolveChannelsFromDb,
   type RoleSeverityMatrix,
   type Severity,
 } from "./routing";
@@ -56,6 +59,8 @@ import {
   buildAccountingPeriodClosedTemplate,
   buildAccountingJournalPostedHighValueTemplate,
   buildSecurityBreakGlassActivatedTemplate,
+  buildTaskNotificationTemplate,
+  buildCargoPendienteTarifaTemplate,
   type RenderedTemplate,
 } from "./templates";
 
@@ -151,6 +156,30 @@ async function resolveRecipientsAndSeverity(
       return resolveAccountingJournalPostedHighValue(parsed.payload, event.organizationId, prisma);
     case "security.breakGlass.activated":
       return resolveSecurityBreakGlassActivated(parsed.payload, event.organizationId, prisma);
+    // CC-0031 — puente tarea→notificación: los 4 eventTypes comparten payload
+    // y resolución (assignedRoleCode ya viene post-alias/escalado desde el
+    // emisor — care-task-consumer.ts, order-consumer.ts, el watchdog SQL
+    // (fn_cc0031_escalation_role) o workflowInbox.escalar).
+    case "task.action_required":
+    case "task.sla_warning":
+    case "task.sla_exceeded":
+    case "task.escalated":
+      return resolveByRole(
+        parsed.payload.assignedRoleCode,
+        event.organizationId,
+        prisma,
+        parsed.eventType === "task.sla_exceeded" || parsed.eventType === "task.escalated"
+          ? "CRITICAL"
+          : parsed.eventType === "task.sla_warning"
+            ? "WARNING"
+            : "INFO",
+      );
+    // docs/48 Ola 2 (C2-1) — antes de CC-0031 este case no existía: el evento
+    // se emitía y se perdía (00 §2.3 "el agujero"). FACTURACION hardcodeado
+    // porque el payload de cargo.pendiente_tarifa no trae assignedRoleCode
+    // (contrato pre-existente, no se modifica en CC-0031).
+    case "cargo.pendiente_tarifa":
+      return resolveByRole("FACTURACION", event.organizationId, prisma, "WARNING");
     default: {
       // HG-15 (Stream G, P2) — ECE Rectificaciones: notificación al solicitante (NTEC Art. 42).
       // Se maneja fuera del switch tipado porque el eventType es nuevo y el
@@ -444,6 +473,110 @@ async function resolveSecurityBreakGlassActivated(
 }
 
 // -----------------------------------------------------------------------------
+// CC-0031 — resolver genérico por rol (puente tarea→notificación).
+//
+// Generaliza `resolveSecurityBreakGlassActivated` (lista fija de códigos) a
+// CUALQUIER `roleCode`: expande alias inversos (`RoleCodeAlias.canonicalCode
+// = roleCode`) + herencia (`Role.inheritsFromRoleId`, cualquier rol que
+// herede — transitivamente — del rol resuelto también cuenta), luego
+// notifica a todos los usuarios con membresía VIGENTE (`UserOrganizationRole`,
+// `validFrom/validTo`) en alguno de esos roles, `distinct userId`.
+//
+// NO es importable desde `packages/trpc/src/rbac/effective-roles.ts` (esa
+// utilidad expande "roles que YA tiene un usuario"; acá el problema es el
+// inverso — "qué usuarios tienen efectivamente este rol" — y además
+// `infrastructure` no puede depender de `trpc`). Replicado con queries
+// directas; la Edge Function Deno (`supabase/functions/notifications-dispatch/`)
+// replica la MISMA lógica — ver tests de paridad en `__tests__/resolve-by-role.test.ts`.
+// -----------------------------------------------------------------------------
+
+const MAX_ROLE_INHERITANCE_DEPTH = 20;
+
+async function resolveRoleIdsForCode(
+  roleCode: string,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+): Promise<string[]> {
+  // 1. Alias inverso: cualquier sourceCode cuyo canonicalCode sea roleCode
+  //    (p.ej. roleCode="NURSE" → sourceCode="ENF" también cuenta).
+  const aliasRows = await prisma.roleCodeAlias.findMany({
+    where: {
+      canonicalCode: roleCode,
+      OR: [{ organizationId }, { organizationId: null }],
+    },
+    select: { sourceCode: true },
+  });
+  const codes = Array.from(new Set([roleCode, ...aliasRows.map((a) => a.sourceCode)]));
+
+  // 2. Role rows reales (org-scoped + globales) para esos códigos — raíz de
+  //    la búsqueda de herencia.
+  const directRoles = await prisma.role.findMany({
+    where: { code: { in: codes }, OR: [{ organizationId }, { organizationId: null }] },
+    select: { id: true },
+  });
+  const allIds = new Set(directRoles.map((r) => r.id));
+  if (allIds.size === 0) return [];
+
+  // 3. Herencia transitiva: cualquier rol cuyo `inheritsFromRoleId` llegue
+  //    (directa o indirectamente) a una de las raíces también cuenta —
+  //    quien tiene ese rol hereda efectivamente el rol destino.
+  let frontier = Array.from(allIds);
+  let depth = 0;
+  while (frontier.length > 0 && depth < MAX_ROLE_INHERITANCE_DEPTH) {
+    depth++;
+    const children = await prisma.role.findMany({
+      where: { inheritsFromRoleId: { in: frontier } },
+      select: { id: true },
+    });
+    const newIds = children.map((c) => c.id).filter((id) => !allIds.has(id));
+    if (newIds.length === 0) break;
+    for (const id of newIds) allIds.add(id);
+    frontier = newIds;
+  }
+  return Array.from(allIds);
+}
+
+/**
+ * Notifica a TODOS los usuarios con membresía vigente (`UserOrganizationRole`)
+ * en `roleCode` (o cualquier alias/rol heredado que resuelva a él) dentro de
+ * `organizationId`. Fail-safe implícito: si `roleCode` no resuelve a ningún
+ * `Role` (código huérfano sin alias — ver sql/238), devuelve `[]` en vez de
+ * lanzar — el caller lo reporta como `skippedReason: "no-recipient"`.
+ */
+async function resolveByRole(
+  roleCode: string,
+  organizationId: string,
+  prisma: DispatcherPrisma,
+  severity: Severity,
+): Promise<ResolvedRecipient[]> {
+  const roleIds = await resolveRoleIdsForCode(roleCode, organizationId, prisma);
+  if (roleIds.length === 0) return [];
+
+  const now = new Date();
+  const links = await prisma.userOrganizationRole.findMany({
+    where: {
+      organizationId,
+      roleId: { in: roleIds },
+      validFrom: { lte: now },
+      OR: [{ validTo: null }, { validTo: { gte: now } }],
+    },
+    select: {
+      userId: true,
+      role: { select: { code: true } },
+      user: { select: { email: true, fullName: true } },
+    },
+    distinct: ["userId"],
+  });
+  return links.map((l) => ({
+    userId: l.userId,
+    email: l.user.email,
+    fullName: l.user.fullName,
+    roleCode: l.role.code,
+    severity,
+  }));
+}
+
+// -----------------------------------------------------------------------------
 // HG-15 (Stream G, P2) — ECE Rectificaciones (NTEC Art. 42)
 // Notifica al solicitante cuando DIR aprueba o rechaza su rectificación.
 // Tipos inline para evitar dependencia de versión de @his/contracts en node_modules.
@@ -520,6 +653,13 @@ function renderTemplate(
       return buildAccountingJournalPostedHighValueTemplate(event.payload as AccountingJournalPostedHighValuePayload, ctx);
     case "security.breakGlass.activated":
       return buildSecurityBreakGlassActivatedTemplate(event.payload as SecurityBreakGlassActivatedPayload, ctx);
+    case "task.action_required":
+    case "task.sla_warning":
+    case "task.sla_exceeded":
+    case "task.escalated":
+      return buildTaskNotificationTemplate(event.eventType, event.payload as TaskNotificationPayload, ctx);
+    case "cargo.pendiente_tarifa":
+      return buildCargoPendienteTarifaTemplate(event.payload as CargoPendienteTarifaPayload, ctx);
     default:
       return null;
   }
@@ -589,13 +729,25 @@ export async function dispatchDomainEvent(
       ? await ctx.loadUserPreferences(recipient.userId)
       : undefined;
 
-    const channels = resolveChannels({
-      roleCode: recipient.roleCode,
-      severity: recipient.severity,
-      hasEmail: !!recipient.email,
-      userPrefs,
-      overrides: ctx.defaults,
-    });
+    // CC-0031 Fase 1(d) — si el caller no pasó `defaults` explícitos (tests /
+    // overrides), lee `RoleNotificationDefault` de BD con fallback automático
+    // al mapa hardcodeado (`resolveChannelsFromDb` nunca lanza).
+    const channels = ctx.defaults
+      ? resolveChannels({
+          roleCode: recipient.roleCode,
+          severity: recipient.severity,
+          hasEmail: !!recipient.email,
+          userPrefs,
+          overrides: ctx.defaults,
+        })
+      : await resolveChannelsFromDb({
+          prisma: ctx.prisma,
+          organizationId: event.organizationId,
+          roleCode: recipient.roleCode,
+          severity: recipient.severity,
+          hasEmail: !!recipient.email,
+          userPrefs,
+        });
 
     // 3a. INBOX
     if (channels.inbox) {

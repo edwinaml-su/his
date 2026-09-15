@@ -16,8 +16,10 @@ import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/ass
 
 import {
   buildAllergyMismatchTemplate,
+  buildCargoPendienteTarifaTemplate,
   buildDrugInteractionTemplate,
   buildLabCriticalValueTemplate,
+  buildTaskNotificationTemplate,
   buildVitalCriticalTemplate,
   clip,
   DEFAULT_ROLE_DEFAULTS,
@@ -236,6 +238,85 @@ Deno.test("clip — string largo se trunca con elipsis", () => {
 // -----------------------------------------------------------------------------
 // Sanity: defaults matrix tiene los 4 roles canónicos.
 // -----------------------------------------------------------------------------
+
+// -----------------------------------------------------------------------------
+// CC-0031 — task.action_required/sla_warning/sla_exceeded/escalated + cargo.pendiente_tarifa
+// -----------------------------------------------------------------------------
+
+Deno.test("mapEventTypeToSeverity — task.action_required → INFO", () => {
+  assertEquals(mapEventTypeToSeverity("task.action_required", {}), "INFO");
+});
+
+Deno.test("mapEventTypeToSeverity — task.sla_warning → WARNING", () => {
+  assertEquals(mapEventTypeToSeverity("task.sla_warning", {}), "WARNING");
+});
+
+Deno.test("mapEventTypeToSeverity — task.sla_exceeded y task.escalated → CRITICAL", () => {
+  assertEquals(mapEventTypeToSeverity("task.sla_exceeded", {}), "CRITICAL");
+  assertEquals(mapEventTypeToSeverity("task.escalated", {}), "CRITICAL");
+});
+
+Deno.test("mapEventTypeToSeverity — cargo.pendiente_tarifa → WARNING", () => {
+  assertEquals(mapEventTypeToSeverity("cargo.pendiente_tarifa", {}), "WARNING");
+});
+
+Deno.test("validatePayloadShallow — task.action_required OK con campos mínimos", () => {
+  const err = validatePayloadShallow("task.action_required", {
+    taskType: "IND_MED_CUMPLIR",
+    assignedRoleCode: "NURSE",
+    resumen: "Cumplir indicación",
+    url: "/tareas",
+  });
+  assertEquals(err, null);
+});
+
+Deno.test("validatePayloadShallow — task.escalated sin assignedRoleCode → error", () => {
+  const err = validatePayloadShallow("task.escalated", {
+    taskType: "IND_MED_CUMPLIR",
+    resumen: "x",
+    url: "/tareas",
+  });
+  assertEquals(err, "missing_assignedRoleCode");
+});
+
+Deno.test("validatePayloadShallow — cargo.pendiente_tarifa OK con code+cargoId", () => {
+  const err = validatePayloadShallow("cargo.pendiente_tarifa", {
+    code: "SVC-001",
+    cargoId: "11111111-1111-4111-8111-111111111111",
+  });
+  assertEquals(err, null);
+});
+
+Deno.test("buildTaskNotificationTemplate — subject incluye el badge del eventType", () => {
+  const t = buildTaskNotificationTemplate("task.sla_exceeded", {
+    taskType: "IND_MED_CUMPLIR",
+    resumen: "Cumplir indicación — Juan Pérez",
+    dueAt: "2026-09-15T10:00:00.000Z",
+  });
+  assertEquals(t.subject.includes("SLA VENCIDO"), true);
+  assertEquals(t.text.includes("Cumplir indicación"), true);
+});
+
+Deno.test("buildCargoPendienteTarifaTemplate — incluye código y origen", () => {
+  const t = buildCargoPendienteTarifaTemplate({
+    code: "SVC-001",
+    quantity: 2,
+    origen: "indicaciones",
+  });
+  assertEquals(t.subject.includes("SVC-001"), true);
+  assertEquals(t.text.includes("indicaciones"), true);
+});
+
+Deno.test("renderTemplate — task.* y cargo.pendiente_tarifa resuelven (no null)", () => {
+  assertNotEquals(
+    renderTemplate("task.action_required", { taskType: "x", resumen: "y" }, null),
+    null,
+  );
+  assertNotEquals(
+    renderTemplate("cargo.pendiente_tarifa", { code: "SVC-001" }, null),
+    null,
+  );
+});
 
 Deno.test("DEFAULT_ROLE_DEFAULTS — incluye PHYSICIAN, NURSE, PHARMACIST, ADMIN", () => {
   for (const code of ["PHYSICIAN", "NURSE", "PHARMACIST", "ADMIN"]) {

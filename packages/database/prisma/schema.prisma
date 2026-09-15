@@ -8617,6 +8617,11 @@ model CareTask {
   priority         String    @default("NORMAL") @db.VarChar(10) /// LOW|NORMAL|HIGH|CRITICAL.
   slaMinutes       Int?
   dueAt            DateTime? @db.Timestamptz()
+  /// CC-0031 Fase 3 — guardas de idempotencia del watchdog `caretask_sla_watchdog`
+  /// (sql/238b): evita reemitir `task.sla_warning`/`task.sla_exceeded` para la
+  /// misma tarea en cada corrida del cron (cada 15 min).
+  slaWarningEmittedAt  DateTime? @db.Timestamptz()
+  slaExceededEmittedAt DateTime? @db.Timestamptz()
   status           String    @default("PENDIENTE") @db.VarChar(20) /// PENDIENTE|EN_PROCESO|CUMPLIDA|CANCELADA.
   completedById    String?   @db.Uuid
   completedAt      DateTime? @db.Timestamptz()

@@ -34,6 +34,8 @@ import {
   TASK_SLA_MINUTES,
   TASK_TYPE_LABEL,
 } from "@his/contracts/schemas/workflow-inbox";
+import { resolveEscalationRole } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
@@ -2348,6 +2350,40 @@ export const workflowInboxRouter = router({
             input.targetUserId ?? null,
             input.reason,
           );
+
+          // CC-0031 Fase 3(c) — emite `task.escalated` al rol escalado. Best
+          // effort (try/catch): el Workflow Inbox NO persiste `assignedRoleCode`
+          // por tarea (es 100% derivado — ver 00 §4), así que se aproxima con
+          // el primer rol de `TASK_REQUIRED_ROLES[taskType]`; y `input.taskId`
+          // no siempre es un UUID válido (`taskSchema.id` es string libre —
+          // algunas fuentes BPM componen ids no-UUID), lo que puede hacer
+          // fallar la validación Zod del payload. Ninguno de los dos casos
+          // debe tumbar la escalación ya registrada arriba.
+          try {
+            const sourceRole = TASK_REQUIRED_ROLES[input.taskType]?.[0] ?? "DIR";
+            await emitDomainEvent(prisma, {
+              organizationId: tenant.organizationId,
+              eventType: "task.escalated",
+              aggregateType: "WorkflowTaskAction",
+              aggregateId: input.taskId,
+              emittedById: user.id,
+              payload: {
+                taskType: input.taskType,
+                sourceType: "MANUAL",
+                sourceId: input.taskId,
+                assignedRoleCode: resolveEscalationRole(sourceRole),
+                url: "/tareas",
+                resumen: `Tarea escalada: ${TASK_TYPE_LABEL[input.taskType]} — ${input.reason}`.slice(0, 500),
+              },
+            });
+          } catch (err) {
+            console.error(
+              `[CC-0031 workflow-inbox.escalar] emitDomainEvent(task.escalated) falló para taskId=${input.taskId} — ` +
+                "la escalación se registró igual, solo no se emitió la notificación.",
+              err,
+            );
+          }
+
           return { ok: true };
         },
       );

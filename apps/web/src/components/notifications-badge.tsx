@@ -1,24 +1,37 @@
 "use client";
 
 /**
- * NotificationsBadge — Beta.15 (US.B15.3.2).
+ * NotificationsBadge — Beta.15 (US.B15.3.2) + CC-0031 Fase 2.
  *
- * Badge global del navbar que muestra el contador de notificaciones sin leer
- * del usuario autenticado. Consume `trpc.notifications.unreadCount` (PR #57)
- * con polling cada 30s. No usa WebSocket/SSE — fuera de scope MVP.
+ * Badge global del navbar. Antes de CC-0031 mostraba SOLO
+ * `trpc.notifications.unreadCount` (siempre 0 en prod — el puente
+ * tarea→notificación no existía, ver docs/audit/2026-09-15_cobertura/00-*.md
+ * §0). Ahora combina:
+ *   - `notifications.unreadCount` — notificaciones entregadas (INBOX).
+ *   - `workflowInbox.contadorBadge` — tareas pendientes del rol del usuario
+ *     en la Bandeja BPM (`/tareas`), que hasta CC-0031 no tenía ningún
+ *     consumidor en la UI (00 §4, hallazgo P1).
  *
- * - Si `count === 0`: solo se muestra el icono Bell (sin pill numérico).
- * - Si `count > 99`: muestra "99+" para no romper el layout.
- * - Wrapper en <Link href="/notifications"> → click navega al inbox.
- * - `aria-label` dinámico para lectores de pantalla.
- *
- * Visualmente: bell icon de `lucide-react` con un pill rojo absoluto encima
- * (top-right) usando el variant `destructive` del Badge del design system.
+ * El pill muestra la SUMA; el desglose "X notificaciones · Y tareas de tu
+ * rol" aparece en un menú desplegable con links a `/notifications` y
+ * `/tareas`. Mantiene el polling de 30s (mismo intervalo para ambas queries,
+ * sin WebSocket/SSE — fuera de scope, ver 00 §6).
  */
 import * as React from "react";
 import Link from "next/link";
 import { Bell } from "lucide-react";
 import { trpc } from "@/lib/trpc/react";
+import { Button } from "@his/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@his/ui/components/dropdown-menu";
+
+const POLL_INTERVAL_MS = 30_000;
 
 /** Cap visual del contador: > 99 → "99+". */
 export function formatBadgeCount(count: number): string {
@@ -33,32 +46,66 @@ export function buildAriaLabel(count: number): string {
   return `${count} notificaciones sin leer`;
 }
 
+/** Texto de desglose del menú: "X notificaciones · Y tareas de tu rol". */
+export function buildBreakdownLabel(notificationsCount: number, tasksCount: number): string {
+  const notifLabel = notificationsCount === 1 ? "1 notificación" : `${notificationsCount} notificaciones`;
+  const taskLabel = tasksCount === 1 ? "1 tarea de tu rol" : `${tasksCount} tareas de tu rol`;
+  return `${notifLabel} · ${taskLabel}`;
+}
+
 export function NotificationsBadge() {
-  // Polling cada 30s. `staleTime` igual al interval para que un re-mount
-  // (p.ej. navegación entre rutas) no dispare un fetch innecesario.
-  const { data } = trpc.notifications.unreadCount.useQuery(undefined, {
-    refetchInterval: 30_000,
-    staleTime: 30_000,
+  const { data: notifData } = trpc.notifications.unreadCount.useQuery(undefined, {
+    refetchInterval: POLL_INTERVAL_MS,
+    staleTime: POLL_INTERVAL_MS,
+  });
+  const { data: taskData } = trpc.workflowInbox.contadorBadge.useQuery(undefined, {
+    refetchInterval: POLL_INTERVAL_MS,
+    staleTime: POLL_INTERVAL_MS,
   });
 
-  const count = data?.count ?? 0;
-  const label = buildAriaLabel(count);
+  const notificationsCount = notifData?.count ?? 0;
+  const tasksCount = taskData?.total ?? 0;
+  const total = notificationsCount + tasksCount;
+  const label = buildAriaLabel(total);
+  const breakdown = buildBreakdownLabel(notificationsCount, tasksCount);
 
   return (
-    <Link
-      href="/notifications"
-      aria-label={label}
-      className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <Bell className="h-4 w-4" aria-hidden="true" />
-      {count > 0 ? (
-        <span
-          data-testid="notifications-badge-count"
-          className="absolute -right-1 -top-1 inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground"
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={label}
+          title={breakdown}
+          className="relative inline-flex h-8 w-8 items-center justify-center p-0 text-foreground"
         >
-          {formatBadgeCount(count)}
-        </span>
-      ) : null}
-    </Link>
+          <Bell className="h-4 w-4" aria-hidden="true" />
+          {total > 0 ? (
+            <span
+              data-testid="notifications-badge-count"
+              className="absolute -right-1 -top-1 inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold leading-none text-destructive-foreground"
+            >
+              {formatBadgeCount(total)}
+            </span>
+          ) : null}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          {breakdown}
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link href="/notifications">
+            Notificaciones{notificationsCount > 0 ? ` (${formatBadgeCount(notificationsCount)})` : ""}
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/tareas">
+            Mis tareas{tasksCount > 0 ? ` (${formatBadgeCount(tasksCount)})` : ""}
+          </Link>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
