@@ -23,10 +23,12 @@ import {
   buildVitalCriticalTemplate,
   clip,
   DEFAULT_ROLE_DEFAULTS,
+  isDeadlockError,
   mapEventTypeToSeverity,
   renderTemplate,
   resolveChannels,
   validatePayloadShallow,
+  withRetry,
 } from "./lib.ts";
 
 // -----------------------------------------------------------------------------
@@ -322,4 +324,85 @@ Deno.test("DEFAULT_ROLE_DEFAULTS — incluye PHYSICIAN, NURSE, PHARMACIST, ADMIN
   for (const code of ["PHYSICIAN", "NURSE", "PHARMACIST", "ADMIN"]) {
     assertNotEquals(DEFAULT_ROLE_DEFAULTS.get(code), undefined, `missing role ${code}`);
   }
+});
+
+// -----------------------------------------------------------------------------
+// isDeadlockError + withRetry (incidente 2026-09-15 — 40P01 en ráfagas del poller)
+// -----------------------------------------------------------------------------
+
+Deno.test("isDeadlockError — detecta código 40P01 y mensaje 'deadlock detected'", () => {
+  assertEquals(isDeadlockError({ code: "40P01", message: "" }), true);
+  assertEquals(isDeadlockError({ message: "deadlock detected" }), true);
+  assertEquals(isDeadlockError({ code: "23505", message: "duplicate key" }), false);
+  assertEquals(isDeadlockError(null), false);
+  assertEquals(isDeadlockError(undefined), false);
+});
+
+Deno.test("withRetry — éxito al primer intento no reintenta ni duerme", async () => {
+  let calls = 0;
+  let slept = 0;
+  const result = await withRetry(
+    () => Promise.resolve({ error: null, calls: ++calls }),
+    { sleep: () => (slept++, Promise.resolve()) },
+  );
+  assertEquals(calls, 1);
+  assertEquals(slept, 0);
+  assertEquals(result.error, null);
+});
+
+Deno.test("withRetry — error NO deadlock retorna de inmediato sin reintentar", async () => {
+  let calls = 0;
+  const result = await withRetry(
+    () => Promise.resolve({ error: { code: "23505", message: "duplicate key" }, calls: ++calls }),
+    { sleep: () => Promise.resolve() },
+  );
+  assertEquals(calls, 1);
+  assertEquals(result.error?.code, "23505");
+});
+
+Deno.test("withRetry — deadlock reintenta y converge al segundo intento", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const result = await withRetry(
+    () => {
+      calls++;
+      return Promise.resolve(
+        calls === 1
+          ? { error: { code: "40P01", message: "deadlock detected" } }
+          : { error: null },
+      );
+    },
+    { jitter: false, baseMs: 200, sleep: (ms) => (delays.push(ms), Promise.resolve()) },
+  );
+  assertEquals(calls, 2);
+  assertEquals(delays, [200]);
+  assertEquals(result.error, null);
+});
+
+Deno.test("withRetry — deadlock persistente agota reintentos con backoff exponencial y retorna el error", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  const result = await withRetry(
+    () => (calls++, Promise.resolve({ error: { code: "40P01", message: "deadlock detected" } })),
+    { retries: 3, baseMs: 200, jitter: false, sleep: (ms) => (delays.push(ms), Promise.resolve()) },
+  );
+  // 1 intento inicial + 3 reintentos; el caller recibe el error y lanza.
+  assertEquals(calls, 4);
+  assertEquals(delays, [200, 400, 800]);
+  assertEquals(result.error?.code, "40P01");
+});
+
+Deno.test("withRetry — jitter mantiene el delay entre 50% y 100% del backoff", async () => {
+  let calls = 0;
+  const delays: number[] = [];
+  await withRetry(
+    () => (calls++, Promise.resolve({ error: { code: "40P01", message: "deadlock detected" } })),
+    { retries: 2, baseMs: 200, sleep: (ms) => (delays.push(ms), Promise.resolve()) },
+  );
+  assertEquals(delays.length, 2);
+  const bounds = [[100, 200], [200, 400]] as const;
+  delays.forEach((ms, i) => {
+    const [lo, hi] = bounds[i]!;
+    assertEquals(ms >= lo && ms <= hi, true, `delay ${ms} fuera de [${lo}, ${hi}]`);
+  });
 });

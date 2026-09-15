@@ -41,6 +41,7 @@ import {
   renderTemplate,
   resolveChannels,
   validatePayloadShallow,
+  withRetry,
   type ChannelSet,
   type RoleSeverityMatrix,
   type Severity,
@@ -526,16 +527,20 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
     // Notification.id se genera con DEFAULT gen_random_uuid(); leemos el id
     // de vuelta para luego UPDATE el estado del email.
     if (channels.inbox) {
-      const { error: insertErr } = await supabase.from("Notification").insert({
-        organizationId: body.organizationId,
-        eventId: body.eventId,
-        recipientUserId: recipient.userId,
-        channel: "INBOX",
-        severity,
-        subject,
-        body: bodyText,
-        status: "PENDING",
-      });
+      // withRetry: solo reintenta 40P01 (deadlock en la cadena de hash de
+      // auditoría bajo ráfagas del poller) — otros errores pasan directo.
+      const { error: insertErr } = await withRetry(() =>
+        supabase.from("Notification").insert({
+          organizationId: body.organizationId,
+          eventId: body.eventId,
+          recipientUserId: recipient.userId,
+          channel: "INBOX",
+          severity,
+          subject,
+          body: bodyText,
+          status: "PENDING",
+        })
+      );
       if (insertErr) {
         console.error("[dispatch] INBOX insert failed", insertErr);
         throw new Error(`inbox_insert_failed: ${insertErr.message}`);
@@ -544,20 +549,22 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
     }
 
     if (channels.email && recipient.email) {
-      const { data: emailRow, error: emailInsertErr } = await supabase
-        .from("Notification")
-        .insert({
-          organizationId: body.organizationId,
-          eventId: body.eventId,
-          recipientUserId: recipient.userId,
-          channel: "EMAIL",
-          severity,
-          subject,
-          body: bodyText,
-          status: "PENDING",
-        })
-        .select("id")
-        .single();
+      const { data: emailRow, error: emailInsertErr } = await withRetry(() =>
+        supabase
+          .from("Notification")
+          .insert({
+            organizationId: body.organizationId,
+            eventId: body.eventId,
+            recipientUserId: recipient.userId,
+            channel: "EMAIL",
+            severity,
+            subject,
+            body: bodyText,
+            status: "PENDING",
+          })
+          .select("id")
+          .single()
+      );
       if (emailInsertErr || !emailRow) {
         console.error("[dispatch] EMAIL insert failed", emailInsertErr);
         throw new Error(`email_insert_failed: ${emailInsertErr?.message ?? "no row"}`);
@@ -640,14 +647,16 @@ async function dispatchEvent(body: DispatchPayload): Promise<DispatchResult> {
 
   // 9. Audit log (acción UPDATE, entity DomainEvent — paralelo al dispatcher Node).
   const durationMs = Date.now() - dispatchStartedAt;
-  const { error: auditErr } = await supabase.from("AuditLog").insert({
-    organizationId: body.organizationId,
-    userId: null,
-    action: "UPDATE",
-    entity: "DomainEvent",
-    entityId: body.eventId,
-    justification: `DOMAIN_EVENT_PUBLISHED:${body.eventType} duration=${durationMs}ms recipients=${result.notificationsCreated}`,
-  });
+  const { error: auditErr } = await withRetry(() =>
+    supabase.from("AuditLog").insert({
+      organizationId: body.organizationId,
+      userId: null,
+      action: "UPDATE",
+      entity: "DomainEvent",
+      entityId: body.eventId,
+      justification: `DOMAIN_EVENT_PUBLISHED:${body.eventType} duration=${durationMs}ms recipients=${result.notificationsCreated}`,
+    })
+  );
   if (auditErr) {
     // No relanzamos — auditoría ausente no debe revertir un dispatch ya hecho.
     console.error("[dispatch] AuditLog insert failed (non-fatal)", auditErr);

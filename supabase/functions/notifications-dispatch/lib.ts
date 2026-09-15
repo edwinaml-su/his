@@ -557,3 +557,69 @@ export function renderTemplate(
 export function clip(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + "…";
 }
+
+// -----------------------------------------------------------------------------
+// Retry anti-deadlock (incidente 2026-09-15: en la tanda inicial de triage,
+// 20/36 despachos fallaron con 40P01 "deadlock detected" — el poller
+// `notifications.process_outbox_batch` (sql/44+242) dispara los http_post
+// casi simultáneos vía pg_net y las tx concurrentes cruzan locks en la
+// cadena de hash de auditoría, sql/05/43).
+//
+// Cada insert vía PostgREST es su propia transacción auto-commit, así que
+// reintentar el statement es seguro. OJO: esto NO aplica a Prisma dentro de
+// una transacción (dispatcher Node) — ahí un 40P01 aborta la tx completa y
+// el retry correcto es re-ejecutar la tx entera en el caller.
+// -----------------------------------------------------------------------------
+
+export interface PgErrorLike {
+  code?: string | null;
+  message?: string | null;
+}
+
+export function isDeadlockError(error: PgErrorLike | null | undefined): boolean {
+  if (!error) return false;
+  if (error.code === "40P01") return true;
+  return /deadlock detected/i.test(error.message ?? "");
+}
+
+export interface WithRetryOpts {
+  /** Reintentos adicionales tras el primer intento (default 3). */
+  retries?: number;
+  /** Base del backoff exponencial: baseMs * 2^n (default 200). */
+  baseMs?: number;
+  /** Aleatoriza cada delay al 50–100% para des-sincronizar tx concurrentes (default true). */
+  jitter?: boolean;
+  /** Inyectable para tests (default setTimeout real). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Reintenta `fn` mientras el resultado traiga un error de deadlock (40P01).
+ * Cualquier otro error (o éxito) retorna de inmediato — el caller conserva
+ * su manejo de errores intacto. Si los reintentos se agotan, retorna el
+ * último resultado (con el error de deadlock) para que el caller lance y el
+ * poller re-arme el evento.
+ */
+export async function withRetry<T extends { error: PgErrorLike | null }>(
+  fn: () => PromiseLike<T>,
+  opts: WithRetryOpts = {},
+): Promise<T> {
+  const retries = opts.retries ?? 3;
+  const baseMs = opts.baseMs ?? 200;
+  const jitter = opts.jitter ?? true;
+  const sleep =
+    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+
+  let result = await fn();
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    if (!isDeadlockError(result.error)) return result;
+    const delay = baseMs * 2 ** (attempt - 1);
+    const waitMs = jitter ? Math.round(delay * (0.5 + Math.random() * 0.5)) : delay;
+    console.warn(
+      `[withRetry] deadlock detectado — reintento ${attempt}/${retries} en ${waitMs}ms`,
+    );
+    await sleep(waitMs);
+    result = await fn();
+  }
+  return result;
+}
