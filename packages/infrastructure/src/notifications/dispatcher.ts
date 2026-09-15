@@ -911,6 +911,17 @@ export async function dispatchDomainEvent(
   // una transacción, el audit es atómico con las creaciones de Notification.
   // El trigger SQL `audit.fn_audit_log_chain` calcula prevHash + signatureHash
   // automáticamente.
+  //
+  // Riesgo de deadlock 40P01 (incidente 2026-09-15): bajo ráfagas de
+  // despachos concurrentes, las tx cruzan locks en la cadena de hash de
+  // auditoría (sql/05/43). La Edge Function (ruta de runtime real del poller
+  // pg_cron → pg_net) lo mitiga con `withRetry` (ver
+  // supabase/functions/notifications-dispatch/lib.ts) porque cada insert
+  // PostgREST es su propia tx auto-commit. Acá NO reintentamos a nivel de
+  // statement: `dispatchDomainEvent` no tiene ningún caller de runtime en
+  // prod (verificado 2026-09-15 por grep — solo tests) y, si `ctx.prisma`
+  // es una transacción, el 40P01 la aborta completa — el retry correcto
+  // sería re-ejecutar la tx entera en el caller, no repetir el statement.
   const durationMs = Date.now() - dispatchStartedAt;
   await ctx.prisma.auditLog.create({
     data: {
