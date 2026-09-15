@@ -9,8 +9,10 @@
 -- conciliación (el reporte 5 solo miraba `status = 'CANCELLED'`, ver SQL 240
 -- también en conciliacion-cargos.router.ts).
 --
--- ⚠️ PENDIENTE DE APLICAR — @Dev NO aplica SQL a Supabase prod (ver
--- CLAUDE.md §MCPs). Lo aplica @Orq. Requiere sql/89, sql/214 (Prescription
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (expiracion_reservas_reversion_240)
+-- por @Orq — NO re-aplicar. Verificado: cron */5 activo, función con
+-- reversión completa, 0 reservas vencidas pendientes al aplicar.
+-- Requiere sql/89, sql/214 (Prescription
 -- como pharmacy order) y sql/237 (PrescriptionItem.dispensedQty +
 -- PharmacyReservation.prescriptionItemId) ya aplicados.
 --
@@ -249,7 +251,7 @@ COMMENT ON FUNCTION public.expire_pharmacy_reservations() IS
   'SQL 240 (auditoría 2026-09-15, C7/B23) — expira reservas RESERVED vencidas '
   'Y revierte stock+cargo+dispensedQty, espejo de cancelReservation/'
   'revertirCargo/applyDispensedQtyDelta. Llamada por pg_cron cada 5 min. '
-  'PENDIENTE DE APLICAR.';
+  'APLICADO 2026-09-15.';
 
 -- -----------------------------------------------------------------------
 -- Re-programar el job pg_cron — mismo jobname, mismo intervalo. Idempotente
