@@ -384,6 +384,94 @@ async function enforceControlledWitness(
 }
 
 // ---------------------------------------------------------------------------
+// CC-0030 — R6 de RN-HIS-BOT-001 (docs/47 §4): "se carga la cantidad
+// ENTREGADA, no la solicitada". PrescriptionItem.dispensedQty (SQL 237) es
+// la qty neta entregada; prescribedQty=0 (recetas legacy) = sin tope.
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard stop CONFLICT `ITEM_COMPLETO` si el ítem ya alcanzó su prescribedQty.
+ * Debe llamarse ANTES de crear la reserva/capturar el cargo (throw revierte
+ * la tx completa, sin descuento fantasma) — mismo lugar en el flujo que
+ * `enforceControlledWitness`.
+ */
+function assertItemNotComplete(
+  item: { prescribedQty: unknown; dispensedQty: unknown } | null | undefined,
+): void {
+  if (!item) return;
+  const prescribedQty = Number(item.prescribedQty);
+  const dispensedQty = Number(item.dispensedQty);
+  if (prescribedQty > 0 && dispensedQty >= prescribedQty) {
+    throw new TRPCError({ code: "CONFLICT", message: "ITEM_COMPLETO" });
+  }
+}
+
+/**
+ * Aplica un delta (+1 al reservar/escanear, -1 al devolver/cancelar) a
+ * `PrescriptionItem.dispensedQty` (floor 0) y recomputa `Prescription.status`
+ * a partir del agregado de TODOS los ítems de la receta — no solo el
+ * tocado, porque una receta con varios medicamentos solo pasa a DISPENSED
+ * cuando TODOS quedan completos.
+ *
+ * Debe llamarse dentro de la MISMA transacción que el resto del flujo
+ * (capturarCargo/revertirCargo) — mismo motivo que el resto de este router.
+ * No toca el status si la Prescription está en un estado terminal ajeno al
+ * ciclo de dispensación (CANCELLED/EXPIRED).
+ */
+async function applyDispensedQtyDelta(
+  tx: PrismaClient,
+  params: { prescriptionItemId: string; delta: 1 | -1 },
+): Promise<void> {
+  const item = await tx.prescriptionItem.findUnique({
+    where: { id: params.prescriptionItemId },
+    select: { id: true, prescriptionId: true, dispensedQty: true },
+  });
+  if (!item) return; // defensivo — no debería ocurrir (FK)
+
+  const nextQty = Math.max(0, Number(item.dispensedQty) + params.delta);
+  await tx.prescriptionItem.update({
+    where: { id: item.id },
+    data: { dispensedQty: nextQty },
+  });
+
+  const siblings = await tx.prescriptionItem.findMany({
+    where: { prescriptionId: item.prescriptionId },
+    select: { prescribedQty: true, dispensedQty: true },
+  });
+
+  // Nota (hallazgo pre-PR review): una receta con ALGÚN ítem legacy
+  // prescribedQty=0 (sin tope) nunca satisface `allDone` para ese ítem —
+  // la receta queda indefinidamente en PARTIALLY_DISPENSED aunque se siga
+  // dispensando, nunca llega a DISPENSED. Es consecuencia intencional del
+  // diseño "sin tope = sin forma de saber cuándo está completo"; hoy no
+  // rompe nada (todo el código que filtra por status usa
+  // `{in: ["SIGNED","PARTIALLY_DISPENSED"]}`, nunca distingue DISPENSED de
+  // PARTIALLY_DISPENSED de forma exclusiva).
+  const allDone =
+    siblings.length > 0 &&
+    siblings.every(
+      (i) => Number(i.prescribedQty) > 0 && Number(i.dispensedQty) >= Number(i.prescribedQty),
+    );
+  const anyDispensed = siblings.some((i) => Number(i.dispensedQty) > 0);
+  const newStatus = allDone ? "DISPENSED" : anyDispensed ? "PARTIALLY_DISPENSED" : "SIGNED";
+
+  const prescription = await tx.prescription.findUnique({
+    where: { id: item.prescriptionId },
+    select: { status: true },
+  });
+  if (
+    prescription &&
+    (["SIGNED", "PARTIALLY_DISPENSED", "DISPENSED"] as string[]).includes(prescription.status) &&
+    prescription.status !== newStatus
+  ) {
+    await tx.prescription.update({
+      where: { id: item.prescriptionId },
+      data: { status: newStatus },
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Input schemas
 // ---------------------------------------------------------------------------
 
@@ -644,6 +732,8 @@ export const dispensationRouter = router({
               items: {
                 select: {
                   id: true,
+                  prescribedQty: true,
+                  dispensedQty: true,
                   drug: {
                     select: { id: true, genericName: true, dispensingClass: true },
                   },
@@ -782,6 +872,12 @@ export const dispensationRouter = router({
             });
           }
 
+          // CC-0030 (RN-HIS-BOT-001 R6) — hard stop ITEM_COMPLETO si el ítem
+          // ya alcanzó prescribedQty. Corre ANTES de capturar el cargo, mismo
+          // criterio que el resto de esta sección (throw revierte también el
+          // descuento de stock del Paso 3.5, misma transacción).
+          assertItemNotComplete(matchedItem);
+
           // docs/48 Ola 4b (H-13) — 2-eyes con PIN si el ítem resuelto es
           // RX_CONTROLLED. Corre ANTES de capturar el cargo: un scan de
           // controlado sin testigo/PIN válido no debe generar cargo ni
@@ -813,6 +909,13 @@ export const dispensationRouter = router({
             origen: "DISPENSACION_FARMACIA",
             referenciaId: prescription.id,
             actorId: ctx.user.id,
+          });
+
+          // CC-0030 (RN-HIS-BOT-001 R6) — qty entregada +1 sobre el ítem
+          // resuelto, y recompute del status agregado de la receta.
+          await applyDispensedQtyDelta(tx, {
+            prescriptionItemId: matchedItem.id,
+            delta: 1,
           });
 
           // docs/48 Ola 4b (H-13) — libro de controlados: solo se crea la fila
@@ -884,6 +987,8 @@ export const dispensationRouter = router({
                 dosage: true,
                 route: true,
                 frequency: true,
+                prescribedQty: true,
+                dispensedQty: true,
                 drug: { select: { id: true, genericName: true } },
               },
             },
@@ -895,7 +1000,20 @@ export const dispensationRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Orden no encontrada" });
       }
 
-      return rx;
+      // CC-0030 (RN-HIS-BOT-001 R6) — "pendiente visible": prescribedQty=0
+      // (recetas legacy sin cantidad capturada) se expone como sin tope,
+      // pendiente=null — la UI no debe mostrar "pendiente 0" engañoso.
+      return {
+        ...rx,
+        items: rx.items.map((it) => {
+          const prescribedQty = Number(it.prescribedQty);
+          const dispensedQty = Number(it.dispensedQty);
+          return {
+            ...it,
+            pendiente: prescribedQty > 0 ? Math.max(0, prescribedQty - dispensedQty) : null,
+          };
+        }),
+      };
     }),
 
   /**
@@ -911,6 +1029,9 @@ export const dispensationRouter = router({
    *     (PRECONDITION_FAILED). El descuento de 1 unidad + StockMovement OUT
    *     (referenceCode = reservation.id) ocurren en la MISMA transacción que
    *     la reserva: un throw revierte todo (sin descuento fantasma).
+   *   - ITEM_COMPLETO (CONFLICT) — CC-0030 (RN-HIS-BOT-001 R6): el ítem
+   *     resuelto ya alcanzó `prescribedQty` unidades entregadas. No existe
+   *     la unidad N+1 de una receta con N prescritas.
    *
    * Transacción atómica con withTenantContext.
    */
@@ -944,6 +1065,8 @@ export const dispensationRouter = router({
             items: {
               select: {
                 id: true,
+                prescribedQty: true,
+                dispensedQty: true,
                 drug: { select: { genericName: true, dispensingClass: true } },
               },
             },
@@ -1002,6 +1125,11 @@ export const dispensationRouter = router({
         // RX_CONTROLLED. Corre ANTES de crear la reserva: sin testigo/PIN
         // válido no debe quedar reserva, descuento de stock ni cargo.
         const matchedItem = prescription.items?.[0] ?? null;
+
+        // CC-0030 (RN-HIS-BOT-001 R6) — hard stop ITEM_COMPLETO. Corre ANTES
+        // de crear la reserva: mismo criterio que el 2-eyes de abajo.
+        assertItemNotComplete(matchedItem);
+
         const isControlled = matchedItem
           ? isControlledDispensingClass(matchedItem.drug.dispensingClass)
           : false;
@@ -1027,6 +1155,10 @@ export const dispensationRouter = router({
             serie: input.serie ?? null,
             status: "RESERVED",
             expiresAt,
+            // SQL 237 (CC-0030) — enlace explícito al ítem que esta reserva
+            // entrega, para que returnItem/cancelReservation decrementen
+            // dispensedQty del ítem EXACTO (sin volver a adivinar).
+            prescriptionItemId: matchedItem?.id ?? null,
           },
         });
 
@@ -1069,6 +1201,15 @@ export const dispensationRouter = router({
           referenciaId: reservation.id,
           actorId: tenant.userId,
         });
+
+        // CC-0030 (RN-HIS-BOT-001 R6) — qty entregada +1 sobre el ítem
+        // resuelto, y recompute del status agregado de la receta.
+        if (matchedItem) {
+          await applyDispensedQtyDelta(tx, {
+            prescriptionItemId: matchedItem.id,
+            delta: 1,
+          });
+        }
 
         // docs/48 Ola 4b (H-13) — libro de controlados: se crea la fila
         // MedicationDispense SOLO para RX_CONTROLLED (H-13 en pharmacy.ts
@@ -1211,6 +1352,18 @@ export const dispensationRouter = router({
             cargoId: cargoVigente.id,
             motivo: input.motivo,
             actorId: tenant.userId,
+          });
+        }
+
+        // CC-0030 (RN-HIS-BOT-001 R6) — la reserva cancelada nunca se quedó
+        // con el paciente: qty entregada -1 sobre el ítem que enlazó (SQL
+        // 237). Reservas legacy sin prescriptionItemId (ninguna en prod al
+        // aplicar el cambio) no tienen a qué ítem atribuir el decremento —
+        // se omite, no es un error.
+        if (reservation.prescriptionItemId) {
+          await applyDispensedQtyDelta(tx, {
+            prescriptionItemId: reservation.prescriptionItemId,
+            delta: -1,
           });
         }
 
@@ -1410,6 +1563,17 @@ export const dispensationRouter = router({
           motivo: `Devolución post-despacho (${input.motivo})${input.notas ? `: ${input.notas}` : ""}`,
           actorId: tenant.userId,
         });
+
+        // CC-0030 (RN-HIS-BOT-001 R6) — el medicamento devuelto no se quedó
+        // con el paciente: qty entregada -1 sobre el ítem que enlazó la
+        // reserva (SQL 237). Igual que cancelReservation: reservas legacy
+        // sin prescriptionItemId se omiten, no es un error.
+        if (reservation.prescriptionItemId) {
+          await applyDispensedQtyDelta(tx, {
+            prescriptionItemId: reservation.prescriptionItemId,
+            delta: -1,
+          });
+        }
 
         // docs/48 Ola 4b (H-13) — libro de controlados: fila de DEVOLUCIÓN
         // con cantidad negativa (misma granularidad de 1 unidad/reserva que

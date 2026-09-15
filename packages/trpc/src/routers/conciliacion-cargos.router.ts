@@ -1,10 +1,10 @@
 /**
  * docs/48 Ola 4 (C4-2) — Conciliación clínico-financiera (RN-HIS-BOT-001 R11).
  *
- * 6 reportes de brecha entre el acto clínico y su reflejo financiero (5
+ * 7 reportes de brecha entre el acto clínico y su reflejo financiero (5
  * originales + `despachadoSinCierre`, SQL 232 — RN-HIS-BOT-001 devolución
- * post-despacho), más un `resumen` con los 6 conteos para el tablero. Todas
- * las queries usan
+ * post-despacho + `entregasParciales`, SQL 237 — CC-0030 R6), más un
+ * `resumen` con los 7 conteos para el tablero. Todas las queries usan
  * `$queryRawUnsafe` porque cruzan `Prescription`/`PharmacyReservation`/
  * `StockMovement`/`PatientAccountService` sin relaciones Prisma declaradas
  * entre sí (mismo patrón que `finance-reports.router.ts`).
@@ -104,6 +104,18 @@ interface DespachadoSinCierreRow {
   lote: string;
   createdAt: Date;
   horasTranscurridas: number;
+}
+
+interface EntregaParcialRow {
+  prescriptionItemId: string;
+  prescriptionId: string;
+  patientId: string;
+  patientName: string;
+  genericName: string;
+  prescribedQty: string;
+  dispensedQty: string;
+  pendiente: string;
+  signedAt: Date;
 }
 
 // ---------------------------------------------------------------------------
@@ -337,7 +349,50 @@ export const conciliacionCargosRouter = router({
     }),
 
   /**
-   * Resumen — los 6 conteos de una vez, para el tablero.
+   * 7. SQL 237 (CC-0030) — entregas parciales: ítems de receta con
+   * `0 < dispensedQty < prescribedQty` de recetas SIGNED/PARTIALLY_DISPENSED
+   * — el "pendiente visible" de R6 a nivel conciliación (no bloquea el
+   * cierre de cuenta, ver docs/CC/0030 — es visibilidad clínico-logística,
+   * no una brecha financiera como las otras 6).
+   */
+  entregasParciales: readerProc
+    .input(dateRangeInput)
+    .query(async ({ ctx, input }) => {
+      const { tenant, prisma } = ctx;
+      const desde = `${input.fechaDesde}T00:00:00`;
+      const hasta = `${input.fechaHasta}T23:59:59`;
+
+      return withTenantContext(prisma, tenant, async (tx) =>
+        tx.$queryRawUnsafe<EntregaParcialRow[]>(
+          `SELECT
+             pi.id                                  AS "prescriptionItemId",
+             p.id                                    AS "prescriptionId",
+             p."patientId"                           AS "patientId",
+             (pt."firstName" || ' ' || pt."lastName") AS "patientName",
+             d."genericName"                         AS "genericName",
+             pi."prescribedQty"::text                AS "prescribedQty",
+             pi."dispensedQty"::text                 AS "dispensedQty",
+             (pi."prescribedQty" - pi."dispensedQty")::text AS "pendiente",
+             p."signedAt"                            AS "signedAt"
+           FROM "PrescriptionItem" pi
+           JOIN "Prescription" p ON p.id = pi."prescriptionId"
+           JOIN "Drug" d ON d.id = pi."drugId"
+           JOIN "Patient" pt ON pt.id = p."patientId"
+           WHERE p."organizationId" = $1
+             AND p.status IN ('SIGNED', 'PARTIALLY_DISPENSED')
+             AND pi."dispensedQty" > 0
+             AND pi."dispensedQty" < pi."prescribedQty"
+             AND p."signedAt" BETWEEN $2 AND $3
+           ORDER BY p."signedAt" DESC`,
+          tenant.organizationId,
+          desde,
+          hasta,
+        ),
+      );
+    }),
+
+  /**
+   * Resumen — los 7 conteos de una vez, para el tablero.
    */
   resumen: readerProc.input(dateRangeInput).query(async ({ ctx, input }) => {
     const { tenant, prisma } = ctx;
@@ -353,6 +408,7 @@ export const conciliacionCargosRouter = router({
           cargos_sin_tarifa: string;
           devoluciones_sin_reversion: string;
           despachado_sin_cierre: string;
+          entregas_parciales: string;
         }>
       >(
         `SELECT
@@ -413,7 +469,15 @@ export const conciliacionCargosRouter = router({
              WHERE pr."organizationId" = $1
                AND pr.status IN ('RESERVED', 'DISPATCHED')
                AND pr."createdAt" BETWEEN $2 AND $3
-           )::text AS despachado_sin_cierre`,
+           )::text AS despachado_sin_cierre,
+           (SELECT count(*) FROM "PrescriptionItem" pi
+              JOIN "Prescription" p ON p.id = pi."prescriptionId"
+             WHERE p."organizationId" = $1
+               AND p.status IN ('SIGNED', 'PARTIALLY_DISPENSED')
+               AND pi."dispensedQty" > 0
+               AND pi."dispensedQty" < pi."prescribedQty"
+               AND p."signedAt" BETWEEN $2 AND $3
+           )::text AS entregas_parciales`,
         tenant.organizationId,
         desde,
         hasta,
@@ -427,6 +491,7 @@ export const conciliacionCargosRouter = router({
         cargosSinTarifa: Number(r.cargos_sin_tarifa),
         devolucionesSinReversion: Number(r.devoluciones_sin_reversion),
         despachadoSinCierre: Number(r.despachado_sin_cierre),
+        entregasParciales: Number(r.entregas_parciales),
       };
     });
   }),

@@ -33,7 +33,10 @@
  * congelamiento de tarifa) llevan `@smoke` (docs/48 lo pide textual) y
  * corren en cada PR contra el stack efímero. Devolución (#6) y emergencia
  * (#7) son de flujo/estado de cuenta, no de precio — sin tag, corren en
- * `e2e.yml` nightly. #5 (entrega parcial) es `test.fixme` — ver esa prueba.
+ * `e2e.yml` nightly. #5 (entrega parcial, CC-0030) también escanea GS1 y
+ * verifica precio (unitPrice=$6.00) igual que #1-4/#8 — mismo costo que
+ * ellas, lleva `@smoke`. Ya NO es `test.fixme`: CC-0030 (2026-09-15)
+ * construyó el tope de qty (SQL 237) que faltaba.
  */
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "./_helpers/auth";
@@ -253,21 +256,72 @@ test.describe("RN-HIS-BOT-001 — pruebas de aceptación de cargos a cuenta (doc
     expect(cierre.errorCode).toBe("PRECONDITION_FAILED");
   });
 
-  test("5. Entrega parcial 5 de 10 ⇒ cargo por 5, pendiente por 5", async () => {
-    // R6 (cantidad entregada vs. solicitada) NO fue parte del alcance de
-    // docs/48 — confirmado sin cambios en la re-verificación @DrHIS
-    // (docs/qa/drhis/RN-HIS-BOT-001-reverificacion-post-remediacion.md,
-    // fila R6 de la matriz R1-R13: "No cumple (sin cambios)"). El modelo de
-    // dispensación GS1 real es unidad-por-escaneo: `capturarCargo` siempre
-    // recibe `quantity: 1` (hardcodeado en dispensation.router.ts:569,773),
-    // no existe un input de "cantidad entregada" distinto de "cantidad
-    // solicitada" en `reserveItem`/`scanItem`. No hay UI ni API que
-    // produzca "cargo por 5, pendiente por 5" hoy — automatizar esta
-    // prueba requeriría construir el feature primero (R6), no solo el test.
-    test.fixme(
-      true,
-      "R6 (cantidad entregada vs. solicitada) fuera del alcance de docs/48 — modelo GS1 es unidad-por-escaneo, sin campo de cantidad parcial en reserveItem/scanItem. Ver docs/qa/drhis/RN-HIS-BOT-001-reverificacion-post-remediacion.md fila R6.",
-    );
+  test("@smoke 5. Entrega parcial: prescribedQty=3 ⇒ cargo por unidad, pendiente visible, 4ª rechazada ITEM_COMPLETO", async ({
+    page,
+  }) => {
+    // CC-0030 (RN-HIS-BOT-001 R6, 2026-09-15) cierra el gap que dejó esta
+    // prueba `test.fixme` desde docs/48: el modelo GS1 sigue siendo
+    // unidad-por-escaneo (`capturarCargo` recibe `quantity: 1`, no cambia
+    // aquí) — lo que agrega CC-0030 es el TOPE acumulado por ítem
+    // (PrescriptionItem.dispensedQty, SQL 237) y el "pendiente visible"
+    // (docs/47 R6 literal). Fixture dedicado: E2E_BOT.entregaParcial,
+    // prescribedQty=3 (seed-e2e-fixtures.mjs §7, escena 8).
+    const s = E2E_BOT.entregaParcial;
+
+    // 1ª unidad — cargo VIGENTE (lista ISBM, $6.00) + UI refleja "Entregado
+    // 1 de 3 — pendiente 2" SIN recargar la página (orderDetail se invalida
+    // en el onSuccess de reserveItem).
+    const primera = await dispensar(page, {
+      prescriptionId: s.prescriptionId,
+      gtin: s.gtin,
+      lote: s.lote,
+      drugName: s.drugName,
+    });
+    expect(primera.ok, primera.errorMessage ?? "").toBeTruthy();
+    expect(primera.data?.cargo.status).toBe("VIGENTE");
+    expect(decimalToNumber(primera.data?.cargo.unitPrice)).toBeCloseTo(6.0, 2);
+    await expect(page.getByText(/Entregado 1 de 3 — pendiente 2/)).toBeVisible();
+
+    // 2ª unidad — nueva navegación (mismo patrón que `dispensar()`), mismo
+    // GTIN/lote, sin serie ⇒ no hay conflicto de serial, se crea OTRA
+    // reserva sobre el mismo ítem (mismo patrón que la prueba #8, que
+    // dispensa dos veces el mismo ítem).
+    const segunda = await dispensar(page, {
+      prescriptionId: s.prescriptionId,
+      gtin: s.gtin,
+      lote: s.lote,
+      drugName: s.drugName,
+    });
+    expect(segunda.ok, segunda.errorMessage ?? "").toBeTruthy();
+    await expect(page.getByText(/Entregado 2 de 3 — pendiente 1/)).toBeVisible();
+
+    // 3ª unidad — completa prescribedQty. UI pasa a "pendiente 0" y bloquea
+    // el escaneo (botón deshabilitado + alerta ITEM_COMPLETO), sin esperar
+    // a que el servidor rechace un 4º intento.
+    const tercera = await dispensar(page, {
+      prescriptionId: s.prescriptionId,
+      gtin: s.gtin,
+      lote: s.lote,
+      drugName: s.drugName,
+    });
+    expect(tercera.ok, tercera.errorMessage ?? "").toBeTruthy();
+    await expect(page.getByText(/Entregado 3 de 3 — pendiente 0/)).toBeVisible();
+    await expect(page.getByText(/cantidad total prescrita/i)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Validar y reservar" })).toBeDisabled();
+
+    // 4ª unidad — el botón ya está deshabilitado en UI (verificado arriba);
+    // esta llamada ejercita el hard stop SERVER-SIDE directamente (mismo
+    // patrón que las pruebas #4/#7 para `patientAccount.cerrar`) — el
+    // enforcement no puede depender solo de que la UI no deje hacer clic.
+    const cuarta = await trpcMutate(page.request, "dispensation.reserveItem", {
+      pharmacyOrderId: s.prescriptionId,
+      gtin: s.gtin,
+      lote: s.lote,
+      patientId: s.patientId,
+    });
+    expect(cuarta.ok).toBe(false);
+    expect(cuarta.errorCode).toBe("CONFLICT");
+    expect(cuarta.errorMessage).toContain("ITEM_COMPLETO");
   });
 
   test("6. Devolución ⇒ reingreso al mismo lote y línea REVERSION negativa enlazada, original nunca borrada", async ({

@@ -2320,11 +2320,21 @@ model PrescriptionItem {
   prescribedQty   Decimal    @default(0) @db.Decimal(12, 4)
   /// Qty acumulada de administraciones con status=ADMINISTERED. Actualizada por trigger.
   administeredQty Decimal    @default(0) @db.Decimal(12, 4)
+  /// SQL 237 (CC-0030, RN-HIS-BOT-001 R6) — qty NETA entregada por farmacia
+  /// (reservas/scans vivos, no CANCELLED/RETURNED). A diferencia de
+  /// administeredQty, la mantiene la APP (dispensation.router.ts), no un
+  /// trigger — el neteo de reserveItem/returnItem/cancelReservation vive
+  /// junto a la captura/reversión del cargo, en la MISMA transacción; un
+  /// trigger tendría que reimplementar esa misma lógica en SQL sin ganar
+  /// nada. prescribedQty=0 (recetas legacy sin cantidad capturada) = sin
+  /// tope de enforcement.
+  dispensedQty    Decimal    @default(0) @db.Decimal(12, 4)
 
   prescription    Prescription               @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
   drug            Drug                       @relation(fields: [drugId], references: [id], onDelete: Restrict)
   dispenses       MedicationDispense[]
   administrations MedicationAdministration[] @relation("MedAdminItem")
+  reservations    PharmacyReservation[]      @relation("PrescItemReservations")
 
   @@index([prescriptionId])
   @@schema("public")
@@ -2359,13 +2369,24 @@ model PharmacyReservation {
   /// Testigo 2-eyes cuando el ítem devuelto es RX_CONTROLLED (returnItem).
   returnWitnessUserId  String?   @db.Uuid
 
-  organization  Organization   @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
-  pharmacyOrder Prescription   @relation("RxPharmacyReservations", fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
-  patient       Patient        @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
+  /// SQL 237 (CC-0030, RN-HIS-BOT-001 R6) — enlace explícito al ítem de
+  /// receta que esta reserva entrega. NULL para reservas legacy anteriores a
+  /// este cambio (prod tenía 0 filas al aplicar — sin backfill de datos
+  /// posible ni necesario). `reserveItem` lo setea desde ahora en adelante;
+  /// `returnItem`/`cancelReservation` lo leen para decrementar
+  /// PrescriptionItem.dispensedQty de forma exacta (sin volver a adivinar
+  /// "el primer ítem de la receta").
+  prescriptionItemId   String?   @db.Uuid
+
+  organization     Organization      @relation("OrgPharmacyReservations", fields: [organizationId], references: [id], onDelete: Restrict)
+  pharmacyOrder    Prescription      @relation("RxPharmacyReservations", fields: [pharmacyOrderId], references: [id], onDelete: Restrict)
+  patient          Patient           @relation("PatPharmacyReservations", fields: [patientId], references: [id], onDelete: Restrict)
+  prescriptionItem PrescriptionItem? @relation("PrescItemReservations", fields: [prescriptionItemId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, patientId])
   @@index([pharmacyOrderId])
   @@index([expiresAt])
+  @@index([prescriptionItemId])
   @@schema("public")
 }
 

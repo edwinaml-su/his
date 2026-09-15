@@ -9,6 +9,11 @@
  *
  * Bloque 6 (SQL 232) — despachadoSinCierre: devolución post-despacho
  * (RN-HIS-BOT-001) que cierra el ciclo de la requisición.
+ *
+ * Bloque 7 (SQL 237, CC-0030) — entregasParciales: pendiente visible de R6
+ * (solicitado vs. entregado). A diferencia de los otros 6, NO es una brecha
+ * financiera (no bloquea el cierre de cuenta) — es visibilidad
+ * clínico-logística, ver docs/CC/0030.
  */
 import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -48,6 +53,7 @@ export default function ConciliacionPage() {
   const sinTarifaQ = trpcAny.conciliacionCargos.cargosSinTarifa.useQuery(search);
   const devolucionesQ = trpcAny.conciliacionCargos.devolucionesSinReversion.useQuery(search);
   const despachadoSinCierreQ = trpcAny.conciliacionCargos.despachadoSinCierre.useQuery(search);
+  const entregasParcialesQ = trpcAny.conciliacionCargos.entregasParciales.useQuery(search);
 
   const loading = resumenQ.isLoading;
 
@@ -58,6 +64,7 @@ export default function ConciliacionPage() {
     { key: "cargosSinTarifa", count: resumenQ.data?.cargosSinTarifa, label: "Cargos sin tarifa" },
     { key: "devolucionesSinReversion", count: resumenQ.data?.devolucionesSinReversion, label: "Devoluciones sin reversión" },
     { key: "despachadoSinCierre", count: resumenQ.data?.despachadoSinCierre, label: "Despachado sin cierre" },
+    { key: "entregasParciales", count: resumenQ.data?.entregasParciales, label: "Entregas parciales" },
   ];
 
   return (
@@ -83,7 +90,7 @@ export default function ConciliacionPage() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         {bloques.map((b) => (
           <Card key={b.key} className={b.count ? "border-warning" : undefined}>
             <CardContent className="pt-4 text-center">
@@ -280,6 +287,52 @@ export default function ConciliacionPage() {
                       <TableCell>{r.status}</TableCell>
                       <TableCell className="text-right font-mono">{Math.round(r.horasTranscurridas)}</TableCell>
                       <TableCell>{fmtFecha(r.createdAt)}</TableCell>
+                    </TableRow>
+                  ),
+                )
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader><CardTitle>7. Entregas parciales (pendiente visible — R6)</CardTitle></CardHeader>
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Paciente</TableHead>
+                <TableHead>Medicamento</TableHead>
+                <TableHead className="text-right">Prescrito</TableHead>
+                <TableHead className="text-right">Entregado</TableHead>
+                <TableHead className="text-right">Pendiente</TableHead>
+                <TableHead>Receta firmada</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {entregasParcialesQ.isLoading ? (
+                <SkeletonRows cols={6} />
+              ) : (entregasParcialesQ.data ?? []).length === 0 ? (
+                <EmptyState />
+              ) : (
+                (entregasParcialesQ.data ?? []).map(
+                  (r: {
+                    prescriptionItemId: string;
+                    patientName: string;
+                    genericName: string;
+                    prescribedQty: string;
+                    dispensedQty: string;
+                    pendiente: string;
+                    signedAt: string;
+                  }) => (
+                    <TableRow key={r.prescriptionItemId}>
+                      <TableCell>{r.patientName}</TableCell>
+                      <TableCell>{r.genericName}</TableCell>
+                      <TableCell className="text-right font-mono">{r.prescribedQty}</TableCell>
+                      <TableCell className="text-right font-mono">{r.dispensedQty}</TableCell>
+                      <TableCell className="text-right font-mono">{r.pendiente}</TableCell>
+                      <TableCell>{fmtFecha(r.signedAt)}</TableCell>
                     </TableRow>
                   ),
                 )

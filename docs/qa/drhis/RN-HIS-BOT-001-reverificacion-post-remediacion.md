@@ -194,4 +194,22 @@ Quedan deliberadamente abiertos: C3-2 (disparadores estancia/quirófano), C5-1 (
 
 ---
 
+## 8. Addendum CC-0030 (2026-09-15) — R6 pasa a Cumple
+
+Edwin decidió cerrar R6 como CC-0030 (`docs/CC/0030_cantidad_efectiva_entrega_parcial.md`, SQL 237). Resumen del cambio: `PrescriptionItem.dispensedQty` (mantenida por la app, no por trigger) + hard stop `CONFLICT ITEM_COMPLETO` en `reserveItem`/`scanItem` cuando `dispensedQty >= prescribedQty` (con `prescribedQty=0` sin tope, compat legacy) + recompute de `Prescription.status` (`SIGNED`/`PARTIALLY_DISPENSED`/`DISPENSED`) en ambas direcciones (`returnItem`/`cancelReservation` también decrementan) + "pendiente visible" en `orderDetail`/UI + 7º reporte `entregasParciales` en `conciliacionCargosRouter`.
+
+El modelo GS1 sigue siendo unidad-por-escaneo (`capturarCargo` sigue recibiendo `quantity: 1`) — CC-0030 no lo cambia, agrega el TOPE acumulado por ítem y la visibilidad del pendiente que R6 pedía textualmente, sobre ese mismo modelo.
+
+| Fila | Antes (§4/§5) | Ahora (CC-0030) |
+|---|---|---|
+| R6 (matriz R1-R13) | No cumple | **Cumple** |
+| Paso 13 (24 pasos) | No cumple | **Cumple** |
+| Prueba de aceptación #5 | `test.fixme` — bloqueada estructuralmente | **Verificada** (`apps/web/e2e/cargos-rn-bot-001.spec.ts`, `@smoke`) |
+
+Conteo R1-R13 resultante tras CC-0030: **10 Cumple · 3 Parcial (R1, R5, R12 — acotados por `inventory.out` legado documentado y C5-1 datos) · 0 No cumple · 0 No verificado**.
+
+Queda igual de abierto el resto de la lista de la sección 7: C3-2, C5-1, deducible/coaseguro — ninguno tocado por este CC.
+
+---
+
 *Documento producido por @DrHIS. No se modificó código ni se escribió en la base de datos de producción durante esta re-verificación — todas las consultas SQL fueron `SELECT`.*

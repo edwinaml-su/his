@@ -186,8 +186,40 @@ describe("conciliacionCargosRouter", () => {
     });
   });
 
+  // CC-0030 (SQL 237) — 7º reporte: pendiente visible de R6 (solicitado vs.
+  // entregado). NO bloquea cierre de cuenta (visibilidad clínico-logística,
+  // no brecha financiera) — ver docs/CC/0030.
+  describe("entregasParciales", () => {
+    it("devuelve ítems con 0 < dispensedQty < prescribedQty de recetas SIGNED/PARTIALLY_DISPENSED", async () => {
+      const rows = [
+        {
+          prescriptionItemId: "item-1",
+          prescriptionId: "rx-1",
+          patientId: "pat-1",
+          patientName: "Ana Pérez",
+          genericName: "Amoxicilina",
+          prescribedQty: "3",
+          dispensedQty: "1",
+          pendiente: "2",
+          signedAt: new Date("2026-09-10"),
+        },
+      ];
+      prisma.$queryRawUnsafe.mockResolvedValue(rows as never);
+
+      const caller = conciliacionCargosRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.entregasParciales(RANGE);
+
+      expect(result).toEqual(rows);
+      const sql = String(prisma.$queryRawUnsafe.mock.calls[0]![0]);
+      expect(sql).toContain("PrescriptionItem");
+      expect(sql).toContain("dispensedQty");
+      expect(sql).toContain("SIGNED");
+      expect(sql).toContain("PARTIALLY_DISPENSED");
+    });
+  });
+
   describe("resumen", () => {
-    it("devuelve los 6 conteos convertidos a number", async () => {
+    it("devuelve los 7 conteos convertidos a number", async () => {
       prisma.$queryRawUnsafe.mockResolvedValue([
         {
           indicaciones_sin_dispensa: "3",
@@ -196,6 +228,7 @@ describe("conciliacionCargosRouter", () => {
           cargos_sin_tarifa: "7",
           devoluciones_sin_reversion: "2",
           despachado_sin_cierre: "4",
+          entregas_parciales: "5",
         },
       ] as never);
 
@@ -209,6 +242,7 @@ describe("conciliacionCargosRouter", () => {
         cargosSinTarifa: 7,
         devolucionesSinReversion: 2,
         despachadoSinCierre: 4,
+        entregasParciales: 5,
       });
     });
   });
