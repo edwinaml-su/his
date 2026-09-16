@@ -240,6 +240,8 @@ import { conciliacionCargosRouter } from "./conciliacion-cargos.router";
 import { establishmentRouter } from "./establishment.router";
 // Modelo de camas — habitaciones espejo Odoo ACS HMS (encargo Edwin 2026-09-11)
 import { roomRouter } from "./room.router";
+// CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
+import { turnoRouter } from "./turno.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -481,6 +483,8 @@ export const appRouter = router({
   // CC-0036 Ola 1B (REQ-HIS-AFIL-001 S1) — catálogo de consultorios y médicos afiliados
   consultorio: consultorioRouter,
   medicoAfiliado: medicoAfiliadoRouter,
+  // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
+  turno: turnoRouter,
 });
 
 export type AppRouter = typeof appRouter;
