@@ -28,6 +28,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { SinSedesNotice } from "@/components/sin-sedes-notice";
 import { ConsultorioDialog, type ConsultorioData } from "./consultorio-dialog";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -47,6 +48,7 @@ export function ConsultoriosShell({ roleCodes }: { roleCodes: string[] }) {
 
   const [establishmentFilter, setEstablishmentFilter] = React.useState<string>(TODOS);
   const establishments = trpcAny.establishment.list.useQuery();
+  const sinSedes = establishments.isSuccess && (establishments.data?.length ?? 0) === 0;
 
   const query = trpcAny.consultorio.list.useQuery({
     establishmentId: establishmentFilter === TODOS ? undefined : establishmentFilter,
@@ -93,19 +95,23 @@ export function ConsultoriosShell({ roleCodes }: { roleCodes: string[] }) {
             {query.isLoading ? "Cargando…" : `${rows.length} consultorio(s)`}
           </CardTitle>
           <div className="w-56">
-            <Select value={establishmentFilter} onValueChange={setEstablishmentFilter}>
-              <SelectTrigger>
-                <SelectValue placeholder="Todas las sedes" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={TODOS}>Todas las sedes</SelectItem>
-                {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.code} — {e.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {sinSedes ? (
+              <SinSedesNotice />
+            ) : (
+              <Select value={establishmentFilter} onValueChange={setEstablishmentFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Todas las sedes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={TODOS}>Todas las sedes</SelectItem>
+                  {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
+                    <SelectItem key={e.id} value={e.id}>
+                      {e.code} — {e.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
         </CardHeader>
         <CardContent>

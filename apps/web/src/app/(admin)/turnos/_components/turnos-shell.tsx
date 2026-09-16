@@ -40,6 +40,7 @@ import { Label } from "@his/ui/components/label";
 import { Input } from "@his/ui/components/input";
 import { Alert, AlertDescription } from "@his/ui/components/alert";
 import { trpc } from "@/lib/trpc/react";
+import { SinSedesNotice } from "@/components/sin-sedes-notice";
 import { PlantillaDialog, type PlantillaData } from "./plantilla-dialog";
 import { ProgramacionPanel } from "./programacion-panel";
 
@@ -71,6 +72,7 @@ export function TurnosShell({ roleCodes }: { roleCodes: string[] }) {
   const canProgramar = roleCodes.some((r) => ROLES_PROGRAMAR.includes(r));
 
   const establishments = trpcAny.establishment.list.useQuery();
+  const sinSedes = establishments.isSuccess && (establishments.data?.length ?? 0) === 0;
   const [establishmentId, setEstablishmentId] = React.useState<string>("");
   const [tipo, setTipo] = React.useState<TurnoTipo>("MEDICO_GENERAL");
 
@@ -123,29 +125,37 @@ export function TurnosShell({ roleCodes }: { roleCodes: string[] }) {
           </p>
         </div>
         <div className="w-64">
-          <Select
-            value={establishmentId}
-            onValueChange={(v) => {
-              setEstablishmentId(v);
-              setSelectedProgramacionId(null);
-            }}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Selecciona una sede" />
-            </SelectTrigger>
-            <SelectContent>
-              {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
-                <SelectItem key={e.id} value={e.id}>
-                  {e.code} — {e.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {sinSedes ? (
+            <SinSedesNotice />
+          ) : (
+            <Select
+              value={establishmentId}
+              onValueChange={(v) => {
+                setEstablishmentId(v);
+                setSelectedProgramacionId(null);
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Selecciona una sede" />
+              </SelectTrigger>
+              <SelectContent>
+                {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
+                  <SelectItem key={e.id} value={e.id}>
+                    {e.code} — {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </div>
       </div>
 
       {!establishmentId ? (
-        <p className="text-sm text-muted-foreground">Selecciona una sede para continuar.</p>
+        sinSedes ? (
+          <SinSedesNotice />
+        ) : (
+          <p className="text-sm text-muted-foreground">Selecciona una sede para continuar.</p>
+        )
       ) : (
         <>
           <Tabs value={tipo} onValueChange={(v) => setTipo(v as TurnoTipo)}>

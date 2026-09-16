@@ -17,7 +17,7 @@ import { PanelLeft } from "lucide-react";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "../lib/utils";
 import { Button } from "./button";
-import { Sheet, SheetContent } from "./sheet";
+import { Sheet, SheetContent, SheetTitle } from "./sheet";
 
 // ── Mobile breakpoint hook ────────────────────────────────────────────────────
 
@@ -176,6 +176,9 @@ export function Sidebar({
             className,
           )}
         >
+          {/* Radix (Sheet = Dialog) exige un Title por accesibilidad; oculto
+              porque el sidebar no muestra encabezado propio. */}
+          <SheetTitle className="sr-only">Menú de navegación</SheetTitle>
           <div
             data-state="expanded"
             data-collapsible={collapsible}

@@ -1469,6 +1469,9 @@ export default function NuevaHistoriaClinicaPage() {
       {/* Modal fullscreen: Formulario de Lesión de Causa Externa (MINSAL) — solo-vista, iframe aislado */}
       <Dialog open={lesionOpen} onOpenChange={setLesionOpen}>
         <DialogContent className="flex h-[min(92vh,100%)] w-[min(1180px,100%)] max-w-[1180px] flex-col gap-0 overflow-hidden rounded-[14px] p-0">
+          {/* Radix exige un DialogTitle por accesibilidad; oculto porque el
+              encabezado visible es el div custom de abajo (svg + subtítulo). */}
+          <DialogTitle className="sr-only">Formulario de Lesión de Causa Externa</DialogTitle>
           <div className="flex flex-none items-center justify-between gap-3 border-b border-border bg-surface-1 px-4 py-3">
             <div className="flex items-center gap-2.5 text-sm font-bold text-foreground">
               <svg

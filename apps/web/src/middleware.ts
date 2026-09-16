@@ -17,6 +17,11 @@ const PUBLIC_PATHS = [
   "/api/health",
   "/_next",
   "/favicon.ico",
+  // /manifest.json: el browser lo fetchea SIN cookies de sesión (request de
+  // manifest PWA). El matcher no excluye `.json`, así que sin esta entrada el
+  // middleware respondía el redirect HTML a /login y la consola marcaba
+  // "Manifest: Line: 1, column: 1, Syntax error".
+  "/manifest.json",
 ];
 
 // La allowlist de procedures tRPC sin sesión vive en `@/lib/auth/trpc-public`

@@ -29,7 +29,7 @@
  * request real de prueba, únicamente en este archivo.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 const mockUpdateSession = vi.fn();
 
@@ -109,5 +109,17 @@ describe("middleware — fail-closed ante excepción no atrapada (OWASP A10:2025
     expect(res.headers.get("location")).toBeNull();
     expect(res.status).not.toBe(307);
     expect(res.status).not.toBe(308);
+  });
+
+  // El browser fetchea el manifest PWA SIN cookies de sesión; si el
+  // middleware lo redirige a /login, la consola marca "Manifest: Line: 1,
+  // column: 1, Syntax error" (recibe HTML en vez de JSON). Debe ser público.
+  it("/manifest.json sin sesión → pass-through, sin redirect a /login", async () => {
+    mockUpdateSession.mockResolvedValue({ response: NextResponse.next(), user: null });
+
+    const res = await middleware(makeRequest("/manifest.json"));
+
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.status).not.toBe(307);
   });
 });
