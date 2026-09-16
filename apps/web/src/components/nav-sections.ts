@@ -80,6 +80,7 @@ import {
   HandCoins,
   DoorOpen,
   CalendarClock,
+  TrendingUp,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -392,6 +393,9 @@ export const SECTIONS: NavSection[] = [
       { href: "/agendas", label: "Agendas Médicas", icon: CalendarClock,
         requiredRoles: ["ADMIN", "DIR", "ADMIN_CONSULTORIOS", "SECRETARIA_MEDICO_AFILIADO", "MEDICO_AFILIADO"],
         description: "CC-0036 Ola 3 — configuración de agenda, excepciones y disponibilidad derivada por médico afiliado/consultorio (REQ-HIS-AFIL-001)." },
+      { href: "/rentabilidad", label: "Rentabilidad y Ocupación", icon: TrendingUp,
+        requiredRoles: ["ADMIN", "DIR", "GERENTE_FINANCIERO"],
+        description: "CC-0036 Ola 6 — tablero de rentabilidad por médico afiliado y ocupación de consultorios (REQ-HIS-AFIL-001, última ola)." },
       { href: "/profesionales-salud", label: "Profesionales de la Salud", icon: UserCog,
         description: "Personal no-médico: enfermería, archivo (ESDOMED), atención al cliente, administrativos." },
       { href: "/chat-analytics", label: "Asistente — Analytics", icon: BarChart3,

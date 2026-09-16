@@ -85,6 +85,7 @@ export * from "./afiliado";
 export * from "./agenda";
 export * from "./contrato";
 export * from "./honorario";
+export * from "./rentabilidad";
 export * from "./session";
 export * from "./sso";
 export * from "./surgery";
