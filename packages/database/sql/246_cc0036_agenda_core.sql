@@ -4,6 +4,11 @@
 -- derivada (REQ-HIS-AFIL-001 §6.1 Bloque E2, US.AGE.2.1, US.AGE.2.2, US.AGE.2.3,
 -- Sprint S3 del plan §11).
 --
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_agenda_core_246) — NO
+-- re-aplicar. Verificado: 4 tablas + 6 policies + audit, fn_agenda_
+-- disponibilidad ejecuta (smoke con agenda inexistente → 0 filas), 3
+-- permisos agenda, rol SECRETARIA_MEDICO_AFILIADO en orgs activas.
+--
 -- Correcciones a la numeración del REQ (la numeración real del repo manda,
 -- igual que sql/243/244/245): el REQ sugiere sql/245-247 para este bloque
 -- (agenda_core / agenda_appointment_alter / agenda_disponibilidad), pero
