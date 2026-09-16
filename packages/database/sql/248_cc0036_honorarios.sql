@@ -62,6 +62,12 @@
 --      organización activa (patrón sql/244 §5). Segregación generador≠
 --      aprobador de liquidación es un GUARD DE ROUTER (honorario.router.ts),
 --      no expresable como CHECK de fila sin acceso al usuario actual.
+--
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_honorarios_248) — NO
+-- re-aplicar. Verificado: 6 objetos (5 tablas + secuencia), EXCLUDE bounds
+-- '[]', fn_next_liquidacion atómica (probada, fila de prueba limpiada),
+-- 11 permisos, roles ANALISTA_HONORARIOS/GERENTE_FINANCIERO en orgs activas,
+-- 8 policies + audit triggers.
 -- ============================================================================
 
 BEGIN;
