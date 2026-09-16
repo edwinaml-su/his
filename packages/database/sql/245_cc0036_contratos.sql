@@ -60,7 +60,11 @@
 --      "hoy" (local) — diaCorte decide CUÁNDO corre el cron, no qué período
 --      factura (ver packages/trpc/src/lib/contrato-devengo.ts).
 --
--- Idempotente. Aplicar vía mcp apply_migration en una sola transacción.
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_contratos_245) — NO
+-- re-aplicar. Verificado: 4 objetos (3 tablas + secuencia), EXCLUDE con
+-- bounds '[]' (fix del pre-pr-review: fechaFin inclusiva), fn_next atómica
+-- (probada 1→2, fila de prueba limpiada), RLS/audit, 8 permisos, cron
+-- contrato_devengo_mensual 08:00 UTC activo.
 -- ============================================================================
 
 BEGIN;
@@ -113,7 +117,11 @@ BEGIN
       ADD CONSTRAINT excl_contrato_arrendamiento_exclusivo
       EXCLUDE USING gist (
         "consultorioId" WITH =,
-        daterange("fechaInicio", COALESCE("fechaFin", 'infinity'::date)) WITH &&
+        -- Bounds '[]' EXPLÍCITOS: fechaFin es INCLUSIVA en la semántica de negocio
+        -- (el prorrateo factura completo el día de fechaFin y el pre-check JS usa
+        -- gte/lte). El default de Postgres '[)' dejaba fuera al caso de contratos
+        -- exactamente adyacentes — hallazgo del pre-pr-review de la Ola 2.
+        daterange("fechaInicio", COALESCE("fechaFin", 'infinity'::date), '[]') WITH &&
       ) WHERE (estado IN ('VIGENTE', 'EN_MORA') AND modalidad = 'EXCLUSIVO');
   END IF;
 END $$;

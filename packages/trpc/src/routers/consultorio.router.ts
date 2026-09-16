@@ -169,7 +169,11 @@ export const consultorioRouter = router({
         }
         if (!input.active) {
           const contratoBloqueante = await tx.contratoArrendamiento.findFirst({
-            where: { consultorioId: input.id, estado: { in: ["VIGENTE", "EN_MORA"] } },
+            where: {
+              consultorioId: input.id,
+              organizationId: ctx.tenant.organizationId,
+              estado: { in: ["VIGENTE", "EN_MORA"] },
+            },
             select: { folio: true },
           });
           if (contratoBloqueante) {
