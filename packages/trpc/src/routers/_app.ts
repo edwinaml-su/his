@@ -2,6 +2,7 @@ import { router } from "../trpc";
 import { consultorioRouter } from "./consultorio.router";
 import { medicoAfiliadoRouter } from "./medico-afiliado.router";
 import { contratoRouter } from "./contrato.router";
+import { agendaRouter } from "./agenda.router";
 import { countryRouter } from "./country.router";
 import { organizationRouter } from "./organization.router";
 import { currencyRouter } from "./currency.router";
@@ -486,6 +487,8 @@ export const appRouter = router({
   medicoAfiliado: medicoAfiliadoRouter,
   // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento y devengo mensual
   contrato: contratoRouter,
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — motor de agenda
+  agenda: agendaRouter,
   // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
   turno: turnoRouter,
 });

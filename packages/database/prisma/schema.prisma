@@ -493,6 +493,9 @@ model Organization {
   // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
   contratosArrendamiento    ContratoArrendamiento[]
   contratoCargos            ContratoCargo[]
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — motor de agenda
+  agendasMedico             AgendaMedico[]
+  listaEsperas              ListaEspera[]
   vaccinations              PatientVaccination[]
   outpatientAppointments    OutpatientAppointment[]    @relation("OrgAppointments")
   inpatientAdmissions       InpatientAdmission[]       @relation("OrgInpatientAdmissions")
@@ -601,6 +604,8 @@ model Establishment {
   rooms                  Room[]
   // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
   consultorios           Consultorio[]
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — motor de agenda
+  agendasMedico          AgendaMedico[]
   // CC-0036 Ola 1A — Rostering 24/7 (turnos)
   plantillasTurno        PlantillaTurno[]
   programacionesTurno    ProgramacionTurno[]
@@ -1164,6 +1169,8 @@ model MedicalSpecialty {
   consultoriosSugeridos       Consultorio[]                @relation("ConsultorioEspecialidadSugerida")
   medicosAfiliadosPrincipal   MedicoAfiliado[]              @relation("MedicoAfiliadoEspecialidadPrincipal")
   medicoAfiliadoEspecialidades MedicoAfiliadoEspecialidad[]
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3)
+  agendasMedico               AgendaMedico[]                @relation("AgendaMedicoEspecialidad")
 
   @@schema("public")
 }
@@ -1405,6 +1412,8 @@ model Patient {
   patientAccounts        PatientAccount[]   @relation("PatientAccounts")
   // CC-0026 — tareas de tablero ancladas al paciente
   careTasks              CareTask[]
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — lista de espera de agenda
+  listaEsperas           ListaEspera[]
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -1841,6 +1850,7 @@ model Consultorio {
   serviceUnit          ServiceUnit?      @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
   especialidadSugerida MedicalSpecialty? @relation("ConsultorioEspecialidadSugerida", fields: [especialidadSugeridaId], references: [id], onDelete: SetNull)
   contratos            ContratoArrendamiento[]
+  agendas              AgendaMedico[]
 
   @@unique([organizationId, codigo])
   @@index([establishmentId])
@@ -1883,6 +1893,7 @@ model MedicoAfiliado {
   especialidadPrincipal MedicalSpecialty?           @relation("MedicoAfiliadoEspecialidadPrincipal", fields: [especialidadPrincipalId], references: [id], onDelete: SetNull)
   especialidades        MedicoAfiliadoEspecialidad[]
   contratos             ContratoArrendamiento[]
+  agendas               AgendaMedico[]
 
   @@unique([organizationId, jvpmNumero])
   @@index([userId])
@@ -1951,6 +1962,7 @@ model ContratoArrendamiento {
   costCenter     CostCenter?         @relation("ContratoArrendamientoCostCenter", fields: [costCenterId], references: [id], onDelete: SetNull)
   jornadas       ContratoJornada[]
   cargos         ContratoCargo[]
+  agendas        AgendaMedico[]
 
   @@unique([organizationId, folio])
   @@index([organizationId])
@@ -2014,6 +2026,131 @@ model ContratoCargo {
   @@unique([contratoId, periodo, concepto])
   @@index([organizationId])
   @@index([contratoId, periodo])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// AgendaMedico — configuración de agenda de un médico afiliado en un
+/// consultorio (CC-0036 Ola 3, REQ-HIS-AFIL-001 §6.1, US.AGE.2.1).
+/// sql/246_cc0036_agenda_core.sql. D4: disponibilidad DERIVADA por
+/// `fn_agenda_disponibilidad`, sin tabla de slots. `estado` SUSPENDIDA por
+/// mora del contrato es DERIVADO en el router, no persistido por job.
+model AgendaMedico {
+  id                        String    @id @default(uuid()) @db.Uuid
+  organizationId            String    @db.Uuid
+  establishmentId           String    @db.Uuid
+  medicoAfiliadoId          String    @db.Uuid
+  consultorioId             String    @db.Uuid
+  contratoId                String?   @db.Uuid
+  specialtyId               String?   @db.Uuid
+  vigenciaDesde             DateTime  @db.Date
+  vigenciaHasta             DateTime? @db.Date
+  duracionSlotMin           Int       @default(20)
+  capacidadPorSlot          Int       @default(1)
+  sobrecupoMaximoDia        Int       @default(0)
+  anticipacionMinimaHoras   Int       @default(0)
+  horizonteMaximoDias       Int       @default(90)
+  politicaCancelacionHoras  Int       @default(24)
+  /// Reservado para la fase de portal/autoagenda (D3 del REQ) — sin lector/escritor esta ola.
+  permiteAutoagenda         Boolean   @default(false)
+  /// BORRADOR | PUBLICADA | SUSPENDIDA | CERRADA — CHECK chk_agenda_medico_estado (sql/246).
+  estado                    String    @default("BORRADOR") @db.VarChar(20)
+  active                    Boolean   @default(true)
+  createdAt                 DateTime  @default(now()) @db.Timestamptz()
+  createdBy                 String?   @db.Uuid
+  updatedAt                 DateTime  @updatedAt @db.Timestamptz()
+  updatedBy                 String?   @db.Uuid
+
+  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment  Establishment          @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  medicoAfiliado MedicoAfiliado         @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Restrict)
+  consultorio    Consultorio            @relation(fields: [consultorioId], references: [id], onDelete: Restrict)
+  contrato       ContratoArrendamiento? @relation(fields: [contratoId], references: [id], onDelete: SetNull)
+  specialty      MedicalSpecialty?      @relation("AgendaMedicoEspecialidad", fields: [specialtyId], references: [id], onDelete: SetNull)
+  horarios       AgendaHorario[]
+  excepciones    AgendaExcepcion[]
+  listaEsperas   ListaEspera[]
+
+  @@index([organizationId])
+  @@index([establishmentId])
+  @@index([medicoAfiliadoId])
+  @@index([consultorioId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// AgendaHorario — bloques de horario semanal de una AgendaMedico (CC-0036
+/// Ola 3, US.AGE.2.1 AC1/AC3). Nunca cruza medianoche. sql/246.
+model AgendaHorario {
+  id          String   @id @default(uuid()) @db.Uuid
+  agendaId    String   @db.Uuid
+  /// 0=domingo .. 6=sábado.
+  diaSemana   Int      @db.SmallInt
+  horaInicio  DateTime @db.Time(6)
+  horaFin     DateTime @db.Time(6)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+  createdBy   String?  @db.Uuid
+
+  agenda AgendaMedico @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+
+  @@index([agendaId])
+  @@index([agendaId, diaSemana])
+  @@schema("public")
+}
+
+/// AgendaExcepcion — bloqueos/vacaciones/congresos/extensiones puntuales por
+/// fecha (CC-0036 Ola 3, US.AGE.2.2). EXTENSION suma disponibilidad (incluso
+/// en feriado); el resto resta. sql/246.
+model AgendaExcepcion {
+  id          String    @id @default(uuid()) @db.Uuid
+  agendaId    String    @db.Uuid
+  fecha       DateTime  @db.Date
+  /// BLOQUEO | EXTENSION | VACACION | CONGRESO — CHECK chk_agenda_excepcion_tipo (sql/246).
+  tipo        String    @db.VarChar(20)
+  /// NULL = día completo.
+  horaInicio  DateTime? @db.Time(6)
+  horaFin     DateTime? @db.Time(6)
+  motivo      String    @db.VarChar(500)
+  createdBy   String    @db.Uuid
+  createdAt   DateTime  @default(now()) @db.Timestamptz()
+
+  agenda AgendaMedico @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+
+  @@index([agendaId])
+  @@index([agendaId, fecha])
+  @@schema("public")
+}
+
+/// ListaEspera — modelo completo (CC-0036 Ola 3, REQ-HIS-AFIL-001 §6.1). La
+/// operación (inscribir/notificar/convertir a cita) llega en Ola 4
+/// (US.AGE.2.4 AC7 / US.AGE.2.5 AC3) — se crea ahora porque el REQ la define
+/// en el mismo bloque de tablas E2. sql/246.
+model ListaEspera {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @db.Uuid
+  agendaId          String    @db.Uuid
+  patientId         String    @db.Uuid
+  /// NORMAL | PREFERENTE — CHECK chk_lista_espera_prioridad (sql/246).
+  prioridad         String    @default("NORMAL") @db.VarChar(20)
+  fechaDeseadaDesde DateTime? @db.Date
+  fechaDeseadaHasta DateTime? @db.Date
+  /// ESPERANDO | CONTACTADO | AGENDADO | DESISTIO | VENCIDO — CHECK chk_lista_espera_estado (sql/246).
+  estado            String    @default("ESPERANDO") @db.VarChar(20)
+  citaGeneradaId    String?   @db.Uuid
+  notas             String?
+  createdAt         DateTime  @default(now()) @db.Timestamptz()
+  createdBy         String?   @db.Uuid
+  updatedAt         DateTime  @updatedAt @db.Timestamptz()
+  updatedBy         String?   @db.Uuid
+
+  organization Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  agenda       AgendaMedico           @relation(fields: [agendaId], references: [id], onDelete: Cascade)
+  patient      Patient                @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  citaGenerada OutpatientAppointment? @relation(fields: [citaGeneradaId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([agendaId])
+  @@index([patientId])
   @@index([estado])
   @@schema("public")
 }
@@ -2495,6 +2632,8 @@ model OutpatientAppointment {
   patient       Patient                  @relation("PatAppointments", fields: [patientId], references: [id], onDelete: Restrict)
   provider      User                     @relation("ProviderAppointments", fields: [providerId], references: [id], onDelete: Restrict)
   consultations OutpatientConsultation[]
+  // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — cita generada desde ListaEspera (Ola 4 la escribe; el modelo ya existe).
+  listaEsperas  ListaEspera[]
 
   @@unique([providerId, scheduledAt], name: "outpatient_appointment_provider_slot_unique")
   @@index([organizationId, scheduledAt])
