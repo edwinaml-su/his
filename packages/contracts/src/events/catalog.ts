@@ -189,6 +189,10 @@ export const EVENT_TYPES = [
   "task.escalated",
   // CC-0036 Ola 1B (REQ-HIS-AFIL-001 US.AFIL.1.2) — alta de médico afiliado (PROSPECTO)
   "afiliado.creado",
+  // CC-0036 Ola 2 (REQ-HIS-AFIL-001 US.AFIL.1.3/1.4) — contratos de arrendamiento y devengo mensual
+  "contrato.activado",
+  "contrato.cargo.devengado",
+  "contrato.terminado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

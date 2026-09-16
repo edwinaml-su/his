@@ -408,6 +408,9 @@ model Currency {
   // Finance — sql/127 + sql/129
   invoices         Invoice[]         @relation("InvoiceCurrency")
   hisOperatingCosts HisOperatingCost[] @relation("HisOperatingCostCurrency")
+  // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
+  contratosArrendamiento ContratoArrendamiento[]
+  contratoCargos         ContratoCargo[]
 
   @@schema("public")
 }
@@ -487,6 +490,9 @@ model Organization {
   // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
   consultorios              Consultorio[]
   medicosAfiliados          MedicoAfiliado[]
+  // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
+  contratosArrendamiento    ContratoArrendamiento[]
+  contratoCargos            ContratoCargo[]
   vaccinations              PatientVaccination[]
   outpatientAppointments    OutpatientAppointment[]    @relation("OrgAppointments")
   inpatientAdmissions       InpatientAdmission[]       @relation("OrgInpatientAdmissions")
@@ -1834,6 +1840,7 @@ model Consultorio {
   establishment        Establishment     @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
   serviceUnit          ServiceUnit?      @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
   especialidadSugerida MedicalSpecialty? @relation("ConsultorioEspecialidadSugerida", fields: [especialidadSugeridaId], references: [id], onDelete: SetNull)
+  contratos            ContratoArrendamiento[]
 
   @@unique([organizationId, codigo])
   @@index([establishmentId])
@@ -1875,6 +1882,7 @@ model MedicoAfiliado {
   tipoDocumento        IdentifierType?              @relation(fields: [tipoDocumentoId], references: [id], onDelete: SetNull)
   especialidadPrincipal MedicalSpecialty?           @relation("MedicoAfiliadoEspecialidadPrincipal", fields: [especialidadPrincipalId], references: [id], onDelete: SetNull)
   especialidades        MedicoAfiliadoEspecialidad[]
+  contratos             ContratoArrendamiento[]
 
   @@unique([organizationId, jvpmNumero])
   @@index([userId])
@@ -1895,6 +1903,118 @@ model MedicoAfiliadoEspecialidad {
   specialty      MedicalSpecialty @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
 
   @@unique([medicoAfiliadoId, specialtyId])
+  @@schema("public")
+}
+
+/// CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2, US.AFIL.1.3) — contrato de
+/// arrendamiento de consultorio entre Avante y el médico afiliado. Folio
+/// fn_next_contrato_arrendamiento(). sql/245_cc0036_contratos.sql.
+/// Antitraslape EXCLUSIVO (mismo consultorioId, rango de fechas solapado,
+/// estados VIGENTE/EN_MORA) no modelable en Prisma — ver
+/// `excl_contrato_arrendamiento_exclusivo` en sql/245. Cero integración Odoo
+/// esta ola (decisión Edwin 2026-09-15): sin campos odooInvoiceId/odooSyncedAt
+/// en este modelo (viven solo en ContratoCargo, reservados sin escritor).
+model ContratoArrendamiento {
+  id                     String    @id @default(uuid()) @db.Uuid
+  organizationId         String    @db.Uuid
+  medicoAfiliadoId       String    @db.Uuid
+  consultorioId          String    @db.Uuid
+  folio                  String    @db.VarChar(20)
+  /// EXCLUSIVO | COMPARTIDO_POR_JORNADA — CHECK chk_contrato_arrendamiento_modalidad (sql/245).
+  modalidad              String    @db.VarChar(30)
+  fechaInicio            DateTime  @db.Date
+  fechaFin               DateTime? @db.Date
+  plazoMeses             Int?
+  rentaMensual           Decimal   @db.Decimal(14, 2)
+  cuotaServicios         Decimal   @default(0) @db.Decimal(14, 2)
+  currencyId             String    @db.Uuid
+  diaCorte               Int       @default(1)
+  plazoPagoDias          Int       @default(5)
+  ivaAplica              Boolean   @default(true)
+  indexacionAnualPct     Decimal?  @db.Decimal(7, 4)
+  depositoGarantia       Decimal   @default(0) @db.Decimal(14, 2)
+  renovacionAutomatica   Boolean   @default(false)
+  mesesPreavisoTermino   Int       @default(2)
+  costCenterId           String?   @db.Uuid
+  /// BORRADOR | VIGENTE | EN_MORA | SUSPENDIDO | TERMINADO | RENOVADO — CHECK chk_contrato_arrendamiento_estado (sql/245).
+  estado                 String    @default("BORRADOR") @db.VarChar(20)
+  notas                  String?
+  createdAt              DateTime  @default(now()) @db.Timestamptz()
+  createdBy              String?   @db.Uuid
+  updatedAt              DateTime  @updatedAt @db.Timestamptz()
+  updatedBy              String?   @db.Uuid
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  medicoAfiliado MedicoAfiliado      @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Restrict)
+  consultorio    Consultorio         @relation(fields: [consultorioId], references: [id], onDelete: Restrict)
+  currency       Currency            @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+  costCenter     CostCenter?         @relation("ContratoArrendamientoCostCenter", fields: [costCenterId], references: [id], onDelete: SetNull)
+  jornadas       ContratoJornada[]
+  cargos         ContratoCargo[]
+
+  @@unique([organizationId, folio])
+  @@index([organizationId])
+  @@index([medicoAfiliadoId])
+  @@index([consultorioId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// ContratoJornada — jornadas semanales de un contrato COMPARTIDO_POR_JORNADA
+/// (CC-0036 Ola 2, US.AFIL.1.3 AC3). El no-traslape entre jornadas de
+/// contratos distintos del mismo consultorio se valida en el router (cruza
+/// filas de otro contrato, no modelable en un solo EXCLUDE de esta tabla).
+/// sql/245_cc0036_contratos.sql.
+model ContratoJornada {
+  id          String   @id @default(uuid()) @db.Uuid
+  contratoId  String   @db.Uuid
+  /// 0=domingo .. 6=sábado.
+  diaSemana   Int      @db.SmallInt
+  horaInicio  DateTime @db.Time(6)
+  horaFin     DateTime @db.Time(6)
+  createdAt   DateTime @default(now()) @db.Timestamptz()
+  createdBy   String?  @db.Uuid
+
+  contrato ContratoArrendamiento @relation(fields: [contratoId], references: [id], onDelete: Cascade)
+
+  @@index([contratoId])
+  @@schema("public")
+}
+
+/// ContratoCargo — devengo mensual de un ContratoArrendamiento (CC-0036 Ola
+/// 2, US.AFIL.1.4). UNIQUE (contratoId, periodo, concepto) da idempotencia al
+/// cron `contrato_devengo_mensual` y a la generación manual.
+/// odooInvoiceId/odooSyncedAt y los estados ENVIADO_ODOO/FACTURADO/PAGADO son
+/// RESERVADOS — sin escritor en esta ola (cero integración Odoo, decisión
+/// Edwin 2026-09-15). sql/245_cc0036_contratos.sql.
+model ContratoCargo {
+  id              String    @id @default(uuid()) @db.Uuid
+  organizationId  String    @db.Uuid
+  contratoId      String    @db.Uuid
+  /// Primer día del mes devengado.
+  periodo         DateTime  @db.Date
+  /// RENTA | SERVICIOS | MORA | AJUSTE | DEPOSITO — CHECK chk_contrato_cargo_concepto (sql/245).
+  concepto        String    @db.VarChar(20)
+  monto           Decimal   @db.Decimal(14, 2)
+  currencyId      String    @db.Uuid
+  /// DEVENGADO | ENVIADO_ODOO | FACTURADO | PAGADO | ANULADO — esta ola solo
+  /// produce DEVENGADO/ANULADO (CHECK chk_contrato_cargo_estado, sql/245).
+  estado          String    @default("DEVENGADO") @db.VarChar(20)
+  /// RESERVADO — sin escritor en esta ola.
+  odooInvoiceId   Int?
+  /// RESERVADO — sin escritor en esta ola.
+  odooSyncedAt    DateTime? @db.Timestamptz()
+  motivoAnulacion String?   @db.VarChar(500)
+  generadoAt      DateTime  @default(now()) @db.Timestamptz()
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contrato     ContratoArrendamiento @relation(fields: [contratoId], references: [id], onDelete: Restrict)
+  currency     Currency              @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+
+  @@unique([contratoId, periodo, concepto])
+  @@index([organizationId])
+  @@index([contratoId, periodo])
+  @@index([estado])
   @@schema("public")
 }
 
@@ -5423,6 +5543,8 @@ model CostCenter {
   labOrdersEjecutor        LabOrder[]                   @relation("LabOrderEjecutor")
   // Surgery — Wave 10 (132_cost_center_clinical_modules.sql)
   surgeryCases             SurgeryCase[]                @relation("SurgeryCaseCostCenter")
+  // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
+  contratosArrendamiento   ContratoArrendamiento[]      @relation("ContratoArrendamientoCostCenter")
 
   @@unique([organizationId, code])
   @@index([organizationId, active])

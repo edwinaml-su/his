@@ -1,6 +1,7 @@
 import { router } from "../trpc";
 import { consultorioRouter } from "./consultorio.router";
 import { medicoAfiliadoRouter } from "./medico-afiliado.router";
+import { contratoRouter } from "./contrato.router";
 import { countryRouter } from "./country.router";
 import { organizationRouter } from "./organization.router";
 import { currencyRouter } from "./currency.router";
@@ -483,6 +484,8 @@ export const appRouter = router({
   // CC-0036 Ola 1B (REQ-HIS-AFIL-001 S1) — catálogo de consultorios y médicos afiliados
   consultorio: consultorioRouter,
   medicoAfiliado: medicoAfiliadoRouter,
+  // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento y devengo mensual
+  contrato: contratoRouter,
   // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
   turno: turnoRouter,
 });

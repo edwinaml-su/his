@@ -168,5 +168,32 @@ describe("consultorioRouter", () => {
         caller.setActive({ id: CONSULTORIO_ID, active: false }),
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("CC-0036 Ola 2: bloquea la desactivación si hay un ContratoArrendamiento VIGENTE, con el folio", async () => {
+      grantAdmin(prisma, "consultorio.desactivar");
+      prisma.consultorio.findFirst.mockResolvedValue({ id: CONSULTORIO_ID, active: true } as never);
+      prisma.contratoArrendamiento.findFirst.mockResolvedValue({ folio: "ARR-000123" } as never);
+
+      const caller = consultorioRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.setActive({ id: CONSULTORIO_ID, active: false }),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: expect.stringContaining("ARR-000123"),
+      });
+      expect(prisma.consultorio.update).not.toHaveBeenCalled();
+    });
+
+    it("CC-0036 Ola 2: permite desactivar cuando no hay contrato VIGENTE/EN_MORA bloqueante", async () => {
+      grantAdmin(prisma, "consultorio.desactivar");
+      prisma.consultorio.findFirst.mockResolvedValue({ id: CONSULTORIO_ID, active: true } as never);
+      prisma.contratoArrendamiento.findFirst.mockResolvedValue(null as never);
+      prisma.consultorio.update.mockResolvedValue({ id: CONSULTORIO_ID, active: false } as never);
+
+      const caller = consultorioRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.setActive({ id: CONSULTORIO_ID, active: false });
+
+      expect(result).toMatchObject({ active: false });
+    });
   });
 });
