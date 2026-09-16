@@ -79,6 +79,7 @@ import {
   Lock,
   HandCoins,
   DoorOpen,
+  CalendarClock,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -385,6 +386,9 @@ export const SECTIONS: NavSection[] = [
       { href: "/contratos", label: "Contratos de Arrendamiento", icon: FileSignature,
         requiredRoles: ["ADMIN", "DIR", "ADMIN_CONSULTORIOS"],
         description: "CC-0036 Ola 2 — contratos de arrendamiento de consultorio, jornadas y devengo mensual al hub de eventos (REQ-HIS-AFIL-001)." },
+      { href: "/agendas", label: "Agendas Médicas", icon: CalendarClock,
+        requiredRoles: ["ADMIN", "DIR", "ADMIN_CONSULTORIOS", "SECRETARIA_MEDICO_AFILIADO", "MEDICO_AFILIADO"],
+        description: "CC-0036 Ola 3 — configuración de agenda, excepciones y disponibilidad derivada por médico afiliado/consultorio (REQ-HIS-AFIL-001)." },
       { href: "/profesionales-salud", label: "Profesionales de la Salud", icon: UserCog,
         description: "Personal no-médico: enfermería, archivo (ESDOMED), atención al cliente, administrativos." },
       { href: "/chat-analytics", label: "Asistente — Analytics", icon: BarChart3,

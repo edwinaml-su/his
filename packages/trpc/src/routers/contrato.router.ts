@@ -83,6 +83,14 @@ function toMinutes(hora: Date): number {
   return hora.getUTCHours() * 60 + hora.getUTCMinutes();
 }
 
+// Inverso de toTimeColumnValue — vuelve una columna `time` (Date UTC 1970) a
+// "HH:MM" para re-usar assertJornadaSinTraslape desde `activar`.
+function toTimeInputValue(hora: Date): string {
+  const hh = String(hora.getUTCHours()).padStart(2, "0");
+  const mm = String(hora.getUTCMinutes()).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
 function appendNota(existing: string | null, entry: string): string {
   return existing ? `${existing}\n${entry}` : entry;
 }
@@ -165,7 +173,9 @@ async function assertJornadaSinTraslape(
       diaSemana: params.diaSemana,
       contrato: {
         consultorioId: params.consultorioId,
-        estado: "VIGENTE",
+        // EN_MORA sigue ocupando la jornada (el contrato no se libera por
+        // mora) — hallazgo del pre-pr-review de la Ola 3.
+        estado: { in: [...VIGENTES_CONTRATO] },
         id: { not: params.contratoId },
       },
     },
@@ -441,6 +451,23 @@ export const contratoRouter = router({
         modalidad: contrato.modalidad,
         excludeContratoId: contrato.id,
       });
+
+      // Re-validar las jornadas al activar (hallazgo del pre-pr-review de la
+      // Ola 3): entre el alta en BORRADOR y la activacion pudo activarse otro
+      // contrato del mismo consultorio con jornadas que ahora traslapan; el
+      // check del alta ya no cubre esa carrera y no hay EXCLUDE de BD para
+      // jornadas (cruza contratos).
+      if (contrato.modalidad === "COMPARTIDO_POR_JORNADA") {
+        for (const j of contrato.jornadas) {
+          await assertJornadaSinTraslape(tx, {
+            consultorioId: contrato.consultorioId,
+            contratoId: contrato.id,
+            diaSemana: j.diaSemana,
+            horaInicio: toTimeInputValue(j.horaInicio),
+            horaFin: toTimeInputValue(j.horaFin),
+          });
+        }
+      }
 
       let activado;
       try {
