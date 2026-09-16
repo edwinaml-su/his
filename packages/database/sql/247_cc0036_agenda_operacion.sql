@@ -4,9 +4,12 @@
 -- no-show y check-in→Encounter+cuenta (REQ-HIS-AFIL-001 §6.1 Bloque E2,
 -- US.AGE.2.4, US.AGE.2.5, US.AGE.2.6, US.AGE.2.7, Sprint S4 del plan §11).
 --
--- PENDIENTE DE APLICAR — @Orq aplica vía MCP Supabase. Requiere sql/243-246
--- ya aplicados (AgendaMedico/AgendaHorario/AgendaExcepcion/ListaEspera,
--- MedicoAfiliado, Consultorio, ContratoArrendamiento, btree_gist).
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_agenda_operacion_247) — NO
+-- re-aplicar. Verificado: 18 columnas + 9 FKs + 2 CHECKs + 2 EXCLUDE (vía
+-- fn_cita_rango IMMUTABLE — fix sobre la expresión del REQ, que dio 42P17
+-- "functions in index expression must be marked IMMUTABLE" en el primer
+-- apply) + 4 índices + fn_cita_no_show + cron cita_no_show */10 + 5
+-- permisos de operación. Requiere sql/243-246 ya aplicados.
 --
 -- Corrección al REQ: la numeración sugerida (§10) da 246 a este archivo y
 -- 247 a `fn_agenda_disponibilidad`, pero esa función YA se aplicó como parte
@@ -141,12 +144,26 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 --    (US.AGE.2.5 AC5 — el sobrecupo es intencional, fuera de esta guarda).
 -- ---------------------------------------------------------------------------
 
+-- Rango de la cita como función IMMUTABLE — requerido por el EXCLUDE gist
+-- (42P17: "functions in index expression must be marked IMMUTABLE"; la
+-- expresión del REQ `("durationMinutes" || ' minutes')::interval` no lo es).
+-- Declararla IMMUTABLE es correcto: suma de minutos puros a timestamptz es
+-- determinista (sin componentes día/mes; El Salvador además no tiene DST).
+CREATE OR REPLACE FUNCTION public.fn_cita_rango(p_inicio timestamptz, p_duracion_min int)
+RETURNS tstzrange
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+  SELECT tstzrange(p_inicio, p_inicio + make_interval(mins => p_duracion_min));
+$$;
+
 DO $$ BEGIN
   ALTER TABLE "OutpatientAppointment"
     ADD CONSTRAINT excl_cita_medico
     EXCLUDE USING gist (
       "providerId" WITH =,
-      tstzrange("scheduledAt", "scheduledAt" + ("durationMinutes" || ' minutes')::interval) WITH &&
+      public.fn_cita_rango("scheduledAt", "durationMinutes") WITH &&
     )
     WHERE (status IN ('SCHEDULED', 'CONFIRMED', 'CHECKED_IN') AND "esSobrecupo" = false AND "deletedAt" IS NULL);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -156,7 +173,7 @@ DO $$ BEGIN
     ADD CONSTRAINT excl_cita_consultorio
     EXCLUDE USING gist (
       "consultorioId" WITH =,
-      tstzrange("scheduledAt", "scheduledAt" + ("durationMinutes" || ' minutes')::interval) WITH &&
+      public.fn_cita_rango("scheduledAt", "durationMinutes") WITH &&
     )
     WHERE (status IN ('SCHEDULED', 'CONFIRMED', 'CHECKED_IN') AND "esSobrecupo" = false AND "deletedAt" IS NULL);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
