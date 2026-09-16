@@ -1297,6 +1297,55 @@ export const afiliadoCreadoPayloadSchema = z.object({
 export type AfiliadoCreadoPayload = z.infer<typeof afiliadoCreadoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// CC-0036 Ola 2 (REQ-HIS-AFIL-001 US.AFIL.1.3/1.4) — contratos de
+// arrendamiento y devengo mensual. Sin campos odooInvoiceId/odooSyncedAt en
+// los payloads: cero integración Odoo en esta ola (decisión Edwin
+// 2026-09-15, ver docstring de contrato.ts).
+// -----------------------------------------------------------------------------
+
+export const contratoActivadoPayloadSchema = z.object({
+  contratoId: z.string().uuid(),
+  folio: z.string().min(1).max(20),
+  medicoAfiliadoId: z.string().uuid(),
+  consultorioId: z.string().uuid(),
+  modalidad: z.enum(["EXCLUSIVO", "COMPARTIDO_POR_JORNADA"]),
+  fechaInicio: z.string().date(),
+});
+
+export type ContratoActivadoPayload = z.infer<typeof contratoActivadoPayloadSchema>;
+
+/**
+ * Emitido por cargo individual (RENTA/SERVICIOS son 2 eventos separados del
+ * mismo contrato) — `aggregateId` del `DomainEvent` DEBE ser `cargoId`, NO
+ * `contratoId`: `uq_domain_event_pending_dedup` (sql/97) es único por
+ * (organizationId, aggregateId, eventType) mientras el evento esté pending,
+ * y dos cargos del mismo contrato en el mismo período (RENTA + SERVICIOS)
+ * comparten `eventType='contrato.cargo.devengado'` — si compartieran
+ * `aggregateId=contratoId` el segundo INSERT chocaría contra el índice
+ * (misma lección que 241b/sql/243 §4 sobre AsignacionTurno).
+ */
+export const contratoCargoDevengadoPayloadSchema = z.object({
+  contratoId: z.string().uuid(),
+  cargoId: z.string().uuid(),
+  folio: z.string().min(1).max(20),
+  concepto: z.enum(["RENTA", "SERVICIOS", "MORA", "AJUSTE", "DEPOSITO"]),
+  monto: z.number(),
+  /** Primer día del mes devengado, YYYY-MM-DD. */
+  periodo: z.string().date(),
+});
+
+export type ContratoCargoDevengadoPayload = z.infer<typeof contratoCargoDevengadoPayloadSchema>;
+
+export const contratoTerminadoPayloadSchema = z.object({
+  contratoId: z.string().uuid(),
+  folio: z.string().min(1).max(20),
+  fechaEfectiva: z.string().date(),
+  motivo: z.string().min(1).max(500),
+});
+
+export type ContratoTerminadoPayload = z.infer<typeof contratoTerminadoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1779,6 +1828,18 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("afiliado.creado"),
     payload: afiliadoCreadoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("contrato.activado"),
+    payload: contratoActivadoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("contrato.cargo.devengado"),
+    payload: contratoCargoDevengadoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("contrato.terminado"),
+    payload: contratoTerminadoPayloadSchema,
   }),
 ]);
 

@@ -148,11 +148,9 @@ export const consultorioRouter = router({
   /**
    * Activa/desactiva un consultorio (US.AFIL.1.1 AC3).
    *
-   * TODO CC-0036 Ola 2: cuando exista `ContratoArrendamiento`, bloquear la
-   * desactivación si hay un contrato en estado VIGENTE sobre este
-   * consultorio, indicando el folio (`fn_next_contrato_arrendamiento`) que
-   * lo bloquea — ver REQ-HIS-AFIL-001 US.AFIL.1.1 AC3. Esta ola no tiene esa
-   * tabla todavía, así que el toggle es libre.
+   * CC-0036 Ola 2 (cierra el TODO de Ola 1B): bloquea la desactivación si hay
+   * un `ContratoArrendamiento` en estado VIGENTE o EN_MORA sobre este
+   * consultorio, indicando el folio que lo bloquea.
    */
   setActive: requirePermission("consultorio.desactivar")
     .input(consultorioSetActiveSchema)
@@ -168,6 +166,22 @@ export const consultorioRouter = router({
         }
         if (existing.active === input.active) {
           return existing; // idempotente
+        }
+        if (!input.active) {
+          const contratoBloqueante = await tx.contratoArrendamiento.findFirst({
+            where: {
+              consultorioId: input.id,
+              organizationId: ctx.tenant.organizationId,
+              estado: { in: ["VIGENTE", "EN_MORA"] },
+            },
+            select: { folio: true },
+          });
+          if (contratoBloqueante) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `No se puede desactivar: tiene un contrato de arrendamiento vigente (folio ${contratoBloqueante.folio}).`,
+            });
+          }
         }
         return tx.consultorio.update({
           where: { id: input.id },

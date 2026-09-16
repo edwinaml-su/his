@@ -9,14 +9,20 @@
  *
  * Pendiente documentado (Ola 2+, NO implementado acá):
  *   - `activar` (PROSPECTO→ACTIVO): el REQ exige contrato de arrendamiento o
- *     convenio de honorarios VIGENTE. Esas tablas (ContratoArrendamiento,
- *     ConvenioHonorario) llegan en olas siguientes — por ahora la transición
- *     es manual, gateada solo por `medico_afiliado.editar` + auditoría
- *     (trigger `trg_audit_MedicoAfiliado`, sql/244). Decisión temporal
- *     explícita, no un olvido.
+ *     convenio de honorarios VIGENTE. CC-0036 Ola 2 cerró el lado de
+ *     contrato — `contrato.router.ts#activar` promueve automáticamente al
+ *     afiliado PROSPECTO→ACTIVO cuando su `ContratoArrendamiento` pasa a
+ *     VIGENTE. Esta mutación (`activar` de este router) queda como la vía
+ *     MANUAL restante — gateada solo por `medico_afiliado.editar` + auditoría
+ *     (trigger `trg_audit_MedicoAfiliado`, sql/244) — para el caso
+ *     `ConvenioHonorario` VIGENTE, que llega en una ola posterior
+ *     (honorarios). Decisión temporal explícita, no un olvido.
  *   - `darBaja`: el REQ exige verificar ausencia de producción PENDIENTE sin
- *     liquidar y de contrato VIGENTE. `ProduccionMedica`/`ContratoArrendamiento`
- *     no existen todavía — el gate real llega con esas tablas.
+ *     liquidar y de contrato VIGENTE. `ProduccionMedica` no existe todavía
+ *     (ola de honorarios); `ContratoArrendamiento` sí existe desde Ola 2 pero
+ *     el chequeo de "sin contrato VIGENTE" no se agregó aquí para no acoplar
+ *     esta ola a la de honorarios a medias — se cierra completo cuando
+ *     ProduccionMedica exista.
  *   - ABAC `$user.medicoAfiliadoId` (REQ §7.3.1, SECRETARIA_MEDICO_AFILIADO /
  *     MEDICO_AFILIADO): requiere resolver `medicoAfiliadoId` en
  *     `getTenantContext()` (apps/web/src/lib/auth/session.ts) y añadirlo a

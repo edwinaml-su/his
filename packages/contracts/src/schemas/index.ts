@@ -82,6 +82,7 @@ export * from "./pharmacy";
 export * from "./rbac";
 export * from "./room";
 export * from "./afiliado";
+export * from "./contrato";
 export * from "./session";
 export * from "./sso";
 export * from "./surgery";
