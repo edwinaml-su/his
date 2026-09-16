@@ -23,9 +23,11 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import type { PrismaClient } from "@prisma/client";
+import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { nextCuenta } from "../lib/cuenta-numbering";
+import { calcularResumenRubros } from "../lib/resumen-rubros";
 import {
   resolverCobertura,
   type Ambito,
@@ -742,6 +744,10 @@ export const patientAccountRouter = router({
    *      `conciliacion-cargos.despachadoSinCierre`).
    * Sin causas → CERRADA + closedAt/closedBy. No hay reapertura: decisión
    * administrativa futura, fuera de alcance de este plan.
+   *
+   * CC-0036 Ola 5 (Decisión Edwin 2026-09-16 #2c) — tras el cierre exitoso,
+   * emite `cuenta.resumen_rubros` (agregado por centro de costo + cuenta
+   * contable, `lib/resumen-rubros.ts`) al outbox, no-bloqueante (try/catch).
    */
   cerrar: tenantProcedure
     .input(z.object({ accountId: z.string().uuid() }))
@@ -770,10 +776,34 @@ export const patientAccountRouter = router({
           });
         }
 
-        return tx.patientAccount.update({
+        const cerrada = await tx.patientAccount.update({
           where: { id: account.id },
           data: { status: "CERRADA", closedAt: new Date(), closedBy: ctx.user.id },
         });
+
+        // CC-0036 Ola 5 (Decisión Edwin 2026-09-16 #2c) — agregado por rubro
+        // (centro de costo + cuenta contable) rumbo al ERP. No-fatal: el
+        // cierre de cuenta NUNCA debe fallar por un problema en la capa de
+        // agregación contable (mismo patrón que los demás emisores de
+        // emitDomainEvent, ver break-glass.router.ts/turno.router.ts).
+        try {
+          const rubros = await calcularResumenRubros(tx, {
+            organizationId: ctx.tenant.organizationId,
+            accountId: cerrada.id,
+          });
+          await emitDomainEvent(tx, {
+            organizationId: ctx.tenant.organizationId,
+            eventType: "cuenta.resumen_rubros",
+            aggregateType: "PatientAccount",
+            aggregateId: cerrada.id,
+            emittedById: ctx.user.id,
+            payload: { accountId: cerrada.id, patientId: cerrada.patientId, rubros },
+          });
+        } catch {
+          // Intencional — ver comentario arriba.
+        }
+
+        return cerrada;
       });
     }),
 

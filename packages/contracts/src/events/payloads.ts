@@ -1390,6 +1390,54 @@ export const citaNoShowPayloadSchema = z.object({
 export type CitaNoShowPayload = z.infer<typeof citaNoShowPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios médicos.
+// -----------------------------------------------------------------------------
+
+export const produccionRegistradaPayloadSchema = z.object({
+  produccionId: z.string().uuid(),
+  medicoAfiliadoId: z.string().uuid(),
+  rolMedico: z.enum(["TRATANTE", "CIRUJANO", "AYUDANTE", "ANESTESISTA", "INTERPRETE", "REFERENTE"]),
+  patientAccountServiceId: z.string().uuid(),
+  estado: z.enum(["PENDIENTE", "EXCLUIDO"]),
+  honorarioCalculado: z.number(),
+  motivoExclusion: z.enum(["SIN_REGLA", "PERSONAL_DE_PLANTA"]).nullable(),
+});
+
+export type ProduccionRegistradaPayload = z.infer<typeof produccionRegistradaPayloadSchema>;
+
+/** Decisión Edwin 2026-09-15 #1 — llega hasta APROBADA, esto ES el "hub de eventos" (sin Odoo esta ola). */
+export const liquidacionAprobadaPayloadSchema = z.object({
+  liquidacionId: z.string().uuid(),
+  medicoAfiliadoId: z.string().uuid(),
+  folio: z.string().min(1).max(20),
+  periodoDesde: z.string().date(),
+  periodoHasta: z.string().date(),
+  totalBruto: z.number(),
+  totalRetenciones: z.number(),
+  totalCompensaciones: z.number(),
+  totalNeto: z.number(),
+  aprobadaById: z.string().uuid(),
+});
+
+export type LiquidacionAprobadaPayload = z.infer<typeof liquidacionAprobadaPayloadSchema>;
+
+/** Decisión Edwin 2026-09-16 #2c — agregado compacto por rubro, rumbo al ERP en la fase de integración. */
+export const cuentaResumenRubrosPayloadSchema = z.object({
+  accountId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  rubros: z.array(
+    z.object({
+      origen: z.string().max(30),
+      costCenterId: z.string().uuid().nullable(),
+      cuentaContableCodigo: z.string().max(40).nullable(),
+      total: z.number(),
+    }),
+  ),
+});
+
+export type CuentaResumenRubrosPayload = z.infer<typeof cuentaResumenRubrosPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1896,6 +1944,18 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("cita.no_show"),
     payload: citaNoShowPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("produccion.registrada"),
+    payload: produccionRegistradaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("liquidacion.aprobada"),
+    payload: liquidacionAprobadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("cuenta.resumen_rubros"),
+    payload: cuentaResumenRubrosPayloadSchema,
   }),
 ]);
 

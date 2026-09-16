@@ -35,6 +35,7 @@ import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import { revertirCargo } from "../lib/charge-capture";
 import { hayConflictoQuirofano } from "../lib/quirofano-conflicto";
 import { capturarCargoReservaQuirofano } from "../lib/quirofano-reserva-cargo";
+import { atribuirProduccionMedica } from "../lib/produccion-atribucion";
 
 // ---------------------------------------------------------------------------
 // Router
@@ -217,7 +218,7 @@ export const surgeryRouter = router({
               where: { id: input.operatingRoomId },
               select: { code: true, chargeCode: true },
             });
-            await capturarCargoReservaQuirofano(tx, {
+            const cargoReserva = await capturarCargoReservaQuirofano(tx, {
               organizationId: ctx.tenant.organizationId,
               patientId: input.patientId,
               encounterId: input.encounterId,
@@ -227,6 +228,33 @@ export const surgeryRouter = router({
               referenciaId: surgeryCase.id,
               actorId: ctx.user.id,
             });
+
+            // CC-0036 Ola 5 (US.AFIL.1.6 AC2) — atribuye CIRUJANO sobre el
+            // cargo de reserva de quirófano si el cirujano principal está
+            // registrado como MedicoAfiliado (userId). AYUDANTE/ANESTESISTA
+            // quedan diferidos: SurgeryCase no modela esos roles como filas
+            // propias todavía (ver docstring de produccion-atribucion.ts).
+            // No-fatal: nunca bloquea la creación del caso quirúrgico.
+            try {
+              const cirujanoAfiliado = await tx.medicoAfiliado.findFirst({
+                where: { organizationId: ctx.tenant.organizationId, userId: input.primarySurgeonId },
+                select: { id: true },
+              });
+              if (cirujanoAfiliado) {
+                await atribuirProduccionMedica(tx, {
+                  organizationId: ctx.tenant.organizationId,
+                  establishmentId: input.establishmentId,
+                  medicoAfiliadoId: cirujanoAfiliado.id,
+                  rolMedico: "CIRUJANO",
+                  patientAccountServiceId: cargoReserva.cargoId,
+                  ambito: "CIRUGIA",
+                  fecha: new Date(),
+                  actorId: ctx.user.id,
+                });
+              }
+            } catch {
+              // Intencional — ver docstring de produccion-atribucion.ts.
+            }
           }
 
           return surgeryCase;

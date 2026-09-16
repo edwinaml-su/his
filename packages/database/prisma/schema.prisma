@@ -411,6 +411,8 @@ model Currency {
   // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
   contratosArrendamiento ContratoArrendamiento[]
   contratoCargos         ContratoCargo[]
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios
+  liquidaciones          Liquidacion[]
 
   @@schema("public")
 }
@@ -493,6 +495,10 @@ model Organization {
   // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
   contratosArrendamiento    ContratoArrendamiento[]
   contratoCargos            ContratoCargo[]
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios
+  conveniosHonorario        ConvenioHonorario[]
+  produccionesMedicas       ProduccionMedica[]
+  liquidaciones             Liquidacion[]
   // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — motor de agenda
   agendasMedico             AgendaMedico[]
   listaEsperas              ListaEspera[]
@@ -627,6 +633,8 @@ model Establishment {
   invoices               Invoice[] @relation("InvoiceEstablishment")
   // CC-0026 — tareas de tablero ancladas al establecimiento
   careTasks              CareTask[]
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios
+  produccionesMedicas    ProduccionMedica[]
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -1894,6 +1902,10 @@ model MedicoAfiliado {
   especialidades        MedicoAfiliadoEspecialidad[]
   contratos             ContratoArrendamiento[]
   agendas               AgendaMedico[]
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios.
+  convenios             ConvenioHonorario[]
+  producciones          ProduccionMedica[]
+  liquidaciones         Liquidacion[]
 
   @@unique([organizationId, jvpmNumero])
   @@index([userId])
@@ -2022,11 +2034,209 @@ model ContratoCargo {
   organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contrato     ContratoArrendamiento @relation(fields: [contratoId], references: [id], onDelete: Restrict)
   currency     Currency              @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+  // CC-0036 Ola 5 (US.AFIL.1.7 AC2) — compensación renta-honorarios.
+  compensaciones LiquidacionCompensacion[]
 
   @@unique([contratoId, periodo, concepto])
   @@index([organizationId])
   @@index([contratoId, periodo])
   @@index([estado])
+  @@schema("public")
+}
+
+/// ConvenioHonorario — convenio de honorarios de un médico afiliado (CC-0036
+/// Ola 5, REQ-HIS-AFIL-001 §5.1 Bloque B, US.AFIL.1.5). Antitraslape VIGENTE
+/// por EXCLUDE gist (no modelable en Prisma, ver `excl_convenio_honorario_vigente`
+/// en sql/248). retencionRentaPct/aplicaIvaRetenido/periodicidadLiquidacion
+/// son parametrizables por convenio (§15 del REQ) — nunca hardcodear.
+/// sql/248_cc0036_honorarios.sql.
+model ConvenioHonorario {
+  id                       String    @id @default(uuid()) @db.Uuid
+  organizationId           String    @db.Uuid
+  medicoAfiliadoId         String    @db.Uuid
+  vigenciaDesde            DateTime  @db.Date
+  vigenciaHasta            DateTime? @db.Date
+  retencionRentaPct        Decimal   @default(0.10) @db.Decimal(7, 4)
+  aplicaIvaRetenido        Boolean   @default(false)
+  /// QUINCENAL | MENSUAL — CHECK chk_convenio_honorario_periodicidad (sql/248).
+  periodicidadLiquidacion  String    @default("MENSUAL") @db.VarChar(20)
+  /// BORRADOR | VIGENTE | TERMINADO — CHECK chk_convenio_honorario_estado (sql/248).
+  estado                   String    @default("BORRADOR") @db.VarChar(20)
+  createdAt                DateTime  @default(now()) @db.Timestamptz()
+  createdBy                String?   @db.Uuid
+  updatedAt                DateTime  @updatedAt @db.Timestamptz()
+  updatedBy                String?   @db.Uuid
+
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  medicoAfiliado MedicoAfiliado  @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Restrict)
+  reglas         ReglaHonorario[]
+
+  @@index([organizationId])
+  @@index([medicoAfiliadoId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// ReglaHonorario — regla de cálculo de honorario por ámbito/rol/categoría/
+/// código dentro de un ConvenioHonorario (CC-0036 Ola 5, US.AFIL.1.5). Sin
+/// `organizationId` propio: RLS vía join a ConvenioHonorario (sql/248, mismo
+/// patrón que ContratoJornada). Resolución por especificidad (codigoServicio
+/// > serviceCategoryId > ambito) -> prioridad desc -> createdAt desc, ver
+/// packages/trpc/src/lib/honorario-resolver.ts. `costCenterId` +
+/// `cuentaContableCodigo` = "rubro" del honorario (Decisión Edwin 2026-09-16
+/// #2b — cuentaContableCodigo es FK LÓGICA a `Account.code`, único por
+/// `ledgerId` y no global, mismo patrón que `TipoCuenta.priceListId`).
+/// sql/248_cc0036_honorarios.sql.
+model ReglaHonorario {
+  id                    String   @id @default(uuid()) @db.Uuid
+  convenioId            String   @db.Uuid
+  /// CIRUGIA | CONSULTA | PROCEDIMIENTO | INTERPRETACION | VISITA_HOSPITALARIA | INSUMO — CHECK (sql/248).
+  ambito                String   @db.VarChar(30)
+  /// TRATANTE | CIRUJANO | AYUDANTE | ANESTESISTA | INTERPRETE | REFERENTE — CHECK (sql/248). Null = cualquier rol.
+  rolMedico             String?  @db.VarChar(20)
+  /// FK lógica -> ServiceCategory (tabla fuera de schema.prisma, sql/133).
+  serviceCategoryId     String?  @db.Uuid
+  /// FK lógica -> ServicePriceListItem.code.
+  codigoServicio        String?  @db.VarChar(40)
+  /// PORCENTAJE | MONTO_FIJO — CHECK chk_regla_honorario_tipo_calculo (sql/248).
+  tipoCalculo           String   @db.VarChar(20)
+  porcentaje            Decimal? @db.Decimal(7, 4)
+  montoFijo             Decimal? @db.Decimal(14, 2)
+  montoMinimo           Decimal? @db.Decimal(14, 2)
+  montoMaximo           Decimal? @db.Decimal(14, 2)
+  prioridad             Int      @default(0)
+  costCenterId          String?  @db.Uuid
+  cuentaContableCodigo  String?  @db.VarChar(40)
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @db.Timestamptz()
+  createdBy             String?  @db.Uuid
+  updatedAt             DateTime @updatedAt @db.Timestamptz()
+  updatedBy             String?  @db.Uuid
+
+  convenio   ConvenioHonorario  @relation(fields: [convenioId], references: [id], onDelete: Cascade)
+  costCenter CostCenter?        @relation("ReglaHonorarioCostCenter", fields: [costCenterId], references: [id], onDelete: SetNull)
+  producciones ProduccionMedica[]
+
+  @@index([convenioId])
+  @@index([convenioId, ambito, active])
+  @@schema("public")
+}
+
+/// ProduccionMedica — atribución de producción a un médico afiliado por rol
+/// sobre un cargo (CC-0036 Ola 5, US.AFIL.1.6). `patientAccountServiceId` es
+/// el cargo ORIGEN (definición REQ); `encounterId`/`patientAccountServiceId`/
+/// `cargoHonorarioId` son FK LÓGICAS a `Encounter`/`PatientAccountService`
+/// (sin `@relation`, mismo patrón que `OutpatientAppointment.medicoAfiliadoId`
+/// en Ola 4) para no arrastrar relaciones inversas nuevas a esos dos modelos
+/// de altísimo uso. `cargoHonorarioId` = cargo nuevo `origen='HONORARIO_MEDICO'`
+/// creado por la atribución (Decisión Edwin 2026-09-16 #2a) — distinto del
+/// cargo origen. UNIQUE (patientAccountServiceId, medicoAfiliadoId, rolMedico)
+/// da idempotencia (AC3). sql/248_cc0036_honorarios.sql.
+model ProduccionMedica {
+  id                       String   @id @default(uuid()) @db.Uuid
+  organizationId           String   @db.Uuid
+  establishmentId          String   @db.Uuid
+  medicoAfiliadoId         String   @db.Uuid
+  /// TRATANTE | CIRUJANO | AYUDANTE | ANESTESISTA | INTERPRETE | REFERENTE — CHECK (sql/248).
+  rolMedico                String   @db.VarChar(20)
+  /// FK lógica -> PatientAccountService (cargo ORIGEN).
+  patientAccountServiceId  String   @db.Uuid
+  /// FK lógica -> Encounter.
+  encounterId              String?  @db.Uuid
+  fecha                    DateTime @db.Date
+  montoFacturado           Decimal  @db.Decimal(14, 2)
+  honorarioCalculado       Decimal  @db.Decimal(14, 2)
+  reglaHonorarioId         String?  @db.Uuid
+  /// PENDIENTE | LIQUIDADO | EXCLUIDO | REVERSADO — CHECK chk_produccion_medica_estado (sql/248).
+  estado                   String   @default("PENDIENTE") @db.VarChar(20)
+  liquidacionId            String?  @db.Uuid
+  /// SIN_REGLA | PERSONAL_DE_PLANTA | MANUAL — CHECK chk_produccion_medica_motivo (sql/248).
+  motivoExclusion          String?  @db.VarChar(40)
+  /// Texto libre de la exclusión MANUAL (produccion.excluir) — null en las automáticas.
+  motivoDetalle            String?  @db.VarChar(200)
+  /// FK lógica -> PatientAccountService (cargo HONORARIO_MEDICO nuevo, distinto del origen).
+  cargoHonorarioId         String?  @db.Uuid
+  createdAt                DateTime @default(now()) @db.Timestamptz()
+  createdBy                String?  @db.Uuid
+  updatedAt                DateTime @updatedAt @db.Timestamptz()
+  updatedBy                String?  @db.Uuid
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment  Establishment    @relation(fields: [establishmentId], references: [id], onDelete: Restrict)
+  medicoAfiliado MedicoAfiliado   @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Restrict)
+  reglaHonorario ReglaHonorario?  @relation(fields: [reglaHonorarioId], references: [id], onDelete: SetNull)
+  liquidacion    Liquidacion?     @relation(fields: [liquidacionId], references: [id], onDelete: SetNull)
+
+  @@unique([patientAccountServiceId, medicoAfiliadoId, rolMedico])
+  @@index([organizationId])
+  @@index([medicoAfiliadoId, estado])
+  @@index([liquidacionId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// Liquidacion — liquidación de honorarios por afiliado y período (CC-0036
+/// Ola 5, US.AFIL.1.7). Folio fn_next_liquidacion() formato LIQ-{NNNNNN}.
+/// Llega hasta APROBADA y emite `liquidacion.aprobada` al outbox (Decisión
+/// Edwin 2026-09-15 #1, cero Odoo esta ola) — ENVIADA_ODOO/PAGADA/odooBillId
+/// RESERVADOS sin escritor. sql/248_cc0036_honorarios.sql.
+model Liquidacion {
+  id                    String    @id @default(uuid()) @db.Uuid
+  organizationId        String    @db.Uuid
+  medicoAfiliadoId      String    @db.Uuid
+  folio                 String    @db.VarChar(20)
+  periodoDesde          DateTime  @db.Date
+  periodoHasta          DateTime  @db.Date
+  totalBruto            Decimal   @default(0) @db.Decimal(14, 2)
+  totalRetenciones      Decimal   @default(0) @db.Decimal(14, 2)
+  totalCompensaciones   Decimal   @default(0) @db.Decimal(14, 2)
+  totalNeto             Decimal   @default(0) @db.Decimal(14, 2)
+  currencyId            String    @db.Uuid
+  /// BORRADOR | APROBADA | ENVIADA_ODOO | PAGADA | ANULADA — esta ola solo
+  /// produce BORRADOR/APROBADA/ANULADA (CHECK chk_liquidacion_estado, sql/248).
+  estado                String    @default("BORRADOR") @db.VarChar(20)
+  aprobadaBy            String?   @db.Uuid
+  aprobadaAt            DateTime? @db.Timestamptz()
+  motivoAnulacion       String?   @db.VarChar(500)
+  /// RESERVADO — sin escritor en esta ola.
+  odooBillId            Int?
+  /// RESERVADO — sin escritor en esta ola.
+  odooSyncedAt          DateTime? @db.Timestamptz()
+  createdAt             DateTime  @default(now()) @db.Timestamptz()
+  createdBy             String?   @db.Uuid
+  updatedAt             DateTime  @updatedAt @db.Timestamptz()
+  updatedBy             String?   @db.Uuid
+
+  organization   Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  medicoAfiliado MedicoAfiliado            @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Restrict)
+  currency       Currency                  @relation(fields: [currencyId], references: [id], onDelete: Restrict)
+  producciones   ProduccionMedica[]
+  compensaciones LiquidacionCompensacion[]
+
+  @@unique([organizationId, folio])
+  @@index([organizationId])
+  @@index([medicoAfiliadoId, periodoDesde])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// LiquidacionCompensacion — cruce de renta de arrendamiento en mora contra
+/// la liquidación de honorarios (CC-0036 Ola 5, US.AFIL.1.7 AC2), sin dejar
+/// totalNeto negativo. Sin `organizationId` propio: RLS vía join a
+/// Liquidacion (sql/248, mismo patrón que ContratoJornada).
+model LiquidacionCompensacion {
+  id              String   @id @default(uuid()) @db.Uuid
+  liquidacionId   String   @db.Uuid
+  contratoCargoId String   @db.Uuid
+  monto           Decimal  @db.Decimal(14, 2)
+  createdAt       DateTime @default(now()) @db.Timestamptz()
+
+  liquidacion   Liquidacion   @relation(fields: [liquidacionId], references: [id], onDelete: Cascade)
+  contratoCargo ContratoCargo @relation(fields: [contratoCargoId], references: [id], onDelete: Restrict)
+
+  @@unique([liquidacionId, contratoCargoId])
+  @@index([liquidacionId])
+  @@index([contratoCargoId])
   @@schema("public")
 }
 
@@ -5725,6 +5935,8 @@ model CostCenter {
   surgeryCases             SurgeryCase[]                @relation("SurgeryCaseCostCenter")
   // CC-0036 Ola 2 (REQ-HIS-AFIL-001 S2) — contratos de arrendamiento
   contratosArrendamiento   ContratoArrendamiento[]      @relation("ContratoArrendamientoCostCenter")
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — rubro del honorario (Decisión Edwin #2b)
+  reglasHonorario          ReglaHonorario[]             @relation("ReglaHonorarioCostCenter")
 
   @@unique([organizationId, code])
   @@index([organizationId, active])
