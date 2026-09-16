@@ -2,8 +2,10 @@
 -- 244_cc0036_afiliado_consultorio.sql — CC-0036 Ola 1B (REQ-HIS-AFIL-001 S1):
 -- catálogo de consultorios y médicos afiliados.
 --
--- PENDIENTE DE APLICAR — la aplica @Orq vía MCP. NO aplicar desde este
--- worktree.
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_afiliado_consultorio_244) —
+-- NO re-aplicar. Verificado: 3 tablas + 5 policies + triggers audit (×3
+-- eventos c/u; nombres en minúsculas por identifier sin comillas) + 8
+-- permisos + roles ADMIN_CONSULTORIOS/MEDICO_AFILIADO en orgs activas.
 --
 -- Fuente: REQ-HIS-AFIL-001.md §5.1 Bloque A (Consultorio, MedicoAfiliado,
 -- MedicoAfiliadoEspecialidad), US.AFIL.1.1, US.AFIL.1.2, §7 (RBAC).
