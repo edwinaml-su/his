@@ -80,6 +80,72 @@
 import { emitDomainEvent, type PrismaClient } from "@his/database";
 import { categoriaUIDeItem } from "./order-consumer";
 
+/** CC-0036 — alias de "médico general" para efectos de US.AFIL.1.11.2 (mismo criterio que `PHYSICIAN_CODES` de `middleware/ece-permission.ts`, acotado a los 2 códigos relevantes acá). */
+const PHYSICIAN_ROLE_CODES = new Set(["PHYSICIAN", "MC"]);
+
+/**
+ * CC-0036 US.AFIL.1.11.2/3 (REQ-HIS-AFIL-001 Bloque C) — si `assignedRoleCode`
+ * es de médico general y la tarea no trae `assigneeId` explícito, resuelve el
+ * médico de turno vigente en la sede vía `fn_medico_de_turno` (sql/243) y
+ * devuelve su `userId`. Sin cobertura: no asigna a nadie y emite
+ * `task.escalated` a JEFE_MEDICO_SEDE con resumen `SIN_COBERTURA` — NUNCA
+ * bloquea el flujo clínico (try/catch, mismo contrato de fallo que el puente
+ * de notificación `task.action_required` de más abajo).
+ *
+ * Forward-wired: en este consumer `assignedRoleCode` siempre es `NURSE`
+ * (`TASK_TYPE_BY_TIPO` solo produce tareas de enfermería) — la rama de
+ * médico general está lista para cuando algún tipo de indicación futuro (o
+ * cualquier otro creador de `CareTask`, ver `order-consumer.ts`) apunte a
+ * `PHYSICIAN`/`MC`. Con `assignedRoleCode="NURSE"` retorna sin tocar la BD.
+ */
+export async function resolveMedicoGeneralAssignee(
+  tx: PrismaClient,
+  params: {
+    organizationId: string;
+    establishmentId: string;
+    assignedRoleCode: string;
+    taskId: string;
+    taskType: string;
+    title: string;
+    emittedById: string;
+  },
+): Promise<string | null> {
+  if (!PHYSICIAN_ROLE_CODES.has(params.assignedRoleCode)) return null;
+  try {
+    const rows = await tx.$queryRaw<Array<{ userId: string; tipo: string }>>`
+      SELECT "userId", tipo FROM public.fn_medico_de_turno(${params.establishmentId}::uuid)
+    `;
+    const medico = rows.find((r) => r.tipo === "MEDICO_GENERAL");
+    if (medico) return medico.userId;
+
+    await emitDomainEvent(tx, {
+      organizationId: params.organizationId,
+      eventType: "task.escalated",
+      aggregateType: "CareTask",
+      aggregateId: params.taskId,
+      emittedById: params.emittedById,
+      payload: {
+        taskType: params.taskType,
+        sourceType: "CARE_TASK",
+        sourceId: params.taskId,
+        assignedRoleCode: "JEFE_MEDICO_SEDE",
+        establishmentId: params.establishmentId,
+        serviceUnitId: null,
+        dueAt: null,
+        url: "/turnos",
+        resumen: `SIN_COBERTURA — no hay médico general de turno para asignar: ${params.title}`,
+      },
+    });
+  } catch (err) {
+    console.error(
+      `[CC-0036 care-task-consumer] resolución de médico de turno falló para CareTask ${params.taskId} — ` +
+        "la tarea queda sin asignatario, sin bloquear el flujo.",
+      err,
+    );
+  }
+  return null;
+}
+
 export interface CareTaskIndicacionItem {
   id: string;
   /** Valor crudo de `ece.indicacion_item.tipo` (CHECK `chk_ind_item_tipo`, sql/202). */
@@ -240,6 +306,21 @@ export async function materializeCareTasksFromIndicacion(
       },
     });
     tasksCreated += 1;
+
+    // CC-0036 US.AFIL.1.11.2/3 — resolución de médico de turno (no-op para
+    // assignedRoleCode="NURSE", ver doc de la función).
+    const medicoDeTurnoId = await resolveMedicoGeneralAssignee(tx, {
+      organizationId,
+      establishmentId,
+      assignedRoleCode: "NURSE",
+      taskId: task.id,
+      taskType,
+      title,
+      emittedById: userId,
+    });
+    if (medicoDeTurnoId) {
+      await tx.careTask.update({ where: { id: task.id }, data: { assigneeId: medicoDeTurnoId } });
+    }
 
     // CC-0031 Fase 1(b) — puente tarea→notificación. Try/catch DELIBERADO:
     // a diferencia del INSERT de CareTask arriba (que SÍ debe revertir la tx

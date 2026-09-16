@@ -479,6 +479,10 @@ model Organization {
   triages                   TriageEvaluation[]
   beds                      Bed[]
   rooms                     Room[]
+  // CC-0036 Ola 1A — Rostering 24/7 (turnos)
+  plantillasTurno           PlantillaTurno[]
+  programacionesTurno       ProgramacionTurno[]
+  asignacionesTurno         AsignacionTurno[]
   services                  ServiceUnit[]
   // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
   consultorios              Consultorio[]
@@ -591,6 +595,10 @@ model Establishment {
   rooms                  Room[]
   // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
   consultorios           Consultorio[]
+  // CC-0036 Ola 1A — Rostering 24/7 (turnos)
+  plantillasTurno        PlantillaTurno[]
+  programacionesTurno    ProgramacionTurno[]
+  asignacionesTurno      AsignacionTurno[]
   encounters             Encounter[]
   triages                TriageEvaluation[]
   outpatientAppointments OutpatientAppointment[] @relation("EstAppointments")
@@ -728,6 +736,9 @@ model User {
   // cuenta HIS (userId nulo); cuando se vincula, un usuario enlaza a lo sumo
   // un afiliado en la práctica, pero no se fuerza @unique acá (el REQ no lo pide).
   medicosAfiliados          MedicoAfiliado[]
+  // CC-0036 Ola 1A — Rostering 24/7 (turnos)
+  turnosAsignados           AsignacionTurno[]            @relation("AsignacionTurnoUsuario")
+  turnosSustituidos         AsignacionTurno[]            @relation("AsignacionTurnoSustituto")
 
   @@schema("public")
 }
@@ -1175,6 +1186,8 @@ model ServiceUnit {
   specialty     MedicalSpecialty?  @relation(fields: [specialtyId], references: [id], onDelete: SetNull)
   beds          Bed[]
   rooms         Room[]
+  // CC-0036 Ola 1A — Rostering 24/7 (turnos)
+  plantillasTurno PlantillaTurno[]
   encounters    Encounter[]
   triages       TriageEvaluation[]
   // CC-0036 (REQ-HIS-AFIL-001 Ola 1B) — sede sugerida del consultorio (opcional).
@@ -1882,6 +1895,115 @@ model MedicoAfiliadoEspecialidad {
   specialty      MedicalSpecialty @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
 
   @@unique([medicoAfiliadoId, specialtyId])
+  @@schema("public")
+}
+
+/// PlantillaTurno — turno tipo por sede (CC-0036 Ola 1A, US.AFIL.1.9).
+/// REQ-HIS-AFIL-001 §5.1 Bloque C. `cruzaMedianoche` es columna GENERATED
+/// (sql/243) — nunca se envía en `create`/`update`.
+model PlantillaTurno {
+  id                String   @id @default(uuid()) @db.Uuid
+  organizationId    String   @db.Uuid
+  establishmentId   String   @db.Uuid
+  serviceUnitId     String?  @db.Uuid
+  codigo            String   @db.VarChar(40)
+  nombre            String   @db.VarChar(120)
+  horaInicio        DateTime @db.Time(6)
+  horaFin           DateTime @db.Time(6)
+  /// GENERATED ALWAYS AS ("horaFin" <= "horaInicio") STORED — ver sql/243.
+  cruzaMedianoche   Boolean  @default(false)
+  /// MEDICO_GENERAL | ENFERMERIA | APOYO — CHECK chk_plantilla_turno_tipo (sql/243).
+  tipo              String   @db.VarChar(20)
+  dotacionRequerida Int      @default(1)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamptz()
+  createdBy         String?  @db.Uuid
+  updatedAt         DateTime @updatedAt @db.Timestamptz()
+  updatedBy         String?  @db.Uuid
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment Establishment     @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  serviceUnit   ServiceUnit?      @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  asignaciones  AsignacionTurno[]
+
+  @@unique([organizationId, establishmentId, codigo])
+  @@index([organizationId])
+  @@index([establishmentId, tipo, active])
+  @@schema("public")
+}
+
+/// ProgramacionTurno — período de programación (quincenal/mensual) por sede
+/// (CC-0036 Ola 1A, US.AFIL.1.10). REQ-HIS-AFIL-001 §5.1 Bloque C.
+model ProgramacionTurno {
+  id                        String    @id @default(uuid()) @db.Uuid
+  organizationId            String    @db.Uuid
+  establishmentId           String    @db.Uuid
+  periodoDesde              DateTime  @db.Date
+  periodoHasta              DateTime  @db.Date
+  /// BORRADOR | PUBLICADA | CERRADA — CHECK chk_programacion_turno_estado (sql/243).
+  estado                    String    @default("BORRADOR") @db.VarChar(20)
+  publicadaBy               String?   @db.Uuid
+  publicadaAt               DateTime? @db.Timestamptz()
+  autorizaDescubiertoBy     String?   @db.Uuid
+  autorizaDescubiertoMotivo String?   @db.VarChar(300)
+  createdAt                 DateTime  @default(now()) @db.Timestamptz()
+  createdBy                 String?   @db.Uuid
+  updatedAt                 DateTime  @updatedAt @db.Timestamptz()
+  updatedBy                 String?   @db.Uuid
+
+  organization  Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment Establishment     @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  asignaciones  AsignacionTurno[]
+
+  @@unique([organizationId, establishmentId, periodoDesde, periodoHasta])
+  @@index([organizationId])
+  @@index([establishmentId, estado])
+  @@schema("public")
+}
+
+/// AsignacionTurno — asignación de un usuario a un turno en una fecha
+/// (CC-0036 Ola 1A, US.AFIL.1.10-1.11). `organizationId`/`establishmentId`
+/// denormalizados desde ProgramacionTurno (RLS directo, ver sql/243).
+/// Antitraslape por EXCLUDE (mismo userId, rangos [inicioProgramado,
+/// finProgramado) solapados, estados vigentes) — no modelable en Prisma,
+/// ver `excl_asignacion_turno_traslape` en sql/243.
+model AsignacionTurno {
+  id                    String    @id @default(uuid()) @db.Uuid
+  organizationId        String    @db.Uuid
+  establishmentId       String    @db.Uuid
+  programacionId        String    @db.Uuid
+  plantillaTurnoId      String    @db.Uuid
+  userId                String    @db.Uuid
+  fecha                 DateTime  @db.Date
+  inicioProgramado      DateTime  @db.Timestamptz()
+  finProgramado         DateTime  @db.Timestamptz()
+  inicioReal            DateTime? @db.Timestamptz()
+  finReal               DateTime? @db.Timestamptz()
+  /// PROGRAMADO | CONFIRMADO | EN_CURSO | CUMPLIDO | AUSENTE | SUSTITUIDO —
+  /// CHECK chk_asignacion_turno_estado (sql/243).
+  estado                String    @default("PROGRAMADO") @db.VarChar(20)
+  sustitutoUserId       String?   @db.Uuid
+  motivoCambio          String?   @db.VarChar(300)
+  /// Guarda de idempotencia del cron `turno_sin_cobertura_watchdog`
+  /// (US.AFIL.1.10.8, sql/243).
+  sinCoberturaEmitidoAt DateTime? @db.Timestamptz()
+  createdAt             DateTime  @default(now()) @db.Timestamptz()
+  createdBy             String?   @db.Uuid
+  updatedAt             DateTime  @updatedAt @db.Timestamptz()
+  updatedBy             String?   @db.Uuid
+
+  organization   Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment  Establishment     @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  programacion   ProgramacionTurno @relation(fields: [programacionId], references: [id], onDelete: Cascade)
+  plantillaTurno PlantillaTurno    @relation(fields: [plantillaTurnoId], references: [id], onDelete: Restrict)
+  user           User              @relation("AsignacionTurnoUsuario", fields: [userId], references: [id], onDelete: Restrict)
+  sustituto      User?             @relation("AsignacionTurnoSustituto", fields: [sustitutoUserId], references: [id], onDelete: SetNull)
+
+  @@unique([plantillaTurnoId, fecha, userId])
+  @@index([organizationId])
+  @@index([establishmentId, estado])
+  @@index([programacionId])
+  @@index([userId])
   @@schema("public")
 }
 

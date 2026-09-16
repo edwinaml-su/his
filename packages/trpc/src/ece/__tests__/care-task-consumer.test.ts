@@ -22,6 +22,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   materializeCareTasksFromIndicacion,
+  resolveMedicoGeneralAssignee,
   type CareTaskIndicacionItem,
 } from "../care-task-consumer";
 
@@ -390,6 +391,123 @@ describe("materializeCareTasksFromIndicacion", () => {
       // La función NO relanza — tasksCreated refleja la CareTask ya persistida.
       expect(result.tasksCreated).toBe(1);
       expect(tx.careTask.create).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("resolveMedicoGeneralAssignee (CC-0036 US.AFIL.1.11.2/3)", () => {
+    const TASK_ID_2 = "77777777-7777-7777-7777-777777777777";
+    const MEDICO_USER_ID = "88888888-8888-8888-8888-888888888888";
+
+    function makeTurnoTx() {
+      return {
+        $queryRaw: vi.fn(),
+        domainEvent: { create: vi.fn().mockResolvedValue({ id: "evt-turno" }) },
+        auditLog: { create: vi.fn().mockResolvedValue({}) },
+      };
+    }
+
+    it("assignedRoleCode='NURSE' — no toca la BD, devuelve null de inmediato", async () => {
+      const tx = makeTurnoTx();
+      const result = await resolveMedicoGeneralAssignee(tx as never, {
+        organizationId: ORG_ID,
+        establishmentId: ESTABLISHMENT_ID,
+        assignedRoleCode: "NURSE",
+        taskId: TASK_ID_2,
+        taskType: "IND_MED_CUMPLIR",
+        title: "Paracetamol",
+        emittedById: USER_ID,
+      });
+      expect(result).toBeNull();
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it.each(["PHYSICIAN", "MC"])(
+      "assignedRoleCode=%s — hay médico general de turno → resuelve su userId",
+      async (roleCode) => {
+        const tx = makeTurnoTx();
+        tx.$queryRaw.mockResolvedValueOnce([
+          { userId: MEDICO_USER_ID, tipo: "MEDICO_GENERAL" },
+        ]);
+
+        const result = await resolveMedicoGeneralAssignee(tx as never, {
+          organizationId: ORG_ID,
+          establishmentId: ESTABLISHMENT_ID,
+          assignedRoleCode: roleCode,
+          taskId: TASK_ID_2,
+          taskType: "IND_GENERAL",
+          title: "Valorar paciente",
+          emittedById: USER_ID,
+        });
+
+        expect(result).toBe(MEDICO_USER_ID);
+        expect(tx.domainEvent.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it("sin cobertura (fn_medico_de_turno vacío) — devuelve null y emite task.escalated a JEFE_MEDICO_SEDE", async () => {
+      const tx = makeTurnoTx();
+      tx.$queryRaw
+        .mockResolvedValueOnce([]) // fn_medico_de_turno: sin filas
+        .mockResolvedValueOnce([{ hasTenantContext: false }]); // emitDomainEvent: sonda de contexto
+
+      const result = await resolveMedicoGeneralAssignee(tx as never, {
+        organizationId: ORG_ID,
+        establishmentId: ESTABLISHMENT_ID,
+        assignedRoleCode: "PHYSICIAN",
+        taskId: TASK_ID_2,
+        taskType: "IND_GENERAL",
+        title: "Valorar paciente",
+        emittedById: USER_ID,
+      });
+
+      expect(result).toBeNull();
+      expect(tx.domainEvent.create).toHaveBeenCalledTimes(1);
+      const eventArgs = tx.domainEvent.create.mock.calls[0]![0] as {
+        data: { eventType: string; payload: Record<string, unknown> };
+      };
+      expect(eventArgs.data.eventType).toBe("task.escalated");
+      expect(eventArgs.data.payload).toMatchObject({
+        assignedRoleCode: "JEFE_MEDICO_SEDE",
+        establishmentId: ESTABLISHMENT_ID,
+      });
+      expect(eventArgs.data.payload.resumen).toMatch(/^SIN_COBERTURA/);
+    });
+
+    it("solo hay enfermería de turno (sin MEDICO_GENERAL) — se trata igual que sin cobertura", async () => {
+      const tx = makeTurnoTx();
+      tx.$queryRaw
+        .mockResolvedValueOnce([{ userId: "otro-user", tipo: "ENFERMERIA" }])
+        .mockResolvedValueOnce([{ hasTenantContext: false }]);
+
+      const result = await resolveMedicoGeneralAssignee(tx as never, {
+        organizationId: ORG_ID,
+        establishmentId: ESTABLISHMENT_ID,
+        assignedRoleCode: "PHYSICIAN",
+        taskId: TASK_ID_2,
+        taskType: "IND_GENERAL",
+        title: "Valorar paciente",
+        emittedById: USER_ID,
+      });
+
+      expect(result).toBeNull();
+      expect(tx.domainEvent.create).toHaveBeenCalledTimes(1);
+    });
+
+    it("si fn_medico_de_turno lanza (error de BD) — atrapa y devuelve null sin propagar", async () => {
+      const tx = makeTurnoTx();
+      tx.$queryRaw.mockRejectedValueOnce(new Error("conexión perdida"));
+
+      const result = await resolveMedicoGeneralAssignee(tx as never, {
+        organizationId: ORG_ID,
+        establishmentId: ESTABLISHMENT_ID,
+        assignedRoleCode: "MC",
+        taskId: TASK_ID_2,
+        taskType: "IND_GENERAL",
+        title: "Valorar paciente",
+        emittedById: USER_ID,
+      });
+
+      expect(result).toBeNull();
     });
   });
 });
