@@ -35,10 +35,12 @@
 -- BI necesita esta matview, requiere su propio wrapper con
 -- `analytics.current_bi_org_id()` o una policy — no un GRANT directo.
 --
--- PENDIENTE DE APLICAR — @Orq aplica a prod vía MCP Supabase. Una vez
--- aplicado, marcar este encabezado "APLICADO" y NO re-aplicar (DROP...CREATE
--- es idempotente en estructura pero pisa el contenido hasta el próximo
--- refresh de cron).
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_tableros_249) — NO
+-- re-aplicar (DROP...CREATE pisa el contenido hasta el próximo refresh).
+-- Verificado: matview + índices, analytics.current_bi_org_id() creada acá
+-- (capa BI 48/49 sigue sin aplicar — bi_reader no existe, omitido del
+-- REVOKE), wrapper devuelve 0 filas sin GUC (probado), cron 03:30 UTC
+-- activo, permiso tablero_afiliado.leer sembrado.
 -- =============================================================================
 
 BEGIN;
@@ -173,7 +175,23 @@ COMMENT ON MATERIALIZED VIEW analytics.mv_rentabilidad_afiliado IS
 --    (sembrada en sql/49). Ver nota de seguridad al inicio del archivo.
 -- -----------------------------------------------------------------------------
 
-REVOKE ALL ON analytics.mv_rentabilidad_afiliado FROM PUBLIC, authenticated, anon, bi_reader;
+-- analytics.current_bi_org_id() se define AQUÍ (copiada 1:1 de sql/49_bi_rls.sql)
+-- porque la capa BI 48/49 NUNCA se aplicó a prod (deuda documentada en el
+-- barrido 2026-08-20) y esta función es el filtro de tenant del wrapper.
+-- Idempotente: si sql/49 se aplica después, es la misma definición.
+CREATE OR REPLACE FUNCTION analytics.current_bi_org_id()
+RETURNS UUID
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = analytics, public, pg_temp
+AS $$
+  SELECT NULLIF(current_setting('app.current_org_id', TRUE), '')::UUID;
+$$;
+
+-- bi_reader NO existe en prod (sql/48/49 sin aplicar) — se omite del REVOKE;
+-- cuando la capa BI se aplique, su propio hardening lo cubre.
+REVOKE ALL ON analytics.mv_rentabilidad_afiliado FROM PUBLIC, authenticated, anon;
 
 CREATE OR REPLACE FUNCTION analytics.fn_rentabilidad_afiliado(
   p_desde date,
