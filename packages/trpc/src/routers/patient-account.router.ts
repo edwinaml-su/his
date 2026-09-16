@@ -1138,7 +1138,7 @@ export const patientAccountRouter = router({
         type AccountRow = { id: string; patientId: string; status: string; encounterId: string | null };
         const accountRows = await tx.$queryRawUnsafe<AccountRow[]>(
           `SELECT id, "patientId", status, "encounterId" FROM "PatientAccount"
-            WHERE id = $1 AND "organizationId" = $2 FOR UPDATE`,
+            WHERE id = $1::uuid AND "organizationId" = $2::uuid FOR UPDATE`,
           input.accountId,
           organizationId,
         );
@@ -1165,7 +1165,7 @@ export const patientAccountRouter = router({
         type IdRow = { id: string };
         const existentes = await tx.$queryRawUnsafe<IdRow[]>(
           `SELECT id FROM "Invoice"
-            WHERE "patientAccountId" = $1 AND status != 'VOIDED'::invoice_status
+            WHERE "patientAccountId" = $1::uuid AND status != 'VOIDED'::invoice_status
               AND notes LIKE '%[FACTURACION_DUAL%'`,
           account.id,
         );
@@ -1241,7 +1241,7 @@ export const patientAccountRouter = router({
         }
 
         const estabs = await tx.$queryRawUnsafe<IdRow[]>(
-          `SELECT id FROM "Establishment" WHERE "organizationId" = $1 LIMIT 1`,
+          `SELECT id FROM "Establishment" WHERE "organizationId" = $1::uuid LIMIT 1`,
           organizationId,
         );
         const establishmentId = estabs[0]?.id;
@@ -1253,7 +1253,7 @@ export const patientAccountRouter = router({
         }
 
         const costCenters = await tx.$queryRawUnsafe<IdRow[]>(
-          `SELECT id FROM "CostCenter" WHERE "organizationId" = $1 AND active = true ORDER BY code LIMIT 1`,
+          `SELECT id FROM "CostCenter" WHERE "organizationId" = $1::uuid AND active = true ORDER BY code LIMIT 1`,
           organizationId,
         );
         const costCenterId = costCenters[0]?.id;

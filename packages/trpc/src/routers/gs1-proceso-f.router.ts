@@ -151,7 +151,7 @@ export const gs1ProcesoFRouter = router({
                     autorizado_por = $1,
                     notas = COALESCE($2, notas),
                     updated_at = now()
-              WHERE id = $3
+              WHERE id = $3::uuid
                 AND estado = 'solicitado'
              RETURNING id, estado`,
             personal.id,
@@ -198,7 +198,7 @@ export const gs1ProcesoFRouter = router({
                 SET estado = $1,
                     notas = COALESCE($2, notas),
                     updated_at = now()
-              WHERE id = $3
+              WHERE id = $3::uuid
                 AND estado IN ('autorizado', 'en_transito')
              RETURNING id, estado`,
             nuevoEstado,
@@ -328,7 +328,7 @@ export const gs1ProcesoFRouter = router({
                     fecha_devolucion, autorizado_por, establecimiento_id,
                     estado, notas, created_at, updated_at, created_by
                FROM ece.devolucion_inventario
-              WHERE id = $1`,
+              WHERE id = $1::uuid`,
             input.id,
           ),
       );

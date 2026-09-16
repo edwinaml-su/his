@@ -103,7 +103,7 @@ export const financeOverviewRouter = router({
              COALESCE(SUM(COALESCE(ii."estimatedCost", 0)), 0)::text                              AS costo_items
            FROM "Invoice" i
            LEFT JOIN "InvoiceItem" ii ON ii."invoiceId" = i.id
-           WHERE i."organizationId" = $1
+           WHERE i."organizationId" = $1::uuid
              AND i."issuedAt" BETWEEN $2 AND $3`,
           orgId,
           since,
@@ -114,7 +114,7 @@ export const financeOverviewRouter = router({
         const [claimsRow] = await tx.$queryRawUnsafe<ClaimsCountRow[]>(
           `SELECT COUNT(*)::text AS pending_count
              FROM "InsuranceClaim"
-            WHERE "organizationId" = $1
+            WHERE "organizationId" = $1::uuid
               AND status IN ('SUBMITTED','IN_REVIEW')`,
           orgId,
         );
@@ -123,7 +123,7 @@ export const financeOverviewRouter = router({
         const [draftRow] = await tx.$queryRawUnsafe<DraftCountRow[]>(
           `SELECT COUNT(*)::text AS draft_count
              FROM "Invoice"
-            WHERE "organizationId" = $1
+            WHERE "organizationId" = $1::uuid
               AND status = 'DRAFT'`,
           orgId,
         );
@@ -135,7 +135,7 @@ export const financeOverviewRouter = router({
           const [overdueRow] = await tx.$queryRawUnsafe<OverdueCountRow[]>(
             `SELECT COUNT(*)::text AS overdue_count
                FROM "Invoice"
-              WHERE "organizationId" = $1
+              WHERE "organizationId" = $1::uuid
                 AND status IN ('ISSUED','PARTIALLY_PAID')
                 AND "dueAt" < NOW()`,
             orgId,
@@ -165,7 +165,7 @@ export const financeOverviewRouter = router({
                )
              ), 0)::text AS total
              FROM "HisOperatingCost"
-             WHERE "organizationId" = $1
+             WHERE "organizationId" = $1::uuid
                AND "periodStart" <= $3::timestamp
                AND "periodEnd"   >= $2::timestamp`,
             orgId,
@@ -239,7 +239,7 @@ export const financeOverviewRouter = router({
              ON i.id = ii."invoiceId"
             AND i."issuedAt" BETWEEN $2 AND $3
             AND i.status <> 'VOIDED'
-           WHERE cc."organizationId" = $1
+           WHERE cc."organizationId" = $1::uuid
              AND cc.active = true
            GROUP BY cc.id, cc.code, cc.name, cc.tipo
            HAVING COALESCE(SUM(ii."totalPrice"), 0) > 0
@@ -291,7 +291,7 @@ export const financeOverviewRouter = router({
              TO_CHAR(DATE_TRUNC('month', i."issuedAt"), 'YYYY-MM') AS mes,
              COALESCE(SUM(i."totalAmount"), 0)::text                AS revenue
            FROM "Invoice" i
-           WHERE i."organizationId" = $1
+           WHERE i."organizationId" = $1::uuid
              AND i.status <> 'VOIDED'
              AND i."issuedAt" >= DATE_TRUNC('month', NOW()) - ($2 - 1) * INTERVAL '1 month'
            GROUP BY DATE_TRUNC('month', i."issuedAt")

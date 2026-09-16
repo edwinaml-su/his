@@ -178,7 +178,7 @@ export const operatingCostRouter = router({
                 hoc."updatedAt"
            FROM "HisOperatingCost" hoc
            LEFT JOIN "Currency" c ON c.id = hoc."currencyId"
-          WHERE hoc.id = $1`,
+          WHERE hoc.id = $1::uuid`,
         input.id,
       );
 
@@ -237,7 +237,7 @@ export const operatingCostRouter = router({
         // Verificar existencia
         type IdRow = { id: string };
         const existing = await tx.$queryRawUnsafe<IdRow[]>(
-          `SELECT id FROM "HisOperatingCost" WHERE id = $1`,
+          `SELECT id FROM "HisOperatingCost" WHERE id = $1::uuid`,
           input.id,
         );
         if (!existing[0]) {
@@ -257,7 +257,7 @@ export const operatingCostRouter = router({
                   notes           = $9,
                   "updatedAt"     = now(),
                   "updatedBy"     = $10
-            WHERE id = $11`,
+            WHERE id = $11::uuid`,
           input.organizationId ?? null,
           input.category,
           input.description,
@@ -284,7 +284,7 @@ export const operatingCostRouter = router({
     return withTenantContext(prisma, tenant, async (tx) => {
       type IdRow = { id: string };
       const existing = await tx.$queryRawUnsafe<IdRow[]>(
-        `SELECT id FROM "HisOperatingCost" WHERE id = $1`,
+        `SELECT id FROM "HisOperatingCost" WHERE id = $1::uuid`,
         input.id,
       );
       if (!existing[0]) {
@@ -292,7 +292,7 @@ export const operatingCostRouter = router({
       }
 
       await tx.$queryRawUnsafe(
-        `DELETE FROM "HisOperatingCost" WHERE id = $1`,
+        `DELETE FROM "HisOperatingCost" WHERE id = $1::uuid`,
         input.id,
       );
 

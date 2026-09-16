@@ -148,7 +148,7 @@ export const financeReportsRouter = router({
              ON i.id = ii."invoiceId"
             AND i."issuedAt" BETWEEN $2 AND $3
             AND i.status <> 'VOIDED'
-           WHERE cc."organizationId" = $1
+           WHERE cc."organizationId" = $1::uuid
              AND cc.active = true
            GROUP BY cc.id, cc.code, cc.name, cc.tipo
            ORDER BY cc.code`,
@@ -173,7 +173,7 @@ export const financeReportsRouter = router({
                JOIN "CostCenterAllocationTarget" t ON t."allocationRuleId" = r.id
               WHERE r."costCenterId" IN (
                 SELECT id FROM "CostCenter"
-                WHERE "organizationId" = $1 AND tipo = 'apoyo' AND active = true
+                WHERE "organizationId" = $1::uuid AND tipo = 'apoyo' AND active = true
               )`,
             orgId,
           );
@@ -245,7 +245,7 @@ export const financeReportsRouter = router({
              JOIN "CostCenter" src ON src.id = r."costCenterId"
              JOIN "CostCenterAllocationTarget" t ON t."allocationRuleId" = r.id
              JOIN "CostCenter" dst ON dst.id = t."destinoCostCenterId"
-             WHERE src."organizationId" = $1
+             WHERE src."organizationId" = $1::uuid
              ORDER BY r.name, dst.code`,
             orgId,
           );
@@ -327,10 +327,10 @@ export const financeReportsRouter = router({
            JOIN "Patient" p ON p.id = e."patientId"
            LEFT JOIN "Invoice" i
              ON i."encounterId" = e.id
-            AND i."organizationId" = $1
+            AND i."organizationId" = $1::uuid
             AND i.status <> 'VOIDED'
            LEFT JOIN "InvoiceItem" ii ON ii."invoiceId" = i.id
-           WHERE e."organizationId" = $1
+           WHERE e."organizationId" = $1::uuid
              AND e."dischargedAt" BETWEEN $2 AND $3
            GROUP BY e.id, e."patientId", p.mrn, e."admissionType",
                     e."admittedAt", e."dischargedAt"
@@ -380,7 +380,7 @@ export const financeReportsRouter = router({
            FROM "InvoiceItem" ii
            JOIN "Invoice" i ON i.id = ii."invoiceId"
            LEFT JOIN "ServiceUnit" su ON su.id = ii."serviceUnitId"
-           WHERE i."organizationId" = $1
+           WHERE i."organizationId" = $1::uuid
              AND i."issuedAt" BETWEEN $2 AND $3
              AND i.status <> 'VOIDED'
            GROUP BY ii."serviceUnitId", su.name
@@ -435,7 +435,7 @@ export const financeReportsRouter = router({
            LEFT JOIN "Invoice" i ON i.id = ii."invoiceId"
              AND i."issuedAt" BETWEEN $2 AND $3
              AND i.status <> 'VOIDED'
-           WHERE cc."organizationId" = $1
+           WHERE cc."organizationId" = $1::uuid
              AND cc.active = true
            GROUP BY cc.id, cc.code, cc.name, cc.tipo
            ORDER BY SUM(ii."totalPrice") DESC NULLS LAST`,
@@ -496,7 +496,7 @@ export const financeReportsRouter = router({
            LEFT JOIN "Invoice" i ON i.id = ii."invoiceId"
              AND i."issuedAt" BETWEEN $2 AND $3
              AND i.status <> 'VOIDED'
-           WHERE cc."organizationId" = $1
+           WHERE cc."organizationId" = $1::uuid
              AND cc.active = true
            GROUP BY cc.tipo
            ORDER BY cc.tipo`,
@@ -515,7 +515,7 @@ export const financeReportsRouter = router({
                COUNT(DISTINCT e.id)::text      AS num_egresos
              FROM "Encounter" e
              JOIN "Invoice" i ON i."encounterId" = e.id
-               AND i."organizationId" = $1
+               AND i."organizationId" = $1::uuid
                AND i.status <> 'VOIDED'
              JOIN "InvoiceItem" ii ON ii."invoiceId" = i.id
              JOIN "CostCenter" cc ON cc.id = ii."costCenterId"

@@ -382,7 +382,7 @@ export const costCenterRouter = router({
                  centro_responsable_minsal = $5,
                  cuenta_ingreso_default_id = $6,
                  cuenta_gasto_default_id = $7
-             WHERE id = $8
+             WHERE id = $8::uuid
                AND EXISTS (
                  SELECT 1 FROM information_schema.columns
                  WHERE table_name='CostCenter' AND column_name='tipo'
@@ -477,7 +477,7 @@ export const costCenterRouter = router({
              centro_responsable_minsal = $4,
              cuenta_ingreso_default_id = $5,
              cuenta_gasto_default_id = $6
-         WHERE id = $7
+         WHERE id = $7::uuid
            AND EXISTS (
              SELECT 1 FROM information_schema.columns
              WHERE table_name='CostCenter' AND column_name='tipo'

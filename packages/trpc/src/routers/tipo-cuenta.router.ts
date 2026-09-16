@@ -34,7 +34,7 @@ async function assertPriceListBelongsToTenant(
   organizationId: string,
 ): Promise<void> {
   const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
-    `SELECT id FROM "ServicePriceList" WHERE id = $1 AND "organizationId" = $2`,
+    `SELECT id FROM "ServicePriceList" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
     priceListId,
     organizationId,
   );

@@ -158,7 +158,7 @@ export const conciliacionCargosRouter = router({
            FROM "PrescriptionItem" pi
            JOIN "Prescription" p ON p.id = pi."prescriptionId"
            JOIN "Drug" d ON d.id = pi."drugId"
-           WHERE p."organizationId" = $1
+           WHERE p."organizationId" = $1::uuid
              AND p."signedAt" IS NOT NULL
              AND p."signedAt" BETWEEN $2 AND $3
              AND NOT EXISTS (
@@ -198,13 +198,13 @@ export const conciliacionCargosRouter = router({
            JOIN "PharmacyReservation" pr
              ON pr.id::text = sm."referenceCode"
             AND pr."organizationId" = sm."organizationId"
-           WHERE sm."organizationId" = $1
+           WHERE sm."organizationId" = $1::uuid
              AND sm.type = 'OUT'
              AND sm."performedAt" BETWEEN $2 AND $3
              AND NOT EXISTS (
                SELECT 1 FROM "PatientAccountService" pas
                JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-               WHERE pa."organizationId" = $1
+               WHERE pa."organizationId" = $1::uuid
                  AND pas."referenciaId"::text = sm."referenceCode"
              )
            ORDER BY sm."performedAt" DESC`,
@@ -237,13 +237,13 @@ export const conciliacionCargosRouter = router({
              pas."referenciaId" AS "referenciaId"
            FROM "PatientAccountService" pas
            JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-           WHERE pa."organizationId" = $1
+           WHERE pa."organizationId" = $1::uuid
              AND pas.origen = 'DISPENSACION_FARMACIA'
              AND pas.status = 'VIGENTE'
              AND pas."createdAt" BETWEEN $2 AND $3
              AND NOT EXISTS (
                SELECT 1 FROM "StockMovement" sm
-               WHERE sm."organizationId" = $1
+               WHERE sm."organizationId" = $1::uuid
                  AND sm.type = 'OUT'
                  AND sm."referenceCode" = pas."referenciaId"::text
              )
@@ -277,7 +277,7 @@ export const conciliacionCargosRouter = router({
              EXTRACT(DAY FROM now() - pas."createdAt")::int AS "antiguedadDias"
            FROM "PatientAccountService" pas
            JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-           WHERE pa."organizationId" = $1
+           WHERE pa."organizationId" = $1::uuid
              AND pas.status = 'PENDIENTE_TARIFA'
              AND pas."createdAt" BETWEEN $2 AND $3
            ORDER BY pas."createdAt" ASC`,
@@ -315,7 +315,7 @@ export const conciliacionCargosRouter = router({
            FROM "PatientAccountService" pas
            JOIN "PatientAccount" pa ON pa.id = pas."accountId"
            JOIN "PharmacyReservation" pr ON pr.id = pas."referenciaId"
-           WHERE pa."organizationId" = $1
+           WHERE pa."organizationId" = $1::uuid
              AND pas.status = 'VIGENTE'
              AND pr.status IN ('CANCELLED', 'EXPIRED')
              AND pas."createdAt" BETWEEN $2 AND $3
@@ -354,7 +354,7 @@ export const conciliacionCargosRouter = router({
              pr."createdAt"   AS "createdAt",
              EXTRACT(EPOCH FROM (now() - pr."createdAt")) / 3600 AS "horasTranscurridas"
            FROM "PharmacyReservation" pr
-           WHERE pr."organizationId" = $1
+           WHERE pr."organizationId" = $1::uuid
              AND pr.status IN ('RESERVED', 'DISPATCHED')
              AND pr."createdAt" BETWEEN $2 AND $3
            ORDER BY pr."createdAt" ASC`,
@@ -395,7 +395,7 @@ export const conciliacionCargosRouter = router({
            JOIN "Prescription" p ON p.id = pi."prescriptionId"
            JOIN "Drug" d ON d.id = pi."drugId"
            JOIN "Patient" pt ON pt.id = p."patientId"
-           WHERE p."organizationId" = $1
+           WHERE p."organizationId" = $1::uuid
              AND p.status IN ('SIGNED', 'PARTIALLY_DISPENSED')
              AND pi."dispensedQty" > 0
              AND pi."dispensedQty" < pi."prescribedQty"
@@ -431,7 +431,7 @@ export const conciliacionCargosRouter = router({
         `SELECT
            (SELECT count(*) FROM "PrescriptionItem" pi
               JOIN "Prescription" p ON p.id = pi."prescriptionId"
-             WHERE p."organizationId" = $1
+             WHERE p."organizationId" = $1::uuid
                AND p."signedAt" IS NOT NULL
                AND p."signedAt" BETWEEN $2 AND $3
                AND NOT EXISTS (
@@ -445,51 +445,51 @@ export const conciliacionCargosRouter = router({
               JOIN "PharmacyReservation" pr
                 ON pr.id::text = sm."referenceCode"
                AND pr."organizationId" = sm."organizationId"
-             WHERE sm."organizationId" = $1
+             WHERE sm."organizationId" = $1::uuid
                AND sm.type = 'OUT'
                AND sm."performedAt" BETWEEN $2 AND $3
                AND NOT EXISTS (
                  SELECT 1 FROM "PatientAccountService" pas
                  JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-                 WHERE pa."organizationId" = $1
+                 WHERE pa."organizationId" = $1::uuid
                    AND pas."referenciaId"::text = sm."referenceCode"
                )
            )::text AS dispensado_sin_cargo,
            (SELECT count(*) FROM "PatientAccountService" pas
               JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-             WHERE pa."organizationId" = $1
+             WHERE pa."organizationId" = $1::uuid
                AND pas.origen = 'DISPENSACION_FARMACIA'
                AND pas.status = 'VIGENTE'
                AND pas."createdAt" BETWEEN $2 AND $3
                AND NOT EXISTS (
                  SELECT 1 FROM "StockMovement" sm
-                 WHERE sm."organizationId" = $1
+                 WHERE sm."organizationId" = $1::uuid
                    AND sm.type = 'OUT'
                    AND sm."referenceCode" = pas."referenciaId"::text
                )
            )::text AS cargos_sin_movimiento,
            (SELECT count(*) FROM "PatientAccountService" pas
               JOIN "PatientAccount" pa ON pa.id = pas."accountId"
-             WHERE pa."organizationId" = $1
+             WHERE pa."organizationId" = $1::uuid
                AND pas.status = 'PENDIENTE_TARIFA'
                AND pas."createdAt" BETWEEN $2 AND $3
            )::text AS cargos_sin_tarifa,
            (SELECT count(*) FROM "PatientAccountService" pas
               JOIN "PatientAccount" pa ON pa.id = pas."accountId"
               JOIN "PharmacyReservation" pr ON pr.id = pas."referenciaId"
-             WHERE pa."organizationId" = $1
+             WHERE pa."organizationId" = $1::uuid
                AND pas.status = 'VIGENTE'
                AND pr.status IN ('CANCELLED', 'EXPIRED')
                AND pas."createdAt" BETWEEN $2 AND $3
            )::text AS devoluciones_sin_reversion,
            (SELECT count(*) FROM "PharmacyReservation" pr
-             WHERE pr."organizationId" = $1
+             WHERE pr."organizationId" = $1::uuid
                AND pr.status IN ('RESERVED', 'DISPATCHED')
                AND pr."createdAt" BETWEEN $2 AND $3
            )::text AS despachado_sin_cierre,
            (SELECT count(*) FROM "PrescriptionItem" pi
               JOIN "Prescription" p ON p.id = pi."prescriptionId"
-             WHERE p."organizationId" = $1
+             WHERE p."organizationId" = $1::uuid
                AND p.status IN ('SIGNED', 'PARTIALLY_DISPENSED')
                AND pi."dispensedQty" > 0
                AND pi."dispensedQty" < pi."prescribedQty"

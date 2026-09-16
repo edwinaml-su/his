@@ -98,7 +98,7 @@ export const epcisQueryRouter = router({
    * Historia completa de un equipo (reemplaza queryByGtin — no hay GTIN en schema legacy).
    */
   queryByEquipment: adminRole.input(queryByEquipmentInput).query(async ({ ctx, input }) => {
-    const conditions: string[] = ["equipment_id = $1"];
+    const conditions: string[] = ["equipment_id = $1::uuid"];
     const params: unknown[] = [input.equipmentId];
     let idx = 2;
 

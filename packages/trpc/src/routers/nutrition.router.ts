@@ -146,7 +146,7 @@ async function lockEncounterRow(
   organizationId: string,
 ): Promise<void> {
   await tx.$queryRawUnsafe(
-    `SELECT id FROM "Encounter" WHERE id = $1 AND "organizationId" = $2 FOR UPDATE`,
+    `SELECT id FROM "Encounter" WHERE id = $1::uuid AND "organizationId" = $2::uuid FOR UPDATE`,
     encounterId,
     organizationId,
   );

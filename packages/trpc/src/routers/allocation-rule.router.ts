@@ -129,7 +129,7 @@ async function assertSourceIsApoyo(
   sourceCostCenterId: string,
 ): Promise<void> {
   const rows = await prisma.$queryRawUnsafe<Array<{ tipo: string | null }>>(
-    `SELECT tipo FROM "CostCenter" WHERE id = $1`,
+    `SELECT tipo FROM "CostCenter" WHERE id = $1::uuid`,
     sourceCostCenterId,
   );
   if (!rows.length) {
@@ -148,7 +148,7 @@ async function assertTargetsAreValid(
   targetIds: string[],
 ): Promise<void> {
   if (!targetIds.length) return;
-  const placeholders = targetIds.map((_, i) => `$${i + 1}`).join(",");
+  const placeholders = targetIds.map((_, i) => `$${i + 1}::uuid`).join(",");
   const rows = await prisma.$queryRawUnsafe<Array<{ id: string; tipo: string | null }>>(
     `SELECT id, tipo FROM "CostCenter" WHERE id IN (${placeholders})`,
     ...targetIds,
@@ -170,7 +170,7 @@ async function fetchTargetsForRules(
   ruleIds: string[],
 ): Promise<TargetRow[]> {
   if (!ruleIds.length) return [];
-  const ph = ruleIds.map((_, i) => `$${i + 1}`).join(",");
+  const ph = ruleIds.map((_, i) => `$${i + 1}::uuid`).join(",");
   return prisma.$queryRawUnsafe<TargetRow[]>(
     `SELECT t.id, t."ruleId", t."targetCostCenterId",
             cc.code AS "targetCode", cc.name AS "targetName",
@@ -266,7 +266,7 @@ export const allocationRuleRouter = router({
                   r.base, r.periodicity, r.active
            FROM "CostCenterAllocationRule" r
            JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
-           WHERE r.id = $1`,
+           WHERE r.id = $1::uuid`,
           input.id,
         );
         if (!rules.length) {
@@ -396,14 +396,14 @@ export const allocationRuleRouter = router({
         if (setParts.length) {
           params.push(input.id);
           await tx.$executeRawUnsafe(
-            `UPDATE "CostCenterAllocationRule" SET ${setParts.join(", ")} WHERE id = $${idx}`,
+            `UPDATE "CostCenterAllocationRule" SET ${setParts.join(", ")} WHERE id = $${idx}::uuid`,
             ...params,
           );
         }
 
         if (input.targets) {
           await tx.$executeRawUnsafe(
-            `DELETE FROM "CostCenterAllocationTarget" WHERE "ruleId" = $1`,
+            `DELETE FROM "CostCenterAllocationTarget" WHERE "ruleId" = $1::uuid`,
             input.id,
           );
           for (const target of input.targets) {
@@ -439,7 +439,7 @@ export const allocationRuleRouter = router({
     try {
       await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
         tx.$executeRawUnsafe(
-          `UPDATE "CostCenterAllocationRule" SET active = false WHERE id = $1`,
+          `UPDATE "CostCenterAllocationRule" SET active = false WHERE id = $1::uuid`,
           input.id,
         ),
       );
@@ -487,7 +487,7 @@ export const allocationRuleRouter = router({
                   r.base, r.periodicity, r.active
            FROM "CostCenterAllocationRule" r
            JOIN "CostCenter" src ON src.id = r."sourceCostCenterId"
-           WHERE r."organizationId" = $1 AND r.active = true`,
+           WHERE r."organizationId" = $1::uuid AND r.active = true`,
           input.organizationId,
         );
 
@@ -513,7 +513,7 @@ export const allocationRuleRouter = router({
             const rows = await tx.$queryRawUnsafe<Array<{ total: string }>>(
               `SELECT COALESCE(SUM(amount), 0)::text AS total
                FROM "HisOperatingCost"
-               WHERE "costCenterId" = $1
+               WHERE "costCenterId" = $1::uuid
                  AND "date" >= $2::timestamptz
                  AND "date" <= $3::timestamptz`,
               rule.sourceCostCenterId,
@@ -528,7 +528,7 @@ export const allocationRuleRouter = router({
                 `SELECT COALESCE(SUM(ii."unitPrice" * ii.quantity), 0)::text AS total
                  FROM "InvoiceItem" ii
                  JOIN "Invoice" inv ON inv.id = ii."invoiceId"
-                 WHERE ii."costCenterId" = $1
+                 WHERE ii."costCenterId" = $1::uuid
                    AND inv."issuedAt" >= $2::timestamptz
                    AND inv."issuedAt" <= $3::timestamptz`,
                 rule.sourceCostCenterId,
