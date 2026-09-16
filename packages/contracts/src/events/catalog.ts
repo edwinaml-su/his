@@ -193,6 +193,10 @@ export const EVENT_TYPES = [
   "contrato.activado",
   "contrato.cargo.devengado",
   "contrato.terminado",
+  // CC-0036 Ola 4 (REQ-HIS-AFIL-001 US.AGE.2.4/2.5/2.7) — operación de agenda
+  "cita.reservada",
+  "cita.cancelada",
+  "cita.no_show",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

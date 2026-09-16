@@ -2607,6 +2607,14 @@ enum ReasonCategory {
 }
 
 /// TDR §10.1 — citas de consulta externa programadas.
+/// CC-0036 Ola 4 (REQ-HIS-AFIL-001 S4, US.AGE.2.4-2.7) — columnas de
+/// operación de agenda (sql/247_cc0036_agenda_operacion.sql). Todas las
+/// nuevas FKs son "lógicas" (sin `@relation`, mismo patrón que
+/// `PatientAccountService.priceListId`): el router resuelve los joins que
+/// necesita puntualmente en vez de arrastrar relaciones inversas nuevas a
+/// MedicoAfiliado/Consultorio/AgendaMedico/TipoCuenta/Insurer/User/Encounter.
+/// Los `EXCLUDE USING gist` (antirreserva doble médico/consultorio) y el
+/// cron `cita_no_show` viven solo en SQL — Prisma no modela ninguno.
 model OutpatientAppointment {
   id              String            @id @default(uuid()) @db.Uuid
   organizationId  String            @db.Uuid
@@ -2627,6 +2635,37 @@ model OutpatientAppointment {
   updatedBy       String?           @db.Uuid
   deletedAt       DateTime?         @db.Timestamptz()
 
+  /// FK lógica -> MedicoAfiliado (nullable: cita puede no venir de un afiliado).
+  medicoAfiliadoId    String?   @db.Uuid
+  /// FK lógica -> Consultorio.
+  consultorioId       String?   @db.Uuid
+  /// FK lógica -> AgendaMedico (slot de origen; nulo en citas legacy sin motor de agenda).
+  agendaId            String?   @db.Uuid
+  /// PRIMERA_VEZ | SUBSECUENTE | CONTROL_POSTQX | PROCEDIMIENTO — CHECK (sql/247).
+  tipoCita            String?   @db.VarChar(30)
+  /// RECEPCION | TELEFONO | MEDICO | PORTAL — CHECK (sql/247).
+  canal               String?   @db.VarChar(20)
+  /// FK lógica -> TipoCuenta (pivote de lista de precios para el estimado y la cuenta del check-in).
+  tipoCuentaId        String?   @db.Uuid
+  /// FK lógica -> Insurer.
+  insurerId           String?   @db.Uuid
+  /// US.AGE.2.5 AC4/AC5 — exenta de los EXCLUDE de antirreserva doble.
+  esSobrecupo         Boolean   @default(false)
+  /// FK lógica -> User; obligatorio cuando esSobrecupo=true (validado en router).
+  autorizaSobrecupoBy String?   @db.Uuid
+  /// US.AGE.2.6/2.7 — sellado por checkIn; gatea el job de no-show.
+  llegadaAt           DateTime? @db.Timestamptz()
+  inicioAtencionAt    DateTime? @db.Timestamptz()
+  finAtencionAt       DateTime? @db.Timestamptz()
+  /// FK lógica -> Encounter, creado por checkIn (idempotente).
+  encounterId         String?   @db.Uuid
+  /// FK lógica -> OutpatientAppointment (self) — cadena de reprogramaciones.
+  reprogramadaDeId    String?   @db.Uuid
+  motivoCancelacion   String?   @db.VarChar(500)
+  /// FK lógica -> User.
+  canceladaBy         String?   @db.Uuid
+  canceladaAt         DateTime? @db.Timestamptz()
+
   organization  Organization             @relation("OrgAppointments", fields: [organizationId], references: [id], onDelete: Restrict)
   establishment Establishment            @relation("EstAppointments", fields: [establishmentId], references: [id], onDelete: Restrict)
   patient       Patient                  @relation("PatAppointments", fields: [patientId], references: [id], onDelete: Restrict)
@@ -2639,6 +2678,8 @@ model OutpatientAppointment {
   @@index([organizationId, scheduledAt])
   @@index([patientId])
   @@index([status])
+  @@index([agendaId, scheduledAt])
+  @@index([consultorioId, scheduledAt])
   @@schema("public")
 }
 
