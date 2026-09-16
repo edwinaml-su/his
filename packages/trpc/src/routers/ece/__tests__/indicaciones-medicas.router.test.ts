@@ -176,6 +176,13 @@ function caller(ctx: ReturnType<typeof buildCtx>) {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("indicacionesMedicasRouter", () => {
+  // Los mocks a nivel de módulo (emitDomainEvent, withEceContext) acumulan
+  // llamadas entre tests; sin este reset, aserciones tipo not.toHaveBeenCalled()
+  // evalúan el conteo acumulado del archivo en vez del test actual.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe("create", () => {
     it("happy path multi-item retorna id + estadoRegistro=borrador", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
