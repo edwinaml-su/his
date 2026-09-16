@@ -125,9 +125,9 @@ export function TurnosShell({ roleCodes }: { roleCodes: string[] }) {
           </p>
         </div>
         <div className="w-64">
-          {sinSedes ? (
-            <SinSedesNotice />
-          ) : (
+          {/* Con sinSedes el aviso va en el cuerpo (abajo); acá solo se
+              omite el combo vacío. */}
+          {sinSedes ? null : (
             <Select
               value={establishmentId}
               onValueChange={(v) => {
