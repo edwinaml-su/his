@@ -6,8 +6,10 @@
 -- Martinez 2026-09-15: "módulo de asignaciones de médicos internos donde se
 -- puedan agendar por mes tanto médicos como enfermeras por turno".
 --
--- ⚠️ PENDIENTE DE APLICAR a prod — @Dev NO ejecuta apply_migration (patrón
--- del repo). Aplica @Orq vía MCP Supabase.
+-- ⚠️ APLICADO a prod 2026-09-15 vía MCP (cc0036_turnos_243) — NO
+-- re-aplicar. Verificado: btree_gist 1.7 instalada, 3 tablas + EXCLUDE
+-- antitraslape + fn_medico_de_turno + RLS/audit + 5 permisos + rol
+-- JEFE_MEDICO_SEDE (orgs activas) + cron turno_sin_cobertura_watchdog */10.
 --
 -- Correcciones al REQ (stack real del repo, ver CLAUDE.md):
 --   - Prisma 5 / Postgres 15 / npm (el REQ asume Prisma 6/PG17/pnpm — no
