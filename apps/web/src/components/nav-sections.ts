@@ -78,6 +78,7 @@ import {
   GitCompare,
   Lock,
   HandCoins,
+  DoorOpen,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -375,6 +376,12 @@ export const SECTIONS: NavSection[] = [
         description: "Gestión de usuarios del sistema, membresías y estado." },
       { href: "/medicos", label: "Médicos", icon: BriefcaseMedical,
         description: "Catálogo B2B2C de médicos del complejo: cabecera, turno, especialistas, interconsultantes." },
+      { href: "/consultorios", label: "Consultorios", icon: DoorOpen,
+        requiredRoles: ["ADMIN", "DIR", "ADMIN_CONSULTORIOS"],
+        description: "CC-0036 — catálogo de consultorios arrendables/propios por sede (REQ-HIS-AFIL-001)." },
+      { href: "/afiliados", label: "Médicos Afiliados", icon: HandCoins,
+        requiredRoles: ["ADMIN", "DIR", "ADMIN_CONSULTORIOS"],
+        description: "CC-0036 — médicos especialistas afiliados: contraparte económica (arrendatario/honorarios, REQ-HIS-AFIL-001)." },
       { href: "/profesionales-salud", label: "Profesionales de la Salud", icon: UserCog,
         description: "Personal no-médico: enfermería, archivo (ESDOMED), atención al cliente, administrativos." },
       { href: "/chat-analytics", label: "Asistente — Analytics", icon: BarChart3,

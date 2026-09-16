@@ -1,4 +1,6 @@
 import { router } from "../trpc";
+import { consultorioRouter } from "./consultorio.router";
+import { medicoAfiliadoRouter } from "./medico-afiliado.router";
 import { countryRouter } from "./country.router";
 import { organizationRouter } from "./organization.router";
 import { currencyRouter } from "./currency.router";
@@ -476,6 +478,9 @@ export const appRouter = router({
   establishment: establishmentRouter,
   // Modelo de camas — habitaciones espejo Odoo ACS HMS (encargo Edwin 2026-09-11)
   room: roomRouter,
+  // CC-0036 Ola 1B (REQ-HIS-AFIL-001 S1) — catálogo de consultorios y médicos afiliados
+  consultorio: consultorioRouter,
+  medicoAfiliado: medicoAfiliadoRouter,
 });
 
 export type AppRouter = typeof appRouter;
