@@ -154,10 +154,10 @@ export const glnHierarchyRouter = router({
       type AssignedRow = { glnCodigo: string; entity: "room" | "bed" };
       const assigned = await ctx.prisma.$queryRawUnsafe<AssignedRow[]>(
         `SELECT "glnCodigo", 'room' AS entity FROM public."Room"
-          WHERE "organizationId" = $1 AND "glnCodigo" IS NOT NULL
+          WHERE "organizationId" = $1::uuid AND "glnCodigo" IS NOT NULL
          UNION ALL
          SELECT "glnCodigo", 'bed' AS entity FROM public."Bed"
-          WHERE "organizationId" = $1 AND "glnCodigo" IS NOT NULL`,
+          WHERE "organizationId" = $1::uuid AND "glnCodigo" IS NOT NULL`,
         ctx.tenant.organizationId,
       );
       const assignedMap = new Map(assigned.map((a) => [a.glnCodigo, a.entity]));

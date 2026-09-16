@@ -292,7 +292,7 @@ export const srsRegistroRouter = router({
       );
       const imported = await tx.$queryRawUnsafe<Array<{ registroSanitario: string }>>(
         `SELECT DISTINCT "srsRegistroSanitario" AS "registroSanitario" FROM "Drug"
-         WHERE "organizationId" = $1 AND "srsRegistroSanitario" IN (${regs.map((_, i) => `$${i + 2}`).join(",")})`,
+         WHERE "organizationId" = $1::uuid AND "srsRegistroSanitario" IN (${regs.map((_, i) => `$${i + 2}`).join(",")})`,
         tenant.organizationId,
         ...regs,
       );
@@ -438,7 +438,7 @@ export const srsRegistroRouter = router({
       // ¿ya existe?
       const existing = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         `SELECT id FROM "Drug"
-         WHERE "organizationId" = $1 AND "srsRegistroSanitario" = $2 LIMIT 1`,
+         WHERE "organizationId" = $1::uuid AND "srsRegistroSanitario" = $2 LIMIT 1`,
         tenant.organizationId,
         detalle.registroSanitario,
       );
@@ -468,7 +468,7 @@ export const srsRegistroRouter = router({
              "srsInformeEvaluacionUrl" = $18,
              "srsUltimaSincronizacion" = now(),
              "updatedAt" = now()
-           WHERE id = $19`,
+           WHERE id = $19::uuid`,
           brandName,
           detalle.titular,
           detalle.primeraAutorizacion,
@@ -562,7 +562,7 @@ export const srsRegistroRouter = router({
         Array<{ srsRegistroSanitario: string; srsEstado: string | null }>
       >(
         `SELECT DISTINCT "srsRegistroSanitario","srsEstado" FROM "Drug"
-         WHERE "organizationId" = $1 AND "srsRegistroSanitario" IS NOT NULL`,
+         WHERE "organizationId" = $1::uuid AND "srsRegistroSanitario" IS NOT NULL`,
         tenant.organizationId,
       );
 
@@ -587,7 +587,7 @@ export const srsRegistroRouter = router({
                  "active" = $3,
                  "srsUltimaSincronizacion" = now(),
                  "updatedAt" = now()
-               WHERE "organizationId" = $4 AND "srsRegistroSanitario" = $5`,
+               WHERE "organizationId" = $4::uuid AND "srsRegistroSanitario" = $5`,
               detalle.estado,
               detalle.anualidad,
               detalle.estado === "ACTIVO",
@@ -599,7 +599,7 @@ export const srsRegistroRouter = router({
               `UPDATE "Drug" SET
                  "srsAnualidad" = $1,
                  "srsUltimaSincronizacion" = now()
-               WHERE "organizationId" = $2 AND "srsRegistroSanitario" = $3`,
+               WHERE "organizationId" = $2::uuid AND "srsRegistroSanitario" = $3`,
               detalle.anualidad,
               tenant.organizationId,
               r.srsRegistroSanitario,

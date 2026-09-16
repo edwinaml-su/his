@@ -457,13 +457,13 @@ export const medicationAdminRouter = router({
             severidad:        string;
           }[]>(
             `SELECT
-               CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
+               CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END AS paired_drug_id,
                d."genericName" AS paired_drug_name,
                lp.razon,
                lp.severidad
              FROM ece.lasa_pair lp
-             JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1 THEN lp.drug_b_id ELSE lp.drug_a_id END
-             WHERE (lp.drug_a_id = $1 OR lp.drug_b_id = $1)
+             JOIN "Drug" d ON d.id = CASE WHEN lp.drug_a_id = $1::uuid THEN lp.drug_b_id ELSE lp.drug_a_id END
+             WHERE (lp.drug_a_id = $1::uuid OR lp.drug_b_id = $1::uuid)
                AND lp.activo = true
              LIMIT 1`,
             indication.drug.id,
@@ -512,7 +512,7 @@ export const medicationAdminRouter = router({
           const patientRow = await tx.$queryRawUnsafe<{
             birth_date: Date | null;
           }[]>(
-            `SELECT "birthDate" AS birth_date FROM "Patient" WHERE id = $1 LIMIT 1`,
+            `SELECT "birthDate" AS birth_date FROM "Patient" WHERE id = $1::uuid LIMIT 1`,
             input.patientId,
           );
 
@@ -533,7 +533,7 @@ export const medicationAdminRouter = router({
               }[]>(
                 `SELECT max_dose_mg_per_kg, max_dose_absolute_mg
                  FROM ece.pediatric_max_dose
-                 WHERE drug_id = $1
+                 WHERE drug_id = $1::uuid
                    AND $2 >= edad_min_meses
                    AND $2 <= edad_max_meses
                    AND activo = true
@@ -556,7 +556,7 @@ export const medicationAdminRouter = router({
                   `SELECT tvs."valueNumeric" AS value_numeric
                    FROM "TriageVitalSign" tvs
                    JOIN "TriageEvaluation" te ON te.id = tvs."evaluationId"
-                   WHERE te."patientId" = $1
+                   WHERE te."patientId" = $1::uuid
                      AND tvs."vitalCode" = 'WEIGHT'
                      AND tvs."measuredAt" >= now() - interval '24 hours'
                    ORDER BY tvs."measuredAt" DESC
@@ -645,7 +645,7 @@ export const medicationAdminRouter = router({
           // Verificar PIN de la segunda enfermera contra hash almacenado en User.
           // El campo User.pinHash almacena argon2id del PIN institucional.
           const verifier = await tx.$queryRawUnsafe<{ pin_hash: string | null }[]>(
-            `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1 LIMIT 1`,
+            `SELECT "pinHash" AS pin_hash FROM "User" WHERE id = $1::uuid LIMIT 1`,
             input.doubleCheckBy,
           );
 

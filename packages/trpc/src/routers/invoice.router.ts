@@ -219,7 +219,7 @@ export const invoiceRouter = router({
     const orgId = tenant.organizationId;
 
     return withTenantContext(prisma, tenant, async (tx) => {
-      const conditions: string[] = [`i."organizationId" = $1`];
+      const conditions: string[] = [`i."organizationId" = $1::uuid`];
       const params: unknown[] = [orgId];
       let idx = 2;
 
@@ -272,7 +272,7 @@ export const invoiceRouter = router({
                   i.status, i."electronicInvoiceStatus", i."costCenterId",
                   i.notes, i."createdAt", i."updatedAt"
              FROM "Invoice" i
-            WHERE i.id = $1 AND i."organizationId" = $2`,
+            WHERE i.id = $1::uuid AND i."organizationId" = $2::uuid`,
           input.id,
           tenant.organizationId,
         ),
@@ -280,13 +280,13 @@ export const invoiceRouter = router({
           `SELECT id, "invoiceId", description, quantity, "unitPrice", "totalPrice",
                   "serviceUnitId", "costCenterId", "estimatedCost", "createdAt"
              FROM "InvoiceItem"
-            WHERE "invoiceId" = $1`,
+            WHERE "invoiceId" = $1::uuid`,
           input.id,
         ),
         tx.$queryRawUnsafe<InvoicePaymentRow[]>(
           `SELECT id, "invoiceId", "paidAt", amount, method, "referenceNumber", "createdAt"
              FROM "InvoicePayment"
-            WHERE "invoiceId" = $1
+            WHERE "invoiceId" = $1::uuid
             ORDER BY "paidAt" DESC`,
           input.id,
         ),
@@ -295,7 +295,7 @@ export const invoiceRouter = router({
                   "respondedAt", status, "submittedAmount", "approvedAmount",
                   "rejectedAmount", "rejectionReason", "createdAt"
              FROM "InsuranceClaim"
-            WHERE "invoiceId" = $1
+            WHERE "invoiceId" = $1::uuid
             ORDER BY "submittedAt" DESC`,
           input.id,
         ),
@@ -329,7 +329,7 @@ export const invoiceRouter = router({
       // Obtener establishmentId del tenant
       type EstabRow = { id: string };
       const estabs = await tx.$queryRawUnsafe<EstabRow[]>(
-        `SELECT id FROM "Establishment" WHERE "organizationId" = $1 LIMIT 1`,
+        `SELECT id FROM "Establishment" WHERE "organizationId" = $1::uuid LIMIT 1`,
         tenant.organizationId,
       );
       const establishmentId = estabs[0]?.id;
@@ -344,7 +344,7 @@ export const invoiceRouter = router({
       // paciente de la factura (ancla la lista de precios de resolverPrecio).
       type AccountCheckRow = { id: string };
       const accountRows = await tx.$queryRawUnsafe<AccountCheckRow[]>(
-        `SELECT id FROM "PatientAccount" WHERE id = $1 AND "organizationId" = $2 AND "patientId" = $3`,
+        `SELECT id FROM "PatientAccount" WHERE id = $1::uuid AND "organizationId" = $2::uuid AND "patientId" = $3::uuid`,
         input.patientAccountId,
         tenant.organizationId,
         input.patientId,
@@ -498,7 +498,7 @@ export const invoiceRouter = router({
       // Verificar que la factura pertenece al tenant y no está VOIDED
       type StatusRow = { status: string };
       const rows = await tx.$queryRawUnsafe<StatusRow[]>(
-        `SELECT status FROM "Invoice" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT status FROM "Invoice" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.invoiceId,
         tenant.organizationId,
       );
@@ -538,7 +538,7 @@ export const invoiceRouter = router({
     return withTenantContext(prisma, tenant, async (tx) => {
       type StatusRow = { status: string };
       const rows = await tx.$queryRawUnsafe<StatusRow[]>(
-        `SELECT status FROM "Invoice" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT status FROM "Invoice" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.invoiceId,
         tenant.organizationId,
       );
@@ -553,7 +553,7 @@ export const invoiceRouter = router({
 
       await tx.$queryRawUnsafe(
         `UPDATE "Invoice" SET status = 'VOIDED'::invoice_status, "updatedAt" = now()
-          WHERE id = $1`,
+          WHERE id = $1::uuid`,
         input.invoiceId,
       );
 
@@ -571,7 +571,7 @@ export const invoiceRouter = router({
       // Verificar que la factura existe y pertenece al tenant
       type InvCheckRow = { id: string; status: string };
       const rows = await tx.$queryRawUnsafe<InvCheckRow[]>(
-        `SELECT id, status FROM "Invoice" WHERE id = $1 AND "organizationId" = $2`,
+        `SELECT id, status FROM "Invoice" WHERE id = $1::uuid AND "organizationId" = $2::uuid`,
         input.invoiceId,
         tenant.organizationId,
       );
@@ -613,7 +613,7 @@ export const invoiceRouter = router({
       const rows = await tx.$queryRawUnsafe<CostCenterRow[]>(
         `SELECT id, code, name
            FROM "CostCenter"
-          WHERE "organizationId" = $1 AND active = true
+          WHERE "organizationId" = $1::uuid AND active = true
           ORDER BY code`,
         tenant.organizationId,
       );
