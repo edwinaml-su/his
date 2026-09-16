@@ -245,6 +245,7 @@ import { roomRouter } from "./room.router";
 // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
 import { turnoRouter } from "./turno.router";
 import { honorarioRouter } from "./honorario.router";
+import { rentabilidadRouter } from "./rentabilidad.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -494,6 +495,8 @@ export const appRouter = router({
   turno: turnoRouter,
   // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios médicos
   honorario: honorarioRouter,
+  // CC-0036 Ola 6 (REQ-HIS-AFIL-001 S7) — tableros de rentabilidad y ocupación (ÚLTIMA ola)
+  rentabilidad: rentabilidadRouter,
 });
 
 export type AppRouter = typeof appRouter;
