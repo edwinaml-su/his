@@ -197,6 +197,12 @@ export const EVENT_TYPES = [
   "cita.reservada",
   "cita.cancelada",
   "cita.no_show",
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6, US.AFIL.1.5/1.6/1.7) — honorarios médicos
+  "produccion.registrada",
+  "liquidacion.aprobada",
+  // Decisión Edwin 2026-09-16 #2c — agregado por rubro (centro de costo +
+  // cuenta contable) emitido tras patientAccount.cerrar, rumbo al ERP.
+  "cuenta.resumen_rubros",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

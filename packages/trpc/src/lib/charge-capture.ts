@@ -29,6 +29,7 @@ import { TRPCError } from "@trpc/server";
 import { emitDomainEvent, type EmitDomainEventTx } from "@his/database";
 import { chargeOriginEnum, CHARGE_ORIGINS, type ChargeOrigin } from "@his/contracts";
 import { resolverPrecio, mapFuenteAPriceSource } from "./price-resolver";
+import { revertirProduccionMedica } from "./produccion-atribucion";
 
 /** Estados de `PatientAccount` que aceptan cargos nuevos (docs/48 Ola 1, C1-5). */
 const ESTADOS_CUENTA_ACTIVA = ["ABIERTA", "PENDIENTE_REGULARIZAR"] as const;
@@ -314,6 +315,16 @@ export async function revertirCargo(
       createdBy: params.actorId,
     },
   });
+
+  // CC-0036 Ola 5 (US.AFIL.1.6 AC4) — reversión simétrica de la producción
+  // médica atribuida al cargo original, si la hubo. No-fatal: revertir un
+  // cargo NUNCA debe fallar por un problema en la capa de honorarios (mismo
+  // criterio que los emisores de emitDomainEvent en otros routers).
+  try {
+    await revertirProduccionMedica(tx, { reversionCargoId: reversion.id, actorId: params.actorId });
+  } catch {
+    // Intencional — ver docstring de revertirProduccionMedica.
+  }
 
   return { reversionId: reversion.id };
 }

@@ -244,6 +244,7 @@ import { establishmentRouter } from "./establishment.router";
 import { roomRouter } from "./room.router";
 // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
 import { turnoRouter } from "./turno.router";
+import { honorarioRouter } from "./honorario.router";
 
 export const appRouter = router({
   country: countryRouter,
@@ -491,6 +492,8 @@ export const appRouter = router({
   agenda: agendaRouter,
   // CC-0036 Ola 1A — Rostering 24/7 (REQ-HIS-AFIL-001 Bloque C)
   turno: turnoRouter,
+  // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios médicos
+  honorario: honorarioRouter,
 });
 
 export type AppRouter = typeof appRouter;

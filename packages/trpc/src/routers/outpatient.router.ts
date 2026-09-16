@@ -53,6 +53,8 @@ import { estadoEfectivo } from "./agenda.router";
 import { nextCuenta } from "../lib/cuenta-numbering";
 import { crearEncounterAmbulatorio } from "../lib/admision-ambulatoria";
 import { estimarConsulta } from "../lib/cita-estimado";
+import { capturarCargo } from "../lib/charge-capture";
+import { atribuirProduccionMedica } from "../lib/produccion-atribucion";
 
 const leerProc = requirePermission("agenda.leer");
 const reservarProc = requirePermission("agenda.reservar");
@@ -158,6 +160,9 @@ async function realizarCheckIn(
     serviceUnitId: string | null;
     consultorioId: string | null;
     notes: string | null;
+    /** CC-0036 Ola 5 (US.AFIL.1.6) — dispara el cargo CONSULTA + atribución TRATANTE cuando viene de un afiliado. */
+    medicoAfiliadoId: string | null;
+    tipoCita: string | null;
   },
   notaExtra?: string,
 ): Promise<{ encounterId: string; cuentaId: string; numeroCuenta: string }> {
@@ -230,6 +235,44 @@ async function realizarCheckIn(
       updatedBy: userId,
     },
   });
+
+  // CC-0036 Ola 5 (US.AFIL.1.6) — cita de un médico afiliado: captura el
+  // cargo CONSULTA (Decisión Edwin #2a: el honorario es TAMBIÉN un cargo en
+  // la cuenta) y atribuye producción TRATANTE. Si el código no resuelve
+  // precio, capturarCargo deja PENDIENTE_TARIFA (R3, nunca a 0) y la
+  // atribución simplemente no corre todavía (ver produccion-atribucion.ts) —
+  // no bloquea el check-in.
+  if (cita.medicoAfiliadoId) {
+    try {
+      const cargoConsulta = await capturarCargo(tx, {
+        organizationId: tenant.organizationId,
+        patientId: cita.patientId,
+        encounterId: encounter.id,
+        accountId: cuenta.id,
+        code: `CONSULTA-${cita.tipoCita ?? "GENERAL"}`,
+        descripcion: "Consulta médica",
+        quantity: 1,
+        origen: "CONSULTA",
+        referenciaId: cita.id,
+        actorId: userId,
+      });
+
+      if (cargoConsulta.status === "VIGENTE") {
+        await atribuirProduccionMedica(tx, {
+          organizationId: tenant.organizationId,
+          establishmentId,
+          medicoAfiliadoId: cita.medicoAfiliadoId,
+          rolMedico: "TRATANTE",
+          patientAccountServiceId: cargoConsulta.cargoId,
+          ambito: "CONSULTA",
+          fecha: new Date(),
+          actorId: userId,
+        });
+      }
+    } catch {
+      // Intencional — ver docstring de produccion-atribucion.ts.
+    }
+  }
 
   return { encounterId: encounter.id, cuentaId: cuenta.id, numeroCuenta: cuenta.numeroCuenta };
 }
