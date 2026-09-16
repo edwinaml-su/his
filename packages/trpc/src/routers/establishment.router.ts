@@ -90,11 +90,15 @@ export const establishmentRouter = router({
 
     type GlnRow = { establishment_id: string; codigo: string; descripcion: string };
     const glnRows = await prisma.$queryRawUnsafe<GlnRow[]>(
+      // $1::uuid OBLIGATORIO: Prisma envía el parámetro como text y Postgres
+      // no coerciona uuid = text (42883) — este raw devolvía 500 y dejaba el
+      // selector de sede de /turnos vacío (FIX-establishment-list-uuid,
+      // 2026-09-16; mismo patrón ya pagado en service-price-list.router).
       `SELECT pe.id AS establishment_id, g.codigo, g.descripcion
          FROM "Establishment" pe
          JOIN ece.establecimiento ee ON ee.establishment_id = pe.id
          JOIN ece.gs1_gln g ON g.establecimiento_id = ee.id AND g.tipo = 'establecimiento'
-        WHERE pe."organizationId" = $1`,
+        WHERE pe."organizationId" = $1::uuid`,
       tenant.organizationId,
     );
     const glnByEstablishment = new Map(glnRows.map((r) => [r.establishment_id, r]));

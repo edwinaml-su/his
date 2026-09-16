@@ -65,6 +65,24 @@ describe("establishmentRouter", () => {
       ]);
     });
 
+    it("el raw de GLN castea $1 a uuid (regresión 42883 uuid=text — FIX-establishment-list-uuid)", async () => {
+      // Prisma envía los parámetros posicionales como text; sin `$1::uuid`
+      // Postgres rechaza `uuid = text` con 42883, el endpoint devolvía 500 y
+      // el selector de sede de /turnos quedaba vacío. Los tests con Prisma
+      // mockeado no ejercitan el SQL real (lección drift vocabulario
+      // 2026-08-20) — este assert estático protege el cast en el string.
+      prisma.establishment.findMany.mockResolvedValue([{ id: EST_ID, code: "HE" }] as never);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma as any).$queryRawUnsafe = vi.fn().mockResolvedValue([]);
+
+      const caller = establishmentRouter.createCaller(makeCtx({ prisma }));
+      await caller.list();
+
+      const [sql, param] = (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(sql).toContain('"organizationId" = $1::uuid');
+      expect(param).toBe(MOCK_TENANT.organizationId);
+    });
+
     it("no consulta GLN si la lista de establecimientos está vacía", async () => {
       prisma.establishment.findMany.mockResolvedValue([] as never);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
