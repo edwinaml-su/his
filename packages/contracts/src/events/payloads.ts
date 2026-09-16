@@ -1346,6 +1346,50 @@ export const contratoTerminadoPayloadSchema = z.object({
 export type ContratoTerminadoPayload = z.infer<typeof contratoTerminadoPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// CC-0036 Ola 4 (REQ-HIS-AFIL-001 US.AGE.2.4/2.5/2.7) — operación de agenda:
+// reserva, cancelación y no-show automático. `aggregateId` del `DomainEvent`
+// es siempre `citaId` (OutpatientAppointment.id).
+// -----------------------------------------------------------------------------
+
+export const citaReservadaPayloadSchema = z.object({
+  citaId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  providerId: z.string().uuid(),
+  medicoAfiliadoId: z.string().uuid().nullable(),
+  consultorioId: z.string().uuid().nullable(),
+  agendaId: z.string().uuid().nullable(),
+  scheduledAt: z.string().datetime(),
+  tipoCita: z.enum(["PRIMERA_VEZ", "SUBSECUENTE", "CONTROL_POSTQX", "PROCEDIMIENTO"]).nullable(),
+  canal: z.enum(["RECEPCION", "TELEFONO", "MEDICO", "PORTAL"]).nullable(),
+  esSobrecupo: z.boolean(),
+});
+
+export type CitaReservadaPayload = z.infer<typeof citaReservadaPayloadSchema>;
+
+export const citaCanceladaPayloadSchema = z.object({
+  citaId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  agendaId: z.string().uuid().nullable(),
+  motivo: z.string().min(1).max(500),
+  /** US.AGE.2.5 AC2 — dentro de `politicaCancelacionHoras` de la agenda. */
+  tardia: z.boolean(),
+});
+
+export type CitaCanceladaPayload = z.infer<typeof citaCanceladaPayloadSchema>;
+
+export const citaNoShowPayloadSchema = z.object({
+  citaId: z.string().uuid(),
+  patientId: z.string().uuid(),
+  providerId: z.string().uuid(),
+  agendaId: z.string().uuid().nullable(),
+  consultorioId: z.string().uuid().nullable(),
+  establishmentId: z.string().uuid(),
+  scheduledAt: z.string().datetime(),
+});
+
+export type CitaNoShowPayload = z.infer<typeof citaNoShowPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1840,6 +1884,18 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("contrato.terminado"),
     payload: contratoTerminadoPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("cita.reservada"),
+    payload: citaReservadaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("cita.cancelada"),
+    payload: citaCanceladaPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("cita.no_show"),
+    payload: citaNoShowPayloadSchema,
   }),
 ]);
 

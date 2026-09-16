@@ -85,11 +85,18 @@ export default function OutpatientListPage() {
             Citas ambulatorias programadas y atendidas (§10).
           </p>
         </div>
-        <Button asChild>
-          <Link href="/outpatient/new" aria-label="Crear nueva cita">
-            Nueva cita
-          </Link>
-        </Button>
+        <div className="flex gap-2">
+          <Button asChild variant="outline">
+            <Link href="/outpatient/tablero" aria-label="Ver tablero del día">
+              Tablero del día
+            </Link>
+          </Button>
+          <Button asChild>
+            <Link href="/outpatient/new" aria-label="Crear nueva cita">
+              Nueva cita
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <Card>

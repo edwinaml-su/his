@@ -59,7 +59,7 @@ const configurarProc = requirePermission("agenda.configurar");
 const publicarProc = requirePermission("agenda.publicar");
 
 /** Estados de `ContratoArrendamiento` que fuerzan `estadoEfectivo = SUSPENDIDA` (AC6). */
-const CONTRATOS_SUSPENSIVOS: readonly string[] = ["TERMINADO", "EN_MORA"];
+export const CONTRATOS_SUSPENSIVOS: readonly string[] = ["TERMINADO", "EN_MORA"];
 const ROLES_MEDICO_SCOPE: readonly string[] = ["SECRETARIA_MEDICO_AFILIADO", "MEDICO_AFILIADO"];
 const ROLES_SIN_SCOPE: readonly string[] = ["ADMIN", "DIR", "ADMIN_CONSULTORIOS"];
 
@@ -93,7 +93,7 @@ function toMinutes(hora: Date): number {
 // Estado efectivo (AC6) — derivado en cada lectura, nunca persistido.
 // ---------------------------------------------------------------------------
 
-function estadoEfectivo(estadoAgenda: string, estadoContrato: string | null | undefined): string {
+export function estadoEfectivo(estadoAgenda: string, estadoContrato: string | null | undefined): string {
   if (estadoContrato && CONTRATOS_SUSPENSIVOS.includes(estadoContrato)) return "SUSPENDIDA";
   return estadoAgenda;
 }
