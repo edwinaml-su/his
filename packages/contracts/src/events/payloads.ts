@@ -1279,6 +1279,24 @@ export const taskNotificationPayloadSchema = z.object({
 export type TaskNotificationPayload = z.infer<typeof taskNotificationPayloadSchema>;
 
 // -----------------------------------------------------------------------------
+// CC-0036 Ola 1B (REQ-HIS-AFIL-001 US.AFIL.1.2) — alta de médico afiliado.
+// -----------------------------------------------------------------------------
+
+export const afiliadoCreadoPayloadSchema = z.object({
+  medicoAfiliadoId: z.string().uuid(),
+  nombreCompleto: z.string().min(1).max(200),
+  jvpmNumero: z.string().min(1).max(30),
+  tipoRelacion: z.enum([
+    "AFILIADO_ARRENDATARIO",
+    "AFILIADO_SIN_CONSULTORIO",
+    "STAFF_INTERNO",
+  ]),
+  estado: z.literal("PROSPECTO"),
+});
+
+export type AfiliadoCreadoPayload = z.infer<typeof afiliadoCreadoPayloadSchema>;
+
+// -----------------------------------------------------------------------------
 // Discriminated union — un evento sólo es válido si su eventType matchea
 // el shape exacto del payload correspondiente.
 // -----------------------------------------------------------------------------
@@ -1757,6 +1775,10 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("task.escalated"),
     payload: taskNotificationPayloadSchema,
+  }),
+  z.object({
+    eventType: z.literal("afiliado.creado"),
+    payload: afiliadoCreadoPayloadSchema,
   }),
 ]);
 

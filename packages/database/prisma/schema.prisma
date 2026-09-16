@@ -480,6 +480,9 @@ model Organization {
   beds                      Bed[]
   rooms                     Room[]
   services                  ServiceUnit[]
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
+  consultorios              Consultorio[]
+  medicosAfiliados          MedicoAfiliado[]
   vaccinations              PatientVaccination[]
   outpatientAppointments    OutpatientAppointment[]    @relation("OrgAppointments")
   inpatientAdmissions       InpatientAdmission[]       @relation("OrgInpatientAdmissions")
@@ -586,6 +589,8 @@ model Establishment {
   serviceUnits           ServiceUnit[]
   beds                   Bed[]
   rooms                  Room[]
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
+  consultorios           Consultorio[]
   encounters             Encounter[]
   triages                TriageEvaluation[]
   outpatientAppointments OutpatientAppointment[] @relation("EstAppointments")
@@ -719,6 +724,10 @@ model User {
   transfersReceived         EncounterTransfer[]          @relation("TransferReceiver")
   // Nivel A scope por servicio — sql/60
   assignedServiceUnits      UserServiceUnitAssignment[]  @relation("UserAssignedServiceUnits")
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B) — D5: MedicoAfiliado puede existir sin
+  // cuenta HIS (userId nulo); cuando se vincula, un usuario enlaza a lo sumo
+  // un afiliado en la práctica, pero no se fuerza @unique acá (el REQ no lo pide).
+  medicosAfiliados          MedicoAfiliado[]
 
   @@schema("public")
 }
@@ -929,6 +938,8 @@ model IdentifierType {
 
   country     Country             @relation(fields: [countryId], references: [id], onDelete: Cascade)
   identifiers PatientIdentifier[]
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
+  medicosAfiliados MedicoAfiliado[]
 
   @@unique([countryId, code])
   @@schema("public")
@@ -1132,6 +1143,10 @@ model MedicalSpecialty {
   parent   MedicalSpecialty?  @relation("SpecialtyTree", fields: [parentId], references: [id], onDelete: Restrict)
   children MedicalSpecialty[] @relation("SpecialtyTree")
   services ServiceUnit[]
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B)
+  consultoriosSugeridos       Consultorio[]                @relation("ConsultorioEspecialidadSugerida")
+  medicosAfiliadosPrincipal   MedicoAfiliado[]              @relation("MedicoAfiliadoEspecialidadPrincipal")
+  medicoAfiliadoEspecialidades MedicoAfiliadoEspecialidad[]
 
   @@schema("public")
 }
@@ -1162,6 +1177,8 @@ model ServiceUnit {
   rooms         Room[]
   encounters    Encounter[]
   triages       TriageEvaluation[]
+  // CC-0036 (REQ-HIS-AFIL-001 Ola 1B) — sede sugerida del consultorio (opcional).
+  consultorios  Consultorio[]
   // Finance — sql/127
   invoiceItems  InvoiceItem[]      @relation("InvoiceItemServiceUnit")
   // Nivel A — sql/60
@@ -1772,6 +1789,99 @@ model Room {
   @@index([organizationId])
   @@index([establishmentId])
   @@index([serviceUnitId])
+  @@schema("public")
+}
+
+/// CC-0036 (REQ-HIS-AFIL-001 Ola 1B, US.AFIL.1.1) — catálogo de consultorios
+/// arrendables/propios por sede. Bloque A del modelo de médico afiliado.
+/// sql/244_cc0036_afiliado_consultorio.sql. Contratos de arrendamiento
+/// (ContratoArrendamiento) llegan en la ola siguiente — por ahora sin FK.
+model Consultorio {
+  id                     String   @id @default(uuid()) @db.Uuid
+  organizationId         String   @db.Uuid
+  establishmentId        String   @db.Uuid
+  serviceUnitId          String?  @db.Uuid
+  codigo                 String   @db.VarChar(40)
+  nombre                 String   @db.VarChar(120)
+  piso                   String?  @db.VarChar(20)
+  areaM2                 Decimal? @db.Decimal(8, 2)
+  /// ARRENDADO | PROPIO | MIXTO — vocabulario cerrado por CHECK (sql/244), no enum Postgres.
+  tipoUso                String   @db.VarChar(20)
+  especialidadSugeridaId String?  @db.Uuid
+  capacidadPacientesHora Int?
+  glnCodigo              String?  @db.VarChar(13)
+  equipamiento           Json     @default("{}")
+  active                 Boolean  @default(true)
+  createdAt              DateTime @default(now()) @db.Timestamptz()
+  createdBy              String?  @db.Uuid
+  updatedAt              DateTime @updatedAt @db.Timestamptz()
+  updatedBy              String?  @db.Uuid
+
+  organization         Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  establishment        Establishment     @relation(fields: [establishmentId], references: [id], onDelete: Cascade)
+  serviceUnit          ServiceUnit?      @relation(fields: [serviceUnitId], references: [id], onDelete: SetNull)
+  especialidadSugerida MedicalSpecialty? @relation("ConsultorioEspecialidadSugerida", fields: [especialidadSugeridaId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, codigo])
+  @@index([establishmentId])
+  @@index([serviceUnitId])
+  @@schema("public")
+}
+
+/// CC-0036 (REQ-HIS-AFIL-001 Ola 1B, US.AFIL.1.2) — médico especialista
+/// afiliado: contraparte económica (arrendatario + proveedor de servicios
+/// profesionales). D5 — entidad de negocio, NO un `User` (userId opcional).
+/// sql/244_cc0036_afiliado_consultorio.sql.
+model MedicoAfiliado {
+  id                      String    @id @default(uuid()) @db.Uuid
+  organizationId          String    @db.Uuid
+  userId                  String?   @db.Uuid
+  nombreCompleto          String    @db.VarChar(200)
+  tipoDocumentoId         String?   @db.Uuid
+  numeroDocumento         String?   @db.VarChar(40)
+  jvpmNumero              String    @db.VarChar(30)
+  especialidadPrincipalId String?   @db.Uuid
+  /// AFILIADO_ARRENDATARIO | AFILIADO_SIN_CONSULTORIO | STAFF_INTERNO — CHECK (sql/244).
+  tipoRelacion            String    @db.VarChar(30)
+  nit                     String?   @db.VarChar(40)
+  nrc                     String?   @db.VarChar(20)
+  esContribuyenteIva      Boolean   @default(false)
+  /// PROSPECTO | ACTIVO | SUSPENDIDO | INACTIVO — CHECK (sql/244).
+  estado                  String    @default("PROSPECTO") @db.VarChar(20)
+  fechaIngreso            DateTime? @db.Date
+  fechaBaja               DateTime? @db.Date
+  motivoBaja              String?   @db.VarChar(300)
+  permiteCompensacion     Boolean   @default(true)
+  createdAt               DateTime  @default(now()) @db.Timestamptz()
+  createdBy               String?   @db.Uuid
+  updatedAt               DateTime  @updatedAt @db.Timestamptz()
+  updatedBy               String?   @db.Uuid
+
+  organization         Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user                 User?                        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tipoDocumento        IdentifierType?              @relation(fields: [tipoDocumentoId], references: [id], onDelete: SetNull)
+  especialidadPrincipal MedicalSpecialty?           @relation("MedicoAfiliadoEspecialidadPrincipal", fields: [especialidadPrincipalId], references: [id], onDelete: SetNull)
+  especialidades        MedicoAfiliadoEspecialidad[]
+
+  @@unique([organizationId, jvpmNumero])
+  @@index([userId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// CC-0036 (REQ-HIS-AFIL-001 Ola 1B) — n:m médico afiliado ↔ especialidad.
+/// Sin `organizationId` propio: RLS vía join a `MedicoAfiliado` (sql/244).
+model MedicoAfiliadoEspecialidad {
+  id               String   @id @default(uuid()) @db.Uuid
+  medicoAfiliadoId String   @db.Uuid
+  specialtyId      String   @db.Uuid
+  esPrincipal      Boolean  @default(false)
+  createdAt        DateTime @default(now()) @db.Timestamptz()
+
+  medicoAfiliado MedicoAfiliado   @relation(fields: [medicoAfiliadoId], references: [id], onDelete: Cascade)
+  specialty      MedicalSpecialty @relation(fields: [specialtyId], references: [id], onDelete: Restrict)
+
+  @@unique([medicoAfiliadoId, specialtyId])
   @@schema("public")
 }
 

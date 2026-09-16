@@ -187,6 +187,8 @@ export const EVENT_TYPES = [
   "task.sla_warning",
   "task.sla_exceeded",
   "task.escalated",
+  // CC-0036 Ola 1B (REQ-HIS-AFIL-001 US.AFIL.1.2) — alta de médico afiliado (PROSPECTO)
+  "afiliado.creado",
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
