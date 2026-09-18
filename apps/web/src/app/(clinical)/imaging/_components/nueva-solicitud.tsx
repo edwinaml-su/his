@@ -2,9 +2,13 @@
 
 /**
  * CC-0016 — Tab «➕ Nueva Solicitud» (mockup view-solicitud).
- * Categorías + búsqueda (global opcional) + selección con chips (contraste/
- * nota/badges ayuno-autorización) + campos dinámicos según parametrización +
- * guardar (con modal PIN si la regla `firma` está habilitada).
+ * CC-0041 (mockup v2): dx CIE-11 desde el expediente (selector agrupado por
+ * fuente + «Otro» con BuscadorCie11), prioridad segmentada con colores
+ * (STAT rojo / Urgente amarillo / Rutina verde) + hook STAT, fecha visible
+ * solo con Rutina, embarazo obligatorio con «No aplica» automático por sexo,
+ * alergias solo lectura desde la Historia Clínica, creatinina con rótulo
+ * dinámico si hay contraste, y «Buscar por Nombre» estandarizado con el
+ * módulo de Laboratorio (insensible a tildes).
  */
 import * as React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@his/ui/components/card";
@@ -18,7 +22,9 @@ import { Switch } from "@his/ui/components/switch";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
@@ -31,15 +37,34 @@ import {
 } from "@his/ui/components/dialog";
 import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
+import { BuscadorCie11 } from "@/components/cie11/BuscadorCie11";
 import type { ImagingCatalogoItem } from "@his/contracts";
-import { FIELD_META, PRIO_LABEL_TO_VALUE } from "./field-rule-meta";
+import { FIELD_META, PRIO_LABEL_TO_VALUE, PRIO_SEGMENT } from "./field-rule-meta";
 
 interface Seleccion {
   conContraste: boolean;
   nota: string;
 }
 
+/** CC-0041 RF-03 — dx elegido del expediente (o digitado con BuscadorCie11). */
+interface DxSeleccion {
+  codigo: string | null;
+  descripcion: string;
+  sistema: "CIE10" | "CIE11" | null;
+  fuente: string;
+  origenId: string | null;
+}
+
 type ToastState = { title: string; description?: string; variant?: "default" | "success" | "destructive" } | null;
+
+/** Estándar Laboratorio — búsqueda insensible a mayúsculas y tildes (mockup v2 `norm`). */
+const norm = (s: string): string =>
+  s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase();
+
+const DX_OTRO = "__OTRO__";
 
 export function NuevaSolicitud({
   cuentaId,
@@ -52,6 +77,8 @@ export function NuevaSolicitud({
   const catalogoQ = trpc.imagingRequest.catalogoImagen.list.useQuery();
   const fieldConfigQ = trpc.imagingRequest.fieldConfig.list.useQuery();
   const rulesQ = trpc.imagingRequest.rules.list.useQuery();
+  // CC-0041 RF-03/06/07 — sexo, alergias y diagnósticos del expediente.
+  const expedienteQ = trpc.imagingRequest.contextoExpediente.useQuery({ cuentaId });
 
   const catalogo = React.useMemo(() => catalogoQ.data ?? [], [catalogoQ.data]);
   const rulesMap = React.useMemo(
@@ -65,6 +92,11 @@ export function NuevaSolicitud({
 
   const rule = (key: string) => rulesMap.get(key)?.enabled ?? false;
   const maxN = rulesMap.get("maxN")?.valorNum ?? 10;
+
+  const sexoM = expedienteQ.data?.sexo === "M";
+  const alergiasHc = expedienteQ.data?.alergias ?? null;
+  const diagnosticos = React.useMemo(() => expedienteQ.data?.diagnosticos ?? [], [expedienteQ.data]);
+  const dxFuentes = React.useMemo(() => [...new Set(diagnosticos.map((d) => d.fuente))], [diagnosticos]);
 
   const panels = React.useMemo(() => {
     const byId = new Map<string, { panelId: string; nombre: string; displayOrder: number; count: number }>();
@@ -90,15 +122,32 @@ export function NuevaSolicitud({
   const [pin, setPin] = React.useState("");
   const [fields, setFields] = React.useState<Record<string, string>>({});
   const [invalidFields, setInvalidFields] = React.useState<Set<string>>(new Set());
+  const [dxSel, setDxSel] = React.useState<DxSeleccion | null>(null);
+  const [dxOtroActivo, setDxOtroActivo] = React.useState(false);
+
+  // RF-06 — paciente masculino: «No aplica» automático y bloqueado.
+  React.useEffect(() => {
+    if (sexoM) setFields((p) => (p.embarazo === "No aplica" ? p : { ...p, embarazo: "No aplica" }));
+  }, [sexoM]);
 
   const itemById = React.useMemo(() => new Map(catalogo.map((i) => [i.labTestId, i])), [catalogo]);
 
   const visibleItems: ImagingCatalogoItem[] = React.useMemo(() => {
-    const q = search.trim().toUpperCase();
+    const q = norm(search.trim());
     const activos = catalogo.filter((i) => i.active && i.panelActive);
-    if (globalSearch && q) return activos.filter((i) => i.name.includes(q));
-    return activos.filter((i) => i.panelId === activePanelId && (!q || i.name.includes(q)));
+    // RF-02 — «Buscar por Nombre» activo: busca en TODAS las categorías,
+    // insensible a tildes; sin query no lista nada (mensaje guía abajo).
+    if (globalSearch) return q ? activos.filter((i) => norm(i.name).includes(q)) : [];
+    return activos.filter((i) => i.panelId === activePanelId && (!q || norm(i.name).includes(q)));
   }, [catalogo, search, globalSearch, activePanelId]);
+
+  // RF-08 — hay al menos una prestación con contraste en la solicitud.
+  const hayContraste = [...seleccion.values()].some((s) => s.conContraste);
+
+  const prioActual = fields.prio ?? "";
+  const fechaCfg = fieldsOrdered.find((f) => f.fieldKey === "fecha");
+  // RF-05 — la fecha solo existe con prioridad Rutina (y no oculta).
+  const fechaVisible = prioActual === "Rutina" && fechaCfg?.estado !== "oculto";
 
   function toggleSel(item: ImagingCatalogoItem, checked: boolean) {
     setSeleccion((prev) => {
@@ -135,8 +184,40 @@ export function NuevaSolicitud({
 
   function limpiar() {
     setSeleccion(new Map());
-    setFields({});
+    setFields(sexoM ? { embarazo: "No aplica" } : {});
+    setDxSel(null);
+    setDxOtroActivo(false);
     setInvalidFields(new Set());
+  }
+
+  // RF-04/RF-05 — prioridad segmentada; al salir de Rutina se limpia la fecha.
+  function setPrio(label: "Rutina" | "Urgente" | "STAT") {
+    setFields((p) => {
+      // Al salir de Rutina la fecha se descarta (RF-05).
+      const { fecha: _descartada, ...rest } = p;
+      return label === "Rutina" ? { ...p, prio: label } : { ...rest, prio: label };
+    });
+    setInvalidFields((prev) => {
+      if (!prev.has("prio")) return prev;
+      const next = new Set(prev);
+      next.delete("prio");
+      return next;
+    });
+    if (label === "STAT") {
+      setToast({ title: "🔴 Prioridad STAT: se notificará de inmediato a Imagenología" });
+    }
+  }
+
+  function onDxChange(value: string) {
+    if (value === DX_OTRO) {
+      setDxOtroActivo(true);
+      setDxSel(null);
+      return;
+    }
+    setDxOtroActivo(false);
+    const idx = Number.parseInt(value, 10);
+    const d = diagnosticos[idx];
+    if (d) setDxSel({ ...d });
   }
 
   const crear = trpc.imagingRequest.crear.useMutation({
@@ -168,15 +249,23 @@ export function NuevaSolicitud({
       conContraste: s.conContraste,
       ...(s.nota.trim() ? { nota: s.nota.trim() } : {}),
     }));
+    const dxTexto = dxSel ? `${dxSel.codigo ? `${dxSel.codigo} — ` : ""}${dxSel.descripcion}` : "";
     return {
       cuentaId,
       prestaciones,
-      ...(fields.dx?.trim() ? { dx: fields.dx.trim() } : {}),
+      // RF-03 — dx copiado del expediente con trazabilidad (o «Otro» manual).
+      ...(dxTexto ? { dx: dxTexto.slice(0, 300) } : {}),
+      ...(dxSel?.sistema ? { dxSistema: dxSel.sistema } : {}),
+      ...(dxSel ? { dxFuente: dxSel.fuente } : {}),
+      ...(dxSel?.origenId ? { dxOrigenId: dxSel.origenId } : {}),
       ...(fields.just?.trim() ? { justificacion: fields.just.trim() } : {}),
       ...(fields.prio ? { prioridad: PRIO_LABEL_TO_VALUE[fields.prio] } : {}),
-      ...(fields.fecha ? { fechaDeseada: new Date(fields.fecha) } : {}),
-      ...(fields.embarazo?.trim() ? { embarazo: fields.embarazo.trim() } : {}),
-      ...(fields.alergias?.trim() ? { alergias: fields.alergias.trim() } : {}),
+      // RF-05 — solo Rutina lleva fecha (el server también lo valida).
+      ...(fechaVisible && fields.fecha ? { fechaDeseada: new Date(`${fields.fecha}T00:00:00`) } : {}),
+      ...(fields.embarazo?.trim()
+        ? { embarazo: fields.embarazo.trim() as "No aplica" | "No" | "Sí" | "Se desconoce" }
+        : {}),
+      // RF-07 — alergias NO se envían: el server toma el snapshot de la HC.
       ...(fields.creat?.trim() ? { creatinina: fields.creat.trim() } : {}),
       ...(fields.obs?.trim() ? { observaciones: fields.obs.trim() } : {}),
       ...(pinValue ? { pin: pinValue } : {}),
@@ -188,10 +277,34 @@ export function NuevaSolicitud({
       setToast({ title: "Seleccione al menos una prestación", variant: "destructive" });
       return;
     }
-    const faltantes = fieldsOrdered.filter((f) => f.estado === "obligatorio" && !fields[f.fieldKey]?.trim());
+    // Campos obligatorios según parametrización. `alergias` se satisface con
+    // el snapshot de HC (server-side); `fecha` no aplica fuera de Rutina;
+    // `dx` se valida contra la selección del expediente.
+    const faltantes = fieldsOrdered.filter((f) => {
+      if (f.estado !== "obligatorio") return false;
+      if (f.fieldKey === "alergias") return false;
+      if (f.fieldKey === "fecha" && prioActual !== "Rutina") return false;
+      if (f.fieldKey === "dx") return !dxSel;
+      return !fields[f.fieldKey]?.trim();
+    });
     if (faltantes.length > 0) {
       setInvalidFields(new Set(faltantes.map((f) => f.fieldKey)));
       setToast({ title: "Complete los campos obligatorios (*)", variant: "destructive" });
+      return;
+    }
+    // RF-08 — creatinina obligatoria si hay contraste, aunque esté Opcional.
+    // Con el campo OCULTO en parametrización el input no existe: el mensaje
+    // señala la parametrización (hallazgo pre-PR: no pedir llenar un campo
+    // invisible). El server valida lo mismo.
+    if (hayContraste && !fields.creat?.trim()) {
+      const creatOculta = fieldsOrdered.find((f) => f.fieldKey === "creat")?.estado === "oculto";
+      setInvalidFields(creatOculta ? new Set<string>() : new Set(["creat"]));
+      setToast({
+        title: creatOculta
+          ? "⚠ Hay estudios con contraste pero el campo creatinina está oculto en parametrización"
+          : "La creatinina sérica es obligatoria: hay estudios con medio de contraste",
+        variant: "destructive",
+      });
       return;
     }
     setInvalidFields(new Set());
@@ -208,6 +321,9 @@ export function NuevaSolicitud({
   }
 
   const isLoadingCatalogo = catalogoQ.isLoading || fieldConfigQ.isLoading || rulesQ.isLoading;
+  // Fecha local del navegador (NO toISOString: en UTC-6 bloqueaba "hoy"
+  // desde las 18:00 — lección HH-07). en-CA ⇒ YYYY-MM-DD.
+  const hoyIso = new Date().toLocaleDateString("en-CA");
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_380px]">
@@ -239,22 +355,31 @@ export function NuevaSolicitud({
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {rule("global") ? (
+              <label
+                className="flex items-center gap-2 text-xs text-muted-foreground"
+                title="Búsqueda estandarizada — idéntica al módulo de Laboratorio Clínico"
+              >
+                <Switch checked={globalSearch} onCheckedChange={setGlobalSearch} aria-label="Buscar por Nombre" />
+                <b>Buscar por Nombre</b>
+              </label>
+            ) : null}
             <Input
               className="min-w-[260px] flex-1"
-              placeholder="Buscar prestación… (ej. tórax, doppler, columna)"
+              placeholder="Escriba el nombre de la prestación… (ej. torax, doppler, columna)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            {rule("global") ? (
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Switch checked={globalSearch} onCheckedChange={setGlobalSearch} aria-label="Buscar en todas las categorías" />
-                Buscar en todas las categorías
-              </label>
-            ) : null}
           </div>
 
           {isLoadingCatalogo ? (
             <p className="text-sm text-muted-foreground">Cargando catálogo…</p>
+          ) : globalSearch && !search.trim() ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              ✒ Escriba el nombre de la prestación para buscar en todas las categorías
+              <br />
+              (búsqueda estandarizada con el módulo de Laboratorio).
+            </p>
           ) : visibleItems.length === 0 ? (
             <p className="py-4 text-center text-sm text-muted-foreground">Sin resultados.</p>
           ) : (
@@ -360,22 +485,138 @@ export function NuevaSolicitud({
           <CardContent className="space-y-3">
             {fieldsOrdered
               .filter((f) => f.estado !== "oculto")
+              .filter((f) => f.fieldKey !== "fecha" || fechaVisible)
               .map((f) => {
                 const meta = FIELD_META[f.fieldKey];
                 const req = f.estado === "obligatorio";
                 const invalid = invalidFields.has(f.fieldKey);
                 const value = fields[f.fieldKey] ?? "";
-                return (
-                  <div key={f.fieldKey} className="space-y-1">
-                    <Label htmlFor={`gf-${f.fieldKey}`}>
-                      {meta.label} {req ? <span className="text-destructive">*</span> : null}
-                    </Label>
-                    {meta.tipo === "select" ? (
+
+                // --- RF-03: dx desde el expediente + «Otro» (BuscadorCie11) ---
+                if (f.fieldKey === "dx") {
+                  return (
+                    <div key="dx" className="space-y-1">
+                      <Label htmlFor="gf-dx">
+                        {meta.label} {req ? <span className="text-destructive">*</span> : null}{" "}
+                        <Badge variant="outline" className="text-[10px]">🔗 del Expediente</Badge>
+                      </Label>
                       <Select
-                        value={f.fieldKey === "prio" ? PRIO_LABEL_TO_VALUE[value] ? value : "" : value}
-                        onValueChange={(v) => setFields((p) => ({ ...p, [f.fieldKey]: v }))}
+                        value={
+                          dxOtroActivo
+                            ? DX_OTRO
+                            : dxSel
+                              ? String(diagnosticos.findIndex(
+                                  (d) => d.descripcion === dxSel.descripcion && d.fuente === dxSel.fuente,
+                                ))
+                              : ""
+                        }
+                        onValueChange={onDxChange}
                       >
-                        <SelectTrigger id={`gf-${f.fieldKey}`} aria-invalid={invalid}>
+                        <SelectTrigger id="gf-dx" aria-invalid={invalid} data-testid="img-dx-select">
+                          <SelectValue placeholder="— Seleccione diagnóstico del expediente —" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {dxFuentes.map((fuente) => (
+                            <SelectGroup key={fuente}>
+                              <SelectLabel>{fuente}</SelectLabel>
+                              {diagnosticos.map((d, i) =>
+                                d.fuente === fuente ? (
+                                  <SelectItem key={i} value={String(i)}>
+                                    {d.codigo ? `${d.codigo} — ` : ""}
+                                    {d.descripcion}
+                                  </SelectItem>
+                                ) : null,
+                              )}
+                            </SelectGroup>
+                          ))}
+                          <SelectGroup>
+                            <SelectLabel>Otro</SelectLabel>
+                            <SelectItem value={DX_OTRO}>✎ Otro diagnóstico (digitar manualmente)…</SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      {dxOtroActivo ? (
+                        <div className="pt-1">
+                          <BuscadorCie11
+                            id="gf-dx-otro"
+                            onSelect={(sel) =>
+                              setDxSel({
+                                codigo: sel.codigo,
+                                descripcion: sel.titulo,
+                                sistema: "CIE11",
+                                fuente: "Manual",
+                                origenId: null,
+                              })
+                            }
+                          />
+                          {dxSel?.fuente === "Manual" ? (
+                            <p className="pt-1 text-xs text-muted-foreground">
+                              Seleccionado: <b>{dxSel.codigo} — {dxSel.descripcion}</b>
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : dxSel ? (
+                        <p className="text-xs text-muted-foreground">
+                          Fuente: {dxSel.fuente}
+                          {dxSel.sistema ? ` · ${dxSel.sistema}` : " · sin código"}
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                }
+
+                // --- RF-04: prioridad segmentada con patrón de colores ---
+                if (f.fieldKey === "prio") {
+                  return (
+                    <div key="prio" className="space-y-1">
+                      <Label>
+                        {meta.label} {req ? <span className="text-destructive">*</span> : null}
+                      </Label>
+                      <div
+                        className={`flex gap-1.5 ${invalid ? "rounded-md outline outline-2 outline-offset-2 outline-destructive" : ""}`}
+                        role="group"
+                        aria-label="Prioridad de la solicitud"
+                      >
+                        {(["Rutina", "Urgente", "STAT"] as const).map((p) => {
+                          const seg = PRIO_SEGMENT[p];
+                          const on = prioActual === p;
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              data-testid={`img-prio-${p}`}
+                              onClick={() => setPrio(p)}
+                              className="flex flex-1 items-center justify-center gap-1.5 rounded-md border px-1 py-2 text-xs font-bold"
+                              style={
+                                on
+                                  ? { backgroundColor: seg.onBg, borderColor: seg.dot, color: seg.onColor }
+                                  : { color: "#64748b" }
+                              }
+                            >
+                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: seg.dot }} />
+                              {p}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+
+                // --- RF-06: embarazo — bloqueado con «No aplica» si sexo M ---
+                if (f.fieldKey === "embarazo") {
+                  return (
+                    <div key="embarazo" className="space-y-1">
+                      <Label htmlFor="gf-embarazo">
+                        {meta.label} <span className="text-destructive">*</span>{" "}
+                        {sexoM ? <Badge variant="outline" className="text-[10px]">🔒 automático por sexo</Badge> : null}
+                      </Label>
+                      <Select
+                        value={sexoM ? "No aplica" : value}
+                        disabled={sexoM}
+                        onValueChange={(v) => setFields((p) => ({ ...p, embarazo: v }))}
+                      >
+                        <SelectTrigger id="gf-embarazo" aria-invalid={invalid} data-testid="img-embarazo-select">
                           <SelectValue placeholder="— Seleccione —" />
                         </SelectTrigger>
                         <SelectContent>
@@ -386,7 +627,88 @@ export function NuevaSolicitud({
                           ))}
                         </SelectContent>
                       </Select>
-                    ) : meta.tipo === "textarea" ? (
+                      {sexoM ? (
+                        <p className="text-xs text-muted-foreground">
+                          Paciente masculino — el sistema asigna «No aplica» por defecto.
+                        </p>
+                      ) : null}
+                    </div>
+                  );
+                }
+
+                // --- RF-07: alergias — solo lectura desde la Historia Clínica ---
+                if (f.fieldKey === "alergias") {
+                  return (
+                    <div key="alergias" className="space-y-1">
+                      <Label htmlFor="gf-alergias">
+                        {meta.label} <Badge variant="outline" className="text-[10px]">🔗 Historia Clínica</Badge>
+                      </Label>
+                      <Input
+                        id="gf-alergias"
+                        readOnly
+                        value={alergiasHc ?? "Sin alergias registradas en Historia Clínica"}
+                        title="Dato obtenido de la Historia Clínica del paciente"
+                        className="bg-muted/50"
+                      />
+                    </div>
+                  );
+                }
+
+                // --- RF-08: creatinina — rótulo dinámico si hay contraste ---
+                if (f.fieldKey === "creat") {
+                  return (
+                    <div key="creat" className="space-y-1">
+                      <Label htmlFor="gf-creat">
+                        {meta.label}{" "}
+                        {hayContraste ? (
+                          <span className="text-xs font-bold text-destructive" data-testid="img-creat-req">
+                            * obligatoria — hay estudio(s) con contraste
+                          </span>
+                        ) : req ? (
+                          <span className="text-destructive">*</span>
+                        ) : null}
+                      </Label>
+                      <Input
+                        id="gf-creat"
+                        placeholder={meta.placeholder}
+                        value={value}
+                        aria-invalid={invalid}
+                        onChange={(e) => setFields((p) => ({ ...p, creat: e.target.value }))}
+                      />
+                    </div>
+                  );
+                }
+
+                // --- RF-05: fecha — visible solo con Rutina (filtro arriba) ---
+                if (f.fieldKey === "fecha") {
+                  return (
+                    <div key="fecha" className="space-y-1">
+                      <Label htmlFor="gf-fecha">
+                        {meta.label} {req ? <span className="text-destructive">*</span> : null}
+                      </Label>
+                      <Input
+                        id="gf-fecha"
+                        type="date"
+                        min={hoyIso}
+                        value={value}
+                        aria-invalid={invalid}
+                        onChange={(e) => setFields((p) => ({ ...p, fecha: e.target.value }))}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        📅 Disponible porque la prioridad es <b className="text-emerald-700">Rutina</b>. Urgente y
+                        STAT se programan de inmediato.
+                      </p>
+                    </div>
+                  );
+                }
+
+                // --- Genéricos (just / obs) ---
+                return (
+                  <div key={f.fieldKey} className="space-y-1">
+                    <Label htmlFor={`gf-${f.fieldKey}`}>
+                      {meta.label} {req ? <span className="text-destructive">*</span> : null}
+                    </Label>
+                    {meta.tipo === "textarea" ? (
                       <Textarea
                         id={`gf-${f.fieldKey}`}
                         rows={2}
@@ -398,7 +720,7 @@ export function NuevaSolicitud({
                     ) : (
                       <Input
                         id={`gf-${f.fieldKey}`}
-                        type={meta.tipo === "date" ? "date" : "text"}
+                        type="text"
                         placeholder={meta.placeholder}
                         value={value}
                         aria-invalid={invalid}

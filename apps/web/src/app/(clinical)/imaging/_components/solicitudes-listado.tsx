@@ -24,6 +24,7 @@ import {
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
 import type { ImagingSolicitudEstado } from "@his/contracts";
+import { PRIO_SEGMENT, PRIO_VALUE_TO_LABEL } from "./field-rule-meta";
 
 const ESTADO_LABEL: Record<ImagingSolicitudEstado, string> = {
   pend: "Pendiente",
@@ -41,9 +42,23 @@ const ESTADO_VARIANT: Record<ImagingSolicitudEstado, BadgeProps["variant"]> = {
   anulado: "destructive",
 };
 
-const PRIO_LABEL: Record<string, string> = { ROUTINE: "Rutina", URGENT: "Urgente", STAT: "STAT" };
-
 const dateFmt = new Intl.DateTimeFormat("es-SV", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+/** CC-0041 RF-04 — pill de prioridad con el patrón de colores obligatorio. */
+function PrioPill({ prioridad }: { prioridad: string }) {
+  const label = (PRIO_VALUE_TO_LABEL[prioridad] ?? prioridad) as "Rutina" | "Urgente" | "STAT";
+  const seg = PRIO_SEGMENT[label] ?? PRIO_SEGMENT.Rutina;
+  return (
+    <span
+      data-testid="img-prio-pill"
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold"
+      style={{ backgroundColor: seg.onBg, color: seg.onColor }}
+    >
+      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: seg.dot }} />
+      {label}
+    </span>
+  );
+}
 
 export function SolicitudesListado({
   cuentaId,
@@ -87,7 +102,9 @@ export function SolicitudesListado({
                   <TableCell>{dateFmt.format(new Date(r.fecha))}</TableCell>
                   <TableCell>{r.categorias}</TableCell>
                   <TableCell>{r.nPrestaciones}</TableCell>
-                  <TableCell>{PRIO_LABEL[r.prioridad] ?? r.prioridad}</TableCell>
+                  <TableCell>
+                    <PrioPill prioridad={r.prioridad} />
+                  </TableCell>
                   <TableCell>
                     <Badge variant={ESTADO_VARIANT[r.estado]}>{ESTADO_LABEL[r.estado]}</Badge>
                   </TableCell>
@@ -129,7 +146,7 @@ function DetalleSolicitudDialog({
           <div className="space-y-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant={ESTADO_VARIANT[d.estado]}>{ESTADO_LABEL[d.estado]}</Badge>
-              <Badge variant="outline">{PRIO_LABEL[d.prioridad] ?? d.prioridad}</Badge>
+              <PrioPill prioridad={d.prioridad} />
             </div>
             {d.dx ? (
               <p>

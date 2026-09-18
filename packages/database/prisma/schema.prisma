@@ -3325,8 +3325,21 @@ model LabTestParameter {
   @@schema("public")
 }
 
-/// Rediseño lab 2026-09 — parámetros ESCOGIDOS para un examen concreto de una
-/// solicitud (subset de LabTestParameter de la prueba).
+/// CC-0041 — SLA parametrizable por prioridad para las tareas de imagenología
+/// (espejo de LabSlaConfig; sql/253). FK a Organization solo a nivel SQL.
+model ImagingSlaConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  priority       String   @db.VarChar(10) /// ROUTINE|URGENT|STAT (CHECK en sql/253).
+  slaMinutes     Int
+  warningMinutes Int      @default(30)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  @@unique([organizationId, priority])
+  @@schema("public")
+}
+
 /// Extensión CC-0040 (2026-09-18) — SLA parametrizable por prioridad para la
 /// supervisión de exámenes de laboratorio (reemplaza el hardcode
 /// SLA_MINUTES_BY_MOCKUP). FK a Organization solo a nivel SQL (sql/251),
@@ -3345,6 +3358,8 @@ model LabSlaConfig {
   @@schema("public")
 }
 
+/// Rediseño lab 2026-09 — parámetros ESCOGIDOS para un examen concreto de una
+/// solicitud (subset de LabTestParameter de la prueba).
 model LabOrderItemParameter {
   id          String @id @default(uuid()) @db.Uuid
   orderItemId String @db.Uuid
@@ -4325,6 +4340,12 @@ model ImagingRequest {
   alergias          String?   @db.VarChar(300)
   creatinina        String?   @db.VarChar(40)
   observaciones     String?   @db.Text
+  /// CC-0041 RF-03 — snapshot del dx del expediente: sistema de codificación
+  /// (CIE10 legado / CIE11), fuente (HC/Evolución/Manual) e id de origen
+  /// (polimórfico, sin FK). `dx` conserva "código — descripción".
+  dxSistema         String?   @db.VarChar(10)
+  dxFuente          String?   @db.VarChar(120)
+  dxOrigenId        String?   @db.Uuid
   firmadoPor        String?   @db.Uuid
   firmadoEn         DateTime? @db.Timestamptz()
   createdAt         DateTime  @default(now()) @db.Timestamptz()

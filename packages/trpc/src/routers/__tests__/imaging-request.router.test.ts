@@ -67,6 +67,14 @@ describe("imagingRequestRouter", () => {
     prisma = mockDeep<PrismaClient>();
     wireTransaction(prisma);
     capturarCargoMock.mockClear();
+    // CC-0041 — defaults de los caminos nuevos de `crear` (sexo/alergias del
+    // expediente, SLA parametrizable, CareTask por prestación) para que las
+    // suites previas no crashen en llamadas sin stub.
+    prisma.patient.findUnique.mockResolvedValue(null as never);
+    prisma.patientAllergy.findMany.mockResolvedValue([] as never);
+    prisma.imagingSlaConfig.findMany.mockResolvedValue([] as never);
+    prisma.serviceUnit.findFirst.mockResolvedValue(null as never);
+    prisma.careTask.create.mockResolvedValue({ id: u } as never);
   });
 
   // ---------------------------------------------------------------------------
@@ -91,6 +99,9 @@ describe("imagingRequestRouter", () => {
       dx: "M54.5",
       justificacion: "lumbalgia",
       prioridad: "ROUTINE" as const,
+      // CC-0041 RF-06 — embarazo obligatorio siempre (sin fila Patient en el
+      // mock, el sexo es desconocido y el input debe traerlo).
+      embarazo: "No aplica" as const,
     };
 
     it("FORBIDDEN si no hay establecimiento seleccionado", async () => {
@@ -117,6 +128,7 @@ describe("imagingRequestRouter", () => {
           prestaciones: [{ labTestId }],
           justificacion: "lumbalgia",
           prioridad: "ROUTINE",
+          embarazo: "No aplica",
         }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
@@ -140,6 +152,7 @@ describe("imagingRequestRouter", () => {
         prestaciones: [{ labTestId }],
         justificacion: "lumbalgia",
         prioridad: "ROUTINE",
+        embarazo: "No aplica",
       });
       expect(result.folio).toMatch(/^SOL-\d{4}-0001$/);
     });
@@ -246,6 +259,241 @@ describe("imagingRequestRouter", () => {
       ] as never);
       const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
       await expect(caller.crear(validInput)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    // ─── CC-0041 (mockup v2) ────────────────────────────────────────────────
+
+    it("CC-0041 RN-4: rechaza fecha de programación con prioridad URGENT/STAT", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.crear({ ...validInput, prioridad: "URGENT", fechaDeseada: new Date() }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Rutina"),
+      });
+    });
+
+    it("CC-0041 RN-4: rechaza fecha de programación en el pasado", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.crear({
+          ...validInput,
+          fechaDeseada: new Date(Date.now() - 48 * 60 * 60 * 1000),
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("CC-0041 RN-5: sexo masculino ⇒ embarazo «No aplica» automático aunque no venga en el input", async () => {
+      stubHappyPath();
+      prisma.patient.findUnique.mockResolvedValue({ biologicalSex: { code: "M" } } as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      const { embarazo: _sinEmbarazo, ...inputSinEmbarazo } = validInput;
+      await caller.crear(inputSinEmbarazo);
+      const args = prisma.imagingRequest.create.mock.calls[0]![0];
+      expect(args.data.embarazo).toBe("No aplica");
+    });
+
+    it("CC-0041 RN-5: sexo femenino sin embarazo ⇒ BAD_REQUEST", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+      prisma.patient.findUnique.mockResolvedValue({ biologicalSex: { code: "F" } } as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      const { embarazo: _sinEmbarazo, ...inputSinEmbarazo } = validInput;
+      await expect(caller.crear(inputSinEmbarazo)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("embarazo"),
+      });
+    });
+
+    it("CC-0041 RN-6: las alergias se snapshotean server-side desde PatientAllergy (ignora el input)", async () => {
+      stubHappyPath();
+      prisma.patientAllergy.findMany.mockResolvedValue([
+        { substanceText: "Penicilina", reaction: "rash" },
+        { substanceText: "Medio de contraste yodado", reaction: null },
+      ] as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear({ ...validInput, alergias: "texto del cliente que se ignora" });
+      const args = prisma.imagingRequest.create.mock.calls[0]![0];
+      expect(args.data.alergias).toBe("Penicilina (rash) · Medio de contraste yodado");
+    });
+
+    it("CC-0041 RF-08: contraste con creatinina OCULTA en parametrización ⇒ BAD_REQUEST (advertencia bloqueante)", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+      prisma.imagingFormFieldConfig.findMany.mockResolvedValue([
+        { fieldKey: "creat", estado: "oculto" },
+      ] as never);
+      prisma.imagingModuleRule.findMany.mockResolvedValue([] as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        { ...TEST_ROW, imagingAttrs: { ...TEST_ROW.imagingAttrs, requiereContraste: true } },
+      ] as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.crear(validInput)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("parametrización"),
+      });
+    });
+
+    it("CC-0041 RF-03: persiste el snapshot de trazabilidad del dx (sistema/fuente/origen)", async () => {
+      stubHappyPath();
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear({
+        ...validInput,
+        dx: "ME84.2 — Dolor de la región lumbar",
+        dxSistema: "CIE11",
+        dxFuente: "Historia Clínica — 15/09/2026",
+        dxOrigenId: u,
+      });
+      const args = prisma.imagingRequest.create.mock.calls[0]![0];
+      expect(args.data).toMatchObject({
+        dxSistema: "CIE11",
+        dxFuente: "Historia Clínica — 15/09/2026",
+        dxOrigenId: u,
+      });
+    });
+
+    it("CC-0041 — crea una CareTask RAD_TECHNICIAN por prestación con SLA parametrizado", async () => {
+      stubHappyPath();
+      prisma.imagingSlaConfig.findMany.mockResolvedValue([
+        { priority: "ROUTINE", slaMinutes: 300, warningMinutes: 20 },
+      ] as never);
+      prisma.serviceUnit.findFirst.mockResolvedValue({ id: panelId } as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear(validInput);
+      expect(prisma.careTask.create).toHaveBeenCalledTimes(1);
+      const args = prisma.careTask.create.mock.calls[0]![0];
+      expect(args.data).toMatchObject({
+        sourceType: "IMAGING_ORDER",
+        sourceId: "order-1",
+        assignedRoleCode: "RAD_TECHNICIAN",
+        taskType: "IMAGING_TO_PERFORM",
+        slaMinutes: 300, // parametrizado (ImagingSlaConfig), no el default 1440
+        serviceUnitId: panelId,
+      });
+    });
+
+    it("CC-0041 RF-04: prioridad STAT emite el hook imaging.solicitudStat", async () => {
+      stubHappyPath();
+      prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await caller.crear({ ...validInput, prioridad: "STAT" });
+      const eventos = prisma.domainEvent.create.mock.calls.map(
+        (c) => (c[0] as { data: { eventType: string } }).data.eventType,
+      );
+      expect(eventos).toContain("imaging.solicitudStat");
+      expect(eventos).toContain("task.action_required");
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0041 — fieldConfig.set: pisos normativos (CA-12)
+  // ---------------------------------------------------------------------------
+  describe("fieldConfig.set (CC-0041 CA-12)", () => {
+    it("rechaza configurar embarazo como opcional u oculto", async () => {
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.fieldConfig.set({ fieldKey: "embarazo", estado: "opcional" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(
+        caller.fieldConfig.set({ fieldKey: "embarazo", estado: "oculto" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("rechaza ocultar la prioridad", async () => {
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.fieldConfig.set({ fieldKey: "prio", estado: "oculto" }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0041 — contexto del expediente (dx / sexo / alergias)
+  // ---------------------------------------------------------------------------
+  describe("contextoExpediente (CC-0041 RF-03)", () => {
+    it("retorna sexo, alergias formateadas y dx CIE-10 de encuentros; degrada sin filas ECE", async () => {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+      prisma.patient.findUnique.mockResolvedValue({ biologicalSex: { code: "F" } } as never);
+      prisma.patientAllergy.findMany.mockResolvedValue([
+        { substanceText: "Penicilina", reaction: "rash" },
+      ] as never);
+      prisma.encounterDiagnosis.findMany.mockResolvedValue([
+        { id: u, conceptId: panelId, diagnosedAt: new Date() },
+      ] as never);
+      prisma.clinicalConcept.findMany.mockResolvedValue([
+        { id: panelId, code: "M54.5", display: "Lumbalgia" },
+      ] as never);
+      // $queryRaw sin stub (undefined) — la lectura ECE degrada con warn.
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.contextoExpediente({ cuentaId });
+      expect(r.sexo).toBe("F");
+      expect(r.alergias).toBe("Penicilina (rash)");
+      expect(r.diagnosticos[0]).toMatchObject({
+        codigo: "M54.5",
+        descripcion: "Lumbalgia",
+        sistema: "CIE10",
+        origenId: u,
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0041 — supervisión + SLA parametrizable
+  // ---------------------------------------------------------------------------
+  describe("supervision / sla (CC-0041)", () => {
+    it("supervision calcula semáforo VENCIDO con el SLA default para un estudio ORDERED viejo", async () => {
+      prisma.imagingOrder.findMany.mockResolvedValue([
+        {
+          id: u,
+          status: "ORDERED",
+          priority: "ROUTINE",
+          orderedAt: new Date(Date.now() - 2000 * 60_000),
+          scheduledAt: null,
+          completedAt: null,
+          encounterId: null,
+          modalityType: "CR",
+          studyDescription: "RX TORAX",
+          report: null,
+          request: { folio: "SOL-2026-0001" },
+          patient: { firstName: "Ana", lastName: "Cruz", expediente: "EXP-1", mrn: "M1" },
+          patientAccount: { numeroCuenta: "CTA-1" },
+        },
+      ] as never);
+      prisma.careTask.findMany.mockResolvedValue([] as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      const res = await caller.supervision({ incluirCompletados: true, limit: 200 });
+      expect(res.rows[0]).toMatchObject({
+        slaEstado: "VENCIDO",
+        etapa: "SOLICITADO",
+        atencion: "AMBULATORIO",
+        categoria: "Radiografías",
+      });
+      expect(res.kpis.vencidos).toBe(1);
+    });
+
+    it("sla.list retorna defaults con esDefault=true y refleja la fila del tenant", async () => {
+      prisma.imagingSlaConfig.findMany.mockResolvedValue([
+        { priority: "STAT", slaMinutes: 45, warningMinutes: 10 },
+      ] as never);
+      const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+      const rows = await caller.sla.list();
+      expect(rows.find((r) => r.priority === "STAT")).toMatchObject({
+        slaMinutes: 45,
+        esDefault: false,
+      });
+      expect(rows.find((r) => r.priority === "ROUTINE")).toMatchObject({
+        slaMinutes: 1440,
+        esDefault: true,
+      });
+    });
+
+    it("sla.upsert exige rol ADMIN/DIR", async () => {
+      const caller = imagingRequestRouter.createCaller(
+        makeCtx({ prisma, tenant: TENANT_NO_ADMIN }),
+      );
+      await expect(
+        caller.sla.upsert({ priority: "STAT", slaMinutes: 45, warningMinutes: 10 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 

@@ -34,8 +34,9 @@ interface MockTx {
   patientAccount: { findFirst: ReturnType<typeof vi.fn> };
   serviceUnit: { findFirst: ReturnType<typeof vi.fn> };
   labOrder: { create: ReturnType<typeof vi.fn> };
-  /** Extensión CC-0040 — SLA parametrizable; [] = defaults de código. */
+  /** Extensión CC-0040/CC-0041 — SLA parametrizable; [] = defaults de código. */
   labSlaConfig: { findMany: ReturnType<typeof vi.fn> };
+  imagingSlaConfig: { findMany: ReturnType<typeof vi.fn> };
   imagingRequest: { create: ReturnType<typeof vi.fn> };
   imagingOrder: { create: ReturnType<typeof vi.fn> };
   careTask: { create: ReturnType<typeof vi.fn> };
@@ -50,6 +51,7 @@ function makeTx(): MockTx {
     serviceUnit: { findFirst: vi.fn().mockResolvedValue(null) },
     labOrder: { create: vi.fn().mockResolvedValue({ id: "lab-order-1" }) },
     labSlaConfig: { findMany: vi.fn().mockResolvedValue([]) },
+    imagingSlaConfig: { findMany: vi.fn().mockResolvedValue([]) },
     imagingRequest: { create: vi.fn().mockResolvedValue({ id: "img-req-1", folio: "SOL-2026-0001" }) },
     imagingOrder: { create: vi.fn().mockResolvedValue({ id: "img-order-1" }) },
     careTask: { create: vi.fn().mockResolvedValue({ id: "task-1" }) },

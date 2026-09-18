@@ -185,6 +185,32 @@ describe("imagingRouter", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("CC-0041: SCHEDULED setea scheduledAt (hito del tablero de supervisión)", async () => {
+      prisma.imagingOrder.findFirst.mockResolvedValue({ id: u, status: "ORDERED" } as never);
+      prisma.imagingOrder.update.mockResolvedValue({ id: u } as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.updateStatus({ id: u, status: "SCHEDULED" });
+      const args = prisma.imagingOrder.update.mock.calls[0]![0];
+      expect((args.data as { scheduledAt: Date }).scheduledAt).toBeInstanceOf(Date);
+    });
+
+    it("CC-0041: sincroniza la CareTask del estudio — COMPLETED ⇒ CUMPLIDA, IN_PROGRESS ⇒ EN_PROCESO", async () => {
+      prisma.imagingOrder.findFirst.mockResolvedValue({ id: u, status: "IN_PROGRESS" } as never);
+      prisma.imagingOrder.update.mockResolvedValue({ id: u } as never);
+      prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.updateStatus({ id: u, status: "COMPLETED" });
+      const taskArgs = prisma.careTask.updateMany.mock.calls[0]![0];
+      expect(taskArgs.where).toMatchObject({ sourceType: "IMAGING_ORDER", sourceId: u });
+      expect(taskArgs.data).toMatchObject({ status: "CUMPLIDA" });
+
+      prisma.careTask.updateMany.mockClear();
+      prisma.imagingOrder.findFirst.mockResolvedValue({ id: u, status: "SCHEDULED" } as never);
+      await caller.order.updateStatus({ id: u, status: "IN_PROGRESS" });
+      const taskArgs2 = prisma.careTask.updateMany.mock.calls[0]![0];
+      expect(taskArgs2.data).toMatchObject({ status: "EN_PROCESO", completedAt: null });
+    });
+
     it("graba radiationDoseDap y radiationDoseCtdi cuando se proveen", async () => {
       prisma.imagingOrder.findFirst.mockResolvedValue({ id: u, status: "IN_PROGRESS" } as never);
       prisma.imagingOrder.update.mockResolvedValue({ id: u } as never);
@@ -221,6 +247,16 @@ describe("imagingRouter", () => {
       await expect(
         caller.order.cancel({ id: u, reason: "Paciente desistió" }),
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("CC-0041: cancelar la orden cancela también su CareTask de supervisión", async () => {
+      prisma.imagingOrder.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = imagingRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.cancel({ id: u, reason: "Paciente desistió" });
+      const taskArgs = prisma.careTask.updateMany.mock.calls[0]![0];
+      expect(taskArgs.where).toMatchObject({ sourceType: "IMAGING_ORDER", sourceId: u });
+      expect(taskArgs.data).toMatchObject({ status: "CANCELADA", cancelReason: "Paciente desistió" });
     });
   });
 

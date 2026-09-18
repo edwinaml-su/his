@@ -10,11 +10,13 @@ export const FIELD_META: Record<
   ImagingFieldKey,
   { label: string; desc: string; tipo: "text" | "textarea" | "select" | "date"; placeholder?: string; opts?: string[] }
 > = {
+  // CC-0041 RF-03 — el dx pasa de texto libre CIE-10 a selector CIE-11
+  // poblado desde el expediente (HC / Evolución) + «Otro» con BuscadorCie11.
   dx: {
-    label: "Diagnóstico presuntivo (CIE-10)",
-    desc: "Código y descripción del diagnóstico que motiva el estudio",
+    label: "Diagnóstico presuntivo (CIE-11)",
+    desc: "Se obtiene de la Historia Clínica, Evolución Clínica o Indicaciones Médicas del expediente",
     tipo: "text",
-    placeholder: "Ej. M54.5 — Lumbalgia",
+    placeholder: "Ej. ME84.2 — Dolor de la región lumbar",
   },
   just: {
     label: "Justificación clínica",
@@ -24,30 +26,29 @@ export const FIELD_META: Record<
   },
   prio: {
     label: "Prioridad de la solicitud",
-    desc: "Rutina, Urgente o STAT (aplica a toda la solicitud)",
+    desc: "Patrón de colores: STAT = rojo, Urgente = amarillo, Rutina = verde",
     tipo: "select",
     opts: ["Rutina", "Urgente", "STAT"],
   },
   fecha: {
-    label: "Fecha deseada del estudio",
-    desc: "Fecha propuesta para programación",
+    label: "Fecha de la solicitud (programación)",
+    desc: "Se habilita únicamente cuando la prioridad es Rutina",
     tipo: "date",
   },
   embarazo: {
     label: "¿Posibilidad de embarazo?",
-    desc: "Seguridad radiológica en pacientes femeninas",
+    desc: "Obligatorio. En pacientes masculinos se asigna «No aplica» automáticamente",
     tipo: "select",
     opts: ["No aplica", "No", "Sí", "Se desconoce"],
   },
   alergias: {
     label: "Alergias conocidas",
-    desc: "Relevante para estudios con medio de contraste",
+    desc: "Se obtiene automáticamente de la Historia Clínica",
     tipo: "text",
-    placeholder: "Ej. Yodo, mariscos, ninguna conocida…",
   },
   creat: {
     label: "Creatinina sérica (mg/dL)",
-    desc: "Se exige cuando hay estudios con contraste",
+    desc: "Obligatoria para todos los estudios que requieran medio de contraste",
     tipo: "text",
     placeholder: "Ej. 0.9",
   },
@@ -65,8 +66,8 @@ export const RULE_META: Record<ImagingRuleKey, { label: string; desc: string }> 
     desc: "Si se apaga, cambiar de categoría limpia la selección",
   },
   global: {
-    label: "Habilitar búsqueda global de prestaciones",
-    desc: "Muestra el interruptor «Buscar en todas las categorías»",
+    label: "Habilitar «Buscar por Nombre»",
+    desc: "Búsqueda por nombre en todas las categorías — estándar del módulo de Laboratorio",
   },
   codigo: {
     label: "Mostrar código de la prestación en el listado",
@@ -88,6 +89,20 @@ export const RULE_META: Record<ImagingRuleKey, { label: string; desc: string }> 
     label: "Límite de prestaciones por solicitud",
     desc: "Límite configurable por perfil de usuario",
   },
+};
+
+/**
+ * CC-0041 RF-04 — patrón de colores obligatorio de la prioridad en TODO el
+ * módulo: STAT rojo (#dc2626) · Urgente amarillo (#f59e0b) · Rutina verde
+ * (#059669). Fondos/textos "on" del mockup v2 (.prio-seg .p-*.on).
+ */
+export const PRIO_SEGMENT: Record<
+  "Rutina" | "Urgente" | "STAT",
+  { dot: string; onBg: string; onColor: string }
+> = {
+  Rutina: { dot: "#059669", onBg: "#d1fae5", onColor: "#065f46" },
+  Urgente: { dot: "#f59e0b", onBg: "#fef3c7", onColor: "#92400e" },
+  STAT: { dot: "#dc2626", onBg: "#fee2e2", onColor: "#991b1b" },
 };
 
 export const PRIO_LABEL_TO_VALUE: Record<string, "ROUTINE" | "URGENT" | "STAT"> = {

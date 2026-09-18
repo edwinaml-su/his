@@ -23,6 +23,8 @@ import {
   imagingFormFieldConfigSetInput,
   imagingModuleRuleSetInput,
   imagingCatalogoUpsertInput,
+  imagingSupervisionInput,
+  imagingSlaConfigUpsertInput,
   derivarEstadoSolicitud,
   imagingModalityTypeEnum,
   IMAGING_FIELD_KEYS,
@@ -32,14 +34,23 @@ import {
   type ImagingRuleKey,
   type ImagingOrderStatusType,
   type ImagingCatalogoItem,
+  type LabSlaEstado,
 } from "@his/contracts";
+import { emitDomainEvent } from "@his/database";
 
 type ImagingModalityTypeValue = z.infer<typeof imagingModalityTypeEnum>;
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { withEceContext } from "../ece/rls-context";
 import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
 import { checkPin } from "./firma-electronica.router";
 import { capturarCargo } from "../lib/charge-capture";
+import {
+  resolveImagingSlaMap,
+  DEFAULT_LAB_SLA,
+  CARE_TASK_PRIORITY_BY_LAB_PRIORITY,
+  type LabPriorityKey,
+} from "../lib/lab-sla";
 
 /** CC-0016 — parametrización del módulo: solo administración. */
 const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
@@ -54,7 +65,9 @@ const DEFAULT_FIELD_CONFIG: Record<ImagingFieldKey, ImagingFieldEstado> = {
   just: "obligatorio",
   prio: "obligatorio",
   fecha: "opcional",
-  embarazo: "opcional",
+  // CC-0041 RF-06 — obligatorio SIEMPRE (sql/253 actualizó el seed; el
+  // server además lo exige incondicional en `crear` y bloquea bajarlo).
+  embarazo: "obligatorio",
   alergias: "opcional",
   creat: "opcional",
   obs: "oculto",
@@ -173,6 +186,62 @@ export const imagingRequestRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta de paciente no encontrada." });
       }
 
+      // --- CC-0041 RF-06/RF-07 — sexo biológico + alergias desde la HC ---
+      const [patientRow, alergiasRows] = await Promise.all([
+        tx.patient.findUnique({
+          where: { id: account.patientId },
+          select: { biologicalSex: { select: { code: true } } },
+        }),
+        tx.patientAllergy.findMany({
+          where: { patientId: account.patientId, active: true },
+          select: { substanceText: true, reaction: true },
+        }),
+      ]);
+      const sexoCode = patientRow?.biologicalSex?.code ?? null;
+
+      // RF-07 / RN-6 — snapshot server-side (el input del cliente se ignora:
+      // el campo es solo lectura desde la Historia Clínica).
+      const alergiasSnapshot = (
+        alergiasRows.length > 0
+          ? alergiasRows
+              .map((a) => `${a.substanceText}${a.reaction ? ` (${a.reaction})` : ""}`)
+              .join(" · ")
+          : "Sin alergias registradas en Historia Clínica"
+      ).slice(0, 300);
+
+      // RF-06 / RN-5 — embarazo obligatorio SIEMPRE; sexo masculino ⇒
+      // "No aplica" automático (aunque el cliente mande otra cosa).
+      const embarazo = sexoCode === "M" ? "No aplica" : (input.embarazo ?? null);
+      if (!embarazo) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Complete «¿Posibilidad de embarazo?» — campo obligatorio.",
+        });
+      }
+
+      // RF-05 / RN-4 — la fecha de programación solo existe con prioridad Rutina.
+      const prioridad = input.prioridad ?? "ROUTINE";
+      if (input.fechaDeseada && prioridad !== "ROUTINE") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "La fecha de programación solo aplica a solicitudes de prioridad Rutina — Urgente y STAT se atienden de inmediato.",
+        });
+      }
+      if (input.fechaDeseada) {
+        // Comparación date-only en la zona del hospital (lección HH-07 /
+        // hallazgo pre-PR: la TZ del proceso en Vercel es UTC — un setHours
+        // local rechazaba "hoy" enviado desde El Salvador a partir de las
+        // 18:00). en-CA formatea YYYY-MM-DD ⇒ comparación lexicográfica.
+        const fmtSv = new Intl.DateTimeFormat("en-CA", { timeZone: "America/El_Salvador" });
+        if (fmtSv.format(input.fechaDeseada) < fmtSv.format(new Date())) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "La fecha de programación debe ser hoy o una fecha futura.",
+          });
+        }
+      }
+
       // --- Parametrización: campos + reglas (fallback a defaults del mockup) ---
       const fieldRows = await tx.imagingFormFieldConfig.findMany({ where: { organizationId } });
       const fieldConfig: Record<ImagingFieldKey, ImagingFieldEstado> = { ...DEFAULT_FIELD_CONFIG };
@@ -185,8 +254,15 @@ export const imagingRequestRouter = router({
       for (const r of ruleRows) rules[r.ruleKey as ImagingRuleKey] = { enabled: r.enabled, valorNum: r.valorNum };
 
       // --- Validación de campos obligatorios ---
+      // `efectivos` incorpora los valores resueltos server-side (embarazo
+      // auto por sexo, alergias snapshot). `fecha` se excluye cuando la
+      // prioridad no es Rutina (RF-05: el campo no existe en ese caso).
+      const efectivos = { ...input, embarazo, alergias: alergiasSnapshot };
       const faltantes = IMAGING_FIELD_KEYS.filter(
-        (k) => fieldConfig[k] === "obligatorio" && fieldIsEmpty(k, input),
+        (k) =>
+          fieldConfig[k] === "obligatorio" &&
+          !(k === "fecha" && prioridad !== "ROUTINE") &&
+          fieldIsEmpty(k, efectivos),
       );
       if (faltantes.length > 0) {
         throw new TRPCError({
@@ -230,15 +306,20 @@ export const imagingRequestRouter = router({
         }
       }
 
-      // --- contraste ⇒ creatinina (si el campo no está oculto) ---
+      // --- CC-0041 RF-08 — contraste ⇒ creatinina SIEMPRE (aunque el campo
+      // esté configurado Opcional; si está Oculto, el error señala la
+      // parametrización — advertencia bloqueante del RF-10.3).
       const hayContraste = input.prestaciones.some((p) => {
         const attrs = testById.get(p.labTestId)?.imagingAttrs;
         return p.conContraste ?? attrs?.requiereContraste ?? false;
       });
-      if (hayContraste && fieldConfig.creat !== "oculto" && !input.creatinina?.trim()) {
+      if (hayContraste && !input.creatinina?.trim()) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Estudios con contraste requieren creatinina sérica reciente.",
+          message:
+            fieldConfig.creat === "oculto"
+              ? "Hay estudios con contraste pero el campo creatinina está oculto en la parametrización — corrija la parametrización o retire el estudio."
+              : "Estudios con contraste requieren creatinina sérica reciente.",
         });
       }
 
@@ -287,8 +368,6 @@ export const imagingRequestRouter = router({
       `;
       const folio = `SOL-${anio}-${String(seqRows[0]!.n).padStart(4, "0")}`;
 
-      const prioridad = input.prioridad ?? "ROUTINE";
-
       const request = await tx.imagingRequest.create({
         data: {
           organizationId,
@@ -298,10 +377,14 @@ export const imagingRequestRouter = router({
           encounterId: account.encounterId ?? null,
           prioridad,
           dx: input.dx ?? null,
+          // CC-0041 RF-03 — trazabilidad del dx copiado del expediente.
+          dxSistema: input.dxSistema ?? null,
+          dxFuente: input.dxFuente ?? null,
+          dxOrigenId: input.dxOrigenId ?? null,
           justificacion: input.justificacion ?? null,
           fechaDeseada: input.fechaDeseada ?? null,
-          embarazo: input.embarazo ?? null,
-          alergias: input.alergias ?? null,
+          embarazo,
+          alergias: alergiasSnapshot,
           creatinina: input.creatinina ?? null,
           observaciones: input.observaciones ?? null,
           firmadoPor,
@@ -310,6 +393,7 @@ export const imagingRequestRouter = router({
         },
       });
 
+      const ordenesCreadas: { id: string; nombre: string }[] = [];
       for (const p of input.prestaciones) {
         const test = testById.get(p.labTestId)!;
         const attrs = test.imagingAttrs;
@@ -364,6 +448,105 @@ export const imagingRequestRouter = router({
           referenciaId: order.id,
           actorId: ctx.user.id,
         });
+        ordenesCreadas.push({ id: order.id, nombre: test.name });
+      }
+
+      // --- CC-0041 — una CareTask por prestación para el equipo de
+      // radiología (mismo patrón que order-consumer.ts, camino de indicación:
+      // taskType IMAGING_TO_PERFORM, rol RAD_TECHNICIAN, SLA parametrizado
+      // en ImagingSlaConfig con fallback a los defaults de ImagingPriority).
+      const slaMap = await resolveImagingSlaMap(tx, organizationId);
+      const sla = slaMap[prioridad as LabPriorityKey] ?? slaMap.ROUTINE;
+      const dueAt = new Date(Date.now() + sla.slaMinutes * 60_000);
+      const serviceUnit = await tx.serviceUnit.findFirst({
+        where: { establishmentId, areaType: "IMAGENES", active: true },
+        select: { id: true },
+      });
+
+      let primeraTareaId: string | null = null;
+      for (const orden of ordenesCreadas) {
+        const tarea = await tx.careTask.create({
+          data: {
+            organizationId,
+            establishmentId,
+            serviceUnitId: serviceUnit?.id ?? null,
+            assignedRoleCode: "RAD_TECHNICIAN",
+            patientId: account.patientId,
+            encounterId: account.encounterId ?? null,
+            patientAccountId: account.id,
+            sourceType: "IMAGING_ORDER",
+            sourceId: orden.id,
+            taskType: "IMAGING_TO_PERFORM",
+            title: orden.nombre.slice(0, 200),
+            priority: CARE_TASK_PRIORITY_BY_LAB_PRIORITY[prioridad as LabPriorityKey] ?? "NORMAL",
+            slaMinutes: sla.slaMinutes,
+            dueAt,
+            status: "PENDIENTE",
+            createdBy: ctx.user.id,
+          },
+        });
+        primeraTareaId ??= tarea.id;
+      }
+
+      // CC-0031 — UNA notificación por solicitud (no por prestación).
+      // Try/catch deliberado: el outbox no revierte la solicitud ya creada.
+      if (primeraTareaId) {
+        try {
+          await emitDomainEvent(tx, {
+            organizationId,
+            eventType: "task.action_required",
+            aggregateType: "CareTask",
+            aggregateId: primeraTareaId,
+            emittedById: ctx.user.id,
+            payload: {
+              taskType: "IMAGING_TO_PERFORM",
+              sourceType: "IMAGING_ORDER",
+              // Hallazgo pre-PR: sourceId debe ser una ImagingOrder (mismo
+              // agregado que sourceType), no la cabecera — paridad con
+              // order-consumer.ts. Se manda la primera orden de la solicitud.
+              sourceId: ordenesCreadas[0]!.id,
+              assignedRoleCode: "RAD_TECHNICIAN",
+              establishmentId,
+              serviceUnitId: serviceUnit?.id ?? null,
+              dueAt: dueAt.toISOString(),
+              url: "/imaging?vista=supervision",
+              resumen: `Solicitud ${folio}: ${ordenesCreadas.length} estudio(s) de imagenología`,
+            },
+          });
+        } catch (err) {
+          console.error(
+            `[CC-0041 imagingRequest.crear] emitDomainEvent(task.action_required) falló para ${folio} — ` +
+              "las tareas se crearon igual, solo no se emitió la notificación.",
+            err,
+          );
+        }
+      }
+
+      // --- CC-0041 RF-04 — hook `solicitud.stat.creada` (solo el evento;
+      // la notificación inmediata a Imagenología es fase posterior).
+      if (prioridad === "STAT") {
+        try {
+          await emitDomainEvent(tx, {
+            organizationId,
+            eventType: "imaging.solicitudStat",
+            aggregateType: "ImagingRequest",
+            aggregateId: request.id,
+            emittedById: ctx.user.id,
+            payload: {
+              requestId: request.id,
+              folio,
+              patientId: account.patientId,
+              patientAccountId: account.id,
+              nPrestaciones: ordenesCreadas.length,
+              estudios: ordenesCreadas.map((o) => o.nombre),
+            },
+          });
+        } catch (err) {
+          console.error(
+            `[CC-0041 imagingRequest.crear] emitDomainEvent(imaging.solicitudStat) falló para ${folio}.`,
+            err,
+          );
+        }
       }
 
       return { id: request.id, folio, advertencias };
@@ -434,6 +617,344 @@ export const imagingRequestRouter = router({
       });
     }),
 
+  /**
+   * CC-0041 RF-03/RF-06/RF-07 — contexto del expediente para el formulario:
+   * sexo biológico (embarazo automático), alergias formateadas (solo lectura)
+   * y diagnósticos con código agrupados por fuente:
+   *   · Historia Clínica (ece.historia_clinica.diagnosticos JSONB, CIE-11)
+   *   · Encuentros (EncounterDiagnosis + ClinicalConcept, CIE-10 legado)
+   *   · Evolución Clínica (problemas de la nota SOAP — SIN código: la
+   *     evolución no persiste códigos, se exponen como texto; ver hallazgo
+   *     exploración CC-0041). Indicaciones médicas no guardan dx — se omiten.
+   */
+  contextoExpediente: tenantProcedure
+    .input(z.object({ cuentaId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      type Dx = {
+        codigo: string | null;
+        descripcion: string;
+        sistema: "CIE10" | "CIE11" | null;
+        fuente: string;
+        origenId: string | null;
+      };
+
+      const base = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const account = await tx.patientAccount.findFirst({
+          where: { id: input.cuentaId, organizationId: ctx.tenant.organizationId },
+          select: { id: true, patientId: true },
+        });
+        if (!account) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta de paciente no encontrada." });
+        }
+
+        const [patient, alergiasRows, encDx] = await Promise.all([
+          tx.patient.findUnique({
+            where: { id: account.patientId },
+            select: { biologicalSex: { select: { code: true } } },
+          }),
+          tx.patientAllergy.findMany({
+            where: { patientId: account.patientId, active: true },
+            select: { substanceText: true, reaction: true },
+          }),
+          tx.encounterDiagnosis.findMany({
+            where: {
+              encounter: { patientId: account.patientId, organizationId: ctx.tenant.organizationId },
+              resolvedAt: null,
+            },
+            orderBy: { diagnosedAt: "desc" },
+            take: 20,
+            select: { id: true, conceptId: true, diagnosedAt: true },
+          }),
+        ]);
+
+        const conceptIds = [...new Set(encDx.map((d) => d.conceptId))];
+        const concepts = conceptIds.length
+          ? await tx.clinicalConcept.findMany({
+              where: { id: { in: conceptIds } },
+              select: { id: true, code: true, display: true },
+            })
+          : [];
+        const conceptById = new Map(concepts.map((c) => [c.id, c]));
+
+        const diagnosticos: Dx[] = [];
+        for (const d of encDx) {
+          const c = conceptById.get(d.conceptId);
+          if (!c) continue;
+          diagnosticos.push({
+            codigo: c.code,
+            descripcion: c.display,
+            sistema: "CIE10",
+            fuente: "Historia Clínica — Encuentros",
+            origenId: d.id,
+          });
+        }
+
+        return {
+          patientId: account.patientId,
+          sexo: patient?.biologicalSex?.code ?? null,
+          alergias:
+            alergiasRows.length > 0
+              ? alergiasRows
+                  .map((a) => `${a.substanceText}${a.reaction ? ` (${a.reaction})` : ""}`)
+                  .join(" · ")
+              : null,
+          diagnosticos,
+        };
+      });
+
+      // ECE (HC Avante CIE-11 + Evolución) — mejor esfuerzo: sin
+      // establecimiento o sin filas ECE, el selector queda con lo de arriba.
+      if (ctx.tenant.establishmentId) {
+        try {
+          const eceDx = await withEceContext(
+            ctx.prisma,
+            ctx.user.id,
+            ctx.tenant.establishmentId,
+            async (tx) => {
+              type HcRow = { id: string; diagnosticos: unknown; registrado_en: Date };
+              const hcRows = await tx.$queryRaw<HcRow[]>`
+                SELECT hc.id::text AS id, hc.diagnosticos, hc.registrado_en
+                FROM ece.historia_clinica hc
+                JOIN ece.paciente ep ON ep.id = hc.paciente_id
+                WHERE ep.public_patient_id = ${base.patientId}::uuid
+                  AND hc.estado_registro = 'vigente'
+                  AND hc.diagnosticos IS NOT NULL
+                ORDER BY hc.registrado_en DESC
+                LIMIT 5
+              `;
+
+              type EvoRow = { id: string; data: unknown; fecha_hora: Date };
+              const evoRows = await tx.$queryRaw<EvoRow[]>`
+                SELECT em.id::text AS id, em.data, em.fecha_hora
+                FROM ece.evolucion_medica em
+                JOIN ece.paciente ep ON ep.id = em.paciente_id
+                WHERE ep.public_patient_id = ${base.patientId}::uuid
+                  AND em.estado_registro = 'vigente'
+                  AND em.fecha_hora >= now() - interval '90 days'
+                ORDER BY em.fecha_hora DESC
+                LIMIT 5
+              `;
+              return { hcRows, evoRows };
+            },
+          );
+
+          const fmt = new Intl.DateTimeFormat("es-SV", { day: "2-digit", month: "2-digit", year: "numeric" });
+          const vistos = new Set(base.diagnosticos.map((d) => `${d.codigo}|${d.descripcion}`));
+          for (const hc of eceDx.hcRows) {
+            if (!Array.isArray(hc.diagnosticos)) continue;
+            for (const raw of hc.diagnosticos as unknown[]) {
+              const d = raw as { codigo?: unknown; descripcion?: unknown };
+              if (typeof d?.codigo !== "string" || typeof d?.descripcion !== "string") continue;
+              const key = `${d.codigo}|${d.descripcion}`;
+              if (vistos.has(key)) continue;
+              vistos.add(key);
+              base.diagnosticos.unshift({
+                codigo: d.codigo,
+                descripcion: d.descripcion,
+                sistema: "CIE11",
+                fuente: `Historia Clínica — ${fmt.format(hc.registrado_en)}`,
+                origenId: hc.id,
+              });
+            }
+          }
+          for (const evo of eceDx.evoRows) {
+            const data = evo.data as { problemas?: unknown } | null;
+            if (!data || !Array.isArray(data.problemas)) continue;
+            for (const raw of data.problemas as unknown[]) {
+              const p = raw as { texto?: unknown };
+              if (typeof p?.texto !== "string" || !p.texto.trim()) continue;
+              const key = `|${p.texto}`;
+              if (vistos.has(key)) continue;
+              vistos.add(key);
+              base.diagnosticos.push({
+                codigo: null,
+                descripcion: p.texto,
+                sistema: null,
+                fuente: `Evolución Clínica — ${fmt.format(evo.fecha_hora)}`,
+                origenId: evo.id,
+              });
+            }
+          }
+        } catch (err) {
+          console.error("[CC-0041 contextoExpediente] lectura ECE falló (degrada a public.*):", err);
+        }
+      }
+
+      return { sexo: base.sexo, alergias: base.alergias, diagnosticos: base.diagnosticos };
+    }),
+
+  /**
+   * CC-0041 — Tablero de supervisión de imagenología (espejo del de
+   * laboratorio, extensión CC-0040): un row por estudio (ImagingOrder) con
+   * hitos de trazabilidad (solicitado / programado / realizado / informado /
+   * validado) y semáforo contra el SLA parametrizado (ImagingSlaConfig +
+   * CareTask.dueAt). KPIs sobre la página retornada — tablero operativo.
+   */
+  supervision: tenantProcedure.input(imagingSupervisionInput).query(async ({ ctx, input }) => {
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const orders = await tx.imagingOrder.findMany({
+        where: {
+          organizationId: ctx.tenant.organizationId,
+          deletedAt: null,
+          status: input.incluirCompletados
+            ? { not: "CANCELLED" }
+            : { in: ["ORDERED", "SCHEDULED", "IN_PROGRESS"] },
+        },
+        include: {
+          report: { select: { reportedAt: true, validatedAt: true } },
+          request: { select: { folio: true } },
+          patient: { select: { firstName: true, lastName: true, expediente: true, mrn: true } },
+          patientAccount: { select: { numeroCuenta: true } },
+        },
+        orderBy: [{ orderedAt: "desc" }, { id: "desc" }],
+        take: input.limit,
+      });
+
+      const tareas = await tx.careTask.findMany({
+        where: { sourceType: "IMAGING_ORDER", sourceId: { in: orders.map((o) => o.id) } },
+        select: { sourceId: true, status: true, dueAt: true, slaMinutes: true, completedAt: true },
+      });
+      const tareaByOrder = new Map(tareas.map((t) => [t.sourceId, t]));
+      const slaMap = await resolveImagingSlaMap(tx, ctx.tenant.organizationId);
+      const now = Date.now();
+
+      let rows = orders.map((o) => {
+        const tarea = tareaByOrder.get(o.id) ?? null;
+        const prioridad = (o.priority as LabPriorityKey) ?? "ROUTINE";
+        const sla = slaMap[prioridad] ?? slaMap.ROUTINE;
+
+        const etapa =
+          o.status === "VALIDATED"
+            ? ("VALIDADO" as const)
+            : o.status === "REPORTED"
+              ? ("INFORMADO" as const)
+              : o.status === "COMPLETED"
+                ? ("REALIZADO" as const)
+                : o.status === "IN_PROGRESS"
+                  ? ("EN_PROCESO" as const)
+                  : o.status === "SCHEDULED"
+                    ? ("PROGRAMADO" as const)
+                    : ("SOLICITADO" as const);
+
+        const terminado =
+          o.status === "COMPLETED" || o.status === "REPORTED" || o.status === "VALIDATED";
+        // Fin real para cumplimiento: realización del estudio (completedAt) o
+        // cierre de la tarea. Data legada sin ambos ⇒ default optimista
+        // (mismo criterio documentado del tablero de laboratorio).
+        const finAt = o.completedAt ?? tarea?.completedAt ?? null;
+        const dueAt = tarea?.dueAt ?? new Date(o.orderedAt.getTime() + sla.slaMinutes * 60_000);
+
+        let slaEstado: LabSlaEstado;
+        if (terminado || tarea?.status === "CUMPLIDA") {
+          slaEstado =
+            finAt && finAt.getTime() > dueAt.getTime() ? "CUMPLIDO_TARDE" : "CUMPLIDO_A_TIEMPO";
+        } else if (now > dueAt.getTime()) {
+          slaEstado = "VENCIDO";
+        } else if (now > dueAt.getTime() - sla.warningMinutes * 60_000) {
+          slaEstado = "POR_VENCER";
+        } else {
+          slaEstado = "EN_TIEMPO";
+        }
+
+        return {
+          orderId: o.id,
+          folio: o.request?.folio ?? null,
+          estudio: o.studyDescription,
+          categoria: CATEGORIA_POR_MODALITY_TYPE[o.modalityType] ?? o.modalityType,
+          paciente: {
+            nombre: `${o.patient.firstName} ${o.patient.lastName}`.trim(),
+            expediente: o.patient.expediente ?? o.patient.mrn,
+          },
+          cuenta: o.patientAccount?.numeroCuenta ?? null,
+          atencion: o.encounterId ? ("HOSPITALARIO" as const) : ("AMBULATORIO" as const),
+          prioridad,
+          etapa,
+          hitos: {
+            solicitadoAt: o.orderedAt,
+            programadoAt: o.scheduledAt ?? null,
+            realizadoAt: o.completedAt ?? null,
+            informadoAt: o.report?.reportedAt ?? null,
+            validadoAt: o.report?.validatedAt ?? null,
+          },
+          slaEstado,
+          dueAt,
+          tareaStatus: tarea?.status ?? null,
+        };
+      });
+
+      const search = input.search?.trim().toLowerCase();
+      if (search) {
+        rows = rows.filter(
+          (r) =>
+            r.paciente.nombre.toLowerCase().includes(search) ||
+            (r.paciente.expediente ?? "").toLowerCase().includes(search) ||
+            (r.folio ?? "").toLowerCase().includes(search) ||
+            (r.cuenta ?? "").toLowerCase().includes(search) ||
+            r.estudio.toLowerCase().includes(search),
+        );
+      }
+      if (input.slaEstado) rows = rows.filter((r) => r.slaEstado === input.slaEstado);
+
+      const kpis = {
+        total: rows.length,
+        enTiempo: rows.filter((r) => r.slaEstado === "EN_TIEMPO").length,
+        porVencer: rows.filter((r) => r.slaEstado === "POR_VENCER").length,
+        vencidos: rows.filter((r) => r.slaEstado === "VENCIDO").length,
+        cumplidosATiempo: rows.filter((r) => r.slaEstado === "CUMPLIDO_A_TIEMPO").length,
+        cumplidosTarde: rows.filter((r) => r.slaEstado === "CUMPLIDO_TARDE").length,
+      };
+
+      return { kpis, rows };
+    });
+  }),
+
+  /**
+   * CC-0041 — parametrización del SLA de imagenología por prioridad (espejo
+   * exacto de lis.sla, extensión CC-0040). `list` retorna el valor efectivo;
+   * `upsert` crea/actualiza la fila del tenant. Solo administración.
+   */
+  sla: router({
+    list: tenantProcedure.query(async ({ ctx }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rows = await tx.imagingSlaConfig.findMany({
+          where: { organizationId: ctx.tenant.organizationId },
+          select: { priority: true, slaMinutes: true, warningMinutes: true },
+        });
+        const byPriority = new Map(rows.map((r) => [r.priority, r]));
+        return (["STAT", "URGENT", "ROUTINE"] as const).map((priority) => {
+          const custom = byPriority.get(priority);
+          const efectivo = custom ?? DEFAULT_LAB_SLA[priority];
+          return {
+            priority,
+            slaMinutes: efectivo.slaMinutes,
+            warningMinutes: efectivo.warningMinutes,
+            esDefault: !custom,
+          };
+        });
+      });
+    }),
+
+    upsert: catalogAdminProc.input(imagingSlaConfigUpsertInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.imagingSlaConfig.upsert({
+          where: {
+            organizationId_priority: {
+              organizationId: ctx.tenant.organizationId,
+              priority: input.priority,
+            },
+          },
+          create: {
+            organizationId: ctx.tenant.organizationId,
+            priority: input.priority,
+            slaMinutes: input.slaMinutes,
+            warningMinutes: input.warningMinutes,
+          },
+          update: { slaMinutes: input.slaMinutes, warningMinutes: input.warningMinutes },
+        });
+      });
+    }),
+  }),
+
   catalogoImagen: router({
     /** Catálogo de las 292 prestaciones (LabTest + ImagingTestAttrs) agrupado por panel RADIOLOGIA. */
     list: tenantProcedure.query(async ({ ctx }): Promise<ImagingCatalogoItem[]> => {
@@ -467,6 +988,8 @@ export const imagingRequestRouter = router({
             duracionMin: t.imagingAttrs?.duracionMin ?? 20,
             modalityId: t.imagingAttrs?.modalityId ?? null,
             preparacionPaciente: t.imagingAttrs?.preparacionPaciente ?? null,
+            // CC-0041 — precio estándar (LabTest.standardPrice, CC-0013).
+            standardPrice: t.standardPrice ? Number(t.standardPrice) : null,
           });
         }
       }
@@ -505,6 +1028,8 @@ export const imagingRequestRouter = router({
               panelId: input.panelId,
               displayOrder: input.displayOrder,
               active: input.active,
+              // CC-0041 — precio estándar de la prestación (undefined = no tocar).
+              ...(input.standardPrice !== undefined && { standardPrice: input.standardPrice }),
             },
           });
         } else {
@@ -524,6 +1049,7 @@ export const imagingRequestRouter = router({
               specimen: "OTHER",
               displayOrder: input.displayOrder,
               active: input.active,
+              standardPrice: input.standardPrice ?? null,
             },
             select: { id: true },
           });
@@ -574,6 +1100,20 @@ export const imagingRequestRouter = router({
     }),
 
     set: catalogAdminProc.input(imagingFormFieldConfigSetInput).mutation(async ({ ctx, input }) => {
+      // CC-0041 CA-12 — "¿Posibilidad de embarazo?" no puede configurarse por
+      // debajo de Obligatorio (RF-06); la prioridad no es ocultable (Apéndice B).
+      if (input.fieldKey === "embarazo" && input.estado !== "obligatorio") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "«¿Posibilidad de embarazo?» es obligatoria por norma (RF-06) — no puede configurarse como opcional u oculta.",
+        });
+      }
+      if (input.fieldKey === "prio" && input.estado === "oculto") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "«Prioridad de la solicitud» no puede ocultarse.",
+        });
+      }
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         await tx.imagingFormFieldConfig.upsert({
           where: {
