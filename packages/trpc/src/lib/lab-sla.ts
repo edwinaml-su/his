@@ -55,3 +55,25 @@ export const CARE_TASK_PRIORITY_BY_LAB_PRIORITY: Record<
   URGENT: "HIGH",
   ROUTINE: "NORMAL",
 };
+
+/**
+ * CC-0041 — mismo contrato para imagenología (`ImagingSlaConfig`, sql/253).
+ * Los defaults son los mismos de ImagingPriority (schema.prisma: STAT 60' /
+ * URGENT 240' / ROUTINE 1440') que ya usa `imaging.order.getOverdueOrders`.
+ */
+export async function resolveImagingSlaMap(
+  tx: Tx,
+  organizationId: string,
+): Promise<Record<LabPriorityKey, LabSlaValues>> {
+  const rows = await tx.imagingSlaConfig.findMany({
+    where: { organizationId },
+    select: { priority: true, slaMinutes: true, warningMinutes: true },
+  });
+  const map = { ...DEFAULT_LAB_SLA };
+  for (const r of rows) {
+    if (r.priority === "ROUTINE" || r.priority === "URGENT" || r.priority === "STAT") {
+      map[r.priority] = { slaMinutes: r.slaMinutes, warningMinutes: r.warningMinutes };
+    }
+  }
+  return map;
+}

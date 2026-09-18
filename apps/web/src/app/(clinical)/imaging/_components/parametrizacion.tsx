@@ -12,6 +12,7 @@ import { Categorias } from "./parametrizacion/categorias";
 import { Catalogo } from "./parametrizacion/catalogo";
 import { OpcionesLlenado } from "./parametrizacion/opciones-llenado";
 import { Reglas } from "./parametrizacion/reglas";
+import { SlaImagenes } from "./parametrizacion/sla";
 
 export function Parametrizacion() {
   return (
@@ -29,6 +30,7 @@ export function Parametrizacion() {
           <TabsTrigger value="cata">🩻 Catálogo de exámenes</TabsTrigger>
           <TabsTrigger value="campos">📝 Opciones de llenado</TabsTrigger>
           <TabsTrigger value="reglas">🔧 Reglas generales</TabsTrigger>
+          <TabsTrigger value="sla">⏱ SLA</TabsTrigger>
         </TabsList>
         <TabsContent value="cat">
           <Categorias />
@@ -41,6 +43,9 @@ export function Parametrizacion() {
         </TabsContent>
         <TabsContent value="reglas">
           <Reglas />
+        </TabsContent>
+        <TabsContent value="sla">
+          <SlaImagenes />
         </TabsContent>
       </Tabs>
     </div>

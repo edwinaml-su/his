@@ -1259,6 +1259,23 @@ export type CargoPendienteTarifaPayload = z.infer<typeof cargoPendienteTarifaPay
 // Ver docs/audit/2026-09-15_cobertura/04-resumen-ejecutivo-y-cc0031.md §4.
 // -----------------------------------------------------------------------------
 
+// -----------------------------------------------------------------------------
+// imaging.solicitudStat (CC-0041 RF-04) — hook al guardar una solicitud de
+// imágenes con prioridad STAT. Consumidor futuro: notificación inmediata a
+// Imagenología (fase posterior del CC).
+// -----------------------------------------------------------------------------
+
+export const imagingSolicitudStatPayloadSchema = z.object({
+  requestId: z.string().uuid(),
+  folio: z.string().min(1).max(20),
+  patientId: z.string().uuid(),
+  patientAccountId: z.string().uuid().nullable().optional(),
+  nPrestaciones: z.number().int().min(1),
+  /** Descripciones de los estudios (para el template de la notificación). */
+  estudios: z.array(z.string().max(400)).max(50),
+});
+export type ImagingSolicitudStatPayload = z.infer<typeof imagingSolicitudStatPayloadSchema>;
+
 export const taskNotificationPayloadSchema = z.object({
   /** `TaskType` de `workflow-inbox.ts` o `CareTask.taskType` — string libre, sin FK. */
   taskType: z.string().min(1).max(60),
@@ -1899,6 +1916,12 @@ export const domainEventPayloadSchema = z.discriminatedUnion("eventType", [
   z.object({
     eventType: z.literal("cargo.pendiente_tarifa"),
     payload: cargoPendienteTarifaPayloadSchema,
+  }),
+  // CC-0041 RF-04 — hook de solicitud STAT de imagenología (notificación
+  // inmediata a Imagenología queda para fase posterior; solo el evento).
+  z.object({
+    eventType: z.literal("imaging.solicitudStat"),
+    payload: imagingSolicitudStatPayloadSchema,
   }),
   // CC-0031 — puente tarea→notificación (mismo payload para los 4 eventTypes).
   z.object({

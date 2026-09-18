@@ -123,6 +123,7 @@ export function Catalogo() {
               <TableHead>Contraste</TableHead>
               <TableHead>Ayuno</TableHead>
               <TableHead>Duración</TableHead>
+              <TableHead>Precio</TableHead>
               <TableHead>Estado</TableHead>
               <TableHead />
             </TableRow>
@@ -136,6 +137,9 @@ export function Catalogo() {
                 <TableCell>{item.requiereContraste ? "Sí" : "—"}</TableCell>
                 <TableCell>{item.requiereAyuno ? "Sí" : "—"}</TableCell>
                 <TableCell>{item.duracionMin} min</TableCell>
+                <TableCell className="tabular-nums">
+                  {item.standardPrice != null ? `$${item.standardPrice.toFixed(2)}` : "—"}
+                </TableCell>
                 <TableCell>
                   <Badge variant={item.active ? "success" : "outline"}>{item.active ? "Activa" : "Inactiva"}</Badge>
                 </TableCell>
@@ -225,6 +229,8 @@ function PrestacionDialog({
   const [autoriz, setAutoriz] = React.useState(false);
   const [activo, setActivo] = React.useState(true);
   const [prep, setPrep] = React.useState("");
+  // CC-0041 — precio estándar de la prestación (LabTest.standardPrice).
+  const [precio, setPrecio] = React.useState("");
   const [serverError, setServerError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -239,6 +245,7 @@ function PrestacionDialog({
     setAutoriz(initialValue?.requiereAutorizacion ?? false);
     setActivo(initialValue?.active ?? true);
     setPrep(initialValue?.preparacionPaciente ?? "");
+    setPrecio(initialValue?.standardPrice != null ? String(initialValue.standardPrice) : "");
     setServerError(null);
   }, [open, initialValue, defaultPanelId]);
 
@@ -258,6 +265,11 @@ function PrestacionDialog({
       setServerError("Código, categoría y nombre son obligatorios.");
       return;
     }
+    const precioNum = precio.trim() === "" ? null : Number(precio);
+    if (precioNum !== null && (Number.isNaN(precioNum) || precioNum < 0)) {
+      setServerError("El precio debe ser un número ≥ 0 (o vacío para sin precio).");
+      return;
+    }
     upsert.mutate({
       ...(isEdit ? { labTestId: initialValue!.labTestId } : { code: codigo.trim().toUpperCase() }),
       panelId,
@@ -270,6 +282,7 @@ function PrestacionDialog({
       requiereAutorizacion: autoriz,
       active: activo,
       ...(prep.trim() ? { preparacionPaciente: prep.trim() } : {}),
+      standardPrice: precioNum,
     });
   }
 
@@ -323,6 +336,18 @@ function PrestacionDialog({
                 step={5}
                 value={duracion}
                 onChange={(e) => setDuracion(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="m-precio">Precio estándar (US$)</Label>
+              <Input
+                id="m-precio"
+                type="number"
+                min={0}
+                step="0.01"
+                placeholder="Ej. 45.00"
+                value={precio}
+                onChange={(e) => setPrecio(e.target.value)}
               />
             </div>
             <div className="space-y-1">

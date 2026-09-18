@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { imagingPriorityEnum, type ImagingOrderStatusType } from "./imaging";
+import { labSlaConfigUpsertInput, labSlaEstadoEnum } from "./lis";
 
 // ---------------------------------------------------------------------------
 // Campos del formulario de solicitud (mockup FIELDS)
@@ -72,6 +73,8 @@ export const imagingCatalogoUpsertInput = z
     requiereAutorizacion: z.boolean().default(false),
     active: z.boolean().default(true),
     preparacionPaciente: z.string().trim().max(2000).optional(),
+    /** CC-0041 — precio estándar de la prestación (LabTest.standardPrice, CC-0013). null = sin precio. */
+    standardPrice: z.number().min(0).max(999999).nullable().optional(),
   })
   .refine((d) => d.labTestId !== undefined || d.code !== undefined, {
     message: "code es requerido al crear una prestación nueva.",
@@ -96,6 +99,8 @@ export interface ImagingCatalogoItem {
   duracionMin: number;
   modalityId: string | null;
   preparacionPaciente: string | null;
+  /** CC-0041 — precio estándar (LabTest.standardPrice). null = sin precio configurado. */
+  standardPrice: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +120,27 @@ export type ImagingRequestPrestacionInput = z.infer<typeof imagingRequestPrestac
  * obligatoriedad la valida el server según `ImagingFormFieldConfig` de la
  * organización (parametrizable, mockup FIELDS).
  */
+/** CC-0041 RF-06 — opciones válidas de "¿Posibilidad de embarazo?". */
+export const IMAGING_EMBARAZO_OPCIONES = ["No aplica", "No", "Sí", "Se desconoce"] as const;
+export const imagingEmbarazoEnum = z.enum(IMAGING_EMBARAZO_OPCIONES);
+export type ImagingEmbarazo = z.infer<typeof imagingEmbarazoEnum>;
+
+/** CC-0041 RF-03 — sistema de codificación del dx copiado del expediente. */
+export const imagingDxSistemaEnum = z.enum(["CIE10", "CIE11"]);
+export type ImagingDxSistema = z.infer<typeof imagingDxSistemaEnum>;
+
 export const imagingRequestCrearInput = z.object({
   cuentaId: z.string().uuid(),
   prestaciones: z.array(imagingRequestPrestacionInput).min(1, "Seleccione al menos una prestación.").max(50),
   dx: z.string().trim().max(300).optional(),
+  /** CC-0041 RF-03 — snapshot de trazabilidad del dx elegido del expediente. */
+  dxSistema: imagingDxSistemaEnum.optional(),
+  dxFuente: z.string().trim().max(120).optional(),
+  dxOrigenId: z.string().uuid().optional(),
   justificacion: z.string().trim().max(4000).optional(),
   prioridad: imagingPriorityEnum.optional(),
   fechaDeseada: z.coerce.date().optional(),
-  embarazo: z.string().trim().max(20).optional(),
+  embarazo: imagingEmbarazoEnum.optional(),
   alergias: z.string().trim().max(300).optional(),
   creatinina: z.string().trim().max(40).optional(),
   observaciones: z.string().trim().max(4000).optional(),
@@ -130,6 +148,25 @@ export const imagingRequestCrearInput = z.object({
   pin: z.string().trim().min(1).max(20).optional(),
 });
 export type ImagingRequestCrearInput = z.infer<typeof imagingRequestCrearInput>;
+
+// ---------------------------------------------------------------------------
+// CC-0041 — Supervisión de imagenología + SLA parametrizable (espejo del
+// tablero de laboratorio, extensión CC-0040). El semáforo y el upsert de SLA
+// reutilizan los schemas de lis.ts (mismo vocabulario ROUTINE|URGENT|STAT).
+// ---------------------------------------------------------------------------
+
+export const imagingSlaConfigUpsertInput = labSlaConfigUpsertInput;
+export type ImagingSlaConfigUpsertInput = z.infer<typeof imagingSlaConfigUpsertInput>;
+
+export const imagingSupervisionInput = z.object({
+  /** Coincide contra paciente, expediente, folio o nombre del estudio. */
+  search: z.string().trim().max(160).optional(),
+  slaEstado: labSlaEstadoEnum.optional(),
+  /** true (default) = incluir estudios ya realizados/informados; false = solo activos. */
+  incluirCompletados: z.boolean().default(true),
+  limit: z.number().int().min(1).max(500).default(200),
+});
+export type ImagingSupervisionInput = z.infer<typeof imagingSupervisionInput>;
 
 export const imagingRequestListarPorCuentaInput = z.object({ cuentaId: z.string().uuid() });
 export const imagingRequestListarPorPacienteInput = z.object({ patientId: z.string().uuid() });

@@ -181,6 +181,9 @@ export const EVENT_TYPES = [
   // docs/48 Ola 2 (C2-1) — capturarCargo: precio no resoluble (RN-HIS-BOT-001 R3,
   // nunca se factura a 0; la línea queda PENDIENTE_TARIFA).
   "cargo.pendiente_tarifa",
+  // CC-0041 RF-04 — hook de solicitud STAT de imagenología (notificación
+  // inmediata a Imagenología en fase posterior; solo el evento).
+  "imaging.solicitudStat",
   // CC-0031 — puente Workflow Inbox / CareTask → Notification (notificaciones
   // internas por rol). Ver docs/audit/2026-09-15_cobertura/04-resumen-ejecutivo-y-cc0031.md §4.
   "task.action_required",

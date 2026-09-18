@@ -34,21 +34,31 @@ export function OpcionesLlenado() {
               <p className="text-xs text-muted-foreground">{meta.desc}</p>
             </div>
             <div className="inline-flex overflow-hidden rounded-md border">
-              {ESTADOS.map((estado) => (
-                <button
-                  key={estado}
-                  type="button"
-                  disabled={set.isPending}
-                  onClick={() => set.mutate({ fieldKey: f.fieldKey, estado })}
-                  className={`px-3 py-1.5 text-xs font-semibold ${
-                    f.estado === estado
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-background text-muted-foreground hover:bg-muted"
-                  }`}
-                >
-                  {ESTADO_LABEL[estado]}
-                </button>
-              ))}
+              {ESTADOS.map((estado) => {
+                // CC-0041 CA-12 — embarazo no baja de Obligatorio (RF-06) y la
+                // prioridad no es ocultable; el server también lo rechaza.
+                const bloqueado =
+                  (f.fieldKey === "embarazo" && estado !== "obligatorio") ||
+                  (f.fieldKey === "prio" && estado === "oculto");
+                return (
+                  <button
+                    key={estado}
+                    type="button"
+                    disabled={set.isPending || bloqueado}
+                    title={bloqueado ? "No configurable por norma (RF-06 / Apéndice B)" : undefined}
+                    onClick={() => set.mutate({ fieldKey: f.fieldKey, estado })}
+                    className={`px-3 py-1.5 text-xs font-semibold ${
+                      f.estado === estado
+                        ? "bg-primary text-primary-foreground"
+                        : bloqueado
+                          ? "cursor-not-allowed bg-background text-muted-foreground/40"
+                          : "bg-background text-muted-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {ESTADO_LABEL[estado]}
+                  </button>
+                );
+              })}
             </div>
           </div>
         );

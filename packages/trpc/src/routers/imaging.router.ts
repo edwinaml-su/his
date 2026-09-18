@@ -188,6 +188,9 @@ export const imagingRouter = router({
             data: {
               status: input.status,
               ...(input.accessionNumber && { accessionNumber: input.accessionNumber }),
+              // CC-0041 — hito de trazabilidad del tablero de supervisión
+              // (antes scheduledAt nunca se seteaba por este camino).
+              ...(input.status === "SCHEDULED" && { scheduledAt: new Date() }),
               ...(input.status === "COMPLETED" && { completedAt: new Date() }),
               ...(input.radiationDoseDap != null && {
                 radiationDoseDap: input.radiationDoseDap,
@@ -198,6 +201,30 @@ export const imagingRouter = router({
               updatedBy: ctx.user.id,
             },
           });
+
+          // CC-0041 — sincroniza la CareTask de supervisión del estudio
+          // (sourceType IMAGING_ORDER, creada por imagingRequest.crear o por
+          // el order-consumer de indicaciones). SCHEDULED→PENDIENTE ·
+          // IN_PROGRESS→EN_PROCESO · COMPLETED→CUMPLIDA; CANCELADA no se toca
+          // y una CUMPLIDA conserva su completedAt (no se re-marca).
+          const taskStatus =
+            input.status === "COMPLETED"
+              ? "CUMPLIDA"
+              : input.status === "IN_PROGRESS"
+                ? "EN_PROCESO"
+                : "PENDIENTE";
+          await tx.careTask.updateMany({
+            where: {
+              sourceType: "IMAGING_ORDER",
+              sourceId: input.id,
+              status: { notIn: ["CANCELADA", taskStatus] },
+            },
+            data:
+              taskStatus === "CUMPLIDA"
+                ? { status: "CUMPLIDA", completedById: ctx.user.id, completedAt: new Date() }
+                : { status: taskStatus, completedById: null, completedAt: null },
+          });
+
           return { ok: true as const };
         });
       }),
@@ -226,6 +253,17 @@ export const imagingRouter = router({
               message: "Orden no existe, ya fue completada, o ya estaba cancelada.",
             });
           }
+
+          // CC-0041 — cancela también la CareTask de supervisión del estudio.
+          await tx.careTask.updateMany({
+            where: {
+              sourceType: "IMAGING_ORDER",
+              sourceId: input.id,
+              status: { in: ["PENDIENTE", "EN_PROCESO"] },
+            },
+            data: { status: "CANCELADA", cancelReason: input.reason },
+          });
+
           return { ok: true as const };
         });
       }),

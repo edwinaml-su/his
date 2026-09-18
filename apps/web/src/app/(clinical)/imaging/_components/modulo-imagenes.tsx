@@ -17,6 +17,7 @@ import { trpc } from "@/lib/trpc/react";
 import { NuevaSolicitud } from "./nueva-solicitud";
 import { SolicitudesListado } from "./solicitudes-listado";
 import { Parametrizacion } from "./parametrizacion";
+import { SupervisionImagenes } from "./supervision-imagenes";
 
 interface ModuloImagenesProps {
   cuentaId: string;
@@ -26,11 +27,13 @@ interface ModuloImagenesProps {
 
 export function ModuloImagenes({ cuentaId, roleCodes, deepLinkOrderId }: ModuloImagenesProps) {
   const isAdmin = roleCodes.includes("ADMIN") || roleCodes.includes("DIR");
-  const [mainTab, setMainTab] = React.useState<"solicitud" | "listado" | "param">("solicitud");
+  const [mainTab, setMainTab] = React.useState<"solicitud" | "listado" | "supervision" | "param">("solicitud");
   const [openRequestId, setOpenRequestId] = React.useState<string | null>(null);
   const [legacyOrderId, setLegacyOrderId] = React.useState<string | null>(null);
 
   const contexto = trpc.patient.contextoCuenta.useQuery({ cuentaId });
+  // CC-0041 — sexo para el encabezado (react-query dedupe con nueva-solicitud).
+  const expediente = trpc.imagingRequest.contextoExpediente.useQuery({ cuentaId });
 
   // Deep-link del workflow-inbox (/imaging?id={imagingOrderId}) — resuelve si la
   // orden pertenece a una solicitud de este módulo o es una orden legada RIS/PACS.
@@ -65,8 +68,13 @@ export function ModuloImagenes({ cuentaId, roleCodes, deepLinkOrderId }: ModuloI
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">Edad</p>
-            <p className="font-medium">{edad !== null ? `${edad} años` : "—"}</p>
+            <p className="text-xs text-muted-foreground">Edad / Sexo</p>
+            <p className="font-medium">
+              {edad !== null ? `${edad} años` : "—"}
+              {expediente.data?.sexo
+                ? ` · ${expediente.data.sexo === "M" ? "Masculino" : expediente.data.sexo === "F" ? "Femenino" : expediente.data.sexo}`
+                : ""}
+            </p>
           </div>
           <div>
             <p className="text-xs text-muted-foreground">Cuenta</p>
@@ -79,6 +87,7 @@ export function ModuloImagenes({ cuentaId, roleCodes, deepLinkOrderId }: ModuloI
         <TabsList aria-label="Módulo de radiología e imágenes">
           <TabsTrigger value="solicitud">➕ Nueva Solicitud</TabsTrigger>
           <TabsTrigger value="listado">📋 Solicitudes del paciente</TabsTrigger>
+          <TabsTrigger value="supervision">📊 Supervisión</TabsTrigger>
           {isAdmin ? <TabsTrigger value="param">⚙️ Parametrización</TabsTrigger> : null}
         </TabsList>
 
@@ -92,6 +101,10 @@ export function ModuloImagenes({ cuentaId, roleCodes, deepLinkOrderId }: ModuloI
             openRequestId={openRequestId}
             onOpenRequestIdChange={setOpenRequestId}
           />
+        </TabsContent>
+
+        <TabsContent value="supervision">
+          <SupervisionImagenes />
         </TabsContent>
 
         {isAdmin ? (

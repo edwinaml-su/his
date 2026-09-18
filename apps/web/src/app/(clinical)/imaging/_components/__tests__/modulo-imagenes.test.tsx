@@ -42,6 +42,13 @@ const mockRulesSet = vi.fn();
 const mockCrear = vi.fn();
 const mockListarPorCuenta = vi.fn();
 const mockDetalle = vi.fn();
+// CC-0041
+const mockContextoExpediente = vi.fn();
+const mockSupervision = vi.fn();
+const mockSlaList = vi.fn();
+const mockSlaUpsert = vi.fn();
+const mockCie11Estado = vi.fn();
+const mockCie11Buscar = vi.fn();
 const mockPanelList = vi.fn();
 const mockPanelUpdate = vi.fn();
 const mockPanelDeactivate = vi.fn();
@@ -57,6 +64,7 @@ const mockUtils = {
     catalogoImagen: { list: { invalidate: mockInvalidate } },
     fieldConfig: { list: { invalidate: mockInvalidate } },
     rules: { list: { invalidate: mockInvalidate } },
+    sla: { list: { invalidate: mockInvalidate } },
   },
   lis: { panel: { list: { invalidate: mockInvalidate } } },
 };
@@ -88,6 +96,17 @@ vi.mock("@/lib/trpc/react", () => ({
         list: { useQuery: (...args: unknown[]) => mockRulesList(...args) },
         set: { useMutation: (opts?: unknown) => mockRulesSet(opts) },
       },
+      // CC-0041
+      contextoExpediente: { useQuery: (...args: unknown[]) => mockContextoExpediente(...args) },
+      supervision: { useQuery: (...args: unknown[]) => mockSupervision(...args) },
+      sla: {
+        list: { useQuery: (...args: unknown[]) => mockSlaList(...args) },
+        upsert: { useMutation: (opts?: unknown) => mockSlaUpsert(opts) },
+      },
+    },
+    cie11: {
+      estado: { useQuery: (...args: unknown[]) => mockCie11Estado(...args) },
+      buscar: { useQuery: (...args: unknown[]) => mockCie11Buscar(...args) },
     },
     lis: {
       panel: {
@@ -134,7 +153,8 @@ const CATALOGO = [
   {
     labTestId: "t2",
     code: "TC001",
-    name: "TOMOGRAFIA CRANEO",
+    // Con tildes a propósito — RF-02 exige búsqueda insensible a tildes.
+    name: "TOMOGRAFÍA CRÁNEO",
     panelId: "p-tac",
     panelNombre: "Tomografías",
     panelDisplayOrder: 3,
@@ -155,11 +175,32 @@ const FIELD_CONFIG = [
   { fieldKey: "just", estado: "obligatorio", displayOrder: 1 },
   { fieldKey: "prio", estado: "obligatorio", displayOrder: 2 },
   { fieldKey: "fecha", estado: "opcional", displayOrder: 3 },
-  { fieldKey: "embarazo", estado: "opcional", displayOrder: 4 },
+  // CC-0041 RF-06 — embarazo es obligatorio siempre.
+  { fieldKey: "embarazo", estado: "obligatorio", displayOrder: 4 },
   { fieldKey: "alergias", estado: "opcional", displayOrder: 5 },
   { fieldKey: "creat", estado: "opcional", displayOrder: 6 },
   { fieldKey: "obs", estado: "oculto", displayOrder: 7 },
 ];
+
+// CC-0041 — contexto del expediente (sexo F por defecto: embarazo editable).
+const EXPEDIENTE = {
+  sexo: "F",
+  alergias: "Penicilina (rash)",
+  diagnosticos: [
+    {
+      codigo: "ME84.2",
+      descripcion: "Dolor de la región lumbar",
+      sistema: "CIE11",
+      fuente: "Historia Clínica — 15/09/2026",
+      origenId: "hc-1",
+    },
+  ],
+};
+
+const SUPERVISION_VACIA = {
+  kpis: { total: 0, enTiempo: 0, porVencer: 0, vencidos: 0, cumplidosATiempo: 0, cumplidosTarde: 0 },
+  rows: [],
+};
 
 const RULES = [
   { ruleKey: "multi", enabled: true, valorNum: null },
@@ -210,6 +251,20 @@ describe("ModuloImagenes (CC-0016)", () => {
     mockTestDeactivate.mockImplementation(defaultMutationImpl);
     mockTestReactivate.mockImplementation(defaultMutationImpl);
     mockModalityList.mockReturnValue({ ...idleQuery, data: [] });
+    // CC-0041
+    mockContextoExpediente.mockReturnValue({ ...idleQuery, data: EXPEDIENTE });
+    mockSupervision.mockReturnValue({ ...idleQuery, data: SUPERVISION_VACIA });
+    mockSlaList.mockReturnValue({
+      ...idleQuery,
+      data: [
+        { priority: "STAT", slaMinutes: 60, warningMinutes: 15, esDefault: true },
+        { priority: "URGENT", slaMinutes: 240, warningMinutes: 30, esDefault: true },
+        { priority: "ROUTINE", slaMinutes: 1440, warningMinutes: 60, esDefault: true },
+      ],
+    });
+    mockSlaUpsert.mockImplementation(defaultMutationImpl);
+    mockCie11Estado.mockReturnValue({ ...idleQuery, data: { configured: false } });
+    mockCie11Buscar.mockReturnValue({ ...idleQuery, data: { configured: false, items: [] }, isFetching: false });
   });
 
   afterEach(() => cleanup());
@@ -248,14 +303,17 @@ describe("ModuloImagenes (CC-0016)", () => {
     expect(within(dxLabel).getByText("*")).toBeInTheDocument();
   });
 
-  it("Guardar llama imagingRequest.crear con cuentaId + prestaciones + campos", () => {
-    // "prio" se marca opcional para este caso: la interacción con el Select
-    // de Radix (Portal + pointer events) no es fiable bajo jsdom — el resto
-    // de la parametrización (dx/just obligatorios vía <input>/<textarea>
-    // planos) sí se ejercita end-to-end.
+  it("Guardar llama imagingRequest.crear con cuentaId + prestaciones + campos + embarazo automático (sexo M)", () => {
+    // "prio" y "dx" se marcan opcionales para este caso: la interacción con
+    // los Select de Radix (Portal + pointer events) no es fiable bajo jsdom —
+    // "just" (textarea plano) sí se ejercita end-to-end. Sexo M ⇒ embarazo
+    // «No aplica» automático (RF-06), así el obligatorio queda satisfecho.
+    mockContextoExpediente.mockReturnValue({ ...idleQuery, data: { ...EXPEDIENTE, sexo: "M" } });
     mockFieldConfigList.mockReturnValue({
       ...idleQuery,
-      data: FIELD_CONFIG.map((f) => (f.fieldKey === "prio" ? { ...f, estado: "opcional" } : f)),
+      data: FIELD_CONFIG.map((f) =>
+        f.fieldKey === "prio" || f.fieldKey === "dx" ? { ...f, estado: "opcional" } : f,
+      ),
     });
     const mutate = vi.fn();
     mockCrear.mockImplementation(() => ({ mutate, isPending: false, error: null }));
@@ -264,9 +322,6 @@ describe("ModuloImagenes (CC-0016)", () => {
     const label = screen.getByText("RX TORAX").closest("label")!;
     fireEvent.click(within(label).getByRole("checkbox"));
 
-    fireEvent.change(screen.getByPlaceholderText("Ej. M54.5 — Lumbalgia"), {
-      target: { value: "M54.5" },
-    });
     fireEvent.change(screen.getByPlaceholderText("Describa el motivo clínico del estudio…"), {
       target: { value: "Dolor lumbar" },
     });
@@ -277,11 +332,102 @@ describe("ModuloImagenes (CC-0016)", () => {
       expect.objectContaining({
         cuentaId: "cuenta-1",
         prestaciones: [{ labTestId: "t1", conContraste: false }],
-        dx: "M54.5",
         justificacion: "Dolor lumbar",
+        embarazo: "No aplica",
       }),
     );
     expect(mutate.mock.calls[0]![0]).not.toHaveProperty("prioridad");
+    // RF-07 — alergias no viajan: el server toma el snapshot de la HC.
+    expect(mutate.mock.calls[0]![0]).not.toHaveProperty("alergias");
+  });
+
+  // ─── CC-0041 (mockup v2) ────────────────────────────────────────────────
+
+  it("CC-0041 RF-04/RF-05: prioridad segmentada con colores; la fecha solo aparece con Rutina", () => {
+    renderModulo();
+
+    // Sin prioridad elegida no hay campo fecha.
+    expect(screen.queryByLabelText(/Fecha de la solicitud/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("img-prio-Rutina"));
+    expect(screen.getByLabelText(/Fecha de la solicitud/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("img-prio-STAT"));
+    expect(screen.queryByLabelText(/Fecha de la solicitud/)).not.toBeInTheDocument();
+    // Botón STAT activo con el color rojo del patrón.
+    expect(screen.getByTestId("img-prio-STAT")).toHaveStyle({ backgroundColor: "#fee2e2" });
+    // Aviso de notificación inmediata a Imagenología.
+    expect(screen.getByText(/Prioridad STAT: se notificará de inmediato/)).toBeInTheDocument();
+  });
+
+  it("CC-0041 RF-06: sexo masculino bloquea embarazo en «No aplica»", () => {
+    mockContextoExpediente.mockReturnValue({ ...idleQuery, data: { ...EXPEDIENTE, sexo: "M" } });
+    renderModulo();
+
+    const select = screen.getByTestId("img-embarazo-select");
+    expect(select).toBeDisabled();
+    expect(select).toHaveTextContent("No aplica");
+    expect(screen.getByText(/el sistema asigna «No aplica» por defecto/)).toBeInTheDocument();
+  });
+
+  it("CC-0041 RF-07: alergias prellenadas desde la Historia Clínica y solo lectura", () => {
+    renderModulo();
+    const input = screen.getByLabelText(/Alergias conocidas/) as HTMLInputElement;
+    expect(input).toHaveValue("Penicilina (rash)");
+    expect(input).toHaveAttribute("readonly");
+
+    cleanup();
+    mockContextoExpediente.mockReturnValue({ ...idleQuery, data: { ...EXPEDIENTE, alergias: null } });
+    renderModulo();
+    expect(screen.getByLabelText(/Alergias conocidas/)).toHaveValue(
+      "Sin alergias registradas en Historia Clínica",
+    );
+  });
+
+  it("CC-0041 RF-08: seleccionar estudio con contraste muestra el rótulo y bloquea guardar sin creatinina", () => {
+    mockContextoExpediente.mockReturnValue({ ...idleQuery, data: { ...EXPEDIENTE, sexo: "M" } });
+    mockFieldConfigList.mockReturnValue({
+      ...idleQuery,
+      data: FIELD_CONFIG.map((f) =>
+        f.fieldKey === "prio" || f.fieldKey === "dx" ? { ...f, estado: "opcional" } : f,
+      ),
+    });
+    const mutate = vi.fn();
+    mockCrear.mockImplementation(() => ({ mutate, isPending: false, error: null }));
+    renderModulo();
+
+    // Cambia a la categoría Tomografías y marca el estudio con contraste.
+    fireEvent.click(screen.getByRole("button", { name: /Tomografías/ }));
+    const label = screen.getByText("TOMOGRAFÍA CRÁNEO").closest("label")!;
+    fireEvent.click(within(label).getByRole("checkbox"));
+
+    expect(screen.getByTestId("img-creat-req")).toHaveTextContent("obligatoria — hay estudio(s) con contraste");
+
+    fireEvent.change(screen.getByPlaceholderText("Describa el motivo clínico del estudio…"), {
+      target: { value: "Cefalea" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Guardar Prestaciones/ }));
+    expect(mutate).not.toHaveBeenCalled();
+    expect(screen.getByText(/creatinina sérica es obligatoria/)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/Creatinina sérica/), { target: { value: "0.9" } });
+    fireEvent.click(screen.getByRole("button", { name: /Guardar Prestaciones/ }));
+    expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ creatinina: "0.9" }));
+  });
+
+  it("CC-0041 RF-02: «Buscar por Nombre» busca en todas las categorías sin tildes y muestra la categoría de origen", () => {
+    renderModulo();
+
+    fireEvent.click(screen.getByRole("switch", { name: /Buscar por Nombre/ }));
+    // Sin query: mensaje guía, no lista.
+    expect(screen.getByText(/buscar en todas las categorías/i)).toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByPlaceholderText(/Escriba el nombre de la prestación/),
+      { target: { value: "tomografia craneo" } }, // sin tildes
+    );
+    const item = screen.getByText("TOMOGRAFÍA CRÁNEO").closest("label")!;
+    expect(within(item).getByText("Tomografías")).toBeInTheDocument();
   });
 
   it("Solicitudes del paciente: renderiza filas de listarPorCuenta", () => {
@@ -313,7 +459,7 @@ describe("ModuloImagenes (CC-0016)", () => {
     clickTab(/Parametrización/);
     clickTab(/Opciones de llenado/);
 
-    const row = screen.getByText(/Fecha deseada del estudio/).closest("div")!.parentElement!;
+    const row = screen.getByText(/Fecha de la solicitud \(programación\)/).closest("div")!.parentElement!;
     fireEvent.click(within(row).getByText("Oculto"));
 
     expect(mutate).toHaveBeenCalledWith({ fieldKey: "fecha", estado: "oculto" });
