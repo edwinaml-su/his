@@ -4950,7 +4950,9 @@ enum VentilatorSessionStatus {
 model RespiratoryOrder {
   id             String                 @id @default(uuid()) @db.Uuid
   organizationId String                 @db.Uuid
-  encounterId    String                 @db.Uuid
+  /// CC-0042 — nullable desde sql/254: cuentas ambulatorias sin admisión
+  /// (pruebas funcionales, preoperatorio) — patrón SQL 189/192.
+  encounterId    String?                @db.Uuid
   patientId      String                 @db.Uuid
   prescriberId   String                 @db.Uuid
   type           RespiratoryOrderType
@@ -4958,6 +4960,22 @@ model RespiratoryOrder {
   flowRate       Decimal?               @db.Decimal(8, 2) /// L/min para O2.
   fio2           Decimal?               @db.Decimal(5, 2) /// fracción inspirada de O2 0–100.
   notes          String?                @db.Text
+  /// CC-0042 (REQ-HIS-TR-001, S1) — orden CPOE-TR del mockup MOCK-HIS-TR-001.
+  /// FK real a PatientAccount solo a nivel SQL (sql/254).
+  patientAccountId  String?   @db.Uuid
+  dxCodigo          String?   @db.VarChar(20) /// CIE-11 (RN-TR-31).
+  dxDescripcion     String?   @db.VarChar(300)
+  prioridad         String?   @db.VarChar(10) /// ROUTINE|URGENT|STAT (CHECK sql/254).
+  /// Meta de saturación (RN-TR-01..04/34): '94-98'|'88-92'|'88-93'|'OTRO'.
+  metaSaturacion    String?   @db.VarChar(20)
+  metaMin           Int?      @db.SmallInt
+  metaMax           Int?      @db.SmallInt
+  metaJustificacion String?   @db.Text
+  /// RN-TR-32/35 — declaración por sección {oxigenoterapia,aerosolterapia,seccion3}.
+  declaraciones     Json?
+  esCpoeTr          Boolean   @default(false)
+  vigenciaHoras     Int?
+  firmadoEn         DateTime? @db.Timestamptz()
   startedAt      DateTime               @default(now()) @db.Timestamptz()
   expiresAt      DateTime?              @db.Timestamptz() /// Beta.12: expiración (startedAt+24h); NULL = sin límite explícito.
   endedAt        DateTime?              @db.Timestamptz()
@@ -4968,11 +4986,12 @@ model RespiratoryOrder {
   updatedBy      String?                @db.Uuid
 
   organization       Organization        @relation("OrgRespiratoryOrders", fields: [organizationId], references: [id], onDelete: Restrict)
-  encounter          Encounter           @relation("EncRespiratoryOrders", fields: [encounterId], references: [id], onDelete: Restrict)
+  encounter          Encounter?          @relation("EncRespiratoryOrders", fields: [encounterId], references: [id], onDelete: Restrict)
   patient            Patient             @relation("PatRespiratoryOrders", fields: [patientId], references: [id], onDelete: Restrict)
   prescriber         User                @relation("RespiratoryPrescriber", fields: [prescriberId], references: [id], onDelete: Restrict)
   ventilatorSessions VentilatorSession[]
   gasUsages          MedicalGasUsage[]
+  items              RespiratoryOrderItem[]
 
   @@index([organizationId, status])
   @@index([encounterId])
@@ -4983,6 +5002,106 @@ model RespiratoryOrder {
 
 /// TDR §21.2 — sesión de ventilación mecánica vinculada a una orden.
 /// Beta.12: statusSM (state machine destete), patientWeightKg (Vt/kg), outOfRangeSince, alertFiredAt.
+/// CC-0042 — línea de orden CPOE-TR / sesión (S1: PROGRAMADA→EJECUTADA|
+/// NO_EJECUTADA|CANCELADA; CHECK sql/254). El cargo se devenga AL EJECUTAR
+/// (RN-TR-24) — `cargoId` referencia el PatientAccountService creado.
+model RespiratoryOrderItem {
+  id                  String    @id @default(uuid()) @db.Uuid
+  orderId             String    @db.Uuid
+  procedimientoCodigo String    @db.VarChar(20)
+  /// Snapshot: protege el historial ante renombres del catálogo.
+  procedimientoNombre String    @db.VarChar(200)
+  seccionOrden        Int       @default(0) @db.SmallInt
+  /// Snapshot del bloque de medicamento (RN-TR-36): {clave,nombre,dosis,
+  /// unidad,diluyente,extraLabel,extraValor,frecuencia}.
+  medicamento         Json?
+  estado              String    @default("PROGRAMADA") @db.VarChar(20)
+  ejecutadaEn         DateTime? @db.Timestamptz()
+  ejecutadaPor        String?   @db.Uuid
+  causaNoEjecucion    String?   @db.VarChar(200)
+  observaciones       String?   @db.Text
+  cargoId             String?   @db.Uuid
+  createdAt           DateTime  @default(now()) @db.Timestamptz()
+  updatedAt           DateTime  @updatedAt @db.Timestamptz()
+
+  order RespiratoryOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([estado])
+  @@schema("public")
+}
+
+/// CC-0042 — catálogo de procedimientos de terapia respiratoria (REQ §6.1,
+/// 46 códigos TR-*; AER-02 retirado ⇒ activo=false). Global (organizationId
+/// NULL) con overrides por tenant; unique parciales a nivel SQL (sql/254).
+/// `tarifaBase` = fallback del price-resolver (las listas por tipo de cuenta
+/// lo overridean por código); `aerosolConfig` = RN-TR-36 (meds/unidades/
+/// diluyentes/parámetro técnico del bloque de medicamento).
+model TrProcedimiento {
+  id                     String   @id @default(uuid()) @db.Uuid
+  organizationId         String?  @db.Uuid
+  codigo                 String   @db.VarChar(20)
+  nombre                 String   @db.VarChar(200)
+  categoria              String   @db.VarChar(40)
+  /// 1=Oxigenoterapia · 2=Aerosolterapia · 3=Fisio/Vía aérea/Pruebas · 0=fuera del CPOE.
+  seccionOrden           Int      @default(0) @db.SmallInt
+  subSeccion             String?  @db.VarChar(60)
+  unidadCobro            String   @default("Evento") @db.VarChar(20)
+  requiereConsentimiento Boolean  @default(false)
+  delegablePorProtocolo  Boolean  @default(false)
+  /// RN-TR-33 — pareo indivisible (TR-OXI-01→TR-OXI-02, TR-OXI-03→TR-OXI-04).
+  pareoCon               String?  @db.VarChar(20)
+  tiempoEstandarMin      Int?
+  tarifaBase             Decimal? @db.Decimal(12, 2)
+  aerosolConfig          Json?
+  displayOrder           Int      @default(0)
+  activo                 Boolean  @default(true)
+  createdAt              DateTime @default(now()) @db.Timestamptz()
+  updatedAt              DateTime @updatedAt @db.Timestamptz()
+
+  @@index([organizationId, activo])
+  @@schema("public")
+}
+
+/// CC-0042 — catálogo de medicamentos inhalados (REQ §6.3 + MEDS del mockup).
+/// Dosis paramétrica: la unidad base bloquea la captura en gramos (incidente
+/// «Tropium 0.5 g»); `altoRiesgo` = IPSG.3 (doble verificación).
+model TrMedicamentoInhalado {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String?  @db.Uuid
+  clave          String   @db.VarChar(40)
+  nombre         String   @db.VarChar(200)
+  unidadBase     String   @db.VarChar(12) /// mg | mL | disparos.
+  dosisMin       Decimal  @db.Decimal(10, 3)
+  dosisMax       Decimal  @db.Decimal(10, 3)
+  dosisDefault   Decimal  @db.Decimal(10, 3)
+  altoRiesgo     Boolean  @default(false)
+  precaucion     Boolean  @default(false)
+  mensaje        String   @db.Text
+  displayOrder   Int      @default(0)
+  activo         Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  @@index([organizationId, activo])
+  @@schema("public")
+}
+
+/// CC-0042 — SLA parametrizable por prioridad para las tareas de terapia
+/// respiratoria (espejo LabSlaConfig sql/251; RN-TR-21: STAT 15').
+model TrSlaConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  priority       String   @db.VarChar(10) /// ROUTINE|URGENT|STAT (CHECK sql/254).
+  slaMinutes     Int
+  warningMinutes Int      @default(15)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  @@unique([organizationId, priority])
+  @@schema("public")
+}
+
 model VentilatorSession {
   id              String                  @id @default(uuid()) @db.Uuid
   orderId         String                  @db.Uuid
