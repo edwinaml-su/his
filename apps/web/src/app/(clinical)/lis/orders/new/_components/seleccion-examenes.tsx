@@ -13,6 +13,10 @@
  * con testCount + pruebas con defaultQty/paramCount). Reemplaza
  * `lis.test.listByArea`, que queda reservado para el wizard de HC (§17,
  * no se toca en este cambio).
+ *
+ * CC-0040 (RF-11/RN-04): prueba con leyenda "ESPECIFICAR PROCEDENCIA" habilita
+ * un campo de procedencia obligatorio en la fila de la solicitud; guardar se
+ * bloquea mientras esté vacío y el valor viaja en `items[].procedencia`.
  */
 
 import * as React from "react";
@@ -53,6 +57,9 @@ interface SeleccionExamenesProps {
   roleCodes: string[];
 }
 
+/** CC-0040 RN-04 — misma regex que el server (`lis.router` order.create). */
+const requiereProcedencia = (nombre: string): boolean => /ESPECIFICAR PROCEDENCIA/i.test(nombre);
+
 export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProps): React.ReactElement {
   const router = useRouter();
   const isAdmin = roleCodes.includes("ADMIN") || roleCodes.includes("DIR");
@@ -73,6 +80,8 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
   const [seleccionadas, setSeleccionadas] = React.useState<Set<string>>(new Set());
   const [cantidades, setCantidades] = React.useState<Record<string, number>>({});
   const [paramSel, setParamSel] = React.useState<Record<string, string[]>>({});
+  // CC-0040 — procedencia del cultivo por prueba seleccionada (mockup: `procedencia`).
+  const [procedencias, setProcedencias] = React.useState<Record<string, string>>({});
   const [paramModalTestId, setParamModalTestId] = React.useState<string | null>(null);
   const [priority, setPriority] = React.useState<LabPriority>("ROUTINE");
   const [resumenModo, setResumenModo] = React.useState<"ver" | "guardar" | null>(null);
@@ -199,6 +208,11 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
         delete next[p.id];
         return next;
       });
+      setProcedencias((prev) => {
+        const next = { ...prev };
+        delete next[p.id];
+        return next;
+      });
     } else {
       setCantidades((prev) => (p.id in prev ? prev : { ...prev, [p.id]: p.defaultQty || 1 }));
     }
@@ -224,6 +238,13 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
       }
       return next;
     });
+    if (!checked) {
+      setProcedencias((prev) => {
+        const next = { ...prev };
+        for (const p of listaVisible) delete next[p.id];
+        return next;
+      });
+    }
     setToast({ title: checked ? "Se incluyeron todas las pruebas filtradas." : "Se quitaron las pruebas filtradas." });
   }
 
@@ -243,6 +264,11 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
       delete next[testId];
       return next;
     });
+    setProcedencias((prev) => {
+      const next = { ...prev };
+      delete next[testId];
+      return next;
+    });
   }
 
   function limpiarSeleccion(): void {
@@ -253,6 +279,7 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
     setSeleccionadas(new Set());
     setCantidades({});
     setParamSel({});
+    setProcedencias({});
     setToast({ title: "Selección limpiada." });
   }
 
@@ -285,6 +312,7 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
       setSeleccionadas(new Set());
       setCantidades({});
       setParamSel({});
+      setProcedencias({});
     },
     onError: (err) => {
       setResumenModo(null);
@@ -295,6 +323,15 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
   function onGuardarClick(): void {
     if (seleccionadas.size === 0) {
       setToast({ title: "Seleccione al menos una prueba." });
+      return;
+    }
+    // CC-0040 RF-11 — guardar se bloquea con procedencia de cultivo pendiente.
+    const faltanProcedencia = [...seleccionadas].some((id) => {
+      const p = pruebaById.get(id);
+      return p && requiereProcedencia(p.name) && !(procedencias[id] ?? "").trim();
+    });
+    if (faltanProcedencia) {
+      setToast({ title: "Indique la procedencia del cultivo (campo requerido)." });
       return;
     }
     setResumenModo("guardar");
@@ -322,10 +359,12 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
               parameterIds = params.map((param) => param.id);
             }
           }
+          const procedencia = (procedencias[p.id] ?? "").trim();
           return {
             testId: p.id,
             quantity: cantidades[p.id] ?? p.defaultQty ?? 1,
             ...(parameterIds ? { parameterIds } : {}),
+            ...(requiereProcedencia(p.name) && procedencia ? { procedencia } : {}),
           };
         }),
       );
@@ -546,7 +585,7 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
           <label
             className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold"
             style={{ borderColor: MOCK.rbBorder, color: MOCK.tealDark }}
-            title="Incluir todas las pruebas visibles con el filtro actual."
+            title="Incluir todas las pruebas de esta sección."
           >
             <input
               ref={todosRef}
@@ -698,6 +737,35 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
                       <td className="px-3 py-1.5 text-center">{idx + 1}</td>
                       <td className="px-3 py-1.5 font-semibold" style={{ color: MOCK.ink }}>
                         {p.name}
+                        {/* CC-0040 RF-11 — input de procedencia bajo el nombre (mockup: `procHtml`). */}
+                        {requiereProcedencia(p.name) ? (
+                          <div className="mt-1.5 font-normal">
+                            <input
+                              type="text"
+                              data-testid={`lab-procedencia-input-${p.id}`}
+                              aria-label={`Procedencia de ${p.name}`}
+                              placeholder="Especifique la procedencia (requerido)..."
+                              value={procedencias[p.id] ?? ""}
+                              onChange={(e) =>
+                                setProcedencias((prev) => ({ ...prev, [p.id]: e.target.value }))
+                              }
+                              className="w-full rounded border px-2 py-1 text-xs"
+                              style={{
+                                borderColor: (procedencias[p.id] ?? "").trim() ? "#cbd4d9" : MOCK.orange,
+                              }}
+                            />
+                            <div
+                              className="mt-0.5 text-[10.5px]"
+                              style={{
+                                color: (procedencias[p.id] ?? "").trim() ? MOCK.hintColor : MOCK.removeColor,
+                              }}
+                            >
+                              {(procedencias[p.id] ?? "").trim()
+                                ? "Procedencia del cultivo"
+                                : "Indique de dónde se toma el cultivo"}
+                            </div>
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-3 py-1.5">
                         <span
@@ -815,6 +883,16 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
                   {p.sampleSubtypeId ? subtipoNombreById.get(p.sampleSubtypeId) : "—"} — Cant:{" "}
                   <b>{cantidades[p.id] ?? p.defaultQty ?? 1}</b>
                   {paramTxt}
+                  {requiereProcedencia(p.name) ? (
+                    <>
+                      {" — Procedencia: "}
+                      {(procedencias[p.id] ?? "").trim() ? (
+                        <b>{(procedencias[p.id] ?? "").trim()}</b>
+                      ) : (
+                        <b style={{ color: MOCK.removeColor }}>(pendiente)</b>
+                      )}
+                    </>
+                  ) : null}
                 </li>
               );
             })}

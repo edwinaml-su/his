@@ -286,6 +286,12 @@ export async function materializeOrdenesFromIndicacion(
         items: {
           create: [
             {
+              // CC-0040 RN-04 (recorte de alcance deliberado): la procedencia
+              // de cultivo obligatoria se exige solo en la escogitación
+              // (`lis.order.create`) — la indicación hospitalaria no captura
+              // procedencia en su formulario, así que aquí queda null y el
+              // laboratorio la completa vía tablero. Si CC futuro agrega el
+              // campo a la indicación, replicar la guarda de order.create.
               testId: labTestId,
               notes: tipoMuestra ? `Muestra: ${tipoMuestra}` : null,
             },

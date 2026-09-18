@@ -63,14 +63,17 @@ const CASCADA = {
   tipos: [
     { id: "tipo-sangre", name: "Sangre y derivados", displayOrder: 0, testCount: 2 },
     { id: "tipo-orina", name: "Orina", displayOrder: 1, testCount: 1 },
+    { id: "tipo-secre", name: "Secreciones y exudados", displayOrder: 2, testCount: 1 },
   ],
   subtipos: [
     { id: "sub-suero", sampleTypeId: "tipo-sangre", name: "Suero", displayOrder: 0, testCount: 2 },
     { id: "sub-azar", sampleTypeId: "tipo-orina", name: "Orina al azar", displayOrder: 0, testCount: 1 },
+    { id: "sub-heridas", sampleTypeId: "tipo-secre", name: "Heridas", displayOrder: 0, testCount: 1 },
   ],
   secciones: [
     { id: "sec-quimica", name: "QUIMICA", displayOrder: 0, testCount: 2 },
     { id: "sec-uri", name: "URIANALISIS", displayOrder: 1, testCount: 1 },
+    { id: "sec-micro", name: "MICROBIOLOGIA", displayOrder: 2, testCount: 1 },
   ],
   pruebas: [
     {
@@ -99,6 +102,16 @@ const CASCADA = {
       sampleSubtypeId: "sub-azar",
       defaultQty: 1,
       paramCount: 2,
+    },
+    // CC-0040 RF-11 — prueba con leyenda "ESPECIFICAR PROCEDENCIA".
+    {
+      id: "t4-cultivo",
+      name: "CULTIVO ESPECIFICAR PROCEDENCIA",
+      panelId: "sec-micro",
+      sampleTypeId: "tipo-secre",
+      sampleSubtypeId: "sub-heridas",
+      defaultQty: 1,
+      paramCount: 0,
     },
   ],
 };
@@ -246,6 +259,49 @@ describe("SeleccionExamenes (rediseño lab 2026-09)", () => {
 
     expect(screen.queryByRole("heading", { name: "Pruebas a guardar" })).not.toBeInTheDocument();
     expect(screen.getByText("Seleccione al menos una prueba.")).toBeInTheDocument();
+  });
+
+  it("CC-0040 (RF-11/RN-04): cultivo exige procedencia — bloquea guardar, la incluye en el payload y en el resumen", async () => {
+    const mutate = vi.fn();
+    mockOrderCreate.mockImplementation(() => ({ mutate, isPending: false, error: null }));
+    renderComponente();
+
+    fireEvent.click(screen.getByTestId("lab-seccion-pill-MICROBIOLOGIA"));
+    fireEvent.click(screen.getByText("CULTIVO ESPECIFICAR PROCEDENCIA"));
+
+    // Campo habilitado con hint de requerido.
+    const procInput = screen.getByTestId("lab-procedencia-input-t4-cultivo");
+    expect(procInput).toBeInTheDocument();
+    expect(screen.getByText("Indique de dónde se toma el cultivo")).toBeInTheDocument();
+
+    // Guardar bloqueado mientras la procedencia esté vacía.
+    fireEvent.click(screen.getAllByTestId("lab-guardar-btn")[0]!);
+    expect(screen.queryByRole("heading", { name: "Pruebas a guardar" })).not.toBeInTheDocument();
+    expect(screen.getByText("Indique la procedencia del cultivo (campo requerido).")).toBeInTheDocument();
+
+    fireEvent.change(procInput, { target: { value: "Herida quirúrgica abdominal" } });
+    expect(screen.getByText("Procedencia del cultivo")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTestId("lab-guardar-btn")[0]!);
+    expect(screen.getByRole("heading", { name: "Pruebas a guardar" })).toBeInTheDocument();
+    // RF-13 — el resumen muestra la procedencia capturada.
+    expect(screen.getByText("Herida quirúrgica abdominal")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar y Guardar" }));
+    await waitFor(() => expect(mutate).toHaveBeenCalled());
+    expect(mutate).toHaveBeenCalledWith({
+      cuentaId: "cuenta-1",
+      priority: "ROUTINE",
+      items: [{ testId: "t4-cultivo", quantity: 1, procedencia: "Herida quirúrgica abdominal" }],
+    });
+  });
+
+  it('CA-04: el tooltip de "TODOS" dice exactamente "Incluir todas las pruebas de esta sección."', () => {
+    renderComponente();
+    expect(screen.getByTestId("lab-chk-todos").closest("label")).toHaveAttribute(
+      "title",
+      "Incluir todas las pruebas de esta sección.",
+    );
   });
 
   it('"Mantenimiento de catálogos" solo es visible para ADMIN/DIR', () => {
