@@ -215,6 +215,51 @@ const CARE_TASK_SLA_MINUTES_BY_TASK_TYPE: Record<string, number> = {
   IND_GENERAL: 240,
 };
 
+/**
+ * Pedido Edwin 2026-09-18 — la orden "Tomar signos vitales" (sección `sv` del
+ * modal de cuidados, cuidados-catalogo.ts) genera ADEMÁS una CareTask propia
+ * `SIGNOS_VITALES` en el tablero de enfermería: embebida en la tarea genérica
+ * IND_CUIDADOS quedaba invisible como pendiente de toma. El SLA es la propia
+ * frecuencia ordenada (cada N horas ⇒ la primera toma vence en N horas); el
+ * watchdog sql/238b la vigila como a cualquier CareTask.
+ */
+const SV_SECCION_NOMBRE = "Tomar signos vitales";
+
+/**
+ * "Hora" → 60 · "N Horas" → N×60 · "Día" → 1440 · desconocido → 60.
+ * Clamp a 7 días: `detalle` viene del input del router (z.unknown()), una
+ * frecuencia artesanal gigante no debe overflow-ear el int4 de slaMinutes
+ * (revienta el INSERT y revierte la firma completa).
+ */
+const SV_SLA_MAX_MINUTES = 7 * 1440;
+function frecuenciaToMinutes(frecuencia: string): number {
+  const f = frecuencia.trim().toLowerCase();
+  if (f === "hora") return 60;
+  if (f === "día" || f === "dia") return 1440;
+  const m = /^(\d+)\s*horas?$/.exec(f);
+  if (m) return Math.min(Number.parseInt(m[1]!, 10) * 60, SV_SLA_MAX_MINUTES);
+  return 60;
+}
+
+/** Extrae la orden de toma de SV del detalle de un ítem CUIDADO_GENERAL (null si no la trae). */
+function ordenSignosVitalesDe(
+  item: CareTaskIndicacionItem,
+): { frecuencia: string; monitorizados: boolean } | null {
+  if (item.tipo.toUpperCase() !== "CUIDADO_GENERAL") return null;
+  const secciones = item.detalle?.secciones;
+  if (!Array.isArray(secciones)) return null;
+  for (const raw of secciones) {
+    const s = raw as { seccion?: unknown; frecuencia?: unknown; monitorizados?: unknown };
+    if (s?.seccion === SV_SECCION_NOMBRE) {
+      return {
+        frecuencia: typeof s.frecuencia === "string" ? s.frecuencia : "Hora",
+        monitorizados: s.monitorizados === true,
+      };
+    }
+  }
+  return null;
+}
+
 /** JCI/mockup: STAT o "urgente" (cualquier capitalización) en la descripción sube la prioridad. */
 const HIGH_PRIORITY_PATTERN = /\bSTAT\b|urgente/i;
 
@@ -356,6 +401,69 @@ export async function materializeCareTasksFromIndicacion(
           "la tarea se creó igual, solo no se emitió la notificación.",
         err,
       );
+    }
+
+    // ── Orden de toma de signos vitales ⇒ tarea PROPIA en el tablero de
+    // enfermería (pedido Edwin 2026-09-18). Es ADICIONAL a la IND_CUIDADOS
+    // del ítem: la genérica cubre el conjunto de cuidados; esta rastrea la
+    // toma pendiente con SLA = frecuencia ordenada. Misma tx (falla ⇒
+    // rollback de la firma, contrato del header); emit best-effort.
+    const svOrden = ordenSignosVitalesDe(item);
+    if (svOrden) {
+      const svTitle = `Tomar signos vitales${svOrden.monitorizados ? " monitorizados" : ""} y anotar cada ${svOrden.frecuencia}`.slice(
+        0,
+        TITLE_MAX_LENGTH,
+      );
+      const svSla = frecuenciaToMinutes(svOrden.frecuencia);
+      const svDueAt = new Date(Date.now() + svSla * 60_000);
+      const svTask = await tx.careTask.create({
+        data: {
+          organizationId,
+          establishmentId,
+          serviceUnitId: null,
+          assignedRoleCode: "NURSE",
+          patientId,
+          encounterId,
+          patientAccountId: null,
+          sourceType: "INDICACION_ITEM",
+          sourceId: item.id,
+          taskType: "SIGNOS_VITALES",
+          title: svTitle,
+          priority: resolvePriority(item.descripcion),
+          slaMinutes: svSla,
+          dueAt: svDueAt,
+          status: "PENDIENTE",
+          createdBy: userId,
+        },
+      });
+      tasksCreated += 1;
+
+      try {
+        await emitDomainEvent(tx, {
+          organizationId,
+          eventType: "task.action_required",
+          aggregateType: "CareTask",
+          aggregateId: svTask.id,
+          emittedById: userId,
+          payload: {
+            taskType: "SIGNOS_VITALES",
+            sourceType: "INDICACION_ITEM",
+            sourceId: item.id,
+            assignedRoleCode: "NURSE",
+            establishmentId,
+            serviceUnitId: null,
+            dueAt: svDueAt.toISOString(),
+            url: "/tareas",
+            resumen: svTitle,
+          },
+        });
+      } catch (err) {
+        console.error(
+          `[care-task-consumer] emitDomainEvent(task.action_required) falló para CareTask SV ${svTask.id} — ` +
+            "la tarea se creó igual, solo no se emitió la notificación.",
+          err,
+        );
+      }
     }
   }
 

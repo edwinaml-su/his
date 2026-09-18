@@ -96,6 +96,87 @@ describe("materializeCareTasksFromIndicacion", () => {
     });
   });
 
+  it("orden «Tomar signos vitales» en cuidados ⇒ CareTask SIGNOS_VITALES adicional con SLA = frecuencia", async () => {
+    const tx = makeTx();
+    primeResolution(tx);
+
+    const items: CareTaskIndicacionItem[] = [
+      {
+        id: "item-cui",
+        tipo: "CUIDADO_GENERAL",
+        descripcion: "Tomar signos vitales monitorizados y anotar cada 4 Horas\nMantener aislamiento Por contacto",
+        detalle: {
+          secciones: [
+            { seccion: "Mantener aislamiento", opcion: "Por contacto" },
+            { seccion: "Tomar signos vitales", monitorizados: true, frecuencia: "4 Horas" },
+          ],
+        },
+      },
+    ];
+
+    const result = await materializeCareTasksFromIndicacion(tx as never, baseParams(items));
+
+    // 1 tarea genérica IND_CUIDADOS + 1 tarea propia SIGNOS_VITALES.
+    expect(result.tasksCreated).toBe(2);
+    expect(tx.careTask.create).toHaveBeenCalledTimes(2);
+
+    const svCall = tx.careTask.create.mock.calls[1]![0] as { data: Record<string, unknown> };
+    expect(svCall.data).toMatchObject({
+      assignedRoleCode: "NURSE",
+      sourceType: "INDICACION_ITEM",
+      sourceId: "item-cui",
+      taskType: "SIGNOS_VITALES",
+      title: "Tomar signos vitales monitorizados y anotar cada 4 Horas",
+      slaMinutes: 240, // 4 Horas
+      status: "PENDIENTE",
+    });
+  });
+
+  it("cuidados SIN sección de signos vitales ⇒ solo la tarea genérica IND_CUIDADOS", async () => {
+    const tx = makeTx();
+    primeResolution(tx);
+
+    const result = await materializeCareTasksFromIndicacion(
+      tx as never,
+      baseParams([
+        {
+          id: "item-cui",
+          tipo: "CUIDADO_GENERAL",
+          descripcion: "Mantener aislamiento Por contacto",
+          detalle: { secciones: [{ seccion: "Mantener aislamiento", opcion: "Por contacto" }] },
+        },
+      ]),
+    );
+
+    expect(result.tasksCreated).toBe(1);
+    expect(tx.careTask.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("frecuencias de SV: Hora ⇒ 60' · Día ⇒ 1440' · desconocida ⇒ 60'", async () => {
+    for (const [frecuencia, esperado] of [
+      ["Hora", 60],
+      ["Día", 1440],
+      ["cada rato", 60],
+    ] as const) {
+      const tx = makeTx();
+      primeResolution(tx);
+      await materializeCareTasksFromIndicacion(
+        tx as never,
+        baseParams([
+          {
+            id: "item-cui",
+            tipo: "CUIDADO_GENERAL",
+            descripcion: "Tomar signos vitales",
+            detalle: { secciones: [{ seccion: "Tomar signos vitales", monitorizados: false, frecuencia }] },
+          },
+        ]),
+      );
+      const svCall = tx.careTask.create.mock.calls[1]![0] as { data: Record<string, unknown> };
+      expect(svCall.data.slaMinutes).toBe(esperado);
+      expect(svCall.data.title).toBe(`Tomar signos vitales y anotar cada ${frecuencia}`);
+    }
+  });
+
   it("mapea taskType por tipo (incluye REPOSO, fuera del enum Zod pero dentro del CHECK de BD)", async () => {
     const tx = makeTx();
     primeResolution(tx);

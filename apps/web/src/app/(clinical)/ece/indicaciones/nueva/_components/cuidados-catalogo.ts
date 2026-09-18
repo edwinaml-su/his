@@ -31,6 +31,10 @@ export interface CuiSeccion {
  * una nota sobre el bloque respiratorio 16-19, no una sección propia). */
 export const CUI_SECTIONS: CuiSeccion[] = [
   { name: "Mantener aislamiento", kind: "tipo", opts: ["Por contacto", "Por gotas", "Por aerosol", "Invertido"], na: true },
+  // ⚠ NO renombrar sin actualizar SV_SECCION_NOMBRE en
+  // packages/trpc/src/ece/care-task-consumer.ts: el consumer matchea este
+  // nombre literal (detalle.secciones[].seccion) para crear la CareTask
+  // SIGNOS_VITALES del tablero de enfermería — un rename lo silencia.
   { name: "Tomar signos vitales", kind: "sv" },
   { name: "Llevar balance hídrico y diuresis horaria", kind: "anotar", opts: ["4 Horas", "6 Horas", "8 Horas", "12 Horas", "Día"], na: true },
   { name: "Tomar temperatura", kind: "anotar", opts: ["Hora", "2 Horas", "4 Horas", "6 Horas", "8 Horas", "12 Horas", "Día"], na: true },
