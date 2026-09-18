@@ -270,7 +270,7 @@ describe("SeleccionExamenes (rediseño lab 2026-09)", () => {
     fireEvent.click(screen.getByText("CULTIVO ESPECIFICAR PROCEDENCIA"));
 
     // Campo habilitado con hint de requerido.
-    const procInput = screen.getByTestId("lab-procedencia-input");
+    const procInput = screen.getByTestId("lab-procedencia-input-t4-cultivo");
     expect(procInput).toBeInTheDocument();
     expect(screen.getByText("Indique de dónde se toma el cultivo")).toBeInTheDocument();
 

@@ -742,7 +742,7 @@ export function SeleccionExamenes({ cuentaId, roleCodes }: SeleccionExamenesProp
                           <div className="mt-1.5 font-normal">
                             <input
                               type="text"
-                              data-testid="lab-procedencia-input"
+                              data-testid={`lab-procedencia-input-${p.id}`}
                               aria-label={`Procedencia de ${p.name}`}
                               placeholder="Especifique la procedencia (requerido)..."
                               value={procedencias[p.id] ?? ""}
