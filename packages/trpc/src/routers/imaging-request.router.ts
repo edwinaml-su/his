@@ -229,9 +229,12 @@ export const imagingRequestRouter = router({
         });
       }
       if (input.fechaDeseada) {
-        const hoy = new Date();
-        hoy.setHours(0, 0, 0, 0);
-        if (input.fechaDeseada.getTime() < hoy.getTime()) {
+        // Comparación date-only en la zona del hospital (lección HH-07 /
+        // hallazgo pre-PR: la TZ del proceso en Vercel es UTC — un setHours
+        // local rechazaba "hoy" enviado desde El Salvador a partir de las
+        // 18:00). en-CA formatea YYYY-MM-DD ⇒ comparación lexicográfica.
+        const fmtSv = new Intl.DateTimeFormat("en-CA", { timeZone: "America/El_Salvador" });
+        if (fmtSv.format(input.fechaDeseada) < fmtSv.format(new Date())) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "La fecha de programación debe ser hoy o una fecha futura.",
@@ -498,7 +501,10 @@ export const imagingRequestRouter = router({
             payload: {
               taskType: "IMAGING_TO_PERFORM",
               sourceType: "IMAGING_ORDER",
-              sourceId: request.id,
+              // Hallazgo pre-PR: sourceId debe ser una ImagingOrder (mismo
+              // agregado que sourceType), no la cabecera — paridad con
+              // order-consumer.ts. Se manda la primera orden de la solicitud.
+              sourceId: ordenesCreadas[0]!.id,
               assignedRoleCode: "RAD_TECHNICIAN",
               establishmentId,
               serviceUnitId: serviceUnit?.id ?? null,

@@ -205,10 +205,12 @@ export const imagingRouter = router({
           // CC-0041 — sincroniza la CareTask de supervisión del estudio
           // (sourceType IMAGING_ORDER, creada por imagingRequest.crear o por
           // el order-consumer de indicaciones). SCHEDULED→PENDIENTE ·
-          // IN_PROGRESS→EN_PROCESO · COMPLETED→CUMPLIDA; CANCELADA no se toca
-          // y una CUMPLIDA conserva su completedAt (no se re-marca).
+          // IN_PROGRESS→EN_PROCESO · COMPLETED/REPORTED/VALIDATED→CUMPLIDA
+          // (hallazgo pre-PR: COMPLETED→REPORTED vía updateStatus NO debe
+          // reabrir una tarea ya cumplida); CANCELADA no se toca y una
+          // CUMPLIDA conserva su completedAt (no se re-marca).
           const taskStatus =
-            input.status === "COMPLETED"
+            input.status === "COMPLETED" || input.status === "REPORTED" || input.status === "VALIDATED"
               ? "CUMPLIDA"
               : input.status === "IN_PROGRESS"
                 ? "EN_PROCESO"

@@ -62,7 +62,7 @@
  */
 import { emitDomainEvent, type PrismaClient } from "@his/database";
 import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
-import { resolveLabSlaMap } from "../lib/lab-sla";
+import { resolveLabSlaMap, resolveImagingSlaMap } from "../lib/lab-sla";
 
 export interface OrderIndicacionItem {
   id: string;
@@ -112,12 +112,9 @@ export function categoriaUIDeItem(
   return categoria === "LABORATORIO" || categoria === "GABINETE" ? categoria : null;
 }
 
-/** Espejo de `PRIORIDADES` en modal-laboratorio.tsx/modal-gabinete.tsx. */
-const SLA_MINUTES_BY_MOCKUP: Record<string, number> = {
-  STAT: 60,
-  Urgente: 240,
-  Rutina: 1440,
-};
+// CC-0040/CC-0041 — el SLA por prioridad dejó de estar hardcodeado acá
+// (SLA_MINUTES_BY_MOCKUP): se resuelve con resolveLabSlaMap /
+// resolveImagingSlaMap (lib/lab-sla.ts) parametrizable por tenant.
 
 const CARE_TASK_PRIORITY_BY_MOCKUP: Record<string, "CRITICAL" | "HIGH" | "NORMAL"> = {
   STAT: "CRITICAL",
@@ -239,9 +236,12 @@ export async function materializeOrdenesFromIndicacion(
 
   const patientAccountId = await resolvePatientAccountId(tx, organizationId, patientId, encounterId);
 
-  // Extensión CC-0040 — SLA de lab parametrizado por tenant (LabSlaConfig,
-  // sql/251) con fallback a los mismos defaults que el hardcode que reemplaza.
+  // Extensión CC-0040/CC-0041 — SLA parametrizado por tenant (LabSlaConfig
+  // sql/251 / ImagingSlaConfig sql/253) con fallback a los mismos defaults
+  // que el hardcode que reemplaza. Misma parametrización que el camino de
+  // escogitación (lis.order.create / imagingRequest.crear).
   const labSlaMap = await resolveLabSlaMap(tx, organizationId);
+  const imagingSlaMap = await resolveImagingSlaMap(tx, organizationId);
 
   // ─── Laboratorio ────────────────────────────────────────────────────────
   for (const item of labItems) {
@@ -467,7 +467,7 @@ export async function materializeOrdenesFromIndicacion(
       );
     }
 
-    const slaMinutes = SLA_MINUTES_BY_MOCKUP[prioridadMockup] ?? SLA_MINUTES_BY_MOCKUP.Rutina!;
+    const slaMinutes = imagingSlaMap[engineePriority].slaMinutes;
     const dueAt = new Date(Date.now() + slaMinutes * 60_000);
     const imagingTaskTitle = item.descripcion.slice(0, TITLE_MAX_LENGTH);
     const imagingCareTask = await tx.careTask.create({

@@ -293,10 +293,16 @@ export function NuevaSolicitud({
       return;
     }
     // RF-08 — creatinina obligatoria si hay contraste, aunque esté Opcional.
+    // Con el campo OCULTO en parametrización el input no existe: el mensaje
+    // señala la parametrización (hallazgo pre-PR: no pedir llenar un campo
+    // invisible). El server valida lo mismo.
     if (hayContraste && !fields.creat?.trim()) {
-      setInvalidFields(new Set(["creat"]));
+      const creatOculta = fieldsOrdered.find((f) => f.fieldKey === "creat")?.estado === "oculto";
+      setInvalidFields(creatOculta ? new Set<string>() : new Set(["creat"]));
       setToast({
-        title: "La creatinina sérica es obligatoria: hay estudios con medio de contraste",
+        title: creatOculta
+          ? "⚠ Hay estudios con contraste pero el campo creatinina está oculto en parametrización"
+          : "La creatinina sérica es obligatoria: hay estudios con medio de contraste",
         variant: "destructive",
       });
       return;
@@ -315,7 +321,9 @@ export function NuevaSolicitud({
   }
 
   const isLoadingCatalogo = catalogoQ.isLoading || fieldConfigQ.isLoading || rulesQ.isLoading;
-  const hoyIso = new Date().toISOString().slice(0, 10);
+  // Fecha local del navegador (NO toISOString: en UTC-6 bloqueaba "hoy"
+  // desde las 18:00 — lección HH-07). en-CA ⇒ YYYY-MM-DD.
+  const hoyIso = new Date().toLocaleDateString("en-CA");
 
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_380px]">
