@@ -176,6 +176,16 @@ function caller(ctx: ReturnType<typeof buildCtx>) {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe("indicacionesMedicasRouter", () => {
+  // Los mocks a nivel de módulo (emitDomainEvent, withEceContext) acumulan
+  // llamadas entre tests. El afterEach global de src/__tests__/setup.ts ya los
+  // limpia cuando el archivo corre vía el config del workspace (CI/turbo), pero
+  // NO cuando se invoca por path desde la raíz del repo (el proyecto raíz lo
+  // recoge sin ese setupFiles) — ahí not.toHaveBeenCalled() evaluaba el conteo
+  // acumulado del archivo. Este reset garantiza aislamiento en ambos modos.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe("create", () => {
     it("happy path multi-item retorna id + estadoRegistro=borrador", async () => {
       const ctx = buildCtx(["PHYSICIAN"]);
