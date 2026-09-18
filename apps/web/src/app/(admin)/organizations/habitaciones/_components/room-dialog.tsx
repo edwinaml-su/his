@@ -29,6 +29,7 @@ import {
 } from "@his/ui/components/select";
 import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
 import { trpc } from "@/lib/trpc/react";
+import { SinSedesNotice } from "@/components/sin-sedes-notice";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
@@ -143,6 +144,7 @@ export function RoomDialog({ open, onOpenChange, room, onSaved }: Props) {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
 
   const establishments = trpcAny.establishment.list.useQuery(undefined, { enabled: open });
+  const sinSedes = establishments.isSuccess && (establishments.data?.length ?? 0) === 0;
   const serviceUnits = trpcAny.room.listServiceUnits.useQuery(
     { establishmentId },
     { enabled: open && establishmentId.length > 0 },
@@ -251,25 +253,29 @@ export function RoomDialog({ open, onOpenChange, room, onSaved }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label htmlFor="room-establishment">Establecimiento</Label>
-              <Select
-                value={establishmentId}
-                onValueChange={(v) => {
-                  setEstablishmentId(v);
-                  setServiceUnitId("");
-                }}
-                disabled={isPending || isEdit}
-              >
-                <SelectTrigger id="room-establishment">
-                  <SelectValue placeholder="Selecciona…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
-                    <SelectItem key={e.id} value={e.id}>
-                      {e.code} — {e.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {sinSedes ? (
+                <SinSedesNotice />
+              ) : (
+                <Select
+                  value={establishmentId}
+                  onValueChange={(v) => {
+                    setEstablishmentId(v);
+                    setServiceUnitId("");
+                  }}
+                  disabled={isPending || isEdit}
+                >
+                  <SelectTrigger id="room-establishment">
+                    <SelectValue placeholder="Selecciona…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(establishments.data ?? []).map((e: { id: string; code: string; name: string }) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.code} — {e.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
 
             <div className="space-y-1.5">
