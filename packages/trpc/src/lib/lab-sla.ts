@@ -33,13 +33,10 @@ export async function resolveLabSlaMap(
   tx: Tx,
   organizationId: string,
 ): Promise<Record<LabPriorityKey, LabSlaValues>> {
-  // `?? []` — defensivo para suites con Prisma mockeado (mockDeep devuelve
-  // undefined en llamadas sin stub); en runtime findMany nunca es undefined.
-  const rows =
-    (await tx.labSlaConfig.findMany({
-      where: { organizationId },
-      select: { priority: true, slaMinutes: true, warningMinutes: true },
-    })) ?? [];
+  const rows = await tx.labSlaConfig.findMany({
+    where: { organizationId },
+    select: { priority: true, slaMinutes: true, warningMinutes: true },
+  });
   const map = { ...DEFAULT_LAB_SLA };
   for (const r of rows) {
     if (r.priority === "ROUTINE" || r.priority === "URGENT" || r.priority === "STAT") {

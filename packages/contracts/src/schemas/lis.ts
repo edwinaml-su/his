@@ -201,7 +201,7 @@ export const labSupervisionInput = z.object({
   search: z.string().trim().max(160).optional(),
   /** Sin filtro = todos los semáforos. */
   slaEstado: labSlaEstadoEnum.optional(),
-  /** true = incluir exámenes ya cumplidos/validados (default: solo activos). */
+  /** true (default) = incluir exámenes ya con resultado/validados; false = solo activos. */
   incluirCompletados: z.boolean().default(true),
   limit: z.number().int().min(1).max(500).default(200),
 });

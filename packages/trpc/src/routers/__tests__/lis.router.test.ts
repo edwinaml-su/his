@@ -56,9 +56,11 @@ describe("lisRouter", () => {
     prisma = mockDeep<PrismaClient>();
     wireTransaction(prisma);
     capturarCargoMock.mockClear();
-    // Extensión CC-0040 — order.create crea CareTasks por examen; default para
-    // que las suites previas (que no las inspeccionan) no crashen en tarea.id.
+    // Extensión CC-0040 — order.create crea CareTasks por examen; defaults
+    // para que las suites previas (que no las inspeccionan) no crashen en
+    // tarea.id / en la iteración de resolveLabSlaMap.
     prisma.careTask.create.mockResolvedValue({ id: w } as never);
+    prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
   });
 
   describe("panel.list", () => {

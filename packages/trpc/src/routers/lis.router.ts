@@ -1303,10 +1303,13 @@ export const lisRouter = router({
         }
 
         for (const item of input.items) {
-          await tx.labOrderItem.updateMany({
+          const updated = await tx.labOrderItem.updateMany({
             where: { id: item.itemId, orderId: input.orderId },
             data: { status: item.status, notes: item.notes || null },
           });
+          // Hallazgo pre-PR: sin este gate, un itemId de OTRA orden del mismo
+          // tenant no tocaría el examen (count 0) pero sí movería su CareTask.
+          if (updated.count === 0) continue;
 
           // Extensión CC-0040 — sincroniza la CareTask de supervisión del
           // examen (sourceType LAB_ORDER_ITEM). Mapa 1:1 con el select del
@@ -1565,7 +1568,11 @@ export const lisRouter = router({
           const resultado = i.results[0] ?? null;
           const muestraAt = i.order.specimens[0]?.collectedAt ?? null;
 
-          // Hito terminal del examen según su pipeline LIS.
+          // Hito terminal del examen según su pipeline LIS. Solo el status
+          // del ITEM manda: el specimen es de la ORDEN (no hay anclaje
+          // specimen→item en el modelo), así que `muestraAt` se muestra como
+          // hito informativo pero NO infla la etapa de un examen aún ORDERED
+          // (hallazgo pre-PR: órdenes multi-examen).
           const etapa =
             i.status === "VALIDATED"
               ? ("VALIDADO" as const)
@@ -1573,13 +1580,16 @@ export const lisRouter = router({
                 ? ("RESULTADO" as const)
                 : i.status === "IN_PROCESS"
                   ? ("EN_PROCESO" as const)
-                  : i.status === "COLLECTED" || muestraAt
+                  : i.status === "COLLECTED"
                     ? ("MUESTRA_TOMADA" as const)
                     : ("SOLICITADO" as const);
 
           const terminado = i.status === "RESULTED" || i.status === "VALIDATED";
           // Fin real del examen para cumplimiento: resultado capturado o
           // tarea marcada Realizado en el modal — lo primero que exista.
+          // Data legada (terminada antes de CC-0040, sin LabResult ni tarea):
+          // finAt=null ⇒ cae a CUMPLIDO_A_TIEMPO — default optimista
+          // documentado; el semáforo es operativo, no un reporte histórico.
           const finAt = resultado?.resultedAt ?? tarea?.completedAt ?? null;
           const dueAt =
             tarea?.dueAt ?? new Date(i.order.orderedAt.getTime() + sla.slaMinutes * 60_000);

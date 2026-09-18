@@ -9379,7 +9379,8 @@ model CareTask {
   patientId        String?   @db.Uuid
   encounterId      String?   @db.Uuid
   patientAccountId String?   @db.Uuid
-  /// Origen polimórfico: INDICACION_ITEM|LAB_ORDER|IMAGING_ORDER|TRANSFER|MANUAL.
+  /// Origen polimórfico: INDICACION_ITEM|LAB_ORDER|LAB_ORDER_ITEM|IMAGING_ORDER|TRANSFER|MANUAL
+  /// (CHECK en sql/209, ampliado con LAB_ORDER_ITEM en sql/252 — extensión CC-0040).
   sourceType       String    @db.VarChar(30)
   /// PK de la fila origen en la tabla que corresponda a `sourceType` (sin FK — polimórfico).
   sourceId         String    @db.Uuid

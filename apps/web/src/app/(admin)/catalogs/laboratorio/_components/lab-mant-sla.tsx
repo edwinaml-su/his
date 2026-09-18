@@ -56,15 +56,18 @@ export function SlaTab(): React.ReactElement {
   const setDraft = (priority: string, patch: Partial<Draft>, base: { slaMinutes: number; warningMinutes: number }) =>
     setDrafts((prev) => ({ ...prev, [priority]: { ...draftOf(priority, base), ...prev[priority], ...patch } }));
 
+  const [invalidMsg, setInvalidMsg] = React.useState<string | null>(null);
+
   const guardar = (priority: string, base: { slaMinutes: number; warningMinutes: number }) => {
     const d = draftOf(priority, base);
     const slaMinutes = Number.parseInt(d.slaMinutes, 10);
     const warningMinutes = Number.parseInt(d.warningMinutes, 10);
+    setSavedMsg(null);
     if (Number.isNaN(slaMinutes) || slaMinutes < 1 || Number.isNaN(warningMinutes) || warningMinutes < 0) {
-      setSavedMsg(null);
+      setInvalidMsg("SLA debe ser un entero ≥ 1 y el aviso un entero ≥ 0 (minutos).");
       return;
     }
-    setSavedMsg(null);
+    setInvalidMsg(null);
     upsert.mutate({ priority: priority as "ROUTINE" | "URGENT" | "STAT", slaMinutes, warningMinutes });
   };
 
@@ -80,9 +83,9 @@ export function SlaTab(): React.ReactElement {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Minutos desde la solicitud del examen hasta el vencimiento del SLA, por prioridad. El aviso marca el
-        examen como &quot;por vencer&quot; esa cantidad de minutos antes. Aplica a la supervisión de
-        laboratorio y a las tareas del área (watchdog cada 15 min).
+        Minutos desde la solicitud del examen hasta el vencimiento del SLA, por prioridad. El SLA define el
+        vencimiento de la tarea del área (y sus alertas del watchdog); el aviso marca el examen como
+        &quot;por vencer&quot; en el tablero de Supervisión esa cantidad de minutos antes.
       </p>
       <Table>
         <TableHeader>
@@ -140,6 +143,11 @@ export function SlaTab(): React.ReactElement {
           })}
         </TableBody>
       </Table>
+      {invalidMsg ? (
+        <p role="alert" className="text-sm text-destructive">
+          {invalidMsg}
+        </p>
+      ) : null}
       {upsert.error ? (
         <p role="alert" className="text-sm text-destructive">
           {upsert.error.message}
