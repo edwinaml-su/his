@@ -62,6 +62,7 @@
  */
 import { emitDomainEvent, type PrismaClient } from "@his/database";
 import { MODALITY_EXECUTOR_CODE } from "../lib/modality-executor";
+import { resolveLabSlaMap } from "../lib/lab-sla";
 
 export interface OrderIndicacionItem {
   id: string;
@@ -238,6 +239,10 @@ export async function materializeOrdenesFromIndicacion(
 
   const patientAccountId = await resolvePatientAccountId(tx, organizationId, patientId, encounterId);
 
+  // Extensión CC-0040 — SLA de lab parametrizado por tenant (LabSlaConfig,
+  // sql/251) con fallback a los mismos defaults que el hardcode que reemplaza.
+  const labSlaMap = await resolveLabSlaMap(tx, organizationId);
+
   // ─── Laboratorio ────────────────────────────────────────────────────────
   for (const item of labItems) {
     const detalle = item.detalle ?? {};
@@ -312,7 +317,7 @@ export async function materializeOrdenesFromIndicacion(
       );
     }
 
-    const slaMinutes = SLA_MINUTES_BY_MOCKUP[prioridadMockup] ?? SLA_MINUTES_BY_MOCKUP.Rutina!;
+    const slaMinutes = labSlaMap[engineePriority].slaMinutes;
     const dueAt = new Date(Date.now() + slaMinutes * 60_000);
     const labTaskTitle = item.descripcion.slice(0, TITLE_MAX_LENGTH);
     const labCareTask = await tx.careTask.create({

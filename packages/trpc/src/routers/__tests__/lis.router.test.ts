@@ -8,7 +8,7 @@ import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@his/database";
 import { makeCtx } from "../../__tests__/helpers/caller";
-import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { MOCK_USER_ADMIN, MOCK_TENANT, MOCK_TENANT_NO_ESTABLISHMENT } from "@his/test-utils";
 
 // docs/48 Ola 3 (C3-1) — capturarCargo ya tiene su propia suite
 // (charge-capture.test.ts); aquí solo importa que order.create la invoque
@@ -56,6 +56,9 @@ describe("lisRouter", () => {
     prisma = mockDeep<PrismaClient>();
     wireTransaction(prisma);
     capturarCargoMock.mockClear();
+    // Extensión CC-0040 — order.create crea CareTasks por examen; default para
+    // que las suites previas (que no las inspeccionan) no crashen en tarea.id.
+    prisma.careTask.create.mockResolvedValue({ id: w } as never);
   });
 
   describe("panel.list", () => {
@@ -244,6 +247,60 @@ describe("lisRouter", () => {
         testId: u,
         procedencia: "Herida quirúrgica abdominal",
       });
+    });
+
+    // Extensión CC-0040 (2026-09-18) — supervisión de laboratorio.
+    it("CC-0040 — crea una CareTask de supervisión por examen con SLA parametrizado", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([{ id: u, code: "L1", name: "GLUCOSA" }] as never);
+      prisma.labSlaConfig.findMany.mockResolvedValue([
+        { priority: "URGENT", slaMinutes: 100, warningMinutes: 10 },
+      ] as never);
+      prisma.serviceUnit.findFirst.mockResolvedValue({ id: w } as never);
+      prisma.labOrder.create.mockResolvedValue({
+        id: u,
+        items: [
+          { id: "10000000-0000-0000-0000-000000000001", testId: u, quantity: 1 },
+          { id: "10000000-0000-0000-0000-000000000002", testId: u, quantity: 1 },
+        ],
+      } as never);
+      prisma.careTask.create.mockResolvedValue({ id: w } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        priority: "URGENT",
+        items: [{ testId: u }, { testId: u }],
+      });
+      expect(prisma.careTask.create).toHaveBeenCalledTimes(2);
+      const args = prisma.careTask.create.mock.calls[0]![0];
+      expect(args.data).toMatchObject({
+        sourceType: "LAB_ORDER_ITEM",
+        sourceId: "10000000-0000-0000-0000-000000000001",
+        assignedRoleCode: "LAB_TECHNICIAN",
+        taskType: "LAB_TO_PROCESS",
+        slaMinutes: 100, // parametrizado (LabSlaConfig), no el default 240
+        priority: "HIGH",
+        establishmentId: MOCK_TENANT.establishmentId,
+      });
+    });
+
+    it("CC-0040 — sin establecimiento en sesión NO crea CareTasks (la orden sí)", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([] as never);
+      prisma.labOrder.create.mockResolvedValue({
+        id: u,
+        items: [{ id: v, testId: u, quantity: 1 }],
+      } as never);
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: MOCK_TENANT_NO_ESTABLISHMENT }),
+      );
+      await expect(
+        caller.order.create({ encounterId: u, patientId: u, items: [{ testId: u }] }),
+      ).resolves.toBeDefined();
+      expect(prisma.careTask.create).not.toHaveBeenCalled();
     });
 
     it("CC-0013 — crea orden con cuentaId: resuelve patientId/encounterId desde la cuenta", async () => {
@@ -1162,6 +1219,154 @@ describe("lisRouter", () => {
       const itemArgs = prisma.labOrderItem.updateMany.mock.calls[0]![0];
       expect(itemArgs.where).toMatchObject({ id: v, orderId: u });
       expect(itemArgs.data).toMatchObject({ status: "RESULTED", notes: "Muestra hemolizada, repetir" });
+    });
+
+    it("CC-0040 — sincroniza la CareTask de supervisión del examen (RESULTED → CUMPLIDA)", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labOrderItem.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.updateItems({ orderId: u, items: [{ itemId: v, status: "RESULTED" }] });
+
+      const taskArgs = prisma.careTask.updateMany.mock.calls[0]![0];
+      expect(taskArgs.where).toMatchObject({ sourceType: "LAB_ORDER_ITEM", sourceId: v });
+      expect(taskArgs.data).toMatchObject({ status: "CUMPLIDA", completedById: MOCK_USER_ADMIN.id });
+    });
+
+    it("CC-0040 — IN_PROCESS reabre la tarea a EN_PROCESO sin completedAt", async () => {
+      prisma.labOrder.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.labOrderItem.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.updateItems({ orderId: u, items: [{ itemId: v, status: "IN_PROCESS" }] });
+
+      const taskArgs = prisma.careTask.updateMany.mock.calls[0]![0];
+      expect(taskArgs.data).toMatchObject({ status: "EN_PROCESO", completedAt: null, completedById: null });
+    });
+  });
+
+  // Extensión CC-0040 (2026-09-18) — tablero de supervisión + SLA parametrizable.
+  describe("order.supervision", () => {
+    it("calcula semáforo VENCIDO con el SLA default cuando el examen excede ROUTINE 1440'", async () => {
+      const solicitado = new Date(Date.now() - 2000 * 60_000); // hace ~33 h
+      prisma.labOrderItem.findMany.mockResolvedValue([
+        {
+          id: v,
+          status: "ORDERED",
+          results: [],
+          test: { name: "GLUCOSA", panel: { name: "QUIMICA" } },
+          order: {
+            id: u,
+            orderedAt: solicitado,
+            priority: "ROUTINE",
+            encounterId: null,
+            patient: { firstName: "Ana", lastName: "Cruz", expediente: "EXP-1", mrn: "M1" },
+            patientAccount: { numeroCuenta: "CTA-1" },
+            specimens: [],
+          },
+        },
+      ] as never);
+      prisma.careTask.findMany.mockResolvedValue([] as never);
+      prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const res = await caller.order.supervision({ incluirCompletados: true, limit: 200 });
+      expect(res.rows[0]).toMatchObject({
+        slaEstado: "VENCIDO",
+        etapa: "SOLICITADO",
+        atencion: "AMBULATORIO",
+      });
+      expect(res.kpis.vencidos).toBe(1);
+    });
+
+    it("examen RESULTED con tarea cumplida dentro del plazo → CUMPLIDO_A_TIEMPO; hospitalario si hay encounter", async () => {
+      const solicitado = new Date(Date.now() - 30 * 60_000);
+      const resultado = new Date(Date.now() - 5 * 60_000);
+      prisma.labOrderItem.findMany.mockResolvedValue([
+        {
+          id: v,
+          status: "RESULTED",
+          results: [{ resultedAt: resultado, validatedAt: null }],
+          test: { name: "HEMOGRAMA", panel: { name: "HEMATOLOGIA" } },
+          order: {
+            id: u,
+            orderedAt: solicitado,
+            priority: "STAT",
+            encounterId: w,
+            patient: { firstName: "Luis", lastName: "Mena", expediente: null, mrn: "M2" },
+            patientAccount: null,
+            specimens: [{ collectedAt: new Date(Date.now() - 20 * 60_000) }],
+          },
+        },
+      ] as never);
+      prisma.careTask.findMany.mockResolvedValue([
+        {
+          sourceId: v,
+          status: "CUMPLIDA",
+          dueAt: new Date(Date.now() + 30 * 60_000),
+          slaMinutes: 60,
+          completedAt: resultado,
+        },
+      ] as never);
+      prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const res = await caller.order.supervision({ incluirCompletados: true, limit: 200 });
+      expect(res.rows[0]).toMatchObject({
+        slaEstado: "CUMPLIDO_A_TIEMPO",
+        etapa: "RESULTADO",
+        atencion: "HOSPITALARIO",
+      });
+    });
+  });
+
+  describe("sla (parametrización)", () => {
+    it("list retorna los defaults con esDefault=true cuando el tenant no parametrizó", async () => {
+      prisma.labSlaConfig.findMany.mockResolvedValue([] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const rows = await caller.sla.list();
+      expect(rows).toHaveLength(3);
+      expect(rows.find((r) => r.priority === "STAT")).toMatchObject({
+        slaMinutes: 60,
+        esDefault: true,
+      });
+    });
+
+    it("list refleja la fila parametrizada del tenant", async () => {
+      prisma.labSlaConfig.findMany.mockResolvedValue([
+        { priority: "URGENT", slaMinutes: 90, warningMinutes: 20 },
+      ] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      const rows = await caller.sla.list();
+      expect(rows.find((r) => r.priority === "URGENT")).toMatchObject({
+        slaMinutes: 90,
+        warningMinutes: 20,
+        esDefault: false,
+      });
+    });
+
+    it("upsert exige rol ADMIN/DIR", async () => {
+      const caller = lisRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
+      );
+      await expect(
+        caller.sla.upsert({ priority: "STAT", slaMinutes: 45, warningMinutes: 10 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("upsert persiste por (organizationId, priority)", async () => {
+      prisma.labSlaConfig.upsert.mockResolvedValue({
+        id: u,
+        priority: "STAT",
+        slaMinutes: 45,
+        warningMinutes: 10,
+      } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.sla.upsert({ priority: "STAT", slaMinutes: 45, warningMinutes: 10 });
+      const args = prisma.labSlaConfig.upsert.mock.calls[0]![0];
+      expect(args.where.organizationId_priority).toMatchObject({
+        organizationId: MOCK_TENANT.organizationId,
+        priority: "STAT",
+      });
+      expect(args.create).toMatchObject({ slaMinutes: 45, warningMinutes: 10 });
     });
   });
 

@@ -170,6 +170,43 @@ export const labOrderCuentaModalInput = z.object({
 });
 export type LabOrderCuentaModalInput = z.infer<typeof labOrderCuentaModalInput>;
 
+// ---------------------------------------------------------------------------
+// Extensión CC-0040 (2026-09-18) — Supervisión de laboratorio: cada examen
+// genera una CareTask (sourceType LAB_ORDER_ITEM) y el tablero de supervisión
+// muestra trazabilidad toma→procesamiento + semáforo de cumplimiento contra
+// el SLA parametrizado por prioridad (LabSlaConfig, sql/251).
+// ---------------------------------------------------------------------------
+
+/** Semáforo de cumplimiento SLA de un examen en el tablero de supervisión. */
+export const labSlaEstadoEnum = z.enum([
+  "EN_TIEMPO",
+  "POR_VENCER",
+  "VENCIDO",
+  "CUMPLIDO_A_TIEMPO",
+  "CUMPLIDO_TARDE",
+]);
+export type LabSlaEstado = z.infer<typeof labSlaEstadoEnum>;
+
+export const labSlaConfigUpsertInput = z.object({
+  priority: labPriorityEnum,
+  /** Minutos desde la solicitud hasta el vencimiento (máx. 7 días). */
+  slaMinutes: z.number().int().min(1).max(10080),
+  /** Minutos antes del vencimiento en que se marca "por vencer". */
+  warningMinutes: z.number().int().min(0).max(10080).default(30),
+});
+export type LabSlaConfigUpsertInput = z.infer<typeof labSlaConfigUpsertInput>;
+
+export const labSupervisionInput = z.object({
+  /** Coincide contra paciente, expediente, cuenta o nombre del examen. */
+  search: z.string().trim().max(160).optional(),
+  /** Sin filtro = todos los semáforos. */
+  slaEstado: labSlaEstadoEnum.optional(),
+  /** true = incluir exámenes ya cumplidos/validados (default: solo activos). */
+  incluirCompletados: z.boolean().default(true),
+  limit: z.number().int().min(1).max(500).default(200),
+});
+export type LabSupervisionInput = z.infer<typeof labSupervisionInput>;
+
 // JCI Standard: IPSG.1 ME 4 — toma de muestra bedside requiere 2 identificadores.
 export const specimenCollectInput = z.object({
   orderId: z.string().uuid(),

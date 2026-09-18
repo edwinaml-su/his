@@ -39,6 +39,7 @@ import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
 import { Tablero } from "./_components/tablero";
 import { Estudios } from "./_components/estudios";
+import { Supervision } from "./_components/supervision";
 
 type LabPriority = "ROUTINE" | "URGENT" | "STAT";
 type LabOrderStatus =
@@ -81,18 +82,25 @@ const STATUS_LABEL: Record<LabOrderStatus, string> = {
 const ALL = "__ALL__";
 
 /**
- * CC-0013 / CC-0013b — tres vistas: Estudios (grid de consulta a nivel de
+ * CC-0013 / CC-0013b — cuatro vistas: Estudios (grid de consulta a nivel de
  * examen, todos los estados — default), Tablero (por cuenta, mockup
- * docs/CC/0013) y Lista (filtros clásicos por encuentro/paciente).
- * `?vista=tablero` / `?vista=lista` seleccionan la pestaña inicial; sin el
- * parámetro (o con un valor desconocido) la pestaña inicial es "Estudios"
- * — CC-0013b cambia el default, que antes era "Lista".
+ * docs/CC/0013), Lista (filtros clásicos por encuentro/paciente) y
+ * Supervisión (extensión CC-0040: trazabilidad toma→procesamiento + SLA).
+ * `?vista=tablero` / `?vista=lista` / `?vista=supervision` seleccionan la
+ * pestaña inicial; sin el parámetro (o con un valor desconocido) la pestaña
+ * inicial es "Estudios" — CC-0013b cambia el default, que antes era "Lista".
  */
 export default function LisOrdersPage(): React.ReactElement {
   const searchParams = useSearchParams();
   const vistaParam = searchParams.get("vista");
   const vistaInicial =
-    vistaParam === "tablero" ? "tablero" : vistaParam === "lista" ? "lista" : "estudios";
+    vistaParam === "tablero"
+      ? "tablero"
+      : vistaParam === "lista"
+        ? "lista"
+        : vistaParam === "supervision"
+          ? "supervision"
+          : "estudios";
 
   return (
     <div className="space-y-4">
@@ -113,6 +121,7 @@ export default function LisOrdersPage(): React.ReactElement {
           <TabsTrigger value="estudios">Estudios</TabsTrigger>
           <TabsTrigger value="lista">Lista</TabsTrigger>
           <TabsTrigger value="tablero">Tablero por cuenta</TabsTrigger>
+          <TabsTrigger value="supervision">Supervisión</TabsTrigger>
         </TabsList>
         <TabsContent value="estudios">
           <Estudios />
@@ -122,6 +131,9 @@ export default function LisOrdersPage(): React.ReactElement {
         </TabsContent>
         <TabsContent value="tablero">
           <Tablero />
+        </TabsContent>
+        <TabsContent value="supervision">
+          <Supervision />
         </TabsContent>
       </Tabs>
     </div>
