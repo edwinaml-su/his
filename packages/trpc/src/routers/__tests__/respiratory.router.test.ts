@@ -9,9 +9,24 @@
  *   - ventilator.transition enforces state-machine graph.
  *   - MedicalGasUsage: no update/delete mutations exposed.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
+import { MOCK_TENANT } from "@his/test-utils";
+
+// CC-0042 — capturarCargo tiene su propia suite (charge-capture.test.ts);
+// aquí solo importa que sesion.ejecutar lo invoque con origen
+// TERAPIA_RESPIRATORIA y que crear NO lo invoque (RN-TR-24).
+const capturarCargoMock = vi.fn().mockResolvedValue({
+  cargoId: "cargo-tr",
+  status: "VIGENTE",
+  unitPrice: 20.15,
+});
+vi.mock("../../lib/charge-capture", () => ({
+  capturarCargo: (...args: unknown[]) => capturarCargoMock(...args),
+  revertirCargo: vi.fn(),
+}));
+
 import { respiratoryRouter } from "../respiratory.router";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
 
@@ -461,6 +476,375 @@ describe("respiratoryRouter", () => {
       };
       expect(where.gasType).toBe("O2");
       expect(where.measuredAt.gte).toBeInstanceOf(Date);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // CC-0042 — CPOE-TR (orden, sesión con cargo al ejecutar, SLA, configuración)
+  // ---------------------------------------------------------------------------
+
+  describe("tr (CC-0042)", () => {
+    const CUENTA = { id: u, patientId: v, encounterId: u };
+    const AER_CFG = {
+      hint: "jet",
+      meds: ["ipratropio", "salbutamol"],
+      unidades: ["mg", "µg", "g", "mL"],
+      diluyentes: ["Solución salina normal 0.9 % · 4 mL", "Sin diluyente"],
+      diluyenteDefault: 0,
+      extra: { label: "Flujo impulsor de oxígeno", opciones: ["6 L/min"], default: 0 },
+    };
+    const PROCS = [
+      proc("TR-OXI-01", "Inicio de oxigenoterapia de bajo flujo", 1, { pareoCon: "TR-OXI-02" }),
+      proc("TR-OXI-02", "Supervisión y cuidado de O₂ bajo flujo", 1),
+      proc("TR-OXI-03", "Inicio de oxigenoterapia de alto flujo", 1, { pareoCon: "TR-OXI-04" }),
+      proc("TR-OXI-04", "Supervisión y cuidado de O₂ alto flujo", 1),
+      proc("TR-AER-01", "Nebulización convencional (jet)", 2, { aerosolConfig: AER_CFG }),
+      proc("TR-AER-05", "Educación de técnica inhalatoria", 2),
+      proc("TR-FIS-03", "Espirómetro incentivo", 3),
+    ];
+    const MEDS = [
+      {
+        id: "m1",
+        organizationId: null,
+        clave: "ipratropio",
+        nombre: "Bromuro de ipratropio («Tropium») — solución 0.25 mg/mL",
+        unidadBase: "mg",
+        dosisMin: 0.25,
+        dosisMax: 0.5,
+        dosisDefault: 0.5,
+        altoRiesgo: false,
+        precaucion: false,
+        mensaje: "x",
+        displayOrder: 1,
+        activo: true,
+      },
+      {
+        id: "m2",
+        organizationId: null,
+        clave: "salbutamol",
+        nombre: "Salbutamol — solución 5 mg/mL",
+        unidadBase: "mg",
+        dosisMin: 2.5,
+        dosisMax: 5,
+        dosisDefault: 2.5,
+        altoRiesgo: false,
+        precaucion: false,
+        mensaje: "x",
+        displayOrder: 2,
+        activo: true,
+      },
+    ];
+
+    function proc(
+      codigo: string,
+      nombre: string,
+      seccionOrden: number,
+      extra: Partial<Record<string, unknown>> = {},
+    ) {
+      return {
+        id: `p-${codigo}`,
+        organizationId: null,
+        codigo,
+        nombre,
+        categoria: "x",
+        seccionOrden,
+        subSeccion: null,
+        unidadCobro: "Evento",
+        requiereConsentimiento: false,
+        delegablePorProtocolo: false,
+        pareoCon: null,
+        tiempoEstandarMin: null,
+        tarifaBase: null,
+        aerosolConfig: null,
+        displayOrder: 0,
+        activo: true,
+        ...extra,
+      };
+    }
+
+    function stubCrear() {
+      prisma.patientAccount.findFirst.mockResolvedValue(CUENTA as never);
+      prisma.trProcedimiento.findMany.mockResolvedValue(PROCS as never);
+      prisma.trMedicamentoInhalado.findMany.mockResolvedValue(MEDS as never);
+      prisma.trSlaConfig.findMany.mockResolvedValue([] as never);
+      prisma.serviceUnit.findFirst.mockResolvedValue(null as never);
+      prisma.respiratoryOrder.create.mockResolvedValue({ id: u } as never);
+      prisma.respiratoryOrderItem.create.mockResolvedValue({ id: v } as never);
+      prisma.careTask.create.mockResolvedValue({ id: u } as never);
+      prisma.domainEvent.create.mockResolvedValue({ id: u } as never);
+      capturarCargoMock.mockClear();
+    }
+
+    const baseInput = {
+      cuentaId: u,
+      dxCodigo: "CA22.0",
+      dxDescripcion: "EPOC con exacerbación aguda",
+      prioridad: "URGENT" as const,
+      vigenciaHoras: 72,
+      declaraciones: {
+        oxigenoterapia: "SELECCIONADA" as const,
+        aerosolterapia: "NO_REQUIERE" as const,
+        seccion3: "NO_REQUIERE" as const,
+      },
+      meta: { tipo: "88-92" as const },
+      items: [{ codigo: "TR-OXI-01" }],
+    };
+
+    const soloAer = (medicamento?: Record<string, unknown>) => ({
+      ...baseInput,
+      declaraciones: {
+        oxigenoterapia: "NO_REQUIERE" as const,
+        aerosolterapia: "SELECCIONADA" as const,
+        seccion3: "NO_REQUIERE" as const,
+      },
+      meta: undefined,
+      items: [{ codigo: "TR-AER-01", ...(medicamento ? { medicamento } : {}) }],
+    });
+
+    const MED_OK = {
+      clave: "ipratropio",
+      dosis: 0.5,
+      unidad: "mg",
+      diluyente: "Solución salina normal 0.9 % · 4 mL",
+      frecuencia: "Cada 6 horas",
+    };
+
+    it("RN-TR-33: pareo automático — TR-OXI-01 agrega TR-OXI-02 y crea una CareTask por sesión SIN cargo", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      const r = await caller.tr.orden.crear(baseInput);
+
+      expect(r.items.map((i) => i.codigo).sort()).toEqual(["TR-OXI-01", "TR-OXI-02"]);
+      expect(prisma.respiratoryOrderItem.create).toHaveBeenCalledTimes(2);
+      expect(prisma.careTask.create).toHaveBeenCalledTimes(2);
+      const tarea = prisma.careTask.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(tarea.data).toMatchObject({
+        sourceType: "TR_ORDEN_ITEM",
+        assignedRoleCode: "RESP_THERAPIST",
+        taskType: "TR_EJECUTAR",
+        priority: "HIGH",
+        slaMinutes: 60, // default TR para URGENT (parametrizable en TrSlaConfig)
+        status: "PENDIENTE",
+      });
+      // RN-TR-24 — el cargo NUNCA nace al firmar la orden.
+      expect(capturarCargoMock).not.toHaveBeenCalled();
+      const orden = prisma.respiratoryOrder.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(orden.data).toMatchObject({
+        esCpoeTr: true,
+        dxCodigo: "CA22.0",
+        metaSaturacion: "88-92",
+        type: "OXYGEN_THERAPY",
+      });
+    });
+
+    it("RN-TR-33: bajo flujo y alto flujo juntos ⇒ BAD_REQUEST (selección única)", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.tr.orden.crear({ ...baseInput, items: [{ codigo: "TR-OXI-01" }, { codigo: "TR-OXI-03" }] }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("RN-TR-32/35: sección declarada SELECCIONADA sin procedimientos ⇒ BAD_REQUEST", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.tr.orden.crear({ ...baseInput, items: [] })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Oxigenoterapia"),
+      });
+    });
+
+    it("meta obligatoria con oxigenoterapia; OTRO exige rango 70–100 y justificación ≥15 (RN-TR-34)", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.tr.orden.crear({ ...baseInput, meta: undefined })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("meta de saturación"),
+      });
+      await expect(
+        caller.tr.orden.crear({
+          ...baseInput,
+          meta: { tipo: "OTRO", min: 90, max: 94, justificacion: "corta" },
+        }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("justificación clínica"),
+      });
+    });
+
+    it("RN-TR-36: la unidad «g» se rechaza con el mensaje clínico (incidente Tropium 0.5 g)", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.tr.orden.crear(soloAer({ ...MED_OK, unidad: "g" })),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("Use miligramos o microgramos"),
+      });
+    });
+
+    it("RN-TR-36: dosis > 2× máximo bloquea; diluyente fuera de la lista cerrada bloquea; AER-05 no admite medicamento", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.tr.orden.crear(soloAer({ ...MED_OK, dosis: 1.1 })),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("por encima del máximo") });
+      await expect(
+        caller.tr.orden.crear(soloAer({ ...MED_OK, diluyente: "Agua de coco" })),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("lista parametrizada") });
+      await expect(
+        caller.tr.orden.crear({
+          ...soloAer(),
+          items: [{ codigo: "TR-AER-05", medicamento: MED_OK }],
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST", message: expect.stringContaining("no admite bloque de medicamento") });
+    });
+
+    it("dosis en µg equivalente dentro de rango pasa (500 µg de ipratropio)", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.tr.orden.crear(soloAer({ ...MED_OK, dosis: 500, unidad: "µg" })),
+      ).resolves.toBeDefined();
+      const item = prisma.respiratoryOrderItem.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(item.data).toMatchObject({ procedimientoCodigo: "TR-AER-01" });
+      expect((item.data.medicamento as { dosis: number }).dosis).toBe(500);
+    });
+
+    describe("sesion.ejecutar (RN-TR-24 — cargo al ejecutar)", () => {
+      const ITEM = {
+        id: v,
+        estado: "PROGRAMADA",
+        procedimientoCodigo: "TR-AER-01",
+        procedimientoNombre: "Nebulización convencional (jet)",
+        order: { id: u, patientId: v, encounterId: u, patientAccountId: u, status: "ACTIVE" },
+      };
+
+      it("EJECUTADA ⇒ capturarCargo origen TERAPIA_RESPIRATORIA + tarea CUMPLIDA", async () => {
+        capturarCargoMock.mockClear();
+        prisma.respiratoryOrderItem.findFirst.mockResolvedValue(ITEM as never);
+        prisma.respiratoryOrderItem.update.mockResolvedValue({ id: v } as never);
+        prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+        const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+        const r = await caller.tr.sesion.ejecutar({ itemId: v, resultado: "EJECUTADA" });
+
+        expect(r.cargoStatus).toBe("VIGENTE");
+        expect(r.unitPrice).toBe(20.15);
+        expect(capturarCargoMock).toHaveBeenCalledWith(
+          prisma,
+          expect.objectContaining({
+            origen: "TERAPIA_RESPIRATORIA",
+            code: "TR-AER-01",
+            quantity: 1,
+            accountId: u,
+            referenciaId: v,
+          }),
+        );
+        const upd = prisma.respiratoryOrderItem.update.mock.calls[0]![0] as { data: Record<string, unknown> };
+        expect(upd.data).toMatchObject({ estado: "EJECUTADA", cargoId: "cargo-tr" });
+        const tarea = prisma.careTask.updateMany.mock.calls[0]![0] as {
+          where: Record<string, unknown>;
+          data: Record<string, unknown>;
+        };
+        expect(tarea.where).toMatchObject({ sourceType: "TR_ORDEN_ITEM", sourceId: v });
+        expect(tarea.data).toMatchObject({ status: "CUMPLIDA" });
+      });
+
+      it("NO_EJECUTADA ⇒ SIN cargo, causa obligatoria, tarea CANCELADA", async () => {
+        capturarCargoMock.mockClear();
+        prisma.respiratoryOrderItem.findFirst.mockResolvedValue(ITEM as never);
+        prisma.respiratoryOrderItem.update.mockResolvedValue({ id: v } as never);
+        prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
+        const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+        await caller.tr.sesion.ejecutar({
+          itemId: v,
+          resultado: "NO_EJECUTADA",
+          causaNoEjecucion: "Paciente en estudio de imagen",
+        });
+        expect(capturarCargoMock).not.toHaveBeenCalled();
+        const tarea = prisma.careTask.updateMany.mock.calls[0]![0] as { data: Record<string, unknown> };
+        expect(tarea.data).toMatchObject({
+          status: "CANCELADA",
+          cancelReason: "Paciente en estudio de imagen",
+        });
+      });
+
+      it("sesión ya cerrada ⇒ CONFLICT", async () => {
+        prisma.respiratoryOrderItem.findFirst.mockResolvedValue({ ...ITEM, estado: "EJECUTADA" } as never);
+        const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.tr.sesion.ejecutar({ itemId: v, resultado: "EJECUTADA" }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      });
+    });
+
+    it("sla.list retorna defaults TR (STAT 15') y upsert exige ADMIN/DIR", async () => {
+      prisma.trSlaConfig.findMany.mockResolvedValue([] as never);
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      const rows = await caller.tr.sla.list();
+      expect(rows.find((r) => r.priority === "STAT")).toMatchObject({ slaMinutes: 15, esDefault: true });
+
+      const sinAdmin = respiratoryRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
+      );
+      await expect(
+        sinAdmin.tr.sla.upsert({ priority: "STAT", slaMinutes: 10, warningMinutes: 3 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("configuración: editar una fila GLOBAL materializa el override del tenant (tarifa base)", async () => {
+      const fila = {
+        ...proc("TR-AER-01", "Nebulización convencional (jet)", 2, { aerosolConfig: AER_CFG }),
+        id: "00000000-0000-0000-0000-00000000aa01",
+      };
+      prisma.trProcedimiento.findFirst.mockResolvedValue(fila as never);
+      prisma.trProcedimiento.create.mockResolvedValue({ ...fila, id: "nuevo" } as never);
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await caller.tr.catalogo.updateProcedimiento({ id: fila.id, tarifaBase: 20.15 });
+
+      expect(prisma.trProcedimiento.update).not.toHaveBeenCalled();
+      const creado = prisma.trProcedimiento.create.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(creado.data).toMatchObject({
+        codigo: "TR-AER-01",
+        tarifaBase: 20.15,
+        organizationId: MOCK_TENANT.organizationId,
+      });
+    });
+
+    it("supervisión: sesión PROGRAMADA vieja ⇒ VENCIDO con SLA default", async () => {
+      prisma.respiratoryOrderItem.findMany.mockResolvedValue([
+        {
+          id: v,
+          orderId: u,
+          procedimientoCodigo: "TR-AER-01",
+          procedimientoNombre: "Nebulización convencional (jet)",
+          medicamento: null,
+          estado: "PROGRAMADA",
+          ejecutadaEn: null,
+          causaNoEjecucion: null,
+          cargoId: null,
+          order: {
+            id: u,
+            prioridad: "ROUTINE",
+            startedAt: new Date(Date.now() - 500 * 60_000),
+            encounterId: null,
+            dxCodigo: "CA22.0",
+            patient: { firstName: "Ana", lastName: "Cruz", expediente: "EXP-1", mrn: "M1" },
+          },
+        },
+      ] as never);
+      prisma.respiratoryOrder.findMany.mockResolvedValue([{ id: u, patientAccountId: null }] as never);
+      prisma.patientAccount.findMany.mockResolvedValue([] as never);
+      prisma.careTask.findMany.mockResolvedValue([] as never);
+      prisma.trSlaConfig.findMany.mockResolvedValue([] as never);
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      const res = await caller.tr.supervision({ incluirCompletados: true, limit: 200 });
+      expect(res.rows[0]).toMatchObject({
+        slaEstado: "VENCIDO",
+        estado: "PROGRAMADA",
+        atencion: "AMBULATORIO",
+      });
+      expect(res.kpis.vencidas).toBe(1);
     });
   });
 });
