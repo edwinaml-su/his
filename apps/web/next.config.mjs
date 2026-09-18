@@ -168,6 +168,14 @@ const nextConfig = {
         destination: "/triage",
         permanent: true,
       },
+      // Remediación auditoría 2026-09-18: /ece/camas duplicaba /beds (que ya
+      // consume eceCama.mapCompleto) y filtraba con UUIDs mock inexistentes.
+      // Mismo precedente que /ece/triaje (PR #101).
+      {
+        source: "/ece/camas",
+        destination: "/beds",
+        permanent: true,
+      },
       // Safari macOS intenta /site.webmanifest además del estándar /manifest.json.
       // Sin este alias recibe el HTML 404 y lanza "Parsing application manifest:
       // The manifest is not valid JSON data" en consola.

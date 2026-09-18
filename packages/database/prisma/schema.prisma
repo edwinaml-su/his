@@ -3138,9 +3138,11 @@ model PharmacyReservation {
   @@schema("public")
 }
 
+// Remediación auditoría 2026-09-18: CONFIRMED existía solo aquí — el enum de
+// prod tiene 6 valores sin CONFIRMED; un where por ese valor reventaba en
+// runtime pasando typecheck. NO re-agregarlo sin SQL que lo cree en prod.
 enum PharmacyReservationStatus {
   RESERVED
-  CONFIRMED
   DISPATCHED
   CANCELLED
   EXPIRED

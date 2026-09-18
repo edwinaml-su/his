@@ -455,7 +455,7 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
     }
 
     // Cama liberada
-    const okCamas = await probeRoute(page, `/ece/camas?numero=${CAMA_NUMERO}`);
+    const okCamas = await probeRoute(page, `/beds?numero=${CAMA_NUMERO}`);
     if (okCamas) {
       const camaLibre = page.getByText(new RegExp(`${CAMA_NUMERO}.*libre|disponible`, "i")).first();
       await expect(camaLibre).toBeVisible({ timeout: 8_000 }).catch(() => {
