@@ -54,6 +54,8 @@ export const labOrderItemInput = z.object({
   quantity: z.number().int().min(1).default(1),
   /** Rediseño lab 2026-09 — subset de LabTestParameter escogido para este examen. */
   parameterIds: z.array(z.string().uuid()).optional(),
+  /** CC-0040 RF-11 — procedencia del cultivo (obligatoria server-side si la prueba indica "ESPECIFICAR PROCEDENCIA"). */
+  procedencia: z.string().trim().max(300).optional(),
 });
 
 /**

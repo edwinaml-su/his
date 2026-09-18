@@ -208,6 +208,44 @@ describe("lisRouter", () => {
       expect(args.data.priority).toBe("ROUTINE");
     });
 
+    // CC-0040 RF-11/RN-04 — prueba con leyenda "ESPECIFICAR PROCEDENCIA".
+    it("CC-0040 — BAD_REQUEST si un cultivo 'ESPECIFICAR PROCEDENCIA' llega sin procedencia", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        { id: u, code: "LABV2-050", name: "CULTIVO ESPECIFICAR PROCEDENCIA" },
+      ] as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.order.create({ encounterId: u, patientId: u, items: [{ testId: u }] }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        message: expect.stringContaining("procedencia"),
+      });
+      expect(prisma.labOrder.create).not.toHaveBeenCalled();
+    });
+
+    it("CC-0040 — con procedencia el cultivo se crea y la persiste en el ítem", async () => {
+      prisma.encounter.findFirst.mockResolvedValue({ id: u, patientId: u } as never);
+      prisma.patientAccount.findFirst.mockResolvedValue(null as never);
+      prisma.labTest.findMany.mockResolvedValue([
+        { id: u, code: "LABV2-050", name: "CULTIVO ESPECIFICAR PROCEDENCIA" },
+      ] as never);
+      prisma.labOrder.create.mockResolvedValue({ id: u, items: [] } as never);
+      const caller = lisRouter.createCaller(makeCtx({ prisma }));
+      await caller.order.create({
+        encounterId: u,
+        patientId: u,
+        items: [{ testId: u, procedencia: "Herida quirúrgica abdominal" }],
+      });
+      const args = prisma.labOrder.create.mock.calls[0]![0];
+      const itemsCreate = (args.data.items as { create: Array<Record<string, unknown>> }).create;
+      expect(itemsCreate[0]).toMatchObject({
+        testId: u,
+        procedencia: "Herida quirúrgica abdominal",
+      });
+    });
+
     it("CC-0013 — crea orden con cuentaId: resuelve patientId/encounterId desde la cuenta", async () => {
       prisma.patientAccount.findFirst.mockResolvedValue({
         id: u,

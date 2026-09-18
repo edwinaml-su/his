@@ -3443,6 +3443,9 @@ model LabOrderItem {
   notes   String?        @db.Text
   /// Rediseño lab 2026-09 — cantidad solicitada (mockup: columna Cantidad).
   quantity Int           @default(1)
+  /// CC-0040 RF-11 — procedencia del cultivo (obligatoria server-side si la
+  /// prueba indica "ESPECIFICAR PROCEDENCIA"; null para el resto).
+  procedencia String?    @db.VarChar(300)
 
   order      LabOrder                @relation(fields: [orderId], references: [id], onDelete: Cascade)
   test       LabTest                 @relation(fields: [testId], references: [id], onDelete: Restrict)

@@ -1050,6 +1050,18 @@ export const lisRouter = router({
         });
         const testInfoById = new Map(testsForCargo.map((t) => [t.id, t]));
 
+        // CC-0040 RF-11/RN-04 — prueba con leyenda "ESPECIFICAR PROCEDENCIA"
+        // exige procedencia no vacía (misma regex que la UI de escogitación).
+        for (const item of input.items) {
+          const test = testInfoById.get(item.testId);
+          if (test && /ESPECIFICAR PROCEDENCIA/i.test(test.name) && !item.procedencia?.trim()) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `La prueba "${test.name}" requiere especificar la procedencia del cultivo.`,
+            });
+          }
+        }
+
         const order = await tx.labOrder.create({
           data: {
             organizationId: ctx.tenant.organizationId,
@@ -1067,6 +1079,7 @@ export const lisRouter = router({
                 testId: i.testId,
                 notes: i.notes ?? null,
                 quantity: i.quantity,
+                procedencia: i.procedencia?.trim() || null,
                 ...(i.parameterIds && i.parameterIds.length > 0
                   ? { parameters: { create: i.parameterIds.map((parameterId) => ({ parameterId })) } }
                   : {}),

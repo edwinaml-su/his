@@ -153,6 +153,7 @@ resto del módulo, no literales repetidos.
 | Archivo del mockup | Ruta en la app | Componentes | Estado |
 |---|---|---|---|
 | `design/mockup/mockup_examenes_laboratorio.html` (pantalla principal) | `apps/web/src/app/(clinical)/lis/orders/new/page.tsx` | `page.tsx` (Server, roleCodes) → `_components/seleccion-examenes-shell.tsx` → `_components/seleccion-examenes.tsx` + `_components/parametros-modal.tsx` | ✅ verificado contra mockup |
+| Procedencia de cultivo (CC-0040, mockup actualizado 2026-09-18: `procHtml`/`procInput`) | `_components/seleccion-examenes.tsx` (input bajo el nombre en la tabla de solicitud + resumen) | borde vacío `MOCK.orange` (#e8853d) / lleno `#cbd4d9` · hint vacío `MOCK.removeColor` (#c0392b) "Indique de dónde se toma el cultivo" / lleno `MOCK.hintColor` "Procedencia del cultivo" — tokens ya existentes en `MOCK_LAB_PALETTE` | ✅ verificado contra mockup |
 | Modal "Solicitud" + tabla `.sol-list` (columna Cantidad, línea 71) | `apps/web/src/app/(clinical)/lis/orders/_components/estudios.tsx` y `solicitud-modal.tsx` | columna "Cant." agregada, sin rediseño adicional (ya alineados a CC-0013) | ✅ verificado contra mockup |
 | "Mantenimiento de catálogos" (líneas 162–229) | `apps/web/src/app/(admin)/catalogs/laboratorio/` | fuera de alcance de este cambio (otro agente en paralelo) | ⬜ pendiente (otro workstream) |
 
