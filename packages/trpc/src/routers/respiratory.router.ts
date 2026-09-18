@@ -365,10 +365,18 @@ export const respiratoryRouter = router({
 
           const account = await tx.patientAccount.findFirst({
             where: { id: input.cuentaId, organizationId },
-            select: { id: true, patientId: true, encounterId: true },
+            select: { id: true, patientId: true, encounterId: true, status: true },
           });
           if (!account) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta de paciente no encontrada." });
+          }
+          // El cargo es diferido (RN-TR-24): si la cuenta no está activa hoy,
+          // la ejecución fallaría después con la sesión atrapada en PROGRAMADA.
+          if (account.status !== "ABIERTA" && account.status !== "PENDIENTE_REGULARIZAR") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `La cuenta no está activa (estado: ${account.status}); no es posible firmar órdenes con cargo diferido sobre ella.`,
+            });
           }
 
           // Catálogo efectivo (tenant override > global), solo activos.
@@ -394,6 +402,12 @@ export const respiratoryRouter = router({
           for (const codigo of [...codigos]) {
             const pareo = procByCodigo.get(codigo)?.pareoCon;
             if (pareo && !codigos.has(pareo)) {
+              if (!procByCodigo.has(pareo)) {
+                throw new TRPCError({
+                  code: "PRECONDITION_FAILED",
+                  message: `El procedimiento ${codigo} exige su acompañante ${pareo} (pareo indivisible), pero está inactivo en el catálogo. Reactívelo en Configuración antes de ordenar.`,
+                });
+              }
               codigos.add(pareo);
               input.items.push({ codigo: pareo });
             }
@@ -763,6 +777,28 @@ export const respiratoryRouter = router({
           }
 
           const now = new Date();
+
+          // Claim atómico: dos cierres concurrentes (doble click, retry de
+          // red, dos terapeutas) leerían ambos PROGRAMADA — el updateMany con
+          // guarda de estado deja pasar exactamente uno; el otro recibe
+          // CONFLICT y NO llega a capturarCargo (evita doble devengo).
+          const claim = await tx.respiratoryOrderItem.updateMany({
+            where: { id: item.id, estado: "PROGRAMADA" },
+            data: {
+              estado: input.resultado,
+              ejecutadaEn: now,
+              ejecutadaPor: ctx.user.id,
+              causaNoEjecucion: input.resultado === "NO_EJECUTADA" ? input.causaNoEjecucion : null,
+              observaciones: input.observaciones ?? null,
+            },
+          });
+          if (claim.count === 0) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "La sesión ya fue cerrada por otro usuario.",
+            });
+          }
+
           let cargoId: string | null = null;
           let cargoStatus: "VIGENTE" | "PENDIENTE_TARIFA" | null = null;
           let unitPrice: number | null = null;
@@ -786,17 +822,9 @@ export const respiratoryRouter = router({
             unitPrice = cargo.unitPrice;
           }
 
-          await tx.respiratoryOrderItem.update({
-            where: { id: item.id },
-            data: {
-              estado: input.resultado,
-              ejecutadaEn: now,
-              ejecutadaPor: ctx.user.id,
-              causaNoEjecucion: input.resultado === "NO_EJECUTADA" ? input.causaNoEjecucion : null,
-              observaciones: input.observaciones ?? null,
-              cargoId,
-            },
-          });
+          if (cargoId) {
+            await tx.respiratoryOrderItem.update({ where: { id: item.id }, data: { cargoId } });
+          }
 
           // Sincroniza la tarea de supervisión de la sesión.
           await tx.careTask.updateMany({
@@ -822,12 +850,49 @@ export const respiratoryRouter = router({
      */
     supervision: tenantProcedure.input(trSupervisionInput).query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        // El search filtra EN la consulta (no después del take): un post-filtro
+        // sobre la página de `limit` filas escondería coincidencias más
+        // antiguas (lección supervisión lab/imaging).
+        const search = input.search?.trim();
+        let searchWhere: Prisma.RespiratoryOrderItemWhereInput | undefined;
+        if (search) {
+          const cuentasMatch = await tx.patientAccount.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              numeroCuenta: { contains: search, mode: "insensitive" },
+            },
+            select: { id: true },
+          });
+          searchWhere = {
+            OR: [
+              { procedimientoCodigo: { contains: search, mode: "insensitive" } },
+              { procedimientoNombre: { contains: search, mode: "insensitive" } },
+              {
+                order: {
+                  patient: {
+                    OR: [
+                      { firstName: { contains: search, mode: "insensitive" } },
+                      { lastName: { contains: search, mode: "insensitive" } },
+                      { expediente: { contains: search, mode: "insensitive" } },
+                      { mrn: { contains: search, mode: "insensitive" } },
+                    ],
+                  },
+                },
+              },
+              ...(cuentasMatch.length
+                ? [{ order: { patientAccountId: { in: cuentasMatch.map((c) => c.id) } } }]
+                : []),
+            ],
+          };
+        }
+
         const items = await tx.respiratoryOrderItem.findMany({
           where: {
             order: { organizationId: ctx.tenant.organizationId, esCpoeTr: true },
             estado: input.incluirCompletados
               ? { not: "CANCELADA" }
               : { in: ["PROGRAMADA"] },
+            ...(searchWhere ?? {}),
           },
           include: {
             order: {
@@ -920,16 +985,6 @@ export const respiratoryRouter = router({
           };
         });
 
-        const search = input.search?.trim().toLowerCase();
-        if (search) {
-          rows = rows.filter(
-            (r) =>
-              r.paciente.nombre.toLowerCase().includes(search) ||
-              (r.paciente.expediente ?? "").toLowerCase().includes(search) ||
-              (r.cuenta ?? "").toLowerCase().includes(search) ||
-              r.procedimiento.toLowerCase().includes(search),
-          );
-        }
         if (input.slaEstado) rows = rows.filter((r) => r.slaEstado === input.slaEstado);
 
         const kpis = {

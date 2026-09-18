@@ -1,5 +1,6 @@
 -- =============================================================================
 -- 254_cc0042_terapia_respiratoria.sql — CC-0042 / REQ-HIS-TR-001 (S1)
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-18 — NO re-aplicar.
 -- Módulo de Terapia Respiratoria v1 sobre el legacy §21 (RespiratoryOrder):
 -- adecuar, NO duplicar (regla permanente).
 --

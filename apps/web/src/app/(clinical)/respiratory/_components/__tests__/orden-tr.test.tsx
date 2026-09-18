@@ -37,7 +37,9 @@ import { OrdenTr } from "../orden-tr";
 
 const AER_CFG = {
   hint: "Parámetros estándar de nebulización con generador tipo jet",
-  meds: ["ipratropio", "salbutamol"],
+  // Orden del seed real (sql/254): salbutamol primero — el conjunto EPOC debe
+  // corregirlo a ipratropio vía cambiarMed (bug de closure detectado en pre-PR).
+  meds: ["salbutamol", "ipratropio"],
   unidades: ["mg", "µg", "g", "mL"],
   diluyentes: ["Solución salina normal 0.9 % · 4 mL", "Sin diluyente"],
   diluyenteDefault: 0,
@@ -191,6 +193,20 @@ describe("OrdenTr (CC-0042)", () => {
     // Sin dx el primer bloqueo es el diagnóstico (RN-TR-31).
     fireEvent.click(screen.getByTestId("tr-firmar"));
     expect(screen.getByTestId("tr-modal-error")).toHaveTextContent("diagnóstico CIE-11");
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
+  it("las tres secciones en «No requiere/No aplica» ⇒ modal: la orden debe incluir al menos un procedimiento", () => {
+    const mutate = vi.fn();
+    mockCrear.mockImplementation(() => ({ mutate, isPending: false, error: null }));
+    renderOrden();
+
+    fireEvent.click(screen.getByRole("button", { name: "Conjunto: EPOC exacerbada" })); // fija dx
+    fireEvent.click(checkboxDe("No requiere oxigenoterapia"));
+    for (const cb of screen.getAllByRole("checkbox", { name: /No aplica/ })) fireEvent.click(cb);
+
+    fireEvent.click(screen.getByTestId("tr-firmar"));
+    expect(screen.getByTestId("tr-modal-error")).toHaveTextContent("al menos un procedimiento");
     expect(mutate).not.toHaveBeenCalled();
   });
 

@@ -78,7 +78,8 @@ export const trOrdenCrearInput = z.object({
       justificacion: z.string().trim().max(2000).optional(),
     })
     .optional(),
-  items: z.array(trOrdenItemInput).min(0).max(30),
+  /** Una orden sin procedimientos no tiene objeto clínico ni genera sesiones. */
+  items: z.array(trOrdenItemInput).min(1, "La orden debe incluir al menos un procedimiento seleccionado.").max(30),
   observaciones: z.string().trim().max(4000).optional(),
 });
 export type TrOrdenCrearInput = z.infer<typeof trOrdenCrearInput>;

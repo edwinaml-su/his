@@ -209,8 +209,11 @@ export function OrdenTr({ cuentaId, onGuardado }: { cuentaId: string; onGuardado
     });
   }
 
+  // Sin guarda sobre `aerCfg`: es una const del render y dentro de un handler
+  // que acaba de llamar seleccionarAer() aún vale el valor anterior (los
+  // conjuntos de órdenes la invocan en esa secuencia). El updater funcional
+  // sí ve el `med` recién encolado.
   function cambiarMed(clave: string) {
-    if (!aerCfg) return;
     const m = medByClave.get(clave);
     setMed((prev) =>
       prev
@@ -292,6 +295,12 @@ export function OrdenTr({ cuentaId, onGuardado }: { cuentaId: string; onGuardado
   function firmar() {
     if (!dx) {
       setModalError("El diagnóstico CIE-11 es obligatorio: sin diagnóstico no hay firma ni cargo (RN-TR-31).");
+      return;
+    }
+    if (noOxi && noAer && noFis) {
+      setModalError(
+        "La orden debe incluir al menos un procedimiento: las tres secciones están declaradas como no requeridas, por lo que no hay nada que ordenar ni sesiones que generar.",
+      );
       return;
     }
     if (!noOxi && oxiSel.size === 0) {

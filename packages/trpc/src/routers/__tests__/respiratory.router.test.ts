@@ -484,7 +484,7 @@ describe("respiratoryRouter", () => {
   // ---------------------------------------------------------------------------
 
   describe("tr (CC-0042)", () => {
-    const CUENTA = { id: u, patientId: v, encounterId: u };
+    const CUENTA = { id: u, patientId: v, encounterId: u, status: "ABIERTA" };
     const AER_CFG = {
       hint: "jet",
       meds: ["ipratropio", "salbutamol"],
@@ -648,10 +648,48 @@ describe("respiratoryRouter", () => {
     it("RN-TR-32/35: sección declarada SELECCIONADA sin procedimientos ⇒ BAD_REQUEST", async () => {
       stubCrear();
       const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
-      await expect(caller.tr.orden.crear({ ...baseInput, items: [] })).rejects.toMatchObject({
+      // Oxigenoterapia SELECCIONADA pero los ítems solo traen sección 3.
+      await expect(
+        caller.tr.orden.crear({
+          ...baseInput,
+          declaraciones: { ...baseInput.declaraciones, seccion3: "SELECCIONADA" as const },
+          items: [{ codigo: "TR-FIS-03" }],
+        }),
+      ).rejects.toMatchObject({
         code: "BAD_REQUEST",
         message: expect.stringContaining("Oxigenoterapia"),
       });
+    });
+
+    it("orden sin ningún procedimiento ⇒ rechazada por contrato (min 1 ítem)", async () => {
+      stubCrear();
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.tr.orden.crear({ ...baseInput, items: [] })).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
+      expect(prisma.respiratoryOrder.create).not.toHaveBeenCalled();
+    });
+
+    it("pareo hacia un acompañante inactivo ⇒ PRECONDITION_FAILED con mensaje accionable", async () => {
+      stubCrear();
+      prisma.trProcedimiento.findMany.mockResolvedValue(
+        PROCS.map((p) => (p.codigo === "TR-OXI-02" ? { ...p, activo: false } : p)) as never,
+      );
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.tr.orden.crear(baseInput)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        message: expect.stringContaining("TR-OXI-02"),
+      });
+    });
+
+    it("cuenta no activa (CERRADA) ⇒ PRECONDITION_FAILED antes de crear nada", async () => {
+      stubCrear();
+      prisma.patientAccount.findFirst.mockResolvedValue({ ...CUENTA, status: "CERRADA" } as never);
+      const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.tr.orden.crear(baseInput)).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(prisma.respiratoryOrder.create).not.toHaveBeenCalled();
     });
 
     it("meta obligatoria con oxigenoterapia; OTRO exige rango 70–100 y justificación ≥15 (RN-TR-34)", async () => {
@@ -720,9 +758,10 @@ describe("respiratoryRouter", () => {
         order: { id: u, patientId: v, encounterId: u, patientAccountId: u, status: "ACTIVE" },
       };
 
-      it("EJECUTADA ⇒ capturarCargo origen TERAPIA_RESPIRATORIA + tarea CUMPLIDA", async () => {
+      it("EJECUTADA ⇒ claim atómico + capturarCargo origen TERAPIA_RESPIRATORIA + tarea CUMPLIDA", async () => {
         capturarCargoMock.mockClear();
         prisma.respiratoryOrderItem.findFirst.mockResolvedValue(ITEM as never);
+        prisma.respiratoryOrderItem.updateMany.mockResolvedValue({ count: 1 } as never);
         prisma.respiratoryOrderItem.update.mockResolvedValue({ id: v } as never);
         prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
         const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
@@ -740,8 +779,15 @@ describe("respiratoryRouter", () => {
             referenciaId: v,
           }),
         );
+        // Claim con guarda de estado (anti doble devengo) ANTES de capturar el cargo.
+        const claim = prisma.respiratoryOrderItem.updateMany.mock.calls[0]![0] as {
+          where: Record<string, unknown>;
+          data: Record<string, unknown>;
+        };
+        expect(claim.where).toMatchObject({ id: v, estado: "PROGRAMADA" });
+        expect(claim.data).toMatchObject({ estado: "EJECUTADA" });
         const upd = prisma.respiratoryOrderItem.update.mock.calls[0]![0] as { data: Record<string, unknown> };
-        expect(upd.data).toMatchObject({ estado: "EJECUTADA", cargoId: "cargo-tr" });
+        expect(upd.data).toMatchObject({ cargoId: "cargo-tr" });
         const tarea = prisma.careTask.updateMany.mock.calls[0]![0] as {
           where: Record<string, unknown>;
           data: Record<string, unknown>;
@@ -753,7 +799,7 @@ describe("respiratoryRouter", () => {
       it("NO_EJECUTADA ⇒ SIN cargo, causa obligatoria, tarea CANCELADA", async () => {
         capturarCargoMock.mockClear();
         prisma.respiratoryOrderItem.findFirst.mockResolvedValue(ITEM as never);
-        prisma.respiratoryOrderItem.update.mockResolvedValue({ id: v } as never);
+        prisma.respiratoryOrderItem.updateMany.mockResolvedValue({ count: 1 } as never);
         prisma.careTask.updateMany.mockResolvedValue({ count: 1 } as never);
         const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
         await caller.tr.sesion.ejecutar({
@@ -762,6 +808,10 @@ describe("respiratoryRouter", () => {
           causaNoEjecucion: "Paciente en estudio de imagen",
         });
         expect(capturarCargoMock).not.toHaveBeenCalled();
+        // Sin cargo no hay segundo update (el claim ya persistió estado+causa).
+        expect(prisma.respiratoryOrderItem.update).not.toHaveBeenCalled();
+        const claim = prisma.respiratoryOrderItem.updateMany.mock.calls[0]![0] as { data: Record<string, unknown> };
+        expect(claim.data).toMatchObject({ causaNoEjecucion: "Paciente en estudio de imagen" });
         const tarea = prisma.careTask.updateMany.mock.calls[0]![0] as { data: Record<string, unknown> };
         expect(tarea.data).toMatchObject({
           status: "CANCELADA",
@@ -775,6 +825,17 @@ describe("respiratoryRouter", () => {
         await expect(
           caller.tr.sesion.ejecutar({ itemId: v, resultado: "EJECUTADA" }),
         ).rejects.toMatchObject({ code: "CONFLICT" });
+      });
+
+      it("carrera: claim con count 0 ⇒ CONFLICT sin capturar cargo (anti doble devengo)", async () => {
+        capturarCargoMock.mockClear();
+        prisma.respiratoryOrderItem.findFirst.mockResolvedValue(ITEM as never);
+        prisma.respiratoryOrderItem.updateMany.mockResolvedValue({ count: 0 } as never);
+        const caller = respiratoryRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.tr.sesion.ejecutar({ itemId: v, resultado: "EJECUTADA" }),
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(capturarCargoMock).not.toHaveBeenCalled();
       });
     });
 
