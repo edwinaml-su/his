@@ -39,7 +39,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
     const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
-    await expect(page).toHaveURL(/\/ece\/camas/);
+    await expect(page).toHaveURL(/\/beds/);
 
     // El mapa debe mostrar al menos un bloque/tarjeta de cama
     const camas = page.getByTestId("cama-card")
@@ -347,7 +347,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
     // -----------------------------------------------------------------------
     // Recargar mapa para estado actualizado
     await page.reload();
-    await expect(page).toHaveURL(/\/ece\/camas/);
+    await expect(page).toHaveURL(/\/beds/);
 
     const camaEnLimpieza = camaNro
       ? page

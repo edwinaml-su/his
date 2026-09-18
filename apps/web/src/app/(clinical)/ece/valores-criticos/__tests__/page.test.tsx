@@ -24,7 +24,7 @@ vi.mock("@/lib/trpc/react", () => ({
   },
 }));
 
-import ValoresCriticosPage from "../page";
+import { ValoresCriticosClient } from "../valores-criticos-client";
 
 const NOTIF = {
   id: "00000000-0000-0000-0000-0000000000c1",
@@ -50,10 +50,10 @@ const NOTIF = {
   escalado_en: null,
 };
 
-function renderPage() {
+function renderPage(roleCodes: string[] = ["PHYSICIAN"]) {
   return render(
     <ToastProvider>
-      <ValoresCriticosPage />
+      <ValoresCriticosClient roleCodes={roleCodes} />
       <ToastViewport />
     </ToastProvider>,
   );
@@ -118,6 +118,13 @@ describe("ValoresCriticosPage (IPSG.2 read-back)", () => {
     fireEvent.change(screen.getByTestId("vc-pin"), { target: { value: "9999" } });
     fireEvent.click(screen.getByTestId("vc-confirmar-pin"));
     expect(screen.getByText(/PIN incorrecto/)).toBeInTheDocument();
+  });
+
+  it("DIR/ADMIN ven la bandeja pero SIN botón de confirmar (mcProc firma)", () => {
+    renderPage(["DIR"]);
+    expect(screen.getByTestId("vc-notif")).toBeInTheDocument();
+    expect(screen.queryByTestId(`vc-confirmar-${NOTIF.id}`)).not.toBeInTheDocument();
+    expect(screen.getByText(/lo firma el médico tratante/)).toBeInTheDocument();
   });
 
   it("bandeja vacía muestra el estado limpio", () => {

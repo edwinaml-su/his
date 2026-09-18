@@ -29,6 +29,11 @@ CREATE EXTENSION IF NOT EXISTS pg_cron SCHEMA cron;
 
 -- -----------------------------------------------------------------------
 -- 1. Enum de estado de reserva
+-- ⚠ Drift conocido (auditoría 2026-09-18): 'CONFIRMED' quedó aquí pero el
+-- enum vivo de prod NO lo tiene y schema.prisma lo removió — en una
+-- reconstrucción desde cero omitirlo (o dropearlo post-apply) para quedar
+-- espejo de prod: RESERVED, DISPATCHED, EXPIRED, CANCELLED (+ ADMINISTERED,
+-- RETURNED de sql/232a).
 -- -----------------------------------------------------------------------
 DO $$
 BEGIN
