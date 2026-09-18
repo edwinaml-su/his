@@ -30,6 +30,7 @@ import { PruebasTab } from "./lab-mant-pruebas";
 import { SeccionesTab } from "./lab-mant-secciones";
 import { TiposTab } from "./lab-mant-tipos";
 import { SubtiposTab } from "./lab-mant-subtipos";
+import { SlaTab } from "./lab-mant-sla";
 
 export interface CascadaTipo {
   id: string;
@@ -67,13 +68,16 @@ export interface CascadaData {
   pruebas: CascadaPrueba[];
 }
 
-type TabKey = "pruebas" | "secciones" | "tipos" | "subtipos";
+// Extensión CC-0040 — "sla" parametriza minutos de SLA por prioridad (sin
+// buscador ni "+ Nuevo": son 3 filas fijas, la toolbar se oculta en esa tab).
+type TabKey = "pruebas" | "secciones" | "tipos" | "subtipos" | "sla";
 
 const TAB_SEARCH_LABEL: Record<TabKey, string> = {
   pruebas: "pruebas",
   secciones: "secciones",
   tipos: "tipos de muestra",
   subtipos: "subtipos de muestra",
+  sla: "",
 };
 
 const NEW_LABEL: Record<TabKey, string> = {
@@ -81,6 +85,7 @@ const NEW_LABEL: Record<TabKey, string> = {
   secciones: "+ Nueva sección",
   tipos: "+ Nuevo tipo",
   subtipos: "+ Nuevo subtipo",
+  sla: "",
 };
 
 export function LabMaintenance() {
@@ -184,10 +189,13 @@ export function LabMaintenance() {
             <TabsTrigger value="subtipos" data-testid="lab-mant-tab-subtipos">
               Subtipos de muestra
             </TabsTrigger>
+            <TabsTrigger value="sla" data-testid="lab-mant-tab-sla">
+              SLA
+            </TabsTrigger>
           </TabsList>
         </Tabs>
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className={tab === "sla" ? "hidden" : "flex flex-wrap items-center justify-between gap-2"}>
           <Input
             data-testid="lab-mant-search"
             placeholder={`Buscar en ${TAB_SEARCH_LABEL[tab]}...`}
@@ -242,6 +250,7 @@ export function LabMaintenance() {
         {data && tab === "subtipos" ? (
           <SubtiposTab tipos={data.tipos} subtipos={data.subtipos} search={search} newSignal={newSignal} />
         ) : null}
+        {tab === "sla" ? <SlaTab /> : null}
       </CardContent>
     </Card>
   );

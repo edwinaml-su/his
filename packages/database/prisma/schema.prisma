@@ -3327,6 +3327,24 @@ model LabTestParameter {
 
 /// Rediseño lab 2026-09 — parámetros ESCOGIDOS para un examen concreto de una
 /// solicitud (subset de LabTestParameter de la prueba).
+/// Extensión CC-0040 (2026-09-18) — SLA parametrizable por prioridad para la
+/// supervisión de exámenes de laboratorio (reemplaza el hardcode
+/// SLA_MINUTES_BY_MOCKUP). FK a Organization solo a nivel SQL (sql/251),
+/// sin relación Prisma — mismo patrón que TipoCuenta.priceListId.
+/// Fallback en código: STAT 60' / URGENT 240' / ROUTINE 1440', warning 30'.
+model LabSlaConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  priority       String   @db.VarChar(10) /// ROUTINE|URGENT|STAT (CHECK en sql/251).
+  slaMinutes     Int
+  warningMinutes Int      @default(30)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  @@unique([organizationId, priority])
+  @@schema("public")
+}
+
 model LabOrderItemParameter {
   id          String @id @default(uuid()) @db.Uuid
   orderItemId String @db.Uuid
@@ -9361,7 +9379,8 @@ model CareTask {
   patientId        String?   @db.Uuid
   encounterId      String?   @db.Uuid
   patientAccountId String?   @db.Uuid
-  /// Origen polimórfico: INDICACION_ITEM|LAB_ORDER|IMAGING_ORDER|TRANSFER|MANUAL.
+  /// Origen polimórfico: INDICACION_ITEM|LAB_ORDER|LAB_ORDER_ITEM|IMAGING_ORDER|TRANSFER|MANUAL
+  /// (CHECK en sql/209, ampliado con LAB_ORDER_ITEM en sql/252 — extensión CC-0040).
   sourceType       String    @db.VarChar(30)
   /// PK de la fila origen en la tabla que corresponda a `sourceType` (sin FK — polimórfico).
   sourceId         String    @db.Uuid

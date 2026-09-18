@@ -55,6 +55,9 @@ import {
   labTestParameterAddInput,
   labTestParameterRemoveInput,
   labCatalogoImportInput,
+  labSlaConfigUpsertInput,
+  labSupervisionInput,
+  type LabSlaEstado,
   type LabReferenceRange,
   type LisSex,
   type LisResultFlag,
@@ -66,6 +69,12 @@ import { emitDomainEvent } from "@his/database";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { capturarCargo } from "../lib/charge-capture";
+import {
+  resolveLabSlaMap,
+  DEFAULT_LAB_SLA,
+  CARE_TASK_PRIORITY_BY_LAB_PRIORITY,
+  type LabPriorityKey,
+} from "../lib/lab-sla";
 import { resolvePersonalSalud } from "../lib/identity-resolver";
 import { createCriticalResultNotification } from "../ece/critical-result-notification";
 
@@ -1112,6 +1121,88 @@ export const lisRouter = router({
           });
         }
 
+        // Extensión CC-0040 (2026-09-18) — cada examen genera una CareTask
+        // trackeable (sourceType LAB_ORDER_ITEM) para el tablero de
+        // supervisión de laboratorio, con SLA parametrizado por prioridad
+        // (LabSlaConfig, sql/251). Mismo patrón que order-consumer.ts
+        // (camino de indicación hospitalaria) pero a nivel de ITEM: la
+        // escogitación crea órdenes de N exámenes. CareTask.establishmentId
+        // es NOT NULL — sin establecimiento en sesión se omite con warn
+        // (la orden y los cargos ya quedaron; el tablero LIS igual la ve).
+        const establishmentId = ctx.tenant.establishmentId;
+        if (establishmentId) {
+          const slaMap = await resolveLabSlaMap(tx, ctx.tenant.organizationId);
+          const sla = slaMap[input.priority as LabPriorityKey] ?? slaMap.ROUTINE;
+          const dueAt = new Date(Date.now() + sla.slaMinutes * 60_000);
+          const serviceUnit = await tx.serviceUnit.findFirst({
+            where: { establishmentId, areaType: "LABORATORIO", active: true },
+            select: { id: true },
+          });
+
+          let primeraTareaId: string | null = null;
+          for (const item of order.items) {
+            const test = testInfoById.get(item.testId);
+            const tarea = await tx.careTask.create({
+              data: {
+                organizationId: ctx.tenant.organizationId,
+                establishmentId,
+                serviceUnitId: serviceUnit?.id ?? null,
+                assignedRoleCode: "LAB_TECHNICIAN",
+                patientId,
+                encounterId,
+                patientAccountId,
+                sourceType: "LAB_ORDER_ITEM",
+                sourceId: item.id,
+                taskType: "LAB_TO_PROCESS",
+                title: (test?.name ?? "Examen de laboratorio").slice(0, 200),
+                priority: CARE_TASK_PRIORITY_BY_LAB_PRIORITY[input.priority as LabPriorityKey] ?? "NORMAL",
+                slaMinutes: sla.slaMinutes,
+                dueAt,
+                status: "PENDIENTE",
+                createdBy: ctx.user.id,
+              },
+            });
+            primeraTareaId ??= tarea.id;
+          }
+
+          // CC-0031 — UNA notificación por orden (no por examen, para no
+          // multiplicar el fan-out del dispatcher). Try/catch deliberado:
+          // mismo contrato que order-consumer.ts, un fallo del outbox no
+          // revierte la orden.
+          if (primeraTareaId) {
+            try {
+              await emitDomainEvent(tx, {
+                organizationId: ctx.tenant.organizationId,
+                eventType: "task.action_required",
+                aggregateType: "CareTask",
+                aggregateId: primeraTareaId,
+                emittedById: ctx.user.id,
+                payload: {
+                  taskType: "LAB_TO_PROCESS",
+                  sourceType: "LAB_ORDER",
+                  sourceId: order.id,
+                  assignedRoleCode: "LAB_TECHNICIAN",
+                  establishmentId,
+                  serviceUnitId: serviceUnit?.id ?? null,
+                  dueAt: dueAt.toISOString(),
+                  url: "/lis/orders?vista=supervision",
+                  resumen: `${order.items.length} examen(es) de laboratorio solicitados`,
+                },
+              });
+            } catch (err) {
+              console.error(
+                `[CC-0040 lis.order.create] emitDomainEvent(task.action_required) falló para la orden ${order.id} — ` +
+                  "las tareas se crearon igual, solo no se emitió la notificación.",
+                err,
+              );
+            }
+          }
+        } else {
+          console.warn(
+            `[CC-0040 lis.order.create] Sesión sin establecimiento — orden ${order.id} creada sin CareTasks de supervisión.`,
+          );
+        }
+
         return order;
       });
     }),
@@ -1212,9 +1303,35 @@ export const lisRouter = router({
         }
 
         for (const item of input.items) {
-          await tx.labOrderItem.updateMany({
+          const updated = await tx.labOrderItem.updateMany({
             where: { id: item.itemId, orderId: input.orderId },
             data: { status: item.status, notes: item.notes || null },
+          });
+          // Hallazgo pre-PR: sin este gate, un itemId de OTRA orden del mismo
+          // tenant no tocaría el examen (count 0) pero sí movería su CareTask.
+          if (updated.count === 0) continue;
+
+          // Extensión CC-0040 — sincroniza la CareTask de supervisión del
+          // examen (sourceType LAB_ORDER_ITEM). Mapa 1:1 con el select del
+          // modal: Pendiente→PENDIENTE · En proceso→EN_PROCESO ·
+          // Realizado→CUMPLIDA. CANCELADA nunca se toca; una tarea ya
+          // CUMPLIDA conserva su completedAt original (no se re-marca).
+          const taskStatus =
+            item.status === "RESULTED"
+              ? "CUMPLIDA"
+              : item.status === "IN_PROCESS"
+                ? "EN_PROCESO"
+                : "PENDIENTE";
+          await tx.careTask.updateMany({
+            where: {
+              sourceType: "LAB_ORDER_ITEM",
+              sourceId: item.itemId,
+              status: { notIn: ["CANCELADA", taskStatus] },
+            },
+            data:
+              taskStatus === "CUMPLIDA"
+                ? { status: "CUMPLIDA", completedById: ctx.user.id, completedAt: new Date() }
+                : { status: taskStatus, completedById: null, completedAt: null },
           });
         }
 
@@ -1379,6 +1496,212 @@ export const lisRouter = router({
           select: { fullName: true },
         });
         return buildCuentaRow(o, prescriber?.fullName ?? "—");
+      });
+    }),
+
+    /**
+     * Extensión CC-0040 (2026-09-18) — Tablero de supervisión de laboratorio.
+     *
+     * Un row por examen (LabOrderItem) de pacientes hospitalarios Y
+     * ambulatorios, con trazabilidad toma→procesamiento (hitos: solicitado /
+     * muestra tomada / resultado / validado) y semáforo de cumplimiento
+     * contra el SLA parametrizado (LabSlaConfig + CareTask.dueAt).
+     *
+     * KPIs calculados sobre la página retornada (limit default 200) — no
+     * sobre el universo completo: el tablero es operativo (turno en curso),
+     * no un reporte histórico. `incluirCompletados=false` acota a activos.
+     */
+    supervision: tenantProcedure.input(labSupervisionInput).query(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const items = await tx.labOrderItem.findMany({
+          where: {
+            order: { organizationId: ctx.tenant.organizationId },
+            status: input.incluirCompletados
+              ? { not: "CANCELLED" }
+              : { in: ["DRAFT", "ORDERED", "COLLECTED", "IN_PROCESS"] },
+          },
+          include: {
+            test: { select: { name: true, panel: { select: { name: true } } } },
+            results: {
+              select: { resultedAt: true, validatedAt: true },
+              orderBy: { resultedAt: "desc" },
+              take: 1,
+            },
+            order: {
+              select: {
+                id: true,
+                orderedAt: true,
+                priority: true,
+                encounterId: true,
+                patient: { select: { firstName: true, lastName: true, expediente: true, mrn: true } },
+                patientAccount: { select: { numeroCuenta: true } },
+                specimens: {
+                  select: { collectedAt: true },
+                  orderBy: { collectedAt: "asc" },
+                  take: 1,
+                },
+              },
+            },
+          },
+          orderBy: [{ order: { orderedAt: "desc" } }, { id: "desc" }],
+          take: input.limit,
+        });
+
+        const tareas = await tx.careTask.findMany({
+          where: { sourceType: "LAB_ORDER_ITEM", sourceId: { in: items.map((i) => i.id) } },
+          select: {
+            sourceId: true,
+            status: true,
+            dueAt: true,
+            slaMinutes: true,
+            completedAt: true,
+          },
+        });
+        const tareaByItem = new Map(tareas.map((t) => [t.sourceId, t]));
+        const slaMap = await resolveLabSlaMap(tx, ctx.tenant.organizationId);
+        const now = Date.now();
+
+        let rows = items.map((i) => {
+          const tarea = tareaByItem.get(i.id) ?? null;
+          const prioridad = (i.order.priority as LabPriorityKey) ?? "ROUTINE";
+          const sla = slaMap[prioridad] ?? slaMap.ROUTINE;
+          const resultado = i.results[0] ?? null;
+          const muestraAt = i.order.specimens[0]?.collectedAt ?? null;
+
+          // Hito terminal del examen según su pipeline LIS. Solo el status
+          // del ITEM manda: el specimen es de la ORDEN (no hay anclaje
+          // specimen→item en el modelo), así que `muestraAt` se muestra como
+          // hito informativo pero NO infla la etapa de un examen aún ORDERED
+          // (hallazgo pre-PR: órdenes multi-examen).
+          const etapa =
+            i.status === "VALIDATED"
+              ? ("VALIDADO" as const)
+              : i.status === "RESULTED"
+                ? ("RESULTADO" as const)
+                : i.status === "IN_PROCESS"
+                  ? ("EN_PROCESO" as const)
+                  : i.status === "COLLECTED"
+                    ? ("MUESTRA_TOMADA" as const)
+                    : ("SOLICITADO" as const);
+
+          const terminado = i.status === "RESULTED" || i.status === "VALIDATED";
+          // Fin real del examen para cumplimiento: resultado capturado o
+          // tarea marcada Realizado en el modal — lo primero que exista.
+          // Data legada (terminada antes de CC-0040, sin LabResult ni tarea):
+          // finAt=null ⇒ cae a CUMPLIDO_A_TIEMPO — default optimista
+          // documentado; el semáforo es operativo, no un reporte histórico.
+          const finAt = resultado?.resultedAt ?? tarea?.completedAt ?? null;
+          const dueAt =
+            tarea?.dueAt ?? new Date(i.order.orderedAt.getTime() + sla.slaMinutes * 60_000);
+
+          let slaEstado: LabSlaEstado;
+          if (terminado || tarea?.status === "CUMPLIDA") {
+            slaEstado =
+              finAt && finAt.getTime() > dueAt.getTime() ? "CUMPLIDO_TARDE" : "CUMPLIDO_A_TIEMPO";
+          } else if (now > dueAt.getTime()) {
+            slaEstado = "VENCIDO";
+          } else if (now > dueAt.getTime() - sla.warningMinutes * 60_000) {
+            slaEstado = "POR_VENCER";
+          } else {
+            slaEstado = "EN_TIEMPO";
+          }
+
+          return {
+            itemId: i.id,
+            orderId: i.order.id,
+            examen: i.test.name,
+            seccion: i.test.panel?.name ?? "",
+            paciente: {
+              nombre: `${i.order.patient.firstName} ${i.order.patient.lastName}`.trim(),
+              expediente: i.order.patient.expediente ?? i.order.patient.mrn,
+            },
+            cuenta: i.order.patientAccount?.numeroCuenta ?? null,
+            /** Hospitalario si la orden ancla a un encuentro de admisión; ambulatorio si solo tiene cuenta. */
+            atencion: i.order.encounterId ? ("HOSPITALARIO" as const) : ("AMBULATORIO" as const),
+            prioridad,
+            etapa,
+            hitos: {
+              solicitadoAt: i.order.orderedAt,
+              muestraAt,
+              resultadoAt: resultado?.resultedAt ?? null,
+              validadoAt: resultado?.validatedAt ?? null,
+            },
+            slaEstado,
+            dueAt,
+            tareaStatus: tarea?.status ?? null,
+          };
+        });
+
+        const search = input.search?.trim().toLowerCase();
+        if (search) {
+          rows = rows.filter(
+            (r) =>
+              r.paciente.nombre.toLowerCase().includes(search) ||
+              (r.paciente.expediente ?? "").toLowerCase().includes(search) ||
+              (r.cuenta ?? "").toLowerCase().includes(search) ||
+              r.examen.toLowerCase().includes(search),
+          );
+        }
+        if (input.slaEstado) rows = rows.filter((r) => r.slaEstado === input.slaEstado);
+
+        const kpis = {
+          total: rows.length,
+          enTiempo: rows.filter((r) => r.slaEstado === "EN_TIEMPO").length,
+          porVencer: rows.filter((r) => r.slaEstado === "POR_VENCER").length,
+          vencidos: rows.filter((r) => r.slaEstado === "VENCIDO").length,
+          cumplidosATiempo: rows.filter((r) => r.slaEstado === "CUMPLIDO_A_TIEMPO").length,
+          cumplidosTarde: rows.filter((r) => r.slaEstado === "CUMPLIDO_TARDE").length,
+        };
+
+        return { kpis, rows };
+      });
+    }),
+  }),
+
+  /**
+   * Extensión CC-0040 — parametrización del SLA de laboratorio por prioridad
+   * (RN de cumplimiento). `list` retorna el valor EFECTIVO por prioridad
+   * (fila del tenant o default de código); `upsert` crea/actualiza la fila
+   * del tenant. Solo administración, igual que el resto del catálogo.
+   */
+  sla: router({
+    list: tenantProcedure.query(async ({ ctx }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const rows = await tx.labSlaConfig.findMany({
+          where: { organizationId: ctx.tenant.organizationId },
+          select: { priority: true, slaMinutes: true, warningMinutes: true },
+        });
+        const byPriority = new Map(rows.map((r) => [r.priority, r]));
+        return (["STAT", "URGENT", "ROUTINE"] as const).map((priority) => {
+          const custom = byPriority.get(priority);
+          const efectivo = custom ?? DEFAULT_LAB_SLA[priority];
+          return {
+            priority,
+            slaMinutes: efectivo.slaMinutes,
+            warningMinutes: efectivo.warningMinutes,
+            esDefault: !custom,
+          };
+        });
+      });
+    }),
+
+    upsert: catalogAdminProc.input(labSlaConfigUpsertInput).mutation(async ({ ctx, input }) => {
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        return tx.labSlaConfig.upsert({
+          where: {
+            organizationId_priority: {
+              organizationId: ctx.tenant.organizationId,
+              priority: input.priority,
+            },
+          },
+          create: {
+            organizationId: ctx.tenant.organizationId,
+            priority: input.priority,
+            slaMinutes: input.slaMinutes,
+            warningMinutes: input.warningMinutes,
+          },
+          update: { slaMinutes: input.slaMinutes, warningMinutes: input.warningMinutes },
+        });
       });
     }),
   }),
