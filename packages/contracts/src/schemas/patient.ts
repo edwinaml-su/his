@@ -118,7 +118,13 @@ const patientBaseObject = z.object({
   bloodTypeNotReported: z.boolean().optional(),
   isUnknown: z.boolean().default(false),
   // CC-0002 §3/§5: documento de registro (opcional, tolera pacientes existentes sin doc).
-  documentType: documentTypeEnum.optional(),
+  // CC-A (auditoría 2026-09-18, P1) — relajado de `documentTypeEnum` (5 valores
+  // fijos SV) a texto libre: acepta también `IdentifierType.code` del país de
+  // la organización (ej. DPI en Guatemala). `documentTypeEnum` se conserva
+  // como lista legacy SV (ver export abajo) — la validación de que el valor
+  // sea uno de los legacy O un IdentifierType activo del país corre
+  // server-side en `patient.router.ts` (Zod no conoce el país de la org).
+  documentType: z.string().trim().min(2).max(40).optional(),
   documentNumber: z.string().min(1).max(40).optional(),
   responsable: responsableSchema.optional(),
 });

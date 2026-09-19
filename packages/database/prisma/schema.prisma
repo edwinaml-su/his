@@ -90,18 +90,6 @@ enum AdmissionType {
   @@schema("public")
 }
 
-/// CC-0002 §3 — tipo de documento de registro del paciente.
-/// CC-0005: CARNET_RESIDENCIA agregado para resolver pacientes por documento en OI.
-enum DocumentType {
-  DUI
-  DNI
-  PASAPORTE
-  DUI_RESP
-  CARNET_RESIDENCIA
-
-  @@schema("public")
-}
-
 /// CC-0002 §7 — tipo de servicio en cuenta de paciente.
 enum TipoServicio {
   HOSPITALARIO
@@ -331,6 +319,8 @@ model Country {
   defaultLocale String   @db.VarChar(20) /// es-SV, es-GT, etc.
   defaultTzId   String   @db.VarChar(60) /// IANA: America/El_Salvador.
   active        Boolean  @default(true)
+  /// CC-A (auditoría 2026-09-18, P1) — IVA del país (ej. 0.13 = 13% SV, 0.12 = 12% GT). SQL 255.
+  vatRate       Decimal  @default(0.13) @db.Decimal(5, 4)
   createdAt     DateTime @default(now()) @db.Timestamptz()
   updatedAt     DateTime @updatedAt @db.Timestamptz()
 
@@ -1317,7 +1307,7 @@ model Patient {
   organizationId     String    @db.Uuid /// organización propietaria del registro maestro.
   mrn                String    @db.VarChar(40) /// medical record number interno.
   expediente         String?   @unique @db.VarChar(20) /// CC-0002 §6: {PAIS}{AA}{NNNNN}. Inmutable tras asignarse. Server-generated.
-  documentType       DocumentType?            /// CC-0002 §3: documento de registro. DUI_RESP = doc del responsable (menores).
+  documentType       String?   @db.VarChar(40) /// CC-0002 §3 / CC-A: documento de registro. Legacy SV (DUI/DNI/PASAPORTE/DUI_RESP/CARNET_RESIDENCIA) o `IdentifierType.code` del país de la organización (era enum `DocumentType` — SQL 255 lo convirtió a texto libre para soportar catálogos por país).
   documentNumber     String?   @db.VarChar(40) /// CC-0002 §5: dedup 1:1 para docs propios; DUI_RESP es compartible.
   /// CC-0008 §6 — switch "el paciente trae documento de identidad" (default ON). OFF habilita registro sin documento + responsable.
   traeDocumento      Boolean   @default(true)

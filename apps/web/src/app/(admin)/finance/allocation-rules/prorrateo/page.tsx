@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const t = trpc as any;
@@ -51,10 +52,6 @@ type ProrationResult = {
   totalProrateado: number;
   distribuciones: Distribucion[];
 };
-
-function formatMoney(n: number): string {
-  return n.toLocaleString("es-SV", { style: "currency", currency: "USD" });
-}
 
 function exportCsv(results: ProrationResult[], from: string, to: string) {
   const rows: string[] = [
@@ -210,7 +207,7 @@ export default function ProrrateoPage() {
                     </div>
                     <div className="text-right">
                       <p className="text-xs text-muted-foreground">Total prorateado</p>
-                      <p className="text-lg font-bold">{formatMoney(r.totalProrateado)}</p>
+                      <p className="text-lg font-bold">{formatCurrency(r.totalProrateado)}</p>
                     </div>
                   </div>
                 </CardHeader>
@@ -233,7 +230,7 @@ export default function ProrrateoPage() {
                             </TableCell>
                             <TableCell className="text-right">{d.porcentaje.toFixed(2)}%</TableCell>
                             <TableCell className="text-right font-medium">
-                              {formatMoney(d.monto)}
+                              {formatCurrency(d.monto)}
                             </TableCell>
                           </TableRow>
                         ))}
@@ -296,7 +293,7 @@ export default function ProrrateoPage() {
                                 <span className="text-muted-foreground">{row.name}</span>
                               </TableCell>
                               <TableCell className="text-right font-semibold">
-                                {formatMoney(row.monto)}
+                                {formatCurrency(row.monto)}
                               </TableCell>
                             </TableRow>
                           ))}

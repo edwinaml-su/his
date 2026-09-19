@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import {
   DateRangePicker,
   useDateRange,
@@ -117,7 +118,7 @@ export default function ConsumoInsumosPage() {
           <Card className="text-center">
             <CardContent className="pt-4">
               <p className="text-xs text-muted-foreground">Costo total periodo</p>
-              <p className="font-mono text-lg font-bold">${fmtCurrency(totalCosto)}</p>
+              <p className="font-mono text-lg font-bold">{formatCurrency(totalCosto)}</p>
             </CardContent>
           </Card>
         </div>
@@ -146,7 +147,7 @@ export default function ConsumoInsumosPage() {
                   <TableCell className="text-sm">{r.name}</TableCell>
                   <TableCell className="text-xs capitalize">{r.tipo}</TableCell>
                   <TableCell className="text-right font-mono text-sm">{r.totalItems}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.totalCosto)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{formatCurrency(r.totalCosto)}</TableCell>
                 </TableRow>
               ))
             )}

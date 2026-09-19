@@ -255,6 +255,7 @@ describe("triageRouter", () => {
       prisma.patient.create.mockResolvedValue({ id: "p-nn-1" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.organization.findUnique.mockResolvedValue({ functionalCurrency: "cur1" } as never);
       prisma.encounter.count.mockResolvedValue(0 as never);
       prisma.encounter.create.mockResolvedValue({ id: "enc1" } as never);
       prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);
@@ -288,6 +289,7 @@ describe("triageRouter", () => {
       prisma.patient.create.mockResolvedValue({ id: "p-nn-2" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.organization.findUnique.mockResolvedValue({ functionalCurrency: "cur1" } as never);
       prisma.encounter.count.mockResolvedValue(0 as never);
       prisma.encounter.create.mockResolvedValue({ id: "enc2" } as never);
       prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);
@@ -313,6 +315,7 @@ describe("triageRouter", () => {
       prisma.patient.create.mockResolvedValue({ id: "p-rls-1" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.countryCurrency.findFirst.mockResolvedValue({ currencyId: "cur1" } as never);
+      prisma.organization.findUnique.mockResolvedValue({ functionalCurrency: "cur1" } as never);
       prisma.encounter.count.mockResolvedValue(0 as never);
       prisma.encounter.create.mockResolvedValue({ id: "enc-rls" } as never);
       prisma.triageFlowchart.findFirst.mockResolvedValue({ id: "fc1" } as never);

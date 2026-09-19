@@ -199,6 +199,10 @@ describe("invoiceRouter", () => {
     it("persiste patientAccountId cuando la cuenta pertenece al tenant y paciente", async () => {
       mockTransaction(prisma);
       (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      // CC-A — currencyId del input YA es la funcional: exchangeRateToFunc=1 sin tocar ExchangeRate.
+      prisma.organization.findUnique.mockResolvedValue({
+        functionalCurrency: baseInput.currencyId,
+      } as never);
       // docs/48 Ola 2 (C2-3) — el precio resuelto coincide con el unitPrice
       // enviado (10): la línea pasa sin necesitar override.
       resolverPrecioMock.mockResolvedValue({
@@ -221,6 +225,37 @@ describe("invoiceRouter", () => {
       const insertCall = queryMock.mock.calls[2]!;
       expect(String(insertCall[0])).toContain('"patientAccountId"');
       expect(insertCall).toContain(accountId);
+    });
+
+    // CC-A (auditoría 2026-09-18, P1) — antes 13% hardcodeado sin importar el país.
+    it("usa Country.vatRate del país de la org (GT=12%) en vez de 13% fijo", async () => {
+      mockTransaction(prisma);
+      (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      prisma.organization.findUnique.mockResolvedValue({
+        functionalCurrency: baseInput.currencyId,
+        country: { vatRate: { toNumber: () => 0.12 } },
+      } as never);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 10,
+        fuente: "estandar",
+        priceListId: null,
+        reglaId: null,
+      });
+      const queryMock = prisma.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>;
+      queryMock
+        .mockResolvedValueOnce([{ id: "estab-1" }])
+        .mockResolvedValueOnce([{ id: accountId }])
+        .mockResolvedValueOnce([{ id: "inv-gt" }])
+        .mockResolvedValueOnce(undefined);
+
+      const caller = invoiceRouter.createCaller(makeCtx({ prisma }));
+      await caller.create({ ...baseInput, patientAccountId: accountId });
+
+      // INSERT Invoice: subtotal=10, taxAmount=1.2 (12% de 10), totalAmount=11.2.
+      const insertCall = queryMock.mock.calls[2]!;
+      expect(insertCall[9]).toBe(10);
+      expect(insertCall[10]).toBe(1.2);
+      expect(insertCall[11]).toBe(11.2);
     });
   });
 
@@ -288,6 +323,10 @@ describe("invoiceRouter", () => {
     it("con overridePrecio + rol ADMIN acepta el precio del cliente y persiste priceSource='manual_override'", async () => {
       mockTransaction(prisma);
       (prisma.$executeRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+      // CC-A — currencyId del input YA es la funcional: exchangeRateToFunc=1 sin tocar ExchangeRate.
+      prisma.organization.findUnique.mockResolvedValue({
+        functionalCurrency: baseInput.currencyId,
+      } as never);
       resolverPrecioMock.mockResolvedValue({
         precio: 25,
         fuente: "regla",

@@ -55,6 +55,7 @@ import {
 } from "@his/ui/components/dropdown-menu";
 import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
 import {
@@ -212,10 +213,6 @@ export function PersonalSaludDetail({ personalId, backHref, backLabel }: Persona
       setToast({ title: "Error", description: err instanceof Error ? err.message : String(err), variant: "destructive" });
     }
   };
-
-  function formatCurrency(n: number): string {
-    return new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD" }).format(n);
-  }
 
   function setQuickRange(months: number) {
     const hasta = new Date();

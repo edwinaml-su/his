@@ -40,6 +40,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 function fmtFecha(d: string | Date | null | undefined): string {
   if (!d) return "—";
@@ -173,7 +174,7 @@ function ReglasDePoliza({ coverageId }: { coverageId: string }) {
       {rulesQuery.data.map((r) => (
         <li key={r.id}>
           {r.ruleOn === "CODIGO" ? `Código ${r.code}` : `Categoría ${r.serviceCategoryId}`}:{" "}
-          {r.fullCover ? "100%" : r.ruleType === "PORCENTAJE" ? `${r.percentage}%` : `$${r.amount}`}
+          {r.fullCover ? "100%" : r.ruleType === "PORCENTAJE" ? `${r.percentage}%` : formatCurrency(Number(r.amount))}
         </li>
       ))}
     </ul>

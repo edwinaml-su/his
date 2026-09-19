@@ -13,6 +13,7 @@
 import { prisma } from "@his/database";
 import type { KpiValue } from "../_components/kpi-card";
 import { fmtUnidad, semaforoMayor, semaforoMenor } from "../_lib/mock-values";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 export interface ComputeRequest {
   organizationIds: string[];
@@ -124,7 +125,7 @@ export async function computeFinancieros(req: ComputeRequest): Promise<KpiValues
       result.fin_dso = {
         display: fmtUnidad(dso, "días", 1),
         semaforo: semaforoMenor(dso, 45, 60),
-        delta: `CxC $${cxc.toLocaleString("es-SV")} / ingresos $${revenue.toLocaleString("es-SV")}`,
+        delta: `CxC ${formatCurrency(cxc)} / ingresos ${formatCurrency(revenue)}`,
       };
     }
   } catch {
@@ -261,7 +262,7 @@ export async function computeFinancieros(req: ComputeRequest): Promise<KpiValues
       result.fin_margen = {
         display: fmtUnidad(v, "%"),
         semaforo: semaforoMayor(v, 30, 15),
-        delta: `Ingresos $${ingresos.toLocaleString("es-SV")} − Costos $${costos.toLocaleString("es-SV")}`,
+        delta: `Ingresos ${formatCurrency(ingresos)} − Costos ${formatCurrency(costos)}`,
       };
     }
   } catch {

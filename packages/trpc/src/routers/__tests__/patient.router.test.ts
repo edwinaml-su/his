@@ -167,7 +167,7 @@ describe("patientRouter", () => {
 
       // Mock de organization.findUnique para obtener isoAlpha2 del país.
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV", isoNumeric: 222 },
+        countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
       // Mock de $queryRaw: fn_next_expediente devuelve 1.
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
@@ -241,7 +241,7 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       // $queryRaw: fn_next_expediente devuelve 1 para el primer menor; luego hook ECE queries → []
       prisma.$queryRaw
         .mockResolvedValueOnce([{ n: 1 }] as never)   // fn_next_expediente → SV{AA}00001
@@ -291,7 +291,7 @@ describe("patientRouter", () => {
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
 
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV", isoNumeric: 222 },
+        countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
 
       const existingPatient = {
@@ -328,7 +328,7 @@ describe("patientRouter", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
           .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-        prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+        prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       }
 
       it("compone firstName/lastName por sexo, expediente con año ACTUAL, unknownLabel y traeDocumento=false", async () => {
@@ -420,7 +420,7 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
       prisma.patient.create.mockResolvedValue({ id: "with-blood", expediente: "2228400001" } as never);
 
@@ -436,6 +436,119 @@ describe("patientRouter", () => {
 
       const args = prisma.patient.create.mock.calls[0]![0];
       expect(args.data).toMatchObject({ bloodTypeAbo: "O", bloodRh: "Du" });
+    });
+
+    // ─── CC-A (auditoría 2026-09-18, P1) — tipos de documento por país ─────
+    describe("documentType por país", () => {
+      function setupOrgGT() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+          .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+        prisma.organization.findUnique.mockResolvedValue({
+          countryId: "country-gt",
+          country: { isoAlpha2: "GT", isoNumeric: 320 },
+        } as never);
+      }
+
+      it("acepta un documentType del catálogo IdentifierType del país (DPI)", async () => {
+        setupOrgGT();
+        prisma.identifierType.findFirst.mockResolvedValue({ code: "DPI" } as never);
+        prisma.patient.findFirst.mockResolvedValue(null as never); // dedup: no existe
+        prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
+        prisma.patient.create.mockResolvedValue({ id: "gt-1", expediente: "3202600001" } as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await caller.create({
+          firstName: "Ana",
+          lastName: "García",
+          biologicalSexId: "00000000-0000-0000-0000-000000000099",
+          birthDate: "1990-01-01",
+          documentType: "DPI",
+          documentNumber: "1234567890101",
+        } as never);
+
+        expect(prisma.identifierType.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { countryId: "country-gt", code: "DPI", active: true },
+          }),
+        );
+        expect(prisma.patient.create).toHaveBeenCalledTimes(1);
+      });
+
+      it("rechaza un documentType que no existe en el catálogo del país (BAD_REQUEST, nunca crea)", async () => {
+        setupOrgGT();
+        prisma.identifierType.findFirst.mockResolvedValue(null as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.create({
+            firstName: "Ana",
+            lastName: "García",
+            biologicalSexId: "00000000-0000-0000-0000-000000000099",
+            birthDate: "1990-01-01",
+            documentType: "PASAPORTE_XYZ_INEXISTENTE",
+            documentNumber: "123",
+          } as never),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(prisma.patient.create).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("update", () => {
+    const PATIENT_ID = "00000000-0000-0000-0000-0000000000f1";
+
+    it("acepta documentType legacy SV sin consultar IdentifierType", async () => {
+      prisma.patient.update.mockResolvedValue({ id: PATIENT_ID, documentType: "DUI" } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.update({ id: PATIENT_ID, documentType: "DUI" } as never);
+
+      expect(prisma.identifierType.findFirst).not.toHaveBeenCalled();
+      expect(prisma.patient.update).toHaveBeenCalledTimes(1);
+    });
+
+    it("rechaza documentType inexistente en el catálogo del país (BAD_REQUEST)", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-gt" } as never);
+      prisma.identifierType.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.update({ id: PATIENT_ID, documentType: "NO_EXISTE" } as never),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.patient.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("tiposDocumento", () => {
+    it("devuelve el catálogo IdentifierType del país de la org cuando existe", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-gt" } as never);
+      prisma.identifierType.findMany.mockResolvedValue([
+        { code: "DPI", name: "Documento Personal de Identificación" },
+      ] as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.tiposDocumento();
+
+      expect(result).toEqual([
+        { code: "DPI", name: "Documento Personal de Identificación" },
+      ]);
+    });
+
+    it("cae a la lista legacy SV si el país no tiene catálogo sembrado", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-xx" } as never);
+      prisma.identifierType.findMany.mockResolvedValue([] as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.tiposDocumento();
+
+      expect(result.map((t) => t.code)).toEqual([
+        "DUI",
+        "DNI",
+        "PASAPORTE",
+        "DUI_RESP",
+        "CARNET_RESIDENCIA",
+      ]);
     });
   });
 
