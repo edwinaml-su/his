@@ -21,12 +21,44 @@
 --   2. Backfill: recorre los `User` activos con algún rol clínico vigente y
 --      los materializa — puebla prod de una vez al aplicar (el sync ES la
 --      carga, no la precede).
---   3. Triggers AFTER INSERT/UPDATE sobre `public."User"` y
+--   3. Triggers AFTER INSERT/UPDATE/DELETE sobre `public."User"` y
 --      `public."UserOrganizationRole"` que invocan la función — mantiene
 --      `ece.personal_salud`/`ece.asignacion_rol` al día sin intervención
---      manual futura. Ambos envuelven la llamada en un bloque
+--      manual futura. Todos envuelven la llamada en un bloque
 --      EXCEPTION → RAISE WARNING: un fallo del sync NUNCA debe abortar el
---      INSERT/UPDATE real sobre User/UserOrganizationRole.
+--      INSERT/UPDATE/DELETE real sobre User/UserOrganizationRole.
+--
+-- ══════════════════════════════════════════════════════════════════════════
+-- DIVULGACIÓN OBLIGATORIA — resultado real del backfill, simulado contra
+-- prod (SELECT de solo lectura, sin escribir nada; ejecutado 2026-09-19 vía
+-- mcp__.../execute_sql sobre ejacvsgbewcerxtjtwto) ANTES de que @Orq aplique
+-- este archivo. NO SUAVIZAR:
+--
+--   De los 6 usuarios elegibles hoy (algún rol clínico mapeado, activos):
+--   SOLO 2 MATERIALIZAN — amedina@complejoavante.com y
+--   wgonzalez@codecastle.com.sv — porque son los únicos con
+--   `UserServiceUnitAssignment` activa (resolución (a)).
+--
+--   LOS OTROS 4 QUEDAN SIN FILA (RAISE NOTICE, no error) porque el
+--   fallback (b) — "único Establishment activo entre las orgs del
+--   usuario" — NUNCA decide para ellos: la organización real de Avante
+--   (`c7eabf29-a484-4a69-9426-9ee8b06d054a`) tiene 6 establecimientos
+--   activos (HE/CM/US/CL/FCM/FSC), no 1, así que el count(DISTINCT) > 1
+--   y el fallback se rinde. Los 4 omitidos:
+--     - emartinez@complejoavante.com — cuenta DIR de EDWIN. Su
+--       `certificacion.listCola` dará PRECONDITION_FAILED hasta que (a)
+--       se le cree una `UserServiceUnitAssignment`, o (b) se resuelva la
+--       decisión pendiente "SUPER_ADMIN cross-org" (memoria del proyecto)
+--       con un mecanismo de establecimiento explícito para superusuarios.
+--     - eaguirre@complejoavante.com (ADMIN)
+--     - qa.admin@his.test / qa.triagist@his.test (fixtures E2E, ADMIN)
+--
+--   Consecuencia operativa: R1.1 desbloquea IPSG-2 y `listCola` SOLO para
+--   los 2 usuarios con asignación de servicio real — no es una solución
+--   completa para todo el universo de usuarios clínicos con roles
+--   corporativos/multi-sede hasta que se cierre R1.1's fallback (b) o se
+--   pueble `UserServiceUnitAssignment` para el resto (Track D del plan).
+-- ══════════════════════════════════════════════════════════════════════════
 --
 -- ── Decisión de mapeo de roles (evidencia: introspección prod 2026-09-19 vía
 --    mcp__.../execute_sql, read-only, proyecto ejacvsgbewcerxtjtwto) ─────────
@@ -45,9 +77,26 @@
 -- Mapeo aplicado (`public."Role".code` → `ece.rol.codigo`):
 --   DIR → DIR · PHYSICIAN → MC · NURSE/ENF_NRP/TRIAGE_NURSE → ENF ·
 --   GO/PEDIA/ANEST → ESP (especialistas) · ADMIN/ADMISSION_CLERK → ADM.
+--
+-- P2-3 (revisión independiente, evidencia: `public."Role"` en prod tiene 21
+-- filas de cada uno de estos códigos — sembrados por org, CC-0036/CC-0017) —
+-- roles corporativos/de afiliación que la primera pasada no cubrió:
+--   MEDICO_AFILIADO → MC (médico externo B2B2C que documenta/firma HC del
+--     paciente que trae — mismo rol funcional NTEC que un PHYSICIAN interno).
+--   JEFE_MEDICO_SEDE → MC (médico de sede con función administrativa
+--     adicional, pero sigue firmando documentos clínicos como médico).
+--   ADMIN_CLINICO → ADM (administrativo con alcance clínico — mismo rol NTEC
+--     que ADMIN/ADMISSION_CLERK).
+-- SIN mapeo, con nota explícita (no son actores clínicos NTEC — roles de
+-- VISIBILIDAD/GOBIERNO corporativo, no documentan ni firman en el ECE):
+--   DIR_PAIS (dirección país, supervisión multi-sede — no es el DIR de
+--     establecimiento que certifica Art. 21 NTEC), CONTRALOR_CORP
+--     (contraloría financiera corporativa), SUPER_ADMIN (cross-org, decisión
+--     pendiente de Edwin — ver memoria "SUPER_ADMIN cross-org").
 -- Sin mapeo (no clínico NTEC, se ignoran para elegibilidad):
 --   PHARMACIST, WORKFLOW_DESIGNER, SUPER_ADMIN, LAB_TECHNICIAN,
---   RAD_TECHNICIAN y cualquier otro código no listado arriba.
+--   RAD_TECHNICIAN, DIR_PAIS, CONTRALOR_CORP y cualquier otro código no
+--   listado arriba.
 --
 -- ── Decisión de establecimiento ("contexto de membresía") ───────────────────
 -- No existe un vínculo User→Establishment directo. Se resuelve, en orden:
@@ -136,6 +185,8 @@ BEGIN
     SELECT CASE r.code
              WHEN 'DIR'              THEN 'DIR'
              WHEN 'PHYSICIAN'        THEN 'MC'
+             WHEN 'MEDICO_AFILIADO'  THEN 'MC'
+             WHEN 'JEFE_MEDICO_SEDE' THEN 'MC'
              WHEN 'NURSE'            THEN 'ENF'
              WHEN 'ENF_NRP'          THEN 'ENF'
              WHEN 'TRIAGE_NURSE'     THEN 'ENF'
@@ -144,6 +195,7 @@ BEGIN
              WHEN 'ANEST'            THEN 'ESP'
              WHEN 'ADMIN'            THEN 'ADM'
              WHEN 'ADMISSION_CLERK'  THEN 'ADM'
+             WHEN 'ADMIN_CLINICO'    THEN 'ADM'
              ELSE NULL
            END AS codigo
     FROM public."UserOrganizationRole" uor
@@ -178,8 +230,12 @@ BEGIN
   LIMIT 1;
 
   -- (b) Fallback: único Establishment activo entre todas las orgs del usuario.
+  -- `min(uuid)` no existe en Postgres — cast a text y de vuelta a uuid
+  -- (encontrado al simular este bloque contra prod antes de aplicar: sin
+  -- este cast la función abortaría con 42883 la primera vez que un usuario
+  -- elegible cayera en este fallback).
   IF v_estab_space_a IS NULL THEN
-    SELECT count(DISTINCT e.id), min(e.id)
+    SELECT count(DISTINCT e.id), min(e.id::text)::uuid
     INTO v_estab_count, v_estab_space_a
     FROM public."Establishment" e
     WHERE e.active
@@ -259,8 +315,21 @@ COMMENT ON FUNCTION ece.fn_sync_personal_salud(uuid) IS
   'con rol clínico NTEC. documento_identidad se puebla con centinela '
   '(PENDIENTE-DUI-*) — requiere corrección manual del DUI real, nunca inventado.';
 
+-- P1-2 (revisión independiente) — SECDEF de ESCRITURA con owner BYPASSRLS y
+-- `ece` con USAGE para `authenticated`: sin este REVOKE, cualquier sesión
+-- `authenticated` podría llamar `SELECT ece.fn_sync_personal_salud(<uuid>)`
+-- directamente con un uuid arbitrario y reactivar filas/asignaciones que un
+-- ADMIN desactivó a mano (bypassa el `activo=false` manual). El único uso
+-- legítimo es interno, vía los triggers de abajo — un trigger NO requiere
+-- EXECUTE del rol que dispara el INSERT/UPDATE (se invoca por el mecanismo
+-- de trigger, no por llamada directa), así que revocar de `authenticated`
+-- no rompe nada. Patrón: sql/196_owasp2025_a02_secdef_hardening.sql.
+REVOKE ALL ON FUNCTION ece.fn_sync_personal_salud(uuid) FROM PUBLIC, anon, authenticated;
+
 -- -----------------------------------------------------------------------
--- 2. Triggers — AFTER INSERT/UPDATE en User y UserOrganizationRole.
+-- 2. Triggers — AFTER INSERT/UPDATE/DELETE en User y UserOrganizationRole.
+--    (`fn_trg_*` son RETURNS trigger — no necesitan REVOKE: los triggers no
+--    requieren EXECUTE del rol que dispara el INSERT/UPDATE/DELETE.)
 --    Envueltos en EXCEPTION → RAISE WARNING: un fallo del sync NUNCA bloquea
 --    la escritura real (principio "la data nunca bloquea").
 -- -----------------------------------------------------------------------
@@ -322,6 +391,40 @@ CREATE TRIGGER trg_sync_personal_salud_on_uor
   FOR EACH ROW
   EXECUTE FUNCTION ece.fn_trg_sync_personal_salud_uor();
 
+-- P2-1 (revisión independiente) — un DELETE directo sobre
+-- UserOrganizationRole (fuera del camino normal de la app, que usa
+-- `validTo` para revocar) NO disparaba el UPDATE anterior. `OLD` (no `NEW`)
+-- porque en AFTER DELETE la fila ya no existe — se re-evalúa el usuario con
+-- sus roles restantes; si ya no le queda ninguno clínico,
+-- fn_sync_personal_salud lo desactiva (Art. 23 lit. f).
+CREATE OR REPLACE FUNCTION ece.fn_trg_sync_personal_salud_uor_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ece, public, pg_catalog
+AS $function$
+BEGIN
+  BEGIN
+    PERFORM ece.fn_sync_personal_salud(OLD."userId");
+  EXCEPTION WHEN OTHERS THEN
+    RAISE WARNING 'fn_sync_personal_salud (trigger UserOrganizationRole DELETE) falló para usuario %: % (%)',
+      OLD."userId", SQLERRM, SQLSTATE;
+  END;
+  RETURN OLD;
+END;
+$function$;
+
+COMMENT ON FUNCTION ece.fn_trg_sync_personal_salud_uor_delete() IS
+  'R1.1/P2-1 — dispara ece.fn_sync_personal_salud tras un DELETE directo de '
+  'public."UserOrganizationRole" (el camino normal de revocación usa validTo, '
+  'que ya cubre trg_sync_personal_salud_on_uor). Nunca aborta la transacción original.';
+
+DROP TRIGGER IF EXISTS trg_sync_personal_salud_on_uor_delete ON public."UserOrganizationRole";
+CREATE TRIGGER trg_sync_personal_salud_on_uor_delete
+  AFTER DELETE ON public."UserOrganizationRole"
+  FOR EACH ROW
+  EXECUTE FUNCTION ece.fn_trg_sync_personal_salud_uor_delete();
+
 -- -----------------------------------------------------------------------
 -- 3. Backfill idempotente — puebla prod al aplicar (el sync ES la carga).
 --    Códigos clínicos elegibles: ver mapeo en la cabecera. Envuelto en
@@ -340,8 +443,9 @@ BEGIN
     WHERE u.active
       AND (uor."validTo" IS NULL OR uor."validTo" >= now())
       AND ro.code IN (
-        'DIR', 'PHYSICIAN', 'NURSE', 'ENF_NRP', 'TRIAGE_NURSE',
-        'GO', 'PEDIA', 'ANEST', 'ADMIN', 'ADMISSION_CLERK'
+        'DIR', 'PHYSICIAN', 'MEDICO_AFILIADO', 'JEFE_MEDICO_SEDE',
+        'NURSE', 'ENF_NRP', 'TRIAGE_NURSE',
+        'GO', 'PEDIA', 'ANEST', 'ADMIN', 'ADMISSION_CLERK', 'ADMIN_CLINICO'
       )
   LOOP
     BEGIN
@@ -362,13 +466,16 @@ END $$;
 -- FROM ece.personal_salud
 -- ORDER BY creado_en DESC;
 --
--- -- Esperado (evidencia 2026-09-19): >= 1 fila para amedina@complejoavante.com
--- -- (roles DIR+PHYSICIAN+NURSE+ADMIN en la org c7eabf29-a484-4a69-9426-9ee8b06d054a,
--- -- con UserServiceUnitAssignment → establecimiento HE) con documento_identidad
--- -- centinela y activo=true. emartinez@complejoavante.com (superusuario
--- -- cross-org, sin UserServiceUnitAssignment y >1 establecimiento activo en la
--- -- org real) se espera SIN fila — ver "SUPER_ADMIN cross-org" en memoria,
--- -- decisión pendiente de Edwin, fuera de alcance de R1.1.
+-- -- Esperado (evidencia 2026-09-19, ver DIVULGACIÓN OBLIGATORIA en la
+-- -- cabecera): EXACTAMENTE 2 filas nuevas — amedina@complejoavante.com y
+-- -- wgonzalez@codecastle.com.sv (ambos con UserServiceUnitAssignment →
+-- -- establecimiento HE), con documento_identidad centinela y activo=true.
+-- -- Los otros 4 elegibles (emartinez@complejoavante.com — cuenta DIR de
+-- -- Edwin —, eaguirre@complejoavante.com, qa.admin@his.test,
+-- -- qa.triagist@his.test) NO deben tener fila — sin UserServiceUnitAssignment
+-- -- y con >1 establecimiento activo en sus orgs, el fallback (b) no decide.
+-- -- Si `count(*) != 2` después de aplicar, algo cambió en los datos desde la
+-- -- simulación y hay que re-diagnosticar antes de asumir que el sync está bien.
 --
 -- -- Asignaciones de rol creadas:
 -- SELECT ps.nombre_completo, rl.codigo, ar.activo
@@ -382,7 +489,17 @@ END $$;
 -- JOIN ece.rol rl ON rl.id = ar.rol_id
 -- WHERE ar.activo GROUP BY rl.codigo ORDER BY rl.codigo;
 --
--- -- Triggers presentes:
+-- -- Triggers presentes (3: user, uor insert/update, uor delete):
 -- SELECT tgname, tgrelid::regclass FROM pg_trigger
--- WHERE tgname IN ('trg_sync_personal_salud_on_user', 'trg_sync_personal_salud_on_uor');
+-- WHERE tgname IN (
+--   'trg_sync_personal_salud_on_user',
+--   'trg_sync_personal_salud_on_uor',
+--   'trg_sync_personal_salud_on_uor_delete'
+-- );
+--
+-- -- EXECUTE de fn_sync_personal_salud revocado de PUBLIC/anon/authenticated
+-- -- (P1-2) — debe devolver 0 filas:
+-- SELECT grantee, privilege_type FROM information_schema.routine_privileges
+-- WHERE routine_schema = 'ece' AND routine_name = 'fn_sync_personal_salud'
+--   AND grantee IN ('PUBLIC', 'anon', 'authenticated');
 -- =============================================================================

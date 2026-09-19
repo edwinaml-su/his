@@ -100,20 +100,30 @@ const certificarBulkInput = z.object({
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
 
-// R1.1 — sin JOIN a public."Patient"/public."User": esas tablas tienen RLS
-// tenant (`organizationId = current_org_id()`) que `withWorkflowContext` NO
-// setea (GUC distinto al de `withEceContext`'s `tenantContext`). El nombre se
-// resuelve aparte, vía `ctx.prisma` (BYPASSRLS), después de cerrar la
-// transacción ECE — ver el bloque de enriquecimiento en `listCola`.
+// R1.1 (corregido tras revisión — P1-1) — `di.paciente_id` es FK a
+// `ece.paciente(id)`, NO a `public."Patient".id` (verificado por
+// introspección de `pg_constraint`: `documento_instancia_paciente_id_fkey`
+// referencia `ece.paciente`). El puente real hacia el registro público es
+// `ece.paciente.public_patient_id` (127/127 filas bridged en prod, columna
+// nullable por si algún día hay pacientes ECE sin contraparte pública).
+// Análogamente, `dih.ejecutado_por` es FK a `ece.personal_salud(id)`, NO a
+// `public."User".id` (`documento_instancia_historial_ejecutado_por_fkey`) —
+// por eso `validado_por_nombre` se resuelve DENTRO de la misma tx ECE (join a
+// `ece.personal_salud`, mismo espacio de ids), no aparte. Solo el nombre del
+// PACIENTE cruza a `public."Patient"` (que sí tiene RLS tenant ajena al GUC
+// ECE) y por eso ese único lookup queda para después de cerrar la tx — ver
+// el bloque de enriquecimiento en `listCola`.
 interface InstanciaColaRawRow {
   id: string;
   tipo_documento_codigo: string;
   tipo_documento_nombre: string;
   paciente_id: string;
+  public_patient_id: string | null;
   estado_codigo: string;
   estado_nombre: string;
   version: number;
   validado_por: string | null;
+  validado_por_nombre: string | null;
   creado_en: Date;
   ultimo_cambio_en: Date;
 }
@@ -388,27 +398,31 @@ export const eceCertificacionRouter = router({
         ? ["validado", "certificado"]
         : ["validado"];
 
-      // R1.1 — JOIN a Patient/User removido (ver comentario de
-      // InstanciaColaRawRow); de paso corrige dos columnas inexistentes que
-      // esta query nunca ejecutó contra Postgres real (mocks no las
-      // detectan): Patient no tiene `firstLastName` (es `lastName`) y
-      // `public."User"` no tiene `firstName`/`firstLastName` — el modelo
-      // solo declara `fullName`.
+      // R1.1 (corregido — P1-1) — `p.public_patient_id` (bridge hacia
+      // public."Patient", resuelto aparte más abajo) y `ps.nombre_completo`
+      // (join directo a ece.personal_salud, MISMO espacio de ids que
+      // `dih.ejecutado_por` — se resuelve aquí mismo, dentro de la tx ECE).
+      // Ninguno de los dos existía en la query original: `di.paciente_id`
+      // apunta a `ece.paciente`, no a `public."Patient"`, y `ejecutado_por`
+      // apunta a `ece.personal_salud`, no a `public."User"`.
       const baseQuery = `
         SELECT
           di.id,
           td.codigo          AS tipo_documento_codigo,
           td.nombre          AS tipo_documento_nombre,
           di.paciente_id,
+          p.public_patient_id,
           fe.codigo          AS estado_codigo,
           fe.nombre          AS estado_nombre,
           di.version,
           dih.ejecutado_por  AS validado_por,
+          ps.nombre_completo AS validado_por_nombre,
           di.creado_en,
           di.actualizado_en  AS ultimo_cambio_en
         FROM ece.documento_instancia di
         JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
         JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
+        JOIN ece.paciente       p  ON p.id = di.paciente_id
         LEFT JOIN LATERAL (
           SELECT ejecutado_por
           FROM ece.documento_instancia_historial
@@ -417,6 +431,7 @@ export const eceCertificacionRouter = router({
           ORDER BY ejecutado_en DESC
           LIMIT 1
         ) dih ON true
+        LEFT JOIN ece.personal_salud ps ON ps.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
           AND di.estado_registro = 'vigente'
           ${input.cursor ? "AND di.id > $2::uuid" : ""}
@@ -446,37 +461,31 @@ export const eceCertificacionRouter = router({
       const items = hasMore ? rows.slice(0, input.limit) : rows;
       const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
 
-      // Nombres de paciente/validador: `public."Patient"`/`public."User"`
-      // tienen RLS tenant (`organizationId = current_org_id()`), un GUC que
-      // `withWorkflowContext` no setea (espacio ECE, no tenant). Se resuelven
-      // aparte, vía `ctx.prisma` (BYPASSRLS) — mismo patrón que el resto de
-      // este archivo (`findPersonal`, `findFirma`) — filtrando por el
-      // `organizationId` del tenant como defensa adicional.
-      const pacienteIds = [...new Set(items.map((r) => r.paciente_id))];
-      const validadoPorIds = [
-        ...new Set(items.map((r) => r.validado_por).filter((v): v is string => v !== null)),
+      // Nombre de paciente: `public."Patient"` tiene RLS tenant
+      // (`organizationId = current_org_id()`), un GUC que `withWorkflowContext`
+      // no setea (espacio ECE, no tenant). Se resuelve aparte, vía `ctx.prisma`
+      // (BYPASSRLS) — mismo patrón que el resto de este archivo (`findPersonal`,
+      // `findFirma`) — filtrando por el `organizationId` del tenant como
+      // defensa adicional. Se cruza por `public_patient_id` (el bridge real),
+      // NUNCA por `paciente_id` (ese es el id de `ece.paciente`, otro espacio).
+      // `validado_por_nombre` YA viene resuelto de la query anterior (join a
+      // ece.personal_salud dentro de la misma tx ECE — mismo espacio de ids
+      // que `ejecutado_por`), no requiere un segundo lookup.
+      const publicPatientIds = [
+        ...new Set(items.map((r) => r.public_patient_id).filter((v): v is string => v !== null)),
       ];
       const orgId = ctx.tenant.organizationId;
 
-      const [pacientes, validadores] = await Promise.all([
-        pacienteIds.length > 0
-          ? ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
+      const pacientes =
+        publicPatientIds.length > 0
+          ? await ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
               SELECT id::text, ("firstName" || ' ' || "lastName") AS nombre
               FROM public."Patient"
-              WHERE id = ANY(${pacienteIds}::uuid[])
+              WHERE id = ANY(${publicPatientIds}::uuid[])
                 AND "organizationId" = ${orgId}::uuid
             `
-          : Promise.resolve([]),
-        validadoPorIds.length > 0
-          ? ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
-              SELECT id::text, "fullName" AS nombre
-              FROM public."User"
-              WHERE id = ANY(${validadoPorIds}::uuid[])
-            `
-          : Promise.resolve([]),
-      ]);
+          : [];
       const pacienteNombreMap = new Map(pacientes.map((p) => [p.id, p.nombre]));
-      const validadorNombreMap = new Map(validadores.map((u) => [u.id, u.nombre]));
 
       return {
         items: items.map((r) => ({
@@ -484,12 +493,14 @@ export const eceCertificacionRouter = router({
           tipoDocumentoCodigo: r.tipo_documento_codigo,
           tipoDocumentoNombre: r.tipo_documento_nombre,
           pacienteId: r.paciente_id,
-          pacienteNombre: pacienteNombreMap.get(r.paciente_id) ?? r.paciente_id,
+          pacienteNombre:
+            (r.public_patient_id ? pacienteNombreMap.get(r.public_patient_id) : undefined) ??
+            r.paciente_id,
           estadoCodigo: r.estado_codigo,
           estadoNombre: r.estado_nombre,
           version: r.version,
           validadoPor: r.validado_por,
-          validadoPorNombre: r.validado_por ? (validadorNombreMap.get(r.validado_por) ?? null) : null,
+          validadoPorNombre: r.validado_por_nombre,
           creadoEn: r.creado_en instanceof Date
             ? r.creado_en.toISOString()
             : String(r.creado_en),

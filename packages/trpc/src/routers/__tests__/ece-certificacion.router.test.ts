@@ -78,12 +78,20 @@ describe("eceCertificacionRouter", () => {
   // listCola
   // -------------------------------------------------------------------------
   describe("listCola", () => {
+    const PUBLIC_PATIENT_ID = "00000000-0000-0000-0000-000000000010";
+    const ECE_PACIENTE_ID = "00000000-0000-0000-0000-0000000000ee"; // ece.paciente.id — espacio DISTINTO de PUBLIC_PATIENT_ID
+
     /**
-     * R1.1 — `listCola` ahora corre bajo `withWorkflowContext` (resuelve
-     * `resolvePersonalSalud` vía `$queryRaw`, aplica el contexto ECE vía
-     * `$executeRawUnsafe` dentro de `$transaction`, y consulta la cola vía
-     * `tx.$queryRawUnsafe`). Los nombres de paciente/validador se resuelven
-     * aparte con `ctx.prisma.$queryRaw` (BYPASSRLS) — ver cabecera del router.
+     * R1.1 (corregido — P1-1) — `listCola` corre bajo `withWorkflowContext`
+     * (resuelve `resolvePersonalSalud` vía `$queryRaw`, aplica el contexto
+     * ECE vía `$executeRawUnsafe` dentro de `$transaction`, y consulta la
+     * cola vía `tx.$queryRawUnsafe` — esa query YA incluye
+     * `validado_por_nombre` resuelto por JOIN a `ece.personal_salud`, mismo
+     * espacio de ids que `ejecutado_por`). Solo el nombre de PACIENTE se
+     * resuelve aparte con `ctx.prisma.$queryRaw` (BYPASSRLS) sobre
+     * `public."Patient"`, cruzando por `public_patient_id` — NUNCA por
+     * `paciente_id` (ese es el id de `ece.paciente`, otro espacio — ver
+     * cabecera del router).
      */
     function setupWorkflowContext() {
       prisma.$transaction.mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) =>
@@ -103,18 +111,20 @@ describe("eceCertificacionRouter", () => {
           id: INSTANCIA_ID,
           tipo_documento_codigo: "EPICRISIS",
           tipo_documento_nombre: "Epicrisis",
-          paciente_id: "00000000-0000-0000-0000-000000000010",
+          paciente_id: ECE_PACIENTE_ID,
+          public_patient_id: PUBLIC_PATIENT_ID,
           estado_codigo: "validado",
           estado_nombre: "Validado",
           version: 1,
-          validado_por: null,
+          validado_por: PERSONAL_ID,
+          validado_por_nombre: "Dr. Juan Validador",
           creado_en: new Date("2026-05-10T08:00:00Z"),
           ultimo_cambio_en: new Date("2026-05-11T10:00:00Z"),
         },
       ]);
-      // Lookup de nombre de paciente (validado_por es null → sin lookup de User)
+      // Lookup de nombre de paciente — cruza por public_patient_id.
       prisma.$queryRaw.mockResolvedValueOnce([
-        { id: "00000000-0000-0000-0000-000000000010", nombre: "Juana Perez" },
+        { id: PUBLIC_PATIENT_ID, nombre: "Juana Perez" },
       ]);
 
       const caller = eceCertificacionRouter.createCaller(
@@ -124,9 +134,41 @@ describe("eceCertificacionRouter", () => {
 
       expect(result.items).toHaveLength(1);
       expect(result.items[0]?.estadoCodigo).toBe("validado");
+      expect(result.items[0]?.pacienteId).toBe(ECE_PACIENTE_ID);
       expect(result.items[0]?.pacienteNombre).toBe("Juana Perez");
-      expect(result.items[0]?.validadoPorNombre).toBeNull();
+      // validadoPorNombre viene DIRECTO de la query ECE (join a
+      // ece.personal_salud) — no de un segundo lookup a public."User".
+      expect(result.items[0]?.validadoPorNombre).toBe("Dr. Juan Validador");
       expect(result.nextCursor).toBeUndefined();
+      // Nota: pacienteNombre solo puede resolver a "Juana Perez" si el
+      // lookup cruzó por public_patient_id — si usara paciente_id (el id de
+      // ece.paciente) a secas, el Map.get fallaría y caería al fallback
+      // `r.paciente_id` (ECE_PACIENTE_ID). Esta aserción ES la regresión de P1-1.
+    });
+
+    it("aplica el contexto ECE (personal.id real del DIR) ANTES de consultar la cola", async () => {
+      setupWorkflowContext();
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      await caller.listCola({});
+
+      // set_ece_context debe recibir el personal.id REAL (resuelto vía
+      // resolvePersonalSalud), no ctx.user.id — bug que motivó P1-1/R1.1.
+      const setContextCall = prisma.$executeRawUnsafe.mock.calls.find(
+        ([sql]) => typeof sql === "string" && sql.includes("set_ece_context"),
+      );
+      expect(setContextCall).toBeDefined();
+      expect(setContextCall?.[0]).toContain(PERSONAL_ID);
+
+      // Y ese contexto debe aplicarse ANTES de la query de la cola — si una
+      // regresión saca la query fuera de `withWorkflowContext`, esta
+      // aserción de orden de invocación debe fallar (P2-2).
+      const contextCallOrder = prisma.$executeRawUnsafe.mock.invocationCallOrder[0]!;
+      const queryCallOrder = prisma.$queryRawUnsafe.mock.invocationCallOrder[0]!;
+      expect(contextCallOrder).toBeLessThan(queryCallOrder);
     });
 
     it("rechaza rol no DIR (FORBIDDEN)", async () => {
