@@ -78,7 +78,17 @@ export const TITULOS: Record<TipoFormulario, string> = {
   triaje: "Formulario de Triaje Manchester — Contingencia",
 };
 
-export async function generarFormularioPdf(tipo: TipoFormulario): Promise<Buffer> {
+/**
+ * CC-B — nombre real de la organización activa, resuelto best-effort por el
+ * caller (route.ts) vía `getTenantContext()` + `Organization.name`. Fallback
+ * al literal histórico: este endpoint es de CONTINGENCIA (NTEC Art. 44) y
+ * debe seguir imprimiendo el formulario en papel aunque la BD/sesión no esté
+ * disponible — nunca debe bloquear la generación por falta de tenant.
+ */
+export async function generarFormularioPdf(
+  tipo: TipoFormulario,
+  organizationName = "Avante Complejo Hospitalario",
+): Promise<Buffer> {
   const estilos = createStyles();
   const campos = CAMPOS[tipo];
   const titulo = TITULOS[tipo];
@@ -86,7 +96,7 @@ export async function generarFormularioPdf(tipo: TipoFormulario): Promise<Buffer
   const doc = (
     <Document
       title={titulo}
-      author="Avante Complejo Hospitalario — HIS"
+      author={`${organizationName} — HIS`}
       subject="Formulario de contingencia operativa"
       keywords="contingencia, papel, HIS, NTEC"
     >
@@ -95,7 +105,7 @@ export async function generarFormularioPdf(tipo: TipoFormulario): Promise<Buffer
         <View style={estilos.header}>
           <Text style={estilos.titulo}>{titulo}</Text>
           <Text style={estilos.subtitulo}>
-            Sistema HIS — Avante Complejo Hospitalario
+            Sistema HIS — {organizationName}
           </Text>
           <Text style={estilos.nota}>
             Formulario de contingencia operativa (NTEC Art. 44). Digitalizar al restaurar el sistema.

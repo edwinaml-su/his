@@ -65,6 +65,14 @@ interface EpicrisisPdfPreviewProps {
   /** Si true, muestra el botón "Imprimir" sobre el preview. */
   showPrintButton?: boolean;
   className?: string;
+  /**
+   * CC-B — nombre de la organización activa (Organization.name), para el pie
+   * de página del documento. El caller lo resuelve vía `trpc.organization.current`
+   * (no viene de `ctx.tenant`, que solo trae el id). Fallback al literal
+   * histórico si no hay organización resuelta aún (loading) — nunca deja el
+   * pie de página vacío.
+   */
+  organizationName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +122,7 @@ export function EpicrisisPdfPreview({
   data,
   showPrintButton = true,
   className,
+  organizationName = "HIS Avante",
 }: EpicrisisPdfPreviewProps) {
   const principalDx = data.diagnosticosEgreso.filter((d) => d.tipo === "principal");
   const secundarioDx = data.diagnosticosEgreso.filter((d) => d.tipo !== "principal");
@@ -367,7 +376,7 @@ export function EpicrisisPdfPreview({
         {/* Pie de página */}
         <footer className="mt-6 border-t pt-3 text-center text-[10px] text-gray-400">
           <p>
-            Documento generado por HIS Avante — Documento inmutable post-firma (Art. 40 Reglamento ECE)
+            Documento generado por {organizationName} — Documento inmutable post-firma (Art. 40 Reglamento ECE)
           </p>
           <p className="mt-0.5 font-mono">
             Hash verificable en {data.id}

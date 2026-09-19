@@ -128,6 +128,9 @@ const LEDGER_KIND_LABELS: Record<LedgerKindLocal, { label: string; description: 
 /**
  * Verifica que el `ctx.user` tenga rol ADMIN vigente sobre `organizationId`.
  * Lanza FORBIDDEN si no. Pattern alineado con `organization.setFunctionalCurrency`.
+ *
+ * Uso: SOLO procedures de escritura (create/update/activate/deactivate). Los
+ * de lectura usan `assertLedgerReadMembership` (CC-B — visión corporativa).
  */
 async function assertAdminMembership(
   prisma: PrismaClient,
@@ -148,6 +151,39 @@ async function assertAdminMembership(
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Requiere rol ADMIN vigente en la organización.",
+    });
+  }
+}
+
+/**
+ * CC-B (directriz Edwin 2026-09-19) — igual que `assertAdminMembership` pero
+ * también admite `CONTRALOR_CORP` (visión consolidada de operaciones y
+ * multi-libro). Usada por los procedures de LECTURA `list`/`get`/
+ * `roundingPolicy` — la escritura sigue exigiendo ADMIN exclusivamente.
+ *
+ * CC-B review (P2-3) — `listKinds` NO llama a este helper: es metadata
+ * estática (`LEDGER_KIND_LABELS`, literales es-SV) sin gate de rol,
+ * preexistente a este cambio; la corrección aquí es solo documental.
+ */
+async function assertLedgerReadMembership(
+  prisma: PrismaClient,
+  userId: string,
+  organizationId: string,
+): Promise<void> {
+  const now = new Date();
+  const membership = await prisma.userOrganizationRole.findFirst({
+    where: {
+      userId,
+      organizationId,
+      validFrom: { lte: now },
+      OR: [{ validTo: null }, { validTo: { gte: now } }],
+      role: { code: { in: ["ADMIN", "CONTRALOR_CORP"] } },
+    },
+  });
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Requiere rol ADMIN o CONTRALOR_CORP vigente en la organización.",
     });
   }
 }
@@ -204,7 +240,7 @@ export const ledgerRouter = router({
       ctx.prisma,
       { userId: ctx.user!.id, organizationId: orgId },
       async (tx) => {
-        await assertAdminMembership(tx, ctx.user!.id, orgId);
+        await assertLedgerReadMembership(tx, ctx.user!.id, orgId);
 
         return tx.ledger.findMany({
           where: {
@@ -256,7 +292,7 @@ export const ledgerRouter = router({
         if (!ledger) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Libro no encontrado." });
         }
-        await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
+        await assertLedgerReadMembership(tx, ctx.user!.id, ledger.organizationId);
 
         // TODO(Sprint 5): `tx.chartOfAccounts.count({ where: { ledgerId: input.id } })`.
         const accountsCount = 0;
@@ -532,7 +568,7 @@ export const ledgerRouter = router({
         ctx.prisma,
         { userId: ctx.user!.id, organizationId: ledger.organizationId },
         async (tx) => {
-          await assertAdminMembership(tx, ctx.user!.id, ledger.organizationId);
+          await assertLedgerReadMembership(tx, ctx.user!.id, ledger.organizationId);
 
           // TODO(Sprint 5): SELECT * FROM LedgerRoundingPolicy WHERE ledgerId = ...
           return {

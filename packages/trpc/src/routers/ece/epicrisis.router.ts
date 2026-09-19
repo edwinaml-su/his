@@ -35,7 +35,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
-import { applyWorkflowContext } from "../../workflow/context";
+import { applyWorkflowContext, withWorkflowContext } from "../../workflow/context";
 import { resolvePersonalSalud } from "../../lib/identity-resolver";
 
 // ---------------------------------------------------------------------------
@@ -199,33 +199,41 @@ export const epicrisisRouter = router({
     const offset = (input.page - 1) * input.pageSize;
     const establecimientoId = eceCtx.establecimientoId;
 
-    // A-06: filtrar por establecimiento_id vía JOIN con episodio_atencion.
-    const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT ee.*
-      FROM ece.epicrisis_egreso ee
-      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
-      WHERE ea.establecimiento_id = ${establecimientoId}::uuid
-        AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
-        AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
-      ORDER BY ee.registrado_en DESC
-      LIMIT ${input.pageSize} OFFSET ${offset}
-    `;
+    // CC-B — antes corría en ctx.prisma directo (rol BYPASSRLS); el filtro de
+    // establecimiento vivía solo en el JOIN de esta query, no en RLS.
+    return withWorkflowContext(
+      ctx.prisma,
+      { personalId: eceCtx.personalId, establecimientoId },
+      async (tx) => {
+        // A-06: filtrar por establecimiento_id vía JOIN con episodio_atencion.
+        const rows = await tx.$queryRaw<EpicrisisRow[]>`
+          SELECT ee.*
+          FROM ece.epicrisis_egreso ee
+          JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+          WHERE ea.establecimiento_id = ${establecimientoId}::uuid
+            AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
+            AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
+          ORDER BY ee.registrado_en DESC
+          LIMIT ${input.pageSize} OFFSET ${offset}
+        `;
 
-    const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
-      SELECT COUNT(*) AS total
-      FROM ece.epicrisis_egreso ee
-      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
-      WHERE ea.establecimiento_id = ${establecimientoId}::uuid
-        AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
-        AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
-    `;
+        const [{ total }] = await tx.$queryRaw<[{ total: bigint }]>`
+          SELECT COUNT(*) AS total
+          FROM ece.epicrisis_egreso ee
+          JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+          WHERE ea.establecimiento_id = ${establecimientoId}::uuid
+            AND (${episodioFilter}::uuid IS NULL OR ee.episodio_id = ${episodioFilter}::uuid)
+            AND (${estadoFilter}::text IS NULL OR ee.estado_workflow = ${estadoFilter}::text)
+        `;
 
-    return {
-      items: rows,
-      total: Number(total),
-      page: input.page,
-      pageSize: input.pageSize,
-    };
+        return {
+          items: rows,
+          total: Number(total),
+          page: input.page,
+          pageSize: input.pageSize,
+        };
+      },
+    );
   }),
 
   /**
@@ -235,19 +243,25 @@ export const epicrisisRouter = router({
     const eceCtx = extractEceCtx(ctx);
     const establecimientoId = eceCtx.establecimientoId;
 
-    const rows = await ctx.prisma.$queryRaw<EpicrisisRow[]>`
-      SELECT ee.*
-      FROM ece.epicrisis_egreso ee
-      JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
-      WHERE ee.id = ${input.id}::uuid
-        AND ea.establecimiento_id = ${establecimientoId}::uuid
-      LIMIT 1
-    `;
+    return withWorkflowContext(
+      ctx.prisma,
+      { personalId: eceCtx.personalId, establecimientoId },
+      async (tx) => {
+        const rows = await tx.$queryRaw<EpicrisisRow[]>`
+          SELECT ee.*
+          FROM ece.epicrisis_egreso ee
+          JOIN ece.episodio_atencion ea ON ea.id = ee.episodio_id
+          WHERE ee.id = ${input.id}::uuid
+            AND ea.establecimiento_id = ${establecimientoId}::uuid
+          LIMIT 1
+        `;
 
-    if (rows.length === 0) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
-    }
-    return rows[0]!;
+        if (rows.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Epicrisis no encontrada." });
+        }
+        return rows[0]!;
+      },
+    );
   }),
 
   /**

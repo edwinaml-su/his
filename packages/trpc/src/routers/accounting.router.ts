@@ -210,7 +210,8 @@ function rethrowPrisma(err: unknown): never {
 // ---------------------------------------------------------------------------
 
 const chartRouter = router({
-  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN"]).input(chartListInput).query(
+  // CC-B — CONTRALOR_CORP: visión consolidada de multi-libro (lectura).
+  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN", "CONTRALOR_CORP"]).input(chartListInput).query(
     async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         return tx.account.findMany({
@@ -310,7 +311,8 @@ const chartRouter = router({
 });
 
 const periodRouter = router({
-  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN"]).input(periodListInput).query(
+  // CC-B — CONTRALOR_CORP: visión consolidada de multi-libro (lectura).
+  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN", "CONTRALOR_CORP"]).input(periodListInput).query(
     async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         return tx.accountingPeriod.findMany({
@@ -420,7 +422,8 @@ const periodRouter = router({
 });
 
 const journalRouter = router({
-  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN"]).input(journalListInput).query(
+  // CC-B — CONTRALOR_CORP: visión consolidada de multi-libro (lectura).
+  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN", "CONTRALOR_CORP"]).input(journalListInput).query(
     async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         const items = await tx.journalEntry.findMany({
@@ -683,7 +686,8 @@ const journalRouter = router({
 });
 
 const costCenterRouter = router({
-  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN"])
+  // CC-B — CONTRALOR_CORP: visión consolidada de multi-libro (lectura).
+  list: requireRole(["ACCOUNTANT", "ACCOUNTANT_SENIOR", "ADMIN", "CONTRALOR_CORP"])
     .input(costCenterListInput)
     .query(async ({ ctx, input }) => {
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
