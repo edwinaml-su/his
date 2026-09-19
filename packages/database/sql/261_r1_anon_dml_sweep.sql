@@ -1,4 +1,5 @@
 -- =============================================================================
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
 -- 261_r1_anon_dml_sweep.sql — R1 (revisión independiente 2026-09-19, P2-2):
 -- barrido de DML de `anon` en tablas SlaConfig sembradas DESPUÉS de sql/152
 -- (NO aplicado — requiere OK de Edwin).

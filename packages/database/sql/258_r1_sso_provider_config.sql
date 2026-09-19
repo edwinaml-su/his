@@ -1,6 +1,8 @@
 -- =============================================================================
 -- 258_r1_sso_provider_config.sql — Persistencia real de configuración SSO
--- por organización (R1.4, plan de remediación 2026-09, NO aplicar sin OK Edwin)
+-- por organización (R1.4, plan de remediación 2026-09).
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado: tabla + policy tenant + 0 DML de anon.
 --
 -- Contexto: `/admin/sso-config` guardaba en localStorage (nunca llegaba a BD)
 -- y `apps/web/src/app/actions/sso.ts:listSsoProvidersForLogin` devolvía una

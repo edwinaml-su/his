@@ -1,4 +1,5 @@
 -- =============================================================================
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
 -- 259_r1_bi_reader.sql — R1.5 (plan de remediación 2026-09): rol bi_reader
 -- a prod, ACTUALIZADO al estado real (NO aplicado — requiere OK de Edwin).
 --
