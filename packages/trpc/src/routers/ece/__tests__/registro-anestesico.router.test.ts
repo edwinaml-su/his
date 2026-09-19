@@ -15,6 +15,7 @@ import type { PrismaClient } from "@prisma/client";
 import { eceRegistroAnestesicoRouter } from "../registro-anestesico.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_TENANT } from "@his/test-utils";
+import { withWorkflowContext } from "../../../workflow/context";
 
 // withWorkflowContext envuelve en $transaction + SET LOCAL — el mock ejecuta
 // el callback directamente contra el mismo prisma mock (mismo patrón que
@@ -82,6 +83,15 @@ describe("eceRegistroAnestesicoRouter", () => {
 
       expect(result).toHaveLength(1);
       expect(result[0]!.id).toBe(REGISTRO_ID);
+      // R1.2 (P2-2) — regresión de wiring: si alguien vuelve a romper el
+      // cableado de contexto (p.ej. reintroduce el fallback a organizationId,
+      // o deja de invocar withWorkflowContext), este assert lo atrapa aunque
+      // el resultado mockeado "pase" igual.
+      expect(vi.mocked(withWorkflowContext)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ establecimientoId: ESTAB_ID }),
+        expect.any(Function),
+      );
     });
 
     it("retorna lista vacía cuando no hay registros", async () => {
@@ -103,6 +113,11 @@ describe("eceRegistroAnestesicoRouter", () => {
 
       expect(result.id).toBe(REGISTRO_ID);
       expect(result.tipo_anestesia).toBe("general");
+      expect(vi.mocked(withWorkflowContext)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ establecimientoId: ESTAB_ID }),
+        expect.any(Function),
+      );
     });
 
     it("lanza NOT_FOUND si el registro no existe", async () => {

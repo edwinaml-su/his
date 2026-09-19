@@ -57,9 +57,24 @@ export interface RegistroAnestesicoRow {
 // ---------------------------------------------------------------------------
 
 function buildEceCtx(tenant: TenantContext, userId: string) {
+  // R1.2 (revisión independiente, P1-2) — el fallback `?? tenant.organizationId`
+  // metía el uuid de la organización donde se espera un establecimiento:
+  // `ece.set_ece_context` no lo resuelve contra `ece.establecimiento` (ni por
+  // `id` ni por `establishment_id` puente, ver ADR 0022) y solo emite un
+  // RAISE WARNING — el GUC queda con un valor que ninguna policy `by_estab`
+  // matchea nunca. Resultado silencioso: list/get devuelven 0 filas (no un
+  // error) y las mutaciones con `emitDomainEvent` revientan 42501 en el
+  // primer INSERT sobre una tabla `ece.*`. Se falla rápido y explícito en su
+  // lugar, igual que certificado-defuncion/periodo-expulsivo/los bridges.
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Selecciona un establecimiento antes de continuar.",
+    });
+  }
   return {
     personalId: userId,
-    establecimientoId: tenant.establishmentId ?? tenant.organizationId,
+    establecimientoId: tenant.establishmentId,
   };
 }
 

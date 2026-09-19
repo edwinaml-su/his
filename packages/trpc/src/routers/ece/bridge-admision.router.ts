@@ -638,7 +638,24 @@ export const eceBridgeAdmisionRouter = router({
           message: "Se requiere un establecimiento activo para ver la cola de admisión.",
         });
       }
-      const eceCtx = { personalId: ctx.user.id, establecimientoId: ctx.tenant.establishmentId };
+
+      // R1.2 (revisión independiente, P2-1b) — bootstrap best-effort: si el
+      // caller tiene ece.personal_salud vinculado, usar su id real como GUC
+      // de personal para que la policy RESTRICTIVE `documento_instancia:
+      // confidencial_read` (vía asignacion_rol → rol DIR) lo autorice sobre
+      // documentos confidenciales. `listOrdenesPendientesAdmision` es
+      // `tenantProcedure` (cualquier usuario con org, no solo ADM/DIR) — a
+      // diferencia de `admitirDesdeOrden` NO bloqueamos con
+      // PRECONDITION_FAILED si no hay perfil vinculado: seguimos con
+      // `ctx.user.id` (comportamiento previo) y el caller simplemente no ve
+      // los documentos `confidencial = true` que no sean suyos ni de un DIR
+      // resuelto — degradación aceptada, no bloqueo de la cola completa
+      // mientras R03 (personal_salud vacío en prod) siga abierto.
+      const personal = await resolvePersonalSalud(ctx.prisma, ctx.user.id);
+      const eceCtx = {
+        personalId: personal?.id ?? ctx.user.id,
+        establecimientoId: ctx.tenant.establishmentId,
+      };
       const offset = (input.page - 1) * input.pageSize;
 
       const { items, countRows } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {

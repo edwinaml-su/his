@@ -89,9 +89,24 @@ export interface SalaExpulsionRow {
 // ---------------------------------------------------------------------------
 
 function buildEceCtx(tenant: TenantContext, userId: string) {
+  // R1.2 (revisión independiente, P1-2) — el fallback `?? tenant.organizationId`
+  // metía el uuid de la organización donde se espera un establecimiento:
+  // `ece.set_ece_context` no lo resuelve contra `ece.establecimiento` (ni por
+  // `id` ni por `establishment_id` puente, ver ADR 0022) y solo emite un
+  // RAISE WARNING — el GUC queda con un valor que ninguna policy `by_estab`
+  // matchea nunca. Resultado silencioso: list/get devuelven 0 filas (no un
+  // error) y las mutaciones con `emitDomainEvent` revientan 42501 en el
+  // primer INSERT sobre una tabla `ece.*`. Se falla rápido y explícito en su
+  // lugar, igual que certificado-defuncion/periodo-expulsivo/los bridges.
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Selecciona un establecimiento antes de continuar.",
+    });
+  }
   return {
     personalId: userId,
-    establecimientoId: tenant.establishmentId ?? tenant.organizationId,
+    establecimientoId: tenant.establishmentId,
   };
 }
 
@@ -383,7 +398,27 @@ export const eceSalaExpulsionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
 
-      return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+      // R1.2 (revisión independiente, P2-1a) — bootstrap privilegiado (mismo
+      // patrón que bridge-admision.router.ts): resuelve `ece.personal_salud.id`
+      // ANTES de abrir el contexto. La policy `firma_self_only` de
+      // `ece.firma_electronica` exige `personal_id = current_setting
+      // ('app.ece_personal_id')`; pasar `ctx.user.id` (espacio public."User")
+      // como personalId del GUC nunca matchea esa policy — `verifyPin` (más
+      // abajo) encontraría 0 filas en silencio para cualquier firma real. Solo
+      // filtra por `his_user_id = ctx.user.id` (valor de sesión, no del
+      // cliente) — sin fuga cross-tenant posible.
+      const personal = await resolvePersonalSalud(ctx.prisma, userId);
+      if (!personal) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Su usuario no tiene un registro de personal de salud (ece.personal_salud) " +
+            "activo y vinculado para firmar. Pida a un ADMIN/DIR que lo vincule " +
+            "(his_user_id) en /profesionales-salud antes de continuar.",
+        });
+      }
+
+      return withEceContext(ctx.prisma, ctx.tenant, personal.id, async (tx) => {
         // R1.2 — movido dentro del contexto ECE (antes corría en ctx.prisma
         // directo, sin filtro de establecimiento).
         const row = await findSalaExpulsion(tx, input.id);
