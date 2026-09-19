@@ -2,9 +2,8 @@
 -- 260_r1b_historial_insert_policy.sql — R1.2: policy de INSERT faltante en
 -- ece.documento_instancia_historial (prerrequisito del demote de bridge-admision)
 --
--- NO APLICAR — la aplica @Orq (guarda local `guard-sql-reapply` + convención
--- del proyecto: los SQL numerados los aplica el orquestador vía MCP contra
--- prod, @Dev solo los escribe/versiona).
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado post-apply: policy INSERT presente junto a la de SELECT.
 --
 -- Contexto (revisión independiente de fix/r1b-ece-mixtos-rls, P1-1):
 --   `bridge-admision.router.ts` (Paso 9, admitirDesdeOrden) fue migrado en
