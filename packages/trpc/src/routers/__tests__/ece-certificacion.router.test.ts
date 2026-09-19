@@ -78,22 +78,43 @@ describe("eceCertificacionRouter", () => {
   // listCola
   // -------------------------------------------------------------------------
   describe("listCola", () => {
+    /**
+     * R1.1 — `listCola` ahora corre bajo `withWorkflowContext` (resuelve
+     * `resolvePersonalSalud` vía `$queryRaw`, aplica el contexto ECE vía
+     * `$executeRawUnsafe` dentro de `$transaction`, y consulta la cola vía
+     * `tx.$queryRawUnsafe`). Los nombres de paciente/validador se resuelven
+     * aparte con `ctx.prisma.$queryRaw` (BYPASSRLS) — ver cabecera del router.
+     */
+    function setupWorkflowContext() {
+      prisma.$transaction.mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) =>
+        fn(prisma),
+      );
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+      // resolvePersonalSalud (personal del DIR que llama)
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { id: PERSONAL_ID, nombre_completo: "Dra. Ana Medina" },
+      ]);
+    }
+
     it("devuelve documentos en estado validado", async () => {
+      setupWorkflowContext();
       prisma.$queryRawUnsafe.mockResolvedValueOnce([
         {
           id: INSTANCIA_ID,
           tipo_documento_codigo: "EPICRISIS",
           tipo_documento_nombre: "Epicrisis",
           paciente_id: "00000000-0000-0000-0000-000000000010",
-          paciente_nombre: "Juana Perez",
           estado_codigo: "validado",
           estado_nombre: "Validado",
           version: 1,
           validado_por: null,
-          validado_por_nombre: null,
           creado_en: new Date("2026-05-10T08:00:00Z"),
           ultimo_cambio_en: new Date("2026-05-11T10:00:00Z"),
         },
+      ]);
+      // Lookup de nombre de paciente (validado_por es null → sin lookup de User)
+      prisma.$queryRaw.mockResolvedValueOnce([
+        { id: "00000000-0000-0000-0000-000000000010", nombre: "Juana Perez" },
       ]);
 
       const caller = eceCertificacionRouter.createCaller(
@@ -103,6 +124,8 @@ describe("eceCertificacionRouter", () => {
 
       expect(result.items).toHaveLength(1);
       expect(result.items[0]?.estadoCodigo).toBe("validado");
+      expect(result.items[0]?.pacienteNombre).toBe("Juana Perez");
+      expect(result.items[0]?.validadoPorNombre).toBeNull();
       expect(result.nextCursor).toBeUndefined();
     });
 
@@ -111,6 +134,23 @@ describe("eceCertificacionRouter", () => {
         makeCtx({ prisma, tenant: NON_DIR_TENANT }),
       );
       await expect(caller.listCola({})).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("rechaza sin establecimiento activo (BAD_REQUEST)", async () => {
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...DIR_TENANT, establishmentId: undefined } }),
+      );
+      await expect(caller.listCola({})).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    it("rechaza si el DIR no tiene personal_salud materializado (PRECONDITION_FAILED)", async () => {
+      // resolvePersonalSalud → sin fila (sync R1.1 aún no corrió para este usuario)
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = eceCertificacionRouter.createCaller(
+        makeCtx({ prisma, tenant: DIR_TENANT }),
+      );
+      await expect(caller.listCola({})).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
     });
   });
 

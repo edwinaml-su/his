@@ -45,6 +45,25 @@
  *   listCola        → requireRole(["DIR"])  — cola de documentos pendientes de certificar
  *   certificar      → requireRole(["DIR"])  + requireEcePermission("ece.documento.certificar")
  *   certificarBulk  → requireRole(["DIR"])  — verifica PIN una vez, certifica todos en serie
+ *
+ * ---------------------------------------------------------------------------
+ * R1.1 (plan de remediación 2026-09) — `listCola` re-migrado a RLS real
+ * ---------------------------------------------------------------------------
+ *   Hasta PR #693, `listCola` leía con `ctx.prisma.$queryRawUnsafe` SIN
+ *   contexto ECE (rol BYPASSRLS) — excepción documentada porque
+ *   `ece.personal_salud` tenía 0 filas en prod y `ece.current_personal_id()`
+ *   nunca resolvía para ningún DIR. `sql/257_r1_sync_personal_salud.sql`
+ *   materializa automáticamente `ece.personal_salud` + `ece.asignacion_rol`
+ *   para todo usuario clínico con rol asignado (trigger AFTER INSERT/UPDATE
+ *   sobre `User`/`UserOrganizationRole` + backfill), así que ya se puede
+ *   resolver `personal.id` y correr bajo `withWorkflowContext` — la policy
+ *   RESTRICTIVE `"documento_instancia: confidencial_read"` (ADR 0020) evalúa
+ *   correctamente: no-confidenciales siempre visibles; confidenciales solo si
+ *   `creado_por = ece.current_personal_id()` o el personal tiene
+ *   `ece.asignacion_rol` activa con `ece.rol.codigo = 'DIR'` (lo que el sync
+ *   ahora puebla). Si `resolvePersonalSalud` no encuentra fila (sync aún no
+ *   corrió, o el DIR perdió el rol clínico), lanza PRECONDITION_FAILED en vez
+ *   de degradar a lectura privilegiada.
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -81,17 +100,20 @@ const certificarBulkInput = z.object({
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
 
-interface InstanciaColaRow {
+// R1.1 — sin JOIN a public."Patient"/public."User": esas tablas tienen RLS
+// tenant (`organizationId = current_org_id()`) que `withWorkflowContext` NO
+// setea (GUC distinto al de `withEceContext`'s `tenantContext`). El nombre se
+// resuelve aparte, vía `ctx.prisma` (BYPASSRLS), después de cerrar la
+// transacción ECE — ver el bloque de enriquecimiento en `listCola`.
+interface InstanciaColaRawRow {
   id: string;
   tipo_documento_codigo: string;
   tipo_documento_nombre: string;
   paciente_id: string;
-  paciente_nombre: string;
   estado_codigo: string;
   estado_nombre: string;
   version: number;
   validado_por: string | null;
-  validado_por_nombre: string | null;
   creado_en: Date;
   ultimo_cambio_en: Date;
 }
@@ -334,28 +356,54 @@ export const eceCertificacionRouter = router({
   listCola: dirProcedure
     .input(listColaCertificacionInput)
     .query(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo.",
+        });
+      }
+
+      // R1.1 — resuelve el personal_salud del DIR que llama (BYPASSRLS, fuera
+      // de tx, igual que el resto de este archivo) para setear el GUC
+      // correcto (`app.ece_personal_id`) dentro de `withWorkflowContext` más
+      // abajo. Antes de sql/257 esta fila no existía para ningún usuario.
+      const personal = await resolvePersonalSalud(ctx.prisma, ctx.user.id);
+      if (!personal) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Su usuario no tiene un registro de personal de salud (ece.personal_salud) activo. " +
+            "El sync automático lo materializa si tiene un rol clínico asignado (sql/257); " +
+            "si el problema persiste, contacte a un ADMIN.",
+        });
+      }
+
+      const eceCtx = {
+        personalId: personal.id,
+        establecimientoId: ctx.tenant.establishmentId,
+        roles: ctx.tenant.roleCodes,
+      };
+
       const estadoFiltro = input.incluirCertificados
         ? ["validado", "certificado"]
         : ["validado"];
 
+      // R1.1 — JOIN a Patient/User removido (ver comentario de
+      // InstanciaColaRawRow); de paso corrige dos columnas inexistentes que
+      // esta query nunca ejecutó contra Postgres real (mocks no las
+      // detectan): Patient no tiene `firstLastName` (es `lastName`) y
+      // `public."User"` no tiene `firstName`/`firstLastName` — el modelo
+      // solo declara `fullName`.
       const baseQuery = `
         SELECT
           di.id,
           td.codigo          AS tipo_documento_codigo,
           td.nombre          AS tipo_documento_nombre,
           di.paciente_id,
-          COALESCE(
-            p."firstName" || ' ' || p."firstLastName",
-            di.paciente_id::text
-          )                  AS paciente_nombre,
           fe.codigo          AS estado_codigo,
           fe.nombre          AS estado_nombre,
           di.version,
           dih.ejecutado_por  AS validado_por,
-          COALESCE(
-            u."firstName" || ' ' || u."firstLastName",
-            NULL
-          )                  AS validado_por_nombre,
           di.creado_en,
           di.actualizado_en  AS ultimo_cambio_en
         FROM ece.documento_instancia di
@@ -369,8 +417,6 @@ export const eceCertificacionRouter = router({
           ORDER BY ejecutado_en DESC
           LIMIT 1
         ) dih ON true
-        LEFT JOIN public."Patient" p ON p.id = di.paciente_id
-        LEFT JOIN public."User"    u ON u.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
           AND di.estado_registro = 'vigente'
           ${input.cursor ? "AND di.id > $2::uuid" : ""}
@@ -386,14 +432,51 @@ export const eceCertificacionRouter = router({
         ? [estadoFiltro, input.cursor, limit]
         : [estadoFiltro, limit];
 
-      const rows = await ctx.prisma.$queryRawUnsafe<InstanciaColaRow[]>(
-        baseQuery,
-        ...params,
-      );
+      // R1.1 — corre bajo contexto ECE real (antes: ctx.prisma.$queryRawUnsafe
+      // sin ningún contexto, excepción de PR #693). `withWorkflowContext`
+      // setea `app.ece_personal_id`/`app.ece_establecimiento_id` y demota a
+      // `authenticated`: la policy RESTRICTIVE de confidencial_read aplica.
+      const { rows, hasMore } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        const rawRows = await (
+          tx as unknown as { $queryRawUnsafe: typeof ctx.prisma.$queryRawUnsafe }
+        ).$queryRawUnsafe<InstanciaColaRawRow[]>(baseQuery, ...params);
+        return { rows: rawRows, hasMore: rawRows.length > input.limit };
+      });
 
-      const hasMore = rows.length > input.limit;
       const items = hasMore ? rows.slice(0, input.limit) : rows;
       const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
+
+      // Nombres de paciente/validador: `public."Patient"`/`public."User"`
+      // tienen RLS tenant (`organizationId = current_org_id()`), un GUC que
+      // `withWorkflowContext` no setea (espacio ECE, no tenant). Se resuelven
+      // aparte, vía `ctx.prisma` (BYPASSRLS) — mismo patrón que el resto de
+      // este archivo (`findPersonal`, `findFirma`) — filtrando por el
+      // `organizationId` del tenant como defensa adicional.
+      const pacienteIds = [...new Set(items.map((r) => r.paciente_id))];
+      const validadoPorIds = [
+        ...new Set(items.map((r) => r.validado_por).filter((v): v is string => v !== null)),
+      ];
+      const orgId = ctx.tenant.organizationId;
+
+      const [pacientes, validadores] = await Promise.all([
+        pacienteIds.length > 0
+          ? ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
+              SELECT id::text, ("firstName" || ' ' || "lastName") AS nombre
+              FROM public."Patient"
+              WHERE id = ANY(${pacienteIds}::uuid[])
+                AND "organizationId" = ${orgId}::uuid
+            `
+          : Promise.resolve([]),
+        validadoPorIds.length > 0
+          ? ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
+              SELECT id::text, "fullName" AS nombre
+              FROM public."User"
+              WHERE id = ANY(${validadoPorIds}::uuid[])
+            `
+          : Promise.resolve([]),
+      ]);
+      const pacienteNombreMap = new Map(pacientes.map((p) => [p.id, p.nombre]));
+      const validadorNombreMap = new Map(validadores.map((u) => [u.id, u.nombre]));
 
       return {
         items: items.map((r) => ({
@@ -401,12 +484,12 @@ export const eceCertificacionRouter = router({
           tipoDocumentoCodigo: r.tipo_documento_codigo,
           tipoDocumentoNombre: r.tipo_documento_nombre,
           pacienteId: r.paciente_id,
-          pacienteNombre: r.paciente_nombre,
+          pacienteNombre: pacienteNombreMap.get(r.paciente_id) ?? r.paciente_id,
           estadoCodigo: r.estado_codigo,
           estadoNombre: r.estado_nombre,
           version: r.version,
           validadoPor: r.validado_por,
-          validadoPorNombre: r.validado_por_nombre,
+          validadoPorNombre: r.validado_por ? (validadorNombreMap.get(r.validado_por) ?? null) : null,
           creadoEn: r.creado_en instanceof Date
             ? r.creado_en.toISOString()
             : String(r.creado_en),
