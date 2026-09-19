@@ -25,6 +25,7 @@ import { buildPatientMovementEvent } from "../lib/epcis-builder";
 import { persistPatientMovementEvent } from "../lib/epcis-patient-persist";
 import { resolveLocationGln } from "../lib/gln-resolver";
 import { capturarCargo } from "../lib/charge-capture";
+import { resolverTasaFuncional } from "../lib/exchange";
 
 /** Prefijo GS1 de fallback cuando la organización no tiene uno configurado. */
 const FALLBACK_GS1_PREFIX = "7503000";
@@ -146,6 +147,14 @@ export const encounterRouter = router({
           message: "Moneda no definida para la organización.",
         });
       }
+      // CC-A (auditoría 2026-09-18, P0) — antes hardcodeaba 1. Camino corto
+      // si `currencyId` ya es la funcional (caso normal SV/USD); si el
+      // caller forzó otra moneda, exige tasa vigente en ExchangeRate.
+      const exchangeRateToFunc = await resolverTasaFuncional(tx, {
+        organizationId: ctx.tenant.organizationId,
+        currencyId,
+        functionalCurrencyId: org?.functionalCurrency,
+      });
 
       // docs/48 §5 C3-2 — se guarda fuera del `if` para reusarla al crear el
       // BedAssignment (código de tarifario de la Room, si tiene).
@@ -198,8 +207,7 @@ export const encounterRouter = router({
           encounterNumber,
           currencyId,
           costCenterId: input.costCenterId ?? null,
-          // TODO(Sprint 2): resolver tipo de cambio real desde ExchangeRate.
-          exchangeRateToFunc: 1,
+          exchangeRateToFunc,
           createdBy: ctx.user.id,
           // H2-01 (audit Stream A — P1 ALTA): campos de admisión ahora persistidos.
           chiefComplaint: input.chiefComplaint ?? null,

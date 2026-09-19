@@ -34,6 +34,8 @@ export interface InsertarFacturaParams {
   insurerId?: string | null;
   costCenterId?: string | null;
   currencyId: string;
+  /** CC-A (auditoría 2026-09-18, P0) — tasa a la moneda funcional de la org. Default 1 (columna NOT NULL DEFAULT 1). */
+  exchangeRateToFunc?: number;
   patientAccountId: string;
   status: "DRAFT" | "ISSUED";
   subtotal: number;
@@ -68,13 +70,19 @@ export async function insertarFacturaConItems(
   type IdRow = { id: string };
   const invoiceNumber = buildInvoiceNumber();
 
+  // `exchangeRateToFunc` va AL FINAL de la lista de columnas (no junto a
+  // `currencyId`) a propósito: así los índices posicionales $1..$14 de las
+  // columnas preexistentes no se corren, y no hace falta tocar los asserts
+  // por posición de `patient-account.router.test.ts` (mismo INSERT,
+  // reusado por `facturacionDual` — ver cabecera del archivo).
   const inserted = await tx.$queryRawUnsafe<IdRow[]>(
     `INSERT INTO "Invoice" (
        "organizationId", "establishmentId", "patientId", "encounterId",
        "insurerId", "costCenterId", "currencyId", "invoiceNumber",
-       subtotal, "taxAmount", "totalAmount", status, "patientAccountId", notes
+       subtotal, "taxAmount", "totalAmount", status, "patientAccountId", notes,
+       "exchangeRateToFunc"
      ) VALUES (
-       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13, $14
+       $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_status, $13, $14, $15
      ) RETURNING id`,
     params.organizationId,
     params.establishmentId,
@@ -90,6 +98,7 @@ export async function insertarFacturaConItems(
     params.status,
     params.patientAccountId,
     params.notes ?? null,
+    params.exchangeRateToFunc ?? 1,
   );
 
   const invoiceId = inserted[0]?.id;

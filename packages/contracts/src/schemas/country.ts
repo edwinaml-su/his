@@ -5,6 +5,12 @@ export const iso3Regex = /^[A-Z]{3}$/;
 /** ISO 3166-1 alpha-2 (e.g., "SV", "GT"). 2 letras mayúsculas. */
 export const iso2Regex = /^[A-Z]{2}$/;
 
+/** CC-A (auditoría 2026-09-18, P1) — IVA como fracción (0.13 = 13%, 0.12 = 12% GT). */
+const vatRateSchema = z
+  .number({ invalid_type_error: "IVA requerido (fracción, ej. 0.13 = 13%)." })
+  .min(0, "El IVA no puede ser negativo.")
+  .max(1, "El IVA debe expresarse como fracción (0.13, no 13).");
+
 export const countrySchema = z.object({
   id: z.string().uuid(),
   isoAlpha3: z.string().length(3),
@@ -13,6 +19,7 @@ export const countrySchema = z.object({
   defaultLocale: z.string(),
   defaultTzId: z.string(),
   active: z.boolean(),
+  vatRate: z.number(),
 });
 
 /**
@@ -58,6 +65,8 @@ export const countryCreateInput = z.object({
     .max(60),
   defaultCurrencyId: z.string().uuid().optional(),
   active: z.boolean().optional(),
+  /** CC-A — default 0.13 (comportamiento histórico SV) si se omite al crear. */
+  vatRate: vatRateSchema.optional(),
 });
 
 /** US-1.1 — Actualizar país. Todos los campos opcionales menos `id`. */
@@ -87,6 +96,7 @@ export const countryUpdateInput = z.object({
     .optional(),
   defaultTzId: z.string().trim().min(3).max(60).optional(),
   defaultCurrencyId: z.string().uuid().optional(),
+  vatRate: vatRateSchema.optional(),
 });
 
 /** US-1.1 — Desactivar / activar país. */

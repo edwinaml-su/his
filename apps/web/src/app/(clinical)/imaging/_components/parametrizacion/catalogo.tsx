@@ -37,6 +37,7 @@ import {
 } from "@his/ui/components/dialog";
 import { Toast, ToastDescription, ToastTitle } from "@his/ui/components/toast";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import type { ImagingCatalogoItem } from "@his/contracts";
 
 type ToastState = { title: string; description?: string; variant?: "default" | "success" | "destructive" } | null;
@@ -138,7 +139,7 @@ export function Catalogo() {
                 <TableCell>{item.requiereAyuno ? "Sí" : "—"}</TableCell>
                 <TableCell>{item.duracionMin} min</TableCell>
                 <TableCell className="tabular-nums">
-                  {item.standardPrice != null ? `$${item.standardPrice.toFixed(2)}` : "—"}
+                  {item.standardPrice != null ? formatCurrency(item.standardPrice) : "—"}
                 </TableCell>
                 <TableCell>
                   <Badge variant={item.active ? "success" : "outline"}>{item.active ? "Activa" : "Inactiva"}</Badge>

@@ -302,7 +302,7 @@ describe("encounterRouter", () => {
         .mockResolvedValueOnce(null as never); // GSRN: ya sin gsrn
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.organization.findUnique
-        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ functionalCurrency: "00000000-0000-0000-0000-000000000020" } as never)
         .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({
@@ -340,7 +340,7 @@ describe("encounterRouter", () => {
         .mockResolvedValueOnce(null as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.organization.findUnique
-        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ functionalCurrency: "00000000-0000-0000-0000-000000000020" } as never)
         .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({
@@ -378,7 +378,7 @@ describe("encounterRouter", () => {
         .mockResolvedValueOnce({ id: "p1", active: true } as never)
         .mockResolvedValueOnce({ id: "p1", mrn: "MRN-001" } as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
-      prisma.organization.findUnique.mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never);
+      prisma.organization.findUnique.mockResolvedValueOnce({ functionalCurrency: "00000000-0000-0000-0000-000000000020" } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({
         id: "enc-uuid-3",
@@ -514,7 +514,7 @@ describe("encounterRouter", () => {
         .mockResolvedValueOnce(null as never);
       prisma.encounter.findFirst.mockResolvedValue(null as never);
       prisma.organization.findUnique
-        .mockResolvedValueOnce({ functionalCurrency: "curr-uuid" } as never)
+        .mockResolvedValueOnce({ functionalCurrency: "00000000-0000-0000-0000-000000000020" } as never)
         .mockResolvedValueOnce({ gs1CompanyPrefix: null } as never);
       prisma.encounter.count.mockResolvedValue(0);
       prisma.encounter.create.mockResolvedValue({

@@ -49,6 +49,8 @@ interface FormState {
   defaultLocale: string;
   defaultTzId: string;
   defaultCurrencyId: string;
+  /** CC-A (auditoría 2026-09-18, P1) — se captura como % (13) y se envía como fracción (0.13). */
+  vatRatePercent: string;
 }
 
 function buildDefaults(initial?: CountryRow): FormState {
@@ -59,6 +61,7 @@ function buildDefaults(initial?: CountryRow): FormState {
     defaultLocale: initial?.defaultLocale ?? "",
     defaultTzId: initial?.defaultTzId ?? "",
     defaultCurrencyId: initial?.currencies?.[0]?.currency?.id ?? "",
+    vatRatePercent: initial?.vatRate != null ? String(initial.vatRate * 100) : "",
   };
 }
 
@@ -110,6 +113,8 @@ export function CountryForm({ open, onOpenChange, initialValue }: CountryFormPro
     setErrors({});
 
     const numericVal = values.isoNumeric === "" ? NaN : Number(values.isoNumeric);
+    // CC-A — el usuario captura porcentaje (13); el contrato espera fracción (0.13).
+    const vatRateVal = values.vatRatePercent === "" ? NaN : Number(values.vatRatePercent) / 100;
 
     if (isEdit && initialValue) {
       const candidate: Record<string, unknown> = { id: initialValue.id };
@@ -119,6 +124,7 @@ export function CountryForm({ open, onOpenChange, initialValue }: CountryFormPro
       if (values.defaultLocale) candidate.defaultLocale = values.defaultLocale;
       if (values.defaultTzId) candidate.defaultTzId = values.defaultTzId;
       if (values.defaultCurrencyId) candidate.defaultCurrencyId = values.defaultCurrencyId;
+      if (!Number.isNaN(vatRateVal)) candidate.vatRate = vatRateVal;
 
       const parsed = countryUpdateInput.safeParse(candidate);
       if (!parsed.success) {
@@ -139,6 +145,8 @@ export function CountryForm({ open, onOpenChange, initialValue }: CountryFormPro
         defaultLocale: values.defaultLocale,
         defaultTzId: values.defaultTzId,
         ...(values.defaultCurrencyId ? { defaultCurrencyId: values.defaultCurrencyId } : {}),
+        // Si se omite, el server usa el default 0.13 (comportamiento histórico SV).
+        ...(!Number.isNaN(vatRateVal) ? { vatRate: vatRateVal } : {}),
       };
 
       const parsed = countryCreateInput.safeParse(candidate);
@@ -264,6 +272,26 @@ export function CountryForm({ open, onOpenChange, initialValue }: CountryFormPro
               </Select>
               <FormHint>ISO 4217. Se enlaza como moneda funcional/legal del país.</FormHint>
               <FormError>{errors.defaultCurrencyId}</FormError>
+            </FormField>
+
+            <FormField>
+              <Label htmlFor="vatRatePercent">IVA (%)</Label>
+              <Input
+                id="vatRatePercent"
+                type="number"
+                min={0}
+                max={100}
+                step="0.01"
+                placeholder="13"
+                value={values.vatRatePercent}
+                onChange={(e) => setField("vatRatePercent", e.target.value)}
+                aria-invalid={Boolean(errors.vatRate)}
+              />
+              <FormHint>
+                Porcentaje sobre subtotal (ej. 13 = El Salvador, 12 = Guatemala). Vacío = 13% por
+                defecto.
+              </FormHint>
+              <FormError>{errors.vatRate}</FormError>
             </FormField>
 
             {serverError ? (

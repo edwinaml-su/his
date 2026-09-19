@@ -20,6 +20,9 @@ const COUNTRY = {
   active: true,
   defaultLocale: "es-SV",
   defaultTzId: "America/El_Salvador",
+  // CC-A (auditoría 2026-09-18, P1) — Decimal real (mock con .toNumber(),
+  // mismo patrón que ExchangeRate.rate en currency.router.test.ts).
+  vatRate: { toNumber: () => 0.13 },
 };
 
 describe("countryRouter", () => {
@@ -63,6 +66,19 @@ describe("countryRouter", () => {
       const callArg = prisma.country.findMany.mock.calls[0][0] as { where: Record<string, unknown> };
       expect(callArg.where).toHaveProperty("OR");
     });
+
+    // CC-A (auditoría 2026-09-18, P1) — vatRate es Decimal en BD; el router
+    // debe convertirlo a number plano antes de cruzar tRPC (superjson no
+    // serializa Prisma.Decimal sin un transformer custom).
+    it("convierte vatRate (Decimal) a number plano", async () => {
+      prisma.country.findMany.mockResolvedValue([COUNTRY] as never);
+
+      const caller = countryRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.list({});
+
+      expect(result[0]!.vatRate).toBe(0.13);
+      expect(typeof result[0]!.vatRate).toBe("number");
+    });
   });
 
   // ------------------------------------------------------------------ create
@@ -87,6 +103,57 @@ describe("countryRouter", () => {
       });
 
       expect(result).toMatchObject({ isoAlpha3: "SLV" });
+    });
+
+    it("pasa vatRate a tx.country.create cuando se provee (GT=12%)", async () => {
+      let createData: Record<string, unknown> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = mockDeep<PrismaClient>();
+        tx.country.create.mockImplementation((async (args: { data: Record<string, unknown> }) => {
+          createData = args.data;
+          return { ...COUNTRY, isoAlpha3: "GTM", vatRate: { toNumber: () => 0.12 } };
+        }) as never);
+        tx.countryCurrency.updateMany.mockResolvedValue({ count: 0 } as never);
+        tx.countryCurrency.upsert.mockResolvedValue({} as never);
+        return fn(tx);
+      });
+
+      const caller = countryRouter.createCaller(makeCtx({ prisma }));
+      await caller.create({
+        isoAlpha3: "GTM",
+        isoNumeric: 320,
+        name: "Guatemala",
+        defaultLocale: "es-GT",
+        defaultTzId: "America/Guatemala",
+        vatRate: 0.12,
+      });
+
+      expect(createData.vatRate).toBe(0.12);
+    });
+
+    it("omite vatRate en el INSERT cuando no se provee (default de columna 0.13)", async () => {
+      let createData: Record<string, unknown> = {};
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      prisma.$transaction.mockImplementation(async (fn: any) => {
+        const tx = mockDeep<PrismaClient>();
+        tx.country.create.mockImplementation((async (args: { data: Record<string, unknown> }) => {
+          createData = args.data;
+          return COUNTRY;
+        }) as never);
+        return fn(tx);
+      });
+
+      const caller = countryRouter.createCaller(makeCtx({ prisma }));
+      await caller.create({
+        isoAlpha3: "SLV",
+        isoNumeric: 222,
+        name: "El Salvador",
+        defaultLocale: "es-SV",
+        defaultTzId: "America/El_Salvador",
+      });
+
+      expect(createData).not.toHaveProperty("vatRate");
     });
 
     it("lanza CONFLICT con mensaje legible cuando P2002", async () => {

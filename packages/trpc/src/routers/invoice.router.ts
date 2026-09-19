@@ -8,7 +8,9 @@
  * y status al insertar pagos; NO manipular status de Invoice manualmente
  * al agregar pagos.
  *
- * IVA: El Salvador, 13% sobre subtotal. Se calcula en el router al crear factura.
+ * IVA: por país de la organización (`Country.vatRate`, default 0.13 = 13% SV
+ * si no hay país configurado — ver `lib/vat.ts`, CC-A). Se calcula en el
+ * router al crear factura.
  *
  * Procedures:
  *   list         — readerProc, filtros opcionales: status, fechaDesde, fechaHasta, paginación
@@ -25,6 +27,8 @@ import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 import { resolverPrecio, mapFuenteAPriceSource } from "../lib/price-resolver";
 import { insertarFacturaConItems } from "../lib/invoice-writer";
+import { resolverTasaFuncional } from "../lib/exchange";
+import { resolverVatRate } from "../lib/vat";
 
 /**
  * docs/48 Ola 2 (C2-3/H-03) — roles autorizados a forzar un `unitPrice`
@@ -38,9 +42,6 @@ const TOLERANCIA_PRECIO = 0.005;
 // ---------------------------------------------------------------------------
 // Constantes
 // ---------------------------------------------------------------------------
-
-/** IVA El Salvador (Art. 54 LIVA). */
-const IVA_RATE = 0.13;
 
 // ---------------------------------------------------------------------------
 // Schemas locales
@@ -312,7 +313,8 @@ export const invoiceRouter = router({
 
   /**
    * Crea Invoice + InvoiceItem[] en una sola transacción.
-   * IVA: 13% sobre subtotal (LIVA El Salvador).
+   * IVA: `Country.vatRate` de la org sobre subtotal (CC-A — default 0.13 =
+   * 13% LIVA El Salvador si la org no tiene país configurado; ver `lib/vat.ts`).
    * invoiceNumber: generado automáticamente (no forzamos consecutivo en MVP).
    *
    * docs/48 Ola 2 (C2-3/H-03) — por cada línea se re-resuelve el precio
@@ -446,11 +448,21 @@ export const invoiceRouter = router({
         (acc, it) => acc + it.quantity * it.unitPrice,
         0,
       );
-      const taxAmount = parseFloat((subtotal * IVA_RATE).toFixed(2));
+      // CC-A (auditoría 2026-09-18, P1) — antes 13% hardcodeado; ahora lee
+      // Country.vatRate de la org (default 0.13 si no hay país configurado).
+      const vatRate = await resolverVatRate(tx, tenant.organizationId);
+      const taxAmount = parseFloat((subtotal * vatRate).toFixed(2));
       const totalAmount = parseFloat((subtotal + taxAmount).toFixed(2));
       const subtotalFixed = parseFloat(subtotal.toFixed(2));
 
       const notes = overrideNotes.length > 0 ? overrideNotes.join("\n") : null;
+
+      // CC-A (auditoría 2026-09-18, P0) — antes no se seteaba y quedaba en el
+      // default de columna (1), sin importar la moneda elegida en el form.
+      const exchangeRateToFunc = await resolverTasaFuncional(tx, {
+        organizationId: tenant.organizationId,
+        currencyId: input.currencyId,
+      });
 
       // Insertar Invoice + items con el precio congelado (docs/48 Ola 1, H-05).
       // Helper compartido con patientAccount.facturacionDual (CC-0028b) — ver
@@ -463,6 +475,7 @@ export const invoiceRouter = router({
         insurerId: input.insurerId ?? null,
         costCenterId: input.costCenterId ?? null,
         currencyId: input.currencyId,
+        exchangeRateToFunc,
         patientAccountId: input.patientAccountId,
         status: input.status,
         subtotal: subtotalFixed,
@@ -619,5 +632,17 @@ export const invoiceRouter = router({
       );
       return rows;
     });
+  }),
+
+  /**
+   * CC-A (revisión independiente 2026-09-19, P1) — IVA vigente para la org,
+   * consumido por el preview client-side de `/finance/invoices/nuevo` para
+   * que NO diverja del que aplicará `create` al persistir. Reusa
+   * `resolverVatRate` (misma fuente de verdad, sin duplicar la resolución).
+   */
+  vatRatePreview: tenantProcedure.query(async ({ ctx }) => {
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      resolverVatRate(tx, ctx.tenant.organizationId),
+    );
   }),
 });

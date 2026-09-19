@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import { ReglasCard } from "./_components/reglas-card";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,10 +70,6 @@ type CostCenterRow = { id: string; code: string; name: string };
 
 function fmt(d: string | Date) {
   return new Date(d).toLocaleDateString("es-SV");
-}
-
-function fmtMoney(v: string | number) {
-  return Number(v).toLocaleString("es-SV", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ---------------------------------------------------------------------------
@@ -352,10 +349,10 @@ export default function PriceListDetailPage() {
                     </TableCell>
                     <TableCell className="text-sm">{item.description}</TableCell>
                     <TableCell className="text-right font-mono text-sm">
-                      ${fmtMoney(item.unitPrice)}
+                      {formatCurrency(Number(item.unitPrice))}
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm">
-                      {item.estimatedCost ? `$${fmtMoney(item.estimatedCost)}` : <span className="text-muted-foreground">—</span>}
+                      {item.estimatedCost ? formatCurrency(Number(item.estimatedCost)) : <span className="text-muted-foreground">—</span>}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {item.costCenterCode ? (

@@ -22,6 +22,7 @@ import { hookEcePacienteAfterCreate } from "../lib/ece-hooks";
 import { nextExpediente } from "../lib/expediente-numbering";
 import { nextNoIdentificadoLabel } from "../lib/no-identificado-numbering";
 import { validateDUI } from "@his/contracts";
+import { validarTipoDocumentoPorPais } from "../lib/document-type";
 
 // =============================================================================
 // US-4.3 — Algoritmos de scoring (mirror compacto de apps/web/src/lib/mpi/dedupe.ts).
@@ -147,6 +148,15 @@ function scorePair(a: ScoreCandidate, b: ScoreCandidate): number {
 
   return Math.round(score * 10000) / 10000;
 }
+
+/** CC-A — etiqueta legible del catálogo legacy SV, usada como fallback de `tiposDocumento`. */
+const DOCUMENT_TYPE_LEGACY_LABEL: Record<(typeof documentTypeEnum.options)[number], string> = {
+  DUI: "DUI",
+  DNI: "DNI",
+  PASAPORTE: "Pasaporte",
+  DUI_RESP: "DUI del responsable",
+  CARNET_RESIDENCIA: "Carné de residencia",
+};
 
 // =============================================================================
 // Tablas con FK a Patient que se reasignan en merge (TDR §8.1).
@@ -402,23 +412,37 @@ export const patientRouter = router({
 
       const org = await tx.organization.findUnique({
         where: { id: ctx.tenant.organizationId },
-        select: { country: { select: { isoAlpha2: true, isoNumeric: true } } },
+        select: { countryId: true, country: { select: { isoAlpha2: true, isoNumeric: true } } },
       });
 
       const alpha2 = org?.country?.isoAlpha2;
       const isoNumeric = org?.country?.isoNumeric;
-      if (!alpha2 || isoNumeric == null) {
+      if (!alpha2 || isoNumeric == null || !org?.countryId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: "El país de la organización no tiene código ISO alfa-2 o numérico configurado (CC-0002/CC-0014). Contacta al administrador.",
         });
       }
 
+      // CC-A (auditoría 2026-09-18, P1) — documentType ahora es texto libre;
+      // exige que sea legacy SV o un IdentifierType activo del país de la org.
+      if (input.documentType) {
+        await validarTipoDocumentoPorPais(tx, {
+          countryId: org.countryId,
+          documentType: input.documentType,
+          documentNumber: input.documentNumber,
+        });
+      }
+
       // CC-0002 §5 / CC-0005: dedup por documento propio antes de crear.
-      // No aplica a isUnknown (no trae documento).
+      // No aplica a isUnknown (no trae documento). CC-A: la exclusión es
+      // "cualquier tipo salvo DUI_RESP" (antes whitelist de 4 códigos SV) —
+      // así un documento de catálogo por país (ej. DPI de Guatemala,
+      // validado arriba) también dedupea; DUI_RESP es del responsable
+      // (puede repetirse entre hermanos, nunca debe dedupear al paciente).
       if (
         input.documentType &&
-        ["DUI", "DNI", "PASAPORTE", "CARNET_RESIDENCIA"].includes(input.documentType) &&
+        input.documentType !== "DUI_RESP" &&
         input.documentNumber
       ) {
         const existing = await tx.patient.findFirst({
@@ -525,37 +549,132 @@ export const patientRouter = router({
 
   update: tenantProcedure.input(patientUpdateSchema).mutation(async ({ ctx, input }) => {
     const { id, ...rest } = input;
-    return ctx.prisma.patient.update({
-      where: { id },
-      data: { ...rest, updatedBy: ctx.user.id },
+    // CC-A (auditoría 2026-09-18, P1) — mismo criterio que `create`: si viene
+    // documentType NO legacy, valida contra IdentifierType del país de la
+    // org. Camino corto para legacy SV: sin query a Organization/IdentifierType.
+    if (rest.documentType && !(documentTypeEnum.options as readonly string[]).includes(rest.documentType)) {
+      const org = await ctx.prisma.organization.findUnique({
+        where: { id: ctx.tenant.organizationId },
+        select: { countryId: true },
+      });
+      if (!org) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Organización no encontrada." });
+      }
+      await validarTipoDocumentoPorPais(ctx.prisma, {
+        countryId: org.countryId,
+        documentType: rest.documentType,
+        documentNumber: rest.documentNumber,
+      });
+    }
+    // Hallazgo de seguridad (revisión independiente 2026-09-19, P0,
+    // confirmado por @Dev al tocar este handler para CC-A): antes hacía
+    // `ctx.prisma.patient.update({ where: { id } })` sin organizationId ni
+    // withTenantContext — cualquier usuario autenticado de OTRA org podía
+    // sobrescribir PHI de un paciente ajeno adivinando/enumerando el UUID
+    // (rol Supabase original tiene BYPASSRLS, ver CLAUDE.md §Contrato RLS).
+    // Ahora corre dentro de withTenantContext y valida pertenencia a la org
+    // ANTES de escribir — NOT_FOUND si el id no es de este tenant.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const existing = await tx.patient.findFirst({
+        where: { id, organizationId: ctx.tenant.organizationId },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+      }
+      return tx.patient.update({
+        where: { id },
+        data: { ...rest, updatedBy: ctx.user.id },
+      });
     });
   }),
 
+  /**
+   * CC-A (auditoría 2026-09-18, P1) — catálogo de tipos de documento para el
+   * select de registro/edición de paciente. Lee `IdentifierType` activo del
+   * país de la organización; si el país no tiene catálogo sembrado (aún),
+   * cae a la lista legacy SV para no dejar el select vacío.
+   */
+  tiposDocumento: tenantProcedure.query(async ({ ctx }) => {
+    const org = await ctx.prisma.organization.findUnique({
+      where: { id: ctx.tenant.organizationId },
+      select: { countryId: true },
+    });
+    if (!org) return [];
+
+    const tipos = await ctx.prisma.identifierType.findMany({
+      where: { countryId: org.countryId, active: true },
+      orderBy: { name: "asc" },
+      select: { code: true, name: true },
+    });
+    if (tipos.length > 0) return tipos;
+
+    return documentTypeEnum.options.map((code) => ({ code, name: DOCUMENT_TYPE_LEGACY_LABEL[code] }));
+  }),
+
+  /**
+   * Hallazgo de seguridad (revisión independiente 2026-09-19, P0 — mismo
+   * gap que tenía `update` antes de CC-A): creaba directo con
+   * `ctx.prisma.patientIdentifier.create({ patientId: input.patientId, ... })`
+   * sin verificar que `patientId` perteneciera al tenant — cualquier usuario
+   * autenticado de OTRA org podía adjuntar un identificador (PHI) a un
+   * paciente ajeno adivinando/enumerando el UUID. Ahora corre dentro de
+   * withTenantContext y valida pertenencia ANTES de escribir.
+   */
   addIdentifier: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientIdentifierSchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientIdentifier.create({
-        data: { patientId: input.patientId, ...input.data },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientIdentifier.create({
+          data: { patientId: input.patientId, ...input.data },
+        });
       });
     }),
 
+  /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
   addAllergy: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientAllergySchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientAllergy.create({
-        data: {
-          patientId: input.patientId,
-          ...input.data,
-          createdBy: ctx.user.id,
-        },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientAllergy.create({
+          data: {
+            patientId: input.patientId,
+            ...input.data,
+            createdBy: ctx.user.id,
+          },
+        });
       });
     }),
 
+  /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
   addAddress: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientAddressSchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientAddress.create({
-        data: { patientId: input.patientId, ...input.data },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientAddress.create({
+          data: { patientId: input.patientId, ...input.data },
+        });
       });
     }),
 

@@ -22,6 +22,7 @@ import type { PrismaClient } from "@prisma/client";
 import { nextEncounterNumber } from "./encounter-numbering";
 import { hookEceEpisodioAfterAdmit, resolveEceEstablecimientoId } from "./ece-hooks";
 import { applyWorkflowContext } from "../workflow/context";
+import { resolverTasaFuncional } from "./exchange";
 
 export interface CrearEncounterAmbulatorioParams {
   organizationId: string;
@@ -58,6 +59,16 @@ export async function crearEncounterAmbulatorio(
 
   const encounterNumber = await nextEncounterNumber(tx, params.organizationId);
 
+  // CC-A (auditoría 2026-09-18, P0) — la cuenta ambulatoria siempre se abre
+  // en la moneda funcional de la organización (línea de arriba), así que
+  // esto resuelve a 1 por el camino corto (sin query extra a ExchangeRate).
+  // Se cablea igual para no dejar un `1` sin pasar por el resolver único.
+  const exchangeRateToFunc = await resolverTasaFuncional(tx, {
+    organizationId: params.organizationId,
+    currencyId: org.functionalCurrency,
+    functionalCurrencyId: org.functionalCurrency,
+  });
+
   const encounter = await tx.encounter.create({
     data: {
       countryId: org.countryId,
@@ -69,7 +80,7 @@ export async function crearEncounterAmbulatorio(
       admittedAt: params.admittedAt,
       encounterNumber,
       currencyId: org.functionalCurrency,
-      exchangeRateToFunc: 1,
+      exchangeRateToFunc,
       createdBy: params.createdBy,
     },
   });

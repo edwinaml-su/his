@@ -17,6 +17,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import {
   DateRangePicker,
   useDateRange,
@@ -170,11 +171,11 @@ export default function EstadoResultadosPage() {
                   <TableCell className="font-mono text-xs">{r.code}</TableCell>
                   <TableCell className="text-sm">{r.name}</TableCell>
                   <TableCell className="text-xs capitalize">{r.tipo}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.ingresos)}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.costoDirecto)}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.costoIndirecto)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{formatCurrency(r.ingresos)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{formatCurrency(r.costoDirecto)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{formatCurrency(r.costoIndirecto)}</TableCell>
                   <TableCell className={`text-right font-mono text-sm ${r.margen < 0 ? "text-destructive" : ""}`}>
-                    ${fmtCurrency(r.margen)}
+                    {formatCurrency(r.margen)}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">{fmtPct(r.margenPct)}</TableCell>
                 </TableRow>

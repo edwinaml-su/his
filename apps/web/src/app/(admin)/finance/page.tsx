@@ -22,6 +22,7 @@ import { Badge } from "@his/ui/components/badge";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
@@ -58,10 +59,6 @@ function prevMonthRange(): { start: string; end: string } {
     start: first.toISOString().slice(0, 10),
     end: last.toISOString().slice(0, 10),
   };
-}
-
-function fmtCurrency(n: number): string {
-  return n.toLocaleString("es-SV", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtMonthLabel(yyyymm: string): string {
@@ -262,20 +259,20 @@ export default function FinanceOverviewPage() {
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <KpiCard
             title="Ingresos"
-            value={s ? `$${fmtCurrency(s.revenueTotal)}` : "—"}
+            value={s ? formatCurrency(s.revenueTotal) : "—"}
             sub="Σ facturas no anuladas"
             loading={summaryQ.isLoading}
           />
           <KpiCard
             title="Cobrado"
-            value={s ? `$${fmtCurrency(s.cobrado)}` : "—"}
+            value={s ? formatCurrency(s.cobrado) : "—"}
             sub={s ? `${s.cobradoPct}% del total` : undefined}
             colorClass={s ? semaforo(s.cobradoPct, 80, 50) : ""}
             loading={summaryQ.isLoading}
           />
           <KpiCard
             title="CxC Pendiente"
-            value={s ? `$${fmtCurrency(s.cxc)}` : "—"}
+            value={s ? formatCurrency(s.cxc) : "—"}
             sub="Facturas emitidas sin cobrar"
             colorClass={s && s.cxc > 0 ? "text-amber-600" : ""}
             loading={summaryQ.isLoading}
@@ -379,7 +376,7 @@ export default function FinanceOverviewPage() {
                         <tr key={row.mes} className="border-b last:border-0">
                           <td className="py-2 font-medium">{fmtMonthLabel(row.mes)}</td>
                           <td className="py-2 text-right font-mono">
-                            ${fmtCurrency(row.revenue)}
+                            {formatCurrency(row.revenue)}
                           </td>
                           <td className="py-2 pl-4">
                             <div className="flex items-center gap-2">
@@ -444,7 +441,7 @@ export default function FinanceOverviewPage() {
                             {c.tipo}
                           </Badge>
                         </td>
-                        <td className="py-2 text-right font-mono">${fmtCurrency(c.ingresos)}</td>
+                        <td className="py-2 text-right font-mono">{formatCurrency(c.ingresos)}</td>
                         <td className={`py-2 text-right font-mono ${semaforo(c.margenPct, 30, 10)}`}>
                           {c.margenPct.toFixed(1)}%
                         </td>

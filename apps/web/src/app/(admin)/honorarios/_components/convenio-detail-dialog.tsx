@@ -21,6 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@his/ui/components/table";
 import { Alert, AlertDescription, AlertTitle } from "@his/ui/components/alert";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
@@ -180,7 +181,7 @@ export function ConvenioDetailDialog({ convenioId, onOpenChange, canManage, onCh
                       <TableCell className="text-right">
                         {r.tipoCalculo === "PORCENTAJE"
                           ? `${(Number(r.porcentaje ?? 0) * 100).toFixed(2)}%`
-                          : `$${Number(r.montoFijo ?? 0).toFixed(2)}`}
+                          : formatCurrency(Number(r.montoFijo ?? 0))}
                       </TableCell>
                       <TableCell>
                         <Badge variant={r.active ? "success" : "outline"}>{r.active ? "activa" : "inactiva"}</Badge>

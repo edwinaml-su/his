@@ -17,6 +17,7 @@ import {
 } from "@his/ui/components/table";
 import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import {
   DateRangePicker,
   useDateRange,
@@ -144,7 +145,7 @@ export default function CostoPacientePage() {
           {[
             { label: "Egresos en página", value: String(rows.length) },
             { label: "Total días estancia", value: String(totales.diasEstancia) },
-            { label: "Costo por día (promedio)", value: `$${fmtCurrency(costoPorDia)}` },
+            { label: "Costo por día (promedio)", value: formatCurrency(costoPorDia) },
           ].map((m) => (
             <Card key={m.label} className="text-center">
               <CardContent className="pt-4">
@@ -186,9 +187,9 @@ export default function CostoPacientePage() {
                     {r.dischargedAt ? new Date(r.dischargedAt).toLocaleDateString("es-SV") : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">{r.diasEstancia}</TableCell>
-                  <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.totalCosto)}</TableCell>
+                  <TableCell className="text-right font-mono text-sm">{formatCurrency(r.totalCosto)}</TableCell>
                   <TableCell className="text-right font-mono text-sm">
-                    ${fmtCurrency(r.diasEstancia > 0 ? r.totalCosto / r.diasEstancia : 0)}
+                    {formatCurrency(r.diasEstancia > 0 ? r.totalCosto / r.diasEstancia : 0)}
                   </TableCell>
                 </TableRow>
               ))

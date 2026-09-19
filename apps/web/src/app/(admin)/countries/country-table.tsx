@@ -36,6 +36,8 @@ type Row = {
   defaultLocale: string;
   defaultTzId: string;
   active: boolean;
+  /** CC-A (auditoría 2026-09-18, P1) — IVA como fracción (0.13 = 13%). */
+  vatRate: number;
   currencies?: Array<{ currency: CurrencyRow; isFunctional: boolean }>;
 };
 
@@ -117,6 +119,7 @@ export function CountryTable({ onEdit }: CountryTableProps) {
               <TableHead className="w-28">Locale</TableHead>
               <TableHead className="w-44">Timezone</TableHead>
               <TableHead className="w-28">Moneda</TableHead>
+              <TableHead className="w-20">IVA</TableHead>
               <TableHead className="w-24">Estado</TableHead>
               <TableHead className="w-44 text-right">Acciones</TableHead>
             </TableRow>
@@ -124,7 +127,7 @@ export function CountryTable({ onEdit }: CountryTableProps) {
           <TableBody>
             {rows.length === 0 && !query.isLoading ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-sm text-muted-foreground">
+                <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">
                   Sin países registrados.
                 </TableCell>
               </TableRow>
@@ -142,6 +145,9 @@ export function CountryTable({ onEdit }: CountryTableProps) {
                   <TableCell className="font-mono text-xs">{row.defaultTzId}</TableCell>
                   <TableCell className="font-mono text-xs">
                     {fn ? fn.isoCode : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {(row.vatRate * 100).toLocaleString("es-SV", { maximumFractionDigits: 2 })}%
                   </TableCell>
                   <TableCell>
                     {row.active ? (
