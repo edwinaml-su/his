@@ -57,6 +57,18 @@ CREATE INDEX IF NOT EXISTS "SsoProviderConfig_enabled_idx"
 ALTER TABLE public."SsoProviderConfig" ENABLE ROW LEVEL SECURITY;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public."SsoProviderConfig" TO authenticated;
 
+-- P2-2 (revisión independiente 2026-09-19) — los default privileges del
+-- schema `public` en este proyecto dan DML completo a `anon` sobre tablas
+-- NUEVAS (verificado en prod), lo que contradice sql/152 (BD-P0-1: `anon`
+-- sin DML en PHI/credenciales). `SsoProviderConfig` es una tabla nueva —
+-- sin este REVOKE explícito heredaría ese grant por default. Mismo criterio
+-- que sql/152: revoca INSERT/UPDATE/DELETE/TRUNCATE, conserva lo que RLS
+-- gobierne (aquí ni siquiera hay lectura pública prevista para `anon`, así
+-- que no se le otorgó SELECT tampoco).
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE
+  ON TABLE public."SsoProviderConfig"
+  FROM anon;
+
 DROP POLICY IF EXISTS sso_provider_config_tenant ON public."SsoProviderConfig";
 CREATE POLICY sso_provider_config_tenant ON public."SsoProviderConfig"
   FOR ALL
