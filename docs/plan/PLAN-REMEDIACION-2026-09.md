@@ -50,6 +50,16 @@ Aclaración de Edwin (2026-09-19): **la carga/migración de datos SÍ se hará �
 | R3.5 | `Drug.srs*` al schema.prisma (declarar 20 columnas que YA existen en prod — es sincronizar el modelo, no migrar data). | Cero DDL. | S |
 | R3.6 | Enum/SQL de reconstrucción: barrido de scripts sql/ legacy cuya definición difiere de prod (patrón sql/89 CONFIRMED) — solo cabeceras/notas, sin tocar prod. | Documental. | S |
 
+## Derivados de la ejecución de R1 (hallazgos de las revisiones, para CC/olas posteriores)
+
+| # | Hallazgo | Origen | Destino |
+|---|---|---|---|
+| D1 | `FK_REASSIGN_TABLES` de `mergePatients` cubre 9 de ~38 relaciones a `Patient` (PatientAccount, RespiratoryOrder, ImagingRequest, CareTask, Invoice, Prescription, ece.*… quedan fuera) — el historial del paciente perdedor queda huérfano apuntando al soft-deleted. Preexistente; además hay un SEGUNDO motor de merge (`patient-dedup.router.ts` ECE) con su propia lista. | Revisión R1C | **CC propio: merge de pacientes completo** (unificar motores + lista generada desde schema) |
+| D2 | `patient-dedup.router.ts:519` (ECE): `auditLog.create` dentro de contexto demotado — mismo bug latente que el P0 corregido en R1C (permission denied en prod). | Revisión R1C | R1.3 bis (fix quirúrgico patrón death-certificate R02) |
+| D3 | Default privileges de `public` otorgan DML completo a `anon` en TODA tabla nueva (contradice SQL 152); mitigado por RLS pero sistémico. SQL 261 barre las 3 SLA configs + SsoProviderConfig; la raíz (`ALTER DEFAULT PRIVILEGES`) merece SQL propio con revisión de impacto. | Revisión R1C | SQL de hardening en R4 |
+| D4 | `personal-salud.router.ts` usa columna inexistente `jvpm_o_jvp`; `/profesionales-salud` no permite editar `documentoIdentidad` (necesario para corregir centinelas `PENDIENTE-DUI-*` del sync R1.1). | @Dev R1A (chips ya creados) | Fixes cortos R3 |
+| D5 | Keyset de `certificacion.listCola` inconsistente con su ORDER BY (paginación puede saltar/duplicar). Preexistente. | Revisión R1A | Fix corto R3 |
+
 ## Ola R4 — Calidad e infraestructura
 
 | # | Ítem | Diseño anti-bloqueo | Esfuerzo |
