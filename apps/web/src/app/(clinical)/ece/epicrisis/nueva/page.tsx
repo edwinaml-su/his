@@ -552,6 +552,9 @@ const TOTAL_STEPS = 5;
 
 export default function NuevaEpicrisisPage() {
   const router = useRouter();
+  // CC-B — nombre real de la organización para el pie de página del PDF
+  // (antes hardcoded "HIS Avante" dentro de EpicrisisPdfPreview).
+  const orgQuery = trpc.organization.current.useQuery();
   const [step, setStep] = React.useState(1);
   const [form, setForm] = React.useState<WizardForm>(() => {
     // Intentar restaurar borrador de localStorage
@@ -750,7 +753,15 @@ export default function NuevaEpicrisisPage() {
         {/* PDF preview lateral */}
         {showPreview && step >= 4 && (
           <div>
-            <EpicrisisPdfPreview data={previewData} showPrintButton={false} />
+            <EpicrisisPdfPreview
+              data={previewData}
+              showPrintButton={false}
+              organizationName={
+                orgQuery.data
+                  ? (orgQuery.data.tradeName ?? orgQuery.data.legalName)
+                  : undefined
+              }
+            />
           </div>
         )}
       </div>

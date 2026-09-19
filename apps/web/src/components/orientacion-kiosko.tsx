@@ -44,6 +44,14 @@ export interface OrientacionKioskoProps {
   baseUrl?: string;
   mostrarRutas?: boolean;
   triageDestacado?: boolean;
+  /**
+   * CC-B — nombre de la organización activa (Organization.name), mostrado en
+   * el encabezado del modo kiosko. El caller (Server Component) lo resuelve
+   * vía `getTenantContext()` + `Organization.name` — `ctx.tenant` solo trae
+   * el id. Fallback al literal histórico si no hay tenant resuelto (kiosko
+   * público sin sesión).
+   */
+  organizationName?: string;
 }
 
 /* ───────────────────── Destinos = pantallas del HIS ───────────────────── */
@@ -150,6 +158,7 @@ export function OrientacionKiosko(props: OrientacionKioskoProps) {
   const baseUrl = String(cfg("baseUrl", "")).replace(/\/+$/, "");
   const mostrarRutas = String(cfg("mostrarRutas", true)) !== "false";
   const destacado = String(cfg("triageDestacado", true)) !== "false";
+  const organizationName = String(cfg("organizationName", "AVANTE"));
 
   const t = THEMES[estilo] ?? THEMES.claro;
   const dark = estilo === "inmersivo";
@@ -351,7 +360,7 @@ export function OrientacionKiosko(props: OrientacionKioskoProps) {
         <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 14, padding: device === "kiosk" ? "22px 26px" : "20px 30px", background: t.headerBg, color: t.headerText, borderBottom: `1px solid ${t.headerBorder}` }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 46, height: 46, borderRadius: 12, background: t.markBg }}><Activity size={26} color={t.markStroke} /></div>
           <div style={{ lineHeight: 1.05 }}>
-            <div style={{ fontWeight: 800, letterSpacing: ".16em", fontSize: 18 }}>AVANTE</div>
+            <div style={{ fontWeight: 800, letterSpacing: ".16em", fontSize: 18 }}>{organizationName.toUpperCase()}</div>
             <div style={{ fontSize: 11, letterSpacing: ".04em", opacity: 0.72, textTransform: "uppercase" }}>Complejo Hospitalario · Orientación</div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
