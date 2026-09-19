@@ -808,4 +808,158 @@ describe("patientRouter", () => {
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
+
+  // ─── R1.3 (auditoría 2026-09-19, IDOR) — findDuplicates / mergePatients ────
+  // Antes filtraban `organizationId` solo en JS bajo `ctx.prisma` (rol
+  // BYPASSRLS de Supabase). Ahora corren dentro de `withTenantContext`.
+
+  describe("findDuplicates", () => {
+    const PIVOT_ID = "00000000-0000-4000-8000-000000000030";
+
+    function setupTxDup() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
+    it("corre dentro de withTenantContext (SET LOCAL ROLE authenticated)", async () => {
+      setupTxDup();
+      prisma.patient.findFirst.mockResolvedValue({
+        id: PIVOT_ID,
+        firstName: "Ana",
+        lastName: "Pérez",
+        secondLastName: null,
+        birthDate: null,
+        identifiers: [],
+        phones: [],
+        addresses: [],
+      } as never);
+      prisma.patientMerge.findMany.mockResolvedValue([] as never);
+      prisma.patient.findMany.mockResolvedValue([] as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.findDuplicates({ patientId: PIVOT_ID });
+
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+    });
+
+    it("IDOR — NOT_FOUND si el pivote no pertenece al tenant (organizationId no matchea)", async () => {
+      setupTxDup();
+      // El where ya filtra organizationId; simulamos que Postgres/Prisma no
+      // encuentra fila (paciente de otra org) devolviendo null.
+      prisma.patient.findFirst.mockResolvedValue(null);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.findDuplicates({ patientId: PIVOT_ID }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      expect(prisma.patient.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("mergePatients", () => {
+    const FROM_ID = "00000000-0000-4000-8000-000000000031";
+    const TO_ID = "00000000-0000-4000-8000-000000000032";
+    const JUSTIFICATION = "Duplicado confirmado por MPI, mismo DUI y fecha de nacimiento.";
+
+    function setupTxMerge() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
+    it("IDOR — NOT_FOUND si `fromPatientId` es de otra org, sin ninguna escritura", async () => {
+      setupTxMerge();
+      // Simula que `to` sí es del tenant pero `from` no (organizationId no matchea).
+      prisma.patient.findFirst
+        .mockResolvedValueOnce(null) // from
+        .mockResolvedValueOnce({ id: TO_ID } as never); // to
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.mergePatients({
+          fromPatientId: FROM_ID,
+          toPatientId: TO_ID,
+          justification: JUSTIFICATION,
+          fieldsToTake: {},
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      expect(prisma.patientMerge.create).not.toHaveBeenCalled();
+      expect(prisma.patient.update).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it("IDOR — NOT_FOUND si `toPatientId` es de otra org, sin ninguna escritura", async () => {
+      setupTxMerge();
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: FROM_ID } as never) // from
+        .mockResolvedValueOnce(null); // to
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.mergePatients({
+          fromPatientId: FROM_ID,
+          toPatientId: TO_ID,
+          justification: JUSTIFICATION,
+          fieldsToTake: {},
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      expect(prisma.patientMerge.create).not.toHaveBeenCalled();
+      expect(prisma.patient.update).not.toHaveBeenCalled();
+      expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    });
+
+    it("corre dentro de withTenantContext y escribe solo tras verificar tenant de ambos pacientes", async () => {
+      setupTxMerge();
+      prisma.patient.findFirst
+        .mockResolvedValueOnce({ id: FROM_ID, mrn: "MRN-A", firstName: "Ana", lastName: "Pérez" } as never)
+        .mockResolvedValueOnce({ id: TO_ID, mrn: "MRN-B", firstName: "Ana", lastName: "Pérez" } as never);
+      prisma.patientMerge.create.mockResolvedValue({ id: "merge-1" } as never);
+      prisma.patient.update.mockResolvedValue({} as never);
+      prisma.auditLog.create.mockResolvedValue({} as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.mergePatients({
+        fromPatientId: FROM_ID,
+        toPatientId: TO_ID,
+        justification: JUSTIFICATION,
+        fieldsToTake: {},
+      });
+
+      expect(result).toMatchObject({ mergeId: "merge-1", toPatientId: TO_ID });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      const calls = prisma.$executeRawUnsafe.mock.calls.map((c) => String(c[0]));
+      expect(calls.some((s) => s.includes("set_tenant_context"))).toBe(true);
+      expect(calls.some((s) => s.includes("SET LOCAL ROLE authenticated"))).toBe(true);
+      expect(prisma.patientMerge.create).toHaveBeenCalledOnce();
+      // Soft-delete del `from`.
+      expect(prisma.patient.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: FROM_ID },
+          data: expect.objectContaining({ active: false }),
+        }),
+      );
+    });
+
+    it("BAD_REQUEST si fromPatientId === toPatientId (Zod refine, antes de cualquier query)", async () => {
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.mergePatients({
+          fromPatientId: FROM_ID,
+          toPatientId: FROM_ID,
+          justification: JUSTIFICATION,
+          fieldsToTake: {},
+        }),
+      ).rejects.toThrow();
+      expect(prisma.patient.findFirst).not.toHaveBeenCalled();
+    });
+  });
 });
