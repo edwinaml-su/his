@@ -215,37 +215,52 @@ const physicianRole = requireRole(["PHYSICIAN", "MC", "NURSE"]);
 const mcRole = requireRole(["PHYSICIAN", "MC"]);
 
 export const eceSalaExpulsionRouter = router({
-  /** Lista registros de sala de expulsión con filtro opcional por episodio. */
+  /**
+   * Lista registros de sala de expulsión con filtro opcional por episodio.
+   *
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS)
+   * sin ningún filtro de establecimiento: cualquier organización podía listar
+   * los registros de otra. La policy `sala_exp_by_estab` (ALL) ahora filtra
+   * de verdad bajo rol `authenticated`.
+   */
   list: physicianRole
     .input(listInput)
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<SalaExpulsionRow[]>)`
-        SELECT id, episodio_hospitalario_id, tipo_parto,
-               inicio_expulsivo_ts, nacimiento_ts,
-               presentacion_fetal, mecanismo_parto,
-               episiotomia, desgarro_perineal_grado,
-               alumbramiento_ts, placenta_completa, sangrado_estimado_ml,
-               atencion_rn_placeholder,
-               registrado_por, estado_registro, firmado_por, firmado_en,
-               registrado_en
-          FROM ece.sala_expulsion
-         WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
-                OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
-         ORDER BY nacimiento_ts DESC
-         LIMIT ${input.limit}
-      `;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, (tx) =>
+        (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<SalaExpulsionRow[]>)`
+          SELECT id, episodio_hospitalario_id, tipo_parto,
+                 inicio_expulsivo_ts, nacimiento_ts,
+                 presentacion_fetal, mecanismo_parto,
+                 episiotomia, desgarro_perineal_grado,
+                 alumbramiento_ts, placenta_completa, sangrado_estimado_ml,
+                 atencion_rn_placeholder,
+                 registrado_por, estado_registro, firmado_por, firmado_en,
+                 registrado_en
+            FROM ece.sala_expulsion
+           WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
+                  OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
+           ORDER BY nacimiento_ts DESC
+           LIMIT ${input.limit}
+        `,
+      );
     }),
 
-  /** Obtiene un registro por id. */
+  /**
+   * Obtiene un registro por id.
+   *
+   * R1.2 — mismo hallazgo que `list`: sin filtro de establecimiento.
+   */
   get: physicianRole
     .input(getInput)
     .query(async ({ ctx, input }) => {
-      const row = await findSalaExpulsion(ctx.prisma, input.id);
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return row;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        const row = await findSalaExpulsion(tx, input.id);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+        return row;
+      });
     }),
 
   /**
@@ -263,23 +278,25 @@ export const eceSalaExpulsionRouter = router({
       const userId = ctx.user.id;
       const orgId = ctx.tenant.organizationId;
 
-      // Verificar que el episodio no tenga ya un registro activo
-      const existing = await (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<Array<{ cnt: bigint }>>)`
-        SELECT COUNT(*) AS cnt
-          FROM ece.sala_expulsion
-         WHERE episodio_hospitalario_id = ${input.episodioHospitalarioId}::uuid
-      `;
-      if (Number(existing[0]?.cnt ?? 0) > 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "El episodio ya tiene un registro de sala de expulsión.",
-        });
-      }
-
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        // Verificar que el episodio no tenga ya un registro activo.
+        // R1.2 — movido dentro del contexto ECE (antes corría en ctx.prisma
+        // directo, filtrando en silencio por CUALQUIER organización).
+        const existing = await (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<Array<{ cnt: bigint }>>)`
+          SELECT COUNT(*) AS cnt
+            FROM ece.sala_expulsion
+           WHERE episodio_hospitalario_id = ${input.episodioHospitalarioId}::uuid
+        `;
+        if (Number(existing[0]?.cnt ?? 0) > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "El episodio ya tiene un registro de sala de expulsión.",
+          });
+        }
+
         const personalId = await findPersonalId(tx, userId);
         if (!personalId) {
           throw new TRPCError({
@@ -366,16 +383,18 @@ export const eceSalaExpulsionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
 
-      const row = await findSalaExpulsion(ctx.prisma, input.id);
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      if (row.estado_registro !== "borrador") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Solo se puede firmar en estado 'borrador'. Estado actual: '${row.estado_registro}'.`,
-        });
-      }
-
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        // R1.2 — movido dentro del contexto ECE (antes corría en ctx.prisma
+        // directo, sin filtro de establecimiento).
+        const row = await findSalaExpulsion(tx, input.id);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+        if (row.estado_registro !== "borrador") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Solo se puede firmar en estado 'borrador'. Estado actual: '${row.estado_registro}'.`,
+          });
+        }
+
         const { personalId } = await verifyPin(tx, userId, input.pin);
 
         await (tx.$executeRaw as (

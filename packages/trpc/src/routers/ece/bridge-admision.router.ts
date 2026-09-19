@@ -31,9 +31,35 @@
  *   - Orden sin episodio previo: idempotencia — si ya tiene episodio, CONFLICT.
  *   - PIN ADM verificado contra ece.firma_electronica.pin_hash (argon2id).
  *   - Toda escritura ECE usa raw SQL (ece.* fuera del schema Prisma principal).
- *   - withTenantContext NO se usa: la tx Prisma garantiza atomicidad; el RLS
- *     de ece.* aplica por schema separado y el router verifica pertenencia al
- *     establecimiento explícitamente (no por org JWT).
+ *
+ * R1.2 (2026-09) — CORRECCIÓN: el comentario anterior decía "withTenantContext
+ * NO se usa: la tx Prisma garantiza atomicidad; el RLS de ece.* aplica por
+ * schema separado" — eso es falso: el rol de Supabase que ejecuta Prisma
+ * tiene BYPASSRLS por default, así que sin demotar a `authenticated` (vía
+ * `withWorkflowContext`/`set_ece_context`) RLS NO aplicaba nunca; el filtro
+ * de establecimiento vivía solo en JS. Migrado:
+ *   - Paso de verificación de orden (findOrdenIngreso + estadoDoc) y TODO el
+ *     bloque de escritura (pasos 1-10) ahora corren dentro de
+ *     `withWorkflowContext` (policies `by_paciente_estab`/`by_episodio_estab`
+ *     ya aplican de verdad).
+ *   - `findPersonalSaludPorAuthUser` sigue privilegiado (`ctx.prisma`
+ *     directo): es el bootstrap que resuelve `personal.id`
+ *     (`ece.personal_salud.id`), necesario ANTES de poder abrir el contexto;
+ *     solo filtra por `his_user_id = ctx.user.id` (valor de sesión, no
+ *     input del cliente) — sin fuga cross-tenant posible.
+ *   - `findFirmaElectronica`/`verificarPin` (PIN) se QUEDAN privilegiados a
+ *     propósito: la policy `firma_self_only` de `ece.firma_electronica`
+ *     exige `personal_id = current_setting('app.ece_personal_id')`, y ese
+ *     GUC lo setea `withWorkflowContext` con el mismo valor de `personalId`
+ *     que se le pase. Demotar aquí exigiría pasar `personal.id` (ya
+ *     resuelto), lo cual SÍ sería correcto para esta tabla en particular —
+ *     pero el PIN debe verificarse ANTES de saber si la orden es válida
+ *     (falla rápido en credenciales), y mezclar ambos contextos (privilegiado
+ *     para PIN + demotado para todo lo demás) en el mismo helper aumenta el
+ *     riesgo de bugs sin cerrar una brecha real: no hay filtro de tenant que
+ *     saltarse en esta lectura (WHERE personal_id = ${personal.id} ya acota
+ *     a la fila propia del profesional resuelto). Ver identity-resolver.ts
+ *     (R03) para el estado general de este desalineamiento de espacios de id.
  *
  * ---------------------------------------------------------------------------
  * OUTBOX (emitDomainEvent dentro de Prisma.$transaction)
@@ -66,6 +92,7 @@ import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../../trpc";
 import { resolvePersonalSalud } from "../../lib/identity-resolver";
+import { withWorkflowContext } from "../../workflow/context";
 
 // =============================================================================
 // Schemas Zod (inlined — igual que bridge-encounter.router.ts — para evitar
@@ -227,7 +254,16 @@ export const eceBridgeAdmisionRouter = router({
   admitirDesdeOrden: admProcedure
     .input(admitirDesdeOrdenInput)
     .mutation(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo para admitir un paciente.",
+        });
+      }
+
       // ── 1. Resolver personal ECE del usuario en sesión ───────────────────
+      // R1.2 — justificado en ctx.prisma directo (bootstrap: resuelve
+      // personal.id ANTES de poder abrir el contexto RLS; ver cabecera).
       const personal = await findPersonalSaludPorAuthUser(ctx.prisma, ctx.user.id);
       if (!personal) {
         throw new TRPCError({
@@ -239,6 +275,9 @@ export const eceBridgeAdmisionRouter = router({
       }
 
       // ── 2. Verificar PIN ─────────────────────────────────────────────────
+      // R1.2 — se QUEDA privilegiado a propósito (ver cabecera: policy
+      // firma_self_only exige un GUC de personal_id que este flujo no puede
+      // setear de forma consistente antes de verificar el PIN).
       const firma = await findFirmaElectronica(ctx.prisma, personal.id);
       if (!firma) {
         throw new TRPCError({
@@ -254,8 +293,14 @@ export const eceBridgeAdmisionRouter = router({
         });
       }
 
+      const eceCtx = { personalId: personal.id, establecimientoId: ctx.tenant.establishmentId };
+
+      return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
       // ── 3. Verificar orden de ingreso ────────────────────────────────────
-      const orden = await findOrdenIngreso(ctx.prisma, input.ordenIngresoId);
+      // R1.2 — migrado dentro del contexto ECE (antes ctx.prisma directo):
+      // la policy `by_paciente_estab` de orden_ingreso ahora filtra de
+      // verdad por establecimiento.
+      const orden = await findOrdenIngreso(tx, input.ordenIngresoId);
       if (!orden) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -266,7 +311,7 @@ export const eceBridgeAdmisionRouter = router({
       // El estado de workflow (firmado/validado) vive en documento_instancia → flujo_estado.
       // El bridge necesita que la orden esté "firmada" en el circuito ECE antes de admitir.
       // findOrdenIngreso no une con documento_instancia, así que verificamos directamente:
-      const estadoDocRows = await (ctx.prisma.$queryRaw as (
+      const estadoDocRows = await (tx.$queryRaw as (
         tpl: TemplateStringsArray,
         ...vals: unknown[]
       ) => Promise<Array<{ estado_doc: string }>>)`
@@ -292,8 +337,8 @@ export const eceBridgeAdmisionRouter = router({
         });
       }
 
-      // ── 4. Transacción atómica ───────────────────────────────────────────
-      return ctx.prisma.$transaction(async (tx) => {
+      // ── 4. Resto de la transacción atómica (mismo `tx` del contexto ECE) ──
+      {
         const rawTx = tx as unknown as RawClient;
         const fechaIngreso = new Date(input.fechaHoraIngreso);
 
@@ -567,6 +612,7 @@ export const eceBridgeAdmisionRouter = router({
           hojaIngresoId,
           camaAsignadaId,
         };
+      }
       });
     }),
 
@@ -574,11 +620,28 @@ export const eceBridgeAdmisionRouter = router({
    * Lista órdenes de ingreso validadas que aún no tienen episodio.
    * Estas son las que el ADM debe procesar para completar la admisión.
    */
+  /**
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS):
+   * sin filtro de establecimiento en absoluto — cualquier organización podía
+   * ver la cola de admisión de otra. La policy `by_paciente_estab` de
+   * `orden_ingreso` (vía ece.paciente) ahora filtra de verdad bajo rol
+   * `authenticated`. El LEFT JOIN a `public."Patient"` puede degradar el
+   * nombre a `numero_expediente`/id bajo contexto ECE puro (mismo patrón
+   * aceptado que certificado-defuncion.router.ts get) — ya tiene fallback.
+   */
   listOrdenesPendientesAdmision: tenantProcedure
     .input(listOrdenesPendientesAdmisionInput)
     .query(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo para ver la cola de admisión.",
+        });
+      }
+      const eceCtx = { personalId: ctx.user.id, establecimientoId: ctx.tenant.establishmentId };
       const offset = (input.page - 1) * input.pageSize;
 
+      const { items, countRows } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
       // Patrón para filtro condicional por servicioId:
       // corremos dos variantes de query para evitar interpolación dinámica
       // de cláusulas SQL (violación de prepared statements).
@@ -590,7 +653,7 @@ export const eceBridgeAdmisionRouter = router({
         // ece.paciente no tiene nombre_completo; el nombre vive en public."Patient" via public_patient_id.
         // Filtramos por estado del documento (firmado/validado), no por estado_registro del registro
         // (CHECK: vigente|rectificado — 'validado' no es un valor válido).
-        items = await (ctx.prisma.$queryRaw as (
+        items = await (tx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<OrdenListRow[]>)`
@@ -618,7 +681,7 @@ export const eceBridgeAdmisionRouter = router({
           LIMIT ${input.pageSize}
           OFFSET ${offset}
         `;
-        countRows = await (ctx.prisma.$queryRaw as (
+        countRows = await (tx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<Array<{ total: bigint }>>)`
@@ -631,7 +694,7 @@ export const eceBridgeAdmisionRouter = router({
             AND o.servicio_ingreso_id = ${input.servicioId}::uuid
         `;
       } else {
-        items = await (ctx.prisma.$queryRaw as (
+        items = await (tx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<OrdenListRow[]>)`
@@ -658,7 +721,7 @@ export const eceBridgeAdmisionRouter = router({
           LIMIT ${input.pageSize}
           OFFSET ${offset}
         `;
-        countRows = await (ctx.prisma.$queryRaw as (
+        countRows = await (tx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<Array<{ total: bigint }>>)`
@@ -670,6 +733,9 @@ export const eceBridgeAdmisionRouter = router({
             AND o.episodio_id IS NULL
         `;
       }
+
+      return { items, countRows };
+      });
 
       const total = Number(countRows[0]?.total ?? 0);
 

@@ -32,6 +32,17 @@ vi.mock("@his/database", () => ({
   emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-00000000" }),
 }));
 
+// R1.2 — withWorkflowContext envuelve en $transaction + SET LOCAL (set_ece_context,
+// SET LOCAL ROLE); el mock ejecuta el callback directamente contra el mismo prisma
+// mock, sin consumir $queryRaw/$executeRaw adicionales (mismo patrón que
+// periodo-expulsivo.router.test.ts / certificado-defuncion.router.test.ts).
+vi.mock("../../../workflow/context", () => ({
+  withWorkflowContext: vi.fn(
+    async (_prisma: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) =>
+      fn(_prisma),
+  ),
+}));
+
 // ─── Constantes UUIDs ────────────────────────────────────────────────────────
 
 const PERSONAL_ID = "11111111-1111-1111-1111-111111111111";
