@@ -4,6 +4,20 @@
 -- Owner: @DA — Data Architect BI
 -- Dependencias: SQL 48 (schema analytics + rol bi_reader + matviews)
 -- Patron de referencia: public schema RLS (01_rls_policies.sql, 04_rls_session_helpers.sql)
+--
+-- ⚠️ HISTÓRICO — NUNCA APLICADO A PROD (confirmado 2026-09, R1.5 plan de
+-- remediación; sql/249 lo constató explícito: "capa BI 48/49 sigue sin
+-- aplicar — bi_reader no existe"). `analytics.current_bi_org_id()` SÍ existe
+-- en prod, pero fue recreada 1:1 dentro de sql/249 (no la sembró este
+-- archivo) porque `analytics.mv_rentabilidad_afiliado` la necesitaba y sql/49
+-- nunca corrió. Ninguna de las policies RLS de este archivo
+-- (`bi_reader_org_isolation`, etc.) está activa — no aplica sobre
+-- `dim_organization`/`dim_establishment` porque esas tablas tampoco existen
+-- (son de sql/48, también sin aplicar). sql/259 crea el rol `bi_reader` y
+-- deliberadamente NO reaplica el `ALTER DEFAULT PRIVILEGES` de la §6 de este
+-- archivo (ver cabecera de sql/259 para el razonamiento: es prospectivo, no
+-- "objetos que existan hoy", y podría exponer a bi_reader una futura
+-- `dim_patient` con PHI antes de que su policy RESTRICTIVE de §8 exista).
 -- =============================================================================
 -- El rol bi_reader NO tiene BYPASSRLS. Cada query pasa por las politicas
 -- definidas aqui, que filtran por organization_id usando el mismo GUC
