@@ -15,9 +15,8 @@
  *
  * No cachea entre requests: en un runtime serverless (Vercel) un caché por
  * proceso podría filtrar el resultado de una organización a otra. Si un
- * caller necesita reusar el resultado dentro del mismo request, es
- * responsabilidad del caller (ver `resolverLocaleOrgCacheado` más abajo,
- * pensado para un único request con varias llamadas al mismo org).
+ * caller necesita reusar el resultado dentro del mismo request, guarda la
+ * constante localmente — no existe (ni debe existir) un caché de módulo.
  */
 
 export interface OrgLocale {

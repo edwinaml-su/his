@@ -58,9 +58,10 @@
   `trpc.ts`), encadenable con `.use()` sobre CUALQUIER procedure. Si
   `ctx.tenant` es `null` (ej. `protectedProcedure` sin org seleccionada),
   se salta la evaluación — fail-safe ALLOW.
-- `atributos.ts`: `atributosDesdeContexto(tenant)` deriva rol,
-  establecimiento, servicio (asignaciones Nivel A) y hora actual
-  (`America/El_Salvador`, timezone fija del proyecto) del `TenantContext`.
+- `atributos.ts`: `atributosDesdeContexto(prisma, tenant)` (async desde
+  R2.1, plan remediación 2026-09) deriva rol, establecimiento, servicio
+  (asignaciones Nivel A) y hora actual en la **timezone de la organización**
+  (`Country.defaultTzId`, fallback `America/El_Salvador`) del `TenantContext`.
 - **Precedencia** (idéntica en motor y documentada en el SQL):
   1. Sin regla que matchee → **ALLOW fail-safe**. Igual que F1: el default
      nunca bloquea lo que hoy funciona.
