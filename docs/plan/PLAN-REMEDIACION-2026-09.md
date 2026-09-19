@@ -101,7 +101,7 @@ Los reportes de `/admin/finance` pasan a poder filtrar por libro cuando (3) est�
 3. R1.4 SSO-config: tabla real vs retiro.
 4. R3.3 destino de las 5 páginas huérfanas.
 5. R4.5 encender MFA staff.
-6. §15 honorarios (parámetros de convenios) — bloquea afinamiento de CC-0036, no este plan.
+6. §15 honorarios — **parcialmente respondido por Edwin (2026-09-19): los honorarios médicos los define cada doctor DESPUÉS de sus intervenciones.** Implicación de diseño: el flujo necesita una captura post-intervención donde el médico declara su honorario (que se vuelve el cargo HONORARIO de la cuenta + ProduccionMedica), con el convenio/regla como tope o default, no como monto automático. Se planifica como CC de ajuste sobre CC-0036 Ola 5. Quedan abiertos los demás parámetros del §15 (cuota de servicios, participación de insumos, retención 10 %, variable de médicos de turno).
 
 ## Secuencia propuesta
 
