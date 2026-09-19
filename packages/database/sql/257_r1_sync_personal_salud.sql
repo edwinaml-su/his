@@ -1,5 +1,9 @@
 -- =============================================================================
 -- 257_r1_sync_personal_salud.sql
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado post-apply: 2 personal_salud (centinelas PENDIENTE-DUI-*),
+-- 5 asignaciones de rol activas, 3 triggers presentes, 0 grants residuales
+-- de EXECUTE — exactamente lo simulado en la DIVULGACIÓN de abajo.
 -- Plan de remediación 2026-09, Ola R1, ítem R1.1 (aprobado por Edwin).
 --
 -- Problema (R03, ver packages/trpc/src/lib/identity-resolver.ts):
