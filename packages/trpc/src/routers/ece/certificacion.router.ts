@@ -334,6 +334,18 @@ export const eceCertificacionRouter = router({
   listCola: dirProcedure
     .input(listColaCertificacionInput)
     .query(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo.",
+        });
+      }
+      const eceCtx = {
+        personalId: ctx.user.id,
+        establecimientoId: ctx.tenant.establishmentId,
+        roles: ctx.tenant.roleCodes,
+      };
+
       const estadoFiltro = input.incluirCertificados
         ? ["validado", "certificado"]
         : ["validado"];
@@ -386,9 +398,14 @@ export const eceCertificacionRouter = router({
         ? [estadoFiltro, input.cursor, limit]
         : [estadoFiltro, limit];
 
-      const rows = await ctx.prisma.$queryRawUnsafe<InstanciaColaRow[]>(
-        baseQuery,
-        ...params,
+      // CC-B — antes corría en ctx.prisma directo (rol BYPASSRLS). Los JOIN a
+      // public."Patient"/public."User" quedan sujetos a sus propias policies
+      // (current_org_id(), no current_org_id_or_ece_context()) y bajo contexto
+      // ECE puro pueden devolver NULL en paciente_nombre/validado_por_nombre
+      // (ambos ya tienen COALESCE/fallback) — degradación cosmética aceptada,
+      // no un hallazgo de seguridad.
+      const rows = await withWorkflowContext(ctx.prisma, eceCtx, (tx) =>
+        tx.$queryRawUnsafe<InstanciaColaRow[]>(baseQuery, ...params),
       );
 
       const hasMore = rows.length > input.limit;

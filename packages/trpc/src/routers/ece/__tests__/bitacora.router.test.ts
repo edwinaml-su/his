@@ -65,6 +65,12 @@ describe("bitacoraRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    // CC-B — list/exportCsv/metrics/register ahora corren dentro de
+    // withEceContext (prisma.$transaction). Sin este passthrough, el mock
+    // no invoca el callback y las queries dentro nunca se ejecutan.
+    (prisma.$transaction as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma),
+    );
   });
 
   // -------------------------------------------------------------------------

@@ -44,6 +44,10 @@ vi.mock("@his/database", () => ({
 
 vi.mock("../../../workflow/context", () => ({
   applyWorkflowContext: vi.fn().mockResolvedValue(undefined),
+  // CC-B — list/get migraron a withWorkflowContext (ver comentario del
+  // beforeEach); delega al mismo passthrough de `$transaction` que ya
+  // instala `mockTx` sobre el prisma mock del test.
+  withWorkflowContext: vi.fn((prisma, _ctx, fn) => prisma.$transaction(fn)),
 }));
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -115,6 +119,9 @@ describe("epicrisisRouter", () => {
   beforeEach(() => {
     prisma = mockDeep<PrismaClient>();
     vi.clearAllMocks();
+    // CC-B — list/get ahora también corren dentro de withWorkflowContext
+    // (antes usaban ctx.prisma.$queryRaw directo, sin transacción/RLS).
+    mockTx(prisma);
   });
 
   // ──────────────────────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@
 import { TRPCError } from "@trpc/server";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole } from "../../trpc";
+import { withEceContext } from "../../ece/rls-context";
 import {
   linkTriageInput,
   unlinkTriageInput,
@@ -57,6 +58,17 @@ import {
   syncCompletedTriagesInput,
   MANCHESTER_TO_ECE_NIVEL,
 } from "@his/contracts";
+
+/** Requiere establecimiento activo — necesario para el contexto ECE (RLS). */
+function requireEstablishment(tenant: { establishmentId?: string }): string {
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar el bridge ECE-Triage.",
+    });
+  }
+  return tenant.establishmentId;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos para filas raw SQL (ece.hoja_triaje — tabla real)
@@ -264,25 +276,27 @@ export const eceBridgeTriageRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "TriageEvaluation no encontrado." });
       }
 
-      // Verificar que la EceTriaje existe.
-      const eceTriaje = await fetchEceTriaje(ctx.prisma, input.eceTriajeId);
-      if (!eceTriaje) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "EceTriaje no encontrada o anulada." });
-      }
+      const establecimientoId = requireEstablishment(ctx.tenant);
 
-      // Prevenir doble vínculo con un Triage HIS distinto.
-      const existing = eceTriaje.evaluacion_triaje?.["hisTriageEvalId"] as string | undefined;
-      if (existing && existing !== input.triageId) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `EceTriaje ya vinculada al TriageEvaluation ${existing}.`,
-        });
-      }
+      await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        // Verificar que la EceTriaje existe.
+        const eceTriaje = await fetchEceTriaje(tx as unknown as RawClient, input.eceTriajeId);
+        if (!eceTriaje) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "EceTriaje no encontrada o anulada." });
+        }
 
-      const manchesterLevel = hisTriaje.assignedLevel.priority;
-      const firmadoInmediatamente = false;
+        // Prevenir doble vínculo con un Triage HIS distinto.
+        const existing = eceTriaje.evaluacion_triaje?.["hisTriageEvalId"] as string | undefined;
+        if (existing && existing !== input.triageId) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `EceTriaje ya vinculada al TriageEvaluation ${existing}.`,
+          });
+        }
 
-      await ctx.prisma.$transaction(async (tx) => {
+        const manchesterLevel = hisTriaje.assignedLevel.priority;
+        const firmadoInmediatamente = false;
+
         await setHisLink(
           tx as unknown as RawClient,
           input.eceTriajeId,
@@ -320,26 +334,31 @@ export const eceBridgeTriageRouter = router({
   unlinkTriage: nurseProcedure
     .input(unlinkTriageInput)
     .mutation(async ({ ctx, input }) => {
-      // Buscar el EceTriaje vinculado al Triage HIS dado.
-      const rows = await (ctx.prisma.$queryRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<Array<{ id: string }>>)`
-        SELECT id
-        FROM ece.hoja_triaje
-        WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
-        LIMIT 1
-      `;
+      const establecimientoId = requireEstablishment(ctx.tenant);
 
-      const eceTriajeId = rows[0]?.id ?? null;
-      if (!eceTriajeId) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No se encontró ninguna EceTriaje vinculada a ese TriageEvaluation.",
-        });
-      }
+      const eceTriajeId = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        // Buscar el EceTriaje vinculado al Triage HIS dado.
+        const rows = await (tx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          SELECT id
+          FROM ece.hoja_triaje
+          WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
+          LIMIT 1
+        `;
 
-      await setHisLink(ctx.prisma, eceTriajeId, null);
+        const id = rows[0]?.id ?? null;
+        if (!id) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "No se encontró ninguna EceTriaje vinculada a ese TriageEvaluation.",
+          });
+        }
+
+        await setHisLink(tx as unknown as RawClient, id, null);
+        return id;
+      });
 
       return { ok: true as const, eceTriajeId };
     }),
@@ -369,41 +388,39 @@ export const eceBridgeTriageRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "TriageEvaluation no encontrado." });
       }
 
-      // Verificar idempotencia: si ya existe un ECE vinculado, retornar el existente.
-      const existingRows = await (ctx.prisma.$queryRaw as (
-        tpl: TemplateStringsArray,
-        ...vals: unknown[]
-      ) => Promise<Array<{ id: string; estado_registro: string; nivel_prioridad: string }>>)`
-        SELECT id, estado_registro, nivel_prioridad
-        FROM ece.hoja_triaje
-        WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
-        LIMIT 1
-      `;
+      const establecimientoId = requireEstablishment(ctx.tenant);
 
-      if (existingRows[0]) {
-        return {
-          ok: true as const,
-          eceTriajeId: existingRows[0].id,
-          hisTriageId: input.triageId,
-          // estado_registro CHECK: vigente|rectificado. El estado workflow vive en documento_instancia.
-          estadoRegistro: existingRows[0].estado_registro as "vigente" | "rectificado",
-          nivelPrioridad: existingRows[0].nivel_prioridad,
-        };
-      }
-
+      // Verificar idempotencia + crear (documento_instancia + hoja_triaje +
+      // outbox) — todo dentro del mismo contexto ECE.
       const manchesterLevel = hisTriaje.assignedLevel.priority;
       const nivelPrioridad = MANCHESTER_TO_ECE_NIVEL[manchesterLevel] ?? "III";
-
       // El rol ENF puede firmar inmediatamente.
       const isNurse = ctx.tenant.roleCodes.includes("NURSE");
       const firmadoInmediatamente = input.firmarInmediatamente && isNurse;
       // estado_registro siempre 'vigente' (CHECK BD: vigente|rectificado).
       // El estado de workflow (borrador→firmado) vive en documento_instancia.estado_actual_id.
 
-      let eceTriajeId: string;
-
-      await ctx.prisma.$transaction(async (tx) => {
+      const resultado = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
         const rawTx = tx as unknown as RawClient;
+
+        const existingRows = await (rawTx.$queryRaw as (
+          tpl: TemplateStringsArray,
+          ...vals: unknown[]
+        ) => Promise<Array<{ id: string; estado_registro: string; nivel_prioridad: string }>>)`
+          SELECT id, estado_registro, nivel_prioridad
+          FROM ece.hoja_triaje
+          WHERE evaluacion_triaje->>'hisTriageEvalId' = ${input.triageId}
+          LIMIT 1
+        `;
+
+        if (existingRows[0]) {
+          return {
+            eceTriajeId: existingRows[0].id,
+            // estado_registro CHECK: vigente|rectificado. El estado workflow vive en documento_instancia.
+            estadoRegistro: existingRows[0].estado_registro as "vigente" | "rectificado",
+            nivelPrioridad: existingRows[0].nivel_prioridad,
+          };
+        }
 
         // Crear documento_instancia TRIAJE primero (instancia-first, instancia_id NOT NULL).
         const instanciaResult = await (rawTx.$queryRaw as (
@@ -431,7 +448,7 @@ export const eceBridgeTriageRouter = router({
           });
         }
 
-        eceTriajeId = await insertEceTriaje(rawTx, {
+        const eceTriajeId = await insertEceTriaje(rawTx, {
           instanciaId,
           episodioId: input.episodioId,
           motivoConsulta: null, // motivo viene de la evaluación — dejar en null para que enfermero complete
@@ -446,25 +463,27 @@ export const eceBridgeTriageRouter = router({
           organizationId: ctx.tenant.organizationId,
           eventType: "ece.triaje.linkedToHisTriage",
           aggregateType: "EceTriaje",
-          aggregateId: eceTriajeId!,
+          aggregateId: eceTriajeId,
           emittedById: ctx.user.id,
           payload: {
             hisTriageId: input.triageId,
-            eceTriajeId: eceTriajeId!,
+            eceTriajeId,
             patientId: hisTriaje.patient.id,
             manchesterLevel,
             firmadoInmediatamente,
             byUserId: ctx.user.id,
           },
         });
+
+        return { eceTriajeId, estadoRegistro: "vigente" as const, nivelPrioridad };
       });
 
       return {
         ok: true as const,
-        eceTriajeId: eceTriajeId!,
+        eceTriajeId: resultado.eceTriajeId,
         hisTriageId: input.triageId,
-        estadoRegistro: "vigente" as const,
-        nivelPrioridad,
+        estadoRegistro: resultado.estadoRegistro,
+        nivelPrioridad: resultado.nivelPrioridad,
       };
     }),
 
@@ -479,10 +498,17 @@ export const eceBridgeTriageRouter = router({
   syncCompletedTriages: nurseProcedure
     .input(syncCompletedTriagesInput)
     .mutation(async ({ ctx, input }) => {
-      const unlinked = await fetchCompletedUnlinkedTriages(
+      const establecimientoId = requireEstablishment(ctx.tenant);
+
+      // Lee public."TriageEvaluation" (requiere app.current_org_id) Y
+      // ece.hoja_triaje (requiere el contexto ECE) en la misma transacción —
+      // ambos GUC vía la opción `tenantContext` (ver ece/rls-context.ts).
+      const unlinked = await withEceContext(
         ctx.prisma,
-        ctx.tenant.organizationId,
-        input.limit,
+        ctx.user.id,
+        establecimientoId,
+        (tx) => fetchCompletedUnlinkedTriages(tx as unknown as RawClient, ctx.tenant.organizationId, input.limit),
+        { tenantContext: { userId: ctx.user.id, orgId: ctx.tenant.organizationId } },
       );
 
       let processed = 0;
@@ -507,7 +533,7 @@ export const eceBridgeTriageRouter = router({
         try {
           let eceTriajeId: string;
 
-          await ctx.prisma.$transaction(async (tx) => {
+          await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
             const rawTx2 = tx as unknown as RawClient;
 
             // Instancia-first para syncCompletedTriages.
