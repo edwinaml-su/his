@@ -6,7 +6,8 @@
 -- corporativa y completa de las operaciones, además de tener roles
 -- específicos por país y por organización".
 --
--- ⚠️ NO APLICADO — @Orq decide cuándo correr esto contra Supabase.
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado post-apply: 21 organizaciones activas × 2 roles, 0 membresías.
 --
 -- Patrón: idéntico a sql/239_cc0032_super_admin_rbac_audit.sql §1 (rol por
 -- organización activa, `ON CONFLICT ("organizationId", code) DO NOTHING`).
