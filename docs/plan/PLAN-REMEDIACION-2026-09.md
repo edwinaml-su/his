@@ -2,14 +2,14 @@
 
 **Solicitado por:** Edwin Martinez. **Elaborado por:** @Orq (consolidando las auditorías del 2026-09-15 —cobertura—, 2026-09-18 —cableado UI→BD y drift— y 2026-09-18 —multi-tenant/país/moneda/libro—).
 
-## Principio rector: la data nunca bloquea
+## Principio rector: la carga de datos es una fase, no un obstáculo del desarrollo
 
-Restricción explícita del pedido: **la migración/carga de datos no puede ser obstáculo del avance**. El plan la honra con cuatro reglas de diseño, todas ya probadas en el repo:
+Aclaración de Edwin (2026-09-19): **la carga/migración de datos SÍ se hará — en su momento, cuando todo esté funcional, para habilitar las pruebas de UAT.** Es decir: la carga es la puerta de entrada al UAT, no un requisito intercalado en el desarrollo. El plan lo honra así:
 
-1. **Fallback seguro en código**: toda funcionalidad opera con defaults sensatos cuando su parametrización no está cargada (precedentes: SLA por defecto en `lab-sla.ts`, cargo `PENDIENTE_TARIFA` en vez de $0, rol `RESP_THERAPIST` inerte).
-2. **Sincronización automática en lugar de carga manual**: donde un circuito está bloqueado por una tabla vacía, la remediación escribe el *sync* que la puebla desde datos que ya existen — el bloqueo de datos se convierte en código (caso emblema: `ece.personal_salud`).
-3. **Migraciones de schema autocontenidas**: todo SQL numerado incluye su propio backfill idempotente; ninguno depende de una carga externa previa.
-4. **Track de datos paralelo y no bloqueante**: la carga (tasas, SLA, precios, catálogos) solo **enciende** features que ya mergearon inertes; nunca es prerrequisito de un merge.
+1. **Durante el desarrollo, ningún ítem espera datos**: toda funcionalidad opera con defaults sensatos mientras su parametrización no está cargada (precedentes: SLA por defecto en `lab-sla.ts`, cargo `PENDIENTE_TARIFA` en vez de $0, rol `RESP_THERAPIST` inerte) — así las olas R1–R4 avanzan completas sin bloquearse entre sí ni esperar la carga.
+2. **Migraciones de schema autocontenidas**: todo SQL numerado incluye su propio backfill idempotente; ninguno depende de una carga externa previa.
+3. **La Fase de Carga pre-UAT (abajo) tiene checklist propio**: cuando el desarrollo esté funcional, se ejecuta la carga completa de una vez, con inventario cerrado — y ahí sí es requisito: **sin carga no hay UAT**.
+4. **Sync automático donde reduzca la carga manual**: R1.1 (`ece.personal_salud` desde `User`+roles) no sustituye la fase de carga — la achica y evita que ese catálogo se desactualice después del go-live.
 
 ## En vuelo ahora (no forman parte del plan, son contexto)
 
@@ -60,15 +60,21 @@ Restricción explícita del pedido: **la migración/carga de datos no puede ser 
 | R4.4 | Triage de la suite E2E nightly (fallos conocidos acumulados) — por lotes, aprovechando el stack GoTrue ya verde en @smoke. | Sin data real: usa el seeder determinista. | M |
 | R4.5 | MFA staff: **encender la política** (mecanismo ya cableado en layouts). | Config + UAT. **Decisión Edwin.** | S |
 
-## Track D — Datos (paralelo permanente, solo "enciende")
+## Fase de Carga de datos — pre-UAT (se ejecuta cuando el desarrollo esté funcional)
 
-Ninguno de estos ítems es prerrequisito de ninguna ola; cada uno activa una feature que ya mergeó con fallback:
+No es prerrequisito de las olas R1–R4 (esas avanzan con fallbacks), pero **sí es prerrequisito del UAT**: cuando el desarrollo esté funcional, esta carga se ejecuta completa y habilita las pruebas. Inventario cerrado a hoy:
 
-- Tasas de cambio (activa multimoneda real — hasta entonces todo es USD funcional y nada se rompe).
-- SLA de lab/imágenes/TR (hasta entonces gobiernan los defaults de código).
-- `ece.personal_salud` — **se elimina como carga manual si R1.1 se aprueba** (pasa a sync).
-- GLN/precios pendientes de Code Castle; listas de precios de países futuros; países/geo/feriados adicionales (CRUD `/admin/countries` ya existe; GT queda sembrado por SQL 255).
-- Membresías de los roles nuevos (CONTRALOR_CORP, DIR_PAIS, SUPER_ADMIN cross-org, 12+ roles de CC-0036) — asignación manual de Edwin.
+| Dato | Habilita | Fuente |
+|---|---|---|
+| `ece.personal_salud` (perfil ECE del personal clínico con `his_user_id`) | IPSG-2 valores críticos, cola de certificación con RLS, firmas/asignaciones ECE | Sync R1.1 (automático) o carga manual |
+| Tasas de cambio (`ExchangeRate`) | Multimoneda real (hasta entonces USD funcional, fail-closed) | `/admin/exchange-rates` |
+| SLA de lab/imágenes/TR (`*SlaConfig`) | SLAs institucionales en vez de defaults de código | Paneles de configuración ya entregados |
+| GLN/precios pendientes (Code Castle) + listas de precios de países futuros | Trazabilidad GS1 completa y tarifarios | Importadores existentes / Odoo |
+| Países/geo/feriados adicionales | Direcciones, agenda y feriados de orgs extranjeras (GT queda sembrado por SQL 255) | CRUD `/admin/countries` |
+| Membresías de roles (CONTRALOR_CORP, DIR_PAIS, SUPER_ADMIN cross-org, 12+ roles CC-0036) | Visión corporativa/país y operación por rol | Asignación manual de Edwin |
+| Usuarios/pacientes/inventarios reales del complejo | El UAT en sí | Migración desde sistemas actuales + Odoo |
+
+**Gate:** checklist completo ⇒ arranca UAT formal (#687–#694 + olas mergeadas).
 
 ## Fuera de alcance deliberado (decisiones ya tomadas — no re-abrir sin CC)
 
@@ -89,4 +95,4 @@ Ninguno de estos ítems es prerrequisito de ninguna ola; cada uno activa una fea
 
 ## Secuencia propuesta
 
-**R1 → R2 → R3 → R4**, con Track D corriendo en paralelo desde el día 1. R1.1 primero de todo: es el único ítem que convierte un bloqueo de datos en código y desbloquea un circuito de seguridad del paciente (IPSG-2) ya construido de punta a punta.
+**R1 → R2 → R3 → R4 → Fase de Carga → UAT.** R1.1 primero de todo: reduce la fase de carga y deja listo un circuito de seguridad del paciente (IPSG-2) construido de punta a punta. La fase de carga se ejecuta una sola vez, con el desarrollo funcional, e inaugura el UAT.
