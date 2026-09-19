@@ -14,8 +14,9 @@
  * PortalAccount.mfaSecret), nunca a esta tabla. Ver cabecera sql/258.
  *
  * `listSsoProvidersForLogin` (usado por la pantalla PRE-login `/sso`, sin
- * sesión) NO pasa por este router — lee la tabla directo con fallback a env
- * (ver `apps/web/src/app/actions/sso.ts`).
+ * sesión) NO pasa por este router — lee la tabla directo (prisma singleton,
+ * sin tenant) con fallback al mock legacy hardcodeado si la tabla está
+ * vacía o la query falla (ver `apps/web/src/app/actions/sso.ts`).
  */
 import { TRPCError } from "@trpc/server";
 import {

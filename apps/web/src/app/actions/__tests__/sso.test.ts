@@ -9,6 +9,10 @@
  *   - Filtra por `organizationDomain` cuando se provee.
  *   - `config` corrupto/inválido en BD no tumba la función (degrada a
  *     `organizationDomain: undefined`, fila igual se lista).
+ *   - P2-1 (revisión independiente 2026-09-19): la query a BD puede fallar
+ *     (P2021 "tabla no existe" si sql/258 aún no se aplicó, o la BD no
+ *     responde) — degrada al mock legacy en vez de propagar y vaciar el
+ *     selector `/sso`.
  *
  * `@his/database` se mockea — sin Prisma/Supabase real en el entorno de
  * test de `@his/web` (mismo patrón que `break-glass.test.ts`).
@@ -30,6 +34,18 @@ describe("listSsoProvidersForLogin — R1.4", () => {
 
   it("tabla vacía → cae al mock legacy (mismo comportamiento que antes de R1.4)", async () => {
     mockFindMany.mockResolvedValue([]);
+    const { listSsoProvidersForLogin } = await import("../sso");
+
+    const result = await listSsoProvidersForLogin();
+
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.provider).sort()).toEqual(["AZURE_AD", "GOOGLE_WORKSPACE"]);
+  });
+
+  it("P2-1 — la query a BD falla (P2021/conexión) → degrada al mock legacy, no propaga ni vacía el selector", async () => {
+    mockFindMany.mockRejectedValue(
+      new Error('The table `public.SsoProviderConfig` does not exist in the current database.'),
+    );
     const { listSsoProvidersForLogin } = await import("../sso");
 
     const result = await listSsoProvidersForLogin();

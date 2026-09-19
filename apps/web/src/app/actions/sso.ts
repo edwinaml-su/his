@@ -132,8 +132,11 @@ export async function handleSsoCallback(
  * Lee `SsoProviderConfig` (enabled=true, todas las orgs — el filtro real es
  * por dominio de email, no por tenant: el usuario aún no eligió organización
  * en este punto del flujo). Si la tabla no tiene NINGUNA fila (ninguna org
- * configuró SSO todavía vía `/admin/sso-config`), cae al mock legacy — así
- * el comportamiento no cambia mientras la migración a BD esté en curso.
+ * configuró SSO todavía vía `/admin/sso-config`) O la query falla (P2021
+ * "tabla no existe" — sql/258 aún no aplicado — u otro error de conexión),
+ * cae al mock legacy hardcodeado — así el comportamiento no cambia mientras
+ * la migración a BD esté en curso, y un problema de BD no vacía el selector
+ * `/sso` en vez de degradar.
  *
  * Nunca devuelve clientSecret: la tabla no tiene esa columna (ver sql/258).
  */
@@ -142,10 +145,16 @@ export async function listSsoProvidersForLogin(
 ): Promise<
   Array<Pick<SsoProviderConfig, "id" | "provider" | "displayName" | "organizationDomain">>
 > {
-  const dbRows = await prisma.ssoProviderConfig.findMany({
-    where: { enabled: true },
-    select: { id: true, provider: true, displayName: true, config: true },
-  });
+  let dbRows: Array<{ id: string; provider: string; displayName: string; config: unknown }> = [];
+  try {
+    dbRows = await prisma.ssoProviderConfig.findMany({
+      where: { enabled: true },
+      select: { id: true, provider: true, displayName: true, config: true },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[sso] listSsoProvidersForLogin: falló la consulta a BD, usando mock legacy:", err);
+  }
 
   const fromDb = dbRows.map((r) => {
     const parsed = ssoProviderConfigMetaSchema.safeParse(r.config);
