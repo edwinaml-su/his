@@ -413,6 +413,9 @@ model Currency {
   contratoCargos         ContratoCargo[]
   // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios
   liquidaciones          Liquidacion[]
+  // R2.3 (SQL 262) — moneda explícita de la línea de cargo (antes implícita
+  // vía la lista de precios; ambigua en escenario multimoneda).
+  patientAccountServices PatientAccountService[] @relation("PatientAccountServiceCurrency")
 
   @@schema("public")
 }
@@ -9227,6 +9230,10 @@ model PatientAccountService {
   /// Acto clínico que originó el cargo: dispensacion | lab_order | imaging | etc.
   origen        String?      @db.VarChar(30)
   referenciaId  String?      @db.Uuid
+  /// R2.3 (SQL 262) — moneda EXPLÍCITA de unitPrice/totalPrice: la de la
+  /// ServicePriceList que resolvió el precio, o la funcional de la org si no
+  /// vino de una lista (estandar/PENDIENTE_TARIFA). Antes era implícita.
+  currencyId    String?      @db.Uuid
   updatedAt     DateTime     @updatedAt
   createdAt   DateTime     @default(now()) @db.Timestamptz()
   createdBy   String?      @db.Uuid
@@ -9235,6 +9242,7 @@ model PatientAccountService {
   encounter   Encounter?              @relation("EncounterAccountServices", fields: [encounterId], references: [id], onDelete: SetNull)
   reversalOf  PatientAccountService?  @relation("PatientAccountServiceReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
   reversals   PatientAccountService[] @relation("PatientAccountServiceReversal")
+  currency    Currency?               @relation("PatientAccountServiceCurrency", fields: [currencyId], references: [id], onDelete: Restrict)
 
   @@index([accountId])
   @@index([encounterId])
