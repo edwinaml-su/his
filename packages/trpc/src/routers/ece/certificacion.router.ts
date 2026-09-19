@@ -45,6 +45,25 @@
  *   listCola        → requireRole(["DIR"])  — cola de documentos pendientes de certificar
  *   certificar      → requireRole(["DIR"])  + requireEcePermission("ece.documento.certificar")
  *   certificarBulk  → requireRole(["DIR"])  — verifica PIN una vez, certifica todos en serie
+ *
+ * ---------------------------------------------------------------------------
+ * R1.1 (plan de remediación 2026-09) — `listCola` re-migrado a RLS real
+ * ---------------------------------------------------------------------------
+ *   Hasta PR #693, `listCola` leía con `ctx.prisma.$queryRawUnsafe` SIN
+ *   contexto ECE (rol BYPASSRLS) — excepción documentada porque
+ *   `ece.personal_salud` tenía 0 filas en prod y `ece.current_personal_id()`
+ *   nunca resolvía para ningún DIR. `sql/257_r1_sync_personal_salud.sql`
+ *   materializa automáticamente `ece.personal_salud` + `ece.asignacion_rol`
+ *   para todo usuario clínico con rol asignado (trigger AFTER INSERT/UPDATE
+ *   sobre `User`/`UserOrganizationRole` + backfill), así que ya se puede
+ *   resolver `personal.id` y correr bajo `withWorkflowContext` — la policy
+ *   RESTRICTIVE `"documento_instancia: confidencial_read"` (ADR 0020) evalúa
+ *   correctamente: no-confidenciales siempre visibles; confidenciales solo si
+ *   `creado_por = ece.current_personal_id()` o el personal tiene
+ *   `ece.asignacion_rol` activa con `ece.rol.codigo = 'DIR'` (lo que el sync
+ *   ahora puebla). Si `resolvePersonalSalud` no encuentra fila (sync aún no
+ *   corrió, o el DIR perdió el rol clínico), lanza PRECONDITION_FAILED en vez
+ *   de degradar a lectura privilegiada.
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -81,12 +100,25 @@ const certificarBulkInput = z.object({
 // Tipos de fila raw
 // ---------------------------------------------------------------------------
 
-interface InstanciaColaRow {
+// R1.1 (corregido tras revisión — P1-1) — `di.paciente_id` es FK a
+// `ece.paciente(id)`, NO a `public."Patient".id` (verificado por
+// introspección de `pg_constraint`: `documento_instancia_paciente_id_fkey`
+// referencia `ece.paciente`). El puente real hacia el registro público es
+// `ece.paciente.public_patient_id` (127/127 filas bridged en prod, columna
+// nullable por si algún día hay pacientes ECE sin contraparte pública).
+// Análogamente, `dih.ejecutado_por` es FK a `ece.personal_salud(id)`, NO a
+// `public."User".id` (`documento_instancia_historial_ejecutado_por_fkey`) —
+// por eso `validado_por_nombre` se resuelve DENTRO de la misma tx ECE (join a
+// `ece.personal_salud`, mismo espacio de ids), no aparte. Solo el nombre del
+// PACIENTE cruza a `public."Patient"` (que sí tiene RLS tenant ajena al GUC
+// ECE) y por eso ese único lookup queda para después de cerrar la tx — ver
+// el bloque de enriquecimiento en `listCola`.
+interface InstanciaColaRawRow {
   id: string;
   tipo_documento_codigo: string;
   tipo_documento_nombre: string;
   paciente_id: string;
-  paciente_nombre: string;
+  public_patient_id: string | null;
   estado_codigo: string;
   estado_nombre: string;
   version: number;
@@ -334,33 +366,63 @@ export const eceCertificacionRouter = router({
   listCola: dirProcedure
     .input(listColaCertificacionInput)
     .query(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo.",
+        });
+      }
+
+      // R1.1 — resuelve el personal_salud del DIR que llama (BYPASSRLS, fuera
+      // de tx, igual que el resto de este archivo) para setear el GUC
+      // correcto (`app.ece_personal_id`) dentro de `withWorkflowContext` más
+      // abajo. Antes de sql/257 esta fila no existía para ningún usuario.
+      const personal = await resolvePersonalSalud(ctx.prisma, ctx.user.id);
+      if (!personal) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Su usuario no tiene un registro de personal de salud (ece.personal_salud) activo. " +
+            "El sync automático lo materializa si tiene un rol clínico asignado (sql/257); " +
+            "si el problema persiste, contacte a un ADMIN.",
+        });
+      }
+
+      const eceCtx = {
+        personalId: personal.id,
+        establecimientoId: ctx.tenant.establishmentId,
+        roles: ctx.tenant.roleCodes,
+      };
+
       const estadoFiltro = input.incluirCertificados
         ? ["validado", "certificado"]
         : ["validado"];
 
+      // R1.1 (corregido — P1-1) — `p.public_patient_id` (bridge hacia
+      // public."Patient", resuelto aparte más abajo) y `ps.nombre_completo`
+      // (join directo a ece.personal_salud, MISMO espacio de ids que
+      // `dih.ejecutado_por` — se resuelve aquí mismo, dentro de la tx ECE).
+      // Ninguno de los dos existía en la query original: `di.paciente_id`
+      // apunta a `ece.paciente`, no a `public."Patient"`, y `ejecutado_por`
+      // apunta a `ece.personal_salud`, no a `public."User"`.
       const baseQuery = `
         SELECT
           di.id,
           td.codigo          AS tipo_documento_codigo,
           td.nombre          AS tipo_documento_nombre,
           di.paciente_id,
-          COALESCE(
-            p."firstName" || ' ' || p."firstLastName",
-            di.paciente_id::text
-          )                  AS paciente_nombre,
+          p.public_patient_id,
           fe.codigo          AS estado_codigo,
           fe.nombre          AS estado_nombre,
           di.version,
           dih.ejecutado_por  AS validado_por,
-          COALESCE(
-            u."firstName" || ' ' || u."firstLastName",
-            NULL
-          )                  AS validado_por_nombre,
+          ps.nombre_completo AS validado_por_nombre,
           di.creado_en,
           di.actualizado_en  AS ultimo_cambio_en
         FROM ece.documento_instancia di
         JOIN ece.tipo_documento td ON td.id = di.tipo_documento_id
         JOIN ece.flujo_estado   fe ON fe.id = di.estado_actual_id
+        JOIN ece.paciente       p  ON p.id = di.paciente_id
         LEFT JOIN LATERAL (
           SELECT ejecutado_por
           FROM ece.documento_instancia_historial
@@ -369,8 +431,7 @@ export const eceCertificacionRouter = router({
           ORDER BY ejecutado_en DESC
           LIMIT 1
         ) dih ON true
-        LEFT JOIN public."Patient" p ON p.id = di.paciente_id
-        LEFT JOIN public."User"    u ON u.id = dih.ejecutado_por
+        LEFT JOIN ece.personal_salud ps ON ps.id = dih.ejecutado_por
         WHERE fe.codigo = ANY($1::text[])
           AND di.estado_registro = 'vigente'
           ${input.cursor ? "AND di.id > $2::uuid" : ""}
@@ -386,14 +447,45 @@ export const eceCertificacionRouter = router({
         ? [estadoFiltro, input.cursor, limit]
         : [estadoFiltro, limit];
 
-      const rows = await ctx.prisma.$queryRawUnsafe<InstanciaColaRow[]>(
-        baseQuery,
-        ...params,
-      );
+      // R1.1 — corre bajo contexto ECE real (antes: ctx.prisma.$queryRawUnsafe
+      // sin ningún contexto, excepción de PR #693). `withWorkflowContext`
+      // setea `app.ece_personal_id`/`app.ece_establecimiento_id` y demota a
+      // `authenticated`: la policy RESTRICTIVE de confidencial_read aplica.
+      const { rows, hasMore } = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        const rawRows = await (
+          tx as unknown as { $queryRawUnsafe: typeof ctx.prisma.$queryRawUnsafe }
+        ).$queryRawUnsafe<InstanciaColaRawRow[]>(baseQuery, ...params);
+        return { rows: rawRows, hasMore: rawRows.length > input.limit };
+      });
 
-      const hasMore = rows.length > input.limit;
       const items = hasMore ? rows.slice(0, input.limit) : rows;
       const nextCursor = hasMore ? items[items.length - 1]?.id : undefined;
+
+      // Nombre de paciente: `public."Patient"` tiene RLS tenant
+      // (`organizationId = current_org_id()`), un GUC que `withWorkflowContext`
+      // no setea (espacio ECE, no tenant). Se resuelve aparte, vía `ctx.prisma`
+      // (BYPASSRLS) — mismo patrón que el resto de este archivo (`findPersonal`,
+      // `findFirma`) — filtrando por el `organizationId` del tenant como
+      // defensa adicional. Se cruza por `public_patient_id` (el bridge real),
+      // NUNCA por `paciente_id` (ese es el id de `ece.paciente`, otro espacio).
+      // `validado_por_nombre` YA viene resuelto de la query anterior (join a
+      // ece.personal_salud dentro de la misma tx ECE — mismo espacio de ids
+      // que `ejecutado_por`), no requiere un segundo lookup.
+      const publicPatientIds = [
+        ...new Set(items.map((r) => r.public_patient_id).filter((v): v is string => v !== null)),
+      ];
+      const orgId = ctx.tenant.organizationId;
+
+      const pacientes =
+        publicPatientIds.length > 0
+          ? await ctx.prisma.$queryRaw<Array<{ id: string; nombre: string }>>`
+              SELECT id::text, ("firstName" || ' ' || "lastName") AS nombre
+              FROM public."Patient"
+              WHERE id = ANY(${publicPatientIds}::uuid[])
+                AND "organizationId" = ${orgId}::uuid
+            `
+          : [];
+      const pacienteNombreMap = new Map(pacientes.map((p) => [p.id, p.nombre]));
 
       return {
         items: items.map((r) => ({
@@ -401,7 +493,9 @@ export const eceCertificacionRouter = router({
           tipoDocumentoCodigo: r.tipo_documento_codigo,
           tipoDocumentoNombre: r.tipo_documento_nombre,
           pacienteId: r.paciente_id,
-          pacienteNombre: r.paciente_nombre,
+          pacienteNombre:
+            (r.public_patient_id ? pacienteNombreMap.get(r.public_patient_id) : undefined) ??
+            r.paciente_id,
           estadoCodigo: r.estado_codigo,
           estadoNombre: r.estado_nombre,
           version: r.version,
