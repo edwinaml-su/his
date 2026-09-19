@@ -1,7 +1,10 @@
 -- ============================================================================
 -- SQL 255 — CC-A: pre-requisitos multipaís/multimoneda (auditoría 2026-09-18)
 -- ============================================================================
--- NO APLICAR EN CALIENTE: lo aplica @Orq tras revisión del PR.
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado post-apply: documentType varchar + índice recreado + enum
+-- eliminado; IVA SV 0.13 / GT 0.12; GTQ, CountryCurrency GT y DPI sembrados;
+-- 128 pacientes intactos.
 --
 -- Contenido:
 --   1) "Country"."vatRate" — IVA por país (antes 0.13 hardcodeado en
