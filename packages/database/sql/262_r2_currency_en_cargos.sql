@@ -1,6 +1,12 @@
 -- =============================================================================
 -- 262_r2_currency_en_cargos.sql — R2.3: moneda explícita en la línea de cargo
 -- (Plan de remediación 2026-09, aprobado — auditoría multi-moneda 2026-09-18)
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-19 vía MCP — NO re-aplicar.
+-- Verificado post-apply: 2/2 cargos con currencyId, 0 sin moneda.
+-- Nota (P2 revisión): el paso 2 aproxima con la lista ACTUAL del TipoCuenta y
+-- no considera la lista default de la org (SQL 228) — un cargo histórico cuyo
+-- precio vino de la default caería al paso 3 (funcional). Hoy inmaterial
+-- (todo mono-moneda); si alguna org extranjera migra histórico, revisar.
 --
 -- Hallazgo: "PatientAccountService" (la línea de cargo canónica) no tiene
 -- "currencyId" — la moneda del cargo es implícita vía la lista de precios
