@@ -612,31 +612,69 @@ export const patientRouter = router({
     return documentTypeEnum.options.map((code) => ({ code, name: DOCUMENT_TYPE_LEGACY_LABEL[code] }));
   }),
 
+  /**
+   * Hallazgo de seguridad (revisión independiente 2026-09-19, P0 — mismo
+   * gap que tenía `update` antes de CC-A): creaba directo con
+   * `ctx.prisma.patientIdentifier.create({ patientId: input.patientId, ... })`
+   * sin verificar que `patientId` perteneciera al tenant — cualquier usuario
+   * autenticado de OTRA org podía adjuntar un identificador (PHI) a un
+   * paciente ajeno adivinando/enumerando el UUID. Ahora corre dentro de
+   * withTenantContext y valida pertenencia ANTES de escribir.
+   */
   addIdentifier: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientIdentifierSchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientIdentifier.create({
-        data: { patientId: input.patientId, ...input.data },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientIdentifier.create({
+          data: { patientId: input.patientId, ...input.data },
+        });
       });
     }),
 
+  /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
   addAllergy: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientAllergySchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientAllergy.create({
-        data: {
-          patientId: input.patientId,
-          ...input.data,
-          createdBy: ctx.user.id,
-        },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientAllergy.create({
+          data: {
+            patientId: input.patientId,
+            ...input.data,
+            createdBy: ctx.user.id,
+          },
+        });
       });
     }),
 
+  /** Mismo hallazgo/fix que `addIdentifier` — ver comentario ahí. */
   addAddress: tenantProcedure
     .input(z.object({ patientId: z.string().uuid(), data: patientAddressSchema }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.patientAddress.create({
-        data: { patientId: input.patientId, ...input.data },
+      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+        const patient = await tx.patient.findFirst({
+          where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
+        });
+        if (!patient) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+        }
+        return tx.patientAddress.create({
+          data: { patientId: input.patientId, ...input.data },
+        });
       });
     }),
 
