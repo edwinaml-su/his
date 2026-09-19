@@ -34,13 +34,37 @@
 --    validado en aplicación contra la lista legacy SV O contra
 --    "IdentifierType".code activo del país de la organización (paridad con
 --    packages/contracts/src/schemas/patient.ts + packages/trpc/src/lib/document-type.ts).
---    Es la ÚNICA columna que usaba el enum "DocumentType" (verificado:
---    ningún otro modelo lo referencia) — DROP TYPE es seguro.
+--
+--    CORRECCIÓN (revisión independiente 2026-09-19): el comentario original
+--    decía "es la ÚNICA columna que usaba el enum" — FALSO. El enum tiene un
+--    segundo dependiente: el índice único parcial `uq_patient_documento_propio`
+--    (sql/177_cc0002_documento_dedup.sql:32-34), cuyo predicado en prod es
+--    `WHERE "documentType" = ANY (ARRAY['DUI','DNI','PASAPORTE']::"DocumentType"[])
+--    AND "documentNumber" IS NOT NULL`. Sin dropear ese índice ANTES del
+--    ALTER COLUMN, el ALTER falla en prod con 42883 (operador inexistente
+--    contra varchar) y hace rollback total de este archivo. Se dropea el
+--    índice, se hace el ALTER, se dropea el enum, y se recrea el índice con
+--    el MISMO predicado pero literales text (ya no hay enum que castear).
+--
+--    Decisión v1 explícita (no silencio): los tipos de documento nuevos por
+--    país (ej. DPI de Guatemala) quedan FUERA de este unique parcial — no se
+--    amplía la lista de literales. Su deduplicación vive únicamente en el
+--    check JS de `patient.router.ts#create` (`documentType !== "DUI_RESP"`),
+--    que no es 1:1 a nivel BD. Si en el futuro se requiere dedup duro por BD
+--    para tipos no-SV, hace falta un SQL aparte que decida el criterio
+--    (¿todos los IdentifierType activos? ¿por país?) — no se resuelve aquí.
 -- ----------------------------------------------------------------------------
+DROP INDEX IF EXISTS uq_patient_documento_propio;
+
 ALTER TABLE "Patient"
   ALTER COLUMN "documentType" TYPE varchar(40) USING "documentType"::text;
 
 DROP TYPE IF EXISTS "DocumentType";
+
+-- Mismo predicado que sql/177, ahora con literales text (sin enum que castear).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_patient_documento_propio
+  ON "Patient" ("organizationId", "documentType", "documentNumber")
+  WHERE "documentType" IN ('DUI', 'DNI', 'PASAPORTE') AND "documentNumber" IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- 1) IVA por país.

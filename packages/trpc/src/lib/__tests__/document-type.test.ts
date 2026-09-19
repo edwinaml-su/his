@@ -66,26 +66,54 @@ describe("validarTipoDocumentoPorPais", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
-  it("tipo del catálogo con validador reconocido (NIT) y número inválido — BAD_REQUEST", async () => {
-    prisma.identifierType.findFirst.mockResolvedValue({ code: "NIT" } as never);
+  it("IdentifierType(SV,'NIT') con número inválido — BAD_REQUEST (algoritmo SV aplica)", async () => {
+    const COUNTRY_SV = "00000000-0000-0000-0000-000000000002";
+    prisma.identifierType.findFirst.mockResolvedValue({
+      code: "NIT",
+      country: { isoAlpha3: "SLV" },
+    } as never);
 
     await expect(
       validarTipoDocumentoPorPais(prisma, {
-        countryId: COUNTRY_GT,
+        countryId: COUNTRY_SV,
         documentType: "NIT",
         documentNumber: INVALID_NITS.badCheck,
       }),
     ).rejects.toBeInstanceOf(TRPCError);
   });
 
-  it("tipo del catálogo con validador reconocido (NIT) y número válido — aceptado", async () => {
-    prisma.identifierType.findFirst.mockResolvedValue({ code: "NIT" } as never);
+  it("IdentifierType(SV,'NIT') con número válido — aceptado (algoritmo SV aplica)", async () => {
+    const COUNTRY_SV = "00000000-0000-0000-0000-000000000002";
+    prisma.identifierType.findFirst.mockResolvedValue({
+      code: "NIT",
+      country: { isoAlpha3: "SLV" },
+    } as never);
 
+    await expect(
+      validarTipoDocumentoPorPais(prisma, {
+        countryId: COUNTRY_SV,
+        documentType: "NIT",
+        documentNumber: VALID_NITS[0]!,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  // P2-2 (revisión independiente 2026-09-19) — un IdentifierType con código
+  // "NIT" de OTRO país (ej. GT) NO debe validarse con el algoritmo módulo-11
+  // salvadoreño: un NIT guatemalteco legítimo rechazaría con ese algoritmo.
+  it("IdentifierType(GT,'NIT') — NO aplica el algoritmo SV, acepta cualquier valor no vacío", async () => {
+    prisma.identifierType.findFirst.mockResolvedValue({
+      code: "NIT",
+      country: { isoAlpha3: "GTM" },
+    } as never);
+
+    // INVALID_NITS.badCheck falla el módulo-11 salvadoreño — si el bug
+    // estuviera presente, esto lanzaría BAD_REQUEST.
     await expect(
       validarTipoDocumentoPorPais(prisma, {
         countryId: COUNTRY_GT,
         documentType: "NIT",
-        documentNumber: VALID_NITS[0]!,
+        documentNumber: INVALID_NITS.badCheck,
       }),
     ).resolves.toBeUndefined();
   });

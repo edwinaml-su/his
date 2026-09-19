@@ -313,7 +313,8 @@ export const invoiceRouter = router({
 
   /**
    * Crea Invoice + InvoiceItem[] en una sola transacción.
-   * IVA: 13% sobre subtotal (LIVA El Salvador).
+   * IVA: `Country.vatRate` de la org sobre subtotal (CC-A — default 0.13 =
+   * 13% LIVA El Salvador si la org no tiene país configurado; ver `lib/vat.ts`).
    * invoiceNumber: generado automáticamente (no forzamos consecutivo en MVP).
    *
    * docs/48 Ola 2 (C2-3/H-03) — por cada línea se re-resuelve el precio
@@ -631,5 +632,17 @@ export const invoiceRouter = router({
       );
       return rows;
     });
+  }),
+
+  /**
+   * CC-A (revisión independiente 2026-09-19, P1) — IVA vigente para la org,
+   * consumido por el preview client-side de `/finance/invoices/nuevo` para
+   * que NO diverja del que aplicará `create` al persistir. Reusa
+   * `resolverVatRate` (misma fuente de verdad, sin duplicar la resolución).
+   */
+  vatRatePreview: tenantProcedure.query(async ({ ctx }) => {
+    return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+      resolverVatRate(tx, ctx.tenant.organizationId),
+    );
   }),
 });

@@ -12,8 +12,11 @@ import { TRPCError } from "@trpc/server";
 import type { PrismaClient } from "@prisma/client";
 import { documentTypeEnum, validateIdentifier } from "@his/contracts";
 
-/** Códigos con validador de formato reconocido (paridad con `packages/contracts/src/validators`). */
+/** Códigos con validador de formato reconocido (paridad con `packages/contracts/src/validators`) — algoritmos SALVADOREÑOS únicamente. */
 const CODIGOS_CON_VALIDADOR = ["DUI", "NIT", "NIE"] as const;
+
+/** ISO 3166-1 alpha-3 de El Salvador — único país cuyo NIT/NIE usa el algoritmo de `validateIdentifier`. */
+const ISO_ALPHA3_SV = "SLV";
 
 type TxParaTipoDocumento = Pick<PrismaClient, "identifierType">;
 
@@ -25,9 +28,14 @@ export interface ValidarTipoDocumentoParams {
 
 /**
  * Lanza `BAD_REQUEST` si `documentType` no es uno de los legacy SV ni un
- * `IdentifierType.code` activo para `countryId`. Si el tipo resuelto tiene
- * un validador de formato reconocido (DUI/NIT/NIE) y viene `documentNumber`,
- * también valida el dígito verificador/estructura.
+ * `IdentifierType.code` activo para `countryId`. Si el tipo resuelto
+ * PERTENECE A EL SALVADOR y tiene un validador de formato reconocido
+ * (DUI/NIT/NIE), también valida el dígito verificador/estructura — el
+ * algoritmo de `validateIdentifier` es específico del NIT/NIE salvadoreño
+ * (módulo 11 con pesos fijos); un `IdentifierType(GT,'NIT')` u otro país que
+ * reutilice el código "NIT" NO se valida con ese algoritmo (rechazaría NITs
+ * legítimos de otro país) — queda solo con el check estructural por defecto
+ * de `validateIdentifier` (no vacío), igual que DPI/PASSPORT/MINOR_ID.
  */
 export async function validarTipoDocumentoPorPais(
   tx: TxParaTipoDocumento,
@@ -35,14 +43,17 @@ export async function validarTipoDocumentoPorPais(
 ): Promise<void> {
   const legacy: readonly string[] = documentTypeEnum.options;
   if (legacy.includes(params.documentType)) {
-    // Legacy SV — el formato de DUI ya lo valida el superRefine de
-    // `patientCreateSchema`/`patientUpdateSchema` en @his/contracts.
+    // Legacy SV — el formato de DUI lo valida el superRefine de
+    // `patientCreateSchema` en @his/contracts (create únicamente:
+    // `patientUpdateSchema` es `.partial()` sin superRefine, igual que en
+    // main — un DUI inválido en `update` NO se rechaza hoy; fuera de
+    // alcance de este helper, es un gap preexistente del contrato Zod).
     return;
   }
 
   const tipo = await tx.identifierType.findFirst({
     where: { countryId: params.countryId, code: params.documentType, active: true },
-    select: { code: true },
+    select: { code: true, country: { select: { isoAlpha3: true } } },
   });
 
   if (!tipo) {
@@ -52,7 +63,10 @@ export async function validarTipoDocumentoPorPais(
     });
   }
 
+  const esIdentifierTypeDeSV = tipo.country?.isoAlpha3 === ISO_ALPHA3_SV;
+
   if (
+    esIdentifierTypeDeSV &&
     params.documentNumber &&
     (CODIGOS_CON_VALIDADOR as readonly string[]).includes(tipo.code) &&
     !validateIdentifier(tipo.code, params.documentNumber)

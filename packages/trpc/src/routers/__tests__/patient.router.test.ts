@@ -498,14 +498,43 @@ describe("patientRouter", () => {
   describe("update", () => {
     const PATIENT_ID = "00000000-0000-0000-0000-0000000000f1";
 
+    // CC-A (revisión independiente 2026-09-19, P0 seguridad) — `update` ahora
+    // corre dentro de withTenantContext y exige que el paciente pertenezca
+    // al tenant ANTES de escribir (antes: ctx.prisma.patient.update({where:{id}})
+    // sin organizationId — IDOR cross-org).
+    function setupTx() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
     it("acepta documentType legacy SV sin consultar IdentifierType", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue({ id: PATIENT_ID } as never);
       prisma.patient.update.mockResolvedValue({ id: PATIENT_ID, documentType: "DUI" } as never);
 
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await caller.update({ id: PATIENT_ID, documentType: "DUI" } as never);
 
       expect(prisma.identifierType.findFirst).not.toHaveBeenCalled();
+      expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: PATIENT_ID, organizationId: MOCK_TENANT.organizationId },
+        }),
+      );
       expect(prisma.patient.update).toHaveBeenCalledTimes(1);
+    });
+
+    it("NOT_FOUND si el paciente no pertenece al tenant (IDOR bloqueado)", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.update({ id: PATIENT_ID, documentType: "DUI" } as never),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(prisma.patient.update).not.toHaveBeenCalled();
     });
 
     it("rechaza documentType inexistente en el catálogo del país (BAD_REQUEST)", async () => {

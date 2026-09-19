@@ -566,9 +566,26 @@ export const patientRouter = router({
         documentNumber: rest.documentNumber,
       });
     }
-    return ctx.prisma.patient.update({
-      where: { id },
-      data: { ...rest, updatedBy: ctx.user.id },
+    // Hallazgo de seguridad (revisión independiente 2026-09-19, P0,
+    // confirmado por @Dev al tocar este handler para CC-A): antes hacía
+    // `ctx.prisma.patient.update({ where: { id } })` sin organizationId ni
+    // withTenantContext — cualquier usuario autenticado de OTRA org podía
+    // sobrescribir PHI de un paciente ajeno adivinando/enumerando el UUID
+    // (rol Supabase original tiene BYPASSRLS, ver CLAUDE.md §Contrato RLS).
+    // Ahora corre dentro de withTenantContext y valida pertenencia a la org
+    // ANTES de escribir — NOT_FOUND si el id no es de este tenant.
+    return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      const existing = await tx.patient.findFirst({
+        where: { id, organizationId: ctx.tenant.organizationId },
+        select: { id: true },
+      });
+      if (!existing) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no encontrado." });
+      }
+      return tx.patient.update({
+        where: { id },
+        data: { ...rest, updatedBy: ctx.user.id },
+      });
     });
   }),
 
