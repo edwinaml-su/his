@@ -331,6 +331,39 @@ describe("auditOutlier.scanAndFlag", () => {
     expect(result.ok).toBe(true);
     expect(result.flagged).toBe(2);
   });
+
+  it("R2.2 — sin organización resuelta, parametriza el fallback SV en el SQL ($5 = America/El_Salvador)", async () => {
+    const caller = makeOutlierCaller(prisma);
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(0);
+
+    await caller.scanAndFlag({});
+
+    const [[sql, ...params]] = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sql as string).toContain("AT TIME ZONE $5");
+    expect(sql as string).not.toContain("America/El_Salvador");
+    expect(params[4]).toBe("America/El_Salvador");
+  });
+
+  it("R2.2 — organización GT (sql/255): parametriza America/Guatemala en vez del hardcode SV", async () => {
+    const caller = makeOutlierCaller(prisma);
+    (prisma.organization.findUnique as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      country: {
+        isoAlpha2: "GT",
+        isoAlpha3: "GTM",
+        defaultTzId: "America/Guatemala",
+        defaultLocale: "es-GT",
+      },
+      functionalCurr: { isoCode: "GTQ" },
+    });
+    (prisma.$queryRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mockResolvedValueOnce(0);
+
+    await caller.scanAndFlag({});
+
+    const [[, ...params]] = (prisma.$executeRawUnsafe as ReturnType<typeof vi.fn>).mock.calls;
+    expect(params[4]).toBe("America/Guatemala");
+  });
 });
 
 describe("auditOutlier.dashboardStats", () => {

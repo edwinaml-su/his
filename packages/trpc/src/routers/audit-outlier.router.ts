@@ -27,6 +27,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { requireRole, router, tenantProcedure } from "../trpc";
 import { withTenantContext } from "../rls-context";
+import { resolverLocaleOrg } from "../lib/org-locale";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -234,6 +235,9 @@ export const auditOutlierRouter = router({
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
       const config = await getOrgConfig(ctx.prisma, orgId);
+      // R2.2 (plan remediación 2026-09) — antes 'America/El_Salvador' hardcodeada
+      // en el SQL; ahora la TZ de la organización (fallback exacto a SV).
+      const orgLocale = await resolverLocaleOrg(ctx.prisma, orgId);
 
       // Defaults si no hay config
       const inicio = config?.horarioClinicoInicio ?? "06:00";
@@ -245,9 +249,10 @@ export const auditOutlierRouter = router({
 
       // Condición fuera de horario
       // Horario clínico: inicio <= hora < fin. Outlier: fuera de ese rango.
+      // $5 = TZ de la organización (antes literal 'America/El_Salvador').
       const fueraHorario = `(
-        EXTRACT(HOUR FROM b.ocurrido_en AT TIME ZONE 'America/El_Salvador') * 60
-        + EXTRACT(MINUTE FROM b.ocurrido_en AT TIME ZONE 'America/El_Salvador')
+        EXTRACT(HOUR FROM b.ocurrido_en AT TIME ZONE $5) * 60
+        + EXTRACT(MINUTE FROM b.ocurrido_en AT TIME ZONE $5)
       ) NOT BETWEEN (
         EXTRACT(HOUR FROM $3::time) * 60 + EXTRACT(MINUTE FROM $3::time)
       ) AND (
@@ -255,7 +260,7 @@ export const auditOutlierRouter = router({
       )`;
 
       // Condición IP no whitelisted (solo si whitelist no vacía)
-      const params: unknown[] = [desde, hasta, inicio, fin];
+      const params: unknown[] = [desde, hasta, inicio, fin, orgLocale.timeZone];
       let ipCondition = "false"; // si whitelist vacía, no flaggeamos por IP
       if (whitelist.length > 0) {
         const placeholders = whitelist.map((_, i) => `$${params.length + 1 + i}`);

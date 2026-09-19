@@ -51,6 +51,7 @@ import {
   CARE_TASK_PRIORITY_BY_LAB_PRIORITY,
   type LabPriorityKey,
 } from "../lib/lab-sla";
+import { resolverLocaleOrg } from "../lib/org-locale";
 
 /** CC-0016 — parametrización del módulo: solo administración. */
 const catalogAdminProc = requireRole(["ADMIN", "DIR"]);
@@ -233,7 +234,10 @@ export const imagingRequestRouter = router({
         // hallazgo pre-PR: la TZ del proceso en Vercel es UTC — un setHours
         // local rechazaba "hoy" enviado desde El Salvador a partir de las
         // 18:00). en-CA formatea YYYY-MM-DD ⇒ comparación lexicográfica.
-        const fmtSv = new Intl.DateTimeFormat("en-CA", { timeZone: "America/El_Salvador" });
+        // R2.2 (plan remediación 2026-09) — antes "America/El_Salvador" fija;
+        // ahora la TZ de la organización (fallback exacto a SV).
+        const { timeZone } = await resolverLocaleOrg(tx, organizationId);
+        const fmtSv = new Intl.DateTimeFormat("en-CA", { timeZone });
         if (fmtSv.format(input.fechaDeseada) < fmtSv.format(new Date())) {
           throw new TRPCError({
             code: "BAD_REQUEST",

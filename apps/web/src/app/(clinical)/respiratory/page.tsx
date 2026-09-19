@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { formatDateTime } from "@/lib/i18n/org-locale";
 
 type OrderStatus = "ACTIVE" | "COMPLETED" | "CANCELLED" | "ON_HOLD";
 
@@ -35,10 +36,7 @@ const STATUS_OPTIONS: { value: OrderStatus | "ALL"; label: string }[] = [
   { value: "CANCELLED", label: "Cancelada" },
 ];
 
-const dateFmt = new Intl.DateTimeFormat("es-SV", {
-  dateStyle: "short",
-  timeStyle: "short",
-});
+const DATE_FMT_OPTIONS: Intl.DateTimeFormatOptions = { dateStyle: "short", timeStyle: "short" };
 
 export default function RespiratoryPage() {
   const [status, setStatus] = React.useState<OrderStatus | "ALL">("ACTIVE");
@@ -133,7 +131,7 @@ export default function RespiratoryPage() {
                       <TableCell className="tabular-nums">{o.fio2?.toString() ?? "—"}</TableCell>
                       <TableCell className="tabular-nums">{o.flowRate?.toString() ?? "—"}</TableCell>
                       <TableCell className="tabular-nums">
-                        {dateFmt.format(new Date(o.startedAt))}
+                        {formatDateTime(o.startedAt, DATE_FMT_OPTIONS)}
                       </TableCell>
                       <TableCell>{o.status}</TableCell>
                     </TableRow>
