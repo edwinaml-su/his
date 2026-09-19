@@ -79,10 +79,14 @@ describe("bitacoraRouter", () => {
   describe("list", () => {
     it("happy-path: devuelve items y total con filtros de fecha", async () => {
       const row = makeDbRow();
-      // COUNT query
+      // COUNT query (RLS-scoped)
       prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(1) }]);
-      // DATA query
+      // DATA query (RLS-scoped)
       prisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
+      // P1-2 — merge de eventos de sistema (establecimiento_id IS NULL):
+      // filas + total, sin resultados en este caso.
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(0) }]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
       const result = await caller.list({
@@ -97,12 +101,14 @@ describe("bitacoraRouter", () => {
       expect(result.items[0]?.id).toBe(ROW_ID);
       expect(result.items[0]?.accion).toBe("view");
       expect(result.items[0]?.ocurridoEn).toBe("2026-01-15T10:00:00.000Z");
-      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(4);
     });
 
     it("devuelve lista vacía cuando no hay registros", async () => {
       prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(0) }]);
       prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(0) }]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
       const result = await caller.list({ limit: 50, offset: 0 });
@@ -115,11 +121,38 @@ describe("bitacoraRouter", () => {
       const row = makeDbRow({ accion: "export" });
       prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(1) }]);
       prisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(0) }]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
       const result = await caller.list({ accion: "export", limit: 50, offset: 0 });
 
       expect(result.items[0]?.accion).toBe("export");
+    });
+
+    // P1-2 — eventos de sistema (establecimiento_id IS NULL) antes eran
+    // invisibles bajo RLS (write-only); ahora se mergean en el resultado.
+    it("mergea eventos de sistema (establecimiento_id IS NULL) con los del establecimiento", async () => {
+      const scopedRow = makeDbRow({ id: ROW_ID, ocurrido_en: new Date("2026-01-15T10:00:00Z") });
+      const sistemaRow = makeDbRow({
+        id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        establecimiento_id: null,
+        ocurrido_en: new Date("2026-01-16T10:00:00Z"),
+      });
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(1) }]); // scoped count
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([scopedRow]); // scoped data
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([sistemaRow]); // sistema rows
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ total: BigInt(1) }]); // sistema count
+
+      const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
+      const result = await caller.list({ limit: 50, offset: 0 });
+
+      expect(result.total).toBe(2);
+      expect(result.items.map((i) => i.id)).toEqual(
+        expect.arrayContaining([ROW_ID, "cccccccc-cccc-cccc-cccc-cccccccccccc"]),
+      );
+      // Orden global DESC por ocurrido_en: el evento de sistema (16 ene) va primero.
+      expect(result.items[0]?.id).toBe("cccccccc-cccc-cccc-cccc-cccccccccccc");
     });
 
     it("devuelve FORBIDDEN si usuario no tiene rol DIR o ARCH", async () => {
@@ -141,6 +174,8 @@ describe("bitacoraRouter", () => {
     it("genera base64 con cabecera CSV y fila correcta", async () => {
       const row = makeDbRow({ ip_origen: "10.0.0.1", justificacion: "historia::view" });
       prisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
+      // P1-2 — merge de eventos de sistema, sin resultados en este caso.
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
       const result = await caller.exportCsv({});
@@ -176,13 +211,18 @@ describe("bitacoraRouter", () => {
   // -------------------------------------------------------------------------
   describe("metrics", () => {
     it("retorna ceros cuando no hay filas en el periodo", async () => {
-      // totalAccesos
+      // totalAccesos (scoped)
       prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
-      // totalFirmas
+      // totalFirmas (scoped)
       prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
-      // topDocumentos
+      // topDocumentos (scoped)
       prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
-      // topUsuarios
+      // topUsuarios (scoped)
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      // P1-2 — merge de eventos de sistema: total/firmas/topDocs/topUsers.
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
       prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
@@ -204,6 +244,11 @@ describe("bitacoraRouter", () => {
       prisma.$queryRawUnsafe.mockResolvedValueOnce([
         { user_id: USER_ID, count: BigInt(20) },
       ]);
+      // P1-2 — merge de eventos de sistema: sin resultados en este caso.
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
       const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
       const result = await caller.metrics({
@@ -216,7 +261,32 @@ describe("bitacoraRouter", () => {
       expect(result.topDocumentos).toHaveLength(2);
       expect(result.topDocumentos[0]).toEqual({ documento: "historia::view", accesos: 10 });
       expect(result.topUsuarios[0]).toEqual({ userId: USER_ID, accesos: 20 });
-      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(4);
+      expect(prisma.$queryRawUnsafe).toHaveBeenCalledTimes(8);
+    });
+
+    // P1-2 — eventos de sistema aportan a totales/top-N combinados.
+    it("suma los eventos de sistema a los totales y los mergea en el top-N", async () => {
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(10) }]); // total scoped
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(1) }]); // firmas scoped
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { contexto: "historia::view", count: BigInt(3) },
+      ]); // topDocs scoped
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { user_id: USER_ID, count: BigInt(3) },
+      ]); // topUsers scoped
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(2) }]); // total sistema
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: BigInt(0) }]); // firmas sistema
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([]); // topDocs sistema
+      prisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { user_id: USER_ID, count: BigInt(2) },
+      ]); // topUsers sistema — mismo usuario, se suma
+
+      const caller = bitacoraRouter.createCaller(makeDirCtx(prisma));
+      const result = await caller.metrics({});
+
+      expect(result.totalAccesos).toBe(12);
+      expect(result.totalFirmas).toBe(1);
+      expect(result.topUsuarios[0]).toEqual({ userId: USER_ID, accesos: 5 });
     });
 
     it("devuelve FORBIDDEN sin rol DIR/ARCH", async () => {
@@ -279,6 +349,32 @@ describe("bitacoraRouter", () => {
       });
 
       expect(result.ok).toBe(true);
+    });
+
+    // P2-1 — el establecimiento del INSERT debe coincidir con el de la
+    // sesión activa (ctx.tenant.establishmentId), no con lo que mande el
+    // input — antes era una comparación tautológica (GUC seteado desde el
+    // mismo input que la policy comparaba).
+    it("permite registro cuando establecimientoId coincide con la sede activa", async () => {
+      prisma.$executeRawUnsafe.mockResolvedValueOnce(1);
+
+      const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.register({
+        accion: "view",
+        establecimientoId: MOCK_TENANT.establishmentId,
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it("rechaza con FORBIDDEN si establecimientoId no es la sede activa del usuario", async () => {
+      const OTRA_SEDE = "ffffffff-0000-0000-0000-0000000000ff";
+      const caller = bitacoraRouter.createCaller(makeCtx({ prisma }));
+
+      await expect(
+        caller.register({ accion: "view", establecimientoId: OTRA_SEDE }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(prisma.$executeRawUnsafe).not.toHaveBeenCalled();
     });
   });
 });

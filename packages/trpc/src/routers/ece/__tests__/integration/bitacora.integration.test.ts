@@ -88,6 +88,9 @@ describe.skipIf(!hasIntegrationDb())(
           tenant: {
             ...MOCK_TENANT,
             organizationId: fx.org,
+            // P2-1 — register ahora valida que el establecimiento del INSERT
+            // coincida con el de la sesión activa; el fixture debe usarlo.
+            establishmentId: fx.estab,
             roleCodes: ["PHYSICIAN"],
           },
         });

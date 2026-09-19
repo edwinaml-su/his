@@ -158,8 +158,12 @@ async function assertAdminMembership(
 /**
  * CC-B (directriz Edwin 2026-09-19) — igual que `assertAdminMembership` pero
  * también admite `CONTRALOR_CORP` (visión consolidada de operaciones y
- * multi-libro). Solo para procedures de LECTURA (list/get/listKinds/
- * roundingPolicy) — la escritura sigue exigiendo ADMIN exclusivamente.
+ * multi-libro). Usada por los procedures de LECTURA `list`/`get`/
+ * `roundingPolicy` — la escritura sigue exigiendo ADMIN exclusivamente.
+ *
+ * CC-B review (P2-3) — `listKinds` NO llama a este helper: es metadata
+ * estática (`LEDGER_KIND_LABELS`, literales es-SV) sin gate de rol,
+ * preexistente a este cambio; la corrección aquí es solo documental.
  */
 async function assertLedgerReadMembership(
   prisma: PrismaClient,

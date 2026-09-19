@@ -340,11 +340,6 @@ export const eceCertificacionRouter = router({
           message: "Se requiere un establecimiento activo.",
         });
       }
-      const eceCtx = {
-        personalId: ctx.user.id,
-        establecimientoId: ctx.tenant.establishmentId,
-        roles: ctx.tenant.roleCodes,
-      };
 
       const estadoFiltro = input.incluirCertificados
         ? ["validado", "certificado"]
@@ -398,14 +393,30 @@ export const eceCertificacionRouter = router({
         ? [estadoFiltro, input.cursor, limit]
         : [estadoFiltro, limit];
 
-      // CC-B — antes corría en ctx.prisma directo (rol BYPASSRLS). Los JOIN a
-      // public."Patient"/public."User" quedan sujetos a sus propias policies
-      // (current_org_id(), no current_org_id_or_ece_context()) y bajo contexto
-      // ECE puro pueden devolver NULL en paciente_nombre/validado_por_nombre
-      // (ambos ya tienen COALESCE/fallback) — degradación cosmética aceptada,
-      // no un hallazgo de seguridad.
-      const rows = await withWorkflowContext(ctx.prisma, eceCtx, (tx) =>
-        tx.$queryRawUnsafe<InstanciaColaRow[]>(baseQuery, ...params),
+      // CC-B review (P1-1) — se intentó migrar esta lectura a
+      // withWorkflowContext (RLS real), pero la policy RESTRICTIVE real de
+      // prod "documento_instancia: confidencial_read" exige
+      // `confidencial = false OR creado_por = ece.current_personal_id() OR
+      // <asignación de rol DIR resuelta vía ece.personal_salud>` — y
+      // `ece.current_personal_id()` resuelve desde `app.ece_personal_id`, el
+      // GUC que `ece.set_ece_context` setea con el valor que le pasemos. Este
+      // router (como casi todos, R03) pasa `ctx.user.id` (espacio
+      // public."User") como personalId; `creado_por`/la asignación de rol DIR
+      // viven en el espacio `ece.personal_salud.id`, y `his_user_id` en esa
+      // tabla NUNCA se pobló en prod (0 filas resolubles). Resultado
+      // verificado: demotar a `authenticated` aquí no lanza error — filtra en
+      // SILENCIO todo documento con `confidencial = true` de la cola del DIR,
+      // que es exactamente el escenario que este endpoint existe para mostrar
+      // (Art. 21 NTEC). Por eso esta lectura se queda en `ctx.prisma`
+      // (privilegiada) — no hay filtro de establecimiento/org disponible sin
+      // reescribir el JOIN (documento_instancia no tiene organization_id ni
+      // establecimiento_id directos; ya era así antes de CC-B). TODO: volver
+      // a intentar la migración a RLS cuando `ece.personal_salud.his_user_id`
+      // esté poblado (o exista un resolver equivalente) para que
+      // `ece.current_personal_id()` resuelva de verdad.
+      const rows = await ctx.prisma.$queryRawUnsafe<InstanciaColaRow[]>(
+        baseQuery,
+        ...params,
       );
 
       const hasMore = rows.length > input.limit;

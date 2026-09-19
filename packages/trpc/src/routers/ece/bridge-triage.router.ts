@@ -218,6 +218,27 @@ async function insertEceTriaje(
  * Triages HIS COMPLETED sin vínculo ECE (data en TriageEvaluation no incluye
  * el id ECE — la señal de ausencia es simplemente que ece.triaje no tiene
  * ninguna fila con data->>'hisTriageEvalId' = ese id).
+ *
+ * CC-B review (P2-2) — este SQL usaba columnas snake_case
+ * (te.organization_id, te.patient_id, te.completed_at, te.assigned_level_id,
+ * ev.triage_evaluation_id, ev.chief_complaint) contra tablas Prisma cuyas
+ * columnas reales son camelCase quoted ("organizationId", "patientId",
+ * "completedAt", "assignedLevelId", "triageEvaluationId", "chiefComplaint" —
+ * verificado contra schema.prisma). Eso da 42703 (columna inexistente) en
+ * cualquier ejecución real: `syncCompletedTriages` NUNCA pudo correr contra
+ * una BD real, aunque los tests unitarios (mock de $queryRaw) no lo
+ * detectan. Corregido a las columnas reales; `organizationId` ya llevaba
+ * `::uuid` explícito en el parámetro (lección 42883 — comparación contra
+ * columna uuid) así que ese cast se conserva.
+ *
+ * Riesgo NO resuelto aquí (solo documentado): el NOT EXISTS contra
+ * `ece.hoja_triaje` corre bajo el contexto ECE (RLS por establecimiento) que
+ * `syncCompletedTriages` aplica vía `withEceContext` — si dos llamadas
+ * concurrentes (o una re-ejecución antes de que el primer INSERT sea visible
+ * en el mismo snapshot) leen el mismo `TriageEvaluation` sin ver aún la fila
+ * `hoja_triaje` recién creada, pueden crear un `ece.hoja_triaje` duplicado
+ * para el mismo `hisTriageEvalId`. No hay UNIQUE en
+ * `evaluacion_triaje->>'hisTriageEvalId'` que lo prevenga a nivel BD.
  */
 async function fetchCompletedUnlinkedTriages(
   prisma: RawClient,
@@ -232,20 +253,20 @@ async function fetchCompletedUnlinkedTriages(
   ) => Promise<HisTriajeCompletedRow[]>)`
     SELECT
       te.id,
-      te.patient_id,
+      te."patientId" AS patient_id,
       tl.priority AS assigned_level_priority,
-      ev.chief_complaint AS motivo_consulta,
-      te.completed_at
+      ev."chiefComplaint" AS motivo_consulta,
+      te."completedAt" AS completed_at
     FROM public."TriageEvaluation" te
-    JOIN public."TriageLevel" tl ON tl.id = te.assigned_level_id
-    LEFT JOIN public."EmergencyVisit" ev ON ev.triage_evaluation_id = te.id
-    WHERE te.organization_id = ${organizationId}::uuid
+    JOIN public."TriageLevel" tl ON tl.id = te."assignedLevelId"
+    LEFT JOIN public."EmergencyVisit" ev ON ev."triageEvaluationId" = te.id
+    WHERE te."organizationId" = ${organizationId}::uuid
       AND te.status = 'COMPLETED'
       AND NOT EXISTS (
         SELECT 1 FROM ece.hoja_triaje ht
         WHERE ht.evaluacion_triaje->>'hisTriageEvalId' = te.id::text
       )
-    ORDER BY te.completed_at DESC
+    ORDER BY te."completedAt" DESC
     LIMIT ${limit}
   `;
 }
@@ -502,7 +523,12 @@ export const eceBridgeTriageRouter = router({
 
       // Lee public."TriageEvaluation" (requiere app.current_org_id) Y
       // ece.hoja_triaje (requiere el contexto ECE) en la misma transacción —
-      // ambos GUC vía la opción `tenantContext` (ver ece/rls-context.ts).
+      // ambos GUC vía la opción `tenantContext` (ver ece/rls-context.ts). Esto
+      // resuelve el CONTEXTO/autorización de la lectura; NO alcanza por sí
+      // solo — el SQL de fetchCompletedUnlinkedTriages tenía columnas
+      // snake_case inexistentes (42703) que impedían que este job corriera
+      // en absoluto contra una BD real, independientemente del GUC (ver
+      // comentario P2-2 en esa función, ya corregido).
       const unlinked = await withEceContext(
         ctx.prisma,
         ctx.user.id,
