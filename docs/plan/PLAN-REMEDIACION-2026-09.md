@@ -76,10 +76,20 @@ No es prerrequisito de las olas R1–R4 (esas avanzan con fallbacks), pero **sí
 
 **Gate:** checklist completo ⇒ arranca UAT formal (#687–#694 + olas mergeadas).
 
+## CC propio derivado — Multi-libro operativo (motor de asientos en el HIS)
+
+Aclaración de Edwin (2026-09-19): **el HIS SÍ necesita registrar las transacciones en multi-libro**; la diferencia es que esa información se **interfacea con el ERP** (hub de eventos) — el ERP recibe, no sustituye el registro. Esto reemplaza la exclusión anterior ("la contabilidad va al ERP"). Por su tamaño se planifica como CC propio, secuenciado después de R1 (puede correr en paralelo a R2–R4):
+
+1. **Plan de cuentas y períodos por libro**: poblar `Account` por `Ledger` (IFRS + FISCAL por org; el modelo y el CRUD ya existen, hoy con 0 cuentas) + `AccountingPeriod` con apertura/cierre.
+2. **Tabla de mapeo contable `origen → cuenta por libro`**: cierra el GAP documentado (ReglaHonorario.`cuentaContableCodigo` sin `ledgerId`; resumen por rubro con cuenta null para orígenes no-honorario). Parametrizable por org/libro desde `/admin/ledgers`.
+3. **Motor de posting automático**: los eventos operativos que ya existen (cargos `PatientAccountService`, facturas/pagos, devengo de arrendamiento, liquidación de honorarios, cierre de cuenta) generan asientos de partida doble en **cada libro activo** de la org (el trigger de partida doble de sql/47 ya valida el balance). Fail-safe: sin mapeo de cuenta ⇒ asiento en cuenta puente parametrizable + alerta, nunca se pierde la transacción (mismo espíritu que PENDIENTE_TARIFA).
+4. **Interfaz al ERP**: los asientos/resúmenes por rubro (centro de costo + cuenta contable) viajan por el hub de eventos (outbox ya emite `cuenta.resumen_rubros`) — el consumidor Odoo sigue siendo la fase de integración ya decidida (2026-09-16), sin escritura directa.
+
+Los reportes de `/admin/finance` pasan a poder filtrar por libro cuando (3) esté activo. La carga del plan de cuentas entra al checklist de la **Fase de Carga pre-UAT**.
+
 ## Fuera de alcance deliberado (decisiones ya tomadas — no re-abrir sin CC)
 
-- **Multi-libro operativo** (asientos en HIS): la contabilidad real va al ERP vía hub de eventos; el modelo Ledger queda como está.
-- **Consumidor del hub de eventos → Odoo**: fase de integración propia (decisión 2026-09-16).
+- **Consumidor del hub de eventos → Odoo**: fase de integración propia (decisión 2026-09-16) — el CC de multi-libro produce los eventos; el consumidor no se adelanta.
 - **DTE (§23)** y **HL7/FHIR/DICOM (§28)**: diferidos del MVP.
 - **Workflow designer publish/rollback** al motor vivo: decisión Edwin 2026-08-28.
 - **TR S2–S4**: fases del REQ-HIS-TR-001, se planifican como CC propio, no como remediación.
