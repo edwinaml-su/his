@@ -949,6 +949,54 @@ describe("patientRouter", () => {
       );
     });
 
+    // Fix P0 (revisión independiente 2026-09-19): `authenticated` no tiene
+    // GRANT INSERT sobre `audit."AuditLog"` en prod — si el auditLog.create
+    // corriera DENTRO del contexto demotado (tx), el merge completo abortaría
+    // con permission denied. Este test usa un `tx` mock DISTINTO de
+    // `ctx.prisma` para probarlo: el `tx.auditLog.create` está configurado
+    // para rechazar (simula el permission denied real), mientras que
+    // `ctx.prisma.auditLog.create` (rol bypass, fuera del tx) sí acepta. Si
+    // el código alguna vez regresa a escribir el audit log dentro del tx,
+    // este test falla con la misma rejection que rompería prod.
+    it("el auditLog.create corre FUERA del contexto demotado (ctx.prisma, no tx)", async () => {
+      const tx = mockDeep<PrismaClient>();
+      tx.$executeRawUnsafe.mockResolvedValue(0 as never);
+      tx.patient.findFirst
+        .mockResolvedValueOnce({ id: FROM_ID, mrn: "MRN-A", firstName: "Ana", lastName: "Pérez" } as never)
+        .mockResolvedValueOnce({ id: TO_ID, mrn: "MRN-B", firstName: "Ana", lastName: "Pérez" } as never);
+      tx.patientMerge.create.mockResolvedValue({ id: "merge-2" } as never);
+      tx.patient.update.mockResolvedValue({} as never);
+      // Simula el permission denied real de prod si algo escribiera el audit
+      // log dentro del tx demotado — el test debe pasar SIN tocar esto.
+      tx.auditLog.create.mockRejectedValue(
+        new Error('permission denied for table "AuditLog"'),
+      );
+
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) => fn(tx));
+      prisma.auditLog.create.mockResolvedValue({ id: 1n } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.mergePatients({
+        fromPatientId: FROM_ID,
+        toPatientId: TO_ID,
+        justification: JUSTIFICATION,
+        fieldsToTake: {},
+      });
+
+      expect(result).toMatchObject({ mergeId: "merge-2", toPatientId: TO_ID });
+      // El audit log JAMÁS se intentó dentro del tx demotado.
+      expect(tx.auditLog.create).not.toHaveBeenCalled();
+      // Se escribió después, con el prisma "de aplicación" (rol bypass).
+      expect(prisma.auditLog.create).toHaveBeenCalledOnce();
+      const auditArgs = prisma.auditLog.create.mock.calls[0]![0];
+      expect(auditArgs.data).toMatchObject({
+        entity: "Patient",
+        entityId: TO_ID,
+        afterJson: expect.objectContaining({ op: "MERGE_PATIENTS", mergeId: "merge-2" }),
+      });
+    });
+
     it("BAD_REQUEST si fromPatientId === toPatientId (Zod refine, antes de cualquier query)", async () => {
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await expect(

@@ -729,123 +729,139 @@ export const patientRouter = router({
   // de Supabase) — la verificación de tenant y la escritura corrían bajo
   // rols distintos sin relación causal real: un bug futuro en el filtro JS
   // habría permitido fusionar/reasignar historial de un paciente de OTRA org
-  // sin que RLS lo detectara. Ahora todo (verificación + escritura) corre
-  // dentro de un único `withTenantContext` — la verificación de pertenencia
-  // de AMBOS pacientes al tenant ocurre primero, antes de cualquier `create`
-  // o `update`, y las escrituras subsiguientes ya corren demotadas a
-  // `authenticated` (RLS aplica también a la reasignación de FKs).
+  // sin que RLS lo detectara. Ahora todo (verificación + escritura clínica)
+  // corre dentro de un único `withTenantContext` — la verificación de
+  // pertenencia de AMBOS pacientes al tenant ocurre primero, antes de
+  // cualquier `create`/`update`, y las escrituras subsiguientes ya corren
+  // demotadas a `authenticated` (RLS aplica también a la reasignación de FKs).
+  //
+  // Fix P0 (revisión independiente 2026-09-19): el `auditLog.create` NO va
+  // dentro del `withTenantContext` — `authenticated` no tiene GRANT INSERT
+  // sobre `audit."AuditLog"` en prod (solo SELECT), así que escribirlo bajo
+  // el rol demotado abortaba el `mergePatients` COMPLETO con permission
+  // denied. Mismo patrón que `death-certificate.router.ts` (`create`): el
+  // audit log se escribe DESPUÉS de que el contexto demotado ya commiteó,
+  // vía `ctx.prisma` (rol bypass). Ver también `patient-dedup.router.ts:519`
+  // (ECE) — mismo bug latente, NO corregido en este PR (fuera de alcance,
+  // reportado aparte).
   mergePatients: tenantProcedure
     .input(mergePatientsInput)
     .mutation(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;
 
-      const result = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
-        // 1) Cargar ambos pacientes (mismo tenant) y validar — ANTES de
-        // cualquier escritura. NOT_FOUND si cualquiera no pertenece al tenant.
-        const [from, to] = await Promise.all([
-          tx.patient.findFirst({
-            where: { id: input.fromPatientId, organizationId: orgId, deletedAt: null },
-          }),
-          tx.patient.findFirst({
-            where: { id: input.toPatientId, organizationId: orgId, deletedAt: null },
-          }),
-        ]);
-        if (!from || !to) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Uno o ambos pacientes no existen o están eliminados.",
-          });
-        }
-        if (from.id === to.id) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "No se puede fusionar un paciente consigo mismo.",
-          });
-        }
-
-        // 2) Construir el patch para `toPatient` según fieldsToTake.
-        const patch: Record<string, unknown> = { updatedBy: ctx.user.id };
-        for (const key of mergeFieldKeys) {
-          const choice = input.fieldsToTake[key as PatientMergeFieldKey];
-          if (choice === "from") {
-            patch[key] = (from as Record<string, unknown>)[key];
+      const { mergeId, fromId, toId, beforeSnapshot } = await withTenantContext(
+        ctx.prisma,
+        ctx.tenant,
+        async (tx) => {
+          // 1) Cargar ambos pacientes (mismo tenant) y validar — ANTES de
+          // cualquier escritura. NOT_FOUND si cualquiera no pertenece al tenant.
+          const [from, to] = await Promise.all([
+            tx.patient.findFirst({
+              where: { id: input.fromPatientId, organizationId: orgId, deletedAt: null },
+            }),
+            tx.patient.findFirst({
+              where: { id: input.toPatientId, organizationId: orgId, deletedAt: null },
+            }),
+          ]);
+          if (!from || !to) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Uno o ambos pacientes no existen o están eliminados.",
+            });
           }
-        }
+          if (from.id === to.id) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "No se puede fusionar un paciente consigo mismo.",
+            });
+          }
 
-        // 3) Snapshot before/after para auditoría.
-        const beforeSnapshot = {
-          from: { id: from.id, mrn: from.mrn, firstName: from.firstName, lastName: from.lastName },
-          to: { id: to.id, mrn: to.mrn, firstName: to.firstName, lastName: to.lastName },
-        };
+          // 2) Construir el patch para `toPatient` según fieldsToTake.
+          const patch: Record<string, unknown> = { updatedBy: ctx.user.id };
+          for (const key of mergeFieldKeys) {
+            const choice = input.fieldsToTake[key as PatientMergeFieldKey];
+            if (choice === "from") {
+              patch[key] = (from as Record<string, unknown>)[key];
+            }
+          }
 
-        // 4a) PatientMerge audit row (campo se llama `reason` en schema).
-        const merge = await tx.patientMerge.create({
-          data: {
-            fromPatientId: from.id,
-            toPatientId: to.id,
-            reason: input.justification,
-            mergedBy: ctx.user.id,
-          },
-        });
+          // 3) Snapshot before/after para auditoría (se usa DESPUÉS del tx).
+          const beforeSnapshot = {
+            from: { id: from.id, mrn: from.mrn, firstName: from.firstName, lastName: from.lastName },
+            to: { id: to.id, mrn: to.mrn, firstName: to.firstName, lastName: to.lastName },
+          };
 
-        // 4b) Reasignar FKs. Se hace una update por tabla; Prisma optimiza a UPDATE
-        // ... WHERE patientId = $from. Si una tabla no existe en el cliente Prisma
-        // (drift), saltamos silenciosamente para no romper el merge.
-        for (const table of FK_REASSIGN_TABLES) {
-          const delegate = (tx as unknown as Record<string, { updateMany?: Function }>)[table];
-          if (!delegate?.updateMany) continue;
-          await delegate.updateMany({
-            where: { patientId: from.id },
-            data: { patientId: to.id },
-          });
-        }
-
-        // 4c) Aplicar fields seleccionados al `to`.
-        if (Object.keys(patch).length > 1) {
-          await tx.patient.update({
-            where: { id: to.id },
-            data: patch,
-          });
-        }
-
-        // 4d) Soft-delete del `from`.
-        await tx.patient.update({
-          where: { id: from.id },
-          data: {
-            deletedAt: new Date(),
-            deletedBy: ctx.user.id,
-            active: false,
-          },
-        });
-
-        // 4e) Audit log entry (usa UPDATE porque MERGE_PATIENTS no está en enum).
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: orgId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "UPDATE",
-            entity: "Patient",
-            entityId: to.id,
-            beforeJson: beforeSnapshot,
-            afterJson: {
-              op: "MERGE_PATIENTS",
-              mergeId: merge.id,
+          // 4a) PatientMerge audit row (campo se llama `reason` en schema).
+          const merge = await tx.patientMerge.create({
+            data: {
               fromPatientId: from.id,
               toPatientId: to.id,
-              fieldsToTake: input.fieldsToTake,
-              tablesReassigned: FK_REASSIGN_TABLES,
+              reason: input.justification,
+              mergedBy: ctx.user.id,
             },
-            justification: input.justification,
-          },
-        });
+          });
 
-        return { mergeId: merge.id, toPatientId: to.id };
+          // 4b) Reasignar FKs. Se hace una update por tabla; Prisma optimiza a UPDATE
+          // ... WHERE patientId = $from. Si una tabla no existe en el cliente Prisma
+          // (drift), saltamos silenciosamente para no romper el merge.
+          for (const table of FK_REASSIGN_TABLES) {
+            const delegate = (tx as unknown as Record<string, { updateMany?: Function }>)[table];
+            if (!delegate?.updateMany) continue;
+            await delegate.updateMany({
+              where: { patientId: from.id },
+              data: { patientId: to.id },
+            });
+          }
+
+          // 4c) Aplicar fields seleccionados al `to`.
+          if (Object.keys(patch).length > 1) {
+            await tx.patient.update({
+              where: { id: to.id },
+              data: patch,
+            });
+          }
+
+          // 4d) Soft-delete del `from`.
+          await tx.patient.update({
+            where: { id: from.id },
+            data: {
+              deletedAt: new Date(),
+              deletedBy: ctx.user.id,
+              active: false,
+            },
+          });
+
+          return { mergeId: merge.id, fromId: from.id, toId: to.id, beforeSnapshot };
+        },
+      );
+
+      // 4e) Audit log entry — FUERA del contexto demotado (ver comentario de
+      // arriba). Usa `ctx.prisma` (rol bypass): UPDATE porque MERGE_PATIENTS
+      // no está en el enum de `action`.
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: orgId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "UPDATE",
+          entity: "Patient",
+          entityId: toId,
+          beforeJson: beforeSnapshot,
+          afterJson: {
+            op: "MERGE_PATIENTS",
+            mergeId,
+            fromPatientId: fromId,
+            toPatientId: toId,
+            fieldsToTake: input.fieldsToTake,
+            tablesReassigned: FK_REASSIGN_TABLES,
+          },
+          justification: input.justification,
+        },
       });
 
-      return result;
+      return { mergeId, toPatientId: toId };
     }),
 
   // ===========================================================================
