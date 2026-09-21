@@ -12,6 +12,8 @@
  *             como integer (sin pérdida de precisión, TDR §27.5).
  */
 
+import { formatCurrency } from "./currency";
+
 const LOCALE_SV = "es-SV";
 const TZ_SV = "America/El_Salvador";
 
@@ -46,12 +48,20 @@ export function formatNumberSV(n: number, decimals = 2): string {
 /**
  * Moneda. `currency` ISO-4217 (USD/SVC). Para SVC se usa el símbolo `₡`
  * y se sufija " SVC" para distinguir del colón costarricense.
+ *
+ * @deprecated CC-A — usa `formatCurrency` de `./currency.ts` para código
+ * nuevo. Se conserva como wrapper porque la rama "SVC" (colón, no vigente)
+ * no es representable con `Intl.NumberFormat` estándar (ICU no tiene
+ * símbolo/orden propios para SVC) — el caso USD delega en `formatCurrency`
+ * (mismo output verificado: "$1,234.56" en es-SV).
  */
 export function formatCurrencySV(amount: number, currency: "USD" | "SVC" = "USD"): string {
   if (!Number.isFinite(amount)) return "";
-  const number = formatNumberSV(amount, 2);
-  if (currency === "SVC") return `₡${number} SVC`;
-  return `$${number}`;
+  if (currency === "SVC") {
+    const number = formatNumberSV(amount, 2);
+    return `₡${number} SVC`;
+  }
+  return formatCurrency(amount, "USD", LOCALE_SV);
 }
 
 /**

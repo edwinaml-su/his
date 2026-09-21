@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
@@ -78,9 +79,6 @@ function defaultRange(): { desde: string; hasta: string } {
   return { desde, hasta };
 }
 
-function fmtMoney(n: number): string {
-  return n.toLocaleString("es-SV", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 function fmtPct(n: number | null): string {
   return n === null ? "—" : `${(n * 100).toFixed(1)}%`;
@@ -233,11 +231,11 @@ export function RentabilidadShell(_props: { roleCodes: string[] }) {
                             <span className="ml-1 text-xs text-muted-foreground">JVPM {row.jvpmNumero}</span>
                           ) : null}
                         </TableCell>
-                        <TableCell className="text-right">${fmtMoney(row.rentaDevengada)}</TableCell>
-                        <TableCell className="text-right">${fmtMoney(row.rentaCobrada)}</TableCell>
-                        <TableCell className="text-right">${fmtMoney(row.produccionTotal)}</TableCell>
-                        <TableCell className="text-right">${fmtMoney(row.honorariosDevengados)}</TableCell>
-                        <TableCell className="text-right font-medium">${fmtMoney(row.margenContribucion)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(row.rentaDevengada)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(row.rentaCobrada)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(row.produccionTotal)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(row.honorariosDevengados)}</TableCell>
+                        <TableCell className="text-right font-medium">{formatCurrency(row.margenContribucion)}</TableCell>
                         <TableCell>
                           {row.inactivoComercialmente ? (
                             <Badge variant="warning">Inactivo comercialmente</Badge>
@@ -359,7 +357,7 @@ function DetalleAfiliadoDialog({
               ) : (
                 Object.entries(produccionPorLinea).map(([linea, monto]) => (
                   <Badge key={linea} variant="outline">
-                    {linea}: ${fmtMoney(monto)}
+                    {linea}: {formatCurrency(monto)}
                   </Badge>
                 ))
               )}
@@ -388,10 +386,10 @@ function DetalleAfiliadoDialog({
                 {rows.map((r, i) => (
                   <TableRow key={`${r.periodMonth}-${r.establishmentId}-${i}`}>
                     <TableCell>{r.periodMonth.slice(0, 7)}</TableCell>
-                    <TableCell className="text-right">${fmtMoney(r.rentaDevengada)}</TableCell>
-                    <TableCell className="text-right">${fmtMoney(r.produccionTotal)}</TableCell>
-                    <TableCell className="text-right">${fmtMoney(r.honorariosDevengados)}</TableCell>
-                    <TableCell className="text-right">${fmtMoney(r.margenContribucion)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(r.rentaDevengada)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(r.produccionTotal)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(r.honorariosDevengados)}</TableCell>
+                    <TableCell className="text-right">{formatCurrency(r.margenContribucion)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -83,7 +83,7 @@ export const countryRouter = router({
     const search = input?.search?.trim();
     const activeOnly = input?.activeOnly ?? false;
 
-    return ctx.prisma.country.findMany({
+    const rows = await ctx.prisma.country.findMany({
       where: {
         ...(activeOnly ? { active: true } : {}),
         ...(search
@@ -104,6 +104,10 @@ export const countryRouter = router({
       },
       orderBy: { name: "asc" },
     });
+    // CC-A — `vatRate` es Decimal; superjson no lo serializa sin un
+    // transformer custom (mismo criterio que `ExchangeRate.rate` en
+    // currency.router.ts). Se convierte a number antes de cruzar tRPC.
+    return rows.map((r) => ({ ...r, vatRate: r.vatRate.toNumber() }));
   }),
 
   create: protectedProcedure.input(countryCreateInput).mutation(async ({ ctx, input }) => {
@@ -121,6 +125,7 @@ export const countryRouter = router({
             defaultLocale: rest.defaultLocale,
             defaultTzId: rest.defaultTzId,
             ...(rest.active !== undefined ? { active: rest.active } : {}),
+            ...(rest.vatRate !== undefined ? { vatRate: rest.vatRate } : {}),
           },
         });
 
@@ -130,7 +135,7 @@ export const countryRouter = router({
 
         return created;
       });
-      return country;
+      return { ...country, vatRate: country.vatRate.toNumber() };
     } catch (err) {
       rethrowPrisma(err);
     }
@@ -151,6 +156,7 @@ export const countryRouter = router({
             ...(patch.name !== undefined ? { name: patch.name } : {}),
             ...(patch.defaultLocale !== undefined ? { defaultLocale: patch.defaultLocale } : {}),
             ...(patch.defaultTzId !== undefined ? { defaultTzId: patch.defaultTzId } : {}),
+            ...(patch.vatRate !== undefined ? { vatRate: patch.vatRate } : {}),
           },
         });
 
@@ -160,7 +166,7 @@ export const countryRouter = router({
 
         return updated;
       });
-      return country;
+      return { ...country, vatRate: country.vatRate.toNumber() };
     } catch (err) {
       rethrowPrisma(err);
     }
@@ -184,10 +190,11 @@ export const countryRouter = router({
       }
 
       try {
-        return await ctx.prisma.country.update({
+        const updated = await ctx.prisma.country.update({
           where: { id: input.id },
           data: { active: false },
         });
+        return { ...updated, vatRate: updated.vatRate.toNumber() };
       } catch (err) {
         rethrowPrisma(err);
       }
@@ -196,10 +203,11 @@ export const countryRouter = router({
   /** Reactiva un país previamente desactivado. */
   activate: protectedProcedure.input(countryActivateInput).mutation(async ({ ctx, input }) => {
     try {
-      return await ctx.prisma.country.update({
+      const updated = await ctx.prisma.country.update({
         where: { id: input.id },
         data: { active: true },
       });
+      return { ...updated, vatRate: updated.vatRate.toNumber() };
     } catch (err) {
       rethrowPrisma(err);
     }

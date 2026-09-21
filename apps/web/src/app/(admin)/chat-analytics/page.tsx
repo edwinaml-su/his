@@ -32,6 +32,7 @@ import {
   TabsTrigger,
 } from "@his/ui/components/tabs";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 export default function ChatAnalyticsPage() {
   const [days, setDays] = React.useState<7 | 30 | 90>(30);
@@ -40,10 +41,6 @@ export default function ChatAnalyticsPage() {
   const topQueries = trpc.chatAnalytics.topQueries.useQuery({ days, limit: 20 });
   const byRole = trpc.chatAnalytics.byRole.useQuery({ days });
   const recent = trpc.chatAnalytics.recentSessions.useQuery({ limit: 30 });
-
-  function formatCurrency(n: number): string {
-    return new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
-  }
 
   function formatRelative(iso: string): string {
     const date = new Date(iso);

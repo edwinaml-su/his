@@ -5,7 +5,11 @@
  *
  * Datos cabecera: patientId, insurer (opcional), costCenter cabecera (opcional), currency.
  * Items dinámicos: description, quantity, unitPrice, costCenterId (obligatorio por línea).
- * IVA 13% calculado en cliente (preview) y confirmado en router al guardar.
+ * IVA: preview vía `invoice.vatRatePreview` (Country.vatRate real de la org,
+ * misma fuente que usa `invoice.create` al persistir — CC-A, antes 13%
+ * hardcodeado en cliente mientras el server ya usaba el IVA por país, lo que
+ * mostraba un total distinto al que quedaba facturado en orgs no-SV).
+ * Fallback 0.13 mientras carga o si la query falla.
  * Botones: "Guardar borrador" (DRAFT) | "Emitir" (ISSUED).
  *
  * CC-0015: al elegir una cuenta del paciente, el combo de tarifario se filtra
@@ -51,7 +55,8 @@ import { attachOverrideJustificacion, esErrorDePrecio, puedeOverridePrecio } fro
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const trpcAny = trpc as any;
 
-const IVA_RATE = 0.13;
+/** Fallback mientras carga `invoice.vatRatePreview` o si la query falla — mismo default que el server (Country.vatRate). */
+const IVA_RATE_FALLBACK = 0.13;
 
 interface ItemLine {
   description: string;
@@ -127,6 +132,10 @@ export function NuevaFacturaShell({ roleCodes }: NuevaFacturaShellProps) {
   const costCentersQuery = trpcAny.invoice.listCostCenters.useQuery();
   const currenciesQuery = trpcAny.currency.list.useQuery();
   const insurersQuery = trpcAny.insurance.insurer.list.useQuery({ limit: 200 });
+  // CC-A — mismo IVA que aplicará el server al crear la factura.
+  const vatRateQuery = trpcAny.invoice.vatRatePreview.useQuery();
+  const vatRate: number =
+    typeof vatRateQuery.data === "number" ? vatRateQuery.data : IVA_RATE_FALLBACK;
 
   const patientIdValida = UUID_RE.test(patientId.trim());
   const cuentasQuery = trpcAny.patientAccount.listarPorPaciente.useQuery(
@@ -207,7 +216,7 @@ export function NuevaFacturaShell({ roleCodes }: NuevaFacturaShellProps) {
     const up = parseFloat(it.unitPrice) || 0;
     return acc + qty * up;
   }, 0);
-  const taxAmount = subtotal * IVA_RATE;
+  const taxAmount = subtotal * vatRate;
   const total = subtotal + taxAmount;
 
   function fmt(n: number) {
@@ -574,7 +583,7 @@ export function NuevaFacturaShell({ roleCodes }: NuevaFacturaShellProps) {
               <span className="font-mono">${fmt(subtotal)}</span>
             </div>
             <div className="flex w-56 justify-between text-sm text-muted-foreground">
-              <span>IVA (13%)</span>
+              <span>IVA ({(vatRate * 100).toLocaleString("es-SV", { maximumFractionDigits: 2 })}%)</span>
               <span className="font-mono">${fmt(taxAmount)}</span>
             </div>
             <div className="flex w-56 justify-between font-semibold">

@@ -34,6 +34,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const mockListCostCenters = vi.fn();
+const mockVatRatePreview = vi.fn();
 const mockCurrencyList = vi.fn();
 const mockInsurerList = vi.fn();
 const mockListActiveItems = vi.fn();
@@ -53,6 +54,7 @@ vi.mock("@/lib/trpc/react", () => ({
     }),
     invoice: {
       listCostCenters: { useQuery: (...args: unknown[]) => mockListCostCenters(...args) },
+      vatRatePreview: { useQuery: (...args: unknown[]) => mockVatRatePreview(...args) },
       create: { useMutation: (opts?: unknown) => mockInvoiceCreate(opts) },
     },
     currency: {
@@ -83,6 +85,7 @@ describe("NuevaFacturaShell (CC-0015 + H-17)", () => {
     vi.clearAllMocks();
     capturedMutationOpts = undefined;
     mockListCostCenters.mockReturnValue({ ...idleQuery, data: [] });
+    mockVatRatePreview.mockReturnValue({ ...idleQuery, data: 0.13 });
     mockCurrencyList.mockReturnValue({ ...idleQuery, data: [{ id: "cur-1", isoCode: "USD", name: "Dólar" }] });
     mockInsurerList.mockReturnValue({ ...idleQuery, data: [] });
     mockListActiveItems.mockReturnValue({ ...idleQuery, data: [] });
@@ -206,6 +209,25 @@ describe("NuevaFacturaShell (CC-0015 + H-17)", () => {
 
       expect(screen.getByText("La justificación debe tener al menos 10 caracteres.")).toBeInTheDocument();
       expect(mockMutate).not.toHaveBeenCalled();
+    });
+  });
+
+  // CC-A (revisión independiente 2026-09-19, P1) — el IVA del preview debe
+  // venir de `invoice.vatRatePreview` (Country.vatRate real), no de un 13%
+  // hardcodeado en cliente que podía divergir del total que persiste el server.
+  describe("IVA dinámico (CC-A)", () => {
+    it("usa el vatRate real de la org (GT=12%) en la etiqueta del preview", () => {
+      mockVatRatePreview.mockReturnValue({ ...idleQuery, data: 0.12 });
+      render(<NuevaFacturaShell roleCodes={[]} />);
+
+      expect(screen.getByText("IVA (12%)")).toBeInTheDocument();
+    });
+
+    it("cae a 13% (fallback) mientras `vatRatePreview` no ha resuelto", () => {
+      mockVatRatePreview.mockReturnValue({ ...idleQuery, data: undefined });
+      render(<NuevaFacturaShell roleCodes={[]} />);
+
+      expect(screen.getByText("IVA (13%)")).toBeInTheDocument();
     });
   });
 });

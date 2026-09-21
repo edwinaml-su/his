@@ -16,9 +16,14 @@ import { router, publicProcedure, tenantProcedure } from "../trpc";
  * por eso lo dejamos.
  */
 const fxRateTypeEnum = z.enum(["BUY", "SELL", "AVERAGE", "OFFICIAL", "FISCAL"]);
+export type FxRateType = z.infer<typeof fxRateTypeEnum>;
 
-/** Orden de preferencia cuando el caller no especifica rateType. */
-const RATE_TYPE_FALLBACK = ["OFFICIAL", "AVERAGE", "FISCAL", "SELL", "BUY"] as const;
+/**
+ * Orden de preferencia cuando el caller no especifica rateType. Exportado
+ * para que `lib/exchange.ts#buscarTasaVigente` (CC-A) reuse el mismo orden
+ * en vez de mantener una segunda lista.
+ */
+export const RATE_TYPE_FALLBACK = ["OFFICIAL", "AVERAGE", "FISCAL", "SELL", "BUY"] as const;
 
 export const currencyRouter = router({
   list: publicProcedure.query(async ({ ctx }) => {

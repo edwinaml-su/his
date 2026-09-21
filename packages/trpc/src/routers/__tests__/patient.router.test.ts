@@ -167,7 +167,7 @@ describe("patientRouter", () => {
 
       // Mock de organization.findUnique para obtener isoAlpha2 del país.
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV", isoNumeric: 222 },
+        countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
       // Mock de $queryRaw: fn_next_expediente devuelve 1.
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
@@ -241,7 +241,7 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       // $queryRaw: fn_next_expediente devuelve 1 para el primer menor; luego hook ECE queries → []
       prisma.$queryRaw
         .mockResolvedValueOnce([{ n: 1 }] as never)   // fn_next_expediente → SV{AA}00001
@@ -291,7 +291,7 @@ describe("patientRouter", () => {
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
 
       prisma.organization.findUnique.mockResolvedValue({
-        country: { isoAlpha2: "SV", isoNumeric: 222 },
+        countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 },
       } as never);
 
       const existingPatient = {
@@ -328,7 +328,7 @@ describe("patientRouter", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
           .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-        prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+        prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       }
 
       it("compone firstName/lastName por sexo, expediente con año ACTUAL, unknownLabel y traeDocumento=false", async () => {
@@ -420,7 +420,7 @@ describe("patientRouter", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
         .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
-      prisma.organization.findUnique.mockResolvedValue({ country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-sv", country: { isoAlpha2: "SV", isoNumeric: 222 } } as never);
       prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
       prisma.patient.create.mockResolvedValue({ id: "with-blood", expediente: "2228400001" } as never);
 
@@ -437,15 +437,173 @@ describe("patientRouter", () => {
       const args = prisma.patient.create.mock.calls[0]![0];
       expect(args.data).toMatchObject({ bloodTypeAbo: "O", bloodRh: "Du" });
     });
+
+    // ─── CC-A (auditoría 2026-09-18, P1) — tipos de documento por país ─────
+    describe("documentType por país", () => {
+      function setupOrgGT() {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+          .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+        prisma.organization.findUnique.mockResolvedValue({
+          countryId: "country-gt",
+          country: { isoAlpha2: "GT", isoNumeric: 320 },
+        } as never);
+      }
+
+      it("acepta un documentType del catálogo IdentifierType del país (DPI)", async () => {
+        setupOrgGT();
+        prisma.identifierType.findFirst.mockResolvedValue({ code: "DPI" } as never);
+        prisma.patient.findFirst.mockResolvedValue(null as never); // dedup: no existe
+        prisma.$queryRaw.mockResolvedValue([{ n: 1 }] as never);
+        prisma.patient.create.mockResolvedValue({ id: "gt-1", expediente: "3202600001" } as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await caller.create({
+          firstName: "Ana",
+          lastName: "García",
+          biologicalSexId: "00000000-0000-0000-0000-000000000099",
+          birthDate: "1990-01-01",
+          documentType: "DPI",
+          documentNumber: "1234567890101",
+        } as never);
+
+        expect(prisma.identifierType.findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { countryId: "country-gt", code: "DPI", active: true },
+          }),
+        );
+        expect(prisma.patient.create).toHaveBeenCalledTimes(1);
+      });
+
+      it("rechaza un documentType que no existe en el catálogo del país (BAD_REQUEST, nunca crea)", async () => {
+        setupOrgGT();
+        prisma.identifierType.findFirst.mockResolvedValue(null as never);
+
+        const caller = patientRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.create({
+            firstName: "Ana",
+            lastName: "García",
+            biologicalSexId: "00000000-0000-0000-0000-000000000099",
+            birthDate: "1990-01-01",
+            documentType: "PASAPORTE_XYZ_INEXISTENTE",
+            documentNumber: "123",
+          } as never),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(prisma.patient.create).not.toHaveBeenCalled();
+      });
+    });
   });
+
+  describe("update", () => {
+    const PATIENT_ID = "00000000-0000-0000-0000-0000000000f1";
+
+    // CC-A (revisión independiente 2026-09-19, P0 seguridad) — `update` ahora
+    // corre dentro de withTenantContext y exige que el paciente pertenezca
+    // al tenant ANTES de escribir (antes: ctx.prisma.patient.update({where:{id}})
+    // sin organizationId — IDOR cross-org).
+    function setupTx() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    }
+
+    it("acepta documentType legacy SV sin consultar IdentifierType", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue({ id: PATIENT_ID } as never);
+      prisma.patient.update.mockResolvedValue({ id: PATIENT_ID, documentType: "DUI" } as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await caller.update({ id: PATIENT_ID, documentType: "DUI" } as never);
+
+      expect(prisma.identifierType.findFirst).not.toHaveBeenCalled();
+      expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: PATIENT_ID, organizationId: MOCK_TENANT.organizationId },
+        }),
+      );
+      expect(prisma.patient.update).toHaveBeenCalledTimes(1);
+    });
+
+    it("NOT_FOUND si el paciente no pertenece al tenant (IDOR bloqueado)", async () => {
+      setupTx();
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.update({ id: PATIENT_ID, documentType: "DUI" } as never),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(prisma.patient.update).not.toHaveBeenCalled();
+    });
+
+    it("rechaza documentType inexistente en el catálogo del país (BAD_REQUEST)", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-gt" } as never);
+      prisma.identifierType.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.update({ id: PATIENT_ID, documentType: "NO_EXISTE" } as never),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.patient.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("tiposDocumento", () => {
+    it("devuelve el catálogo IdentifierType del país de la org cuando existe", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-gt" } as never);
+      prisma.identifierType.findMany.mockResolvedValue([
+        { code: "DPI", name: "Documento Personal de Identificación" },
+      ] as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.tiposDocumento();
+
+      expect(result).toEqual([
+        { code: "DPI", name: "Documento Personal de Identificación" },
+      ]);
+    });
+
+    it("cae a la lista legacy SV si el país no tiene catálogo sembrado", async () => {
+      prisma.organization.findUnique.mockResolvedValue({ countryId: "country-xx" } as never);
+      prisma.identifierType.findMany.mockResolvedValue([] as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.tiposDocumento();
+
+      expect(result.map((t) => t.code)).toEqual([
+        "DUI",
+        "DNI",
+        "PASAPORTE",
+        "DUI_RESP",
+        "CARNET_RESIDENCIA",
+      ]);
+    });
+  });
+
+  // CC-A (revisión independiente 2026-09-19, P0 seguridad) — addIdentifier/
+  // addAllergy/addAddress ahora corren dentro de withTenantContext y validan
+  // que `patientId` pertenezca al tenant ANTES de escribir (mismo fix que
+  // `update`). `setupTxConPaciente` mockea el happy path (paciente SÍ es del
+  // tenant); los tests IDOR mockean `patient.findFirst` a null.
+  const PATIENT_ID_AJENO = "00000000-0000-0000-0000-000000000010";
+
+  function setupTxConPaciente() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+      .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+    prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+    prisma.patient.findFirst.mockResolvedValue({ id: PATIENT_ID_AJENO } as never);
+  }
 
   describe("addIdentifier", () => {
     it("acepta DUI válido", async () => {
+      setupTxConPaciente();
       prisma.patientIdentifier.create.mockResolvedValue({ id: "x" } as never);
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
       await caller.addIdentifier({
-        patientId: "00000000-0000-0000-0000-000000000010",
+        patientId: PATIENT_ID_AJENO,
         data: {
           identifierTypeId: "00000000-0000-0000-0000-000000000020",
           kind: "DUI",
@@ -454,6 +612,11 @@ describe("patientRouter", () => {
         },
       });
 
+      expect(prisma.patient.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: PATIENT_ID_AJENO, organizationId: MOCK_TENANT.organizationId },
+        }),
+      );
       expect(prisma.patientIdentifier.create).toHaveBeenCalledOnce();
     });
 
@@ -461,7 +624,7 @@ describe("patientRouter", () => {
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
       await expect(
         caller.addIdentifier({
-          patientId: "00000000-0000-0000-0000-000000000010",
+          patientId: PATIENT_ID_AJENO,
           data: {
             identifierTypeId: "00000000-0000-0000-0000-000000000020",
             kind: "DUI",
@@ -472,15 +635,38 @@ describe("patientRouter", () => {
       ).rejects.toThrow();
       expect(prisma.patientIdentifier.create).not.toHaveBeenCalled();
     });
+
+    it("NOT_FOUND si el paciente no pertenece al tenant (IDOR bloqueado), sin escritura", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.addIdentifier({
+          patientId: PATIENT_ID_AJENO,
+          data: {
+            identifierTypeId: "00000000-0000-0000-0000-000000000020",
+            kind: "DUI",
+            value: VALID_DUIS[0]!,
+            isPrimary: true,
+          },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(prisma.patientIdentifier.create).not.toHaveBeenCalled();
+    });
   });
 
   describe("addAllergy", () => {
     it("registra createdBy del usuario actual", async () => {
+      setupTxConPaciente();
       prisma.patientAllergy.create.mockResolvedValue({ id: "y" } as never);
       const caller = patientRouter.createCaller(makeCtx({ prisma }));
 
       await caller.addAllergy({
-        patientId: "00000000-0000-0000-0000-000000000010",
+        patientId: PATIENT_ID_AJENO,
         data: {
           substanceText: "Penicilina",
           severity: "severe",
@@ -490,6 +676,55 @@ describe("patientRouter", () => {
 
       const args = prisma.patientAllergy.create.mock.calls[0]![0];
       expect(args.data).toMatchObject({ createdBy: MOCK_USER_ADMIN.id });
+    });
+
+    it("NOT_FOUND si el paciente no pertenece al tenant (IDOR bloqueado), sin escritura", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.addAllergy({
+          patientId: PATIENT_ID_AJENO,
+          data: { substanceText: "Penicilina", severity: "severe", verified: true },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(prisma.patientAllergy.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("addAddress", () => {
+    it("crea la dirección cuando el paciente pertenece al tenant", async () => {
+      setupTxConPaciente();
+      prisma.patientAddress.create.mockResolvedValue({ id: "addr-1" } as never);
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+
+      await caller.addAddress({
+        patientId: PATIENT_ID_AJENO,
+        data: { line1: "Calle Falsa 123", isPrimary: true },
+      });
+
+      expect(prisma.patientAddress.create).toHaveBeenCalledOnce();
+    });
+
+    it("NOT_FOUND si el paciente no pertenece al tenant (IDOR bloqueado), sin escritura", async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (prisma.$transaction as unknown as { mockImplementation: (fn: any) => void })
+        .mockImplementation(async (fn: (tx: typeof prisma) => Promise<unknown>) => fn(prisma));
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+      prisma.patient.findFirst.mockResolvedValue(null as never);
+
+      const caller = patientRouter.createCaller(makeCtx({ prisma }));
+      await expect(
+        caller.addAddress({
+          patientId: PATIENT_ID_AJENO,
+          data: { line1: "Calle Falsa 123", isPrimary: true },
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(prisma.patientAddress.create).not.toHaveBeenCalled();
     });
   });
 

@@ -13,6 +13,7 @@ import { withTenantContext } from "../rls-context";
 import { router, tenantProcedure } from "../trpc";
 import { serviceUnitWhereFragment } from "../lib/service-unit-scope";
 import { nextEncounterNumber } from "../lib/encounter-numbering";
+import { resolverTasaFuncional } from "../lib/exchange";
 
 /** Formatea la fecha como yyyyMMdd-HHmmss en UTC para el MRN del NN. */
 function formatNnSuffix(d: Date): string {
@@ -353,6 +354,13 @@ export const triageRouter = router({
         });
         if (!encounter) {
           const currencyId = await resolveCountryCurrency(tx, countryId);
+          // CC-A (auditoría 2026-09-18, P0) — antes hardcodeaba 1. La moneda
+          // resuelta por país normalmente coincide con la funcional de la
+          // organización; si no, exige tasa vigente (nunca 1 silencioso).
+          const exchangeRateToFunc = await resolverTasaFuncional(tx, {
+            organizationId: orgId,
+            currencyId,
+          });
           const encounterNumber = await nextEncounterNumber(tx, orgId);
           encounter = await tx.encounter.create({
             data: {
@@ -364,7 +372,7 @@ export const triageRouter = router({
               encounterNumber,
               admittedAt: new Date(),
               currencyId,
-              exchangeRateToFunc: 1,
+              exchangeRateToFunc,
               createdBy: userId,
             },
           });

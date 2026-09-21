@@ -27,11 +27,16 @@ vi.mock("next/navigation", () => ({
 
 const mockUseMutation = vi.fn();
 const mockUseQuery = vi.fn();
+// CC-A (auditoría 2026-09-18, P1) — catálogo de tipos de documento por país;
+// por defecto sin datos (`data: undefined`) para que el merge caiga a los 3
+// chips legacy del mockup (comportamiento visual idéntico a antes de CC-A).
+const mockUseTiposDocumento = vi.fn();
 
 vi.mock("@/lib/trpc/react", () => ({
   trpc: {
     patient: {
       create: { useMutation: (...args: unknown[]) => mockUseMutation(...args) },
+      tiposDocumento: { useQuery: (...args: unknown[]) => mockUseTiposDocumento(...args) },
     },
     catalog: {
       list: { useQuery: (...args: unknown[]) => mockUseQuery(...args) },
@@ -61,6 +66,7 @@ describe("PreRegistroPage", () => {
     vi.clearAllMocks();
     mockUseMutation.mockReturnValue(makeMutationState());
     mockUseQuery.mockReturnValue(catalogState);
+    mockUseTiposDocumento.mockReturnValue({ data: undefined });
   });
 
   afterEach(() => cleanup());
@@ -80,6 +86,44 @@ describe("PreRegistroPage", () => {
 
     expect(screen.getByLabelText(/Número de Documento/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Crear preregistro/ })).toBeInTheDocument();
+  });
+
+  // ── CC-A (auditoría 2026-09-18, P1) — catálogo de tipos de documento por país ──
+  describe("tipos de documento por país (CC-A)", () => {
+    it("país sin catálogo extra (tiposDocumento vacío) — solo los 3 chips legacy, sin cambio visual", () => {
+      mockUseTiposDocumento.mockReturnValue({ data: [] });
+      render(<PreRegistroPage />);
+
+      expect(screen.getByRole("radio", { name: "DUI" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Pasaporte" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Carnet de Residente" })).toBeInTheDocument();
+      expect(screen.getAllByRole("radio", { name: /DUI|Pasaporte|Carnet de Residente/ })).toHaveLength(3);
+    });
+
+    it("país con catálogo (GT/DPI) agrega un chip adicional sin ocultar los 3 legacy", () => {
+      mockUseTiposDocumento.mockReturnValue({
+        data: [{ code: "DPI", name: "Documento Personal de Identificación" }],
+      });
+      render(<PreRegistroPage />);
+
+      expect(screen.getByRole("radio", { name: "DUI" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Pasaporte" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Carnet de Residente" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: "Documento Personal de Identificación" }),
+      ).toBeInTheDocument();
+    });
+
+    it("al seleccionar un tipo sin lector simulado (DPI), el botón de escaneo se deshabilita", () => {
+      mockUseTiposDocumento.mockReturnValue({
+        data: [{ code: "DPI", name: "Documento Personal de Identificación" }],
+      });
+      render(<PreRegistroPage />);
+
+      fireEvent.click(screen.getByRole("radio", { name: "Documento Personal de Identificación" }));
+
+      expect(screen.getByRole("button", { name: /Escanear documento/ })).toBeDisabled();
+    });
   });
 
   // ── AC3 — sexo biológico como radios (Masculino/Femenino) ──────────────────

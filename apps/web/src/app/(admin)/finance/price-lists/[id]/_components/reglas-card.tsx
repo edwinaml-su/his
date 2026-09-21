@@ -23,6 +23,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import { ReglaDialog, type CategoriaOption, type ListaOption } from "./regla-dialog";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,7 +70,7 @@ function fmtMoney(v: string | number) {
 
 /** Describe en una línea qué precio produce la regla. */
 function describirCalculo(r: Regla): string {
-  if (r.computePrice === "fixed") return `$${fmtMoney(r.fixedPrice ?? 0)}`;
+  if (r.computePrice === "fixed") return formatCurrency(Number(r.fixedPrice ?? 0));
   if (r.computePrice === "percentage") return `${fmtMoney(r.percentPrice)}% menos sobre ${BASE_LABEL[r.base]}`;
 
   const partes: string[] = [];
@@ -77,9 +78,9 @@ function describirCalculo(r: Regla): string {
   if (descuento > 0) partes.push(`−${fmtMoney(descuento)}%`);
   if (descuento < 0) partes.push(`+${fmtMoney(-descuento)}%`);
   if (Number(r.priceRound) > 0) partes.push(`redondeo a ${fmtMoney(r.priceRound)}`);
-  if (Number(r.priceSurcharge) !== 0) partes.push(`recargo $${fmtMoney(r.priceSurcharge)}`);
-  if (Number(r.priceMinMargin) > 0) partes.push(`mín. +$${fmtMoney(r.priceMinMargin)}`);
-  if (Number(r.priceMaxMargin) > 0) partes.push(`máx. +$${fmtMoney(r.priceMaxMargin)}`);
+  if (Number(r.priceSurcharge) !== 0) partes.push(`recargo ${formatCurrency(Number(r.priceSurcharge))}`);
+  if (Number(r.priceMinMargin) > 0) partes.push(`mín. +${formatCurrency(Number(r.priceMinMargin))}`);
+  if (Number(r.priceMaxMargin) > 0) partes.push(`máx. +${formatCurrency(Number(r.priceMaxMargin))}`);
 
   const detalle = partes.length ? partes.join(" · ") : "sin ajustes";
   return `${detalle} sobre ${r.base === "pricelist" ? (r.basePriceListName ?? "otra lista") : BASE_LABEL[r.base]}`;
@@ -137,7 +138,7 @@ function Probador({ priceListId }: { priceListId: string }) {
             <span className="text-muted-foreground">Calculando…</span>
           ) : resultado?.precio != null ? (
             <>
-              <span className="font-mono font-semibold">${fmtMoney(resultado.precio)}</span>{" "}
+              <span className="font-mono font-semibold">{formatCurrency(resultado.precio)}</span>{" "}
               <span className="text-muted-foreground">
                 — {FUENTE_LABEL[resultado.fuente ?? "estandar"]}
               </span>

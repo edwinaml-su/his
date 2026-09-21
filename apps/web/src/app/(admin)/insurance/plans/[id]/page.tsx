@@ -36,6 +36,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 const AMBITOS = ["CONSULTA", "FARMACIA", "GENERAL"] as const;
 type Ambito = (typeof AMBITOS)[number];
@@ -359,8 +360,8 @@ export default function InsurancePlanDetailPage() {
                     <TableCell>{AMBITO_LABEL[ambito]}</TableCell>
                     <TableCell>{cfg ? COVERAGE_TYPE_LABEL[cfg.coverageType as CoverageType] : "— sin configurar —"}</TableCell>
                     <TableCell className="font-mono">{cfg?.insuredPercentage != null ? `${cfg.insuredPercentage}%` : "—"}</TableCell>
-                    <TableCell className="font-mono">{cfg?.copayAmount != null ? `$${cfg.copayAmount}` : "—"}</TableCell>
-                    <TableCell className="font-mono">{cfg?.coverageLimit != null ? `$${cfg.coverageLimit}` : "—"}</TableCell>
+                    <TableCell className="font-mono">{cfg?.copayAmount != null ? formatCurrency(Number(cfg.copayAmount)) : "—"}</TableCell>
+                    <TableCell className="font-mono">{cfg?.coverageLimit != null ? formatCurrency(Number(cfg.coverageLimit)) : "—"}</TableCell>
                     <TableCell>
                       <Button variant="outline" size="sm" onClick={() => setAmbitoDialog(ambito)}>
                         {cfg ? "Editar" : "Configurar"}
@@ -405,7 +406,7 @@ export default function InsurancePlanDetailPage() {
                       ) : r.ruleType === "PORCENTAJE" ? (
                         `${r.percentage}%`
                       ) : (
-                        `$${r.amount}`
+                        formatCurrency(Number(r.amount))
                       )}
                     </TableCell>
                   </TableRow>

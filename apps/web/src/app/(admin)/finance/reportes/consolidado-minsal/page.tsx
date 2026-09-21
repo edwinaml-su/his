@@ -18,6 +18,7 @@ import {
   TableRow,
 } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 import {
   DateRangePicker,
   useDateRange,
@@ -153,8 +154,8 @@ export default function ConsolidadoMinsalPage() {
       {rows.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[
-            { label: "Ingresos totales", value: `$${fmtCurrency(totales.ingresosTotal)}` },
-            { label: "Costos directos", value: `$${fmtCurrency(totales.costosDirectosTotal)}` },
+            { label: "Ingresos totales", value: formatCurrency(totales.ingresosTotal) },
+            { label: "Costos directos", value: formatCurrency(totales.costosDirectosTotal) },
             { label: "Total facturas", value: String(totales.numFacturas) },
             { label: "Total egresos", value: String(totales.numEgresos) },
           ].map((m) => (
@@ -195,8 +196,8 @@ export default function ConsolidadoMinsalPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right font-mono text-sm">{r.numCentros}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.ingresosTotal)}</TableCell>
-                    <TableCell className="text-right font-mono text-sm">${fmtCurrency(r.costosDirectosTotal)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{formatCurrency(r.ingresosTotal)}</TableCell>
+                    <TableCell className="text-right font-mono text-sm">{formatCurrency(r.costosDirectosTotal)}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{r.numFacturas}</TableCell>
                     <TableCell className="text-right font-mono text-sm">{r.numEgresos}</TableCell>
                   </TableRow>
@@ -204,8 +205,8 @@ export default function ConsolidadoMinsalPage() {
                 <TableRow className="border-t-2 font-semibold">
                   <TableCell>Total</TableCell>
                   <TableCell className="text-right font-mono">{totales.numCentros}</TableCell>
-                  <TableCell className="text-right font-mono">${fmtCurrency(totales.ingresosTotal)}</TableCell>
-                  <TableCell className="text-right font-mono">${fmtCurrency(totales.costosDirectosTotal)}</TableCell>
+                  <TableCell className="text-right font-mono">{formatCurrency(totales.ingresosTotal)}</TableCell>
+                  <TableCell className="text-right font-mono">{formatCurrency(totales.costosDirectosTotal)}</TableCell>
                   <TableCell className="text-right font-mono">{totales.numFacturas}</TableCell>
                   <TableCell className="text-right font-mono">{totales.numEgresos}</TableCell>
                 </TableRow>

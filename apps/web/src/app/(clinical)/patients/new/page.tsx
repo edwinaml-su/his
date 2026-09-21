@@ -12,16 +12,23 @@ import { parseDocumento, type TipoDocumento } from "@/lib/parse-documento";
 
 // CC-0008 §5/§9 — tipos de documento del pre-registro. Se mapea al enum del
 // modelo Patient existente (CARNET_RESIDENCIA), no al greenfield del spec.
-type DocTipoUI = "DUI" | "PASAPORTE" | "CARNET_RESIDENCIA";
+// CC-A (auditoría 2026-09-18, P1) — relajado de unión fija a `string`: los
+// chips base (mockup, SV) siguen fijos; `patient.tiposDocumento` puede sumar
+// códigos del catálogo del país de la org (ej. DPI en Guatemala) al final,
+// sin reordenar ni ocultar los 3 existentes (fidelidad de diseño §CLAUDE.md).
+type DocTipoUI = string;
 
-const TIPO_LABEL: Record<DocTipoUI, string> = {
+const TIPO_LABEL_BASE: Record<"DUI" | "PASAPORTE" | "CARNET_RESIDENCIA", string> = {
   DUI: "DUI",
   PASAPORTE: "Pasaporte",
   CARNET_RESIDENCIA: "Carnet de Residente",
 };
 
 // El contrato del parser usa CARNET_RESIDENTE; el modelo/BD usa CARNET_RESIDENCIA.
-const PARSER_TIPO: Record<DocTipoUI, TipoDocumento> = {
+// Solo cubre los 3 tipos con simulación de escaneo (§7) — códigos de catálogo
+// por país (ej. DPI) no tienen lector simulado aún: el botón de escaneo se
+// deshabilita para ellos (captura manual).
+const PARSER_TIPO: Partial<Record<DocTipoUI, TipoDocumento>> = {
   DUI: "DUI",
   PASAPORTE: "PASAPORTE",
   CARNET_RESIDENCIA: "CARNET_RESIDENTE",
@@ -177,6 +184,21 @@ export default function PreRegistroPage() {
     [sexes.data],
   );
 
+  // CC-A (auditoría 2026-09-18, P1) — catálogo de tipos de documento del país
+  // de la org. Se suman al final de los 3 chips base del mockup (SV); si el
+  // país no tiene catálogo sembrado, el procedure cae a la lista legacy y
+  // este merge no añade nada nuevo (comportamiento visual idéntico hoy).
+  const tiposDocumento = trpc.patient.tiposDocumento.useQuery();
+  const docTipoOptions = React.useMemo(() => {
+    const base = (Object.keys(TIPO_LABEL_BASE) as Array<keyof typeof TIPO_LABEL_BASE>).map(
+      (code) => ({ code: code as DocTipoUI, label: TIPO_LABEL_BASE[code] }),
+    );
+    const extra = (tiposDocumento.data ?? [])
+      .filter((t) => !(t.code in TIPO_LABEL_BASE))
+      .map((t) => ({ code: t.code, label: t.name }));
+    return [...base, ...extra];
+  }, [tiposDocumento.data]);
+
   const [created, setCreated] = React.useState<{
     id: string;
     expediente: string | null;
@@ -329,9 +351,13 @@ export default function PreRegistroPage() {
     );
 
   // §7/CC-0008b — escaneo simulado: puebla campos (incl. tipo de sangre) y los
-  // marca como capturados.
+  // marca como capturados. CC-A: solo hay lector simulado para los 3 tipos
+  // legacy SV — un tipo de catálogo por país (ej. DPI) no tiene mock aún, el
+  // botón se deshabilita para esos casos (ver `puedeEscanear` más abajo).
+  const parserTipo = PARSER_TIPO[form.tipoDocumento];
   const onScan = () => {
-    const d = parseDocumento("", PARSER_TIPO[form.tipoDocumento]);
+    if (!parserTipo) return;
+    const d = parseDocumento("", parserTipo);
     const sexId =
       sexOptions.find((s) => s.code === SEXO_CODE[d.sexoBiologico])?.id ?? form.biologicalSexId;
     const [yyyy, mm, dd] = d.fechaNacimiento.split("-");
@@ -605,15 +631,15 @@ export default function PreRegistroPage() {
                   Tipo de documento <span className="ml-0.5 text-[#DC2626]">*</span>
                 </span>
                 <div role="radiogroup" aria-label="Tipo de documento" className="flex flex-wrap gap-[10px]">
-                  {(Object.keys(TIPO_LABEL) as DocTipoUI[]).map((t) => (
+                  {docTipoOptions.map((t) => (
                     <Chip
-                      key={t}
+                      key={t.code}
                       name="tipoDocumento"
-                      value={t}
-                      checked={form.tipoDocumento === t}
-                      onChange={() => setForm((f) => ({ ...f, tipoDocumento: t }))}
+                      value={t.code}
+                      checked={form.tipoDocumento === t.code}
+                      onChange={() => setForm((f) => ({ ...f, tipoDocumento: t.code }))}
                     >
-                      {TIPO_LABEL[t]}
+                      {t.label}
                     </Chip>
                   ))}
                 </div>
@@ -648,7 +674,12 @@ export default function PreRegistroPage() {
                 <button
                   type="button"
                   onClick={onScan}
-                  className="inline-flex items-center justify-center gap-[10px] rounded-lg border-[1.5px] border-dashed border-[#00A8B5] bg-[#E6F7F8] px-[18px] py-[14px] text-sm font-semibold text-[#018592] transition-colors hover:border-solid hover:bg-[#D6F2F4]"
+                  disabled={!parserTipo}
+                  title={parserTipo ? undefined : "Sin lector simulado para este tipo de documento — captura manual."}
+                  className={cn(
+                    "inline-flex items-center justify-center gap-[10px] rounded-lg border-[1.5px] border-dashed border-[#00A8B5] bg-[#E6F7F8] px-[18px] py-[14px] text-sm font-semibold text-[#018592] transition-colors hover:border-solid hover:bg-[#D6F2F4]",
+                    !parserTipo && "cursor-not-allowed opacity-50 hover:border-dashed hover:bg-[#E6F7F8]",
+                  )}
                 >
                   <ScanLine className="h-5 w-5" aria-hidden />
                   Escanear documento (QR / código de barras)

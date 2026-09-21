@@ -9,6 +9,7 @@ import { Label } from "@his/ui/components/label";
 import { Badge } from "@his/ui/components/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@his/ui/components/table";
 import { trpc } from "@/lib/trpc/react";
+import { formatCurrency } from "@/lib/i18n/currency";
 
 /**
  * MPI + worklist de cobro (CC-0008). Lista expedientes con cuentas pendientes de
@@ -17,8 +18,6 @@ import { trpc } from "@/lib/trpc/react";
 type Vista = "pendientes" | "cerradas";
 
 const PAGE_SIZE = 25;
-
-const money = new Intl.NumberFormat("es-SV", { style: "currency", currency: "USD" });
 
 function useDebounced<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = React.useState(value);
@@ -181,9 +180,9 @@ export default function PatientsPage() {
                       <TableCell numeric>{r.edad ?? "—"}</TableCell>
                       <TableCell numeric>
                         {vista === "pendientes" ? (
-                          <Badge variant="warning">{money.format(r.saldo)}</Badge>
+                          <Badge variant="warning">{formatCurrency(r.saldo)}</Badge>
                         ) : (
-                          <span className="tabular-nums text-muted-foreground">{money.format(r.saldo)}</span>
+                          <span className="tabular-nums text-muted-foreground">{formatCurrency(r.saldo)}</span>
                         )}
                       </TableCell>
                       <TableCell>
