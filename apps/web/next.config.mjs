@@ -168,6 +168,19 @@ const nextConfig = {
         destination: "/triage",
         permanent: true,
       },
+      // `/ece/rectificacion` (singular) duplicaba `/ece/rectificaciones` (mismo
+      // dominio NTEC Art. 41/42, mismos endpoints eceRectificacion.list/solicitar).
+      // 0 links entrantes desde sidebar/specs — auditoría R3.1 2026-09.
+      {
+        source: "/ece/rectificacion",
+        destination: "/ece/rectificaciones",
+        permanent: true,
+      },
+      {
+        source: "/ece/rectificacion/nuevo",
+        destination: "/ece/rectificaciones/nueva",
+        permanent: true,
+      },
       // Safari macOS intenta /site.webmanifest además del estándar /manifest.json.
       // Sin este alias recibe el HTML 404 y lanza "Parsing application manifest:
       // The manifest is not valid JSON data" en consola.
