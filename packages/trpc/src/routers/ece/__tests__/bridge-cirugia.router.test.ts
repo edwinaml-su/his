@@ -170,6 +170,10 @@ describe("eceBridgeCirugiaRouter", () => {
     it("2. CONFLICT si sala QX tiene overlap de horario", async () => {
       // personal OK → hayConflictoQuirofano (helper compartido, C5 P0-5)
       // retorna true.
+      // R1.2 — hayConflictoQuirofano se movió dentro de withWorkflowContext
+      // (antes de esto corría en ctx.prisma directo, pre-tx): requiere el
+      // mock de $transaction para que el callback se ejecute.
+      setupTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([PERSONAL_ROW]); // personal
       hayConflictoQuirofanoMock.mockResolvedValueOnce(true);
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
@@ -373,6 +377,8 @@ describe("eceBridgeCirugiaRouter", () => {
     };
 
     it("6. Sin salaQxId: retorna todas las cirugías del día mapeadas", async () => {
+      // R1.2 — listProgramacionDia ahora corre dentro de withWorkflowContext.
+      setupTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([mockProgramacion]);
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
       const result = await caller.listProgramacionDia({ fecha: "2026-05-20" });
@@ -386,6 +392,7 @@ describe("eceBridgeCirugiaRouter", () => {
     });
 
     it("7. Con salaQxId: usa rama filtrada y retorna misma forma", async () => {
+      setupTx(prisma);
       prisma.$queryRaw.mockResolvedValueOnce([mockProgramacion]);
       const caller = eceBridgeCirugiaRouter.createCaller(makeQxCtx(prisma));
       const result = await caller.listProgramacionDia({
@@ -402,6 +409,7 @@ describe("eceBridgeCirugiaRouter", () => {
       // orden_id (PG 42703). El test 7 mockea el SQL sin inspeccionarlo, por eso
       // no atrapaba el bug. Aquí capturamos el template del $queryRaw y verificamos
       // el JOIN real en AMBAS ramas (else y filtrada por sala).
+      setupTx(prisma);
       const sqls: string[] = [];
       prisma.$queryRaw.mockImplementation((...args: unknown[]) => {
         const strings = args[0] as TemplateStringsArray;
@@ -440,6 +448,8 @@ describe("eceBridgeCirugiaRouter", () => {
     };
 
     it("8. NOT_FOUND si orden quirúrgica no existe", async () => {
+      // R1.2 — findOrdenQx se movió dentro de withWorkflowContext.
+      setupTx(prisma);
       prisma.$queryRaw
         .mockResolvedValueOnce([PERSONAL_ROW]) // personal
         .mockResolvedValueOnce([]);            // findOrdenQx → vacío

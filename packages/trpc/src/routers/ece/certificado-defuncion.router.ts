@@ -289,131 +289,149 @@ export const eceCertDefRouter = router({
    * Filtra por establecimiento mediante JOIN con episodio_atencion.
    * Ordenados por fecha de defunción DESC.
    */
+  /**
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS): el
+   * WHERE por establecimiento vivía solo en JS. La policy
+   * `certificado_defuncion: by_episodio_estab` (ALL, vía episodio_atencion)
+   * ahora filtra de verdad bajo rol `authenticated`.
+   */
   list: readProc.input(listCertDefInput).query(async ({ ctx, input }) => {
     const ece = buildEceCtx(ctx);
     const offset = (input.page - 1) * input.pageSize;
 
-    const rows = await ctx.prisma.$queryRaw<CertDefRow[]>`
-      SELECT
-        cd.id,
-        cd.episodio_id,
-        cd.epicrisis_id,
-        ea.paciente_id,
-        ea.establecimiento_id,
-        cd.fecha_hora_defuncion,
-        cd.lugar_defuncion,
-        cd.causa_principal_cie10,
-        COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
-        cd.causa_basica_cie10,
-        cd.manera,
-        COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
-        cd.observaciones,
-        cd.estado_workflow,
-        cd.medico_firmante_id,
-        cd.firmado_en,
-        cd.validado_en,
-        cd.certificado_en,
-        cd.anulado_en,
-        cd.motivo_anulacion,
-        cd.payload_hash,
-        cd.registrado_en
-      FROM ece.certificado_defuncion cd
-      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
-      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
-        AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
-             OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
-        AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
-             OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
-        AND (${input.medicoId ?? null}::uuid IS NULL
-             OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
-        AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
-             OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
-        AND (${input.estado ?? null}::text IS NULL
-             OR cd.estado_workflow = ${input.estado ?? null}::text)
-      ORDER BY cd.fecha_hora_defuncion DESC
-      LIMIT ${input.pageSize} OFFSET ${offset}
-    `;
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
+      const rows = await tx.$queryRaw<CertDefRow[]>`
+        SELECT
+          cd.id,
+          cd.episodio_id,
+          cd.epicrisis_id,
+          ea.paciente_id,
+          ea.establecimiento_id,
+          cd.fecha_hora_defuncion,
+          cd.lugar_defuncion,
+          cd.causa_principal_cie10,
+          COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
+          cd.causa_basica_cie10,
+          cd.manera,
+          COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
+          cd.observaciones,
+          cd.estado_workflow,
+          cd.medico_firmante_id,
+          cd.firmado_en,
+          cd.validado_en,
+          cd.certificado_en,
+          cd.anulado_en,
+          cd.motivo_anulacion,
+          cd.payload_hash,
+          cd.registrado_en
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
+          AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
+               OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
+          AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
+               OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
+          AND (${input.medicoId ?? null}::uuid IS NULL
+               OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
+          AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
+               OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
+          AND (${input.estado ?? null}::text IS NULL
+               OR cd.estado_workflow = ${input.estado ?? null}::text)
+        ORDER BY cd.fecha_hora_defuncion DESC
+        LIMIT ${input.pageSize} OFFSET ${offset}
+      `;
 
-    const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
-      SELECT COUNT(*) AS total
-      FROM ece.certificado_defuncion cd
-      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
-      WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
-        AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
-             OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
-        AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
-             OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
-        AND (${input.medicoId ?? null}::uuid IS NULL
-             OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
-        AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
-             OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
-        AND (${input.estado ?? null}::text IS NULL
-             OR cd.estado_workflow = ${input.estado ?? null}::text)
-    `;
+      const [{ total }] = await tx.$queryRaw<[{ total: bigint }]>`
+        SELECT COUNT(*) AS total
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        WHERE ea.establecimiento_id = ${ece.establecimientoId}::uuid
+          AND (${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz IS NULL
+               OR cd.fecha_hora_defuncion >= ${input.fechaDesde ? input.fechaDesde.toISOString() : null}::timestamptz)
+          AND (${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz IS NULL
+               OR cd.fecha_hora_defuncion <= ${input.fechaHasta ? input.fechaHasta.toISOString() : null}::timestamptz)
+          AND (${input.medicoId ?? null}::uuid IS NULL
+               OR cd.medico_firmante_id = ${input.medicoId ?? null}::uuid)
+          AND (${input.causaPrincipalCie10 ?? null}::text IS NULL
+               OR cd.causa_principal_cie10 = ${input.causaPrincipalCie10 ?? null}::text)
+          AND (${input.estado ?? null}::text IS NULL
+               OR cd.estado_workflow = ${input.estado ?? null}::text)
+      `;
 
-    return {
-      items: rows,
-      total: Number(total),
-      page: input.page,
-      pageSize: input.pageSize,
-    };
+      return {
+        items: rows,
+        total: Number(total),
+        page: input.page,
+        pageSize: input.pageSize,
+      };
+    });
   }),
 
   /**
    * Retorna un certificado extendido con datos de paciente y episodio.
    * paciente_id / establecimiento_id se derivan del episodio vía JOIN.
+   *
+   * R1.2 — mismo hallazgo que `list`.
    */
   get: readProc.input(getCertDefInput).query(async ({ ctx, input }) => {
     const ece = buildEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<
-      (CertDefRow & {
-        paciente_nombre: string | null;
-        paciente_dui: string | null;
-        episodio_tipo: string | null;
-      })[]
-    >`
-      SELECT
-        cd.id,
-        cd.episodio_id,
-        cd.epicrisis_id,
-        ea.paciente_id,
-        ea.establecimiento_id,
-        cd.fecha_hora_defuncion,
-        cd.lugar_defuncion,
-        cd.causa_principal_cie10,
-        COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
-        cd.causa_basica_cie10,
-        cd.manera,
-        COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
-        cd.observaciones,
-        cd.estado_workflow,
-        cd.medico_firmante_id,
-        cd.firmado_en,
-        cd.validado_en,
-        cd.certificado_en,
-        cd.anulado_en,
-        cd.motivo_anulacion,
-        cd.payload_hash,
-        cd.registrado_en,
-        COALESCE(p."firstName" || ' ' || p."firstLastName", NULL) AS paciente_nombre,
-        p."nationalId"                                             AS paciente_dui,
-        ea.tipo                                                    AS episodio_tipo
-      FROM ece.certificado_defuncion cd
-      JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
-      LEFT JOIN public."Patient"   p  ON p.id = ea.paciente_id
-      WHERE cd.id = ${input.id}::uuid
-        AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
-      LIMIT 1
-    `;
+    return withWorkflowContext(ctx.prisma, ece, async (tx) => {
+      // LEFT JOIN a public."Patient": bajo contexto ECE puro (sin
+      // app.current_org_id) su policy de tenant puede no aplicar y la fila
+      // simplemente no matchea — paciente_nombre/paciente_dui salen NULL
+      // (igual que certificacion.router.ts listCola). Degradación cosmética
+      // aceptada, no hallazgo de seguridad: la fila principal (cd/ea) sigue
+      // protegida por `by_episodio_estab`.
+      const rows = await tx.$queryRaw<
+        (CertDefRow & {
+          paciente_nombre: string | null;
+          paciente_dui: string | null;
+          episodio_tipo: string | null;
+        })[]
+      >`
+        SELECT
+          cd.id,
+          cd.episodio_id,
+          cd.epicrisis_id,
+          ea.paciente_id,
+          ea.establecimiento_id,
+          cd.fecha_hora_defuncion,
+          cd.lugar_defuncion,
+          cd.causa_principal_cie10,
+          COALESCE(cd.causas_intermedias, '[]'::jsonb) AS causas_intermedias_cie10,
+          cd.causa_basica_cie10,
+          cd.manera,
+          COALESCE(cd.autopsia_realizada, false) AS autopsia_realizada,
+          cd.observaciones,
+          cd.estado_workflow,
+          cd.medico_firmante_id,
+          cd.firmado_en,
+          cd.validado_en,
+          cd.certificado_en,
+          cd.anulado_en,
+          cd.motivo_anulacion,
+          cd.payload_hash,
+          cd.registrado_en,
+          COALESCE(p."firstName" || ' ' || p."firstLastName", NULL) AS paciente_nombre,
+          p."nationalId"                                             AS paciente_dui,
+          ea.tipo                                                    AS episodio_tipo
+        FROM ece.certificado_defuncion cd
+        JOIN ece.episodio_atencion ea ON ea.id = cd.episodio_id
+        LEFT JOIN public."Patient"   p  ON p.id = ea.paciente_id
+        WHERE cd.id = ${input.id}::uuid
+          AND ea.establecimiento_id = ${ece.establecimientoId}::uuid
+        LIMIT 1
+      `;
 
-    if (!rows[0]) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: `Certificado de defunción no encontrado: ${input.id}`,
-      });
-    }
-    return rows[0];
+      if (!rows[0]) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Certificado de defunción no encontrado: ${input.id}`,
+        });
+      }
+      return rows[0];
+    });
   }),
 
   /**
