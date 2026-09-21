@@ -60,6 +60,9 @@ vi.mock("@/lib/trpc/react", () => ({
         }),
       },
     },
+    useUtils: () => ({
+      eceHistoriaClinica: { get: { invalidate: vi.fn() } },
+    }),
   },
 }));
 
@@ -212,6 +215,8 @@ describe("EditarHistoriaClinicaAmbulatoriaPage", () => {
     });
 
     expect(screen.getByText(/seleccione destino/i)).toBeInTheDocument();
+    // Hint que avisa que el valor legacy se conserva salvo reselección
+    expect(screen.getByText(/'ALTA' \(catálogo anterior\)/)).toBeInTheDocument();
 
     submitForm();
 

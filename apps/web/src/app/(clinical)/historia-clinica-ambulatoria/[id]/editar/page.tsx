@@ -138,6 +138,8 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
   const [dxInput, setDxInput] = React.useState<DiagnosticoCie11>(INITIAL_DX);
   const [clientError, setClientError] = React.useState<string | null>(null);
   const [hydrated, setHydrated] = React.useState(false);
+  // Valor de disposicion pre-CC-0001 que ya no existe en DESTINO_OPTIONS.
+  const [destinoLegacy, setDestinoLegacy] = React.useState<string | null>(null);
   // Claves del jsonb que el formulario no edita pero `update` sobreescribiría.
   const extrasRef = React.useRef<{
     antecedentes: Record<string, unknown>;
@@ -145,9 +147,13 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
   }>({ antecedentes: {} });
 
   const query = trpc.eceHistoriaClinica.get.useQuery({ id: params.id });
+  const utils = trpc.useUtils();
 
   const update = trpc.eceHistoriaClinica.update.useMutation({
     onSuccess: () => {
+      // Sin invalidate, el detalle (misma query key) mostraría un flash de
+      // datos pre-edición hasta el refetch-on-mount.
+      void utils.eceHistoriaClinica.get.invalidate({ id: params.id });
       router.push(`/historia-clinica-ambulatoria/${params.id}`);
     },
   });
@@ -164,6 +170,8 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
       signosVitales: examenFisico.signosVitales,
     };
     const sistemas = examenFisico.sistemas ?? [];
+    const destinoValido = (DESTINO_OPTIONS as readonly string[]).includes(hc.destino ?? "");
+    setDestinoLegacy(!destinoValido && hc.destino ? hc.destino : null);
     setForm({
       motivoConsulta: hc.motivoConsulta ?? "",
       anamnesis: hc.enfermedadActual ?? "",
@@ -180,10 +188,8 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
       planTerapeutico: hc.planManejo ?? "",
       // Un valor legacy fuera del catálogo (columna disposicion pre-CC-0001)
       // no pasaría destinoEnum al guardar; se hidrata vacío y el médico
-      // reselecciona del catálogo vigente.
-      destino: (DESTINO_OPTIONS as readonly string[]).includes(hc.destino ?? "")
-        ? (hc.destino as string)
-        : "",
+      // reselecciona del catálogo vigente (hint visible bajo el select).
+      destino: destinoValido ? (hc.destino as string) : "",
     });
     setDiagnosticos(hc.diagnosticos ?? []);
     setHydrated(true);
@@ -416,6 +422,9 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
                 id="examenFisico"
                 name="examenFisico"
                 rows={5}
+                // examenFisicoSchema limita hallazgo a 2000 chars; sin esto,
+                // un borrador multi-sistema aplanado >2000 sería inguardable.
+                maxLength={2000}
                 placeholder="Cardiovascular, respiratorio, digestivo, neurológico…"
                 value={form.examenFisico}
                 onChange={(e) => updateField("examenFisico", e.target.value)}
@@ -577,6 +586,12 @@ export default function EditarHistoriaClinicaAmbulatoriaPage() {
                   ))}
                 </SelectContent>
               </Select>
+              {destinoLegacy && !form.destino && (
+                <FormHint>
+                  Destino registrado: &apos;{destinoLegacy}&apos; (catálogo anterior).
+                  Se conservará tal cual salvo que seleccione un valor vigente.
+                </FormHint>
+              )}
             </FormField>
           </CardContent>
         </Card>
