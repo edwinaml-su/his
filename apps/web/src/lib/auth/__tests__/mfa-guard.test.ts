@@ -100,4 +100,39 @@ describe("assertMfaOrRedirect — OWASP A07:2025", () => {
 
     consoleSpy.mockRestore();
   });
+
+  // R4.5 — switch de organización (Organization.mfaStaffRequired, SQL 263).
+  describe("switch de organización (R4.5)", () => {
+    it("orgMfaStaffRequired omitido (default false) sin env vars → no-op, comportamiento actual exacto", async () => {
+      await assertMfaOrRedirect(USER_ID, ["PHYSICIAN"]);
+
+      expect(mockRedirect).not.toHaveBeenCalled();
+      expect(mockCookieGet).not.toHaveBeenCalled();
+    });
+
+    it("orgMfaStaffRequired=false explícito sin env vars → no-op, igual que antes", async () => {
+      await assertMfaOrRedirect(USER_ID, ["PHYSICIAN"], false);
+
+      expect(mockRedirect).not.toHaveBeenCalled();
+      expect(mockCookieGet).not.toHaveBeenCalled();
+    });
+
+    it("orgMfaStaffRequired=true sin cookie → redirige a /mfa aunque el rol no esté en MFA_REQUIRED_ROLE_CODES", async () => {
+      vi.stubEnv("MFA_SESSION_SECRET", SECRET);
+      mockCookieGet.mockReturnValue(undefined);
+
+      await assertMfaOrRedirect(USER_ID, ["NURSE"], true);
+
+      expect(mockRedirect).toHaveBeenCalledWith("/mfa");
+    });
+
+    it("orgMfaStaffRequired=true con cookie válida → no redirige", async () => {
+      vi.stubEnv("MFA_SESSION_SECRET", SECRET);
+      mockCookieGet.mockReturnValue({ value: issueMfaCookie(USER_ID, SECRET) });
+
+      await assertMfaOrRedirect(USER_ID, ["NURSE"], true);
+
+      expect(mockRedirect).not.toHaveBeenCalled();
+    });
+  });
 });

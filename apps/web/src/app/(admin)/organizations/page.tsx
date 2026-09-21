@@ -24,12 +24,14 @@ import { OrganizationRow, type OrgRowData } from "./organization-row";
 import { OrganizationCurrencyDialog } from "./organization-currency-dialog";
 import { OrganizationGs1PrefixDialog } from "./organization-gs1-prefix-dialog";
 import { OrganizationFiscalDialog } from "./organization-fiscal-dialog";
+import { OrganizationMfaDialog } from "./organization-mfa-dialog";
 
 export default function OrganizationsPage() {
   const query = trpc.organization.listAll.useQuery();
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [gs1DialogOpen, setGs1DialogOpen] = React.useState(false);
   const [fiscalDialogOpen, setFiscalDialogOpen] = React.useState(false);
+  const [mfaDialogOpen, setMfaDialogOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<OrgRowData | null>(null);
 
   function handleEdit(org: OrgRowData) {
@@ -45,6 +47,11 @@ export default function OrganizationsPage() {
   function handleEditFiscal(org: OrgRowData) {
     setSelected(org);
     setFiscalDialogOpen(true);
+  }
+
+  function handleEditMfa(org: OrgRowData) {
+    setSelected(org);
+    setMfaDialogOpen(true);
   }
 
   return (
@@ -110,6 +117,7 @@ export default function OrganizationsPage() {
                     onEditCurrency={handleEdit}
                     onEditGs1Prefix={handleEditGs1Prefix}
                     onEditFiscal={handleEditFiscal}
+                    onEditMfa={handleEditMfa}
                   />
                 ))}
               </TableBody>
@@ -133,6 +141,12 @@ export default function OrganizationsPage() {
       <OrganizationFiscalDialog
         open={fiscalDialogOpen}
         onOpenChange={setFiscalDialogOpen}
+        organization={selected}
+      />
+
+      <OrganizationMfaDialog
+        open={mfaDialogOpen}
+        onOpenChange={setMfaDialogOpen}
         organization={selected}
       />
     </div>

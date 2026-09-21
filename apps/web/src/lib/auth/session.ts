@@ -190,6 +190,8 @@ export const getTenantContext = cache(async (): Promise<TenantContext | null> =>
     assignedServiceUnitIds,
     assignedServiceUnitCodes,
     isCrossServiceRole,
+    // R4.5 — switch de MFA staff de la org activa (SQL 263, default false).
+    mfaStaffRequired: chosen.organization.mfaStaffRequired,
     breakGlass: breakGlassSession !== null,
     ...(breakGlassSession ? { breakGlassSession } : {}),
   };

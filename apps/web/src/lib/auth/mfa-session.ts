@@ -23,6 +23,15 @@
  * idéntico al de antes. Si se configuran roles pero falta el secreto, la
  * política se considera MAL CONFIGURADA y se deniega (fail-closed): quien
  * pidió MFA debe obtener denegación, no un bypass silencioso.
+ *
+ * R4.5 — switch por organización (`Organization.mfaStaffRequired`, SQL 263):
+ * además del CSV de roles (global, vía env), cada organización puede exigir
+ * MFA a TODO su staff con un toggle en runtime desde `/organizations`
+ * (default `false`). Es un OR sobre la política de roles: si la org lo tiene
+ * apagado (el caso por defecto y el de producción hoy), el comportamiento es
+ * BIT A BIT el mismo que antes de este cambio. Sigue exigiendo
+ * `MFA_SESSION_SECRET` para firmar la cookie — sin secreto, fail-closed igual
+ * que la política por roles.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
@@ -31,33 +40,42 @@ export const MFA_TTL_SECONDS = 12 * 60 * 60;
 
 export type MfaPolicy =
   | { mode: "off" }
-  | { mode: "enforced"; roleCodes: string[]; secret: string }
+  | { mode: "enforced"; roleCodes: string[]; secret: string; orgRequired?: boolean }
   | { mode: "misconfigured"; reason: string };
 
-/** Lee la política desde el entorno. Sin variables → apagada. */
-export function readMfaPolicy(env: NodeJS.ProcessEnv = process.env): MfaPolicy {
+/**
+ * Lee la política combinando env vars (CSV de roles global) + el switch de
+ * organización (`orgMfaStaffRequired`, resuelto por el caller desde
+ * `Organization.mfaStaffRequired` de la org activa — este módulo no toca BD).
+ * Ambas fuentes desactivadas (el default) → apagada, igual que antes de R4.5.
+ */
+export function readMfaPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+  orgMfaStaffRequired = false,
+): MfaPolicy {
   const roleCodes = (env.MFA_REQUIRED_ROLE_CODES ?? "")
     .split(",")
     .map((r) => r.trim().toUpperCase())
     .filter(Boolean);
 
-  if (roleCodes.length === 0) return { mode: "off" };
+  if (roleCodes.length === 0 && !orgMfaStaffRequired) return { mode: "off" };
 
   const secret = env.MFA_SESSION_SECRET ?? "";
   if (secret.length < 32) {
     return {
       mode: "misconfigured",
       reason:
-        "MFA_REQUIRED_ROLE_CODES está configurada pero MFA_SESSION_SECRET falta o tiene menos de 32 caracteres.",
+        "Hay una política de MFA activa (roles por env o switch de organización) pero MFA_SESSION_SECRET falta o tiene menos de 32 caracteres.",
     };
   }
-  return { mode: "enforced", roleCodes, secret };
+  return { mode: "enforced", roleCodes, secret, orgRequired: orgMfaStaffRequired };
 }
 
 /** ¿Alguno de los roles del usuario exige segundo factor? */
 export function mfaRequiredForRoles(roleCodes: string[], policy: MfaPolicy): boolean {
   if (policy.mode === "off") return false;
   if (policy.mode === "misconfigured") return true; // fail-closed
+  if (policy.orgRequired === true) return true; // switch de organización: todo el staff
   return roleCodes.some((r) => policy.roleCodes.includes(r.toUpperCase()));
 }
 

@@ -13,9 +13,10 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   const tenant = await getTenantContext();
-  // OWASP A07:2025 — segundo factor para roles privilegiados (no-op si la
-  // política MFA_REQUIRED_ROLE_CODES está vacía).
-  await assertMfaOrRedirect(user.id, tenant?.roleCodes ?? []);
+  // OWASP A07:2025 — segundo factor para roles privilegiados o, desde R4.5,
+  // para toda la org si Organization.mfaStaffRequired está prendido. No-op
+  // si ambas fuentes están apagadas (default).
+  await assertMfaOrRedirect(user.id, tenant?.roleCodes ?? [], tenant?.mfaStaffRequired ?? false);
 
   return (
     <AppShell
