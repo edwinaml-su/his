@@ -36,10 +36,10 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
   test("1. ENF navega al mapa de camas y verifica el estado inicial", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/camas");
+    const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
-    await expect(page).toHaveURL(/\/ece\/camas/);
+    await expect(page).toHaveURL(/\/beds/);
 
     // El mapa debe mostrar al menos un bloque/tarjeta de cama
     const camas = page.getByTestId("cama-card")
@@ -86,7 +86,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
   test("2. ENF selecciona cama libre y abre modal de asignación", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/camas");
+    const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
     // Localizar primera cama libre en el mapa
@@ -146,7 +146,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
   test("3. ENF busca paciente con episodio activo y asigna a cama", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/camas");
+    const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
     // Abrir modal de asignación directamente si la ruta lo permite
@@ -224,7 +224,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
   test("4. Verifica cama pasa a estado ocupada con nombre del paciente", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/camas");
+    const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
     // Si capturamos el número de cama, verificar su estado
@@ -286,7 +286,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
   test("5. ENF libera cama y verifica estado limpieza", async ({ page }) => {
     await login(page, "nurse");
 
-    const ok = await probeRoute(page, "/ece/camas");
+    const ok = await probeRoute(page, "/beds");
     if (!ok) return;
 
     // Localizar la cama ocupada para liberarla
@@ -347,7 +347,7 @@ test.describe.serial("ECE — Mapa de camas: asignación y liberación", () => {
     // -----------------------------------------------------------------------
     // Recargar mapa para estado actualizado
     await page.reload();
-    await expect(page).toHaveURL(/\/ece\/camas/);
+    await expect(page).toHaveURL(/\/beds/);
 
     const camaEnLimpieza = camaNro
       ? page
