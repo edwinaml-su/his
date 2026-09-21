@@ -48,7 +48,7 @@ jobs:
       # el overhead en cada push normal a main, que sigue siendo amd64-only).
       - name: Set up QEMU (para build arm64 emulado)
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
 
