@@ -624,7 +624,7 @@ export const firmaElectronicaRouter = router({
         const decision = await evaluarAbac(ctx.prisma, ctx.tenant, {
           recurso: "signature",
           accion: "sign",
-          atributos: atributosDesdeContexto(ctx.tenant),
+          atributos: await atributosDesdeContexto(ctx.prisma, ctx.tenant),
         });
         if (!decision.allowed) {
           throw new TRPCError({

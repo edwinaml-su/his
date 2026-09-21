@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@his/ui/components/dialog";
 import { trpc } from "@/lib/trpc/react";
+import { formatDate } from "@/lib/i18n/org-locale";
 import type { ImagingSolicitudEstado } from "@his/contracts";
 import { PRIO_SEGMENT, PRIO_VALUE_TO_LABEL } from "./field-rule-meta";
 
@@ -42,7 +43,7 @@ const ESTADO_VARIANT: Record<ImagingSolicitudEstado, BadgeProps["variant"]> = {
   anulado: "destructive",
 };
 
-const dateFmt = new Intl.DateTimeFormat("es-SV", { day: "2-digit", month: "2-digit", year: "numeric" });
+const DATE_FMT_OPTIONS: Intl.DateTimeFormatOptions = { day: "2-digit", month: "2-digit", year: "numeric" };
 
 /** CC-0041 RF-04 — pill de prioridad con el patrón de colores obligatorio. */
 function PrioPill({ prioridad }: { prioridad: string }) {
@@ -99,7 +100,7 @@ export function SolicitudesListado({
               {rows.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-mono text-xs">{r.folio}</TableCell>
-                  <TableCell>{dateFmt.format(new Date(r.fecha))}</TableCell>
+                  <TableCell>{formatDate(r.fecha, DATE_FMT_OPTIONS)}</TableCell>
                   <TableCell>{r.categorias}</TableCell>
                   <TableCell>{r.nPrestaciones}</TableCell>
                   <TableCell>
