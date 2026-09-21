@@ -6,10 +6,8 @@
  * - Carga HC por ID vía `eceHistoriaClinica.get`.
  * - Muestra todas las secciones clínicas en modo lectura.
  * - Botón "Firmar" disponible solo en estado 'borrador'.
- * - Modal PIN: envía PIN → router verifica contra ece.firma_electronica.
- *
- * TODO(HC-002): usar tipo nativo cuando el router esté mergeado.
- * Cast `(trpc as any)` es temporal hasta disponibilidad del router.
+ * - Modal PIN: envía PIN en claro (TLS) → el router resuelve+valida el
+ *   firmaId contra ece.firma_electronica (argon2id).
  */
 
 import * as React from "react";
@@ -32,7 +30,24 @@ import {
 } from "@his/ui/components/dialog";
 import { Input } from "@his/ui/components/input";
 import { Label } from "@his/ui/components/label";
+import { DESTINO_LABELS, type Destino } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
+
+/**
+ * `get` devuelve `antecedentes`/`examenFisico` como `unknown` (columnas jsonb
+ * sin narrowing en el output schema — ver historiaClinicaGetOutput). La forma
+ * real la fija `antecedentesSchema`/`examenFisicoSchema` (@his/contracts) al
+ * escribir; estas vistas locales narrowan solo los campos que esta página lee.
+ */
+interface AntecedentesView {
+  personales?: string;
+  familiares?: string;
+  obstetricos?: string;
+  alergias?: string;
+}
+interface ExamenFisicoView {
+  sistemas?: Array<{ sistema: string; hallazgo: string }>;
+}
 
 // ── Constantes ────────────────────────────────────────────────────────────────
 
@@ -42,11 +57,8 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
 });
 
 const TIPO_LABELS: Record<string, string> = {
-  ingreso: "Ingreso hospitalario",
-  control: "Control",
-  urgencia: "Urgencia",
-  ambulatoria: "Consulta ambulatoria",
-  interconsulta: "Interconsulta",
+  primera_vez: "Primera vez",
+  subsecuente: "Subsecuente",
 };
 
 const ESTADO_COLORS: Record<string, string> = {
@@ -58,41 +70,6 @@ const ESTADO_COLORS: Record<string, string> = {
 
 // ── Tipos de respuesta esperada ───────────────────────────────────────────────
 
-interface DxCie10 {
-  code: string;
-  description: string;
-  tipo: string;
-}
-
-interface HcAmbulatoria {
-  id: string;
-  tipoConsulta: string;
-  motivoConsulta: string | null;
-  enfermedadActual: string | null;
-  antecedentes: {
-    personales?: string;
-    familiares?: string;
-    ginecologicos?: string;
-    sociales?: string;
-    alergias?: string;
-  } | null;
-  examenFisico: {
-    sistemas?: Array<{ sistema: string; hallazgo: string }>;
-  } | null;
-  diagnosticos: DxCie10[] | null;
-  planManejo: string | null;
-  disposicion: string | null;
-  estadoRegistro: string;
-  registradoEn: string | Date;
-  firmadoEn: string | Date | null;
-  validadoEn: string | Date | null;
-  patient: {
-    firstName: string;
-    lastName: string;
-    mrn?: string | null;
-  } | null;
-}
-
 // ── Componente ────────────────────────────────────────────────────────────────
 
 export default function HistoriaClinicaAmbulatoriaDetailPage() {
@@ -103,42 +80,28 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
   const [pin, setPin] = React.useState("");
   const [pinError, setPinError] = React.useState<string | null>(null);
 
-  // TODO(HC-002): reemplazar cast cuando el router esté disponible.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const query = (trpc as any).eceHistoriaClinica.get.useQuery(
-    { id: params.id },
-  ) as {
-    isLoading: boolean;
-    error: { message: string } | null;
-    data: HcAmbulatoria | undefined;
-    refetch: () => void;
-  };
+  const query = trpc.eceHistoriaClinica.get.useQuery({ id: params.id });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const firmar = (trpc as any).eceHistoriaClinica.firmar.useMutation({
+  const firmar = trpc.eceHistoriaClinica.firmar.useMutation({
     onSuccess: () => {
       setPinOpen(false);
       setPin("");
       setPinError(null);
       void query.refetch();
     },
-    onError: (err: { message: string }) => {
+    onError: (err) => {
       setPinError(err.message);
     },
-  }) as {
-    mutate: (input: Record<string, unknown>) => void;
-    isPending: boolean;
-  };
+  });
 
   function handleFirmar(e: React.FormEvent) {
     e.preventDefault();
-    if (pin.trim().length < 6) {
-      setPinError("El PIN debe tener al menos 6 caracteres.");
+    if (!/^\d{6,8}$/.test(pin.trim())) {
+      setPinError("El PIN debe tener entre 6 y 8 dígitos.");
       return;
     }
     setPinError(null);
-    // PIN se envía como observación; el router resuelve la firma contra ece.firma_electronica.
-    firmar.mutate({ id: params.id, observacion: `pin:${pin.trim()}` });
+    firmar.mutate({ id: params.id, pin: pin.trim() });
   }
 
   function handlePinClose() {
@@ -171,6 +134,8 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
   const hc = query.data;
   const esBorrador = hc.estadoRegistro === "borrador";
   const estadoClass = ESTADO_COLORS[hc.estadoRegistro] ?? "";
+  const antecedentes = hc.antecedentes as AntecedentesView | null;
+  const examenFisico = hc.examenFisico as ExamenFisicoView | null;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -232,50 +197,44 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
                 <p className="mt-0.5 whitespace-pre-wrap">{hc.enfermedadActual}</p>
               </div>
             )}
-            {hc.disposicion && (
+            {hc.destino && (
               <div>
-                <p className="font-medium text-muted-foreground">Disposición</p>
-                <p className="mt-0.5">{hc.disposicion}</p>
+                <p className="font-medium text-muted-foreground">Destino</p>
+                <p className="mt-0.5">{DESTINO_LABELS[hc.destino as Destino] ?? hc.destino}</p>
               </div>
             )}
           </CardContent>
         </Card>
 
         {/* Antecedentes */}
-        {hc.antecedentes && (
+        {antecedentes && (
           <Card>
             <CardHeader>
               <CardTitle>Antecedentes</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {hc.antecedentes.personales && (
+              {antecedentes.personales && (
                 <div>
                   <p className="font-medium text-muted-foreground">Personales</p>
-                  <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes.personales}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap">{antecedentes.personales}</p>
                 </div>
               )}
-              {hc.antecedentes.familiares && (
+              {antecedentes.familiares && (
                 <div>
                   <p className="font-medium text-muted-foreground">Familiares</p>
-                  <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes.familiares}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap">{antecedentes.familiares}</p>
                 </div>
               )}
-              {hc.antecedentes.ginecologicos && (
+              {antecedentes.obstetricos && (
                 <div>
                   <p className="font-medium text-muted-foreground">Ginecológicos / obstétricos</p>
-                  <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes.ginecologicos}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap">{antecedentes.obstetricos}</p>
                 </div>
               )}
-              {hc.antecedentes.sociales && (
-                <div>
-                  <p className="font-medium text-muted-foreground">Sociales</p>
-                  <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes.sociales}</p>
-                </div>
-              )}
-              {hc.antecedentes.alergias && (
+              {antecedentes.alergias && (
                 <div>
                   <p className="font-medium text-muted-foreground">Alergias</p>
-                  <p className="mt-0.5 whitespace-pre-wrap">{hc.antecedentes.alergias}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap">{antecedentes.alergias}</p>
                 </div>
               )}
             </CardContent>
@@ -283,14 +242,14 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
         )}
 
         {/* Examen físico */}
-        {hc.examenFisico?.sistemas?.length ? (
+        {examenFisico?.sistemas?.length ? (
           <Card>
             <CardHeader>
               <CardTitle>Examen físico</CardTitle>
             </CardHeader>
             <CardContent className="text-sm">
               <ul className="space-y-2" aria-label="Hallazgos por sistema">
-                {hc.examenFisico.sistemas.map((s, i) => (
+                {examenFisico.sistemas.map((s, i) => (
                   <li key={i}>
                     <span className="font-medium">{s.sistema}: </span>
                     <span>{s.hallazgo}</span>
@@ -301,18 +260,18 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
           </Card>
         ) : null}
 
-        {/* Diagnósticos CIE-10 */}
+        {/* Diagnósticos CIE-11 */}
         <Card>
           <CardHeader>
-            <CardTitle>Diagnósticos (CIE-10)</CardTitle>
+            <CardTitle>Diagnósticos (CIE-11)</CardTitle>
           </CardHeader>
           <CardContent>
             {hc.diagnosticos && hc.diagnosticos.length > 0 ? (
-              <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-10">
+              <ul className="space-y-1 text-sm" aria-label="Lista de diagnósticos CIE-11">
                 {hc.diagnosticos.map((dx, i) => (
                   <li key={i} className="flex items-center gap-2">
-                    <span className="font-mono text-xs text-muted-foreground">{dx.code}</span>
-                    <span>{dx.description}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{dx.codigo}</span>
+                    <span>{dx.descripcion}</span>
                     <span className="text-xs text-muted-foreground">({dx.tipo})</span>
                   </li>
                 ))}

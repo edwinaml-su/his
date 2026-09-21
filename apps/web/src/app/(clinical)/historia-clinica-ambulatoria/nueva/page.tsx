@@ -4,12 +4,12 @@
  * Historia Clínica Ambulatoria — Formulario de creación.
  *
  * Campos NTEC Art. 7 para consulta ambulatoria:
- *   pacienteId, motivoConsulta, anamnesis, antecedentes
+ *   episodioId, motivoConsulta, anamnesis, antecedentes
  *   (familiares/personales/ginecológicos), examenFisico,
  *   diagnosticos CIE-10, planTerapeutico.
  *
- * TODO(HC-002): usar tipo nativo cuando el router `eceHistoriaClinica`
- * esté mergeado. Cast `(trpc as any)` es temporal.
+ * El router `eceHistoriaClinica.create` es episode-centric: requiere
+ * episodioId (no pacienteId) — ver `packages/trpc/src/routers/ece/historia-clinica.router.ts`.
  */
 
 import * as React from "react";
@@ -31,19 +31,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@his/ui/components/select";
+import {
+  CIE11_CODE_REGEX,
+  DESTINO_LABELS,
+  DESTINO_OPTIONS,
+  TIPO_DIAGNOSTICO_LABELS,
+  TIPO_DIAGNOSTICO,
+  tieneComplementario,
+} from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
-
-// ── Constantes ────────────────────────────────────────────────────────────────
-
-const DISPOSICION_OPTIONS = [
-  { value: "ALTA", label: "Alta" },
-  { value: "INTERNAMIENTO", label: "Internamiento" },
-  { value: "REFERENCIA", label: "Referencia" },
-  { value: "OBSERVACION", label: "Observación" },
-] as const;
-
-/** Regex CIE-10: letra mayúscula + 2 dígitos + subcodigo opcional */
-const CIE10_REGEX = /^[A-Z]\d{2}(\.\d+)?$/;
 
 const TEXTAREA_CLASS =
   "flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background " +
@@ -52,14 +48,14 @@ const TEXTAREA_CLASS =
 
 // ── Tipos locales ─────────────────────────────────────────────────────────────
 
-interface DiagnosticoCie10 {
-  code: string;
-  description: string;
-  tipo: "principal" | "secundario";
+interface DiagnosticoCie11 {
+  codigo: string;
+  descripcion: string;
+  tipo: (typeof TIPO_DIAGNOSTICO)[number];
 }
 
 interface FormState {
-  pacienteId: string;
+  episodioId: string;
   motivoConsulta: string;
   anamnesis: string;
   antecedentesPersonales: string;
@@ -67,11 +63,11 @@ interface FormState {
   antecedentesGineco: string;
   examenFisico: string;
   planTerapeutico: string;
-  disposicion: string;
+  destino: string;
 }
 
 const INITIAL: FormState = {
-  pacienteId: "",
+  episodioId: "",
   motivoConsulta: "",
   anamnesis: "",
   antecedentesPersonales: "",
@@ -79,20 +75,27 @@ const INITIAL: FormState = {
   antecedentesGineco: "",
   examenFisico: "",
   planTerapeutico: "",
-  disposicion: "",
+  destino: "",
 };
 
-const INITIAL_DX: DiagnosticoCie10 = { code: "", description: "", tipo: "secundario" };
+const INITIAL_DX: DiagnosticoCie11 = { codigo: "", descripcion: "", tipo: "COMPLEMENTARIO" };
 
 // ── Validación inline ─────────────────────────────────────────────────────────
 
-function validate(form: FormState, dx: DiagnosticoCie10[]): string | null {
-  if (!form.pacienteId.trim()) return "El ID del paciente es requerido.";
+function validate(form: FormState, dx: DiagnosticoCie11[]): string | null {
+  if (!form.episodioId.trim()) return "El ID del episodio es requerido.";
   if (!form.motivoConsulta.trim()) return "El motivo de consulta es requerido.";
   for (const d of dx) {
-    if (!CIE10_REGEX.test(d.code)) {
-      return `Código CIE-10 inválido: '${d.code}'. Formato: letra + 2 dígitos (ej. J00, I10.0).`;
+    if (!CIE11_CODE_REGEX.test(d.codigo)) {
+      return `Código CIE-11 inválido: '${d.codigo}'.`;
     }
+  }
+  // P1-2 (revisión R3A): firmar exige RN-03 (≥1 diagnóstico Complementario;
+  // ver historia-clinica.router.ts) y no existe página de edición — un
+  // borrador creado sin este diagnóstico queda infirmable para siempre.
+  // Se bloquea aquí, en creación, con el mismo mensaje que usa el server.
+  if (!tieneComplementario(dx)) {
+    return "RN-03: se requiere al menos un diagnóstico de tipo Complementario antes de firmar.";
   }
   return null;
 }
@@ -102,35 +105,29 @@ function validate(form: FormState, dx: DiagnosticoCie10[]): string | null {
 export default function NuevaHistoriaClinicaAmbulatoriaPage() {
   const router = useRouter();
   const [form, setForm] = React.useState<FormState>(INITIAL);
-  const [diagnosticos, setDiagnosticos] = React.useState<DiagnosticoCie10[]>([]);
-  const [dxInput, setDxInput] = React.useState<DiagnosticoCie10>(INITIAL_DX);
+  const [diagnosticos, setDiagnosticos] = React.useState<DiagnosticoCie11[]>([]);
+  const [dxInput, setDxInput] = React.useState<DiagnosticoCie11>(INITIAL_DX);
   const [clientError, setClientError] = React.useState<string | null>(null);
 
-  // TODO(HC-002): reemplazar cast cuando el router esté disponible.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const create = (trpc as any).eceHistoriaClinica.create.useMutation({
+  const create = trpc.eceHistoriaClinica.create.useMutation({
     onSuccess: () => {
       router.push("/historia-clinica-ambulatoria");
     },
-  }) as {
-    mutate: (input: Record<string, unknown>) => void;
-    isPending: boolean;
-    error: { message: string } | null;
-  };
+  });
 
   function updateField<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
   function addDiagnostico() {
-    const code = dxInput.code.trim().toUpperCase();
-    if (!code || !dxInput.description.trim()) return;
-    if (!CIE10_REGEX.test(code)) {
-      setClientError(`Código CIE-10 inválido: '${code}'. Ejemplo: J00, I10.0`);
+    const codigo = dxInput.codigo.trim().toUpperCase();
+    if (!codigo || !dxInput.descripcion.trim()) return;
+    if (!CIE11_CODE_REGEX.test(codigo)) {
+      setClientError(`Código CIE-11 inválido: '${codigo}'.`);
       return;
     }
     setClientError(null);
-    setDiagnosticos((prev) => [...prev, { ...dxInput, code }]);
+    setDiagnosticos((prev) => [...prev, { ...dxInput, codigo }]);
     setDxInput(INITIAL_DX);
   }
 
@@ -152,14 +149,14 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
         ? {
             personales: form.antecedentesPersonales.trim() || undefined,
             familiares: form.antecedentesFamiliares.trim() || undefined,
-            ginecologicos: form.antecedentesGineco.trim() || undefined,
+            obstetricos: form.antecedentesGineco.trim() || undefined,
           }
         : undefined;
 
     create.mutate({
-      pacienteId: form.pacienteId.trim(),
-      // tipoConsulta fijo en "ambulatoria" para este módulo (NTEC Art. 7)
-      tipoConsulta: "ambulatoria",
+      episodioId: form.episodioId.trim(),
+      // tipoConsulta se omite: el server lo deriva ('primera_vez'/'subsecuente'
+      // según historial del paciente) — ver eceHistoriaClinica.create.
       motivoConsulta: form.motivoConsulta.trim(),
       // anamnesis mapea a enfermedadActual en el schema de BD
       enfermedadActual: form.anamnesis.trim() || undefined,
@@ -170,9 +167,7 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
       diagnosticos: diagnosticos.length > 0 ? diagnosticos : undefined,
       // planTerapeutico mapea a planManejo en el schema de BD
       planManejo: form.planTerapeutico.trim() || undefined,
-      disposicion:
-        (form.disposicion as "ALTA" | "INTERNAMIENTO" | "REFERENCIA" | "OBSERVACION") ||
-        undefined,
+      destino: (form.destino as (typeof DESTINO_OPTIONS)[number]) || undefined,
     });
   }
 
@@ -197,21 +192,21 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <FormField>
-              <Label htmlFor="pacienteId">
-                ID del paciente{" "}
+              <Label htmlFor="episodioId">
+                ID del episodio{" "}
                 <span aria-hidden="true" className="text-destructive">*</span>
               </Label>
               <Input
-                id="pacienteId"
-                name="pacienteId"
+                id="episodioId"
+                name="episodioId"
                 required
                 aria-required="true"
-                placeholder="UUID del paciente"
-                value={form.pacienteId}
-                onChange={(e) => updateField("pacienteId", e.target.value)}
+                placeholder="UUID del episodio de atención"
+                value={form.episodioId}
+                onChange={(e) => updateField("episodioId", e.target.value)}
                 disabled={isSubmitting}
               />
-              <FormHint>UUID del registro de paciente en el sistema.</FormHint>
+              <FormHint>UUID del episodio de atención del paciente.</FormHint>
             </FormField>
 
             <FormField>
@@ -330,21 +325,21 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <fieldset>
-              <legend className="sr-only">Agregar diagnóstico CIE-10</legend>
+              <legend className="sr-only">Agregar diagnóstico CIE-11</legend>
               <div className="flex items-end gap-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="dxCodigo">Código</Label>
                   <Input
                     id="dxCodigo"
                     name="dxCodigo"
-                    placeholder="J18.9"
-                    value={dxInput.code}
+                    placeholder="1A00"
+                    value={dxInput.codigo}
                     onChange={(e) =>
-                      setDxInput((d) => ({ ...d, code: e.target.value.toUpperCase() }))
+                      setDxInput((d) => ({ ...d, codigo: e.target.value.toUpperCase() }))
                     }
                     disabled={isSubmitting}
                     className="w-28"
-                    aria-label="Código CIE-10"
+                    aria-label="Código CIE-11"
                   />
                 </div>
                 <div className="flex-1 space-y-1.5">
@@ -353,9 +348,9 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
                     id="dxDescripcion"
                     name="dxDescripcion"
                     placeholder="Descripción del diagnóstico…"
-                    value={dxInput.description}
+                    value={dxInput.descripcion}
                     onChange={(e) =>
-                      setDxInput((d) => ({ ...d, description: e.target.value }))
+                      setDxInput((d) => ({ ...d, descripcion: e.target.value }))
                     }
                     disabled={isSubmitting}
                   />
@@ -365,16 +360,19 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
                   <Select
                     value={dxInput.tipo}
                     onValueChange={(v) =>
-                      setDxInput((d) => ({ ...d, tipo: v as "principal" | "secundario" }))
+                      setDxInput((d) => ({ ...d, tipo: v as DiagnosticoCie11["tipo"] }))
                     }
                     disabled={isSubmitting}
                   >
-                    <SelectTrigger id="dxTipo" className="w-36" aria-label="Tipo de diagnóstico">
+                    <SelectTrigger id="dxTipo" className="w-40" aria-label="Tipo de diagnóstico">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="principal">Principal</SelectItem>
-                      <SelectItem value="secundario">Secundario</SelectItem>
+                      {TIPO_DIAGNOSTICO.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {TIPO_DIAGNOSTICO_LABELS[t]}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -383,7 +381,7 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
                   variant="outline"
                   size="sm"
                   onClick={addDiagnostico}
-                  disabled={isSubmitting || !dxInput.code.trim() || !dxInput.description.trim()}
+                  disabled={isSubmitting || !dxInput.codigo.trim() || !dxInput.descripcion.trim()}
                   aria-label="Agregar diagnóstico a la lista"
                 >
                   Agregar
@@ -391,7 +389,7 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
               </div>
             </fieldset>
             <FormHint>
-              Formato CIE-10: letra mayúscula + 2 dígitos (ej. J00, I10.0, K29.7).
+              Código CIE-11 (OMS): stem alfanumérico, ej. 1A00, BA00, KA62.1.
             </FormHint>
 
             {diagnosticos.length > 0 && (
@@ -406,11 +404,11 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
                   >
                     <span>
                       <span className="mr-2 font-mono text-xs text-muted-foreground">
-                        {dx.code}
+                        {dx.codigo}
                       </span>
-                      {dx.description}
+                      {dx.descripcion}
                       <span className="ml-2 text-xs text-muted-foreground">
-                        ({dx.tipo})
+                        ({TIPO_DIAGNOSTICO_LABELS[dx.tipo]})
                       </span>
                     </span>
                     <Button
@@ -419,7 +417,7 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
                       size="sm"
                       onClick={() => removeDiagnostico(i)}
                       disabled={isSubmitting}
-                      aria-label={`Eliminar diagnóstico ${dx.code}`}
+                      aria-label={`Eliminar diagnóstico ${dx.codigo}`}
                     >
                       Eliminar
                     </Button>
@@ -430,10 +428,10 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
           </CardContent>
         </Card>
 
-        {/* ── 5. Plan terapéutico y disposición ───────────────────────────────── */}
+        {/* ── 5. Plan terapéutico y destino ───────────────────────────────── */}
         <Card>
           <CardHeader>
-            <CardTitle>Plan terapéutico y disposición</CardTitle>
+            <CardTitle>Plan terapéutico y destino</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <FormField>
@@ -451,19 +449,19 @@ export default function NuevaHistoriaClinicaAmbulatoriaPage() {
             </FormField>
 
             <FormField>
-              <Label htmlFor="disposicion">Disposición del paciente</Label>
+              <Label htmlFor="destino">Destino del paciente</Label>
               <Select
-                value={form.disposicion}
-                onValueChange={(v) => updateField("disposicion", v)}
+                value={form.destino}
+                onValueChange={(v) => updateField("destino", v)}
                 disabled={isSubmitting}
               >
-                <SelectTrigger id="disposicion" aria-label="Disposición del paciente al alta">
-                  <SelectValue placeholder="Seleccione disposición" />
+                <SelectTrigger id="destino" aria-label="Destino del paciente">
+                  <SelectValue placeholder="Seleccione destino" />
                 </SelectTrigger>
                 <SelectContent>
-                  {DISPOSICION_OPTIONS.map((o) => (
-                    <SelectItem key={o.value} value={o.value}>
-                      {o.label}
+                  {DESTINO_OPTIONS.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {DESTINO_LABELS[d]}
                     </SelectItem>
                   ))}
                 </SelectContent>

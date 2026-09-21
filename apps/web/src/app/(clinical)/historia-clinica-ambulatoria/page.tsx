@@ -3,11 +3,9 @@
 /**
  * Historia Clínica Ambulatoria — Listado filtrable por paciente y estado.
  *
- * Vista patient-centric: muestra todas las HCs de un paciente a través de
- * sus episodios. Contrasta con /ece/historia-clinica que es episode-centric.
+ * Filtra por episodio (el router `eceHistoriaClinica.list` es episode-centric,
+ * igual que /ece/historia-clinica).
  *
- * TODO: router `eceHistoriaClinica` pendiente de merge en paralelo.
- * Usar cast `(trpc as any)` hasta que esté disponible en el cliente.
  * HC-002: creado para cubrir ausencia total de UI ambulatoria (hallazgo P0).
  */
 
@@ -44,7 +42,7 @@ import { trpc } from "@/lib/trpc/react";
 type EstadoFilter = "borrador" | "firmado" | "validado" | "anulado" | "ALL";
 
 interface Filters {
-  pacienteId: string;
+  episodioId: string;
   estado: EstadoFilter;
 }
 
@@ -82,31 +80,19 @@ const dateFmt = new Intl.DateTimeFormat("es-SV", {
 
 export default function HistoriaClinicaAmbulatoriaListPage() {
   const [filters, setFilters] = React.useState<Filters>({
-    pacienteId: "",
+    episodioId: "",
     estado: "ALL",
   });
 
   const listInput = React.useMemo(() => {
-    const input: Record<string, unknown> = {};
-    if (filters.pacienteId.trim()) input.pacienteId = filters.pacienteId.trim();
+    const input: { episodioId?: string; estado?: Exclude<EstadoFilter, "ALL"> } = {};
+    if (filters.episodioId.trim()) input.episodioId = filters.episodioId.trim();
     if (filters.estado !== "ALL") input.estado = filters.estado;
     return input;
   }, [filters]);
 
-  // TODO(HC-002): usar tipo nativo cuando el router esté mergeado.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const query = (trpc as any).eceHistoriaClinica.list.useQuery(listInput) as {
-    isLoading: boolean;
-    error: { message: string } | null;
-    data: Array<{
-      id: string;
-      tipoConsulta: string;
-      motivoConsulta: string | null;
-      estadoRegistro: string;
-      registradoEn: string | Date;
-      patient: { firstName: string; lastName: string; mrn?: string | null } | null;
-    }> | undefined;
-  };
+  const query = trpc.eceHistoriaClinica.list.useQuery(listInput);
+  const items = query.data?.items;
 
   return (
     <div className="space-y-4">
@@ -135,13 +121,13 @@ export default function HistoriaClinicaAmbulatoriaListPage() {
         <CardContent>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="filter-paciente">Paciente (UUID)</Label>
+              <Label htmlFor="filter-episodio">Episodio (UUID)</Label>
               <Input
-                id="filter-paciente"
-                placeholder="UUID del paciente"
-                value={filters.pacienteId}
+                id="filter-episodio"
+                placeholder="UUID del episodio"
+                value={filters.episodioId}
                 onChange={(e) =>
-                  setFilters((f) => ({ ...f, pacienteId: e.target.value }))
+                  setFilters((f) => ({ ...f, episodioId: e.target.value }))
                 }
               />
             </div>
@@ -183,12 +169,12 @@ export default function HistoriaClinicaAmbulatoriaListPage() {
               {query.error.message}
             </p>
           )}
-          {query.data && query.data.length === 0 && (
+          {items && items.length === 0 && (
             <p className="text-sm text-muted-foreground">
               Sin historias clínicas para los filtros seleccionados.
             </p>
           )}
-          {query.data && query.data.length > 0 && (
+          {items && items.length > 0 && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -201,7 +187,7 @@ export default function HistoriaClinicaAmbulatoriaListPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {query.data.map((hc) => {
+                {items.map((hc) => {
                   const paciente = hc.patient
                     ? `${hc.patient.firstName} ${hc.patient.lastName}`
                     : "—";
