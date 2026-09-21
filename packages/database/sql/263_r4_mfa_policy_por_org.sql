@@ -1,5 +1,7 @@
 -- =============================================================================
 -- 263 — R4.5: switch de MFA staff parametrizable por organización
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-21 vía MCP — NO re-aplicar.
+-- Verificado post-apply: 23 organizaciones, TODAS con mfaStaffRequired=false.
 -- =============================================================================
 -- Contexto: el segundo factor de staff (TOTP) está cableado en los layouts
 -- admin/clinical (`apps/web/src/lib/auth/mfa-guard.ts`) pero la política vive
