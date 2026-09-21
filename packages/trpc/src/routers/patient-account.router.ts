@@ -580,7 +580,10 @@ export const patientAccountRouter = router({
             organizationId: ctx.tenant.organizationId,
           },
           include: {
-            servicios: true,
+            // R2.3 (SQL 262) — currencyId ya viaja como escalar del cargo;
+            // se agrega el isoCode/symbol de la moneda (campo aditivo, sin
+            // tocar el resto del shape) para que la UI no tenga que resolverlo.
+            servicios: { include: { currency: { select: { isoCode: true, symbol: true } } } },
             tipoCuenta: { select: { id: true, code: true, nombre: true } },
             // CC-0027 — egresoAutorizadoAt indica si la Fase 2 ya liberó el
             // egreso físico del encuentro (puede quedar pendiente si otra

@@ -47,6 +47,7 @@ import {
 } from "@/lib/auth/mfa-session";
 import { prisma } from "@his/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getTenantContext } from "@/lib/auth/session";
 
 // -----------------------------------------------------------------------------
 // Constantes/tipos espejo de `@his/contracts/schemas/mfa`. NO importamos del
@@ -326,6 +327,13 @@ async function getCurrentUser(): Promise<{
 // 7) Server Actions exportadas
 // =============================================================================
 
+// CC-B — fallback histórico del issuer TOTP. `enrollMfa()` intenta resolver
+// el nombre real de la organización (best-effort — la página /mfa puede
+// renderizarse ANTES de que haya tenant seleccionado, ver docstring del
+// archivo) y solo lo usa para NUEVOS enrolamientos. Los TOTP ya enrolados
+// (secret + QR ya generados con "Avante HIS") NO se ven afectados: el issuer
+// solo viaja en el otpauth URI que el authenticator guarda al escanear, no
+// se revalida en cada verificación.
 const ISSUER = "Avante HIS";
 
 /**
@@ -386,10 +394,28 @@ export async function enrollMfa(): Promise<
     return { ok: false, error: "No se pudo guardar el enrolamiento." };
   }
 
+  // Best-effort: si hay tenant resuelto para esta sesión, usa el nombre real
+  // de la organización como issuer del QR. Sin tenant (o error de BD), cae al
+  // literal histórico — nunca debe bloquear el enrolamiento MFA.
+  let issuer = ISSUER;
+  try {
+    const tenant = await getTenantContext();
+    if (tenant) {
+      const organization = await prisma.organization.findUnique({
+        where: { id: tenant.organizationId },
+        select: { tradeName: true, legalName: true },
+      });
+      const resolvedName = organization?.tradeName ?? organization?.legalName;
+      if (resolvedName) issuer = resolvedName;
+    }
+  } catch {
+    // Sin tenant/BD disponible — se sigue con el issuer por defecto.
+  }
+
   const otpauthUri = buildOtpAuthUri({
     secret,
     account: user.email,
-    issuer: ISSUER,
+    issuer,
   });
 
   return {

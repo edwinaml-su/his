@@ -340,6 +340,9 @@ export default function EpicrisisDetailPage({
   const { id } = use(params);
 
   const query = trpc.eceEpicrisis.get.useQuery({ id });
+  // CC-B — nombre real de la organización para el pie de página del PDF
+  // (antes hardcoded "HIS Avante" dentro de EpicrisisPdfPreview).
+  const orgQuery = trpc.organization.current.useQuery();
 
   const firmar = trpc.eceEpicrisis.firmar.useMutation({
     onSuccess: () => query.refetch(),
@@ -599,7 +602,15 @@ export default function EpicrisisDetailPage({
 
             {/* Preview PDF */}
             {showPdfPreview && pdfData && (
-              <EpicrisisPdfPreview data={pdfData} showPrintButton />
+              <EpicrisisPdfPreview
+                data={pdfData}
+                showPrintButton
+                organizationName={
+                  orgQuery.data
+                    ? (orgQuery.data.tradeName ?? orgQuery.data.legalName)
+                    : undefined
+                }
+              />
             )}
           </div>
 

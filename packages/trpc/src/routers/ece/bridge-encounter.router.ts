@@ -55,6 +55,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { emitDomainEvent } from "@his/database";
 import { router, requireRole, tenantProcedure } from "../../trpc";
+import { withEceContext } from "../../ece/rls-context";
 
 // =============================================================================
 // Schemas Zod (inlined para evitar dependencia del barrel @his/contracts/schemas
@@ -121,11 +122,13 @@ type PacienteEceRow = {
  * `ctx.tenant.establishmentId`. Verificado contra la BD: los 30 episodios
  * quedan dentro del establecimiento propio y 0 dentro de uno ajeno.
  *
- * OJO: esto NO es RLS. La policy de ece.episodio_atencion compara contra
- * ece.current_establecimiento_id() — el GUC `app.ece_establecimiento_id` —, que
- * pertenece al espacio de ids de ece.establecimiento(id), NO al de
- * public."Establishment"(id). Mientras ese desalineamiento exista, demotar el
- * rol aquí devolvería 0 filas y rompería el bridge. Ver informe R02.
+ * CC-B — el desalineamiento de espacios de id que R02 documentaba (GUC
+ * `app.ece_establecimiento_id` en el espacio ece.establecimiento(id) vs.
+ * `ctx.tenant.establishmentId` en el espacio public."Establishment"(id)) ya
+ * fue resuelto por ADR 0022 (sql/216): `ece.set_ece_context` acepta CUALQUIERA
+ * de los dos espacios y resuelve el puente internamente. Este router ahora usa
+ * `withEceContext(ctx.prisma, ctx.user.id, establecimientoId, ...)` pasando el
+ * id de `ctx.tenant.establishmentId` tal cual — ya no hay que evitar demotar.
  */
 function requireEstablishment(tenant: { establishmentId?: string }): string {
   if (!tenant.establishmentId) {
@@ -211,23 +214,23 @@ export const bridgeEncounterRouter = router({
       }
 
       // 2. Verificar que el episodio ECE existe, es del tenant, y no tiene vínculo.
+      //    3. Actualizar + emitir evento — todo dentro del mismo contexto ECE.
       const establecimientoId = requireEstablishment(ctx.tenant);
-      const episodio = await findEpisodio(ctx.prisma, input.episodioId, establecimientoId);
-      if (!episodio) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Episodio ECE no encontrado.",
-        });
-      }
-      if (episodio.public_encounter_id !== null) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `El episodio ya está vinculado al Encounter ${episodio.public_encounter_id}.`,
-        });
-      }
+      return withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        const episodio = await findEpisodio(tx, input.episodioId, establecimientoId);
+        if (!episodio) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Episodio ECE no encontrado.",
+          });
+        }
+        if (episodio.public_encounter_id !== null) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `El episodio ya está vinculado al Encounter ${episodio.public_encounter_id}.`,
+          });
+        }
 
-      // 3. Actualizar + emitir evento en transacción atómica.
-      return ctx.prisma.$transaction(async (tx) => {
         await (tx.$executeRaw as (
           q: TemplateStringsArray,
           ...v: unknown[]
@@ -270,36 +273,38 @@ export const bridgeEncounterRouter = router({
     .input(unlinkEncounterSchema)
     .mutation(async ({ ctx, input }) => {
       const establecimientoId = requireEstablishment(ctx.tenant);
-      const episodio = await findEpisodio(ctx.prisma, input.episodioId, establecimientoId);
-      if (!episodio) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Episodio ECE no encontrado.",
-        });
-      }
-      if (episodio.public_encounter_id === null) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "El episodio no tiene ningún Encounter vinculado.",
-        });
-      }
+      return withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        const episodio = await findEpisodio(tx, input.episodioId, establecimientoId);
+        if (!episodio) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Episodio ECE no encontrado.",
+          });
+        }
+        if (episodio.public_encounter_id === null) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "El episodio no tiene ningún Encounter vinculado.",
+          });
+        }
 
-      await (ctx.prisma.$executeRaw as (
-        q: TemplateStringsArray,
-        ...v: unknown[]
-      ) => Promise<number>)`
-        UPDATE ece.episodio_atencion ea
-        SET public_encounter_id = NULL,
-            actualizado_en      = now()
-        WHERE ea.id = ${input.episodioId}::uuid
-          AND EXISTS (
-            SELECT 1 FROM ece.paciente p
-            WHERE p.id = ea.paciente_id
-              AND p.establecimiento_id = ${establecimientoId}::uuid
-          )
-      `;
+        await (tx.$executeRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<number>)`
+          UPDATE ece.episodio_atencion ea
+          SET public_encounter_id = NULL,
+              actualizado_en      = now()
+          WHERE ea.id = ${input.episodioId}::uuid
+            AND EXISTS (
+              SELECT 1 FROM ece.paciente p
+              WHERE p.id = ea.paciente_id
+                AND p.establecimiento_id = ${establecimientoId}::uuid
+            )
+        `;
 
-      return { episodioId: input.episodioId, unlinkedEncounterId: episodio.public_encounter_id };
+        return { episodioId: input.episodioId, unlinkedEncounterId: episodio.public_encounter_id };
+      });
     }),
 
   /**
@@ -341,55 +346,57 @@ export const bridgeEncounterRouter = router({
       // puente hacia public."Establishment"(id) — el espacio de ids de
       // `ctx.tenant.establishmentId`.
       const establecimientoId = requireEstablishment(ctx.tenant);
-      const estabOk = await (ctx.prisma.$queryRaw as (
-        q: TemplateStringsArray,
-        ...v: unknown[]
-      ) => Promise<Array<{ id: string }>>)`
-        SELECT id FROM ece.establecimiento
-        WHERE id = ${input.establecimientoEceId}::uuid
-          AND establishment_id = ${establecimientoId}::uuid
-        LIMIT 1
-      `;
-      if (estabOk.length === 0) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "El establecimiento indicado no pertenece a la sede activa.",
-        });
-      }
 
-      // 2. Verificar que el Encounter no tenga ya un episodio vinculado.
-      const existing = await (ctx.prisma.$queryRaw as (
-        q: TemplateStringsArray,
-        ...v: unknown[]
-      ) => Promise<Array<{ id: string }>>)`
-        SELECT id FROM ece.episodio_atencion
-        WHERE public_encounter_id = ${input.encounterId}::uuid
-        LIMIT 1
-      `;
-      if (existing.length > 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `El Encounter ya tiene el episodio ECE ${existing[0]!.id} vinculado.`,
-        });
-      }
+      // 2-4. Verificación de establecimiento + episodio existente + paciente
+      // ECE + INSERT + evento — todo dentro del mismo contexto ECE (atómico).
+      return withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        const estabOk = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          SELECT id FROM ece.establecimiento
+          WHERE id = ${input.establecimientoEceId}::uuid
+            AND establishment_id = ${establecimientoId}::uuid
+          LIMIT 1
+        `;
+        if (estabOk.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "El establecimiento indicado no pertenece a la sede activa.",
+          });
+        }
 
-      // 3. Resolver ece.paciente via bridge de paciente (stream 22).
-      const pacienteEce = await findPacienteEcePorPublicPatient(
-        ctx.prisma,
-        encounter.patientId,
-        establecimientoId,
-      );
-      if (!pacienteEce) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message:
-            "No existe registro ece.paciente para este paciente. " +
-            "Ejecuta el bridge de paciente (stream 22) antes de crear el episodio.",
-        });
-      }
+        // Verificar que el Encounter no tenga ya un episodio vinculado.
+        const existing = await (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ id: string }>>)`
+          SELECT id FROM ece.episodio_atencion
+          WHERE public_encounter_id = ${input.encounterId}::uuid
+          LIMIT 1
+        `;
+        if (existing.length > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `El Encounter ya tiene el episodio ECE ${existing[0]!.id} vinculado.`,
+          });
+        }
 
-      // 4. Crear episodio + vincular + emitir evento — todo atómico.
-      return ctx.prisma.$transaction(async (tx) => {
+        // Resolver ece.paciente via bridge de paciente (stream 22).
+        const pacienteEce = await findPacienteEcePorPublicPatient(
+          tx,
+          encounter.patientId,
+          establecimientoId,
+        );
+        if (!pacienteEce) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "No existe registro ece.paciente para este paciente. " +
+              "Ejecuta el bridge de paciente (stream 22) antes de crear el episodio.",
+          });
+        }
+
         const rows = await (tx.$queryRaw as (
           q: TemplateStringsArray,
           ...v: unknown[]
@@ -463,19 +470,21 @@ export const bridgeEncounterRouter = router({
       // inferencia qué Encounters ajenos están vinculados. Se acota a la sede
       // activa por el establecimiento del paciente del episodio.
       const establecimientoId = requireEstablishment(ctx.tenant);
-      const linkedRows = await (ctx.prisma.$queryRaw as (
-        q: TemplateStringsArray,
-        ...v: unknown[]
-      ) => Promise<Array<{ eid: string }>>)`
-        SELECT ea.public_encounter_id::text AS eid
-        FROM ece.episodio_atencion ea
-        WHERE ea.public_encounter_id IS NOT NULL
-          AND EXISTS (
-            SELECT 1 FROM ece.paciente p
-            WHERE p.id = ea.paciente_id
-              AND p.establecimiento_id = ${establecimientoId}::uuid
-          )
-      `;
+      const linkedRows = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, (tx) =>
+        (tx.$queryRaw as (
+          q: TemplateStringsArray,
+          ...v: unknown[]
+        ) => Promise<Array<{ eid: string }>>)`
+          SELECT ea.public_encounter_id::text AS eid
+          FROM ece.episodio_atencion ea
+          WHERE ea.public_encounter_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1 FROM ece.paciente p
+              WHERE p.id = ea.paciente_id
+                AND p.establecimiento_id = ${establecimientoId}::uuid
+            )
+        `,
+      );
       const linkedIds = linkedRows.map((r) => r.eid);
 
       const where = {

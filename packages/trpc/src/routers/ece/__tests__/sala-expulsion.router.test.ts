@@ -18,6 +18,7 @@ import { TRPCError } from "@trpc/server";
 import { eceSalaExpulsionRouter } from "../sala-expulsion.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { withWorkflowContext } from "../../../workflow/context";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -249,9 +250,13 @@ describe("eceSalaExpulsionRouter", () => {
       const { argon2 } = await import("@his/infrastructure");
       vi.mocked(argon2.verify).mockResolvedValueOnce(false);
 
+      // R1.2 (P2-1a) — bootstrap resolvePersonalSalud (privilegiado, antes de
+      // abrir el contexto ECE) se agregó como PRIMERA query de firmar().
+      // findPersonal (bootstrap) → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findSalaExpulsion → borrador
       prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
-      // findPersonal → PERSONAL_ID
+      // findPersonal (dentro de verifyPin) → PERSONAL_ID
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findFirma → firma activa, sin lockout
       prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow()]);
@@ -267,9 +272,11 @@ describe("eceSalaExpulsionRouter", () => {
     it("lanza TOO_MANY_REQUESTS con cuenta bloqueada", async () => {
       const lockedUntil = new Date(Date.now() + 10 * 60_000);
 
+      // findPersonal (bootstrap) → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findSalaExpulsion → borrador
       prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
-      // findPersonal → PERSONAL_ID
+      // findPersonal (dentro de verifyPin) → PERSONAL_ID
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findFirma → bloqueada
       prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow({ locked_until: lockedUntil })]);
@@ -284,9 +291,11 @@ describe("eceSalaExpulsionRouter", () => {
       const { argon2 } = await import("@his/infrastructure");
       vi.mocked(argon2.verify).mockResolvedValueOnce(true);
 
+      // findPersonal (bootstrap) → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findSalaExpulsion → borrador
       prisma.$queryRaw.mockResolvedValueOnce([makeSalaRow()]);
-      // findPersonal → PERSONAL_ID
+      // findPersonal (dentro de verifyPin) → PERSONAL_ID
       prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       // findFirma → activa, sin lockout
       prisma.$queryRaw.mockResolvedValueOnce([makeFirmaRow()]);
@@ -299,9 +308,23 @@ describe("eceSalaExpulsionRouter", () => {
       const result = await caller.firmar({ id: SALA_ID, pin: VALID_PIN });
 
       expect(result.ok).toBe(true);
+      // R1.2 (P2-2) — regresión de wiring: personalId debe ser el
+      // ece.personal_salud.id resuelto por el bootstrap (PERSONAL_ID), no
+      // ctx.user.id — necesario para que `firma_self_only` matchee.
+      expect(vi.mocked(withWorkflowContext)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          personalId: PERSONAL_ID,
+          establecimientoId: MOCK_TENANT.establishmentId,
+        }),
+        expect.any(Function),
+      );
     });
 
     it("lanza NOT_FOUND si el registro no existe", async () => {
+      // findPersonal (bootstrap) → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
+      // findSalaExpulsion → vacío
       prisma.$queryRaw.mockResolvedValueOnce([]);
 
       const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
@@ -311,6 +334,8 @@ describe("eceSalaExpulsionRouter", () => {
     });
 
     it("lanza BAD_REQUEST si el registro ya está firmado", async () => {
+      // findPersonal (bootstrap) → PERSONAL_ID
+      prisma.$queryRaw.mockResolvedValueOnce([{ id: PERSONAL_ID }]);
       prisma.$queryRaw.mockResolvedValueOnce([
         makeSalaRow({ estado_registro: "firmado" }),
       ]);
@@ -319,6 +344,19 @@ describe("eceSalaExpulsionRouter", () => {
       await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
         code: "BAD_REQUEST",
       });
+    });
+
+    // R1.2 (P2-1a) — regresión de wiring: el bootstrap debe resolver personal
+    // ANTES de abrir el contexto ECE (withWorkflowContext), no dentro.
+    it("lanza PRECONDITION_FAILED si el usuario no tiene personal_salud vinculado (sin abrir el contexto ECE)", async () => {
+      // findPersonal (bootstrap) → vacío
+      prisma.$queryRaw.mockResolvedValueOnce([]);
+
+      const caller = eceSalaExpulsionRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.firmar({ id: SALA_ID, pin: VALID_PIN })).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+      });
+      expect(vi.mocked(withWorkflowContext)).not.toHaveBeenCalled();
     });
   });
 });

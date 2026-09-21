@@ -40,6 +40,9 @@ const PRICE_LIST_ID = "00000000-0000-0000-0000-000000000007";
 const RULE_ID = "00000000-0000-0000-0000-000000000008";
 const CARGO_ID = "00000000-0000-0000-0000-000000000009";
 const REFERENCIA = "00000000-0000-0000-0000-00000000000a";
+/** R2.3 (SQL 262) — moneda de la ServicePriceList, distinta de la funcional de la org. */
+const CURRENCY_LISTA = "00000000-0000-0000-0000-00000000000b";
+const CURRENCY_FUNCIONAL = "00000000-0000-0000-0000-00000000000c";
 
 const resolverPrecioMock = vi.mocked(resolverPrecio);
 const emitDomainEventMock = vi.mocked(emitDomainEvent);
@@ -51,6 +54,9 @@ describe("capturarCargo", () => {
     tx = mockDeep<PrismaClient>();
     resolverPrecioMock.mockReset();
     emitDomainEventMock.mockClear();
+    // R2.3 (SQL 262) — default para los tests que no ejercitan currencyId
+    // directamente: sin priceListId trazable, capturarCargo cae aquí.
+    tx.organization.findUnique.mockResolvedValue({ functionalCurrency: CURRENCY_FUNCIONAL } as never);
   });
 
   const baseParams = {
@@ -286,6 +292,71 @@ describe("capturarCargo", () => {
       }),
     );
   });
+
+  // R2.3 (SQL 262) — moneda explícita del cargo.
+  describe("currencyId", () => {
+    it("usa la moneda de la ServicePriceList que resolvió el precio (lista != funcional de la org)", async () => {
+      tx.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT } as never);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 12.5,
+        fuente: "regla",
+        priceListId: PRICE_LIST_ID,
+        reglaId: RULE_ID,
+      });
+      (tx.$queryRawUnsafe as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { currencyId: CURRENCY_LISTA },
+      ]);
+      tx.patientAccountService.create.mockResolvedValue({ id: CARGO_ID } as never);
+
+      await capturarCargo(tx, baseParams);
+
+      expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(expect.stringContaining("ServicePriceList"), PRICE_LIST_ID);
+      expect(tx.organization.findUnique).not.toHaveBeenCalled();
+      expect(tx.patientAccountService.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ currencyId: CURRENCY_LISTA }),
+      });
+    });
+
+    it("cae a la moneda funcional de la org cuando el precio no viene de una lista (fuente estandar)", async () => {
+      tx.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT } as never);
+      resolverPrecioMock.mockResolvedValue({
+        precio: 5,
+        fuente: "estandar",
+        priceListId: null,
+        reglaId: null,
+      });
+      tx.organization.findUnique.mockResolvedValue({ functionalCurrency: CURRENCY_FUNCIONAL } as never);
+      tx.patientAccountService.create.mockResolvedValue({ id: CARGO_ID } as never);
+
+      await capturarCargo(tx, baseParams);
+
+      expect(tx.organization.findUnique).toHaveBeenCalledWith({
+        where: { id: ORG },
+        select: { functionalCurrency: true },
+      });
+      expect(tx.patientAccountService.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ currencyId: CURRENCY_FUNCIONAL }),
+      });
+    });
+
+    it("cae a la moneda funcional de la org también en el camino PENDIENTE_TARIFA (sin priceListId)", async () => {
+      tx.patientAccount.findFirst.mockResolvedValue({ id: ACCOUNT } as never);
+      resolverPrecioMock.mockResolvedValue({
+        precio: null,
+        fuente: null,
+        priceListId: null,
+        reglaId: null,
+      });
+      tx.organization.findUnique.mockResolvedValue({ functionalCurrency: CURRENCY_FUNCIONAL } as never);
+      tx.patientAccountService.create.mockResolvedValue({ id: CARGO_ID } as never);
+
+      await capturarCargo(tx, baseParams);
+
+      expect(tx.patientAccountService.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ currencyId: CURRENCY_FUNCIONAL, status: "PENDIENTE_TARIFA" }),
+      });
+    });
+  });
 });
 
 describe("revertirCargo", () => {
@@ -311,6 +382,7 @@ describe("revertirCargo", () => {
     status: "VIGENTE",
     origen: "dispensacion",
     referenciaId: REFERENCIA,
+    currencyId: CURRENCY_LISTA,
   };
 
   it("NOT_FOUND si el cargo no existe", async () => {
@@ -350,6 +422,7 @@ describe("revertirCargo", () => {
         unitPrice: 12.5,
         origen: "dispensacion",
         referenciaId: REFERENCIA,
+        currencyId: CURRENCY_LISTA,
         createdBy: ACTOR,
       }),
     });

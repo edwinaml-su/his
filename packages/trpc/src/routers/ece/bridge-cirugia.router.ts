@@ -143,6 +143,14 @@ async function findPersonalSaludPorUsuario(
   prisma: RawClient,
   hisUserId: string,
 ): Promise<PersonalSaludRow | null> {
+  // R1.2 — justificado en `ctx.prisma` directo (BYPASSRLS) a propósito: esta
+  // lectura es el bootstrap que RESUELVE el `establecimiento_id` que luego se
+  // pasa a `withWorkflowContext` (no viene de `ctx.tenant.establishmentId`
+  // como en la mayoría de routers ECE) — no se puede exigir el contexto RLS
+  // de establecimiento antes de saber cuál es. El único filtro es
+  // `his_user_id = hisUserId` (valor server-side de la sesión autenticada,
+  // no input del cliente), así que solo puede devolver la fila del propio
+  // usuario — no hay fuga cross-tenant posible desde este SELECT.
   // El profesional ECE se resuelve por his_user_id = User.id del HIS (ctx.user.id),
   // igual que el router canónico orden-ingreso.router.ts. (auth_user_id es el id de
   // Supabase auth, NO el de ctx.user — usarlo aquí devolvía null siempre.)
@@ -210,22 +218,6 @@ export const eceBridgeCirugiaRouter = router({
       const fechaInicio = new Date(input.fechaProgramada);
       const fechaFin    = new Date(fechaInicio.getTime() + input.duracionEstimadaMin * 60_000);
 
-      // ── 2. Verificar disponibilidad de sala QX (pre-tx) ────────────────
-      // C5 auditoría P0-5 — helper compartido con surgery.router.ts
-      // (lib/quirofano-conflicto.ts); ver ahí la limitación documentada de
-      // no cruzar contra public.SurgeryCase (contextos RLS distintos).
-      const hayConflicto = await hayConflictoQuirofano(ctx.prisma, {
-        salaQxId: input.salaQxId,
-        scheduledStart: fechaInicio,
-        scheduledEnd: fechaFin,
-      });
-      if (hayConflicto) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "La sala QX ya tiene una cirugía activa en ese intervalo horario.",
-        });
-      }
-
       // ── 3. Transacción atómica con contexto ECE ─────────────────────────
       // HE-02 (audit Stream E): withWorkflowContext aplica SET LOCAL ROLE
       // authenticated + GUCs ece (personal_id, establecimiento_id) → las
@@ -245,6 +237,26 @@ export const eceBridgeCirugiaRouter = router({
           ctx.tenant.organizationId,
           ctx.tenant.breakGlass === true,
         );
+
+        // R1.2 (2026-09) — movido dentro del contexto ECE (antes corría en
+        // `ctx.prisma` directo, ANTES de abrir la transacción): la policy
+        // `reserva_sala_by_estab` (vía ece.sala_qx.establecimiento_id) exige
+        // el GUC de establecimiento ya seteado, y quirofano-conflicto.ts
+        // documenta que cada caller debe invocarla "dentro de SU PROPIO
+        // contexto RLS" — antes, un salaQxId de OTRO establecimiento podía
+        // filtrar si esa sala tenía una reserva activa en el horario (leak
+        // de agenda cross-tenant) sin que la policy aplicara.
+        const hayConflicto = await hayConflictoQuirofano(tx, {
+          salaQxId: input.salaQxId,
+          scheduledStart: fechaInicio,
+          scheduledEnd: fechaFin,
+        });
+        if (hayConflicto) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "La sala QX ya tiene una cirugía activa en ese intervalo horario.",
+          });
+        }
 
         const motivoTexto = input.motivoIngreso ?? `Procedimiento CIE-10: ${input.procedimientoCie10}`;
 
@@ -557,20 +569,32 @@ export const eceBridgeCirugiaRouter = router({
   /**
    * Cronograma del día: lista cirugías ordenadas por hora de inicio.
    * Filtra opcionalmente por sala QX.
+   *
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS):
+   * sin filtro de establecimiento en absoluto (ni siquiera en JS) — cualquier
+   * organización podía ver el cronograma de quirófano de otra. La policy
+   * `reserva_sala_by_estab` (vía ece.sala_qx.establecimiento_id) ahora filtra
+   * de verdad bajo rol `authenticated`.
    */
   listProgramacionDia: qxReadProcedure
     .input(listProgramacionDiaInput)
     .query(async ({ ctx, input }) => {
+      if (!ctx.tenant.establishmentId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Se requiere un establecimiento activo para ver el cronograma de quirófano.",
+        });
+      }
+      const eceCtx = { personalId: ctx.user.id, establecimientoId: ctx.tenant.establishmentId };
       const diaInicio = new Date(`${input.fecha}T00:00:00Z`);
       const diaFin    = new Date(`${input.fecha}T23:59:59.999Z`);
 
-      let rows: ProgramacionRow[];
-
-      if (input.salaQxId) {
-        rows = await (ctx.prisma.$queryRaw as (
-          tpl: TemplateStringsArray,
-          ...vals: unknown[]
-        ) => Promise<ProgramacionRow[]>)`
+      const rows = await withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+        if (input.salaQxId) {
+          return (tx.$queryRaw as (
+            tpl: TemplateStringsArray,
+            ...vals: unknown[]
+          ) => Promise<ProgramacionRow[]>)`
           SELECT
             r.orden_qx_id      AS orden_id,
             r.fecha_inicio     AS fecha_programada,
@@ -596,8 +620,8 @@ export const eceBridgeCirugiaRouter = router({
             AND r.estado <> 'cancelado'
           ORDER BY r.fecha_inicio ASC
         `;
-      } else {
-        rows = await (ctx.prisma.$queryRaw as (
+        }
+        return (tx.$queryRaw as (
           tpl: TemplateStringsArray,
           ...vals: unknown[]
         ) => Promise<ProgramacionRow[]>)`
@@ -625,7 +649,7 @@ export const eceBridgeCirugiaRouter = router({
             AND r.estado <> 'cancelado'
           ORDER BY r.sala_qx_id, r.fecha_inicio ASC
         `;
-      }
+      });
 
       return rows.map((row) => ({
         ordenId:           row.orden_id,
@@ -658,24 +682,6 @@ export const eceBridgeCirugiaRouter = router({
         });
       }
 
-      // ── 2. Verificar que la orden existe y es cancelable ─────────────────
-      const orden = await findOrdenQx(ctx.prisma as unknown as RawClient, input.ordenId);
-      if (!orden) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Orden quirúrgica no encontrada.",
-        });
-      }
-      // Cancelable si la reserva está programada o confirmada (no en_curso/finalizada
-      // ni ya cancelada). El estado de workflow vive en la reserva/episodio, no en
-      // estado_registro (que es vigente/rectificado).
-      if (orden.reserva_estado !== null && !["programado", "confirmado"].includes(orden.reserva_estado)) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: `La reserva en estado '${orden.reserva_estado}' no puede cancelarse.`,
-        });
-      }
-
       // ── 3. Transacción atómica cascade soft-delete con contexto ECE ──────
       // HE-02 (audit Stream E): withWorkflowContext aplica RLS al cascade.
       return withWorkflowContext(
@@ -692,6 +698,28 @@ export const eceBridgeCirugiaRouter = router({
           ctx.tenant.organizationId,
           ctx.tenant.breakGlass === true,
         );
+
+        // ── 2. Verificar que la orden existe y es cancelable ───────────────
+        // R1.2 — movido dentro del contexto ECE (antes corría en `ctx.prisma`
+        // directo): la policy `by_paciente_estab` de orden_ingreso exige el
+        // GUC de establecimiento; un ordenId de otro establecimiento ya no
+        // filtra en silencio si existe/su estado de reserva (leak cross-tenant).
+        const orden = await findOrdenQx(rawTx, input.ordenId);
+        if (!orden) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Orden quirúrgica no encontrada.",
+          });
+        }
+        // Cancelable si la reserva está programada o confirmada (no en_curso/finalizada
+        // ni ya cancelada). El estado de workflow vive en la reserva/episodio, no en
+        // estado_registro (que es vigente/rectificado).
+        if (orden.reserva_estado !== null && !["programado", "confirmado"].includes(orden.reserva_estado)) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `La reserva en estado '${orden.reserva_estado}' no puede cancelarse.`,
+          });
+        }
 
         // Paso 1: cancelar reserva_sala_qx
         if (orden.reserva_sala_qx_id) {

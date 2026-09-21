@@ -26,10 +26,22 @@ import type { PrismaClient } from "@prisma/client";
 import { eceBridgeAdmisionRouter } from "../bridge-admision.router";
 import { makeCtx } from "../../../__tests__/helpers/caller";
 import { MOCK_USER_ADMIN, MOCK_TENANT } from "@his/test-utils";
+import { withWorkflowContext } from "../../../workflow/context";
 
 // ─── Mockear emitDomainEvent para evitar acceso a DomainEvent + AuditLog ─────
 vi.mock("@his/database", () => ({
   emitDomainEvent: vi.fn().mockResolvedValue({ id: "evt-00000000" }),
+}));
+
+// R1.2 — withWorkflowContext envuelve en $transaction + SET LOCAL (set_ece_context,
+// SET LOCAL ROLE); el mock ejecuta el callback directamente contra el mismo prisma
+// mock, sin consumir $queryRaw/$executeRaw adicionales (mismo patrón que
+// periodo-expulsivo.router.test.ts / certificado-defuncion.router.test.ts).
+vi.mock("../../../workflow/context", () => ({
+  withWorkflowContext: vi.fn(
+    async (_prisma: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) =>
+      fn(_prisma),
+  ),
 }));
 
 // ─── Constantes UUIDs ────────────────────────────────────────────────────────
@@ -228,6 +240,16 @@ describe("eceBridgeAdmisionRouter", () => {
       expect(result.episodioId).toBe(EPISODIO_ID);
       expect(result.hojaIngresoId).toBe(HOJA_ID);
       expect(result.camaAsignadaId).toBeNull();
+      // R1.2 (P2-2) — regresión de wiring: personalId debe ser el
+      // ece.personal_salud.id resuelto (PERSONAL_ID), no ctx.user.id.
+      expect(vi.mocked(withWorkflowContext)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          personalId: PERSONAL_ID,
+          establecimientoId: MOCK_TENANT.establishmentId,
+        }),
+        expect.any(Function),
+      );
     });
 
     it("8. Happy-path con cama: camaAsignadaId presente + UPDATE cama ejecutado", async () => {
@@ -331,8 +353,11 @@ describe("eceBridgeAdmisionRouter", () => {
         registrado_en: haceUnaHora,
       };
 
+      // R1.2 (P2-1b) — bootstrap resolvePersonalSalud (best-effort, no bloquea
+      // si no hay perfil) se agregó como PRIMERA query.
       // Sin servicioId → rama sin filtro
       prisma.$queryRaw
+        .mockResolvedValueOnce([])                      // bootstrap resolvePersonalSalud → sin perfil
         .mockResolvedValueOnce([mockItem])          // items
         .mockResolvedValueOnce([{ total: BigInt(1) }]); // count
 
@@ -347,6 +372,18 @@ describe("eceBridgeAdmisionRouter", () => {
       expect(result.items[0]?.servicioNombre).toBe("Medicina Interna");
       // antiguedadMinutos debe ser ~60 (tolerancia de 5 min en entornos lentos)
       expect(result.items[0]?.antiguedadMinutos).toBeGreaterThanOrEqual(55);
+      // R1.2 (P2-2) — regresión de wiring: sin perfil ece.personal_salud
+      // vinculado (bootstrap → []), el fallback debe seguir siendo
+      // ctx.user.id (comportamiento previo, no bloqueante) y el
+      // establecimientoId debe venir de la sesión.
+      expect(vi.mocked(withWorkflowContext)).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          personalId: MOCK_USER_ADMIN.id,
+          establecimientoId: MOCK_TENANT.establishmentId,
+        }),
+        expect.any(Function),
+      );
     });
   });
 });
