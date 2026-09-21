@@ -248,7 +248,8 @@ export const SECTIONS: NavSection[] = [
       { href: "/ece/historia-clinica", label: "Historia Clínica", icon: FileText,
         description: "Historia clínica completa del paciente: anamnesis, antecedentes, exámenes." },
       { href: "/historia-clinica-ambulatoria", label: "Historia Clínica Ambulatoria", icon: FileText,
-        description: "Registro de consultas ambulatorias (NTEC Art. 7): motivo, anamnesis, diagnósticos CIE-10." },
+        requiredRoles: ["PHYSICIAN", "NURSE", "MC", "MT", "DIR"],
+        description: "Registro de consultas ambulatorias (NTEC Art. 7): motivo, anamnesis, diagnósticos CIE-11." },
       { href: "/ece/consentimiento", label: "Consentimientos médicos (NTEC)", icon: FileSignature,
         description: "Consentimientos médicos informados según NTEC (HOSPITALIZACION, QUIRURGICO)." },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList,
@@ -454,6 +455,15 @@ export const SECTIONS: NavSection[] = [
       { href: "/ece/certificacion", label: "Certificación DIR", icon: BadgeCheck,
         requiredRoles: ["DIR"],
         description: "Certificación de documentos ECE por Director (Art. NTEC)." },
+      // P2-3 (revisión R3A 2026-09): requiredRoles solo filtra visibilidad del
+      // item de nav — NO es lo mismo que lo que cada router permite ejecutar.
+      // ARCH/ADMIN ven estas 2 páginas completas (list/get/dashboard son
+      // ["DIR","ARCH","ADMIN"]), pero dentro de calidad-documental el botón
+      // "Generar" reporte (comiteEce.exportReport) y en comité la firma de
+      // minuta (comiteEce.firmar) son DIR-only — el server responde FORBIDDEN
+      // a ARCH/ADMIN en esas dos acciones puntuales. Es asimetría esperada
+      // (lectura amplia, escritura/exportación restringida a DIR), no bug.
+      // NO ampliar esos roles en el router sin decisión explícita de Edwin.
       { href: "/ece/comite", label: "Comité ECE — Minutas", icon: ClipboardCheck,
         requiredRoles: ["DIR", "ARCH", "ADMIN"],
         description: "Art. 32 NTEC — minutas del Comité del Expediente Clínico con hash chain." },
