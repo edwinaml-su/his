@@ -15,14 +15,27 @@
  *   la diferencia debe ser < 30 min; caso contrario emite
  *   `ece.expulsion.hemorragia_post_parto_alerta` en el outbox.
  *
- * RLS: withWorkflowContext establece app.current_establecimiento_id.
- *      La policy `sala_exp_by_estab` filtra por establecimiento.
+ * RLS: withWorkflowContext establece app.ece_establecimiento_id (vía
+ *      ece.set_ece_context) y demota a rol `authenticated` — la policy
+ *      `sala_exp_by_estab` (ALL) filtra por establecimiento contra
+ *      ece.episodio_hospitalario/episodio_atencion.
+ *
+ * R1.2 (2026-09) — este router tenía una función local también llamada
+ * `withEceContext` que NO seteaba ningún GUC ni demotaba rol: solo devolvía
+ * un objeto plano. Las 5 procedures corrían en `ctx.prisma` directo (rol
+ * BYPASSRLS) creyendo (por el nombre) que ya estaban protegidas — el filtro
+ * de establecimiento en `list` vivía solo en el WHERE de JS, y `get`/
+ * `listEventos` no filtraban por establecimiento en absoluto (cualquier
+ * establecimiento podía leer la sala de expulsión de otro por id). Se
+ * renombra a `buildEceCtx` (mismo patrón que triaje-ece.router.ts) y se
+ * envuelve cada operación en `withWorkflowContext` real.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
+import { withWorkflowContext, type EceContext } from "../../workflow/context";
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
@@ -84,10 +97,10 @@ export interface ExpulsionEvento {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function withEceContext(ctx: {
+function buildEceCtx(ctx: {
   user: { id: string };
-  tenant: { organizationId: string; establishmentId?: string };
-}) {
+  tenant: { organizationId: string; establishmentId?: string; roleCodes: string[] };
+}): EceContext & { organizationId: string } {
   if (!ctx.tenant.establishmentId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -95,9 +108,10 @@ function withEceContext(ctx: {
     });
   }
   return {
-    userId: ctx.user.id,
+    personalId: ctx.user.id,
     organizationId: ctx.tenant.organizationId,
     establecimientoId: ctx.tenant.establishmentId,
+    roles: ctx.tenant.roleCodes,
   };
 }
 
@@ -138,63 +152,78 @@ export const periodoExpulsivoRouter = router({
    * Lista registros sala_expulsion del establecimiento activo.
    */
   list: eceBase.input(listInput).query(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = buildEceCtx(ctx);
     const offset = (input.page - 1) * input.pageSize;
 
-    const rows = await ctx.prisma.$queryRaw<SalaExpulsionRow[]>`
-      SELECT se.*
-        FROM ece.sala_expulsion se
-        JOIN ece.episodio_hospitalario eh
-          ON eh.episodio_id = se.episodio_hospitalario_id
-        JOIN ece.episodio_atencion ea
-          ON ea.id = eh.episodio_id
-       WHERE ea.establecimiento_id = ${ctx.tenant.establishmentId!}::uuid
-       ORDER BY se.registrado_en DESC
-       LIMIT ${input.pageSize} OFFSET ${offset}
-    `;
+    return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+      // El WHERE explícito queda como defensa en profundidad; el filtro real
+      // ahora lo aplica la policy `sala_exp_by_estab` bajo rol `authenticated`.
+      const rows = await tx.$queryRaw<SalaExpulsionRow[]>`
+        SELECT se.*
+          FROM ece.sala_expulsion se
+          JOIN ece.episodio_hospitalario eh
+            ON eh.episodio_id = se.episodio_hospitalario_id
+          JOIN ece.episodio_atencion ea
+            ON ea.id = eh.episodio_id
+         WHERE ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+         ORDER BY se.registrado_en DESC
+         LIMIT ${input.pageSize} OFFSET ${offset}
+      `;
 
-    const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
-      SELECT COUNT(*) AS total
-        FROM ece.sala_expulsion se
-        JOIN ece.episodio_hospitalario eh
-          ON eh.episodio_id = se.episodio_hospitalario_id
-        JOIN ece.episodio_atencion ea
-          ON ea.id = eh.episodio_id
-       WHERE ea.establecimiento_id = ${ctx.tenant.establishmentId!}::uuid
-    `;
+      const [{ total }] = await tx.$queryRaw<[{ total: bigint }]>`
+        SELECT COUNT(*) AS total
+          FROM ece.sala_expulsion se
+          JOIN ece.episodio_hospitalario eh
+            ON eh.episodio_id = se.episodio_hospitalario_id
+          JOIN ece.episodio_atencion ea
+            ON ea.id = eh.episodio_id
+         WHERE ea.establecimiento_id = ${eceCtx.establecimientoId}::uuid
+      `;
 
-    return { items: rows, total: Number(total), page: input.page, pageSize: input.pageSize };
+      return { items: rows, total: Number(total), page: input.page, pageSize: input.pageSize };
+    });
   }),
 
   /**
    * Registro individual por id.
+   *
+   * R1.2 — antes NO filtraba por establecimiento (ctx.prisma directo, sin
+   * WHERE de tenant): cualquier establecimiento podía leer la sala de
+   * expulsión de otro conociendo el uuid. La policy `sala_exp_by_estab`
+   * ahora hace ese filtro real bajo rol `authenticated`.
    */
   get: eceBase.input(getInput).query(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = buildEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<SalaExpulsionRow[]>`
-      SELECT * FROM ece.sala_expulsion WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    if (rows.length === 0) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Registro de sala de expulsión no encontrado." });
-    }
-    return rows[0]!;
+    return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+      const rows = await tx.$queryRaw<SalaExpulsionRow[]>`
+        SELECT * FROM ece.sala_expulsion WHERE id = ${input.id}::uuid LIMIT 1
+      `;
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Registro de sala de expulsión no encontrado." });
+      }
+      return rows[0]!;
+    });
   }),
 
   /**
    * Devuelve solo el array de eventos de una sala específica.
    * Útil para el timeline de la UI sin cargar todos los campos.
+   *
+   * R1.2 — mismo hallazgo que `get`: sin filtro de establecimiento.
    */
   listEventos: eceBase.input(listEventosInput).query(async ({ ctx, input }) => {
-    withEceContext(ctx);
+    const eceCtx = buildEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<[{ eventos: ExpulsionEvento[] }?]>`
-      SELECT eventos FROM ece.sala_expulsion WHERE id = ${input.salaId}::uuid LIMIT 1
-    `;
-    if (!rows[0]) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Sala de expulsión no encontrada." });
-    }
-    return rows[0].eventos;
+    return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
+      const rows = await tx.$queryRaw<[{ eventos: ExpulsionEvento[] }?]>`
+        SELECT eventos FROM ece.sala_expulsion WHERE id = ${input.salaId}::uuid LIMIT 1
+      `;
+      if (!rows[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Sala de expulsión no encontrada." });
+      }
+      return rows[0].eventos;
+    });
   }),
 
   /**
@@ -205,9 +234,9 @@ export const periodoExpulsivoRouter = router({
    * emite `ece.expulsion.hemorragia_post_parto_alerta` en el outbox de dominio.
    */
   registrarEvento: eceMutate.input(registrarEventoInput).mutation(async ({ ctx, input }) => {
-    const eceCtx = withEceContext(ctx);
+    const eceCtx = buildEceCtx(ctx);
 
-    return ctx.prisma.$transaction(async (tx) => {
+    return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
       // Cargar la sala y sus eventos actuales dentro de la transacción.
       const rows = await tx.$queryRaw<SalaExpulsionRow[]>`
         SELECT id, eventos, nacimiento_ts

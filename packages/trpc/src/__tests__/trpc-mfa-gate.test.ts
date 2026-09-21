@@ -101,6 +101,35 @@ describe("tenantProcedure — gate MFA (OWASP A07:2025, H4)", () => {
     await expect(caller.ping()).resolves.toBe("ok");
   });
 
+  it("R4.5: mfaSatisfied undefined + CSV vacío + tenant.mfaStaffRequired=true → FORBIDDEN (fail-closed por switch de org)", async () => {
+    vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "");
+    const { router, tenantProcedure } = await importFreshTrpc();
+    const testRouter = router({ ping: tenantProcedure.query(() => "ok" as const) });
+    const ctx = buildCtx(prisma, undefined);
+    const caller = testRouter.createCaller({
+      ...ctx,
+      tenant: { ...ctx.tenant!, mfaStaffRequired: true },
+    });
+
+    await expect(caller.ping()).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining("segundo factor"),
+    });
+  });
+
+  it("R4.5: mfaSatisfied undefined + CSV vacío + tenant.mfaStaffRequired=false → pasa (default intacto)", async () => {
+    vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "");
+    const { router, tenantProcedure } = await importFreshTrpc();
+    const testRouter = router({ ping: tenantProcedure.query(() => "ok" as const) });
+    const ctx = buildCtx(prisma, undefined);
+    const caller = testRouter.createCaller({
+      ...ctx,
+      tenant: { ...ctx.tenant!, mfaStaffRequired: false },
+    });
+
+    await expect(caller.ping()).resolves.toBe("ok");
+  });
+
   it("sin tenant → FORBIDDEN por selección de organización, antes de evaluar MFA", async () => {
     vi.stubEnv("MFA_REQUIRED_ROLE_CODES", "ADMIN,DIR");
     const { router, tenantProcedure } = await importFreshTrpc();

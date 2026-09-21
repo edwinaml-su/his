@@ -1,5 +1,7 @@
 import { Suspense } from "react";
 import { OrientacionKiosko } from "@/components/orientacion-kiosko";
+import { getTenantContext } from "@/lib/auth/session";
+import { prisma } from "@his/database";
 
 /**
  * Ruta /orientacion — Navegación táctil de orientación (kioskos/tablets de admisión).
@@ -21,6 +23,22 @@ export default async function OrientacionPage(
   }
 ) {
   const searchParams = await props.searchParams;
+
+  // CC-B — nombre real de la organización para el encabezado del kiosko
+  // (antes hardcoded "AVANTE" dentro de OrientacionKiosko). `ctx.tenant` solo
+  // trae el id; se resuelve Organization.name en este Server Component, el
+  // punto más cercano al origen de datos.
+  const tenant = await getTenantContext();
+  const organization = tenant
+    ? await prisma.organization.findUnique({
+        where: { id: tenant.organizationId },
+        select: { tradeName: true, legalName: true },
+      })
+    : null;
+  const organizationName = organization
+    ? (organization.tradeName ?? organization.legalName)
+    : undefined;
+
   return (
     <Suspense fallback={null}>
       <OrientacionKiosko
@@ -33,6 +51,7 @@ export default async function OrientacionPage(
         baseUrl={searchParams.baseUrl}
         mostrarRutas={searchParams.mostrarRutas !== "false"}
         triageDestacado={searchParams.triageDestacado !== "false"}
+        organizationName={organizationName}
       />
     </Suspense>
   );

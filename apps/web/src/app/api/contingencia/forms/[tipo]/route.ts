@@ -7,6 +7,8 @@
  */
 import { type NextRequest, NextResponse } from "next/server";
 import { type TipoFormulario, generarFormularioPdf } from "./pdf-generator";
+import { getTenantContext } from "@/lib/auth/session";
+import { prisma } from "@his/database";
 
 const TIPOS_VALIDOS: readonly TipoFormulario[] = [
   "signos_vitales",
@@ -33,7 +35,24 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ tipo: st
     );
   }
 
-  const buffer = await generarFormularioPdf(tipo);
+  // CC-B — nombre real de la organización, best-effort. Este endpoint es de
+  // CONTINGENCIA (NTEC Art. 44): si la sesión/BD no responde, la impresión en
+  // papel NO debe bloquearse — generarFormularioPdf ya trae su propio fallback.
+  let organizationName: string | undefined;
+  try {
+    const tenant = await getTenantContext();
+    if (tenant) {
+      const organization = await prisma.organization.findUnique({
+        where: { id: tenant.organizationId },
+        select: { tradeName: true, legalName: true },
+      });
+      organizationName = organization?.tradeName ?? organization?.legalName;
+    }
+  } catch {
+    // Contingencia: sin sesión/BD disponible, se sigue con el fallback.
+  }
+
+  const buffer = await generarFormularioPdf(tipo, organizationName);
 
   return new NextResponse(new Uint8Array(buffer), {
     status: 200,

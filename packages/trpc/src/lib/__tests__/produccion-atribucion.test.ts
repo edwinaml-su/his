@@ -31,6 +31,9 @@ const REGLA = "00000000-0000-0000-0000-000000000008";
 const PRODUCCION = "00000000-0000-0000-0000-000000000009";
 const CARGO_HONORARIO = "00000000-0000-0000-0000-00000000000a";
 const CARGO_REVERSION = "00000000-0000-0000-0000-00000000000b";
+/** R2.3 (SQL 262) — moneda del cargo ORIGEN, heredada por el cargo HONORARIO_MEDICO. */
+const CURRENCY_ORIGEN = "00000000-0000-0000-0000-00000000000c";
+const CURRENCY_FUNCIONAL = "00000000-0000-0000-0000-00000000000d";
 
 const emitDomainEventMock = vi.mocked(emitDomainEvent);
 
@@ -57,6 +60,7 @@ describe("atribuirProduccionMedica", () => {
       totalPrice: 50,
       encounterId: null,
       tipo: "NO_HOSPITALARIO",
+      currencyId: CURRENCY_ORIGEN,
     } as never);
   });
 
@@ -158,6 +162,7 @@ describe("atribuirProduccionMedica", () => {
           unitPrice: 20,
           totalPrice: 20,
           referenciaId: PRODUCCION,
+          currencyId: CURRENCY_ORIGEN,
         }),
       }),
     );
@@ -168,6 +173,52 @@ describe("atribuirProduccionMedica", () => {
     expect(emitDomainEventMock).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({ eventType: "produccion.registrada" }),
+    );
+  });
+
+  // R2.3 (SQL 262) — el cargo HONORARIO_MEDICO hereda la moneda del cargo ORIGEN.
+  it("R2.3: si el cargo ORIGEN no trae currencyId (pre-backfill), cae a la funcional de la org de la cuenta", async () => {
+    tx.patientAccountService.findUnique.mockResolvedValue({
+      accountId: ACCOUNT,
+      totalPrice: 50,
+      encounterId: null,
+      tipo: "NO_HOSPITALARIO",
+      currencyId: null,
+    } as never);
+    tx.medicoAfiliado.findFirst.mockResolvedValue({ tipoRelacion: "AFILIADO_SIN_CONSULTORIO" } as never);
+    tx.convenioHonorario.findFirst.mockResolvedValue({ id: CONVENIO } as never);
+    tx.reglaHonorario.findMany.mockResolvedValue([
+      {
+        id: REGLA,
+        ambito: "CONSULTA",
+        rolMedico: null,
+        serviceCategoryId: null,
+        codigoServicio: null,
+        tipoCalculo: "PORCENTAJE",
+        porcentaje: 0.4,
+        montoFijo: null,
+        montoMinimo: null,
+        montoMaximo: null,
+        prioridad: 0,
+        createdAt: new Date("2026-01-01"),
+      },
+    ] as never);
+    tx.produccionMedica.create.mockResolvedValue({ id: PRODUCCION } as never);
+    tx.patientAccountService.create.mockResolvedValue({ id: CARGO_HONORARIO } as never);
+    tx.patientAccount.findUnique.mockResolvedValue({
+      organization: { functionalCurrency: CURRENCY_FUNCIONAL },
+    } as never);
+
+    await atribuirProduccionMedica(tx, baseParams);
+
+    expect(tx.patientAccount.findUnique).toHaveBeenCalledWith({
+      where: { id: ACCOUNT },
+      select: { organization: { select: { functionalCurrency: true } } },
+    });
+    expect(tx.patientAccountService.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ currencyId: CURRENCY_FUNCIONAL }),
+      }),
     );
   });
 

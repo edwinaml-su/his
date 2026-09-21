@@ -93,6 +93,23 @@ function decimalToNumber(v: { toNumber: () => number } | number | null | undefin
   return typeof v === "number" ? v : v.toNumber();
 }
 
+/**
+ * R2.3 (SQL 262) — fallback de `crearCargoHonorarioYEnlazar` cuando el cargo
+ * origen no trae `currencyId`: la funcional de la organización dueña de la
+ * cuenta (mismo criterio de fallback que `resolverCurrencyIdDelCargo` en
+ * charge-capture.ts).
+ */
+async function resolverCurrencyIdFuncionalDeCuenta(tx: PrismaClient, accountId: string): Promise<string> {
+  const cuenta = await tx.patientAccount.findUnique({
+    where: { id: accountId },
+    select: { organization: { select: { functionalCurrency: true } } },
+  });
+  if (!cuenta) {
+    throw new Error(`resolverCurrencyIdFuncionalDeCuenta: cuenta ${accountId} no encontrada.`);
+  }
+  return cuenta.organization.functionalCurrency;
+}
+
 export interface ResolverHonorarioParaMedicoParams {
   organizationId: string;
   medicoAfiliadoId: string;
@@ -167,6 +184,13 @@ export interface CrearCargoHonorarioParams {
   encounterId: string | null;
   rolMedico: string;
   honorarioCalculado: number;
+  /**
+   * R2.3 (SQL 262) — moneda del cargo ORIGEN que disparó la atribución (el
+   * honorario es un derivado de su `montoFacturado`, en la misma moneda). Si
+   * viene `null` (cargo origen pre-backfill sin migrar aún), se resuelve la
+   * funcional de la organización de la cuenta como fallback.
+   */
+  currencyId: string | null;
   actorId: string;
 }
 
@@ -186,6 +210,8 @@ export async function crearCargoHonorarioYEnlazar(
   tx: PrismaClient,
   params: CrearCargoHonorarioParams,
 ): Promise<string> {
+  const currencyId = params.currencyId ?? (await resolverCurrencyIdFuncionalDeCuenta(tx, params.accountId));
+
   const cargoHonorario = await tx.patientAccountService.create({
     data: {
       accountId: params.accountId,
@@ -200,6 +226,7 @@ export async function crearCargoHonorarioYEnlazar(
       origen: "HONORARIO_MEDICO",
       priceSource: "manual_override",
       referenciaId: params.produccionId,
+      currencyId,
       createdBy: params.actorId,
     },
   });
@@ -237,7 +264,7 @@ export async function atribuirProduccionMedica(
 
   const cargo = await tx.patientAccountService.findUnique({
     where: { id: params.patientAccountServiceId },
-    select: { accountId: true, totalPrice: true, encounterId: true, tipo: true },
+    select: { accountId: true, totalPrice: true, encounterId: true, tipo: true, currencyId: true },
   });
   const montoFacturado = cargo ? decimalToNumber(cargo.totalPrice) : null;
   if (!cargo || montoFacturado == null) return null; // sin monto resuelto todavía (PENDIENTE_TARIFA).
@@ -317,6 +344,7 @@ export async function atribuirProduccionMedica(
           encounterId: cargo.encounterId,
           rolMedico: params.rolMedico,
           honorarioCalculado,
+          currencyId: cargo.currencyId,
           actorId: params.actorId,
         })
       : null;

@@ -87,6 +87,12 @@ type TxForPriceResolver = {
       where: { labTestId: string };
     }) => Promise<{ codigoTarifario: string | null } | null>;
   };
+  /** CC-0042 — tarifa base de procedimientos de terapia respiratoria (TR-*). */
+  trProcedimiento?: {
+    findFirst: (args: {
+      where: { codigo: string; tarifaBase: { not: null }; organizationId: string | null };
+    }) => Promise<{ tarifaBase: unknown } | null>;
+  };
 };
 
 interface ReglaRow {
@@ -270,7 +276,25 @@ async function precioCatalogo(
   const labTest =
     tenant ?? (await tx.labTest.findFirst({ where: { code, standardPrice: { not: null }, organizationId: null } }));
 
-  return labTest?.standardPrice != null ? Number(labTest.standardPrice) : null;
+  if (labTest?.standardPrice != null) return Number(labTest.standardPrice);
+
+  // CC-0042 — los procedimientos de terapia respiratoria (códigos TR-*) no
+  // viven en LabTest: su tarifa base parametrizable está en TrProcedimiento
+  // (override del tenant primero, catálogo global después — mismo criterio).
+  // `?.` porque TxForPriceResolver es estructural y suites viejas no lo traen.
+  if (tx.trProcedimiento) {
+    const trTenant = await tx.trProcedimiento.findFirst({
+      where: { codigo: code, tarifaBase: { not: null }, organizationId },
+    });
+    const tr =
+      trTenant ??
+      (await tx.trProcedimiento.findFirst({
+        where: { codigo: code, tarifaBase: { not: null }, organizationId: null },
+      }));
+    if (tr?.tarifaBase != null) return Number(tr.tarifaBase);
+  }
+
+  return null;
 }
 
 interface ContextoResolucion {

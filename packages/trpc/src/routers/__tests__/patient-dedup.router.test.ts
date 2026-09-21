@@ -665,6 +665,58 @@ describe("patientDedupRouter", () => {
         active: false,
       });
     });
+
+    it("D2: el merge completa aunque auditLog.create dentro de la tx demotada dé permission denied — el log se escribe fuera con el rol bypass", async () => {
+      prisma.ecePatientMerge.findUnique.mockResolvedValue({
+        id: MERGE_ID,
+        organizationId: ORG_ID,
+        canonicalPatientId: PATIENT_A,
+        mergedPatientId: PATIENT_B,
+        estado: "PENDIENTE",
+      } as never);
+      mockQueryRawHappyPath(prisma);
+      prisma.patient.update.mockResolvedValue({} as never);
+      prisma.ecePaciente.updateMany.mockResolvedValue({ count: 0 } as never);
+      prisma.ecePatientMerge.update.mockResolvedValue({
+        id: MERGE_ID,
+        estado: "EJECUTADO",
+        fechaEjecucion: new Date(),
+        canonicalPatientId: PATIENT_A,
+      } as never);
+
+      // `tx` es un mock DISTINTO de `ctx.prisma`: reproduce que, dentro del
+      // callback demotado (rol `authenticated`), el GRANT INSERT sobre
+      // AuditLog no existe — si el código todavía llamara `tx.auditLog.create`
+      // (el bug original), esta promesa rechazada se propagaría y el test
+      // fallaría. `ctx.prisma.auditLog.create` (rol bypass, fuera de la tx)
+      // sí tiene permiso y se mockea por separado como éxito.
+      const txAuditCreate = vi
+        .fn()
+        .mockRejectedValue(new Error("permission denied for table AuditLog"));
+      // tx mínimo y explícito (NO spread de `prisma`: el Proxy de mockDeep no
+      // materializa como "own property" un método que aún no se accedió,
+      // así que un spread pierde `$executeRawUnsafe` en silencio).
+      const tx = {
+        $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+        patient: prisma.patient,
+        ecePaciente: prisma.ecePaciente,
+        ecePatientMerge: prisma.ecePatientMerge,
+        auditLog: { create: txAuditCreate },
+      };
+      prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn(tx),
+      );
+      prisma.auditLog.create.mockResolvedValue({} as never);
+
+      const caller = patientDedupRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.confirmEceMerge(VALID_CONFIRM_INPUT);
+
+      expect(result.estado).toBe("EJECUTADO");
+      // El audit log NUNCA se intenta dentro de la tx demotada.
+      expect(txAuditCreate).not.toHaveBeenCalled();
+      // Se escribe una única vez, fuera, con el rol bypass de ctx.prisma.
+      expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    });
   });
 
   // ===========================================================================

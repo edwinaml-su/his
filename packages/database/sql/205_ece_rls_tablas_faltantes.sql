@@ -159,8 +159,10 @@
 --
 -- Idempotente: ENABLE ROW LEVEL SECURITY es repetible; DROP POLICY IF
 -- EXISTS + CREATE POLICY; GRANT/REVOKE son declarativos.
--- NO aplicado a prod por este archivo — @DBA solo entrega el SQL, @Orq/
--- Edwin aplican vía mcp__supabase__apply_migration en transacción.
+-- ⚠️ APLICADO a prod (verificado 2026-09-21 vía introspección: las 7 tablas
+-- tienen relrowsecurity = true con sus policies presentes, incl. las 3 de
+-- workflow_estado_layout de la corrección #2) — NO re-aplicar. Cabecera
+-- anterior ("NO aplicado a prod por este archivo") quedó stale (drift R3.6).
 -- =====================================================================
 
 -- ---------------------------------------------------------------------------

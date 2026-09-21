@@ -1,19 +1,30 @@
+"use client";
+
 /**
  * ECE — Signos Vitales: Historial / Tendencias
  *
- * Muestra tabla tabular de los últimos registros del paciente seleccionado.
+ * Lee las tomas reales vía `eceSignosVitales.list` (CC-0012) anclada a
+ * `?episodioId=` o `?cuentaId=` — mismo contrato de URL que el capturador
+ * `/nueva`. Sin ancla en la URL se ofrece el SelectorCuenta (patrón
+ * imaging/lis). Remediación auditoría 2026-09-18: esta página renderizaba
+ * MOCK_ROWS hardcodeados con el router ya disponible.
+ *
  * Recharts no está en las dependencias del workspace; se usa tabla nativa
  * para mantener zero-dep overhead. Si se añade recharts en el futuro, este
  * componente puede migrar a <LineChart> con el mismo shape de datos.
  *
- * Accesibilidad: tabla con scope="col", caption descriptivo, role="status"
- * en zona de alerta crítica (WCAG 2.2 AA).
+ * Accesibilidad: caption descriptivo, role="status" en zona de alerta
+ * crítica (WCAG 2.2 AA).
  */
+import * as React from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@his/ui/components/button";
 import { Badge } from "@his/ui/components/badge";
 import { DataCardList, type DataCardColumn } from "@his/ui/components/data-card-list";
 import { VITAL_THRESHOLDS_ADULT } from "@his/contracts/schemas/inpatient";
+import { SelectorCuenta } from "@/components/selector-cuenta";
+import { trpc } from "@/lib/trpc/react";
 
 // ---------------------------------------------------------------------------
 // Tipos locales
@@ -21,7 +32,8 @@ import { VITAL_THRESHOLDS_ADULT } from "@his/contracts/schemas/inpatient";
 
 interface VitalRow {
   id: string;
-  capturedAt: string; // ISO-8601
+  capturedAt: string | Date;
+  estado: string;
   systolicBp: number | null;
   diastolicBp: number | null;
   heartRate: number | null;
@@ -63,47 +75,6 @@ function CellValue({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Datos mock — reemplazar con api.eceSignosVitales.list cuando el router
-// esté cableado al cliente tRPC.
-// ---------------------------------------------------------------------------
-
-const MOCK_ROWS: VitalRow[] = [
-  {
-    id: "1",
-    capturedAt: "2026-05-17T08:00:00",
-    systolicBp: 120,
-    diastolicBp: 80,
-    heartRate: 72,
-    respiratoryRate: 16,
-    temperatureC: 36.8,
-    spo2: 98,
-    painScale: 2,
-  },
-  {
-    id: "2",
-    capturedAt: "2026-05-17T12:00:00",
-    systolicBp: 95,
-    diastolicBp: 62,
-    heartRate: 105,
-    respiratoryRate: 22,
-    temperatureC: 38.7,
-    spo2: 91,
-    painScale: 6,
-  },
-  {
-    id: "3",
-    capturedAt: "2026-05-17T16:00:00",
-    systolicBp: 85,
-    diastolicBp: 55,
-    heartRate: 118,
-    respiratoryRate: 28,
-    temperatureC: 39.2,
-    spo2: 89,
-    painScale: 8,
-  },
-];
-
 function hasCriticalAlert(row: VitalRow): boolean {
   return (
     isCritical("systolicBp", row.systolicBp) ||
@@ -115,11 +86,11 @@ function hasCriticalAlert(row: VitalRow): boolean {
   );
 }
 
-function formatDateTime(iso: string): string {
+function formatDateTime(value: string | Date): string {
   return new Intl.DateTimeFormat("es-SV", {
     dateStyle: "short",
     timeStyle: "short",
-  }).format(new Date(iso));
+  }).format(new Date(value));
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +110,9 @@ const COLUMNS: DataCardColumn<VitalRow>[] = [
         ) : (
           <Badge variant="secondary" className="text-xs">Normal</Badge>
         )}
+        {row.estado !== "firmado" && row.estado !== "validado" ? (
+          <Badge variant="outline" className="text-xs capitalize">{row.estado}</Badge>
+        ) : null}
       </span>
     ),
   },
@@ -190,7 +164,43 @@ const COLUMNS: DataCardColumn<VitalRow>[] = [
 // ---------------------------------------------------------------------------
 
 export default function SignosVitalesPage() {
-  const rows = MOCK_ROWS;
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const episodioId = searchParams.get("episodioId") || undefined;
+  const cuentaId = searchParams.get("cuentaId") || undefined;
+  const conAncla = Boolean(episodioId || cuentaId);
+
+  const query = trpc.eceSignosVitales.list.useQuery(
+    { ...(episodioId ? { episodioId } : {}), ...(cuentaId ? { cuentaId } : {}), limit: 50 },
+    { enabled: conAncla },
+  );
+
+  if (!conAncla) {
+    return (
+      <SelectorCuenta
+        titulo="Signos Vitales — Historial"
+        subtitulo="Seleccione la cuenta del paciente para ver su historial de tomas."
+        onSelect={(id) => router.replace(`/ece/signos-vitales?cuentaId=${id}`)}
+      />
+    );
+  }
+
+  const rows: VitalRow[] = (query.data?.items ?? []).map((r) => ({
+    id: r.id,
+    capturedAt: r.fecha_hora_toma,
+    estado: r.estado_registro,
+    systolicBp: r.presion_sistolica,
+    diastolicBp: r.presion_diastolica,
+    heartRate: r.frecuencia_cardiaca,
+    respiratoryRate: r.frecuencia_respiratoria,
+    temperatureC: r.temperatura,
+    spo2: r.saturacion_o2,
+    painScale: r.escala_dolor,
+  }));
+
+  const nuevaHref = episodioId
+    ? `/ece/signos-vitales/nueva?episodioId=${episodioId}`
+    : `/ece/signos-vitales/nueva?cuentaId=${cuentaId}`;
 
   return (
     <div className="space-y-4">
@@ -203,9 +213,18 @@ export default function SignosVitalesPage() {
           </p>
         </div>
         <Button asChild>
-          <Link href="/ece/signos-vitales/nueva">Nuevo registro</Link>
+          <Link href={nuevaHref}>Nuevo registro</Link>
         </Button>
       </div>
+
+      {query.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error.message}
+        </p>
+      ) : null}
+      {query.isLoading ? (
+        <p className="text-sm text-muted-foreground">Cargando historial…</p>
+      ) : null}
 
       {/* Zona de alerta crítica */}
       {rows.some(hasCriticalAlert) && (
@@ -220,12 +239,14 @@ export default function SignosVitalesPage() {
       )}
 
       {/* Lista responsiva de signos vitales */}
-      <DataCardList
-        data={rows}
-        getKey={(row) => row.id}
-        columns={COLUMNS}
-        emptyMessage='Sin registros. Use "Nuevo registro" para capturar signos vitales.'
-      />
+      {!query.isLoading ? (
+        <DataCardList
+          data={rows}
+          getKey={(row) => row.id}
+          columns={COLUMNS}
+          emptyMessage='Sin registros. Use "Nuevo registro" para capturar signos vitales.'
+        />
+      ) : null}
     </div>
   );
 }

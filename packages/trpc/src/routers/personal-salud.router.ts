@@ -66,6 +66,7 @@
  */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { validateDUI } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
@@ -123,13 +124,36 @@ const createInput = z.object({
   rolCodigos: z.array(z.string().min(1).max(20)).min(1),
 });
 
-const updateInput = z.object({
-  id: z.string().uuid(),
-  nombreCompleto: z.string().trim().min(3).max(200).optional(),
-  jvpmOJvp: z.string().trim().max(40).nullable().optional(),
-  profesion: z.string().trim().max(100).nullable().optional(),
-  rolCodigos: z.array(z.string().min(1).max(20)).optional(),
-});
+const updateInput = z
+  .object({
+    id: z.string().uuid(),
+    // D4b — permite corregir los centinelas `PENDIENTE-DUI-*` que crea el
+    // sync R1.1 (ya vivo en prod) sin exigir DUI en todos los casos: el
+    // documento_identidad de personal ECE también acepta NIT/pasaporte/DPI
+    // extranjero.
+    documentoIdentidad: z.string().trim().min(1).max(40).optional(),
+    nombreCompleto: z.string().trim().min(3).max(200).optional(),
+    jvpmOJvp: z.string().trim().max(40).nullable().optional(),
+    profesion: z.string().trim().max(100).nullable().optional(),
+    rolCodigos: z.array(z.string().min(1).max(20)).optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.documentoIdentidad === undefined) return true;
+      // Solo exige el checksum de DUI cuando el documento TIENE forma de DUI
+      // (9 dígitos, con o sin guion). Otros formatos (NIT, pasaporte, DPI de
+      // personal extranjero) se aceptan sin este chequeo — lección "Zod
+      // DUI-only bloquea DPI" (auditoría multipaís 2026-09-18): forzar
+      // validateDUI sobre todo documento_identidad bloquearía altas legítimas.
+      const digits = data.documentoIdentidad.replace(/\D/g, "");
+      if (digits.length !== 9) return true;
+      return validateDUI(data.documentoIdentidad);
+    },
+    {
+      message: "DUI inválido: el dígito verificador no corresponde.",
+      path: ["documentoIdentidad"],
+    },
+  );
 
 const setActiveInput = z.object({
   id: z.string().uuid(),
@@ -144,7 +168,9 @@ interface PersonalRow {
   id: string;
   documento_identidad: string;
   nombre_completo: string;
-  jvpm_o_jvp: string | null;
+  // D4a — la columna real en prod es `jvpm_codigo` (confirmado por
+  // introspección R1A/R3B); `jvpm_o_jvp` nunca existió en la tabla aplicada.
+  jvpm_codigo: string | null;
   profesion: string | null;
   activo: boolean;
   fecha_baja: Date | null;
@@ -190,6 +216,24 @@ function rethrowHisUserIdConflict(err: unknown): never {
   throw err;
 }
 
+/**
+ * P2-1 — traduce la violación del índice único parcial de
+ * `264_r3_unique_documento_personal.sql` (establecimiento_id,
+ * documento_identidad) a un CONFLICT comprensible. El dup-check previo en
+ * `update` (fuera de la tx) es solo UX — corre check-then-act y no bloquea
+ * una carrera real; este catch es la defensa definitiva contra ella.
+ */
+function rethrowDocumentoIdentidadConflict(err: unknown, documento: string): never {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (msg.includes("unique") || msg.includes("duplicate") || msg.includes("23505")) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Ya existe un profesional con documento ${documento} en este establecimiento.`,
+    });
+  }
+  throw err;
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -215,7 +259,7 @@ export const personalSaludRouter = router({
         p.id::text,
         p.documento_identidad,
         p.nombre_completo,
-        p.jvpm_o_jvp,
+        p.jvpm_codigo,
         p.profesion,
         p.activo,
         p.fecha_baja,
@@ -248,7 +292,7 @@ export const personalSaludRouter = router({
       id: r.id,
       documentoIdentidad: r.documento_identidad,
       nombreCompleto: r.nombre_completo,
-      jvpmOJvp: r.jvpm_o_jvp,
+      jvpmOJvp: r.jvpm_codigo,
       profesion: r.profesion,
       activo: r.activo,
       fechaBaja: r.fecha_baja?.toISOString() ?? null,
@@ -274,7 +318,7 @@ export const personalSaludRouter = router({
           p.id::text,
           p.documento_identidad,
           p.nombre_completo,
-          p.jvpm_o_jvp,
+          p.jvpm_codigo,
           p.profesion,
           p.activo,
           p.fecha_baja,
@@ -303,7 +347,7 @@ export const personalSaludRouter = router({
         id: row.id,
         documentoIdentidad: row.documento_identidad,
         nombreCompleto: row.nombre_completo,
-        jvpmOJvp: row.jvpm_o_jvp,
+        jvpmOJvp: row.jvpm_codigo,
         profesion: row.profesion,
         activo: row.activo,
         fechaBaja: row.fecha_baja?.toISOString() ?? null,
@@ -378,7 +422,7 @@ export const personalSaludRouter = router({
         const created = await tx.$queryRaw<{ id: string }[]>`
           INSERT INTO ece.personal_salud
             (institucion_id, establecimiento_id, documento_identidad,
-             nombre_completo, jvpm_o_jvp, profesion, activo, creado_en)
+             nombre_completo, jvpm_codigo, profesion, activo, creado_en)
           VALUES
             (${inst[0]!.id}::uuid, ${estab}::uuid, ${input.documentoIdentidad},
              ${input.nombreCompleto}, ${input.jvpmOJvp ?? null}, ${input.profesion ?? null},
@@ -407,58 +451,115 @@ export const personalSaludRouter = router({
     .mutation(async ({ ctx, input }) => {
       const estab = resolveEstablecimiento(ctx);
 
-      const target = await ctx.prisma.$queryRaw<{ id: string }[]>`
-        SELECT id::text FROM ece.personal_salud
+      const target = await ctx.prisma.$queryRaw<{ id: string; documento_identidad: string }[]>`
+        SELECT id::text, documento_identidad FROM ece.personal_salud
         WHERE id = ${input.id}::uuid AND establecimiento_id = ${estab}::uuid
         LIMIT 1
       `;
       if (!target[0]) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Profesional no encontrado." });
       }
+      const previousDocumento = target[0].documento_identidad;
 
-      await ctx.prisma.$transaction(async (tx) => {
-        // Update de campos básicos solo si llegaron.
-        const hasName = input.nombreCompleto !== undefined;
-        const hasJvpm = input.jvpmOJvp !== undefined;
-        const hasProf = input.profesion !== undefined;
-        if (hasName || hasJvpm || hasProf) {
-          await tx.$executeRaw`
-            UPDATE ece.personal_salud
-            SET
-              nombre_completo = COALESCE(${hasName ? input.nombreCompleto : null}::text, nombre_completo),
-              jvpm_o_jvp      = CASE WHEN ${hasJvpm}::boolean THEN ${input.jvpmOJvp ?? null}::text ELSE jvpm_o_jvp END,
-              profesion       = CASE WHEN ${hasProf}::boolean THEN ${input.profesion ?? null}::text ELSE profesion END
-            WHERE id = ${input.id}::uuid
-          `;
+      // D4b — permitir corregir los centinelas `PENDIENTE-DUI-*` (sync R1.1):
+      // el nuevo documento no puede colisionar con otro profesional del
+      // mismo establecimiento. UX únicamente (check-then-act, fuera de la
+      // tx) — la defensa real es el índice único parcial de
+      // `264_r3_unique_documento_personal.sql` (P2-1), atrapado abajo.
+      if (input.documentoIdentidad !== undefined) {
+        const dup = await ctx.prisma.$queryRaw<{ id: string }[]>`
+          SELECT id::text FROM ece.personal_salud
+          WHERE documento_identidad = ${input.documentoIdentidad}
+            AND establecimiento_id = ${estab}::uuid
+            AND id != ${input.id}::uuid
+          LIMIT 1
+        `;
+        if (dup[0]) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `Ya existe un profesional con documento ${input.documentoIdentidad} en este establecimiento.`,
+          });
         }
+      }
 
-        // Sincronizar roles si llegaron.
-        if (input.rolCodigos !== undefined) {
-          const roles = await tx.$queryRaw<{ id: string; codigo: string }[]>`
-            SELECT id::text, codigo FROM ece.rol WHERE codigo = ANY(${input.rolCodigos}::text[])
-          `;
-          if (roles.length !== input.rolCodigos.length) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "Algunos roles ECE no existen.",
-            });
-          }
-          // Desactivar todas las asignaciones actuales.
-          await tx.$executeRaw`
-            UPDATE ece.asignacion_rol SET activo = false
-            WHERE personal_id = ${input.id}::uuid AND activo = true
-          `;
-          // Re-insertar / re-activar.
-          for (const role of roles) {
+      try {
+        await ctx.prisma.$transaction(async (tx) => {
+          // Update de campos básicos solo si llegaron.
+          const hasName = input.nombreCompleto !== undefined;
+          const hasDoc = input.documentoIdentidad !== undefined;
+          const hasJvpm = input.jvpmOJvp !== undefined;
+          const hasProf = input.profesion !== undefined;
+          if (hasName || hasDoc || hasJvpm || hasProf) {
             await tx.$executeRaw`
-              INSERT INTO ece.asignacion_rol (personal_id, rol_id, activo, asignado_en)
-              VALUES (${input.id}::uuid, ${role.id}::uuid, true, now())
-              ON CONFLICT (personal_id, rol_id, servicio_id)
-                DO UPDATE SET activo = true, asignado_en = now()
+              UPDATE ece.personal_salud
+              SET
+                nombre_completo     = COALESCE(${hasName ? input.nombreCompleto : null}::text, nombre_completo),
+                documento_identidad = COALESCE(${hasDoc ? input.documentoIdentidad : null}::text, documento_identidad),
+                jvpm_codigo         = CASE WHEN ${hasJvpm}::boolean THEN ${input.jvpmOJvp ?? null}::text ELSE jvpm_codigo END,
+                profesion           = CASE WHEN ${hasProf}::boolean THEN ${input.profesion ?? null}::text ELSE profesion END
+              WHERE id = ${input.id}::uuid
             `;
           }
+
+          // Sincronizar roles si llegaron.
+          if (input.rolCodigos !== undefined) {
+            const roles = await tx.$queryRaw<{ id: string; codigo: string }[]>`
+              SELECT id::text, codigo FROM ece.rol WHERE codigo = ANY(${input.rolCodigos}::text[])
+            `;
+            if (roles.length !== input.rolCodigos.length) {
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message: "Algunos roles ECE no existen.",
+              });
+            }
+            // Desactivar todas las asignaciones actuales.
+            await tx.$executeRaw`
+              UPDATE ece.asignacion_rol SET activo = false
+              WHERE personal_id = ${input.id}::uuid AND activo = true
+            `;
+            // Re-insertar / re-activar.
+            for (const role of roles) {
+              await tx.$executeRaw`
+                INSERT INTO ece.asignacion_rol (personal_id, rol_id, activo, asignado_en)
+                VALUES (${input.id}::uuid, ${role.id}::uuid, true, now())
+                ON CONFLICT (personal_id, rol_id, servicio_id)
+                  DO UPDATE SET activo = true, asignado_en = now()
+              `;
+            }
+          }
+        });
+      } catch (err) {
+        // P2-1 — si la violación es del índice único parcial de documento
+        // (carrera con otra request concurrente), CONFLICT comprensible.
+        // Cualquier otro error (p.ej. BAD_REQUEST de roles) se repropaga tal cual.
+        if (input.documentoIdentidad !== undefined) {
+          rethrowDocumentoIdentidadConflict(err, input.documentoIdentidad);
         }
-      });
+        throw err;
+      }
+
+      // P1 (TDR §6.3) — el documento de identidad es la llave de identidad
+      // del profesional; su cambio queda en la cadena de auditoría con
+      // before/after. Corre DESPUÉS de la tx, con el rol bypass de
+      // ctx.prisma — mismo patrón que confirmEceMerge (D2, patient-dedup.router.ts):
+      // `authenticated` no tiene GRANT INSERT sobre audit.AuditLog.
+      if (input.documentoIdentidad !== undefined && input.documentoIdentidad !== previousDocumento) {
+        await ctx.prisma.auditLog.create({
+          data: {
+            userId: ctx.user.id,
+            organizationId: ctx.tenant.organizationId,
+            establishmentId: estab,
+            ip: ctx.ip ?? null,
+            userAgent: ctx.userAgent ?? null,
+            action: "UPDATE",
+            entity: "PersonalSalud",
+            entityId: input.id,
+            beforeJson: { documentoIdentidad: previousDocumento },
+            afterJson: { documentoIdentidad: input.documentoIdentidad },
+            justification: "Corrección de documento de identidad (D4b).",
+          },
+        });
+      }
 
       return { id: input.id };
     }),

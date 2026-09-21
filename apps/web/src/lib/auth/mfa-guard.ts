@@ -19,9 +19,18 @@ import { MFA_COOKIE_NAME, isMfaSatisfied, readMfaPolicy } from "./mfa-session";
  * dejado aquí `UnsafeUnwrappedCookies`, que preserva el acceso síncrono con un
  * cast — funciona en 15 (deprecado) pero **desaparece en Next 16**, y esto es
  * un gate de seguridad: no se deja como deuda.
+ *
+ * `orgMfaStaffRequired` (R4.5, default `false`) es el switch de
+ * `Organization.mfaStaffRequired` de la org activa — el caller lo resuelve
+ * desde `TenantContext` (sin tenant/org, p.ej. usuario sin membresías, queda
+ * en `false` y el comportamiento es el de la política legada por roles).
  */
-export async function assertMfaOrRedirect(userId: string, roleCodes: string[]): Promise<void> {
-  const policy = readMfaPolicy();
+export async function assertMfaOrRedirect(
+  userId: string,
+  roleCodes: string[],
+  orgMfaStaffRequired = false,
+): Promise<void> {
+  const policy = readMfaPolicy(process.env, orgMfaStaffRequired);
   if (policy.mode === "off") return;
 
   const cookieStore = await cookies();

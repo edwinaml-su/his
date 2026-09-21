@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, requireRole } from "../../trpc";
 import { requirePersonalSalud, type PersonalSaludTx } from "../../lib/identity-resolver";
+import { withEceContext } from "../../ece/rls-context";
 
 // ---------------------------------------------------------------------------
 // Schemas Zod
@@ -154,44 +155,48 @@ const writeBase = requireRole(["MT", "NURSE", "OB", "NEONATOLOGIST", "PHYSICIAN"
 export const eceReanimacionNeonatalRouter = router({
   /** Lista registros NRP, filtrables por atencion_rn_id. Orden apertura DESC. */
   list: readBase.input(listSchema).query(async ({ ctx, input }) => {
-    resolveEceCtx(ctx);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
 
     const atencionFilter = input.atencionRnId ?? null;
     const offset = (input.page - 1) * input.pageSize;
 
-    const rows = await ctx.prisma.$queryRaw<ReanimacionNeonatalRow[]>`
-      SELECT *
-      FROM ece.reanimacion_neonatal
-      WHERE (${atencionFilter}::uuid IS NULL OR atencion_rn_id = ${atencionFilter}::uuid)
-      ORDER BY apertura_en DESC
-      LIMIT ${input.pageSize} OFFSET ${offset}
-    `;
+    return withEceContext(ctx.prisma, userId, establecimientoId, async (tx) => {
+      const rows = await tx.$queryRaw<ReanimacionNeonatalRow[]>`
+        SELECT *
+        FROM ece.reanimacion_neonatal
+        WHERE (${atencionFilter}::uuid IS NULL OR atencion_rn_id = ${atencionFilter}::uuid)
+        ORDER BY apertura_en DESC
+        LIMIT ${input.pageSize} OFFSET ${offset}
+      `;
 
-    const [{ total }] = await ctx.prisma.$queryRaw<[{ total: bigint }]>`
-      SELECT COUNT(*) AS total
-      FROM ece.reanimacion_neonatal
-      WHERE (${atencionFilter}::uuid IS NULL OR atencion_rn_id = ${atencionFilter}::uuid)
-    `;
+      const [{ total }] = await tx.$queryRaw<[{ total: bigint }]>`
+        SELECT COUNT(*) AS total
+        FROM ece.reanimacion_neonatal
+        WHERE (${atencionFilter}::uuid IS NULL OR atencion_rn_id = ${atencionFilter}::uuid)
+      `;
 
-    return {
-      items: rows,
-      total: Number(total),
-      page: input.page,
-      pageSize: input.pageSize,
-    };
+      return {
+        items: rows,
+        total: Number(total),
+        page: input.page,
+        pageSize: input.pageSize,
+      };
+    });
   }),
 
   /** Lectura individual por id. */
   get: readBase.input(getSchema).query(async ({ ctx, input }) => {
-    resolveEceCtx(ctx);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<ReanimacionNeonatalRow[]>`
-      SELECT * FROM ece.reanimacion_neonatal WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    if (rows.length === 0) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
-    }
-    return rows[0]!;
+    return withEceContext(ctx.prisma, userId, establecimientoId, async (tx) => {
+      const rows = await tx.$queryRaw<ReanimacionNeonatalRow[]>`
+        SELECT * FROM ece.reanimacion_neonatal WHERE id = ${input.id}::uuid LIMIT 1
+      `;
+      if (rows.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
+      }
+      return rows[0]!;
+    });
   }),
 
   /**
@@ -199,28 +204,31 @@ export const eceReanimacionNeonatalRouter = router({
    * Estado inicial: en_curso (cerrado_en IS NULL).
    */
   crear: writeBase.input(crearSchema).mutation(async ({ ctx, input }) => {
-    const { userId } = resolveEceCtx(ctx);
-    const personalId = await resolvePersonalId(ctx.prisma as never, userId);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
 
     const fcInicial = input.fcInicial ?? null;
     const respiracionInicial = input.respiracionInicial ?? null;
 
-    const rows = await ctx.prisma.$queryRaw<[{ id: string }]>`
-      INSERT INTO ece.reanimacion_neonatal (
-        atencion_rn_id,
-        registrado_por,
-        fc_inicial,
-        respiracion_inicial
-      ) VALUES (
-        ${input.atencionRnId}::uuid,
-        ${personalId}::uuid,
-        ${fcInicial}::smallint,
-        ${respiracionInicial}
-      )
-      RETURNING id::text
-    `;
+    return withEceContext(ctx.prisma, userId, establecimientoId, async (tx) => {
+      const personalId = await resolvePersonalId(tx as never, userId);
 
-    return { id: rows[0]!.id };
+      const rows = await tx.$queryRaw<[{ id: string }]>`
+        INSERT INTO ece.reanimacion_neonatal (
+          atencion_rn_id,
+          registrado_por,
+          fc_inicial,
+          respiracion_inicial
+        ) VALUES (
+          ${input.atencionRnId}::uuid,
+          ${personalId}::uuid,
+          ${fcInicial}::smallint,
+          ${respiracionInicial}
+        )
+        RETURNING id::text
+      `;
+
+      return { id: rows[0]!.id };
+    });
   }),
 
   /**
@@ -228,117 +236,119 @@ export const eceReanimacionNeonatalRouter = router({
    * Solo si cerrado_en IS NULL (registro en_curso).
    */
   registrarPaso: writeBase.input(registrarPasoSchema).mutation(async ({ ctx, input }) => {
-    resolveEceCtx(ctx);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<[{ cerrado_en: Date | null }?]>`
-      SELECT cerrado_en FROM ece.reanimacion_neonatal
-      WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const rec = rows[0];
-    if (!rec) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
-    }
-    if (rec.cerrado_en !== null) {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "Solo se pueden registrar pasos en un registro en_curso (cerrado_en IS NULL).",
-      });
-    }
-
-    const updated: string[] = [];
-
-    if (input.estimulacionTactilNota !== undefined) {
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET estimulacion_tactil_en = COALESCE(estimulacion_tactil_en, now()),
-            estimulacion_tactil_nota = ${input.estimulacionTactilNota},
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
+    return withEceContext(ctx.prisma, userId, establecimientoId, async (tx) => {
+      const rows = await tx.$queryRaw<[{ cerrado_en: Date | null }?]>`
+        SELECT cerrado_en FROM ece.reanimacion_neonatal
+        WHERE id = ${input.id}::uuid LIMIT 1
       `;
-      updated.push("estimulacion_tactil");
-    }
+      const rec = rows[0];
+      if (!rec) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
+      }
+      if (rec.cerrado_en !== null) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Solo se pueden registrar pasos en un registro en_curso (cerrado_en IS NULL).",
+        });
+      }
 
-    if (input.vppPresionCmh2o !== undefined || input.vppFrecuenciaRpm !== undefined || input.vppFiO2Pct !== undefined) {
-      const presion = input.vppPresionCmh2o ?? null;
-      const frecuencia = input.vppFrecuenciaRpm ?? null;
-      const fio2 = input.vppFiO2Pct ?? null;
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET vpp_iniciada_en = COALESCE(vpp_iniciada_en, now()),
-            vpp_presion_cmh2o = COALESCE(${presion}::smallint, vpp_presion_cmh2o),
-            vpp_frecuencia_rpm = COALESCE(${frecuencia}::smallint, vpp_frecuencia_rpm),
-            vpp_fi_o2_pct = COALESCE(${fio2}::smallint, vpp_fi_o2_pct),
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("vpp");
-    }
+      const updated: string[] = [];
 
-    if (input.tuboSizeMm !== undefined || input.intubacionNota !== undefined) {
-      const tubo = input.tuboSizeMm ?? null;
-      const nota = input.intubacionNota ?? null;
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET intubacion_en = COALESCE(intubacion_en, now()),
-            tubo_size_mm = COALESCE(${tubo}, tubo_size_mm),
-            intubacion_nota = COALESCE(${nota}, intubacion_nota),
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("intubacion");
-    }
+      if (input.estimulacionTactilNota !== undefined) {
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET estimulacion_tactil_en = COALESCE(estimulacion_tactil_en, now()),
+              estimulacion_tactil_nota = ${input.estimulacionTactilNota},
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("estimulacion_tactil");
+      }
 
-    if (input.mceRatio !== undefined) {
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET mce_iniciado_en = COALESCE(mce_iniciado_en, now()),
-            mce_ratio = ${input.mceRatio},
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("mce");
-    }
+      if (input.vppPresionCmh2o !== undefined || input.vppFrecuenciaRpm !== undefined || input.vppFiO2Pct !== undefined) {
+        const presion = input.vppPresionCmh2o ?? null;
+        const frecuencia = input.vppFrecuenciaRpm ?? null;
+        const fio2 = input.vppFiO2Pct ?? null;
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET vpp_iniciada_en = COALESCE(vpp_iniciada_en, now()),
+              vpp_presion_cmh2o = COALESCE(${presion}::smallint, vpp_presion_cmh2o),
+              vpp_frecuencia_rpm = COALESCE(${frecuencia}::smallint, vpp_frecuencia_rpm),
+              vpp_fi_o2_pct = COALESCE(${fio2}::smallint, vpp_fi_o2_pct),
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("vpp");
+      }
 
-    if (input.adrenalinaDosisMl !== undefined) {
-      const via = input.adrenalinaVia ?? null;
-      const conc = input.adrenalinaConcentracion ?? null;
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET adrenalina_dosis_ml = ${input.adrenalinaDosisMl},
-            adrenalina_via = COALESCE(${via}, adrenalina_via),
-            adrenalina_concentracion = COALESCE(${conc}, adrenalina_concentracion),
-            adrenalina_en = COALESCE(adrenalina_en, now()),
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("adrenalina");
-    }
+      if (input.tuboSizeMm !== undefined || input.intubacionNota !== undefined) {
+        const tubo = input.tuboSizeMm ?? null;
+        const nota = input.intubacionNota ?? null;
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET intubacion_en = COALESCE(intubacion_en, now()),
+              tubo_size_mm = COALESCE(${tubo}, tubo_size_mm),
+              intubacion_nota = COALESCE(${nota}, intubacion_nota),
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("intubacion");
+      }
 
-    if (input.volumenExpansorMl !== undefined) {
-      const tipo = input.volumenExpansorTipo ?? null;
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET volumen_expansor_ml = ${input.volumenExpansorMl},
-            volumen_expansor_tipo = COALESCE(${tipo}, volumen_expansor_tipo),
-            volumen_expansor_en = COALESCE(volumen_expansor_en, now()),
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("volumen_expansor");
-    }
+      if (input.mceRatio !== undefined) {
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET mce_iniciado_en = COALESCE(mce_iniciado_en, now()),
+              mce_ratio = ${input.mceRatio},
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("mce");
+      }
 
-    if (input.fcPostIntervencion !== undefined) {
-      await ctx.prisma.$executeRaw`
-        UPDATE ece.reanimacion_neonatal
-        SET fc_post_intervencion = ${input.fcPostIntervencion},
-            fc_post_en = COALESCE(fc_post_en, now()),
-            actualizado_en = now()
-        WHERE id = ${input.id}::uuid
-      `;
-      updated.push("fc_post");
-    }
+      if (input.adrenalinaDosisMl !== undefined) {
+        const via = input.adrenalinaVia ?? null;
+        const conc = input.adrenalinaConcentracion ?? null;
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET adrenalina_dosis_ml = ${input.adrenalinaDosisMl},
+              adrenalina_via = COALESCE(${via}, adrenalina_via),
+              adrenalina_concentracion = COALESCE(${conc}, adrenalina_concentracion),
+              adrenalina_en = COALESCE(adrenalina_en, now()),
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("adrenalina");
+      }
 
-    return { ok: true as const, updated };
+      if (input.volumenExpansorMl !== undefined) {
+        const tipo = input.volumenExpansorTipo ?? null;
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET volumen_expansor_ml = ${input.volumenExpansorMl},
+              volumen_expansor_tipo = COALESCE(${tipo}, volumen_expansor_tipo),
+              volumen_expansor_en = COALESCE(volumen_expansor_en, now()),
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("volumen_expansor");
+      }
+
+      if (input.fcPostIntervencion !== undefined) {
+        await tx.$executeRaw`
+          UPDATE ece.reanimacion_neonatal
+          SET fc_post_intervencion = ${input.fcPostIntervencion},
+              fc_post_en = COALESCE(fc_post_en, now()),
+              actualizado_en = now()
+          WHERE id = ${input.id}::uuid
+        `;
+        updated.push("fc_post");
+      }
+
+      return { ok: true as const, updated };
+    });
   }),
 
   /**
@@ -346,43 +356,46 @@ export const eceReanimacionNeonatalRouter = router({
    * Transición terminal: setea cerrado_en = now().
    */
   cerrar: writeBase.input(cerrarSchema).mutation(async ({ ctx, input }) => {
-    const { userId } = resolveEceCtx(ctx);
-    const personalId = await resolvePersonalId(ctx.prisma as never, userId);
+    const { userId, establecimientoId } = resolveEceCtx(ctx);
 
-    const rows = await ctx.prisma.$queryRaw<[{ cerrado_en: Date | null }?]>`
-      SELECT cerrado_en FROM ece.reanimacion_neonatal
-      WHERE id = ${input.id}::uuid LIMIT 1
-    `;
-    const rec = rows[0];
-    if (!rec) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
-    }
-    if (rec.cerrado_en !== null) {
-      throw new TRPCError({
-        code: "CONFLICT",
-        message: "El registro NRP ya está cerrado.",
-      });
-    }
+    return withEceContext(ctx.prisma, userId, establecimientoId, async (tx) => {
+      const personalId = await resolvePersonalId(tx as never, userId);
 
-    const notas = input.notasCierre ?? null;
-    const fcPost = input.fcPostIntervencion ?? null;
+      const rows = await tx.$queryRaw<[{ cerrado_en: Date | null }?]>`
+        SELECT cerrado_en FROM ece.reanimacion_neonatal
+        WHERE id = ${input.id}::uuid LIMIT 1
+      `;
+      const rec = rows[0];
+      if (!rec) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Registro NRP no encontrado." });
+      }
+      if (rec.cerrado_en !== null) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "El registro NRP ya está cerrado.",
+        });
+      }
 
-    await ctx.prisma.$executeRaw`
-      UPDATE ece.reanimacion_neonatal
-      SET resultado            = ${input.resultado}::ece.resultado_nrp,
-          cerrado_en           = now(),
-          cerrado_por          = ${personalId}::uuid,
-          notas_cierre         = ${notas},
-          fc_post_intervencion = COALESCE(${fcPost}::smallint, fc_post_intervencion),
-          fc_post_en           = CASE
-                                   WHEN ${fcPost}::smallint IS NOT NULL AND fc_post_en IS NULL
-                                   THEN now()
-                                   ELSE fc_post_en
-                                 END,
-          actualizado_en       = now()
-      WHERE id = ${input.id}::uuid
-    `;
+      const notas = input.notasCierre ?? null;
+      const fcPost = input.fcPostIntervencion ?? null;
 
-    return { ok: true as const, resultado: input.resultado };
+      await tx.$executeRaw`
+        UPDATE ece.reanimacion_neonatal
+        SET resultado            = ${input.resultado}::ece.resultado_nrp,
+            cerrado_en           = now(),
+            cerrado_por          = ${personalId}::uuid,
+            notas_cierre         = ${notas},
+            fc_post_intervencion = COALESCE(${fcPost}::smallint, fc_post_intervencion),
+            fc_post_en           = CASE
+                                     WHEN ${fcPost}::smallint IS NOT NULL AND fc_post_en IS NULL
+                                     THEN now()
+                                     ELSE fc_post_en
+                                   END,
+            actualizado_en       = now()
+        WHERE id = ${input.id}::uuid
+      `;
+
+      return { ok: true as const, resultado: input.resultado };
+    });
   }),
 });

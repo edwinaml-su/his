@@ -50,6 +50,39 @@ function decimalToNumber(v: { toNumber: () => number } | number | null | undefin
   return typeof v === "number" ? v : v.toNumber();
 }
 
+/**
+ * R2.3 (SQL 262) — resuelve la moneda EXPLÍCITA del cargo: la de la
+ * `ServicePriceList` que resolvió el precio (si `resolverPrecio` devolvió
+ * `priceListId`), o la funcional de la org si el precio no vino de una lista
+ * (fuente "estandar"/catálogo, o PENDIENTE_TARIFA). Nunca null — toda línea
+ * nueva queda con una moneda registrada.
+ */
+async function resolverCurrencyIdDelCargo(
+  tx: PrismaClient,
+  organizationId: string,
+  priceListId: string | null,
+): Promise<string> {
+  if (priceListId) {
+    const filas = await tx.$queryRawUnsafe<Array<{ currencyId: string }>>(
+      `SELECT "currencyId" FROM "ServicePriceList" WHERE id = $1::uuid LIMIT 1`,
+      priceListId,
+    );
+    if (filas?.[0]?.currencyId) return filas[0].currencyId;
+  }
+
+  const org = await tx.organization.findUnique({
+    where: { id: organizationId },
+    select: { functionalCurrency: true },
+  });
+  if (!org) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No se pudo resolver la moneda del cargo: organización no encontrada.",
+    });
+  }
+  return org.functionalCurrency;
+}
+
 export interface CapturarCargoParams {
   organizationId: string;
   patientId: string;
@@ -177,6 +210,8 @@ export async function capturarCargo(
 
   const tipo = params.encounterId ? "HOSPITALARIO" : "NO_HOSPITALARIO";
 
+  const currencyId = await resolverCurrencyIdDelCargo(tx, params.organizationId, resuelto.priceListId);
+
   if (resuelto.precio == null) {
     // R3 — nunca se factura a 0: la línea queda pendiente de tarifa, visible
     // y bloqueante de cierre (el bloqueo real de cierre llega en Ola 4, C4-1).
@@ -197,6 +232,7 @@ export async function capturarCargo(
         status: "PENDIENTE_TARIFA",
         origen: params.origen,
         referenciaId: params.referenciaId ?? null,
+        currencyId,
         createdBy: params.actorId,
       },
     });
@@ -241,6 +277,7 @@ export async function capturarCargo(
       status: "VIGENTE",
       origen: params.origen,
       referenciaId: params.referenciaId ?? null,
+      currencyId,
       createdBy: params.actorId,
     },
   });
@@ -312,6 +349,7 @@ export async function revertirCargo(
       reversalOfId: original.id,
       origen: original.origen,
       referenciaId: original.referenciaId,
+      currencyId: original.currencyId,
       createdBy: params.actorId,
     },
   });

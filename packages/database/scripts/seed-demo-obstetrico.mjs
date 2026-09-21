@@ -117,7 +117,7 @@ async function avanzarEstado(tx, { instanciaId, estadoAnteriorId, tipoDocCodigo,
 async function upsertPersonal(tx, { doc, nombre, jvpm, institId, estabId }) {
   const { rows: [p] } = await tx.query(
     `INSERT INTO ece.personal_salud
-       (documento_identidad, nombre_completo, institucion_id, establecimiento_id, jvpm_o_jvp)
+       (documento_identidad, nombre_completo, institucion_id, establecimiento_id, jvpm_codigo)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT DO NOTHING
      RETURNING id`,

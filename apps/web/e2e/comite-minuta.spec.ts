@@ -61,7 +61,7 @@ test.describe("Comité ECE — Registro de minutas", () => {
     // Formulario debe ser visible
     await expect(
       page.getByRole("form", { name: /nueva minuta del comité/i }).or(
-        page.getByLabelText(/fecha de reunión/i),
+        page.getByLabel(/fecha de reunión/i),
       ),
     ).toBeVisible({ timeout: 3000 });
   });

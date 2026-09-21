@@ -101,6 +101,28 @@ describe("ledgerRouter", () => {
       expect(prisma.ledger.findMany).not.toHaveBeenCalled();
     });
 
+    // CC-B (directriz Edwin 2026-09-19) — CONTRALOR_CORP tiene visión
+    // consolidada de multi-libro en LECTURA (no en escritura).
+    it("permite lectura a un usuario con rol CONTRALOR_CORP", async () => {
+      prisma.userOrganizationRole.findFirst.mockResolvedValue({
+        ...adminMembership,
+        roleId: "00000000-0000-0000-0000-000000000030",
+      } as never);
+      prisma.ledger.findMany.mockResolvedValue([baseLedger] as never);
+
+      const caller = ledgerRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.list({});
+
+      expect(result).toHaveLength(1);
+      // El mock no filtra por `where`, así que esta prueba documenta el
+      // contrato (assertLedgerReadMembership acepta ADMIN|CONTRALOR_CORP) —
+      // la cobertura real del filtro SQL vive en el SQL/RLS, no en el mock.
+      const call = prisma.userOrganizationRole.findFirst.mock.calls[0]?.[0];
+      expect(call?.where).toMatchObject({
+        role: { code: { in: ["ADMIN", "CONTRALOR_CORP"] } },
+      });
+    });
+
     it("BAD_REQUEST si no hay organizationId ni tenant", async () => {
       const caller = ledgerRouter.createCaller(makeCtx({ prisma, tenant: null }));
       await expect(caller.list({})).rejects.toMatchObject({ code: "BAD_REQUEST" });

@@ -38,6 +38,29 @@ describe("readMfaPolicy", () => {
       } as unknown as NodeJS.ProcessEnv).mode,
     ).toBe("misconfigured");
   });
+
+  // R4.5 — switch de organización (default false, comportamiento bit a bit
+  // idéntico al de antes de este cambio).
+  describe("switch de organización (R4.5)", () => {
+    it("orgMfaStaffRequired=false (default) sin env vars → apagada, igual que antes", () => {
+      expect(readMfaPolicy({} as unknown as NodeJS.ProcessEnv, false).mode).toBe("off");
+      expect(readMfaPolicy({} as unknown as NodeJS.ProcessEnv).mode).toBe("off");
+    });
+
+    it("orgMfaStaffRequired=true con secreto → enforced con orgRequired", () => {
+      const policy = readMfaPolicy(
+        { MFA_SESSION_SECRET: SECRET } as unknown as NodeJS.ProcessEnv,
+        true,
+      );
+      expect(policy).toMatchObject({ mode: "enforced", roleCodes: [], orgRequired: true });
+    });
+
+    it("orgMfaStaffRequired=true sin secreto → misconfigured (fail-closed)", () => {
+      expect(
+        readMfaPolicy({} as unknown as NodeJS.ProcessEnv, true).mode,
+      ).toBe("misconfigured");
+    });
+  });
 });
 
 describe("mfaRequiredForRoles", () => {
@@ -54,6 +77,12 @@ describe("mfaRequiredForRoles", () => {
 
   it("mal configurada exige siempre (fail-closed)", () => {
     expect(mfaRequiredForRoles(["NURSE"], { mode: "misconfigured" as const, reason: "x" })).toBe(true);
+  });
+
+  it("orgRequired exige a CUALQUIER rol, no solo a los del CSV", () => {
+    const orgEnforced = { mode: "enforced" as const, roleCodes: [], secret: SECRET, orgRequired: true };
+    expect(mfaRequiredForRoles(["NURSE"], orgEnforced)).toBe(true);
+    expect(mfaRequiredForRoles([], orgEnforced)).toBe(true);
   });
 });
 

@@ -47,6 +47,7 @@ import {
 } from "@/lib/auth/mfa-session";
 import { prisma } from "@his/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getTenantContext } from "@/lib/auth/session";
 
 // -----------------------------------------------------------------------------
 // Constantes/tipos espejo de `@his/contracts/schemas/mfa`. NO importamos del
@@ -326,6 +327,13 @@ async function getCurrentUser(): Promise<{
 // 7) Server Actions exportadas
 // =============================================================================
 
+// CC-B — fallback histórico del issuer TOTP. `enrollMfa()` intenta resolver
+// el nombre real de la organización (best-effort — la página /mfa puede
+// renderizarse ANTES de que haya tenant seleccionado, ver docstring del
+// archivo) y solo lo usa para NUEVOS enrolamientos. Los TOTP ya enrolados
+// (secret + QR ya generados con "Avante HIS") NO se ven afectados: el issuer
+// solo viaja en el otpauth URI que el authenticator guarda al escanear, no
+// se revalida en cada verificación.
 const ISSUER = "Avante HIS";
 
 /**
@@ -386,10 +394,28 @@ export async function enrollMfa(): Promise<
     return { ok: false, error: "No se pudo guardar el enrolamiento." };
   }
 
+  // Best-effort: si hay tenant resuelto para esta sesión, usa el nombre real
+  // de la organización como issuer del QR. Sin tenant (o error de BD), cae al
+  // literal histórico — nunca debe bloquear el enrolamiento MFA.
+  let issuer = ISSUER;
+  try {
+    const tenant = await getTenantContext();
+    if (tenant) {
+      const organization = await prisma.organization.findUnique({
+        where: { id: tenant.organizationId },
+        select: { tradeName: true, legalName: true },
+      });
+      const resolvedName = organization?.tradeName ?? organization?.legalName;
+      if (resolvedName) issuer = resolvedName;
+    }
+  } catch {
+    // Sin tenant/BD disponible — se sigue con el issuer por defecto.
+  }
+
   const otpauthUri = buildOtpAuthUri({
     secret,
     account: user.email,
-    issuer: ISSUER,
+    issuer,
   });
 
   return {
@@ -411,9 +437,21 @@ export async function enrollMfa(): Promise<
 /**
  * A07:2025 — deja la marca de sesión firmada que prueba el segundo factor.
  * Sin política configurada es un no-op (la cookie no se emite y nada la pide).
+ *
+ * R4.5 — CRÍTICO: resuelve el switch de organización (`tenant.mfaStaffRequired`)
+ * igual que `assertMfaOrRedirect` (mfa-guard.ts) y el cómputo de `mfaSatisfied`
+ * de `/api/trpc`. Este era el tercer call site de `readMfaPolicy()` y el único
+ * que quedó env-only: con el switch de una org en `true` y
+ * `MFA_REQUIRED_ROLE_CODES` vacío (el estado real de prod hoy), llamar
+ * `readMfaPolicy()` sin el flag resuelve `{mode: "off"}` — el TOTP se verifica
+ * con éxito pero la cookie NUNCA se emite, el layout vuelve a redirigir a
+ * `/mfa`, y el usuario queda en loop infinito (bloqueo total del staff de esa
+ * org al primer uso del switch). Hallazgo de review — no reintroducir un
+ * cuarto call site que llame `readMfaPolicy()` sin resolver la org activa.
  */
 async function markMfaSession(userId: string): Promise<void> {
-  const policy = readMfaPolicy();
+  const tenant = await getTenantContext();
+  const policy = readMfaPolicy(process.env, tenant?.mfaStaffRequired ?? false);
   if (policy.mode !== "enforced") return;
   const cookieStore = await cookies();
   cookieStore.set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {
