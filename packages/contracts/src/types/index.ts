@@ -39,6 +39,13 @@ export interface TenantContext {
    */
   isCrossServiceRole: boolean;
   /**
+   * R4.5 — switch de MFA staff de la organización activa
+   * (`Organization.mfaStaffRequired`, SQL 263). Opcional (default ausente =
+   * `false`) por el mismo motivo que `breakGlass`: no romper fixtures/tests
+   * que construyen un `TenantContext` sin este campo.
+   */
+  mfaStaffRequired?: boolean;
+  /**
    * CC-0017 F3 — `true` si el usuario tiene una sesión break-glass vigente
    * (cookie httpOnly `his.break_glass` presente, con estructura válida y no
    * expirada). Resuelto una sola vez en `getTenantContext()` (server-side) a

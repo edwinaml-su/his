@@ -469,6 +469,9 @@ model Organization {
   active             Boolean  @default(true)
   /// Prefijo GS1 de la empresa (7–9 dígitos) para generación de GSRN (US.F2.6.1).
   gs1CompanyPrefix   String?  @db.VarChar(9)
+  /// R4.5 — switch de MFA staff por organización (SQL 263). Default false:
+  /// encenderlo en prod es decisión runtime de Edwin, no de este PR.
+  mfaStaffRequired   Boolean  @default(false)
   createdAt          DateTime @default(now()) @db.Timestamptz()
   createdBy          String?  @db.Uuid
   updatedAt          DateTime @updatedAt @db.Timestamptz()

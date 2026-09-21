@@ -9,7 +9,7 @@ import { TRPC_MAX_BATCH_SIZE } from "@/lib/trpc/batch-limit";
 import { getClientIp } from "@/lib/http/client-ip";
 import { redactPhi } from "@/lib/log-redact";
 import { cookies } from "next/headers";
-import { MFA_COOKIE_NAME, isMfaSatisfied } from "@/lib/auth/mfa-session";
+import { MFA_COOKIE_NAME, isMfaSatisfied, readMfaPolicy } from "@/lib/auth/mfa-session";
 
 const handler = async (req: Request) => {
   // H1 — OWASP A06:2025: un batch de httpBatchLink es "/api/trpc/proc1,proc2,...".
@@ -74,11 +74,15 @@ const handler = async (req: Request) => {
       portalAccount,
       ip,
       userAgent: req.headers.get("user-agent") ?? undefined,
-      // A07:2025 — veredicto de la política MFA para esta sesión.
+      // A07:2025 — veredicto de la política MFA para esta sesión. R4.5 pasa el
+      // switch de organización explícito: sin esto, `isMfaSatisfied` evaluaría
+      // solo el CSV de roles por env y las mutations tRPC bypasearían el
+      // toggle de `/organizations` aunque el layout ya haya redirigido a /mfa.
       mfaSatisfied: isMfaSatisfied({
         userId: user?.id ?? null,
         roleCodes: tenant?.roleCodes ?? [],
         cookie: (await cookies()).get(MFA_COOKIE_NAME)?.value,
+        policy: readMfaPolicy(process.env, tenant?.mfaStaffRequired ?? false),
       }),
     }),
     onError({ error, path }) {

@@ -20,6 +20,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
 import { probeRoute } from "../_helpers/route-probe";
+import { selectOptionMatching } from "../_helpers/ui";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -207,13 +208,15 @@ test.describe.serial("ECE — Ruta hospitalaria: alta por defunción", () => {
   test("6. MC inicia alta médica con motivo=defuncion", async ({ page }) => {
     await login(page, "physician");
 
-    const ok = await probeRoute(page, `/ece/alta/${episodioId}`);
+    // Ruta real: episodio-hospitalario/[id]/alta (wizard de 3 pasos), no un
+    // `/ece/alta/[id]` standalone.
+    const ok = await probeRoute(page, `/ece/episodio-hospitalario/${episodioId}/alta`);
     if (!ok) return;
 
     // Seleccionar motivo defunción
     const motivoSelect = page.getByLabel(/motivo.*alta|motivo/i).first();
     if ((await motivoSelect.count()) > 0) {
-      await motivoSelect.selectOption({ label: /defunción|defuncion/i });
+      await selectOptionMatching(motivoSelect, /defunción|defuncion/i);
     } else {
       const combo = page.getByRole("combobox").first();
       if ((await combo.count()) > 0) {
@@ -274,7 +277,7 @@ test.describe.serial("ECE — Ruta hospitalaria: alta por defunción", () => {
     // Lugar de fallecimiento
     const lugarSelect = page.getByLabel(/lugar.*fallecimiento/i).first();
     if ((await lugarSelect.count()) > 0) {
-      await lugarSelect.selectOption({ label: /establecimiento|hospital/i });
+      await selectOptionMatching(lugarSelect, /establecimiento|hospital/i);
     }
 
     await page.getByRole("button", { name: /guardar|registrar defunción/i }).click();
@@ -334,7 +337,8 @@ test.describe.serial("ECE — Ruta hospitalaria: alta por defunción", () => {
   test("9. Verifica episodio cerrado con motivo=defuncion", async ({ page }) => {
     await login(page, "admin");
 
-    const ok = await probeRoute(page, `/ece/episodios/${episodioId}`);
+    // Ruta real es /ece/episodio-hospitalario/[id] (singular, sin "s").
+    const ok = await probeRoute(page, `/ece/episodio-hospitalario/${episodioId}`);
     if (!ok) return;
 
     // El episodio debe mostrar estado cerrado con causa defunción
