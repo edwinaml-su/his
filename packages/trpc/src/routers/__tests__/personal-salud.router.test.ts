@@ -10,16 +10,21 @@
  * seguía fallando para ese usuario.
  *
  * Foco: `linkAuthUser`, `unlinkAuthUser`, `createAndLinkUser` — los tres
- * procedures tocados. No se cubre el resto del router (list/get/create/
- * update/setActive/listRoles/getPacientesReferidos/getReporteMedico), que
- * no se modificó en este cambio y no tenía tests previos (gap preexistente,
+ * procedures tocados por R03. No se cubre el resto del router (list/get/
+ * create/setActive/listRoles/getPacientesReferidos/getReporteMedico), que no
+ * se modificó en ese cambio y no tenía tests previos (gap preexistente,
  * fuera de alcance).
+ *
+ * D4b (R3B) agrega cobertura de `update` — específicamente el campo nuevo
+ * `documentoIdentidad` (permite corregir los centinelas `PENDIENTE-DUI-*`
+ * del sync R1.1) y su validación condicional de DUI.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { personalSaludRouter, CLINICAL_ROLE_CODES } from "../personal-salud.router";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
+import { VALID_DUIS_WITH_DASH, INVALID_DUIS } from "@his/test-utils";
 
 const PERSONAL_ID = "00000000-0000-0000-0000-0000000000e1";
 const USER_ID = "00000000-0000-0000-0000-0000000000e2";
@@ -242,5 +247,147 @@ describe("personalSalud.usuariosSinPerfil", () => {
     const call = prisma.$queryRaw.mock.calls[0]!;
     const interpolated = call.slice(1);
     expect(interpolated).toContainEqual(Array.from(CLINICAL_ROLE_CODES));
+  });
+});
+
+describe("personalSalud.update — D4b documentoIdentidad", () => {
+  it("permite corregir el documento (ej. centinela PENDIENTE-DUI-*) con un DUI válido", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0001" }]) // target existe
+      .mockResolvedValueOnce([]); // sin colisión de documento en el establecimiento
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const validDui = VALID_DUIS_WITH_DASH[9]!; // "12345678-4" — fixture canónico
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.update({ id: PERSONAL_ID, documentoIdentidad: validDui });
+
+    expect(result).toEqual({ id: PERSONAL_ID });
+    const call = prisma.$executeRaw.mock.calls[0]!;
+    expect(call.slice(1)).toContain(validDui);
+  });
+
+  it("acepta documentos que NO tienen forma de DUI (pasaporte/DPI extranjero) sin exigir checksum", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0002" }])
+      .mockResolvedValueOnce([]);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    // Pasaporte alfanumérico — no son 9 dígitos, el refine de zod no aplica validateDUI.
+    const result = await caller.update({ id: PERSONAL_ID, documentoIdentidad: "P1234567A" });
+
+    expect(result).toEqual({ id: PERSONAL_ID });
+  });
+
+  it("rechaza un documento con forma de DUI pero dígito verificador inválido (BAD_REQUEST de zod)", async () => {
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+
+    // 9 dígitos → se le exige el checksum; INVALID_DUIS.badCheck altera el
+    // verificador de un cuerpo válido (fixture canónico de @his/test-utils).
+    await expect(
+      caller.update({ id: PERSONAL_ID, documentoIdentidad: INVALID_DUIS.badCheck }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    // El zod refine corta antes de tocar la BD.
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it("lanza CONFLICT si el nuevo documento ya pertenece a otro profesional del establecimiento", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0003" }]) // target existe
+      .mockResolvedValueOnce([{ id: OTHER_PERSONAL_ID }]); // colisión
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.update({ id: PERSONAL_ID, documentoIdentidad: "P1234567A" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("P2-1: traduce la violación del índice único parcial (carrera) a CONFLICT", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0004" }]) // target existe
+      .mockResolvedValueOnce([]); // el dup-check previo NO detecta nada (perdió la carrera)
+    // El $executeRaw dentro de la tx revienta con la violación real de
+    // Postgres del índice de 264_r3_unique_documento_personal.sql — otra
+    // request concurrente ya insertó el mismo documento entre el dup-check
+    // y este UPDATE.
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockRejectedValue(
+      new Error(
+        'duplicate key value violates unique constraint "ux_personal_salud_estab_documento" (23505)',
+      ),
+    );
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.update({ id: PERSONAL_ID, documentoIdentidad: "P1234567A" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("P1: audita el cambio de documentoIdentidad con before/after fuera de la tx (TDR §6.3)", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0005" }]) // target existe
+      .mockResolvedValueOnce([]); // sin colisión
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+    prisma.auditLog.create.mockResolvedValue({} as never);
+
+    const validDui = VALID_DUIS_WITH_DASH[9]!;
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.update({ id: PERSONAL_ID, documentoIdentidad: validDui });
+
+    expect(result).toEqual({ id: PERSONAL_ID });
+    expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
+    const auditArgs = prisma.auditLog.create.mock.calls[0]![0];
+    expect(auditArgs.data).toMatchObject({
+      action: "UPDATE",
+      entity: "PersonalSalud",
+      entityId: PERSONAL_ID,
+      beforeJson: { documentoIdentidad: "PENDIENTE-DUI-0005" },
+      afterJson: { documentoIdentidad: validDui },
+    });
+  });
+
+  it("P1: NO audita si documentoIdentidad no cambió de valor", async () => {
+    const validDui = VALID_DUIS_WITH_DASH[9]!;
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID, documento_identidad: validDui }]) // ya tenía este valor
+      .mockResolvedValueOnce([]);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await caller.update({ id: PERSONAL_ID, documentoIdentidad: validDui });
+
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it("P1: NO audita cuando el update no toca documentoIdentidad", async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { id: PERSONAL_ID, documento_identidad: "PENDIENTE-DUI-0006" },
+    ]); // target existe; sin segunda llamada porque no hay dup-check (documentoIdentidad ausente)
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await caller.update({ id: PERSONAL_ID, profesion: "Enfermería" });
+
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });

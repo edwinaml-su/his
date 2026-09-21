@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="es-SV">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOCK-HIS-TR-001 · Terapia Respiratoria · HIS Avante</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* Avante DS v2.0 */
+  --avante-navy:#0B3D5C;
+  --avante-navy-700:#0A3350;
+  --avante-navy-300:#3E6C87;
+  --avante-teal:#00A8B5;
+  --avante-teal-600:#00919C;
+  --avante-teal-100:#E1F6F8;
+
+  --surface:#FFFFFF;
+  --surface-alt:#F5F7F9;
+  --surface-sunken:#EDF1F4;
+  --border:#D8E0E6;
+  --border-strong:#B9C6D0;
+
+  --ink:#12212B;
+  --ink-secondary:#4A5C68;
+  --ink-muted:#7A8B96;
+  --ink-inverse:#FFFFFF;
+
+  /* estado reservado - nunca como color de serie */
+  --status-good:#1B7F5A;
+  --status-good-bg:#E6F4EE;
+  --status-warning:#8A5A00;
+  --status-warning-bg:#FBF0DA;
+  --status-serious:#A4451A;
+  --status-serious-bg:#FBEAE1;
+  --status-critical:#A31D2B;
+  --status-critical-bg:#FBE7E9;
+
+  --radius-sm:6px; --radius:10px; --radius-lg:14px;
+  --shadow-1:0 1px 2px rgba(11,61,92,.08),0 1px 3px rgba(11,61,92,.06);
+  --shadow-2:0 4px 12px rgba(11,61,92,.10);
+  --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--surface-alt);color:var(--ink);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+h1,h2,h3,h4{line-height:1.25;font-weight:600}
+
+/* ---------- App bar ---------- */
+.appbar{background:var(--avante-navy);color:var(--ink-inverse);padding:0 var(--space-5);height:56px;display:flex;align-items:center;gap:var(--space-5);position:sticky;top:0;z-index:50}
+.brand{display:flex;align-items:center;gap:var(--space-3);font-weight:700;letter-spacing:.2px}
+.brand .mark{width:28px;height:28px;border-radius:7px;background:var(--avante-teal);display:grid;place-items:center;font-size:15px;font-weight:700;color:#04303a}
+.appbar .mod{font-weight:500;opacity:.92;border-left:1px solid rgba(255,255,255,.25);padding-left:var(--space-5)}
+.appbar .spacer{flex:1}
+.appbar select{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);color:#fff;border-radius:var(--radius-sm);padding:5px 8px}
+.appbar .user{display:flex;align-items:center;gap:8px;font-size:13px}
+.avatar{width:28px;height:28px;border-radius:50%;background:var(--avante-teal-600);display:grid;place-items:center;font-size:12px;font-weight:600}
+
+/* ---------- Banner paciente ---------- */
+.patient-banner{background:var(--surface);border-bottom:1px solid var(--border);padding:var(--space-3) var(--space-5);display:flex;align-items:center;gap:var(--space-5);position:sticky;top:56px;z-index:40;flex-wrap:wrap}
+.pb-id{min-width:260px}
+.pb-name{font-size:16px;font-weight:700;color:var(--avante-navy)}
+.pb-sub{font-size:12.5px;color:var(--ink-secondary)}
+.pb-field{display:flex;flex-direction:column;gap:2px}
+.pb-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--ink-muted);font-weight:600}
+.pb-value{font-size:13.5px;font-weight:600}
+.pb-flags{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:600;border:1px solid transparent}
+.chip-alergia{background:var(--status-critical-bg);color:var(--status-critical);border-color:#F0C9CE}
+.chip-aisl{background:var(--status-warning-bg);color:var(--status-warning);border-color:#EBD8AE}
+.chip-o2{background:var(--avante-teal-100);color:#005F67;border-color:#B6E6EA}
+.chip-neutral{background:var(--surface-sunken);color:var(--ink-secondary);border-color:var(--border)}
+
+/* ---------- Tabs ---------- */
+.tabs{background:var(--surface);border-bottom:1px solid var(--border);padding:0 var(--space-5);display:flex;gap:2px;position:sticky;top:120px;z-index:35;overflow-x:auto}
+.tab{background:none;border:none;padding:12px 16px;font-size:13.5px;font-weight:500;color:var(--ink-secondary);cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--avante-navy);background:var(--surface-alt)}
+.tab[aria-selected="true"]{color:var(--avante-navy);border-bottom-color:var(--avante-teal);font-weight:600}
+
+main{padding:var(--space-5);max-width:1400px;margin:0 auto}
+.panel[hidden]{display:none}
+
+/* ---------- Cards ---------- */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-1);margin-bottom:var(--space-4)}
+.card-h{padding:var(--space-4);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.card-h h3{font-size:14.5px;color:var(--avante-navy)}
+.card-h .hint{font-size:12px;color:var(--ink-muted);font-weight:400}
+.card-b{padding:var(--space-4)}
+.grid{display:grid;gap:var(--space-4)}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:1000px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+/* ---------- Formularios ---------- */
+label.f{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-secondary);font-weight:600;margin-bottom:5px}
+.inp,select.inp,textarea.inp{width:100%;padding:8px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface)}
+.inp:focus{outline:2px solid var(--avante-teal);outline-offset:1px;border-color:var(--avante-teal)}
+.inp.err{border-color:var(--status-critical);background:var(--status-critical-bg)}
+.field{margin-bottom:var(--space-3)}
+.row{display:flex;gap:var(--space-3);flex-wrap:wrap}
+.row>.field{flex:1;min-width:130px}
+.help{font-size:11.5px;color:var(--ink-muted);margin-top:4px}
+.err-msg{font-size:11.5px;color:var(--status-critical);margin-top:4px;font-weight:600;display:none}
+.err-msg.show{display:block}
+
+.btn{border:1px solid transparent;border-radius:var(--radius-sm);padding:8px 14px;font-weight:600;font-size:13px;cursor:pointer}
+.btn-primary{background:var(--avante-navy);color:#fff}
+.btn-primary:hover{background:var(--avante-navy-700)}
+.btn-accent{background:var(--avante-teal);color:#04303a}
+.btn-accent:hover{background:var(--avante-teal-600);color:#fff}
+.btn-ghost{background:var(--surface);border-color:var(--border-strong);color:var(--ink-secondary)}
+.btn-ghost:hover{border-color:var(--avante-navy-300);color:var(--avante-navy)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.toggle{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--radius-sm);overflow:hidden}
+.toggle button{background:var(--surface);border:none;padding:7px 12px;cursor:pointer;font-size:12.5px;border-right:1px solid var(--border)}
+.toggle button:last-child{border-right:none}
+.toggle button[aria-pressed="true"]{background:var(--avante-navy);color:#fff;font-weight:600}
+
+/* ---------- Catálogo de procedimientos ---------- */
+.cat-group{margin-bottom:var(--space-4)}
+.cat-title{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--avante-navy);font-weight:700;margin-bottom:var(--space-2);padding-bottom:4px;border-bottom:1px solid var(--border)}
+.proc-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+@media(max-width:900px){.proc-list{grid-template-columns:1fr}}
+.proc{display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;background:var(--surface)}
+.proc:hover{border-color:var(--avante-teal);background:var(--avante-teal-100)}
+.proc input{width:16px;height:16px;accent-color:var(--avante-teal-600)}
+.proc .code{font-size:11px;color:var(--ink-muted);font-variant-numeric:tabular-nums;font-weight:600}
+.proc .nm{flex:1;font-size:13px}
+.proc.sel{border-color:var(--avante-teal);background:var(--avante-teal-100)}
+
+/* ---------- Tablas ---------- */
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-secondary);font-weight:700;padding:9px 10px;background:var(--surface-sunken);border-bottom:1px solid var(--border)}
+td{padding:9px 10px;border-bottom:1px solid var(--border);vertical-align:middle}
+tbody tr:hover{background:var(--surface-alt)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{font-weight:700;background:var(--surface-sunken);border-top:2px solid var(--border-strong)}
+.derived{background:var(--avante-teal-100);border-radius:4px;padding:1px 6px;font-weight:700;font-variant-numeric:tabular-nums;color:#00555C}
+
+/* ---------- Worklist ---------- */
+.wl{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:var(--space-3)}
+.task{background:var(--surface);border:1px solid var(--border);border-left:5px solid var(--border-strong);border-radius:var(--radius);padding:var(--space-3);box-shadow:var(--shadow-1)}
+.task.t-verde{border-left-color:var(--status-good)}
+.task.t-ambar{border-left-color:var(--status-warning)}
+.task.t-rojo{border-left-color:var(--status-critical)}
+.task.t-gris{border-left-color:var(--border-strong);opacity:.72}
+.task-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px}
+.task-p{font-weight:700;color:var(--avante-navy);font-size:14px}
+.task-m{font-size:12px;color:var(--ink-secondary)}
+.task-proc{font-size:13px;margin:8px 0;padding:7px 9px;background:var(--surface-sunken);border-radius:var(--radius-sm)}
+.task-f{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.state{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;border-radius:999px;padding:3px 9px}
+.s-good{background:var(--status-good-bg);color:var(--status-good)}
+.s-warn{background:var(--status-warning-bg);color:var(--status-warning)}
+.s-crit{background:var(--status-critical-bg);color:var(--status-critical)}
+.s-mut{background:var(--surface-sunken);color:var(--ink-secondary)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+/* ---------- Pasos ---------- */
+.steps{display:flex;gap:0;margin-bottom:var(--space-4);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.step{flex:1;padding:10px 12px;border-right:1px solid var(--border);display:flex;align-items:center;gap:9px;font-size:13px}
+.step:last-child{border-right:none}
+.step .n{width:22px;height:22px;border-radius:50%;background:var(--surface-sunken);color:var(--ink-secondary);display:grid;place-items:center;font-size:11.5px;font-weight:700;flex:none}
+.step.done .n{background:var(--status-good);color:#fff}
+.step.now{background:var(--avante-teal-100)}
+.step.now .n{background:var(--avante-teal-600);color:#fff}
+.step.now span{font-weight:700;color:var(--avante-navy)}
+
+/* ---------- Alertas ---------- */
+.alert{display:flex;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);border:1px solid;font-size:12.5px;margin-bottom:var(--space-3);align-items:flex-start}
+.alert b{display:block;margin-bottom:2px}
+.a-crit{background:var(--status-critical-bg);border-color:#F0C9CE;color:#6E1420}
+.a-warn{background:var(--status-warning-bg);border-color:#EBD8AE;color:#5E3E00}
+.a-good{background:var(--status-good-bg);border-color:#BFE3D2;color:#0F5A3E}
+.a-info{background:var(--avante-teal-100);border-color:#B6E6EA;color:#00474E}
+.alert .ic{font-weight:700;flex:none;width:18px;text-align:center}
+
+/* ---------- KPI ---------- */
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-4);box-shadow:var(--shadow-1)}
+.kpi-l{font-size:11.5px;color:var(--ink-secondary);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.kpi-v{font-size:30px;font-weight:700;color:var(--avante-navy);font-variant-numeric:tabular-nums;line-height:1.1;margin:6px 0 2px}
+.kpi-v small{font-size:15px;font-weight:600;color:var(--ink-secondary)}
+.kpi-m{font-size:12px;color:var(--ink-muted)}
+.meter{height:6px;background:var(--surface-sunken);border-radius:3px;overflow:hidden;margin-top:9px}
+.meter>i{display:block;height:100%;background:var(--avante-teal);border-radius:3px}
+
+/* barras simples, una sola serie */
+.bars{display:flex;align-items:flex-end;gap:6px;height:150px;padding-top:10px;position:relative}
+.bars .meta-line{position:absolute;left:0;right:0;border-top:2px dashed var(--border-strong);pointer-events:none}
+.bars .meta-line span{position:absolute;right:0;top:-16px;font-size:10.5px;color:var(--ink-muted);background:var(--surface);padding:0 4px}
+.bars .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:6px;height:100%}
+.bars .b i{display:block;width:100%;background:var(--avante-teal);border-radius:4px 4px 0 0;min-height:3px}
+.bars .b span{font-size:10.5px;color:var(--ink-muted)}
+.bars .b b{font-size:11px;color:var(--ink-secondary);font-variant-numeric:tabular-nums}
+
+.legend-note{font-size:11.5px;color:var(--ink-muted);margin-top:8px}
+.calcbox{background:var(--surface-sunken);border:1px dashed var(--border-strong);border-radius:var(--radius-sm);padding:var(--space-3)}
+.calcrow{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dotted var(--border-strong);font-size:13px}
+.calcrow:last-child{border-bottom:none}
+.calcrow b{font-variant-numeric:tabular-nums}
+.watermark{font-size:11px;color:var(--ink-muted);text-align:center;padding:var(--space-5) 0}
+.chk{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px}
+.chk:last-child{border-bottom:none}
+.chk input{width:16px;height:16px;margin-top:2px;accent-color:var(--status-good)}
+
+.cat-title-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)}
+.no-req{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;text-transform:none;letter-spacing:0;color:var(--ink-secondary);cursor:pointer;border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:5px 10px;background:var(--surface)}
+.no-req:hover{border-color:var(--status-critical);color:var(--status-critical)}
+.no-req input{width:15px;height:15px;accent-color:var(--status-critical)}
+.no-req .x{color:var(--status-critical);font-weight:800;font-size:13px}
+.no-req.on{background:var(--status-critical-bg);border-color:#F0C9CE;color:var(--status-critical)}
+.proc-list.off,#fisList.off{opacity:.42;pointer-events:none}
+.colapsada{display:none !important}
+.help.declarado{color:var(--status-critical);font-weight:600}
+.sub-title{font-size:11px;font-weight:700;color:var(--ink-secondary);letter-spacing:.5px;margin:var(--space-3) 0 var(--space-2);text-transform:uppercase}
+.sub-title:first-child{margin-top:var(--space-2)}
+#metaBlock.off{opacity:.42;pointer-events:none}
+#medCard{overflow:hidden}
+#medCard[hidden]{display:none}
+.modal-ov{position:fixed;inset:0;background:rgba(11,33,43,.55);display:grid;place-items:center;z-index:100;padding:var(--space-4)}
+.modal-ov[hidden]{display:none}
+.modal{background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-2);max-width:520px;width:100%;border-top:5px solid var(--status-critical)}
+.modal-h{display:flex;align-items:center;gap:12px;padding:var(--space-4) var(--space-4) 0}
+.modal-h h3{font-size:16px;color:var(--avante-navy)}
+.modal-ic{width:30px;height:30px;border-radius:50%;background:var(--status-critical-bg);color:var(--status-critical);display:grid;place-items:center;font-weight:800;flex:none}
+.modal-b{padding:var(--space-3) var(--space-4) var(--space-4);font-size:13.5px;color:var(--ink-secondary)}
+.modal-f{padding:0 var(--space-4) var(--space-4);display:flex;justify-content:flex-end}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+</style>
+</head>
+<body>
+
+<header class="appbar">
+  <div class="brand"><span class="mark">A</span> HIS Avante</div>
+  <div class="mod">Terapia Respiratoria</div>
+  <div class="spacer"></div>
+  <select class="sede" aria-label="Sede"><option>Hospital Especializado</option><option>Centro Médico</option><option>Surf City</option></select>
+  <div class="user"><span class="avatar">LB</span> L. Barrera · Terapeuta</div>
+</header>
+
+<section class="patient-banner">
+  <div class="pb-id">
+    <div class="pb-name">RIVAS MÉNDEZ, JOSÉ ANTONIO</div>
+    <div class="pb-sub">HE-26-24151 · 68 a · M · Cuenta 26-008914 · ISBM</div>
+  </div>
+  <div class="pb-field"><span class="pb-label">Ubicación</span><span class="pb-value">Hosp. 2.º nivel · Santorini</span></div>
+  <div class="pb-field"><span class="pb-label">Diagnóstico (CIE-11)</span><span class="pb-value">CA22.0 · EPOC exacerbada</span></div>
+  <div class="pb-field"><span class="pb-label">Peso / Talla</span><span class="pb-value">72 kg · 170 cm</span></div>
+  <div class="pb-field"><span class="pb-label">Meta SpO₂</span><span class="pb-value" style="color:var(--avante-teal-600)">88 – 92 %</span></div>
+  <div class="pb-flags">
+    <span class="chip chip-alergia">⚠ Alergia: penicilina</span>
+    <span class="chip chip-aisl">Aislamiento: gotas</span>
+    <span class="chip chip-o2">O₂ Venturi 28 % · 2 L/min</span>
+  </div>
+</section>
+
+<nav class="tabs" role="tablist">
+  <button class="tab" role="tab" aria-selected="true" data-p="p-orden">Orden médica</button>
+  <button class="tab" role="tab" aria-selected="false" data-p="p-worklist">Worklist del turno</button>
+  <button class="tab" role="tab" aria-selected="false" data-p="p-hoja">Hoja de terapia</button>
+  <button class="tab" role="tab" aria-selected="false" data-p="p-vent">Ventilación / UCI</button>
+  <button class="tab" role="tab" aria-selected="false" data-p="p-oxi">Oxígeno y equipo</button>
+  <button class="tab" role="tab" aria-selected="false" data-p="p-ind">Indicadores</button>
+</nav>
+
+<main>
+
+<!-- ===================== ORDEN ===================== -->
+<section id="p-orden" class="panel">
+  <div class="card">
+    <div class="card-h">
+      <h3>Nueva orden de terapia respiratoria</h3>
+      <div class="row" style="gap:6px">
+        <button class="btn btn-ghost" onclick="orderSet('epoc')">Conjunto: EPOC exacerbada</button>
+        <button class="btn btn-ghost" onclick="orderSet('asma')">Conjunto: Crisis asmática</button>
+        <button class="btn btn-ghost" onclick="orderSet('post')">Conjunto: Postoperatorio de tórax</button>
+        <button class="btn btn-ghost" onclick="orderSet('preop')">Conjunto: Preoperatorio</button>
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="row">
+        <div class="field" style="flex:2"><label class="f" for="dx">Diagnóstico (CIE-11) — obligatorio</label>
+          <select class="inp" id="dx">
+            <option value="CA22.0" selected>CA22.0 — Enfermedad pulmonar obstructiva crónica con exacerbación aguda, no especificada</option>
+            <option value="CA23">CA23 — Asma</option>
+            <option value="CA40">CA40 — Neumonía</option>
+            <option value="CB40.2">CB40.2 — Colapso pulmonar (atelectasia)</option>
+            <option value="CB41">CB41 — Insuficiencia respiratoria</option>
+          </select>
+          <div class="help">Codificación CIE-11 de la Organización Mundial de la Salud. El diagnóstico sustenta la indicación de la terapia y viaja al cargo de la cuenta.</div>
+        </div>
+        <div class="field"><label class="f" for="prio">Prioridad</label>
+          <select class="inp" id="prio"><option>Rutina</option><option>Urgente</option><option>Inmediata (STAT)</option></select></div>
+        <div class="field"><label class="f" for="vig">Vigencia</label>
+          <select class="inp" id="vig"><option>72 h (terapia continua)</option><option>24 h (protocolo delegado)</option><option>Hasta el egreso</option></select></div>
+      </div>
+
+      <div class="field" id="metaBlock">
+        <label class="f">Meta de saturación (obligatoria en oxigenoterapia)</label>
+        <div class="toggle" role="group" aria-label="Meta de saturación" id="metaToggle">
+          <button type="button" aria-pressed="false" onclick="setMeta(this,'94–98 %')">94 – 98 % · adulto agudo</button>
+          <button type="button" aria-pressed="true" onclick="setMeta(this,'88–92 %')">88 – 92 % · riesgo de hipercapnia</button>
+          <button type="button" aria-pressed="false" onclick="setMeta(this,'88–93 %')">88 – 93 % · FiO₂ ≥ 0.70</button>
+          <button type="button" aria-pressed="false" onclick="setMeta(this,'otro')">Otro (con justificación)</button>
+        </div>
+        <div id="metaOtroBox" style="display:none;margin-top:12px">
+          <div class="row">
+            <div class="field" style="flex:none;width:170px"><label class="f" for="metaMin">Rango: mínimo (%)</label><input class="inp" id="metaMin" value="" placeholder="Ej. 90" oninput="valMetaOtro()"></div>
+            <div class="field" style="flex:none;width:170px"><label class="f" for="metaMax">Rango: máximo (%)</label><input class="inp" id="metaMax" value="" placeholder="Ej. 94" oninput="valMetaOtro()"></div>
+            <div class="field" style="flex:2"><label class="f" for="metaJust">Justificación clínica de la meta (obligatoria)</label>
+              <textarea class="inp" id="metaJust" rows="2" placeholder="Explique por qué este paciente requiere una meta distinta de las metas institucionales." oninput="valMetaOtro()"></textarea>
+              <div class="help">Queda registrada en la orden con el nombre del prescriptor y la hora de la firma.</div></div>
+          </div>
+          <div class="err-msg" id="metaErr"></div>
+        </div>
+        <div class="alert a-warn" id="metaHint" style="margin-top:10px">
+          <span class="ic">⚠</span>
+          <div><b>Paciente con riesgo de hipercapnia</b>Meta sugerida 88–92 %. Evitar saturaciones mayores de 92 %. Dispositivo de elección: mascarilla Venturi. Regla de titulación aplicable: Protocolo de titulación de oxígeno TR-O2-02.</div>
+        </div>
+      </div>
+
+      <div class="cat-group">
+        <div class="cat-title cat-title-row">
+          <span>Sección 1: Oxigenoterapia</span>
+          <label class="no-req" for="noOxi"><input type="checkbox" id="noOxi" onchange="toggleNoOxi()"><span class="x" aria-hidden="true">✕</span> No requiere oxigenoterapia</label>
+        </div>
+        <div class="proc-list" id="oxiList">
+          <label class="proc sel"><input type="checkbox" checked data-grp="g1" onchange="selOxi(this)"><span class="code">TR-OXI-01</span><span class="nm">Inicio de oxigenoterapia de bajo flujo</span></label>
+          <label class="proc sel"><input type="checkbox" checked data-grp="g1" onchange="selOxi(this)"><span class="code">TR-OXI-02</span><span class="nm">Supervisión y cuidado de O₂ bajo flujo</span></label>
+          <label class="proc"><input type="checkbox" data-grp="g2" onchange="selOxi(this)"><span class="code">TR-OXI-03</span><span class="nm">Inicio de oxigenoterapia de alto flujo</span></label>
+          <label class="proc"><input type="checkbox" data-grp="g2" onchange="selOxi(this)"><span class="code">TR-OXI-04</span><span class="nm">Supervisión y cuidado de O₂ alto flujo</span></label>
+          <label class="proc"><input type="checkbox" data-grp="g3" onchange="selOxi(this)"><span class="code">TR-OXI-05</span><span class="nm">Traslado de paciente con oxígeno</span></label>
+          <label class="proc"><input type="checkbox" data-grp="g4" onchange="selOxi(this)"><span class="code">TR-OXI-06</span><span class="nm">Titulación protocolizada a meta de saturación</span></label>
+          <label class="proc"><input type="checkbox" data-grp="g5" onchange="selOxi(this)"><span class="code">TR-OXI-07</span><span class="nm">Destete y retiro de oxigenoterapia</span></label>
+        </div>
+        <div class="help" id="oxiHelp">Selección única: al elegir el inicio de oxigenoterapia el sistema agrega automáticamente su supervisión y cuidado. Si el paciente no requiere oxígeno, márquelo en la casilla de la derecha.</div>
+      </div>
+
+      <div class="cat-group">
+        <div class="cat-title cat-title-row">
+          <span>Sección 2: Aerosolterapia</span>
+          <label class="no-req" for="noAer"><input type="checkbox" id="noAer" onchange="toggleNoAer()"><span class="x" aria-hidden="true">✕</span> No aplica</label>
+        </div>
+        <div class="proc-list" id="aerList">
+          <label class="proc sel"><input type="checkbox" checked data-aer="TR-AER-01" onchange="selAer(this)"><span class="code">TR-AER-01</span><span class="nm">Nebulización convencional (jet)</span></label>
+          <label class="proc"><input type="checkbox" data-aer="TR-AER-03" onchange="selAer(this)"><span class="code">TR-AER-03</span><span class="nm">Malla vibratoria en circuito de ventilación mecánica</span></label>
+          <label class="proc"><input type="checkbox" data-aer="TR-AER-04" onchange="selAer(this)"><span class="code">TR-AER-04</span><span class="nm">Inhalador de dosis medida con expansor de volumen</span></label>
+          <label class="proc"><input type="checkbox" data-aer="TR-AER-05" onchange="selAer(this)"><span class="code">TR-AER-05</span><span class="nm">Educación de técnica inhalatoria al egreso</span></label>
+        </div>
+        <div class="help" id="aerHelp">Selección única: la orden admite un procedimiento de aerosolterapia a la vez. Los parámetros de dosificación cambian según el procedimiento elegido.</div>
+      </div>
+
+      <div class="card" id="medCard" style="box-shadow:none;margin-bottom:var(--space-4)">
+        <div class="card-h"><h3 id="medTitulo">Medicamento</h3><span class="hint" id="medHint">Dosis paramétrica con validación de unidad</span></div>
+        <div class="card-b">
+          <div class="row">
+            <div class="field" style="flex:2"><label class="f" for="med">Principio activo</label>
+              <select class="inp" id="med" onchange="cambioMed()"></select></div>
+            <div class="field"><label class="f" for="dosis">Dosis</label><input class="inp" id="dosis" oninput="valDosis()"></div>
+            <div class="field"><label class="f" for="unidad">Unidad</label><select class="inp" id="unidad" onchange="valDosis()"></select></div>
+            <div class="field" style="flex:1.4"><label class="f" for="dil">Diluyente</label><select class="inp" id="dil"></select></div>
+            <div class="field" style="flex:1.4" id="extraBox"><label class="f" for="extra" id="extraLabel">Parámetro</label><select class="inp" id="extra"></select></div>
+            <div class="field"><label class="f" for="frec">Frecuencia</label>
+              <select class="inp" id="frec"><option>Cada 8 horas</option><option selected>Cada 6 horas</option><option>Cada 4 horas</option><option>Por razón necesaria</option></select></div>
+          </div>
+          <div class="err-msg" id="dosisErr"></div>
+          <div id="dosisOk"></div>
+        </div>
+      </div>
+
+      <div class="cat-group">
+        <div class="cat-title cat-title-row">
+          <span>Sección 3: Fisioterapia respiratoria · Vía aérea · Pruebas funcionales</span>
+          <label class="no-req" for="noFis"><input type="checkbox" id="noFis" onchange="toggleNoFis()"><span class="x" aria-hidden="true">✕</span> No aplica</label>
+        </div>
+        <div id="fisList">
+        <div class="sub-title">3.1 · Fisioterapia respiratoria (TR-FIS-01 a TR-FIS-06)</div>
+        <div class="proc-list">
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-01" onchange="toggleProc(this)"><span class="code">TR-FIS-01</span><span class="nm">Vibropercusión y palmopercusión</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-02" onchange="toggleProc(this)"><span class="code">TR-FIS-02</span><span class="nm">Drenaje postural</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-03" onchange="toggleProc(this)"><span class="code">TR-FIS-03</span><span class="nm">Ejercicios de rehabilitación con espirómetro incentivo</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-04" onchange="toggleProc(this)"><span class="code">TR-FIS-04</span><span class="nm">Terapia de presión espiratoria positiva (PEP / oscilación)</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-05" onchange="toggleProc(this)"><span class="code">TR-FIS-05</span><span class="nm">Asistencia mecánica de la tos (insuflación-exsuflación)</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-FIS-06" onchange="toggleProc(this)"><span class="code">TR-FIS-06</span><span class="nm">Entrenamiento de músculos inspiratorios</span></label>
+        </div>
+        <div class="sub-title">3.2 · Vía aérea artificial (TR-VIA-01 a TR-VIA-07)</div>
+        <div class="proc-list">
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-01" onchange="toggleProc(this)"><span class="code">TR-VIA-01</span><span class="nm">Aspiración faringotraqueal</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-02" onchange="toggleProc(this)"><span class="code">TR-VIA-02</span><span class="nm">Aspiración por sistema cerrado en paciente ventilado</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-03" onchange="toggleProc(this)"><span class="code">TR-VIA-03</span><span class="nm">Lavado bronquial</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-04" onchange="toggleProc(this)"><span class="code">TR-VIA-04</span><span class="nm">Cuidado de traqueostomía</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-05" onchange="toggleProc(this)"><span class="code">TR-VIA-05</span><span class="nm">Cambio de cánula de traqueostomía</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-06" onchange="toggleProc(this)"><span class="code">TR-VIA-06</span><span class="nm">Medición y ajuste de presión del cuff</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-VIA-07" onchange="toggleProc(this)"><span class="code">TR-VIA-07</span><span class="nm">Toma de muestra de aspirado traqueal o esputo inducido</span></label>
+        </div>
+        <div class="sub-title">3.3 · Pruebas funcionales respiratorias (TR-PFR-01 a TR-PFR-07)</div>
+        <div class="proc-list">
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-01" onchange="toggleProc(this)"><span class="code">TR-PFR-01</span><span class="nm">Espirometría simple</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-02" onchange="toggleProc(this)"><span class="code">TR-PFR-02</span><span class="nm">Espirometría pre y post broncodilatador</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-03" onchange="toggleProc(this)"><span class="code">TR-PFR-03</span><span class="nm">Gasometría arterial</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-04" onchange="toggleProc(this)"><span class="code">TR-PFR-04</span><span class="nm">Capnografía / capnometría</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-05" onchange="toggleProc(this)"><span class="code">TR-PFR-05</span><span class="nm">Oximetría de pulso nocturna</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-06" onchange="toggleProc(this)"><span class="code">TR-PFR-06</span><span class="nm">Prueba de caminata de 6 minutos</span></label>
+          <label class="proc"><input type="checkbox" data-cod="TR-PFR-07" onchange="toggleProc(this)"><span class="code">TR-PFR-07</span><span class="nm">Presiones inspiratoria y espiratoria máximas (PIM / PEM)</span></label>
+        </div>
+        </div>
+        <div class="help" id="fisHelp">Selección múltiple. Si el paciente no requiere ninguno de estos procedimientos, márquelo en la casilla de la derecha.</div>
+      </div>
+
+      <div class="row" style="justify-content:space-between;align-items:center">
+        <div class="help">Firmará: <b>Dr. R. Ramírez</b> · privilegio clínico vigente en Hospital Especializado · requiere reautenticación</div>
+        <div class="row" style="gap:8px">
+          <button class="btn btn-ghost">Guardar borrador</button>
+          <button class="btn btn-primary" id="btnFirmar" onclick="firmarOrden()">Firmar orden</button>
+        </div>
+      </div>
+      <div id="ordenOk"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Modal de error -->
+<div class="modal-ov" id="modal" hidden>
+  <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="modalT" aria-describedby="modalM">
+    <div class="modal-h"><span class="modal-ic">✕</span><h3 id="modalT">No es posible firmar la orden</h3></div>
+    <div class="modal-b" id="modalM"></div>
+    <div class="modal-f"><button class="btn btn-primary" onclick="cerrarModal()">Entendido</button></div>
+  </div>
+</div>
+
+<!-- ===================== WORKLIST ===================== -->
+<section id="p-worklist" class="panel" hidden>
+  <div class="card">
+    <div class="card-h">
+      <h3>Worklist · Hospitalización 2.º nivel · Turno 06:00 – 18:00</h3>
+      <div class="row" style="gap:8px;align-items:center">
+        <span class="state s-mut"><span class="dot"></span> 18 programadas</span>
+        <span class="state s-good"><span class="dot"></span> 11 ejecutadas</span>
+        <span class="state s-warn"><span class="dot"></span> 2 por vencer</span>
+        <span class="state s-crit"><span class="dot"></span> 1 vencida</span>
+        <button class="btn btn-ghost">Entrega de turno</button>
+      </div>
+    </div>
+    <div class="card-b">
+      <div class="wl">
+        <div class="task t-rojo">
+          <div class="task-h"><div><div class="task-p">RIVAS MÉNDEZ, J. A.</div><div class="task-m">HE-26-24151 · Santorini</div></div><span class="state s-crit"><span class="dot"></span> Vencida 12 min</span></div>
+          <div class="task-proc"><b>TR-AER-01</b> Nebulización · Ipratropio 0.5 mg + SSN 4 mL<br><span class="task-m">Programada 14:00 · ventana ±30 min</span></div>
+          <div class="task-f"><span class="chip chip-aisl">Gotas</span><span class="chip chip-o2">Venturi 28 %</span></div>
+          <div class="task-f"><button class="btn btn-accent" onclick="goTab('p-hoja')">Ejecutar</button><button class="btn btn-ghost">No ejecutada</button></div>
+        </div>
+        <div class="task t-ambar">
+          <div class="task-h"><div><div class="task-p">LÓPEZ CRUZ, M. E.</div><div class="task-m">HE-26-24188 · Capri</div></div><span class="state s-warn"><span class="dot"></span> Vence 14:38</span></div>
+          <div class="task-proc"><b>TR-OXI-02</b> Supervisión de O₂ bajo flujo<br><span class="task-m">Programada 14:30 · meta 94–98 %</span></div>
+          <div class="task-f"><span class="chip chip-neutral">Sin aislamiento</span><span class="chip chip-o2">Cánula 3 L/min</span></div>
+          <div class="task-f"><button class="btn btn-accent" onclick="goTab('p-hoja')">Ejecutar</button><button class="btn btn-ghost">No ejecutada</button></div>
+        </div>
+        <div class="task t-verde">
+          <div class="task-h"><div><div class="task-p">MEJÍA, R. A.</div><div class="task-m">HE-26-24102 · UCI 3</div></div><span class="state s-good"><span class="dot"></span> 15:00</span></div>
+          <div class="task-proc"><b>TR-VMI-03</b> Verificación paciente-ventilador<br><span class="task-m">Turno vespertino · incluye presión de cuff</span></div>
+          <div class="task-f"><span class="chip chip-aisl">Contacto</span><span class="chip chip-neutral">VMI · PC-AC</span></div>
+          <div class="task-f"><button class="btn btn-accent" onclick="goTab('p-vent')">Ejecutar</button><button class="btn btn-ghost">Reasignar</button></div>
+        </div>
+        <div class="task t-verde">
+          <div class="task-h"><div><div class="task-p">CASTILLO, A.</div><div class="task-m">EMG-26-0771 · Emergencia</div></div><span class="state s-crit"><span class="dot"></span> STAT</span></div>
+          <div class="task-proc"><b>TR-AER-01</b> Nebulización de rescate · Salbutamol 5 mg<br><span class="task-m">Protocolo delegado TR-ASMA-01</span></div>
+          <div class="task-f"><span class="chip chip-alergia">Pendiente de convalidación médica</span></div>
+          <div class="task-f"><button class="btn btn-accent" onclick="goTab('p-hoja')">Ejecutar</button></div>
+        </div>
+        <div class="task t-gris">
+          <div class="task-h"><div><div class="task-p">PORTILLO, S.</div><div class="task-m">HE-26-24130 · Mikonos</div></div><span class="state s-mut"><span class="dot"></span> No ejecutada</span></div>
+          <div class="task-proc"><b>TR-FIS-03</b> Espirómetro incentivo<br><span class="task-m">Causa: paciente en estudio de imagen · 13:15</span></div>
+          <div class="task-f"><span class="chip chip-neutral">Sin cargo generado</span></div>
+        </div>
+        <div class="task t-verde">
+          <div class="task-h"><div><div class="task-p">RIVAS MÉNDEZ, J. A.</div><div class="task-m">HE-26-24151 · Santorini</div></div><span class="state s-good"><span class="dot"></span> Firmada 08:05</span></div>
+          <div class="task-proc"><b>TR-AER-01</b> Nebulización · ejecutada 08:02<br><span class="task-m">SpO₂ 90 → 94 % · sin efectos adversos</span></div>
+          <div class="task-f"><span class="chip chip-neutral">Cargo devengado</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== HOJA DE TERAPIA ===================== -->
+<section id="p-hoja" class="panel" hidden>
+  <div class="steps">
+    <div class="step done"><span class="n">✓</span><span>Identificación</span></div>
+    <div class="step done"><span class="n">✓</span><span>Valoración PRE</span></div>
+    <div class="step now"><span class="n">3</span><span>Ejecución</span></div>
+    <div class="step"><span class="n">4</span><span>Valoración POST</span></div>
+    <div class="step"><span class="n">5</span><span>Firma y cargo</span></div>
+  </div>
+
+  <div class="alert a-good"><span class="ic">✓</span><div><b>Identidad verificada por código de barras</b>RIVAS MÉNDEZ, JOSÉ ANTONIO · HE-26-24151 — dos identificadores confirmados a las 14:12 (IPSG.1).</div></div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Valoración PRE · 14:12</h3><span class="hint">Registrada por L. Barrera</span></div>
+      <div class="card-b">
+        <div class="row">
+          <div class="field"><label class="f">SpO₂</label><input class="inp" id="prePo" value="90" oninput="calcDelta()"><div class="help">%, con O₂ actual</div></div>
+          <div class="field"><label class="f">FiO₂ actual</label><input class="inp" value="28" readonly><div class="help">% Venturi</div></div>
+          <div class="field"><label class="f">FR</label><input class="inp" value="26"></div>
+          <div class="field"><label class="f">FC</label><input class="inp" value="98"></div>
+          <div class="field"><label class="f">PA</label><input class="inp" value="132/78"></div>
+        </div>
+        <div class="row">
+          <div class="field" style="flex:2"><label class="f">Auscultación</label>
+            <select class="inp"><option selected>Sibilancias espiratorias difusas</option><option>Crepitantes bibasales</option><option>Murmullo vesicular disminuido</option><option>Normal</option></select></div>
+          <div class="field"><label class="f">Disnea (Borg)</label>
+            <select class="inp"><option>0 · ninguna</option><option>2 · leve</option><option selected>4 · moderada</option><option>6 · intensa</option></select></div>
+          <div class="field"><label class="f">Secreciones</label>
+            <select class="inp"><option selected>Escasas, blanquecinas</option><option>Abundantes, purulentas</option><option>Hemáticas</option><option>Ausentes</option></select></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Ejecución · TR-AER-01</h3><span class="hint">Cronómetro activo</span></div>
+      <div class="card-b">
+        <div class="row">
+          <div class="field"><label class="f">Inicio</label><input class="inp" value="14:14" readonly></div>
+          <div class="field"><label class="f">Fin</label><input class="inp" value="14:26" readonly></div>
+          <div class="field"><label class="f">Duración</label><div style="padding-top:7px"><span class="derived">12 min · calculada</span></div></div>
+        </div>
+        <div class="row">
+          <div class="field" style="flex:2"><label class="f">Medicamento administrado</label><input class="inp" value="Ipratropio 0.5 mg + SSN 0.9 % 4 mL" readonly></div>
+          <div class="field"><label class="f">Dispositivo</label><select class="inp"><option selected>Nebulizador jet</option><option>Ultrasónico</option><option>Malla vibratoria</option></select></div>
+          <div class="field"><label class="f">Flujo impulsor</label><input class="inp" value="6 L/min"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label class="f">Insumo (GTIN)</label><input class="inp" value="7501234567890 · Kit nebulizador ×1" readonly></div>
+          <div class="field"><label class="f">Higiene de manos</label><select class="inp"><option selected>5 momentos cumplidos</option><option>Parcial</option></select></div>
+        </div>
+        <div class="alert a-info"><span class="ic">i</span><div><b>Registro único</b>La administración se publica al MAR de enfermería; no requiere recaptura.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-h"><h3>Valoración POST · obligatoria</h3><span class="hint">El sistema compara contra la valoración PRE</span></div>
+    <div class="card-b">
+      <div class="row">
+        <div class="field"><label class="f">SpO₂</label><input class="inp" id="postPo" value="95" oninput="calcDelta()"></div>
+        <div class="field"><label class="f">FR</label><input class="inp" value="20"></div>
+        <div class="field"><label class="f">FC</label><input class="inp" value="102"></div>
+        <div class="field" style="flex:2"><label class="f">Auscultación</label>
+          <select class="inp"><option selected>Sibilancias escasas</option><option>Sin cambios</option><option>Aumento de sibilancias</option></select></div>
+        <div class="field"><label class="f">Tolerancia</label><select class="inp"><option selected>Buena</option><option>Regular</option><option>Mala</option></select></div>
+        <div class="field"><label class="f">Efecto adverso</label>
+          <select class="inp"><option selected>Ninguno</option><option>Taquicardia</option><option>Temblor</option><option>Broncoespasmo</option><option>Desaturación</option></select></div>
+      </div>
+      <div id="deltaBox"></div>
+      <div class="field"><label class="f">Nota del terapeuta</label><textarea class="inp" rows="2">Paciente tolera la terapia; se mantiene dentro de la meta 88–92 %. Se refuerza técnica de respiración con labios fruncidos.</textarea></div>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Cargos que devengará la firma</h3><span class="hint">Cuenta 26-008914 · ISBM</span></div>
+      <div class="card-b" style="padding:0">
+        <table>
+          <thead><tr><th>Código</th><th>Concepto</th><th class="num">Cant.</th><th class="num">Monto</th></tr></thead>
+          <tbody>
+            <tr><td>TR-AER-01</td><td>Nebulización convencional</td><td class="num">1</td><td class="num">$ 12.00</td></tr>
+            <tr><td>MED-0451</td><td>Bromuro de ipratropio 0.5 mg</td><td class="num">1</td><td class="num">$ 3.40</td></tr>
+            <tr><td>INS-0112</td><td>Kit de nebulización</td><td class="num">1</td><td class="num">$ 4.75</td></tr>
+          </tbody>
+          <tfoot><tr><td colspan="3">Total a devengar</td><td class="num">$ 20.15</td></tr></tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Firma electrónica de la sesión</h3></div>
+      <div class="card-b">
+        <div class="alert a-warn"><span class="ic">⚠</span><div><b>Una firma por sesión, no por turno</b>Requiere reautenticación con PIN clínico. Una vez firmada, la sesión es inmutable: toda corrección se registra como adenda.</div></div>
+        <div class="row"><div class="field" style="flex:2"><label class="f">PIN clínico</label><input class="inp" type="password" value="••••••"></div>
+          <div class="field" style="align-self:flex-end"><button class="btn btn-primary" style="width:100%" onclick="firmar()">Firmar y devengar</button></div></div>
+        <div id="firmaOk"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== VENTILACIÓN ===================== -->
+<section id="p-vent" class="panel" hidden>
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Parámetros ventilatorios · MEJÍA, R. A. · UCI 3</h3><span class="hint">Día 4 de VMI · TOT 7.5</span></div>
+      <div class="card-b">
+        <div class="row">
+          <div class="field"><label class="f">Modo</label><select class="inp"><option selected>PC-AC</option><option>VC-AC</option><option>PSV</option><option>SIMV-PC</option><option>APRV</option></select></div>
+          <div class="field"><label class="f">Sexo</label><select class="inp" id="vSexo" onchange="calcVent()"><option value="H" selected>Hombre</option><option value="M">Mujer</option></select></div>
+          <div class="field"><label class="f">Talla (cm)</label><input class="inp" id="vTalla" value="172" oninput="calcVent()"></div>
+          <div class="field"><label class="f">Vt exhalado (mL)</label><input class="inp" id="vVt" value="480" oninput="calcVent()"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label class="f">FR</label><input class="inp" id="vFr" value="18" oninput="calcVent()"></div>
+          <div class="field"><label class="f">PEEP</label><input class="inp" id="vPeep" value="8" oninput="calcVent()"></div>
+          <div class="field"><label class="f">P. meseta</label><input class="inp" id="vPplat" value="26" oninput="calcVent()"></div>
+          <div class="field"><label class="f">FiO₂ (%)</label><input class="inp" id="vFio2" value="45" oninput="calcVent()"></div>
+          <div class="field"><label class="f">SpO₂ (%)</label><input class="inp" id="vSpo2" value="94" oninput="calcVent()"></div>
+        </div>
+        <div class="calcbox" id="ventCalc"></div>
+        <div id="ventAlerts" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Verificación paciente-ventilador · turno vespertino</h3><span class="hint">AARC 2024</span></div>
+      <div class="card-b" style="padding:0">
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Parámetros programados coinciden con los medidos</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Alarmas verificadas, activas y audibles</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Presión de cuff medida con manómetro: <b>24 cmH₂O</b> (meta 20–30)</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Humidificación adecuada, sin condensado hacia el paciente</label>
+        <label class="chk"><input type="checkbox" onchange="calcChk('chkVent','chkVentOut')"> Integridad de piel bajo fijación e interfaz</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Posición y fijación del tubo verificadas (22 cm en comisura)</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Exploración física: inspección, palpación, percusión, auscultación</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkVent','chkVentOut')"> Equipo de emergencia y vía aérea difícil a la cabecera</label>
+        <div class="card-b" id="chkVentOut"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Paquete de prevención de NAV · por turno</h3><span class="hint">Cumplimiento medido</span></div>
+      <div class="card-b" style="padding:0">
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Cabecera elevada 30–45°</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Higiene bucal con cepillado</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Interrupción diaria de sedación (SAT) coordinada</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Evaluación diaria de destete</label>
+        <label class="chk"><input type="checkbox" onchange="calcChk('chkNav','chkNavOut')"> Movilización temprana</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Circuito sin cambio rutinario (solo si sucio o disfuncional)</label>
+        <label class="chk"><input type="checkbox" checked onchange="calcChk('chkNav','chkNavOut')"> Aspiración subglótica en intubación prolongada</label>
+        <div class="card-b" id="chkNavOut"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Destete · evaluación diaria</h3><span class="hint">SAT / SBT</span></div>
+      <div class="card-b">
+        <div class="row">
+          <div class="field"><label class="f">Elegible para SBT</label><select class="inp"><option selected>Sí</option><option>No</option></select></div>
+          <div class="field"><label class="f">Modalidad</label><select class="inp"><option selected>Presión soporte 5/5</option><option>Pieza en T</option><option>CPAP 5</option></select></div>
+          <div class="field"><label class="f">Duración (min)</label><input class="inp" value="60"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label class="f">FR durante SBT</label><input class="inp" id="sFr" value="22" oninput="calcRsbi()"></div>
+          <div class="field"><label class="f">Vt durante SBT (mL)</label><input class="inp" id="sVt" value="420" oninput="calcRsbi()"></div>
+          <div class="field"><label class="f">Prueba de fuga</label><select class="inp"><option selected>Positiva (fuga presente)</option><option>Negativa</option></select></div>
+        </div>
+        <div class="calcbox" id="rsbiOut"></div>
+        <div class="row" style="margin-top:12px;gap:8px"><button class="btn btn-accent">Registrar SBT</button><button class="btn btn-ghost">Programar extubación</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== OXÍGENO Y EQUIPO ===================== -->
+<section id="p-oxi" class="panel" hidden>
+  <div class="card">
+    <div class="card-h">
+      <h3>Consumo de oxígeno · 16/09/2026 · RIVAS MÉNDEZ, J. A.</h3>
+      <span class="hint">Los litros se calculan; nunca se digitan</span>
+    </div>
+    <div class="card-b" style="padding:0">
+      <table>
+        <thead><tr><th>Inicio</th><th>Fin</th><th>Dispositivo</th><th>Fuente</th><th class="num">Flujo (L/min)</th><th class="num">FiO₂</th><th class="num">Minutos</th><th class="num">Litros</th></tr></thead>
+        <tbody id="tramos"></tbody>
+        <tfoot><tr><td colspan="6">Consumo total del día</td><td class="num" id="totMin"></td><td class="num" id="totL"></td></tr></tfoot>
+      </table>
+    </div>
+    <div class="card-b">
+      <div class="row" style="align-items:flex-end">
+        <div class="field"><label class="f">Nuevo flujo (L/min)</label><input class="inp" id="nFlujo" value="3"></div>
+        <div class="field"><label class="f">Desde</label><input class="inp" id="nDesde" value="18:00"></div>
+        <div class="field"><label class="f">Hasta</label><input class="inp" id="nHasta" value="20:00"></div>
+        <div class="field"><label class="f">Dispositivo</label><select class="inp" id="nDisp"><option>Cánula nasal</option><option selected>Mascarilla Venturi 28 %</option><option>Mascarilla con reservorio</option><option>Cánula de alto flujo</option></select></div>
+        <div class="field" style="flex:none"><button class="btn btn-accent" onclick="addTramo()">Cerrar tramo y abrir uno nuevo</button></div>
+      </div>
+      <div class="help">Al cambiar dispositivo, flujo o FiO₂ el tramo vigente se cierra automáticamente y se abre uno nuevo: no hay solapes posibles.</div>
+      <div class="alert a-info" style="margin-top:12px"><span class="ic">i</span><div><b>Equivalencia con el papel</b>El registro manuscrito de 06:00 a 18:00 a 2 L/min declaraba 1 440 L para todo el turno. El módulo reproduce el mismo resultado por tramos y detecta los cambios de flujo intermedios que el papel perdía.</div></div>
+    </div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Autonomía de cilindro</h3><span class="hint">Verificación previa al traslado</span></div>
+      <div class="card-b">
+        <div class="row">
+          <div class="field"><label class="f">Tipo</label><select class="inp" id="cTipo" onchange="calcCil()"><option value="0.16">D (0.16)</option><option value="0.28" selected>E (0.28)</option><option value="1.56">M (1.56)</option><option value="3.14">H/K (3.14)</option></select></div>
+          <div class="field"><label class="f">Presión (psi)</label><input class="inp" id="cPsi" value="800" oninput="calcCil()"></div>
+          <div class="field"><label class="f">Flujo (L/min)</label><input class="inp" id="cFlujo" value="8" oninput="calcCil()"></div>
+          <div class="field"><label class="f">Reserva (psi)</label><input class="inp" id="cRes" value="200" oninput="calcCil()"></div>
+        </div>
+        <div id="cilOut"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Equipo asignado · trazabilidad GIAI</h3><span class="hint">Sustituye el bloque «Uso equipo HRS» del papel</span></div>
+      <div class="card-b" style="padding:0">
+        <table>
+          <thead><tr><th>GIAI</th><th>Equipo</th><th>Desde</th><th class="num">Horómetro</th><th class="num">Horas</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr><td>7509…0031</td><td>Regulador con medidor automático</td><td>06:00</td><td class="num">—</td><td class="num"><span class="derived">12.0</span></td><td><span class="state s-good"><span class="dot"></span> Vigente</span></td></tr>
+            <tr><td>7509…0117</td><td>Ventilador de transporte Hamilton T1</td><td>—</td><td class="num">3 421.5</td><td class="num">—</td><td><span class="state s-crit"><span class="dot"></span> Mantenimiento vencido</span></td></tr>
+            <tr><td>7509…0208</td><td>CPAP/BiPAP ResMed Lumis</td><td>—</td><td class="num">1 104.0</td><td class="num">—</td><td><span class="state s-good"><span class="dot"></span> Disponible</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card-b">
+        <div class="alert a-crit"><span class="ic">✕</span><div><b>Asignación bloqueada</b>El ventilador de transporte 7509…0117 tiene mantenimiento preventivo vencido desde el 02/09/2026. No puede asignarse a un paciente hasta su liberación por Biomédica.</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== INDICADORES ===================== -->
+<section id="p-ind" class="panel" hidden>
+  <div class="grid g4" style="margin-bottom:var(--space-4)">
+    <div class="kpi"><div class="kpi-l">Cumplimiento de terapias</div><div class="kpi-v">96.4<small> %</small></div><div class="kpi-m">Meta ≥ 95 % · 412 de 427 en ventana</div><div class="meter"><i style="width:96.4%"></i></div></div>
+    <div class="kpi"><div class="kpi-l">Tiempo dentro de meta SpO₂</div><div class="kpi-v">87.1<small> %</small></div><div class="kpi-m">Meta ≥ 85 % · hospitalización</div><div class="meter"><i style="width:87.1%"></i></div></div>
+    <div class="kpi"><div class="kpi-l">Verificación de ventilador por turno</div><div class="kpi-v">98.9<small> %</small></div><div class="kpi-m">Meta ≥ 98 % · UCI</div><div class="meter"><i style="width:98.9%"></i></div></div>
+    <div class="kpi"><div class="kpi-l">Exactitud del consumo de O₂</div><div class="kpi-v">95.8<small> %</small></div><div class="kpi-m">Registrado vs. central de gases</div><div class="meter"><i style="width:95.8%"></i></div></div>
+  </div>
+
+  <div class="grid g2">
+    <div class="card">
+      <div class="card-h"><h3>Cumplimiento del paquete NAV</h3><span class="hint">Últimos 8 meses · UCI · meta 95 %</span></div>
+      <div class="card-b">
+        <div class="bars" id="navBars" role="img" aria-label="Cumplimiento mensual del paquete NAV, de 78 % en febrero a 94 % en septiembre"></div>
+        <div class="legend-note">Serie única: porcentaje de ítems cumplidos sobre ítems aplicables. La línea de meta institucional es 95 %.</div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h"><h3>Indicadores clínicos del servicio</h3><span class="hint">Mes en curso</span></div>
+      <div class="card-b" style="padding:0">
+        <table>
+          <thead><tr><th>Indicador</th><th class="num">Valor</th><th class="num">Meta</th><th>Estado</th></tr></thead>
+          <tbody>
+            <tr><td>Fracaso de extubación (&lt; 48 h)</td><td class="num">9.1 %</td><td class="num">≤ 12 %</td><td><span class="state s-good"><span class="dot"></span> En meta</span></td></tr>
+            <tr><td>Extubación no planificada / 100 días-VM</td><td class="num">1.4</td><td class="num">≤ 1.0</td><td><span class="state s-warn"><span class="dot"></span> Sobre meta</span></td></tr>
+            <tr><td>NAV / 1 000 días-ventilador</td><td class="num">4.8</td><td class="num">Línea base</td><td><span class="state s-mut"><span class="dot"></span> Vigilancia</span></td></tr>
+            <tr><td>Evaluación diaria de destete en elegibles</td><td class="num">91.3 %</td><td class="num">≥ 90 %</td><td><span class="state s-good"><span class="dot"></span> En meta</span></td></tr>
+            <tr><td>Sesiones firmadas sin cargo (fuga)</td><td class="num">0.0 %</td><td class="num">0 %</td><td><span class="state s-good"><span class="dot"></span> En meta</span></td></tr>
+            <tr><td>Mediana de registro por sesión</td><td class="num">74 s</td><td class="num">≤ 90 s</td><td><span class="state s-good"><span class="dot"></span> En meta</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="watermark">MOCK-HIS-TR-001 · Mockup de referencia del módulo de Terapia Respiratoria · HIS Avante Multipaís · Datos ficticios · 16/09/2026</div>
+</main>
+
+<script>
+/* ---------- Navegación ---------- */
+const tabs=document.querySelectorAll('.tab');
+tabs.forEach(t=>t.addEventListener('click',()=>goTab(t.dataset.p)));
+function goTab(id){
+  tabs.forEach(t=>t.setAttribute('aria-selected', String(t.dataset.p===id)));
+  document.querySelectorAll('.panel').forEach(p=>{p.hidden = (p.id!==id);});
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+/* ---------- Orden ---------- */
+function toggleProc(cb){ cb.closest('.proc').classList.toggle('sel', cb.checked); }
+
+/* ===== Sección 1 · Oxigenoterapia ===== */
+function selOxi(cb){
+  const grp = cb.dataset.grp, marcar = cb.checked;
+  document.querySelectorAll('#oxiList input').forEach(i=>{
+    i.checked = marcar && i.dataset.grp===grp;
+    i.closest('.proc').classList.toggle('sel', i.checked);
+  });
+  if(marcar){ document.getElementById('noOxi').checked=false; toggleNoOxi(); }
+}
+function oxiSeleccionados(){ return [...document.querySelectorAll('#oxiList input')].filter(i=>i.checked).length; }
+function toggleNoOxi(){
+  const no = document.getElementById('noOxi');
+  no.closest('.no-req').classList.toggle('on', no.checked);
+  document.getElementById('oxiList').classList.toggle('colapsada', no.checked);
+  document.getElementById('metaBlock').classList.toggle('colapsada', no.checked);
+  if(no.checked){
+    document.querySelectorAll('#oxiList input').forEach(i=>{ i.checked=false; i.closest('.proc').classList.remove('sel'); });
+  }
+  document.getElementById('oxiHelp').classList.toggle('declarado', no.checked);
+  document.getElementById('oxiHelp').textContent = no.checked
+    ? 'Sección colapsada: el prescriptor declara que este paciente no requiere oxigenoterapia. La declaración queda registrada en la orden. Desmarque la casilla para volver a desplegarla.'
+    : 'Selección única: al elegir el inicio de oxigenoterapia el sistema agrega automáticamente su supervisión y cuidado. Si el paciente no requiere oxígeno, márquelo en la casilla de la derecha.';
+}
+
+/* ===== Meta de saturación ===== */
+const METAS={
+  '94–98 %':{tono:'a-info',tit:'Meta estándar del adulto agudo',
+    txt:'Rango 94–98 % para el paciente hospitalizado sin riesgo de retención de dióxido de carbono. Evitar saturaciones por encima del rango: la hiperoxia también se titula a la baja. Regla aplicable: Protocolo de titulación de oxígeno TR-O2-01.'},
+  '88–92 %':{tono:'a-warn',tit:'Paciente con riesgo de hipercapnia',
+    txt:'Meta 88–92 % en enfermedad pulmonar obstructiva crónica, obesidad con hipoventilación, enfermedad neuromuscular o intoxicación por depresores. Evitar saturaciones mayores de 92 %. Dispositivo de elección: mascarilla Venturi. Regla aplicable: Protocolo de titulación de oxígeno TR-O2-02.'},
+  '88–93 %':{tono:'a-warn',tit:'Paciente crítico con fracción inspirada de oxígeno igual o mayor de 0.70',
+    txt:'Meta 88–93 % cuando se requiere una fracción inspirada de oxígeno igual o mayor de 0.70 sin estrategia de presión positiva al final de la espiración elevada. Solicitar gasometría arterial de control. Regla aplicable: Protocolo de titulación de oxígeno TR-O2-03.'}
+};
+function setMeta(btn,val){
+  btn.parentElement.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed','false'));
+  btn.setAttribute('aria-pressed','true');
+  const otro = (val==='otro'), hint=document.getElementById('metaHint');
+  document.getElementById('metaOtroBox').style.display = otro? 'block':'none';
+  if(otro){ hint.style.display='none'; valMetaOtro(); return; }
+  const m=METAS[val];
+  hint.style.display='flex';
+  hint.className='alert '+m.tono;
+  hint.innerHTML='<span class="ic">'+(m.tono==='a-warn'?'⚠':'i')+'</span><div><b>'+m.tit+'</b>'+m.txt+'</div>';
+  const pb=document.querySelectorAll('.pb-value');
+  pb[pb.length-1].textContent = val.replace('–',' – ');
+}
+function valMetaOtro(){
+  const min=parseInt(document.getElementById('metaMin').value,10), max=parseInt(document.getElementById('metaMax').value,10),
+        just=document.getElementById('metaJust').value.trim(), err=document.getElementById('metaErr');
+  let msg='';
+  if(isNaN(min)||isNaN(max)||min<70||max>100||min>=max) msg='Capture un rango válido de saturación (mínimo menor que máximo, entre 70 % y 100 %).';
+  else if(just.length<15) msg='La justificación clínica es obligatoria cuando la meta se aparta de las metas institucionales.';
+  err.textContent=msg; err.classList.toggle('show', !!msg);
+  const pb=document.querySelectorAll('.pb-value');
+  if(!msg) pb[pb.length-1].textContent = min+' – '+max+' %';
+  return !msg;
+}
+
+/* ===== Sección 2 · Aerosolterapia y medicamento dependiente ===== */
+const MEDS={
+  salbutamol:{nom:'Salbutamol — solución para nebulizar 5 mg/mL',base:'mg',min:2.5,max:5,def:2.5,tono:'a-info',
+    msg:'Salbutamol 2.5 a 5 mg por nebulización en el adulto; en pediatría 0.15 mg/kg con un mínimo de 2.5 mg. Vigilar taquicardia, temblor e hipopotasemia.'},
+  ipratropio:{nom:'Bromuro de ipratropio («Tropium») — solución 0.25 mg/mL',base:'mg',min:0.25,max:0.5,def:0.5,tono:'a-info',
+    msg:'Bromuro de ipratropio 0.5 mg (500 µg) por nebulización en el adulto; 0.25 mg en menores de 12 años. La unidad válida es miligramo o microgramo, nunca gramo.'},
+  budesonida:{nom:'Budesonida — suspensión 0.5 mg/mL',base:'mg',min:0.25,max:1,def:0.5,tono:'a-info',
+    msg:'Budesonida 0.5 a 1 mg cada 12 horas en el adulto; 0.25 a 0.5 mg en pediatría. Enjuague bucal obligatorio al terminar la nebulización.'},
+  adrenalina:{nom:'Adrenalina — solución 1 mg/mL',base:'mg',min:0.5,max:5,def:5,tono:'a-warn',
+    msg:'Adrenalina 5 mg nebulizados en el adulto; en pediatría 0.5 mg/kg hasta un máximo de 5 mg. Medicamento de alto riesgo: exige doble verificación por un segundo profesional y monitoreo continuo.'},
+  hipertonica:{nom:'Solución salina hipertónica 3 %',base:'mL',min:3,max:5,def:4,tono:'a-warn',
+    msg:'Solución salina hipertónica 3 % · 4 mL por nebulización. Premedicar con broncodilatador y vigilar broncoespasmo durante los primeros minutos.'},
+  nac:{nom:'N-acetilcisteína — solución 100 mg/mL',base:'mg',min:100,max:600,def:300,tono:'a-warn',
+    msg:'N-acetilcisteína 300 mg (3 mL al 10 %) por nebulización. Puede provocar broncoespasmo: administrar después de un broncodilatador.'},
+  salbutamolIDM:{nom:'Salbutamol — inhalador de dosis medida 100 µg por disparo',base:'disparos',min:2,max:4,def:2,tono:'a-info',
+    msg:'Salbutamol 2 a 4 disparos de 100 µg con expansor de volumen, un disparo a la vez y cinco respiraciones entre disparos. En crisis puede repetirse cada 20 minutos durante la primera hora.'},
+  ipratropioIDM:{nom:'Bromuro de ipratropio — inhalador de dosis medida 20 µg por disparo',base:'disparos',min:2,max:4,def:2,tono:'a-info',
+    msg:'Bromuro de ipratropio 2 a 4 disparos de 20 µg con expansor de volumen. Evitar el contacto del aerosol con los ojos, sobre todo en glaucoma.'},
+  budesonidaIDM:{nom:'Budesonida — inhalador de dosis medida 200 µg por disparo',base:'disparos',min:1,max:2,def:2,tono:'a-info',
+    msg:'Budesonida 1 a 2 disparos de 200 µg cada 12 horas con expansor de volumen. Enjuague bucal obligatorio después de cada administración.'},
+  fluticasonaIDM:{nom:'Fluticasona — inhalador de dosis medida 125 µg por disparo',base:'disparos',min:1,max:2,def:2,tono:'a-info',
+    msg:'Fluticasona 1 a 2 disparos de 125 µg cada 12 horas con expansor de volumen. Enjuague bucal obligatorio después de cada administración.'}
+};
+const AER={
+  'TR-AER-01':{nom:'Nebulización convencional (jet)',hint:'Parámetros estándar de nebulización con generador tipo jet',
+    meds:['salbutamol','ipratropio','budesonida','adrenalina','hipertonica','nac'],
+    unidades:['mg','µg','g','mL'],
+    dil:['Solución salina normal 0.9 % · 3 mL','Solución salina normal 0.9 % · 4 mL','Solución salina normal 0.9 % · 5 mL','Agua estéril · 4 mL','Sin diluyente'],
+    dilDef:1,
+    extra:{label:'Flujo impulsor de oxígeno',ops:['6 L/min','7 L/min','8 L/min'],def:0}},
+  'TR-AER-03':{nom:'Malla vibratoria en circuito de ventilación mecánica',hint:'Parámetros estándar de nebulización en paciente ventilado',
+    meds:['salbutamol','ipratropio','budesonida','nac'],
+    unidades:['mg','µg','g'],
+    dil:['Sin diluyente (malla vibratoria)','Solución salina normal 0.9 % · 2 mL'],
+    dilDef:0,
+    extra:{label:'Posición en el circuito',ops:['Rama inspiratoria, 15 cm antes de la pieza en Y','Entre la pieza en Y y el tubo endotraqueal','Antes del humidificador activo'],def:0}},
+  'TR-AER-04':{nom:'Inhalador de dosis medida con expansor de volumen',hint:'Dosificación en disparos; no requiere diluyente',
+    meds:['salbutamolIDM','ipratropioIDM','budesonidaIDM','fluticasonaIDM'],
+    unidades:['disparos'],
+    dil:['No aplica'],
+    dilDef:0,
+    extra:{label:'Interfaz del expansor',ops:['Con boquilla','Con mascarilla facial','Acoplado al circuito de ventilación'],def:0}},
+  'TR-AER-05':null
+};
+function selAer(cb){
+  const marcar = cb.checked;
+  document.querySelectorAll('#aerList input').forEach(i=>{
+    i.checked = marcar && i===cb;
+    i.closest('.proc').classList.toggle('sel', i.checked);
+  });
+  if(marcar){ document.getElementById('noAer').checked=false; document.getElementById('noAer').closest('.no-req').classList.remove('on'); document.getElementById('aerList').classList.remove('colapsada'); }
+  refrescarMed();
+}
+function aerElegido(){ const i=[...document.querySelectorAll('#aerList input')].find(x=>x.checked); return i? i.dataset.aer : null; }
+function toggleNoAer(){
+  const no=document.getElementById('noAer');
+  no.closest('.no-req').classList.toggle('on', no.checked);
+  document.getElementById('aerList').classList.toggle('colapsada', no.checked);
+  if(no.checked) document.querySelectorAll('#aerList input').forEach(i=>{ i.checked=false; i.closest('.proc').classList.remove('sel'); });
+  document.getElementById('aerHelp').classList.toggle('declarado', no.checked);
+  document.getElementById('aerHelp').textContent = no.checked
+    ? 'Sección colapsada: el prescriptor declara que este paciente no requiere aerosolterapia. Desmarque la casilla para volver a desplegarla.'
+    : 'Selección única: la orden admite un procedimiento de aerosolterapia a la vez. Los parámetros de dosificación cambian según el procedimiento elegido.';
+  refrescarMed();
+}
+function opciones(sel, lista, idx){
+  sel.innerHTML = lista.map((o,n)=>'<option value="'+o+'"'+(n===idx?' selected':'')+'>'+o+'</option>').join('');
+}
+function refrescarMed(){
+  const cod = aerElegido(), card = document.getElementById('medCard'), cfg = cod? AER[cod] : null;
+  if(!cfg){ card.hidden = true; return; }   // TR-AER-05 y "no aplica" no despliegan medicamento
+  card.hidden = false;
+  document.getElementById('medTitulo').textContent = 'Medicamento para ' + cod + ' · ' + cfg.nom;
+  document.getElementById('medHint').textContent = cfg.hint;
+  const med = document.getElementById('med');
+  med.innerHTML = cfg.meds.map((k,n)=>'<option value="'+k+'"'+(n===0?' selected':'')+'>'+MEDS[k].nom+'</option>').join('');
+  opciones(document.getElementById('dil'), cfg.dil, cfg.dilDef);
+  document.getElementById('extraLabel').textContent = cfg.extra.label;
+  opciones(document.getElementById('extra'), cfg.extra.ops, cfg.extra.def);
+  cambioMed();
+}
+function cambioMed(){
+  const cod = aerElegido(); if(!cod || !AER[cod]) return;
+  const cfg = AER[cod], m = MEDS[document.getElementById('med').value];
+  opciones(document.getElementById('unidad'), cfg.unidades, Math.max(0,cfg.unidades.indexOf(m.base)));
+  document.getElementById('dosis').value = m.def;
+  valDosis();
+}
+function valDosis(){
+  const cod = aerElegido(); if(!cod || !AER[cod]) return;
+  const m = MEDS[document.getElementById('med').value], d=parseFloat(document.getElementById('dosis').value),
+        u=document.getElementById('unidad').value, err=document.getElementById('dosisErr'),
+        ok=document.getElementById('dosisOk'), inp=document.getElementById('dosis');
+  const nom = m.nom.split(' — ')[0];
+  let msg='';
+  if(u==='g') msg='Unidad no válida para un medicamento inhalado. Use miligramos o microgramos. Dosis habitual de '+nom+': '+m.max+' mg ('+(m.max*1000)+' µg).';
+  else if(u!==m.base && !(m.base==='mg' && u==='µg')) msg=nom+' se dosifica en '+m.base+'. Cambie la unidad a '+m.base+'.';
+  else if(isNaN(d)||d<=0) msg='Capture una dosis numérica mayor que cero.';
+  else { const eq = (m.base==='mg' && u==='µg')? d/1000 : d;
+    if(eq < m.min*0.5) msg='Dosis por debajo del rango habitual de '+nom+' ('+m.min+' a '+m.max+' '+m.base+'). Requiere justificación del prescriptor.';
+    else if(eq > m.max*2) msg='Dosis por encima del máximo permitido de '+nom+' ('+m.max+' '+m.base+'). No es posible firmar la orden.'; }
+  err.textContent=msg; err.classList.toggle('show', !!msg);
+  inp.classList.toggle('err', !!msg); document.getElementById('unidad').classList.toggle('err', u==='g');
+  ok.innerHTML = msg? '' : '<div class="alert '+m.tono+'" style="margin:0"><span class="ic">'+(m.tono==='a-warn'?'⚠':'✓')+'</span><div><b>'+(m.tono==='a-warn'?'Dosis dentro del rango habitual · requiere precaución adicional':'Dosis dentro del rango habitual')+'</b>'+m.msg+'</div></div>';
+}
+
+/* ===== Sección 3 ===== */
+function toggleNoFis(){
+  const no=document.getElementById('noFis');
+  no.closest('.no-req').classList.toggle('on', no.checked);
+  document.getElementById('fisList').classList.toggle('colapsada', no.checked);
+  if(no.checked) document.querySelectorAll('#fisList input').forEach(i=>{ i.checked=false; i.closest('.proc').classList.remove('sel'); });
+  document.getElementById('fisHelp').classList.toggle('declarado', no.checked);
+  document.getElementById('fisHelp').textContent = no.checked
+    ? 'Sección colapsada: el prescriptor declara que este paciente no requiere fisioterapia respiratoria, manejo de vía aérea ni pruebas funcionales. Desmarque la casilla para volver a desplegarla.'
+    : 'Selección múltiple. Si el paciente no requiere ninguno de estos procedimientos, márquelo en la casilla de la derecha.';
+}
+function fisSeleccionados(){ return [...document.querySelectorAll('#fisList input')].filter(i=>i.checked).length; }
+
+/* ===== Conjuntos de órdenes ===== */
+function limpiarTodo(){
+  ['noOxi','noAer','noFis'].forEach(id=>{ const c=document.getElementById(id); c.checked=false; });
+  document.querySelectorAll('#oxiList input,#aerList input,#fisList input').forEach(i=>{ i.checked=false; i.closest('.proc').classList.remove('sel'); });
+  toggleNoOxi(); toggleNoAer(); toggleNoFis();
+}
+function marcar(sel){ const i=document.querySelector(sel); if(i && !i.checked){ i.checked=true; i.dispatchEvent(new Event('change')); } }
+function orderSet(k){
+  const dxMap={epoc:'CA22.0',asma:'CA23',post:'CB40.2'};
+  limpiarTodo();
+  if(dxMap[k]) document.getElementById('dx').value=dxMap[k];
+  if(k==='epoc'){
+    marcar('#oxiList input[data-grp="g1"]');
+    marcar('#aerList input[data-aer="TR-AER-01"]');
+    document.getElementById('med').value='ipratropio'; cambioMed();
+    marcar('#fisList input[data-cod="TR-FIS-01"]');
+    document.querySelectorAll('#metaToggle button')[1].click();
+  } else if(k==='asma'){
+    marcar('#oxiList input[data-grp="g1"]');
+    marcar('#aerList input[data-aer="TR-AER-01"]');
+    document.getElementById('med').value='salbutamol'; cambioMed();
+    document.getElementById('noFis').checked=true; toggleNoFis();
+    document.querySelectorAll('#metaToggle button')[0].click();
+  } else if(k==='post'){
+    marcar('#oxiList input[data-grp="g1"]');
+    document.getElementById('noAer').checked=true; toggleNoAer();
+    marcar('#fisList input[data-cod="TR-FIS-01"]');
+    marcar('#fisList input[data-cod="TR-FIS-03"]');
+    document.querySelectorAll('#metaToggle button')[0].click();
+  } else if(k==='preop'){
+    document.getElementById('noOxi').checked=true; toggleNoOxi();
+    marcar('#aerList input[data-aer="TR-AER-05"]');
+    marcar('#fisList input[data-cod="TR-FIS-03"]');
+    marcar('#fisList input[data-cod="TR-FIS-06"]');
+    abrirAviso('El conjunto preoperatorio no fija diagnóstico: conserva el diagnóstico quirúrgico del paciente. Incluye educación de técnica inhalatoria y entrenamiento con espirómetro incentivo antes de la cirugía.');
+  }
+}
+
+/* ===== Modal, avisos y firma ===== */
+function abrirModal(txt){
+  document.getElementById('modalT').textContent='No es posible firmar la orden';
+  document.querySelector('.modal').style.borderTopColor='var(--status-critical)';
+  document.querySelector('.modal-ic').textContent='✕';
+  document.getElementById('modalM').innerHTML=txt; document.getElementById('modal').hidden=false;
+}
+function abrirAviso(txt){
+  document.getElementById('modalT').textContent='Conjunto de órdenes aplicado';
+  document.querySelector('.modal').style.borderTopColor='var(--avante-teal)';
+  document.querySelector('.modal-ic').textContent='i';
+  document.getElementById('modalM').innerHTML=txt; document.getElementById('modal').hidden=false;
+}
+function cerrarModal(){ document.getElementById('modal').hidden=true; }
+function firmarOrden(){
+  if(!document.getElementById('noOxi').checked && oxiSeleccionados()===0){
+    abrirModal('Debe seleccionar al menos una opción válida en la sección de «Oxigenoterapia», o bien marcar la casilla <b>No requiere oxigenoterapia</b> para dejar constancia de la decisión del prescriptor.');
+    return;
+  }
+  if(!document.getElementById('noAer').checked && !aerElegido()){
+    abrirModal('Debe seleccionar al menos una opción válida en la sección de «Aerosolterapia», o bien marcar la casilla <b>No aplica</b>.');
+    return;
+  }
+  if(!document.getElementById('noFis').checked && fisSeleccionados()===0){
+    abrirModal('Debe seleccionar al menos una opción válida en la sección de «Fisioterapia respiratoria · Vía aérea · Pruebas funcionales», o bien marcar la casilla <b>No aplica</b>.');
+    return;
+  }
+  if(document.getElementById('metaOtroBox').style.display==='block' && !document.getElementById('noOxi').checked && !valMetaOtro()){
+    abrirModal('La meta de saturación personalizada requiere un rango válido y una justificación clínica antes de firmar la orden.');
+    return;
+  }
+  if(document.getElementById('dosisErr').classList.contains('show')){
+    abrirModal('Corrija la dosis del medicamento antes de firmar la orden.');
+    return;
+  }
+  document.getElementById('ordenOk').innerHTML='<div class="alert a-good" style="margin-top:12px"><span class="ic">✓</span><div><b>Orden firmada · '+document.getElementById('dx').value+'</b>Se generaron las tareas programadas en el worklist del turno y se notificó a la Jefatura de Terapia Respiratoria.</div></div>';
+}
+
+/* ---------- Hoja de terapia ---------- */
+function calcDelta(){
+  const pre=parseFloat(document.getElementById('prePo').value), post=parseFloat(document.getElementById('postPo').value),
+        box=document.getElementById('deltaBox');
+  if(isNaN(pre)||isNaN(post)){box.innerHTML='';return;}
+  const d=post-pre;
+  if(d<=-4||post<88) box.innerHTML='<div class="alert a-crit"><span class="ic">✕</span><div><b>Deterioro durante la terapia ('+d+' puntos de SpO₂)</b>Se notifica al médico tratante y al equipo de respuesta rápida. Registre la conducta tomada antes de firmar.</div></div>';
+  else if(post>92) box.innerHTML='<div class="alert a-warn"><span class="ic">⚠</span><div><b>SpO₂ por encima de la meta (88–92 %)</b>Paciente con riesgo de hipercapnia: reduzca el flujo y reevalúe en 20 minutos. Se generará tarea de titulación.</div></div>';
+  else box.innerHTML='<div class="alert a-good"><span class="ic">✓</span><div><b>Respuesta favorable: SpO₂ '+pre+' → '+post+' % ('+(d>0?'+':'')+d+')</b>Dentro de la meta prescrita. Sin efectos adversos registrados.</div></div>';
+}
+function firmar(){
+  document.getElementById('firmaOk').innerHTML='<div class="alert a-good" style="margin-top:12px"><span class="ic">✓</span><div><b>Sesión firmada 14:31 · L. Barrera</b>Cargo de $ 20.15 devengado en la cuenta 26-008914. Evento <code>tr.sesion.ejecutada</code> publicado. Registro inmutable.</div></div>';
+}
+
+/* ---------- Ventilación ---------- */
+function calcVent(){
+  const sexo=document.getElementById('vSexo').value, talla=parseFloat(document.getElementById('vTalla').value),
+        vt=parseFloat(document.getElementById('vVt').value), fr=parseFloat(document.getElementById('vFr').value),
+        peep=parseFloat(document.getElementById('vPeep').value), pplat=parseFloat(document.getElementById('vPplat').value),
+        fio2=parseFloat(document.getElementById('vFio2').value)/100, spo2=parseFloat(document.getElementById('vSpo2').value);
+  const pbw=(sexo==='H'?50:45.5)+0.91*(talla-152.4);
+  const vtkg=vt/pbw, dp=pplat-peep;
+  const roxVal=(spo2/fio2)/fr;
+  document.getElementById('ventCalc').innerHTML=
+    '<div class="calcrow"><span>Peso corporal predicho (PBW)</span><b>'+pbw.toFixed(1)+' kg</b></div>'+
+    '<div class="calcrow"><span>Volumen corriente por peso predicho</span><b>'+vtkg.toFixed(2)+' mL/kg</b></div>'+
+    '<div class="calcrow"><span>Presión de conducción (Pplat − PEEP)</span><b>'+dp.toFixed(0)+' cmH₂O</b></div>'+
+    '<div class="calcrow"><span>Índice ROX (referencia, si estuviera en CAF)</span><b>'+roxVal.toFixed(2)+'</b></div>'+
+    '<div class="calcrow"><span>Ventilación minuto</span><b>'+((vt*fr)/1000).toFixed(1)+' L/min</b></div>';
+  let a='';
+  if(vtkg>8) a+='<div class="alert a-crit"><span class="ic">✕</span><div><b>Volumen corriente alto: '+vtkg.toFixed(2)+' mL/kg PBW</b>Meta de ventilación protectora 4–8 mL/kg. Reduzca el volumen programado.</div></div>';
+  if(pplat>30) a+='<div class="alert a-crit"><span class="ic">✕</span><div><b>Presión meseta '+pplat+' cmH₂O</b>Supera el límite de 30 cmH₂O.</div></div>';
+  if(dp>15) a+='<div class="alert a-warn"><span class="ic">⚠</span><div><b>Presión de conducción '+dp+' cmH₂O</b>Por encima de 15 cmH₂O: revise volumen y PEEP.</div></div>';
+  if(fio2>=0.70) a+='<div class="alert a-warn"><span class="ic">⚠</span><div><b>FiO₂ ≥ 70 %</b>Solicite gasometría y considere meta de SpO₂ 88–93 %.</div></div>';
+  if(!a) a='<div class="alert a-good"><span class="ic">✓</span><div><b>Ventilación dentro de los límites de protección pulmonar</b>Vt, presión meseta y presión de conducción en rango.</div></div>';
+  document.getElementById('ventAlerts').innerHTML=a;
+}
+function calcRsbi(){
+  const fr=parseFloat(document.getElementById('sFr').value), vt=parseFloat(document.getElementById('sVt').value)/1000;
+  const r=fr/vt;
+  document.getElementById('rsbiOut').innerHTML=
+    '<div class="calcrow"><span>Índice de respiración rápida y superficial (RSBI)</span><b>'+r.toFixed(1)+'</b></div>'+
+    '<div class="calcrow"><span>Umbral institucional</span><b>105</b></div>'+
+    '<div class="calcrow"><span>Lectura</span><b style="color:'+(r<105?'var(--status-good)':'var(--status-serious)')+'">'+(r<105?'Compatible con destete':'Sugiere intolerancia')+'</b></div>';
+}
+function calcChk(_,outId){
+  const box=document.getElementById(outId).closest('.card');
+  const items=box.querySelectorAll('.chk input');
+  const tot=items.length; let ok=0; items.forEach(i=>{if(i.checked)ok++;});
+  const pct=Math.round(ok/tot*1000)/10;
+  const out=document.getElementById(outId);
+  const cls = pct>=95?'a-good':(pct>=85?'a-warn':'a-crit');
+  const ic = pct>=95?'✓':(pct>=85?'⚠':'✕');
+  out.innerHTML='<div class="alert '+cls+'" style="margin:0"><span class="ic">'+ic+'</span><div><b>Cumplimiento del turno: '+pct+' % ('+ok+' de '+tot+')</b>'+(pct<95?'Por debajo de la meta institucional de 95 %: se notifica a Jefatura y a Control de Infecciones.':'En meta. Resultado publicado al tablero de calidad.')+'</div></div>';
+}
+
+/* ---------- Oxígeno ---------- */
+let tramos=[
+  {ini:'06:00',fin:'10:00',disp:'Mascarilla Venturi 28 %',fuente:'Central',flujo:2,fio2:'28 % prog.'},
+  {ini:'10:00',fin:'13:30',disp:'Mascarilla Venturi 28 %',fuente:'Central',flujo:4,fio2:'28 % prog.'},
+  {ini:'13:30',fin:'14:00',disp:'Cánula nasal',fuente:'Cilindro E',flujo:3,fio2:'33 % est.'},
+  {ini:'14:00',fin:'18:00',disp:'Mascarilla Venturi 28 %',fuente:'Central',flujo:2,fio2:'28 % prog.'}
+];
+function mins(a,b){const [h1,m1]=a.split(':').map(Number),[h2,m2]=b.split(':').map(Number);return (h2*60+m2)-(h1*60+m1);}
+function renderTramos(){
+  const tb=document.getElementById('tramos'); let tm=0,tl=0;
+  tb.innerHTML=tramos.map(t=>{
+    const m=mins(t.ini,t.fin), l=m*t.flujo; tm+=m; tl+=l;
+    return '<tr><td>'+t.ini+'</td><td>'+t.fin+'</td><td>'+t.disp+'</td><td>'+t.fuente+'</td><td class="num">'+t.flujo.toFixed(1)+'</td><td class="num">'+t.fio2+'</td><td class="num">'+m+'</td><td class="num"><span class="derived">'+l.toLocaleString('es-SV')+'</span></td></tr>';
+  }).join('');
+  document.getElementById('totMin').textContent=tm+' min';
+  document.getElementById('totL').textContent=tl.toLocaleString('es-SV')+' L';
+}
+function addTramo(){
+  const f=parseFloat(document.getElementById('nFlujo').value), d=document.getElementById('nDesde').value,
+        h=document.getElementById('nHasta').value, disp=document.getElementById('nDisp').value;
+  if(isNaN(f)||mins(d,h)<=0) return;
+  const fio2 = disp==='Cánula nasal' ? (21+4*f)+' % est.' : (disp.match(/\d+/)? disp.match(/\d+/)[0]+' % prog.' : 'prog.');
+  tramos.push({ini:d,fin:h,disp:disp,fuente:'Central',flujo:f,fio2:fio2});
+  renderTramos();
+}
+function calcCil(){
+  const f=parseFloat(document.getElementById('cTipo').value), psi=parseFloat(document.getElementById('cPsi').value),
+        fl=parseFloat(document.getElementById('cFlujo').value), res=parseFloat(document.getElementById('cRes').value);
+  const min=((psi-res)*f)/fl;
+  const cls=min<30?'a-crit':(min<60?'a-warn':'a-good'), ic=min<30?'✕':(min<60?'⚠':'✓');
+  document.getElementById('cilOut').innerHTML=
+    '<div class="calcbox"><div class="calcrow"><span>Autonomía estimada</span><b>'+min.toFixed(0)+' min</b></div>'+
+    '<div class="calcrow"><span>Fórmula</span><b>(('+psi+' − '+res+') × '+f+') ÷ '+fl+'</b></div></div>'+
+    '<div class="alert '+cls+'" style="margin-top:12px"><span class="ic">'+ic+'</span><div><b>'+(min<30?'Autonomía insuficiente: sustituya el cilindro antes del traslado':(min<60?'Autonomía limitada: lleve cilindro de respaldo':'Autonomía suficiente para el traslado'))+'</b>Se registra la verificación previa al traslado en la hoja de terapia.</div></div>';
+}
+
+/* ---------- Indicadores ---------- */
+const nav=[['Feb',78],['Mar',82],['Abr',85],['May',84],['Jun',89],['Jul',91],['Ago',93],['Sep',94]];
+document.getElementById('navBars').innerHTML=
+  '<div class="meta-line" style="bottom:calc(95% - 18px)"><span>meta 95 %</span></div>'+
+  nav.map(([m,v])=>'<div class="b"><b>'+v+'%</b><i style="height:calc('+v+'% - 18px)"></i><span>'+m+'</span></div>').join('');
+
+/* ---------- Init ---------- */
+renderTramos(); calcVent(); calcRsbi(); calcCil(); calcDelta();
+toggleNoOxi(); toggleNoAer(); toggleNoFis(); refrescarMed();
+calcChk('chkVent','chkVentOut'); calcChk('chkNav','chkNavOut');
+</script>
+</body>
+</html>

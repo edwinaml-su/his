@@ -168,6 +168,33 @@ const nextConfig = {
         destination: "/triage",
         permanent: true,
       },
+      // `/ece/rectificacion` (singular) duplicaba `/ece/rectificaciones` (mismo
+      // dominio NTEC Art. 41/42, mismos endpoints eceRectificacion.list/solicitar).
+      // 0 links entrantes desde sidebar/specs — auditoría R3.1 2026-09.
+      // P2-4 (revisión R3A): este redirect NO preserva el query string, así
+      // que un eventual `?episodioId=` en la URL vieja se pierde (la vista
+      // "nueva" de la plural solo lee `?documentoInstanciaId`, no episodioId).
+      // Aceptado: 0 links entrantes verificados (ni sidebar ni specs E2E lo
+      // usan con ese param) — no se justifica una regla `:path*` con forward
+      // de query para un caso sin tráfico real.
+      {
+        source: "/ece/rectificacion",
+        destination: "/ece/rectificaciones",
+        permanent: true,
+      },
+      {
+        source: "/ece/rectificacion/nuevo",
+        destination: "/ece/rectificaciones/nueva",
+        permanent: true,
+      },
+      // Remediación auditoría 2026-09-18: /ece/camas duplicaba /beds (que ya
+      // consume eceCama.mapCompleto) y filtraba con UUIDs mock inexistentes.
+      // Mismo precedente que /ece/triaje (PR #101).
+      {
+        source: "/ece/camas",
+        destination: "/beds",
+        permanent: true,
+      },
       // Safari macOS intenta /site.webmanifest además del estándar /manifest.json.
       // Sin este alias recibe el HTML 404 y lanza "Parsing application manifest:
       // The manifest is not valid JSON data" en consola.

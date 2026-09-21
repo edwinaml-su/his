@@ -141,7 +141,16 @@ export const tenantProcedure = protectedProcedure.use(async ({ ctx, next, path, 
   // la política en silencio. Con la política prendida, `undefined` + tenant
   // presente ahora falla cerrado. Con la política apagada (`MFA_POLICY_ENABLED
   // = false`) el comportamiento es bit-idéntico al de antes.
-  if (ctx.mfaSatisfied === undefined && MFA_POLICY_ENABLED) {
+  //
+  // R4.5: `MFA_POLICY_ENABLED` solo espeja el CSV de roles por env — el
+  // switch de organización (`tenant.mfaStaffRequired`) es una segunda fuente
+  // independiente. Hoy `/api/trpc` SIEMPRE calcula `mfaSatisfied` con ambas
+  // fuentes (ver route.ts), así que este `undefined` no tiene un bypass vivo
+  // en producción — pero si algún caller nuevo arma el contexto sin evaluarlo
+  // (mismo patrón que motivó el comentario de arriba), una org con el switch
+  // prendido y el CSV vacío pasaría en vez de fallar cerrado. Cerramos el
+  // patrón acá también.
+  if (ctx.mfaSatisfied === undefined && (MFA_POLICY_ENABLED || tenant.mfaStaffRequired === true)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Verificación de segundo factor requerida. Vuelve a iniciar sesión en /mfa.",

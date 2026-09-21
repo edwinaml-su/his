@@ -21,6 +21,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
 import { probeRoute } from "../_helpers/route-probe";
+import { selectOptionMatching } from "../_helpers/ui";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -114,7 +115,7 @@ test.describe("ECE — Ruta obstétrica completa (happy path)", () => {
     if ((await motivoSelect.count()) > 0) {
       const tagName = await motivoSelect.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await motivoSelect.selectOption({ label: /trabajo.*parto|labor.*parto/i });
+        await selectOptionMatching(motivoSelect, /trabajo.*parto|labor.*parto/i);
       } else {
         await motivoSelect.click();
         const opcion = page.getByRole("option", { name: /trabajo.*parto|labor/i }).first();
@@ -268,7 +269,7 @@ test.describe("ECE — Ruta obstétrica completa (happy path)", () => {
     if ((await tipoPartoSelect.count()) > 0) {
       const tagName = await tipoPartoSelect.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await tipoPartoSelect.selectOption({ label: /eutócico|vaginal/i });
+        await selectOptionMatching(tipoPartoSelect, /eutócico|vaginal/i);
       } else {
         await tipoPartoSelect.click();
         const opcion = page
@@ -295,7 +296,7 @@ test.describe("ECE — Ruta obstétrica completa (happy path)", () => {
     if ((await sexoRnSelect.count()) > 0) {
       const tagName = await sexoRnSelect.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await sexoRnSelect.selectOption({ label: /masculino|femenino/i });
+        await selectOptionMatching(sexoRnSelect, /masculino|femenino/i);
       }
     }
 
@@ -404,7 +405,7 @@ test.describe("ECE — Ruta obstétrica completa (happy path)", () => {
     if ((await tipoSelect.count()) > 0) {
       const tagName = await tipoSelect.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await tipoSelect.selectOption({ label: /espontáneo|duncan|schultze/i });
+        await selectOptionMatching(tipoSelect, /espontáneo|duncan|schultze/i);
       } else {
         await tipoSelect.click();
         const opcion = page.getByRole("option", { name: /espontáneo|duncan/i }).first();
@@ -441,7 +442,7 @@ test.describe("ECE — Ruta obstétrica completa (happy path)", () => {
     if ((await desgarro.count()) > 0) {
       const tagName = await desgarro.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await desgarro.selectOption({ label: /ninguno|sin.*desgarro/i });
+        await selectOptionMatching(desgarro, /ninguno|sin.*desgarro/i);
       }
     }
 

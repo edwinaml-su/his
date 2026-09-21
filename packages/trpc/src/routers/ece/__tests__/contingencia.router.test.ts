@@ -6,7 +6,7 @@
  *   - withTenantContext mockeado para ejecutar callback síncronamente.
  *   - router.createCaller(ctx) para invocar procedures directamente.
  *
- * Casos cubiertos (16 tests):
+ * Casos cubiertos (19 tests):
  *   Zod validators:
  *     1. activar — motivo mínimo 10 chars falla
  *     2. activar — motivo válido pasa
@@ -25,6 +25,11 @@
  *     14. estadoActual — activo false cuando no hay eventos activos
  *     15. registrarRetroactivo — BAD_REQUEST si encounterId ausente
  *     16. registrarRetroactivo — BAD_REQUEST si timestamp fuera del período
+ *   list (P1-1, revisión R3A 2026-09 — ampliado a la audiencia real de
+ *   registrarRetroactivo):
+ *     17. list — NURSE puede listar (antes solo ADM/DIR, Select quedaba vacío)
+ *     18. list — PHYSICIAN y ARCH también pueden listar
+ *     19. list — rol sin acceso (PHARM) recibe FORBIDDEN
  *
  * @QA E2E: apps/web/e2e/fase2/contingencia.spec.ts
  */
@@ -337,6 +342,43 @@ describe("contingenciaRouter — registrarRetroactivo", () => {
         // Timestamp FUERA del período (después del desactivado_en)
         timestampRealPapel: "2026-05-17T10:00:00-06:00",
       }),
+    ).rejects.toThrow(TRPCError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — list (P1-1, revisión R3A 2026-09)
+// ---------------------------------------------------------------------------
+
+describe("contingenciaRouter — list", () => {
+  it("17. NURSE puede listar (audiencia real de registrarRetroactivo)", async () => {
+    const ctx = buildCtx(["NURSE"]);
+    (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+    const caller = contingenciaRouter.createCaller(ctx as never);
+    await expect(
+      caller.list({ soloActivos: false, limit: 20, offset: 0 }),
+    ).resolves.toEqual([]);
+  });
+
+  it("18. PHYSICIAN y ARCH también pueden listar", async () => {
+    for (const role of ["PHYSICIAN", "ARCH"]) {
+      const ctx = buildCtx([role]);
+      (ctx.prisma.$queryRaw as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+      const caller = contingenciaRouter.createCaller(ctx as never);
+      await expect(
+        caller.list({ soloActivos: true, limit: 20, offset: 0 }),
+      ).resolves.toEqual([]);
+    }
+  });
+
+  it("19. rol sin acceso (PHARM) recibe FORBIDDEN", async () => {
+    const ctx = buildCtx(["PHARM"]);
+
+    const caller = contingenciaRouter.createCaller(ctx as never);
+    await expect(
+      caller.list({ soloActivos: false, limit: 20, offset: 0 }),
     ).rejects.toThrow(TRPCError);
   });
 });

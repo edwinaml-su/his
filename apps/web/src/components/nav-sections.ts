@@ -81,6 +81,7 @@ import {
   DoorOpen,
   CalendarClock,
   TrendingUp,
+  Microscope,
 } from "lucide-react";
 import { type NavItemVisibility } from "./nav-visibility";
 
@@ -180,6 +181,9 @@ export const SECTIONS: NavSection[] = [
       { href: "/lis/orders", label: "Laboratorio (LIS)", icon: FlaskConical,
         requiredServiceUnits: ["LAB"],
         description: "Asignación de exámenes, tablero de estudios y solicitudes por cuenta." },
+      { href: "/ece/valores-criticos", label: "Valores críticos", icon: Siren,
+        requiredRoles: ["MC", "ESP", "PHYSICIAN", "DIR", "ADMIN"],
+        description: "Read-back pendiente de resultados críticos (IPSG.2): confirmación con PIN y SLA de escalación." },
       { href: "/imaging", label: "Imágenes (RIS)", icon: ImageIcon,
         requiredServiceUnits: ["RX"],
         description: "Estudios radiológicos: solicitudes, programación, reportes." },
@@ -187,6 +191,8 @@ export const SECTIONS: NavSection[] = [
         description: "Terapia respiratoria: ventilación, nebulizaciones, oxigenoterapia." },
       { href: "/nutrition", label: "Nutrición", icon: Apple,
         description: "Plan nutricional enteral/parenteral y dietas hospitalarias." },
+      { href: "/pathology", label: "Anatomía Patológica", icon: Microscope,
+        description: "Solicitudes de estudios histopatológicos y citológicos (§16 NTEC)." },
     ],
   },
   {
@@ -244,6 +250,9 @@ export const SECTIONS: NavSection[] = [
     items: [
       { href: "/ece/historia-clinica", label: "Historia Clínica", icon: FileText,
         description: "Historia clínica completa del paciente: anamnesis, antecedentes, exámenes." },
+      { href: "/historia-clinica-ambulatoria", label: "Historia Clínica Ambulatoria", icon: FileText,
+        requiredRoles: ["PHYSICIAN", "NURSE", "MC", "MT", "DIR"],
+        description: "Registro de consultas ambulatorias (NTEC Art. 7): motivo, anamnesis, diagnósticos CIE-11." },
       { href: "/ece/consentimiento", label: "Consentimientos médicos (NTEC)", icon: FileSignature,
         description: "Consentimientos médicos informados según NTEC (HOSPITALIZACION, QUIRURGICO)." },
       { href: "/ece/epicrisis", label: "Epicrisis", icon: ClipboardList,
@@ -261,6 +270,9 @@ export const SECTIONS: NavSection[] = [
         description: "Documentos adjuntos al episodio (autorización, exámenes externos, etc.)." },
       { href: "/ece/fall-event", label: "Reporte de Caídas (IPSG.6)", icon: TriangleAlert,
         description: "Reporte de evento de caída del paciente. Cumple IPSG.6 JCI." },
+      { href: "/ece/registro-retroactivo", label: "Registro Retroactivo", icon: History,
+        requiredRoles: ["NURSE", "PHYSICIAN", "ARCH"],
+        description: "NTEC Art. 44 — digitación de registros en papel capturados durante contingencia." },
     ],
   },
   {
@@ -418,6 +430,9 @@ export const SECTIONS: NavSection[] = [
         description: "Políticas de control de acceso basadas en atributos." },
       { href: "/audit", label: "Auditoría", icon: History,
         description: "Bitácora de auditoría inmutable con hash chain (retención 10 años)." },
+      { href: "/audit-dashboard", label: "Dashboard Auditoría Accesos", icon: Gauge,
+        requiredRoles: ["DIR"],
+        description: "US.F2.7.16 — top usuarios, outliers y accesos a expedientes sensibles del ECE." },
       { href: "/catalogs", label: "Catálogos", icon: Settings,
         description: "Catálogos transversales: sexo biológico, género, estado civil, etc." },
       { href: "/catalogs/laboratorio", label: "Catálogo laboratorio", icon: FlaskConical,
@@ -443,6 +458,21 @@ export const SECTIONS: NavSection[] = [
       { href: "/ece/certificacion", label: "Certificación DIR", icon: BadgeCheck,
         requiredRoles: ["DIR"],
         description: "Certificación de documentos ECE por Director (Art. NTEC)." },
+      // P2-3 (revisión R3A 2026-09): requiredRoles solo filtra visibilidad del
+      // item de nav — NO es lo mismo que lo que cada router permite ejecutar.
+      // ARCH/ADMIN ven estas 2 páginas completas (list/get/dashboard son
+      // ["DIR","ARCH","ADMIN"]), pero dentro de calidad-documental el botón
+      // "Generar" reporte (comiteEce.exportReport) y en comité la firma de
+      // minuta (comiteEce.firmar) son DIR-only — el server responde FORBIDDEN
+      // a ARCH/ADMIN en esas dos acciones puntuales. Es asimetría esperada
+      // (lectura amplia, escritura/exportación restringida a DIR), no bug.
+      // NO ampliar esos roles en el router sin decisión explícita de Edwin.
+      { href: "/ece/comite", label: "Comité ECE — Minutas", icon: ClipboardCheck,
+        requiredRoles: ["DIR", "ARCH", "ADMIN"],
+        description: "Art. 32 NTEC — minutas del Comité del Expediente Clínico con hash chain." },
+      { href: "/ece/calidad-documental", label: "Calidad Documental", icon: BarChart3,
+        requiredRoles: ["DIR", "ARCH", "ADMIN"],
+        description: "Art. 32 NTEC — KPIs de completitud, firma y codificación CIE-10; reporte MINSAL/ISSS." },
       { href: "/workflow-designer", label: "Workflow Designer", icon: GitBranch,
         description: "Diseñador WYSIWYG de workflows ECE: estados, transiciones, dependencias." },
       { href: "/calculadoras", label: "Calculadoras clínicas", icon: Calculator,

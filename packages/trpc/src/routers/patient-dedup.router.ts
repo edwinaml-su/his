@@ -488,7 +488,11 @@ export const patientDedupRouter = router({
       await assertQuorumOrThrow(ctx.prisma, firma1, firma2);
 
       // ── 4. Ejecutar merge dentro de transacción con RLS ──────────────────────
-      return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+      // R02 — el `auditLog.create` NO va dentro del callback demotado:
+      // `authenticated` no tiene GRANT INSERT sobre AuditLog (verificado en
+      // prod) → permission denied. Mismo patrón que death-certificate.router
+      // (create()): se escribe después, bajo el rol bypass de ctx.prisma.
+      const updated = await withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         // Marcar paciente HIS absorbido con mergedIntoId (US.F2.7.41)
         await tx.patient.update({
           where: { id: mergeReq.mergedPatientId },
@@ -504,7 +508,7 @@ export const patientDedupRouter = router({
         });
 
         // Persistir UUIDs de firma (nunca el PIN).
-        const updated = await tx.ecePatientMerge.update({
+        return tx.ecePatientMerge.update({
           where: { id: input.mergeId },
           data: {
             firmaDir1Id: firma1.id,
@@ -514,35 +518,36 @@ export const patientDedupRouter = router({
           },
           select: { id: true, estado: true, fechaEjecucion: true, canonicalPatientId: true },
         });
-
-        // Audit log con quorum explícito — sin PINes.
-        await tx.auditLog.create({
-          data: {
-            userId: ctx.user.id,
-            organizationId: orgId,
-            establishmentId: ctx.tenant.establishmentId ?? null,
-            ip: ctx.ip ?? null,
-            userAgent: ctx.userAgent ?? null,
-            action: "UPDATE",
-            entity: "Patient",
-            entityId: mergeReq.canonicalPatientId,
-            afterJson: {
-              op: "ECE_MERGE_EJECUTADO",
-              mergeId: input.mergeId,
-              canonicalPatientId: mergeReq.canonicalPatientId,
-              mergedPatientId: mergeReq.mergedPatientId,
-              // UUIDs de firma — trazabilidad completa sin datos sensibles.
-              firmaDir1Id: firma1.id,
-              firmaDir1PersonalId: firma1.personal_id,
-              firmaDir2Id: firma2.id,
-              firmaDir2PersonalId: firma2.personal_id,
-            },
-            justification: `Merge NTEC confirmado con quorum doble firma. mergeId=${input.mergeId}`,
-          },
-        });
-
-        return updated;
       });
+
+      // Audit log con quorum explícito — sin PINes. Corre fuera del contexto
+      // demotado (ver comentario arriba).
+      await ctx.prisma.auditLog.create({
+        data: {
+          userId: ctx.user.id,
+          organizationId: orgId,
+          establishmentId: ctx.tenant.establishmentId ?? null,
+          ip: ctx.ip ?? null,
+          userAgent: ctx.userAgent ?? null,
+          action: "UPDATE",
+          entity: "Patient",
+          entityId: mergeReq.canonicalPatientId,
+          afterJson: {
+            op: "ECE_MERGE_EJECUTADO",
+            mergeId: input.mergeId,
+            canonicalPatientId: mergeReq.canonicalPatientId,
+            mergedPatientId: mergeReq.mergedPatientId,
+            // UUIDs de firma — trazabilidad completa sin datos sensibles.
+            firmaDir1Id: firma1.id,
+            firmaDir1PersonalId: firma1.personal_id,
+            firmaDir2Id: firma2.id,
+            firmaDir2PersonalId: firma2.personal_id,
+          },
+          justification: `Merge NTEC confirmado con quorum doble firma. mergeId=${input.mergeId}`,
+        },
+      });
+
+      return updated;
     }),
 
   /**

@@ -89,9 +89,24 @@ export interface SalaExpulsionRow {
 // ---------------------------------------------------------------------------
 
 function buildEceCtx(tenant: TenantContext, userId: string) {
+  // R1.2 (revisión independiente, P1-2) — el fallback `?? tenant.organizationId`
+  // metía el uuid de la organización donde se espera un establecimiento:
+  // `ece.set_ece_context` no lo resuelve contra `ece.establecimiento` (ni por
+  // `id` ni por `establishment_id` puente, ver ADR 0022) y solo emite un
+  // RAISE WARNING — el GUC queda con un valor que ninguna policy `by_estab`
+  // matchea nunca. Resultado silencioso: list/get devuelven 0 filas (no un
+  // error) y las mutaciones con `emitDomainEvent` revientan 42501 en el
+  // primer INSERT sobre una tabla `ece.*`. Se falla rápido y explícito en su
+  // lugar, igual que certificado-defuncion/periodo-expulsivo/los bridges.
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Selecciona un establecimiento antes de continuar.",
+    });
+  }
   return {
     personalId: userId,
-    establecimientoId: tenant.establishmentId ?? tenant.organizationId,
+    establecimientoId: tenant.establishmentId,
   };
 }
 
@@ -215,37 +230,52 @@ const physicianRole = requireRole(["PHYSICIAN", "MC", "NURSE"]);
 const mcRole = requireRole(["PHYSICIAN", "MC"]);
 
 export const eceSalaExpulsionRouter = router({
-  /** Lista registros de sala de expulsión con filtro opcional por episodio. */
+  /**
+   * Lista registros de sala de expulsión con filtro opcional por episodio.
+   *
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS)
+   * sin ningún filtro de establecimiento: cualquier organización podía listar
+   * los registros de otra. La policy `sala_exp_by_estab` (ALL) ahora filtra
+   * de verdad bajo rol `authenticated`.
+   */
   list: physicianRole
     .input(listInput)
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<SalaExpulsionRow[]>)`
-        SELECT id, episodio_hospitalario_id, tipo_parto,
-               inicio_expulsivo_ts, nacimiento_ts,
-               presentacion_fetal, mecanismo_parto,
-               episiotomia, desgarro_perineal_grado,
-               alumbramiento_ts, placenta_completa, sangrado_estimado_ml,
-               atencion_rn_placeholder,
-               registrado_por, estado_registro, firmado_por, firmado_en,
-               registrado_en
-          FROM ece.sala_expulsion
-         WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
-                OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
-         ORDER BY nacimiento_ts DESC
-         LIMIT ${input.limit}
-      `;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, (tx) =>
+        (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<SalaExpulsionRow[]>)`
+          SELECT id, episodio_hospitalario_id, tipo_parto,
+                 inicio_expulsivo_ts, nacimiento_ts,
+                 presentacion_fetal, mecanismo_parto,
+                 episiotomia, desgarro_perineal_grado,
+                 alumbramiento_ts, placenta_completa, sangrado_estimado_ml,
+                 atencion_rn_placeholder,
+                 registrado_por, estado_registro, firmado_por, firmado_en,
+                 registrado_en
+            FROM ece.sala_expulsion
+           WHERE (${input.episodioHospitalarioId ?? null}::uuid IS NULL
+                  OR episodio_hospitalario_id = ${input.episodioHospitalarioId ?? null}::uuid)
+           ORDER BY nacimiento_ts DESC
+           LIMIT ${input.limit}
+        `,
+      );
     }),
 
-  /** Obtiene un registro por id. */
+  /**
+   * Obtiene un registro por id.
+   *
+   * R1.2 — mismo hallazgo que `list`: sin filtro de establecimiento.
+   */
   get: physicianRole
     .input(getInput)
     .query(async ({ ctx, input }) => {
-      const row = await findSalaExpulsion(ctx.prisma, input.id);
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return row;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        const row = await findSalaExpulsion(tx, input.id);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+        return row;
+      });
     }),
 
   /**
@@ -263,23 +293,25 @@ export const eceSalaExpulsionRouter = router({
       const userId = ctx.user.id;
       const orgId = ctx.tenant.organizationId;
 
-      // Verificar que el episodio no tenga ya un registro activo
-      const existing = await (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<Array<{ cnt: bigint }>>)`
-        SELECT COUNT(*) AS cnt
-          FROM ece.sala_expulsion
-         WHERE episodio_hospitalario_id = ${input.episodioHospitalarioId}::uuid
-      `;
-      if (Number(existing[0]?.cnt ?? 0) > 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "El episodio ya tiene un registro de sala de expulsión.",
-        });
-      }
-
       return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+        // Verificar que el episodio no tenga ya un registro activo.
+        // R1.2 — movido dentro del contexto ECE (antes corría en ctx.prisma
+        // directo, filtrando en silencio por CUALQUIER organización).
+        const existing = await (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<Array<{ cnt: bigint }>>)`
+          SELECT COUNT(*) AS cnt
+            FROM ece.sala_expulsion
+           WHERE episodio_hospitalario_id = ${input.episodioHospitalarioId}::uuid
+        `;
+        if (Number(existing[0]?.cnt ?? 0) > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "El episodio ya tiene un registro de sala de expulsión.",
+          });
+        }
+
         const personalId = await findPersonalId(tx, userId);
         if (!personalId) {
           throw new TRPCError({
@@ -366,16 +398,38 @@ export const eceSalaExpulsionRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.user.id;
 
-      const row = await findSalaExpulsion(ctx.prisma, input.id);
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      if (row.estado_registro !== "borrador") {
+      // R1.2 (revisión independiente, P2-1a) — bootstrap privilegiado (mismo
+      // patrón que bridge-admision.router.ts): resuelve `ece.personal_salud.id`
+      // ANTES de abrir el contexto. La policy `firma_self_only` de
+      // `ece.firma_electronica` exige `personal_id = current_setting
+      // ('app.ece_personal_id')`; pasar `ctx.user.id` (espacio public."User")
+      // como personalId del GUC nunca matchea esa policy — `verifyPin` (más
+      // abajo) encontraría 0 filas en silencio para cualquier firma real. Solo
+      // filtra por `his_user_id = ctx.user.id` (valor de sesión, no del
+      // cliente) — sin fuga cross-tenant posible.
+      const personal = await resolvePersonalSalud(ctx.prisma, userId);
+      if (!personal) {
         throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: `Solo se puede firmar en estado 'borrador'. Estado actual: '${row.estado_registro}'.`,
+          code: "PRECONDITION_FAILED",
+          message:
+            "Su usuario no tiene un registro de personal de salud (ece.personal_salud) " +
+            "activo y vinculado para firmar. Pida a un ADMIN/DIR que lo vincule " +
+            "(his_user_id) en /profesionales-salud antes de continuar.",
         });
       }
 
-      return withEceContext(ctx.prisma, ctx.tenant, userId, async (tx) => {
+      return withEceContext(ctx.prisma, ctx.tenant, personal.id, async (tx) => {
+        // R1.2 — movido dentro del contexto ECE (antes corría en ctx.prisma
+        // directo, sin filtro de establecimiento).
+        const row = await findSalaExpulsion(tx, input.id);
+        if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+        if (row.estado_registro !== "borrador") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `Solo se puede firmar en estado 'borrador'. Estado actual: '${row.estado_registro}'.`,
+          });
+        }
+
         const { personalId } = await verifyPin(tx, userId, input.pin);
 
         await (tx.$executeRaw as (

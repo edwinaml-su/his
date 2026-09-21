@@ -18,6 +18,7 @@ import {
 import { Button } from "@his/ui/components/button";
 import { trpc } from "@/lib/trpc/react";
 import { formatCurrency } from "@/lib/i18n/currency";
+import { formatDate } from "@/lib/i18n/org-locale";
 import {
   DateRangePicker,
   useDateRange,
@@ -77,8 +78,8 @@ export default function CostoPacientePage() {
       rows.map((r) => [
         r.mrn ?? "",
         r.admissionType ?? "",
-        r.admittedAt ? new Date(r.admittedAt).toLocaleDateString("es-SV") : "",
-        r.dischargedAt ? new Date(r.dischargedAt).toLocaleDateString("es-SV") : "",
+        r.admittedAt ? formatDate(r.admittedAt) : "",
+        r.dischargedAt ? formatDate(r.dischargedAt) : "",
         String(r.diasEstancia),
         fmtCurrency(r.totalCosto),
         fmtCurrency(r.diasEstancia > 0 ? r.totalCosto / r.diasEstancia : 0),
@@ -101,7 +102,7 @@ export default function CostoPacientePage() {
         [
           r.mrn ?? "",
           r.admissionType ?? "",
-          r.dischargedAt ? new Date(r.dischargedAt).toLocaleDateString("es-SV") : "",
+          r.dischargedAt ? formatDate(r.dischargedAt) : "",
           String(r.diasEstancia),
           fmtCurrency(r.totalCosto),
           fmtCurrency(r.diasEstancia > 0 ? r.totalCosto / r.diasEstancia : 0),
@@ -181,10 +182,10 @@ export default function CostoPacientePage() {
                   <TableCell className="font-mono text-xs">{r.mrn ?? "—"}</TableCell>
                   <TableCell className="text-xs capitalize">{r.admissionType ?? "—"}</TableCell>
                   <TableCell className="text-sm">
-                    {r.admittedAt ? new Date(r.admittedAt).toLocaleDateString("es-SV") : "—"}
+                    {r.admittedAt ? formatDate(r.admittedAt) : "—"}
                   </TableCell>
                   <TableCell className="text-sm">
-                    {r.dischargedAt ? new Date(r.dischargedAt).toLocaleDateString("es-SV") : "—"}
+                    {r.dischargedAt ? formatDate(r.dischargedAt) : "—"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-sm">{r.diasEstancia}</TableCell>
                   <TableCell className="text-right font-mono text-sm">{formatCurrency(r.totalCosto)}</TableCell>

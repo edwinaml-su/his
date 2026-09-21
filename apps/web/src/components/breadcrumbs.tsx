@@ -50,7 +50,6 @@ const SLUG_LABELS: Record<string, string> = {
   "registro-enfermeria":    "Registro Enfermería",
   "registro-retroactivo":   "Registro Retroactivo",
   "rectificaciones":        "Rectificaciones",
-  "rectificacion":          "Rectificación",
   "rri":                    "RRI",
   "signos-vitales":         "Signos Vitales",
   "urpa":                   "URPA",

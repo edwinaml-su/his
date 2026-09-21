@@ -15,7 +15,9 @@ const PAGES_AUTH_REQUIRED = [
   { name: "Dashboard", path: "/" },
   { name: "Pacientes", path: "/patients" },
   { name: "Camas", path: "/beds" },
-  { name: "Triage pendiente", path: "/triage/pending" },
+  // `/triage/pending` nunca existió como página propia — la cola real es
+  // `/triage` (ver triage-manchester.spec.ts, ya migrado).
+  { name: "Triage pendiente", path: "/triage" },
   { name: "Encuentros", path: "/encounters" },
   { name: "Admisión", path: "/admission/new" },
 ];
@@ -49,7 +51,8 @@ test.describe("Accesibilidad — sin violaciones serias o críticas", () => {
 
   test("Triage Manchester — colores con info no solo cromática", async ({ page }) => {
     await login(page, "triagist");
-    await page.goto("/triage/pending");
+    // `/triage/pending` nunca existió — la cola real es `/triage`.
+    await page.goto("/triage");
 
     // Cada celda de nivel debe exponer un nombre accesible explícito.
     // (Ej.: "Nivel rojo - emergencia", no solo un fondo rojo.)

@@ -285,6 +285,40 @@ describe("imagingRequestRouter", () => {
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
+    it("R2.2 (plan remediación 2026-09): la comparación de fecha usa la TZ de la organización, no un hardcode SV", async () => {
+      // now = 2026-01-14T20:00:00Z. En America/El_Salvador (UTC-6) es
+      // "2026-01-14"; en una TZ desplazada (Asia/Tokyo, UTC+9) ya es
+      // "2026-01-15". fechaDeseada = 2026-01-14T13:00:00Z es "hoy" en SV
+      // pero "ayer" en Tokyo — si el código siguiera hardcodeado a SV,
+      // esto pasaría; con la TZ de la organización resuelta, se rechaza.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-14T20:00:00Z"));
+      try {
+        prisma.patientAccount.findFirst.mockResolvedValue(CUENTA_ROW as never);
+        prisma.organization.findUnique.mockResolvedValue({
+          country: {
+            isoAlpha2: "JP",
+            isoAlpha3: "JPN",
+            defaultTzId: "Asia/Tokyo",
+            defaultLocale: "ja-JP",
+          },
+          functionalCurr: { isoCode: "JPY" },
+        } as never);
+        const caller = imagingRequestRouter.createCaller(makeCtx({ prisma }));
+        await expect(
+          caller.crear({
+            ...validInput,
+            fechaDeseada: new Date("2026-01-14T13:00:00Z"),
+          }),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(prisma.organization.findUnique).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: MOCK_TENANT.organizationId } }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("CC-0041 RN-5: sexo masculino ⇒ embarazo «No aplica» automático aunque no venga en el input", async () => {
       stubHappyPath();
       prisma.patient.findUnique.mockResolvedValue({ biologicalSex: { code: "M" } } as never);

@@ -156,6 +156,17 @@ describe("accountingRouter", () => {
       const args = prisma.account.findMany.mock.calls[0]![0];
       expect(args!.where!.active).toBe(true);
     });
+
+    // CC-B (directriz Edwin 2026-09-19) — CONTRALOR_CORP: visión consolidada
+    // de multi-libro en LECTURA.
+    it("permite lectura a un usuario con rol CONTRALOR_CORP", async () => {
+      prisma.account.findMany.mockResolvedValue([] as never);
+
+      const caller = accountingRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["CONTRALOR_CORP"] } }),
+      );
+      await expect(caller.chart.list({ ledgerId: LEDGER_ID })).resolves.toEqual([]);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -224,6 +235,22 @@ describe("accountingRouter", () => {
           currencyId:      CURRENCY_ID,
         }),
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
+
+    // CC-B — CONTRALOR_CORP tiene visión de LECTURA, no de escritura.
+    it("rechaza la escritura de un usuario con rol CONTRALOR_CORP (FORBIDDEN)", async () => {
+      const caller = accountingRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["CONTRALOR_CORP"] } }),
+      );
+      await expect(
+        caller.chart.create({
+          ledgerId:    LEDGER_ID,
+          code:        "1.01",
+          name:        "Activos Corrientes",
+          accountType: "ASSET",
+          currencyId:  CURRENCY_ID,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
   });
 

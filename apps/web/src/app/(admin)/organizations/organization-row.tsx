@@ -28,6 +28,7 @@ export type OrgRowData = {
   active: boolean;
   functionalCurrency: string;
   gs1CompanyPrefix: string | null;
+  mfaStaffRequired: boolean;
   isAdmin: boolean;
   country: { id: string; isoAlpha3: string; name: string } | null;
   functionalCurr: Currency | null;
@@ -39,9 +40,16 @@ type Props = {
   onEditCurrency: (org: OrgRowData) => void;
   onEditGs1Prefix: (org: OrgRowData) => void;
   onEditFiscal: (org: OrgRowData) => void;
+  onEditMfa: (org: OrgRowData) => void;
 };
 
-export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix, onEditFiscal }: Props) {
+export function OrganizationRow({
+  org,
+  onEditCurrency,
+  onEditGs1Prefix,
+  onEditFiscal,
+  onEditMfa,
+}: Props) {
   return (
     <TableRow>
       <TableCell className="font-medium">
@@ -147,6 +155,21 @@ export function OrganizationRow({ org, onEditCurrency, onEditGs1Prefix, onEditFi
             }
           >
             Cambiar moneda
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onEditMfa(org)}
+            disabled={!org.isAdmin || !org.active}
+            title={
+              !org.isAdmin
+                ? "Requiere rol ADMIN en esta organización"
+                : !org.active
+                  ? "Organización inactiva"
+                  : "Configurar MFA de personal"
+            }
+          >
+            MFA {org.mfaStaffRequired ? "(activo)" : ""}
           </Button>
         </div>
       </TableCell>

@@ -57,9 +57,24 @@ export interface RegistroAnestesicoRow {
 // ---------------------------------------------------------------------------
 
 function buildEceCtx(tenant: TenantContext, userId: string) {
+  // R1.2 (revisión independiente, P1-2) — el fallback `?? tenant.organizationId`
+  // metía el uuid de la organización donde se espera un establecimiento:
+  // `ece.set_ece_context` no lo resuelve contra `ece.establecimiento` (ni por
+  // `id` ni por `establishment_id` puente, ver ADR 0022) y solo emite un
+  // RAISE WARNING — el GUC queda con un valor que ninguna policy `by_estab`
+  // matchea nunca. Resultado silencioso: list/get devuelven 0 filas (no un
+  // error) y las mutaciones con `emitDomainEvent` revientan 42501 en el
+  // primer INSERT sobre una tabla `ece.*`. Se falla rápido y explícito en su
+  // lugar, igual que certificado-defuncion/periodo-expulsivo/los bridges.
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Selecciona un establecimiento antes de continuar.",
+    });
+  }
   return {
     personalId: userId,
-    establecimientoId: tenant.establishmentId ?? tenant.organizationId,
+    establecimientoId: tenant.establishmentId,
   };
 }
 
@@ -127,65 +142,64 @@ const espRole = requireRole(["ESP"]);
 const clinicalRole = requireRole(["PHYSICIAN", "ESP", "NURSE"]);
 
 export const eceRegistroAnestesicoRouter = router({
-  /** Lista registros anestésicos con filtros opcionales. */
+  /**
+   * Lista registros anestésicos con filtros opcionales.
+   *
+   * R1.2 (2026-09) — antes corría en `ctx.prisma` directo (rol BYPASSRLS)
+   * sin filtro de establecimiento (solo por actoQuirurgicoId/estado, ambos
+   * opcionales) — cualquier organización podía listar el registro anestésico
+   * de otra. La policy `reg_anest_by_acto_estab` (ALL, vía
+   * acto_quirurgico→episodio_atencion) filtra de verdad bajo `authenticated`.
+   */
   list: clinicalRole
     .input(eceRegistroAnestesicoListSchema)
     .query(async ({ ctx, input }) => {
-      return (ctx.prisma.$queryRaw as (
-        query: TemplateStringsArray,
-        ...values: unknown[]
-      ) => Promise<RegistroAnestesicoRow[]>)`
-        SELECT id, acto_quirurgico_id, instancia_id,
-               asa, tipo_anestesia, via_aerea,
-               medicamentos_administrados, signos_vitales_intraop,
-               complicaciones, fluidoterapia_ml, perdidas_sanguineas_ml,
-               registrado_por, estado_registro,
-               firmado_por, firmado_en, registrado_en
-          FROM ece.registro_anestesico
-         WHERE (${input.actoQuirurgicoId ?? null}::uuid IS NULL
-                OR acto_quirurgico_id = ${input.actoQuirurgicoId ?? null}::uuid)
-           AND (${input.estado ?? null}::text IS NULL
-                OR estado_registro = ${input.estado ?? null})
-         ORDER BY registrado_en DESC
-         LIMIT ${input.limit}
-      `;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, (tx) =>
+        (tx.$queryRaw as (
+          query: TemplateStringsArray,
+          ...values: unknown[]
+        ) => Promise<RegistroAnestesicoRow[]>)`
+          SELECT id, acto_quirurgico_id, instancia_id,
+                 asa, tipo_anestesia, via_aerea,
+                 medicamentos_administrados, signos_vitales_intraop,
+                 complicaciones, fluidoterapia_ml, perdidas_sanguineas_ml,
+                 registrado_por, estado_registro,
+                 firmado_por, firmado_en, registrado_en
+            FROM ece.registro_anestesico
+           WHERE (${input.actoQuirurgicoId ?? null}::uuid IS NULL
+                  OR acto_quirurgico_id = ${input.actoQuirurgicoId ?? null}::uuid)
+             AND (${input.estado ?? null}::text IS NULL
+                  OR estado_registro = ${input.estado ?? null})
+           ORDER BY registrado_en DESC
+           LIMIT ${input.limit}
+        `,
+      );
     }),
 
-  /** Detalle de un registro anestésico. */
+  /**
+   * Detalle de un registro anestésico.
+   *
+   * R1.2 — mismo hallazgo que `list`: sin filtro de establecimiento.
+   */
   get: clinicalRole
     .input(eceRegistroAnestesicoIdSchema)
     .query(async ({ ctx, input }) => {
-      const row = await findRegistro(ctx.prisma, input.id);
-      if (!row) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Registro anestésico no encontrado.",
-        });
-      }
-      return row;
+      return withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        const row = await findRegistro(tx, input.id);
+        if (!row) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Registro anestésico no encontrado.",
+          });
+        }
+        return row;
+      });
     }),
 
   /** Crea un registro anestésico en estado borrador. */
   create: espRole
     .input(eceRegistroAnestesicoCreateSchema)
     .mutation(async ({ ctx, input }) => {
-      const personalId = await findPersonalId(ctx.prisma, ctx.user.id);
-      if (!personalId) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "El usuario no tiene perfil de personal_salud activo en ECE.",
-        });
-      }
-
-      const activos = await countActivos(ctx.prisma, input.actoQuirurgicoId);
-      if (activos > 0) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message:
-            "Ya existe un registro anestésico activo para este acto quirúrgico.",
-        });
-      }
-
       const medicamentosJson = JSON.stringify(
         input.medicamentosAdministrados,
       );
@@ -195,8 +209,27 @@ export const eceRegistroAnestesicoRouter = router({
         ctx.prisma,
         ctx.tenant,
         ctx.user.id,
-        async (tx) =>
-          (tx.$queryRaw as (
+        async (tx) => {
+          // R1.2 — findPersonalId/countActivos movidos dentro del contexto
+          // ECE (antes corrían en ctx.prisma directo).
+          const personalId = await findPersonalId(tx, ctx.user.id);
+          if (!personalId) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "El usuario no tiene perfil de personal_salud activo en ECE.",
+            });
+          }
+
+          const activos = await countActivos(tx, input.actoQuirurgicoId);
+          if (activos > 0) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message:
+                "Ya existe un registro anestésico activo para este acto quirúrgico.",
+            });
+          }
+
+          return (tx.$queryRaw as (
             query: TemplateStringsArray,
             ...values: unknown[]
           ) => Promise<Array<{ id: string }>>)`
@@ -219,7 +252,8 @@ export const eceRegistroAnestesicoRouter = router({
                'borrador',
                now())
             RETURNING id
-          `,
+          `;
+        },
       );
 
       const id = rows[0]?.id;
@@ -240,30 +274,31 @@ export const eceRegistroAnestesicoRouter = router({
   registrarSignoVital: espRole
     .input(registrarSignoVitalSchema)
     .mutation(async ({ ctx, input }) => {
-      const row = await findRegistro(ctx.prisma, input.id);
-      if (!row) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Registro anestésico no encontrado.",
-        });
-      }
-      if (row.estado_registro === "firmado") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "No se pueden agregar signos vitales a un registro firmado.",
-        });
-      }
-      if (row.estado_registro === "anulado") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "El registro anestésico está anulado.",
-        });
-      }
-
       const signoJson = JSON.stringify(input.signoVital);
 
-      await withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) =>
-        (tx.$executeRaw as (
+      await withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        // R1.2 — pre-check movido dentro del contexto ECE.
+        const row = await findRegistro(tx, input.id);
+        if (!row) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Registro anestésico no encontrado.",
+          });
+        }
+        if (row.estado_registro === "firmado") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "No se pueden agregar signos vitales a un registro firmado.",
+          });
+        }
+        if (row.estado_registro === "anulado") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "El registro anestésico está anulado.",
+          });
+        }
+
+        await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]
         ) => Promise<number>)`
@@ -271,8 +306,8 @@ export const eceRegistroAnestesicoRouter = router({
              SET signos_vitales_intraop =
                    signos_vitales_intraop || ${signoJson}::jsonb
            WHERE id = ${input.id}::uuid
-        `,
-      );
+        `;
+      });
 
       return { ok: true as const };
     }),
@@ -284,29 +319,30 @@ export const eceRegistroAnestesicoRouter = router({
   firmar: espRole
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const personalId = await findPersonalId(ctx.prisma, ctx.user.id);
-      if (!personalId) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "El usuario no tiene perfil de personal_salud activo en ECE.",
-        });
-      }
-
-      const row = await findRegistro(ctx.prisma, input.id);
-      if (!row) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Registro anestésico no encontrado.",
-        });
-      }
-      if (row.estado_registro !== "borrador") {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: `El registro ya está en estado '${row.estado_registro}'.`,
-        });
-      }
-
       await withEceContext(ctx.prisma, ctx.tenant, ctx.user.id, async (tx) => {
+        // R1.2 — pre-checks movidos dentro del contexto ECE.
+        const personalId = await findPersonalId(tx, ctx.user.id);
+        if (!personalId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "El usuario no tiene perfil de personal_salud activo en ECE.",
+          });
+        }
+
+        const row = await findRegistro(tx, input.id);
+        if (!row) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Registro anestésico no encontrado.",
+          });
+        }
+        if (row.estado_registro !== "borrador") {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `El registro ya está en estado '${row.estado_registro}'.`,
+          });
+        }
+
         await (tx.$executeRaw as (
           query: TemplateStringsArray,
           ...values: unknown[]

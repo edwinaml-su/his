@@ -209,3 +209,77 @@ describe("PersonalSaludScreen — usuarios clínicos sin perfil ECE", () => {
     expect(linkAuthUserM.mutate).not.toHaveBeenCalled();
   });
 });
+
+// P2-2 (revisión fix/r3b-derivados-cortos) — el flujo de EDICIÓN no tenía
+// cobertura de componente (el bloque de arriba solo cubre banner + alta).
+// D4b habilitó `documentoIdentidad` en el dialog "Editar" — cubre el
+// prefill del centinela PENDIENTE-DUI-*, el envío del campo en `update`, y
+// la validación client de vacío.
+describe("PersonalSaludScreen — edición de documentoIdentidad (P2-2)", () => {
+  const ROW = {
+    id: "00000000-0000-0000-0000-0000000000f2",
+    documentoIdentidad: "PENDIENTE-DUI-0007",
+    nombreCompleto: "Enf. Bertha Ríos",
+    jvpmOJvp: null,
+    profesion: "Enfermería",
+    activo: true,
+    roles: [{ codigo: "ENF", nombre: "Enfermería" }],
+  };
+  const DETAIL = { ...ROW, authUserId: null, firmaActiva: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListQuery.mockReturnValue({ ...idleQuery, data: [ROW] });
+    mockRolesQuery.mockReturnValue({
+      ...idleQuery,
+      data: [{ codigo: "ENF", nombre: "Enfermería", tipo: "no_medico" }],
+    });
+    mockGetQuery.mockReturnValue({ ...idleQuery, data: DETAIL });
+    mockUsuariosSinPerfilQuery.mockReturnValue({ ...idleQuery, data: [] });
+    for (const m of [createM, updateM, setActiveM, linkAuthUserM]) {
+      m.hook.mockImplementation((_opts?: MutationOpts) => ({
+        mutate: m.mutate,
+        mutateAsync: m.mutateAsync,
+        isPending: false,
+      }));
+    }
+  });
+
+  afterEach(() => cleanup());
+
+  it("prefija Documento de identidad con el centinela PENDIENTE-DUI-* al abrir Editar", () => {
+    renderScreen(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    expect(screen.getByRole("heading", { name: "Editar profesional" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Documento de identidad/)).toHaveValue(ROW.documentoIdentidad);
+  });
+
+  it("envía documentoIdentidad en updateMut al guardar cambios", () => {
+    renderScreen(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.change(screen.getByLabelText(/Documento de identidad/), {
+      target: { value: "01234567-8" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    expect(updateM.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ id: ROW.id, documentoIdentidad: "01234567-8" }),
+    );
+  });
+
+  it("valida documentoIdentidad vacío antes de enviar — no llama a updateMut", () => {
+    renderScreen(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.change(screen.getByLabelText(/Documento de identidad/), {
+      target: { value: "   " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/Documento de identidad es obligatorio/);
+    expect(updateM.mutate).not.toHaveBeenCalled();
+  });
+});

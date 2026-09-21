@@ -75,20 +75,17 @@ export function ExchangeRateForm({ onSuccess }: ExchangeRateFormProps) {
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [toast, setToast] = React.useState<{ title: string; description?: string } | null>(null);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const trpcAny = trpc as any;
-  const createMutation = trpcAny.exchangeRate.create.useMutation({
+  const createMutation = trpc.exchangeRate.create.useMutation({
     onSuccess: () => {
       // Invalida tanto la lista del router exchangeRate como las tasas
       // expuestas por currency (ledgers, country page).
       utils.currency.exchangeRates.invalidate();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (utils as any).exchangeRate?.list?.invalidate?.();
+      utils.exchangeRate.list.invalidate();
       setToast({ title: "Tasa creada", description: "Registro inmutable agregado al histórico." });
       setValues(INITIAL_STATE);
       onSuccess?.();
     },
-    onError: (err: { message: string }) => setServerError(err.message),
+    onError: (err) => setServerError(err.message),
   });
 
   const setField = <K extends keyof FormState>(key: K, v: FormState[K]) => {

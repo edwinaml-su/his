@@ -30,6 +30,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
 import { probeRoute } from "../_helpers/route-probe";
+import { selectOptionMatching } from "../_helpers/ui";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -359,12 +360,15 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
   test("9. MC inicia alta médica (motivo=mejoria)", async ({ page }) => {
     await login(page, "physician");
 
-    const ok = await probeRoute(page, `/ece/alta/${episodioId}`);
+    // Ruta real: la página vive bajo episodio-hospitalario/[id]/alta (wizard de
+    // 3 pasos), no en un `/ece/alta/[id]` standalone — ver
+    // apps/web/src/app/(clinical)/ece/episodio-hospitalario/[id]/alta/page.tsx.
+    const ok = await probeRoute(page, `/ece/episodio-hospitalario/${episodioId}/alta`);
     if (!ok) return;
 
     const motivoSelect = page.getByLabel(/motivo.*alta|motivo/i).first();
     if ((await motivoSelect.count()) > 0) {
-      await motivoSelect.selectOption({ label: /mejoría|mejoria/i });
+      await selectOptionMatching(motivoSelect, /mejoría|mejoria/i);
     } else {
       const motivoCombo = page.getByRole("combobox").first();
       if ((await motivoCombo.count()) > 0) {
@@ -445,8 +449,9 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
   test("13. Verifica episodio cerrado, cama liberada y bitácora", async ({ page }) => {
     await login(page, "admin");
 
-    // Episodio cerrado
-    const okEpisodio = await probeRoute(page, `/ece/episodios/${episodioId}`);
+    // Episodio cerrado — ruta real es /ece/episodio-hospitalario/[id] (singular,
+    // sin "s"), no /ece/episodios/[id].
+    const okEpisodio = await probeRoute(page, `/ece/episodio-hospitalario/${episodioId}`);
     if (okEpisodio) {
       const estadoBadge = page.getByText(/cerrado|alta.*completada/i).first();
       await expect(estadoBadge).toBeVisible({ timeout: 8_000 }).catch(() => {
@@ -455,7 +460,7 @@ test.describe.serial("ECE — Ruta hospitalaria completa (happy path)", () => {
     }
 
     // Cama liberada
-    const okCamas = await probeRoute(page, `/ece/camas?numero=${CAMA_NUMERO}`);
+    const okCamas = await probeRoute(page, `/beds?numero=${CAMA_NUMERO}`);
     if (okCamas) {
       const camaLibre = page.getByText(new RegExp(`${CAMA_NUMERO}.*libre|disponible`, "i")).first();
       await expect(camaLibre).toBeVisible({ timeout: 8_000 }).catch(() => {

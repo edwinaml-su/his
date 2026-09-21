@@ -17,6 +17,7 @@
  */
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc";
+import { resolverLocaleOrg, FALLBACK_ORG_LOCALE } from "../lib/org-locale";
 
 const geoLevelSchema = z.union([
   z.literal(1),
@@ -103,14 +104,31 @@ export const localeRouter = router({
     });
   }),
 
-  /** Perfil de localización aplicable al usuario en SV. */
-  currentLocale: publicProcedure.query(() => {
+  /**
+   * Perfil de localización aplicable al usuario. R2.2 (plan remediación
+   * 2026-09): antes devolvía siempre el estático SV; ahora resuelve la TZ/
+   * locale/moneda reales de `ctx.tenant.organizationId` vía
+   * `resolverLocaleOrg`. `currentLocale` es `publicProcedure` (se consume
+   * antes del login, ej. pantalla de login) — sin `ctx.tenant` no hay
+   * organización que resolver, así que se devuelve el fallback SV exacto
+   * SIN tocar la BD (mismo comportamiento observable de antes para ese caso).
+   *
+   * `dateFormat` queda fijo en "DD/MM/AAAA": no hay columna en `Country`
+   * que lo modele todavía (gap conocido, no bloquea R2.1/R2.2 porque GT usa
+   * el mismo formato que SV).
+   */
+  currentLocale: publicProcedure.query(async ({ ctx }) => {
+    const organizationId = ctx.tenant?.organizationId;
+    const resolved = organizationId
+      ? await resolverLocaleOrg(ctx.prisma, organizationId)
+      : FALLBACK_ORG_LOCALE;
+
     return {
-      country: "SV",
-      isoAlpha3: "SLV",
-      locale: "es-SV",
-      timezone: "America/El_Salvador",
-      currency: "USD",
+      country: resolved.isoAlpha2 ?? FALLBACK_ORG_LOCALE.isoAlpha2,
+      isoAlpha3: resolved.isoAlpha3,
+      locale: resolved.locale,
+      timezone: resolved.timeZone,
+      currency: resolved.currencyCode,
       dateFormat: "DD/MM/AAAA",
     };
   }),

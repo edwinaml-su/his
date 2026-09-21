@@ -300,6 +300,54 @@ export const organizationRouter = router({
     }),
 
   /**
+   * R4.5 — switch de MFA staff por organización (`Organization.mfaStaffRequired`,
+   * SQL 263). Runtime toggle, default false: prenderlo en prod es decisión de
+   * Edwin, no de este PR. Mismo patrón de autorización que `setGs1CompanyPrefix`.
+   */
+  setMfaStaffRequired: protectedProcedure
+    .input(
+      z.object({
+        organizationId: z.string().uuid(),
+        mfaStaffRequired: z.boolean(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const now = new Date();
+      const adminMembership = await ctx.prisma.userOrganizationRole.findFirst({
+        where: {
+          userId: ctx.user.id,
+          organizationId: input.organizationId,
+          validFrom: { lte: now },
+          OR: [{ validTo: null }, { validTo: { gte: now } }],
+          role: { code: "ADMIN" },
+        },
+      });
+      if (!adminMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Requiere rol ADMIN en la organización.",
+        });
+      }
+
+      const updated = await withTenantContext(
+        ctx.prisma,
+        { userId: ctx.user.id, organizationId: input.organizationId },
+        async (tx) => {
+          return tx.organization.update({
+            where: { id: input.organizationId },
+            data: {
+              mfaStaffRequired: input.mfaStaffRequired,
+              updatedBy: ctx.user.id,
+            },
+            select: { id: true, mfaStaffRequired: true },
+          });
+        },
+      );
+
+      return { ok: true, organizationId: updated.id, mfaStaffRequired: updated.mfaStaffRequired };
+    }),
+
+  /**
    * Parametrización admin (2026-09-10) — identidad fiscal de la organización
    * (razón social, nombre comercial, NIT, NRC). Antes SQL 227 la sembraba por
    * SQL directo; ahora es editable desde /organizations.
