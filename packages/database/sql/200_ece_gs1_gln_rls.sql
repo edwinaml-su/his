@@ -49,6 +49,10 @@
 -- también empíricamente contra Postgres nativo (ver reporte de esta migración).
 --
 -- Idempotente. Aplicar vía mcp__supabase__apply_migration en transacción.
+-- ⚠️ APLICADO a prod (verificado 2026-09-21 vía introspección: relrowsecurity
+-- = true, policies gs1_gln_select/gs1_gln_insert presentes) — NO re-aplicar.
+-- Cabecera anterior no dejaba constancia del estado (drift R3.6). El UPDATE
+-- que falta a propósito aquí se agregó después en 230_ece_gs1_gln_update_rls.sql.
 -- =====================================================================
 
 ALTER TABLE ece.gs1_gln ENABLE ROW LEVEL SECURITY;

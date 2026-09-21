@@ -1,0 +1,53 @@
+-- =====================================================================
+-- 264_r3_unique_documento_personal.sql
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-21 vía MCP — NO re-aplicar.
+-- Pre-check de duplicados: 0 filas; índice creado y verificado.
+-- P2-1 (revisión fix/r3b-derivados-cortos, sobre D4b) — el dup-check de
+-- `personalSalud.update` (documento_identidad) corre en la capa de
+-- aplicación, FUERA de la transacción de escritura: primero un SELECT de
+-- colisión, después el UPDATE. Verificado que `ece.personal_salud` NO tiene
+-- ningún UNIQUE/índice único sobre (establecimiento_id, documento_identidad)
+-- — es un check-then-act clásico: dos requests concurrentes corrigiendo dos
+-- centinelas distintos al MISMO documento real pueden intercalarse entre el
+-- SELECT y el UPDATE de cada una y las dos "ganar" el pre-check, dejando dos
+-- profesionales con el mismo documento_identidad en el mismo establecimiento.
+--
+-- FIX: índice único parcial sobre (establecimiento_id, documento_identidad).
+--
+-- EXCLUSIÓN de los centinelas `PENDIENTE-DUI-*`: el sync R1.1 (ya vivo en
+-- prod) siembra ese valor literal para cualquier User clínico sin documento
+-- real conocido — es intencional que MÚLTIPLES filas de personal_salud del
+-- mismo establecimiento compartan temporalmente ese centinela mientras
+-- ADMIN/DIR los va corrigiendo uno por uno vía `personalSalud.update`. Sin
+-- excluirlos, la sola existencia de un segundo centinela en el mismo
+-- establecimiento rompería el propio sync (o este índice) apenas se aplique.
+--
+-- El router (`personal-salud.router.ts` → `update`) mantiene su dup-check
+-- previo como UX (mensaje inmediato, sin esperar el round-trip del error de
+-- Postgres) y ahora también atrapa la violación de este índice (23505,
+-- envuelta por Prisma como P2010 en `$executeRaw`) traduciéndola a CONFLICT
+-- — el índice es la defensa real contra la carrera, el dup-check solo la UX.
+--
+-- Antes de aplicar: confirmar que no existan YA dos filas con el mismo
+-- (establecimiento_id, documento_identidad) fuera del patrón PENDIENTE-DUI-*
+-- (el CREATE UNIQUE INDEX fallaría con "could not create unique index" si
+-- las hay) — verificar con el SELECT de la sección de verificación abajo.
+--
+-- Idempotente (IF NOT EXISTS). Aplicar vía mcp__supabase__apply_migration en
+-- transacción. NO aplicar en este cambio — @Orq/Edwin lo aplican aparte.
+-- =====================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_personal_salud_estab_documento
+  ON ece.personal_salud (establecimiento_id, documento_identidad)
+  WHERE documento_identidad NOT LIKE 'PENDIENTE-DUI-%';
+
+-- -----------------------------------------------------------------------------
+-- Verificación previa (correr ANTES de aplicar, no forma parte del DDL de
+-- arriba): filas que colisionarían y bloquearían la creación del índice.
+-- Debe devolver 0 filas.
+-- -----------------------------------------------------------------------------
+-- SELECT establecimiento_id, documento_identidad, count(*)
+-- FROM ece.personal_salud
+-- WHERE documento_identidad NOT LIKE 'PENDIENTE-DUI-%'
+-- GROUP BY establecimiento_id, documento_identidad
+-- HAVING count(*) > 1;
