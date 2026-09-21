@@ -466,7 +466,7 @@ export const honorarioRouter = router({
 
         const cargo = await tx.patientAccountService.findUnique({
           where: { id: produccion.patientAccountServiceId },
-          select: { origen: true, accountId: true, tipo: true, encounterId: true },
+          select: { origen: true, accountId: true, tipo: true, encounterId: true, currencyId: true },
         });
         const ambito = cargo?.origen ? ORIGEN_A_AMBITO[cargo.origen] : undefined;
         if (!ambito) {
@@ -516,6 +516,7 @@ export const honorarioRouter = router({
             encounterId: cargo.encounterId,
             rolMedico: actualizada.rolMedico,
             honorarioCalculado: resuelto.honorarioCalculado,
+            currencyId: cargo.currencyId,
             actorId: user.id,
           });
           return { ...actualizada, cargoHonorarioId };
