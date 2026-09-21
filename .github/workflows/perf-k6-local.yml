@@ -179,6 +179,29 @@ jobs:
           echo "::error::La app no respondió en http://localhost:3000/login tras 60s."
           exit 1
 
+      - name: k6 — auth gate (audit-chain-contention, 1 VU × 5 iteraciones)
+        # SIN continue-on-error, a propósito: es la única línea de defensa
+        # contra un 401/403 sistémico que de otra forma quedaría VERDE e
+        # invisible. Los dos steps de abajo (rampa + contención real) corren
+        # con continue-on-error: true porque son informativos — pero eso
+        # significa que un fallo de auth ahí NO rompería el job, solo
+        # quedaría enterrado en un summary JSON que nadie abre. Este step
+        # corre el MISMO scenario (audit-chain-contention.js) con 1 VU y solo
+        # 5 iteraciones: su setup() ya hace un smoke call autenticado
+        # (organization.listMine) que lanza si la app no acepta el cookie
+        # (ver ese archivo), y su threshold `checks: rate==1` (options del
+        # propio script) hace que UN solo bed.update fallido tumbe este step
+        # con exit ≠0 — sin continue-on-error, eso rompe el job de verdad.
+        env:
+          BASE_URL: http://localhost:3000
+          SUPABASE_URL: http://localhost:9999
+          SUPABASE_ANON_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          k6 run \
+            --vus 1 --iterations 5 \
+            --summary-export=k6-summary-auth-gate.json \
+            infra/k6/scenarios/audit-chain-contention.js
+
       - name: k6 — rampa 5→VUS_RAMP sobre smoke + triage + bed-map
         # --stage sobreescribe vus/duration definidos en cada script (no
         # tocamos los archivos 01/03/04 — son compartidos con perf-k6.yml).
@@ -186,40 +209,51 @@ jobs:
         # ver el comentario de `authHeaders` en ese archivo: es MUY probable
         # que devuelvan 401 contra la app real (que solo lee la sesión de
         # Supabase desde cookies @supabase/ssr, no de un header Authorization).
-        # Por eso este step es informativo (continue-on-error) y no un gate —
-        # el primer dispatch real dirá si hace falta migrarlos a
-        # `sessionCookieHeader` (igual que audit-chain-contention.js).
+        # El auth-gate de arriba NO cubre este caso (valida cookie-auth, no
+        # Bearer) — por eso este step sigue siendo informativo
+        # (continue-on-error) y no un gate. El primer dispatch real dirá si
+        # hace falta migrar 03/04 a `sessionCookieHeader`.
         continue-on-error: true
         env:
           BASE_URL: http://localhost:3000
           SUPABASE_URL: http://localhost:9999
+          SUPABASE_ANON_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
           RAMP="${{ github.event.inputs.vus_ramp || '50' }}"
           MID=$(( RAMP / 2 ))
-          # --stage acepta UN flag con lista separada por comas (sintaxis
-          # verificada contra la referencia oficial de opciones de k6,
-          # 2026-09-21) — no flags repetidos, que sobreescribirían el valor
-          # en vez de acumular etapas.
+          # --stage acepta un flag repetido POR CADA etapa (los valores se
+          # ACUMULAN en una lista — pflag StringSlice, confirmado contra la
+          # referencia oficial de opciones de k6, 2026-09-21) o, equivalente,
+          # un único flag con lista separada por comas. Usamos esto último
+          # por legibilidad, no porque los flags repetidos se sobreescriban.
           STAGES="30s:5,1m:${MID},2m:${RAMP},30s:0"
           for SCRIPT in 01-smoke 03-triage-queue 04-bed-map-read; do
             echo "--- k6 rampa: ${SCRIPT} (5 → ${MID} → ${RAMP} VUs) ---"
+            # Bajo el shell por defecto de Actions (bash -e), un k6 con exit
+            # ≠0 aborta el `for` completo y los summaries de los scripts
+            # restantes faltan sin ninguna señal en el log. `|| echo` capta
+            # el fallo puntual y deja continuar la rampa con los otros 2.
             k6 run \
               --stage "${STAGES}" \
               --summary-export="k6-summary-${SCRIPT}.json" \
               --out json="k6-results-${SCRIPT}.json" \
-              "infra/k6/scenarios/${SCRIPT}.js"
+              "infra/k6/scenarios/${SCRIPT}.js" \
+              || echo "::warning::${SCRIPT} terminó con exit $? (ver k6-summary-${SCRIPT}.json)"
           done
 
       - name: k6 — audit-chain-contention (escritura concurrente sobre la misma cama)
         # Ver infra/k6/scenarios/audit-chain-contention.js para el diseño
-        # completo. Usa cookie-auth (sessionCookieHeader) — sí debería
-        # autenticar contra la app real, a diferencia del step anterior.
-        # continue-on-error igual: es exploratorio (buscar el knee point de
-        # la serialización del audit hash chain), no un SLO pass/fail.
+        # completo. El auth-gate de arriba ya validó que esta cookie-auth
+        # autentica contra la app real con el mismo scenario a baja escala.
+        # continue-on-error igual: acá el objetivo es exploratorio (buscar el
+        # knee point de la serialización del audit hash chain bajo VUs
+        # altos), no repetir el gate — un threshold roto a alta concurrencia
+        # es la señal que se está midiendo, no un fallo a silenciar dos veces.
         continue-on-error: true
         env:
           BASE_URL: http://localhost:3000
           SUPABASE_URL: http://localhost:9999
+          SUPABASE_ANON_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           VUS: ${{ github.event.inputs.contention_vus || '20' }}
           DURATION: ${{ github.event.inputs.contention_duration || '1m' }}
         run: |

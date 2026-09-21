@@ -48,7 +48,7 @@
 // fila nueva en `/audit` (entidad `Bed`, id = K6_BED_ID) por iteración.
 import { sleep } from 'k6';
 import { sessionCookieHeader } from '../lib/auth.js';
-import { trpcMutation, checkTrpcResult } from '../lib/trpc.js';
+import { trpcQuery, trpcMutation, checkTrpcResult } from '../lib/trpc.js';
 
 // E2E_FIXTURES.bedFreeId (apps/web/e2e/_helpers/fixtures.ts) — cama E2E-01,
 // sembrada por packages/database/scripts/seed-e2e-fixtures.mjs. Overridable
@@ -58,13 +58,17 @@ const BED_ID = __ENV.K6_BED_ID || 'e2ef1000-0000-4000-8000-0000000000b1';
 export const options = {
   vus: parseInt(__ENV.VUS || '10', 10),
   duration: __ENV.DURATION || '1m',
-  // Informativo, no gate: el objetivo es OBSERVAR cómo degrada la latencia
-  // con la contención (el LOCK TABLE EXCLUSIVE serializa TODOS los inserts
-  // de auditoría del sistema, no solo los de esta cama), no aprobar/reprobar
-  // un SLO. `perf-k6-local.yml` corre este step con `continue-on-error: true`.
+  // `checks: rate==1` es DELIBERADO, no un SLO de latencia: sirve como gate
+  // de auth (ver setup() y el step "k6 — auth gate" en perf-k6-local.yml,
+  // que corre este MISMO script con 1 VU × 5 iteraciones SIN
+  // continue-on-error). Un 401/403 sistémico debe hacer fallar ese step, no
+  // quedar enterrado en un summary JSON que nadie revisa. El step de carga
+  // real (VUs altos) sí corre con `continue-on-error: true` — ahí un fallo
+  // de threshold es señal informativa (degradación bajo contención), no un
+  // 401, porque el gate previo ya lo descartó.
   thresholds: {
     'http_req_duration{name:bed_update_contention}': ['p(95)<5000'],
-    checks: ['rate>0.95'],
+    checks: ['rate==1'],
   },
 };
 
@@ -73,6 +77,31 @@ export function setup() {
   if (!session) {
     throw new Error('[audit-chain-contention] Login fallido en setup() — abortando scenario.');
   }
+  const headers = { Cookie: session.header };
+
+  // Gate real (mismo patrón que lib/setup.js#buildAuthedContext): un login
+  // 200 contra GoTrue NO prueba que la APP acepte el cookie — el formato de
+  // `sb-<ref>-auth-token` (sessionCookieHeader, lib/auth.js) está construido
+  // leyendo código fuente de @supabase/ssr, nunca verificado en vivo. Sin
+  // este smoke call, un 401 sistémico de la app pasaría inadvertido: los dos
+  // steps de k6 en perf-k6-local.yml corren con `continue-on-error: true`,
+  // así que un scenario que solo reporta "checks failed" en un JSON no
+  // revisado queda VERDE en la UI de Actions. Abortamos ACÁ, con setup()
+  // lanzando (que aborta la corrida ANTES de levantar VUs), para que el
+  // step de auth-gate (sin continue-on-error) falle de forma ruidosa.
+  const smoke = trpcQuery('organization.listMine', {}, headers, {
+    name: 'setup:smoke-auth',
+    phase: 'setup',
+  });
+  if (!smoke.ok) {
+    throw new Error(
+      '[audit-chain-contention] La sesión se creó en GoTrue pero organization.listMine ' +
+        `devolvió error contra la app: ${JSON.stringify(smoke.error)}. Sospechar primero del ` +
+        'formato de cookie (sessionCookieHeader, lib/auth.js) — ver su comentario para el detalle ' +
+        'de cómo se construye y qué verificar con --http-debug=full.',
+    );
+  }
+
   return { cookie: session.header };
 }
 
@@ -82,7 +111,19 @@ export default function (data) {
   // Valor único por request — no por idempotencia (bed.update no la tiene),
   // sino para dejar evidencia legible del orden de llegada real en el visor
   // /audit (afterJson.isolation) al comparar contra el timestamp del request.
-  const isolation = `k6-contention-${__VU}-${__ITER}-${Date.now()}`;
+  // Prefijo corto + timestamp en base36: `bedUpdateSchema.isolation` es
+  // `z.string().max(40)` (packages/contracts/src/schemas/bed.ts) — con VUs
+  // de 4 dígitos o __ITER de 6, el prefijo largo original
+  // (`k6-contention-`) + Date.now() decimal (13 dígitos) rozaba/excedía el
+  // límite y el request se rechazaría por Zod, no por el lock que se quiere
+  // medir. Se asserta el límite en runtime como red de seguridad.
+  const isolation = `k6c-${__VU}-${__ITER}-${Date.now().toString(36)}`;
+  if (isolation.length > 40) {
+    throw new Error(
+      `[audit-chain-contention] isolation generado excede bedUpdateSchema.max(40): ` +
+        `"${isolation}" (${isolation.length} chars).`,
+    );
+  }
   const result = trpcMutation(
     'bed.update',
     { id: BED_ID, isolation },
