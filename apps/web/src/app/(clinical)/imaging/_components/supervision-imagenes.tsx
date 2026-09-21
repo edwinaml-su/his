@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { formatDateTime } from "@/lib/i18n/org-locale";
 import { PRIO_SEGMENT, PRIO_VALUE_TO_LABEL } from "./field-rule-meta";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
@@ -50,12 +51,7 @@ const ETAPA_LABEL: Record<SupervisionRow["etapa"], string> = {
 
 function hora(d: Date | string | null): string {
   if (!d) return "—";
-  return new Date(d).toLocaleString("es-SV", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateTime(d, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 export function SupervisionImagenes(): React.ReactElement {

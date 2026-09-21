@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from "@his/ui/components/select";
 import { trpc } from "@/lib/trpc/react";
+import { formatDateTime } from "@/lib/i18n/org-locale";
 import { MOCK_LAB_PALETTE as MOCK } from "../../_lib/mock-palette";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@his/trpc";
@@ -58,12 +59,7 @@ const PRIORIDAD_LABEL: Record<SupervisionRow["prioridad"], string> = {
 
 function hora(d: Date | string | null): string {
   if (!d) return "—";
-  return new Date(d).toLocaleString("es-SV", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateTime(d, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 export function Supervision(): React.ReactElement {

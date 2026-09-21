@@ -49,7 +49,7 @@ export function abacGuard<TInput = unknown>(
     const guardCtx = ctx as AbacGuardCtx;
 
     const atributos: AbacAtributosRuntime = {
-      ...atributosDesdeContexto(guardCtx.tenant),
+      ...(await atributosDesdeContexto(guardCtx.prisma, guardCtx.tenant)),
       ...(extractAtributos ? extractAtributos(guardCtx, input as TInput) : {}),
     };
 

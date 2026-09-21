@@ -49,9 +49,33 @@ const sustituirProc = requirePermission("turno.sustituir");
 const VIGENTES: readonly string[] = ["PROGRAMADO", "CONFIRMADO", "EN_CURSO"];
 
 // ---------------------------------------------------------------------------
-// Helpers de tiempo — America/El_Salvador es UTC-6 fijo (sin DST, NFR-6).
+// Helpers de tiempo.
 // Las columnas `@db.Time` de Prisma llegan como Date en época 1970-01-01 con
 // los dígitos de hora tal cual se guardaron (no aplican zona horaria).
+//
+// GAP CONOCIDO (R2.2, plan remediación 2026-09 — dejado a propósito, NO es
+// invariante): `combinarFechaHora` fija el offset "-06:00" al construir el
+// instante UTC absoluto de un turno. Esto YA NO es "America/El_Salvador es
+// UTC-6 fijo" como propiedad universal del sistema (NFR-6 original) — es
+// simplemente que El Salvador Y Guatemala (sql/255) comparten el mismo
+// offset UTC-6 sin DST hoy, así que el hardcode sigue dando el resultado
+// correcto POR COINCIDENCIA para ambos países soportados actualmente, igual
+// que advirtió la auditoría 2026-09-18 sobre el resto del sistema.
+// Migrarlo de verdad a `resolverLocaleOrg` exige más que sustituir la
+// constante: `toTimeColumnValue`/`toMinutes`/`fromMinutes` leen las columnas
+// `@db.Time` con `getUTCHours`/`getUTCMinutes` asumiendo que "hora local
+// guardada" == "hora en offset -06:00 sin más" — para una org en un offset
+// distinto habría que decidir si la plantilla de turno guarda hora local del
+// establecimiento (más probable) y entonces el offset a aplicar debe salir
+// de `resolverLocaleOrg(tx, tenant.organizationId).timeZone` resuelto AL
+// MOMENTO de cada fecha (vía `Intl.DateTimeFormat` con `timeZoneName:
+// "longOffset"`, por si algún país futuro sí tuviera DST) en vez de un
+// string fijo. Ese rediseño toca `calcularRangoTurno`,
+// `assertSinExceso24h` y `computeDotacionShortfalls` (todas dependen de
+// `inicioProgramado`/`finProgramado` como instantes absolutos comparables) y
+// no se hizo aquí — honestidad sobre heroísmo: se documenta el gap en vez de
+// tocar código de turnos 24/7 sin cobertura de un país en offset distinto
+// para validar contra.
 // ---------------------------------------------------------------------------
 
 function hhmmss(hora: Date): string {
@@ -91,7 +115,11 @@ function addDays(dateStr: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Combina fecha (YYYY-MM-DD) + hora (Date de columna Time) en un instante UTC-6 real. */
+/**
+ * Combina fecha (YYYY-MM-DD) + hora (Date de columna Time) en un instante
+ * absoluto usando offset -06:00 fijo — ver GAP CONOCIDO arriba (R2.2): NO
+ * migrado a `resolverLocaleOrg` por país, coincide para SV/GT hoy.
+ */
 function combinarFechaHora(fecha: string, hora: Date): Date {
   return new Date(`${fecha}T${hhmmss(hora)}-06:00`);
 }

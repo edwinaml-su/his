@@ -16,7 +16,31 @@ describe("localeRouter", () => {
 
   // ------------------------------------------------------------------ currentLocale
   describe("currentLocale", () => {
-    it("retorna el perfil es-SV sin consultar la BD", async () => {
+    it("retorna el fallback SV sin consultar la BD cuando no hay ctx.tenant (público, ej. login)", async () => {
+      const caller = localeRouter.createCaller(makeCtx({ prisma, tenant: null }));
+      const result = await caller.currentLocale();
+
+      expect(result).toMatchObject({
+        country: "SV",
+        isoAlpha3: "SLV",
+        locale: "es-SV",
+        timezone: "America/El_Salvador",
+        currency: "USD",
+      });
+      expect(prisma.organization.findUnique).not.toHaveBeenCalled();
+    });
+
+    it("resuelve TZ/locale/moneda de la organización del tenant vía resolverLocaleOrg (SV)", async () => {
+      prisma.organization.findUnique.mockResolvedValue({
+        country: {
+          isoAlpha2: "SV",
+          isoAlpha3: "SLV",
+          defaultTzId: "America/El_Salvador",
+          defaultLocale: "es-SV",
+        },
+        functionalCurr: { isoCode: "USD" },
+      } as never);
+
       const caller = localeRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.currentLocale();
 
@@ -27,7 +51,43 @@ describe("localeRouter", () => {
         timezone: "America/El_Salvador",
         currency: "USD",
       });
-      expect(prisma.country.findUnique).not.toHaveBeenCalled();
+      expect(prisma.organization.findUnique).toHaveBeenCalled();
+    });
+
+    it("resuelve una organización GT (sql/255) — R2.1: multi-país deja de ser accidente de offset", async () => {
+      prisma.organization.findUnique.mockResolvedValue({
+        country: {
+          isoAlpha2: "GT",
+          isoAlpha3: "GTM",
+          defaultTzId: "America/Guatemala",
+          defaultLocale: "es-GT",
+        },
+        functionalCurr: { isoCode: "GTQ" },
+      } as never);
+
+      const caller = localeRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.currentLocale();
+
+      expect(result).toMatchObject({
+        country: "GT",
+        isoAlpha3: "GTM",
+        locale: "es-GT",
+        timezone: "America/Guatemala",
+        currency: "GTQ",
+      });
+    });
+
+    it("cae al fallback SV si la organización del tenant no se encuentra", async () => {
+      prisma.organization.findUnique.mockResolvedValue(null as never);
+      const caller = localeRouter.createCaller(makeCtx({ prisma }));
+      const result = await caller.currentLocale();
+      expect(result).toMatchObject({
+        country: "SV",
+        isoAlpha3: "SLV",
+        locale: "es-SV",
+        timezone: "America/El_Salvador",
+        currency: "USD",
+      });
     });
   });
 
