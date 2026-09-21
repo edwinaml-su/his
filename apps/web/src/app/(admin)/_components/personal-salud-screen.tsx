@@ -664,7 +664,10 @@ interface PersonalFormProps {
 }
 
 function PersonalForm({
-  mode,
+  // `mode` ya no distingue nada en el render desde que D4b habilitó
+  // documentoIdentidad también en edición — se mantiene en la interfaz
+  // (contrato de los dos call sites) sin desestructurarlo, para no dejar
+  // un warning de variable sin uso.
   form,
   setForm,
   roles,
