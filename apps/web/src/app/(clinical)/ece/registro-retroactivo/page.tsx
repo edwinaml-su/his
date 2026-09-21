@@ -44,40 +44,6 @@ type TipoDocumento =
   | "indicaciones_medicas"
   | "evolucion_medica";
 
-interface ContingenciaEvento {
-  id: string;
-  motivo: string;
-  activado_en: string;
-  desactivado_en?: string | null;
-}
-
-interface TrpcContingencia {
-  eceContingencia: {
-    list: {
-      useQuery: (input?: {
-        soloActivos?: boolean;
-        limit?: number;
-        offset?: number;
-      }) => { data?: ContingenciaEvento[]; isLoading: boolean };
-    };
-    registrarRetroactivo: {
-      useMutation: (opts?: {
-        onSuccess?: (data: { ok: boolean; tabla: string }) => void;
-        onError?: (e: { message: string }) => void;
-      }) => {
-        mutate: (input: {
-          contingenciaEventoId: string;
-          tipoDocumento: TipoDocumento;
-          encounterId: string;
-          contenido: Record<string, unknown>;
-          timestampRealPapel: string;
-        }) => void;
-        isPending: boolean;
-      };
-    };
-  };
-}
-
 const TIPOS_DOCUMENTO: { value: TipoDocumento; label: string }[] = [
   { value: "signos_vitales", label: "Signos Vitales" },
   { value: "hoja_triaje", label: "Hoja de Triaje" },
@@ -90,7 +56,7 @@ const TIPOS_DOCUMENTO: { value: TipoDocumento; label: string }[] = [
 // ---------------------------------------------------------------------------
 
 export default function RegistroRetroactivoPage() {
-  const utils = (trpc as unknown as TrpcContingencia).eceContingencia;
+  const utils = trpc.eceContingencia;
 
   const eventosQuery = utils.list.useQuery({ soloActivos: false, limit: 20 });
 
@@ -129,7 +95,7 @@ export default function RegistroRetroactivoPage() {
     });
   };
 
-  const formatDate = (d: string) => new Date(d).toLocaleString("es-SV");
+  const formatDate = (d: string | Date) => new Date(d).toLocaleString("es-SV");
 
   return (
     <div className="space-y-6 p-6 max-w-2xl">

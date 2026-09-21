@@ -192,15 +192,19 @@ export const contingenciaRouter = router({
 
       return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
         if (input.soloActivos) {
+          // desactivado_en se incluye (siempre NULL, por el WHERE) solo para que
+          // el shape de retorno sea idéntico al de la otra rama — evita un tipo
+          // unión con campos distintos entre ambas ramas del cliente tRPC.
           const rows = await tx.$queryRaw<
             Array<{
               id: string;
               motivo: string;
               esperado_hasta: Date | null;
               activado_en: Date;
+              desactivado_en: Date | null;
             }>
           >`
-            SELECT id, motivo, esperado_hasta, activado_en
+            SELECT id, motivo, esperado_hasta, activado_en, desactivado_en
             FROM ece.contingencia_evento
             WHERE organization_id = ${orgId}::uuid
               AND desactivado_en IS NULL
