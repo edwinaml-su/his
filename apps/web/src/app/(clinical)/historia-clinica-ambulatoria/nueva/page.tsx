@@ -37,6 +37,7 @@ import {
   DESTINO_OPTIONS,
   TIPO_DIAGNOSTICO_LABELS,
   TIPO_DIAGNOSTICO,
+  tieneComplementario,
 } from "@his/contracts";
 import { trpc } from "@/lib/trpc/react";
 
@@ -88,6 +89,13 @@ function validate(form: FormState, dx: DiagnosticoCie11[]): string | null {
     if (!CIE11_CODE_REGEX.test(d.codigo)) {
       return `Código CIE-11 inválido: '${d.codigo}'.`;
     }
+  }
+  // P1-2 (revisión R3A): firmar exige RN-03 (≥1 diagnóstico Complementario;
+  // ver historia-clinica.router.ts) y no existe página de edición — un
+  // borrador creado sin este diagnóstico queda infirmable para siempre.
+  // Se bloquea aquí, en creación, con el mismo mensaje que usa el server.
+  if (!tieneComplementario(dx)) {
+    return "RN-03: se requiere al menos un diagnóstico de tipo Complementario antes de firmar.";
   }
   return null;
 }
