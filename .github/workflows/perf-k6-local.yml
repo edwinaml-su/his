@@ -1,0 +1,268 @@
+name: Performance k6 (stack local)
+
+# R4.1 (plan de remediación 2026-09, aprobado por Edwin) — perf-k6.yml es
+# manual y NUNCA se ha disparado (requiere `base_url` de producción/preview
+# y credenciales reales, ver CLAUDE.md §CI/CD). Este workflow corre los
+# mismos 6 escenarios base + el nuevo audit-chain-contention.js contra el
+# stack EFÍMERO de e2e-smoke.yml (Postgres + GoTrue + gateway nginx,
+# docker-compose.test.yml) — cero riesgo de tocar producción, disponible en
+# cada push sin pedirle una URL a nadie. Reutiliza los mismos steps de boot
+# + seed que e2e-smoke.yml (ver ese workflow para el porqué de cada uno).
+#
+# NO reemplaza a perf-k6.yml: mide localhost (laptop de CI, no la
+# infraestructura real de Vercel/Supabase), así que los números NO son
+# comparables a una corrida de producción — son una baseline de regresión
+# relativa (¿empeoró vs. la corrida anterior en esta misma infra de CI?),
+# no un SLO absoluto. De ahí que el step de thresholds sea `continue-on-error`.
+on:
+  workflow_dispatch:
+    inputs:
+      vus_ramp:
+        description: 'VUs del escalón final de la rampa (5→25→N) para smoke/triage/bed-map'
+        required: false
+        default: '50'
+      contention_vus:
+        description: 'VUs concurrentes para audit-chain-contention.js'
+        required: false
+        default: '20'
+      contention_duration:
+        description: 'Duración de audit-chain-contention.js'
+        required: false
+        default: '1m'
+  schedule:
+    # Semanal, lunes 08:00 UTC — 1h después de security.yml (07:00) para no
+    # competir por runners de GitHub-hosted en el mismo instante.
+    - cron: '0 8 * * 1'
+
+# Scope mínimo: solo lectura. No escribe al repo ni comenta en PRs. [infra-P1-3]
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-k6-local-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  k6-local:
+    name: k6 contra stack efímero (Postgres + GoTrue)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      DATABASE_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
+      DIRECT_URL: postgresql://his:his@localhost:5432/his_e2e?schema=public
+      # GoTrue local (docker-compose.test.yml) — mismo patrón que e2e-smoke.yml.
+      NEXT_PUBLIC_SUPABASE_URL: http://localhost:9999
+      GOTRUE_JWT_SECRET: e2e-gotrue-test-secret-do-not-use-in-prod-only
+      AUTH_SECRET: e2e-dummy-secret
+      NODE_ENV: test
+      # Credenciales de los usuarios QA sembrados por seed-test-users.mjs —
+      # nunca reales (ver docs/runbooks/e2e-gotrue-auth.md).
+      K6_USER_EMAIL: qa.admin@his.test
+      K6_USER_PASSWORD: TestPass123!
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalar k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -q
+          sudo apt-get install -q k6
+
+      - name: Generar API keys de test (GoTrue)
+        # Idéntico a e2e-smoke.yml — ver ese workflow para el porqué (deben
+        # existir ANTES de "Build app": NEXT_PUBLIC_SUPABASE_ANON_KEY se
+        # inlinea en el bundle cliente en build time).
+        run: |
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$(node scripts/gotrue-test-jwt.mjs anon)" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$(node scripts/gotrue-test-jwt.mjs service_role)" >> "$GITHUB_ENV"
+
+      - name: Boot test stack (Postgres + GoTrue efímeros)
+        run: docker compose -f docker-compose.test.yml up -d --wait
+
+      - name: Dump logs del stack (si el boot falló)
+        if: failure()
+        run: |
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue-gateway"
+          docker compose -f docker-compose.test.yml logs gotrue-gateway --no-color || true
+          echo "::endgroup::"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate --schema=packages/database/prisma/schema.prisma
+
+      - name: Sync schema to ephemeral DB
+        run: npx prisma db push --schema=packages/database/prisma/schema.prisma --skip-generate --accept-data-loss
+
+      - name: Bootstrap RLS helpers (set_tenant_context + rol authenticated)
+        # Mismo corpus que e2e-smoke.yml, mismo orden — ver ese workflow para
+        # el detalle de cada archivo (db push no aplica el SQL hand-rolled de
+        # packages/database/sql/, CLAUDE.md §Schema drift).
+        run: |
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/04_rls_session_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/62b_ece_context_helpers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/216_ece_contexto_espacio_ids.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/scripts/e2e-dual-context-fn.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/206_audit_write_path.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/213_domain_event_dual_context.sql
+          # 02_audit_triggers.sql + 05_audit_hash_chain.sql: SIN esto,
+          # audit-chain-contention.js mide un no-op (bed.update escribiría
+          # sin disparar ningún trigger de auditoría, cero contención que medir).
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/02_audit_triggers.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/05_audit_hash_chain.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/133_service_price_list_tarifario.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/204_cc0021_motor_reglas_precios.sql
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=packages/database/sql/228_lista_precio_default.sql
+          # Re-aplicar el bootstrap (grants) — ver comentario de e2e-smoke.yml.
+          npx prisma db execute --schema=packages/database/prisma/schema.prisma --file=scripts/e2e-rls-bootstrap.sql
+
+      - name: Seed minimal data
+        run: npm run db:seed
+        continue-on-error: true
+
+      - name: Seed usuarios de test E2E (GoTrue)
+        # Crea qa.admin@his.test (ADMIN — usado por audit-chain-contention.js
+        # para bed.update, adminProc) y el resto de personas QA.
+        run: node packages/database/scripts/seed-test-users.mjs
+
+      - name: Seed fixtures clínicos E2E
+        # bed.freeId (E2E-01) es la fila que audit-chain-contention.js mutila
+        # a propósito con N VUs concurrentes.
+        run: node packages/database/scripts/seed-e2e-fixtures.mjs
+
+      - name: Build app
+        run: npm run build
+
+      - name: Arrancar la app (background)
+        run: |
+          nohup npm run -w @his/web start > web-server.log 2>&1 &
+          echo $! > web-server.pid
+
+      - name: Esperar a que la app responda
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://localhost:3000/login; then
+              echo "App lista tras ${i} intentos."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::La app no respondió en http://localhost:3000/login tras 60s."
+          exit 1
+
+      - name: k6 — rampa 5→VUS_RAMP sobre smoke + triage + bed-map
+        # --stage sobreescribe vus/duration definidos en cada script (no
+        # tocamos los archivos 01/03/04 — son compartidos con perf-k6.yml).
+        # ⚠️ 03/04 usan `authHeaders` (Bearer) vía lib/auth.js#loginSupabase —
+        # ver el comentario de `authHeaders` en ese archivo: es MUY probable
+        # que devuelvan 401 contra la app real (que solo lee la sesión de
+        # Supabase desde cookies @supabase/ssr, no de un header Authorization).
+        # Por eso este step es informativo (continue-on-error) y no un gate —
+        # el primer dispatch real dirá si hace falta migrarlos a
+        # `sessionCookieHeader` (igual que audit-chain-contention.js).
+        continue-on-error: true
+        env:
+          BASE_URL: http://localhost:3000
+          SUPABASE_URL: http://localhost:9999
+        run: |
+          RAMP="${{ github.event.inputs.vus_ramp || '50' }}"
+          MID=$(( RAMP / 2 ))
+          # --stage acepta UN flag con lista separada por comas (sintaxis
+          # verificada contra la referencia oficial de opciones de k6,
+          # 2026-09-21) — no flags repetidos, que sobreescribirían el valor
+          # en vez de acumular etapas.
+          STAGES="30s:5,1m:${MID},2m:${RAMP},30s:0"
+          for SCRIPT in 01-smoke 03-triage-queue 04-bed-map-read; do
+            echo "--- k6 rampa: ${SCRIPT} (5 → ${MID} → ${RAMP} VUs) ---"
+            k6 run \
+              --stage "${STAGES}" \
+              --summary-export="k6-summary-${SCRIPT}.json" \
+              --out json="k6-results-${SCRIPT}.json" \
+              "infra/k6/scenarios/${SCRIPT}.js"
+          done
+
+      - name: k6 — audit-chain-contention (escritura concurrente sobre la misma cama)
+        # Ver infra/k6/scenarios/audit-chain-contention.js para el diseño
+        # completo. Usa cookie-auth (sessionCookieHeader) — sí debería
+        # autenticar contra la app real, a diferencia del step anterior.
+        # continue-on-error igual: es exploratorio (buscar el knee point de
+        # la serialización del audit hash chain), no un SLO pass/fail.
+        continue-on-error: true
+        env:
+          BASE_URL: http://localhost:3000
+          SUPABASE_URL: http://localhost:9999
+          VUS: ${{ github.event.inputs.contention_vus || '20' }}
+          DURATION: ${{ github.event.inputs.contention_duration || '1m' }}
+        run: |
+          k6 run \
+            --summary-export=k6-summary-audit-chain-contention.json \
+            --out json=k6-results-audit-chain-contention.json \
+            infra/k6/scenarios/audit-chain-contention.js
+
+      - name: Dump logs de la app y del stack (si algo posterior al boot falló)
+        if: failure()
+        run: |
+          echo "::group::web-server.log (últimas 200 líneas)"
+          tail -n 200 web-server.log || true
+          echo "::endgroup::"
+          echo "::group::docker compose ps -a"
+          docker compose -f docker-compose.test.yml ps -a
+          echo "::endgroup::"
+          echo "::group::logs: postgres-test"
+          docker compose -f docker-compose.test.yml logs postgres-test --no-color --tail=200 || true
+          echo "::endgroup::"
+          echo "::group::logs: gotrue"
+          docker compose -f docker-compose.test.yml logs gotrue --no-color --tail=200 || true
+          echo "::endgroup::"
+
+      - name: Subir resultados como artefactos
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: k6-local-results-${{ github.run_id }}
+          path: |
+            k6-results*.json
+            k6-summary*.json
+            web-server.log
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Detener la app
+        if: always()
+        run: |
+          if [ -f web-server.pid ]; then
+            kill "$(cat web-server.pid)" 2>/dev/null || true
+          fi
+
+      - name: Tear down stack
+        if: always()
+        run: docker compose -f docker-compose.test.yml down -v
