@@ -62,6 +62,7 @@ export * from "./insurance";
 export * from "./inventory";
 export * from "./nutrition";
 export * from "./respiratory";
+export * from "./terapia-respiratoria";
 export * from "./service-price-rule";
 export * from "./services-equipment";
 export * from "./ledger";
