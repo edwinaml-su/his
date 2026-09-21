@@ -10,7 +10,7 @@ describe("formatCurrency", () => {
   });
 
   it("acepta otra moneda (GTQ)", () => {
-    // Node ICU inserta un espacio no separable ( ) entre el código y el
+    // Node ICU inserta un espacio no separable (U+00A0) entre el código y el
     // monto para monedas sin símbolo dedicado — se normaliza antes de comparar.
     expect(formatCurrency(100, "GTQ").replace(/ /g, " ")).toBe("GTQ 100.00");
   });
