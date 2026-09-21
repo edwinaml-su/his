@@ -170,13 +170,23 @@ export default function HistoriaClinicaAmbulatoriaDetailPage() {
               <Link href="/historia-clinica-ambulatoria">Volver</Link>
             </Button>
             {esBorrador && (
-              <Button
-                size="sm"
-                onClick={() => setPinOpen(true)}
-                aria-label="Firmar electrónicamente esta historia clínica ambulatoria"
-              >
-                Firmar
-              </Button>
+              <>
+                <Button asChild variant="outline" size="sm">
+                  <Link
+                    href={`/historia-clinica-ambulatoria/${hc.id}/editar`}
+                    aria-label="Editar borrador de historia clínica ambulatoria"
+                  >
+                    Editar
+                  </Link>
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => setPinOpen(true)}
+                  aria-label="Firmar electrónicamente esta historia clínica ambulatoria"
+                >
+                  Firmar
+                </Button>
+              </>
             )}
           </div>
         </div>
