@@ -23,6 +23,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { login } from "../_helpers/auth";
 import { probeRoute } from "../_helpers/route-probe";
+import { selectOptionMatching } from "../_helpers/ui";
 
 const HAS_SUPABASE = process.env.HAS_REAL_SUPABASE === "1";
 
@@ -449,7 +450,7 @@ test.describe.serial("ECE — Ruta quirúrgica completa (happy path)", () => {
     if ((await destinoSelect.count()) > 0) {
       const tagName = await destinoSelect.evaluate((el) => el.tagName.toLowerCase());
       if (tagName === "select") {
-        await destinoSelect.selectOption({ label: /hospitalización|sala/i });
+        await selectOptionMatching(destinoSelect, /hospitalización|sala/i);
       } else {
         await destinoSelect.click();
         const opcion = page.getByRole("option", { name: /hospitalización|sala/i }).first();
