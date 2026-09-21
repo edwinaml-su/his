@@ -58,6 +58,23 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, requireRole, router } from "../../trpc";
 import { requireEcePermission } from "../../middleware/ece-permission";
+import { withEceContext } from "../../ece/rls-context";
+
+/**
+ * Requiere establecimiento activo para operar bitácora con RLS ECE.
+ * CC-B — antes list/exportCsv/metrics corrían con `ctx.prisma` directo
+ * (rol BYPASSRLS): sin este helper, la lectura de bitácora era global sin
+ * ningún filtro de establecimiento/tenant, ni siquiera en JS.
+ */
+function requireEstablecimiento(tenant: { establishmentId?: string }): string {
+  if (!tenant.establishmentId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Se requiere un establecimiento activo para operar la bitácora ECE.",
+    });
+  }
+  return tenant.establishmentId;
+}
 
 // ---------------------------------------------------------------------------
 // Schemas Zod (espejo de packages/contracts/src/schemas/ece-bitacora.ts)
@@ -184,6 +201,88 @@ function buildWhereClause(input: {
   return { clause: conditions.join(" AND "), params };
 }
 
+type SistemaFilters = {
+  personalId?: string;
+  desde?: string;
+  hasta?: string;
+  accion?: string;
+};
+
+type RawQueryable = {
+  $queryRawUnsafe: <T>(sql: string, ...params: unknown[]) => Promise<T>;
+};
+
+/**
+ * CC-B review (P1-2) — `ece_biacc_select` (sql/65) exige
+ * `establecimiento_id = ece.current_establecimiento_id()`, que NUNCA matchea
+ * `NULL`. Los "eventos de sistema" (establecimiento_id IS NULL — el camino
+ * privilegiado que `register` usa cuando el caller no manda
+ * `establecimientoId`, ver su comentario más abajo) quedaban WRITE-ONLY:
+ * invisibles para list/exportCsv/metrics pese a insertarse correctamente.
+ *
+ * `ece.bitacora_acceso` no tiene columna de organización (ver DDL en la
+ * cabecera del archivo: solo `personal_id`/`establecimiento_id`), así que no
+ * hay forma de acotar este camino privilegiado más allá de
+ * `establecimiento_id IS NULL` + los mismos filtros de fecha/acción/personal
+ * que ya aplica el caller. Los tres procedures que lo consumen (list/
+ * exportCsv/metrics) ya están detrás de `requireRole(["DIR","ARCH"])`
+ * (o `requireEcePermission("ece.bitacora.read")`, equivalente), así que el
+ * alcance de esta lectura sin RLS queda controlado por ROL, no por tenant —
+ * consistente con que estos mismos roles pueden ver bitácora cross-org hoy
+ * en el camino demotado (RLS solo filtra por establecimiento, no hay
+ * aislamiento por organización en esta tabla en absoluto).
+ *
+ * La consulta demotada (RLS real, ya migrada) NO se toca — esto es un
+ * complemento, no un reemplazo.
+ */
+function buildSistemaWhere(filters: SistemaFilters): { clause: string; params: unknown[] } {
+  const { clause, params } = buildWhereClause(filters);
+  return { clause: `${clause} AND b.establecimiento_id IS NULL`, params };
+}
+
+async function fetchSistemaRows(
+  prisma: RawQueryable,
+  filters: SistemaFilters,
+  limit: number,
+): Promise<BitacoraDbRow[]> {
+  const { clause, params } = buildSistemaWhere(filters);
+  const sql = `
+    SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
+           b.ip_origen::text, b.ocurrido_en, b.justificacion,
+           b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
+    FROM ece.bitacora_acceso b
+    WHERE ${clause}
+    ORDER BY b.ocurrido_en DESC
+    LIMIT $${params.length + 1}
+  `;
+  return prisma.$queryRawUnsafe<BitacoraDbRow[]>(sql, ...params, limit);
+}
+
+async function countSistemaRows(prisma: RawQueryable, filters: SistemaFilters): Promise<number> {
+  const { clause, params } = buildSistemaWhere(filters);
+  const rows = await prisma.$queryRawUnsafe<CountRow[]>(
+    `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${clause}`,
+    ...params,
+  );
+  return Number(rows[0]?.total ?? 0);
+}
+
+/** Combina dos listas top-N por clave (suma conteos) y trunca a `limit`. */
+function mergeTopCounts(
+  a: Array<{ key: string; count: number }>,
+  b: Array<{ key: string; count: number }>,
+  limit: number,
+): Array<{ key: string; count: number }> {
+  const map = new Map<string, number>();
+  for (const { key, count } of [...a, ...b]) {
+    map.set(key, (map.get(key) ?? 0) + count);
+  }
+  return Array.from(map.entries())
+    .map(([key, count]) => ({ key, count }))
+    .sort((x, y) => y.count - x.count)
+    .slice(0, limit);
+}
+
 function rowToOutput(r: BitacoraDbRow) {
   return {
     id:               r.id,
@@ -219,38 +318,55 @@ export const bitacoraRouter = router({
   list: requireEcePermission("ece.bitacora.read")
     .input(bitacoraListInput)
     .query(async ({ ctx, input }) => {
+      const establecimientoId = requireEstablecimiento(ctx.tenant);
       const { clause, params } = buildWhereClause(input);
 
-      // Total para paginación.
-      const countSql = `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${clause}`;
-      const countRows = await ctx.prisma.$queryRawUnsafe<CountRow[]>(
-        countSql,
-        ...params,
-      );
-      const total = Number(countRows[0]?.total ?? 0);
+      const scoped = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        // Total para paginación.
+        const countSql = `SELECT COUNT(*) AS total FROM ece.bitacora_acceso b WHERE ${clause}`;
+        const countRows = await tx.$queryRawUnsafe<CountRow[]>(
+          countSql,
+          ...params,
+        );
+        const total = Number(countRows[0]?.total ?? 0);
 
-      // Filas paginadas.
-      const dataParams = [...params, input.limit, input.offset];
-      const limitIdx = params.length + 1;
-      const offsetIdx = params.length + 2;
-      const dataSql = `
-        SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
-               b.ip_origen::text, b.ocurrido_en, b.justificacion,
-               b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
-        FROM ece.bitacora_acceso b
-        WHERE ${clause}
-        ORDER BY b.ocurrido_en DESC
-        LIMIT $${limitIdx} OFFSET $${offsetIdx}
-      `;
-      const rows = await ctx.prisma.$queryRawUnsafe<BitacoraDbRow[]>(
-        dataSql,
-        ...dataParams,
-      );
+        // Filas paginadas.
+        const dataParams = [...params, input.limit, input.offset];
+        const limitIdx = params.length + 1;
+        const offsetIdx = params.length + 2;
+        const dataSql = `
+          SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
+                 b.ip_origen::text, b.ocurrido_en, b.justificacion,
+                 b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
+          FROM ece.bitacora_acceso b
+          WHERE ${clause}
+          ORDER BY b.ocurrido_en DESC
+          LIMIT $${limitIdx} OFFSET $${offsetIdx}
+        `;
+        const rows = await tx.$queryRawUnsafe<BitacoraDbRow[]>(
+          dataSql,
+          ...dataParams,
+        );
 
-      return {
-        items: rows.map(rowToOutput),
-        total,
-      };
+        return { items: rows.map(rowToOutput), total };
+      });
+
+      // P1-2 — mergea los eventos de sistema (establecimiento_id IS NULL,
+      // invisibles bajo RLS) vía el camino privilegiado documentado arriba
+      // (fetchSistemaRows/countSistemaRows). Best-effort: el orden global
+      // combinado se recalcula en JS, pero el offset de paginación sigue
+      // aplicándose solo al lado demotado (la cantidad de eventos de sistema
+      // es marginal frente al volumen de bitácora por establecimiento).
+      const [sistemaRows, sistemaTotal] = await Promise.all([
+        fetchSistemaRows(ctx.prisma, input, input.limit),
+        countSistemaRows(ctx.prisma, input),
+      ]);
+
+      const items = [...scoped.items, ...sistemaRows.map(rowToOutput)]
+        .sort((a, b) => new Date(b.ocurridoEn).getTime() - new Date(a.ocurridoEn).getTime())
+        .slice(0, input.limit);
+
+      return { items, total: scoped.total + sistemaTotal };
     }),
 
   /**
@@ -261,20 +377,32 @@ export const bitacoraRouter = router({
   exportCsv: requireRole(["DIR", "ARCH"])
     .input(bitacoraExportInput)
     .query(async ({ ctx, input }) => {
+      const establecimientoId = requireEstablecimiento(ctx.tenant);
       const { clause, params } = buildWhereClause(input);
 
-      const sql = `
-        SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
-               b.ip_origen::text, b.ocurrido_en, b.justificacion,
-               b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
-        FROM ece.bitacora_acceso b
-        WHERE ${clause}
-        ORDER BY b.ocurrido_en DESC
-        LIMIT 10000
-      `;
-      const rows = await ctx.prisma.$queryRawUnsafe<BitacoraDbRow[]>(
-        sql,
-        ...params,
+      const scopedRows = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, (tx) => {
+        const sql = `
+          SELECT b.id::text, b.personal_id, b.recurso_id, b.accion, b.autorizado,
+                 b.ip_origen::text, b.ocurrido_en, b.justificacion,
+                 b.auth_user_id, b.establecimiento_id, b.flag_outlier, b.motivo_outlier
+          FROM ece.bitacora_acceso b
+          WHERE ${clause}
+          ORDER BY b.ocurrido_en DESC
+          LIMIT 10000
+        `;
+        return tx.$queryRawUnsafe<BitacoraDbRow[]>(sql, ...params);
+      });
+
+      // P1-2 — mergea eventos de sistema (ver comentario de fetchSistemaRows
+      // arriba); cumplimiento (Art. 51/55 NTEC) exige que el export incluya
+      // TODA la bitácora visible para DIR/ARCH, no solo la RLS-scoped.
+      const sistemaRows = await fetchSistemaRows(
+        ctx.prisma,
+        input,
+        Math.max(0, 10000 - scopedRows.length),
+      );
+      const rows = [...scopedRows, ...sistemaRows].sort(
+        (a, b) => b.ocurrido_en.getTime() - a.ocurrido_en.getTime(),
       );
 
       const header = toCsvLine([
@@ -316,6 +444,7 @@ export const bitacoraRouter = router({
   metrics: requireRole(["DIR", "ARCH"])
     .input(bitacoraMetricsInput)
     .query(async ({ ctx, input }) => {
+      const establecimientoId = requireEstablecimiento(ctx.tenant);
       const conditions: string[] = ["1=1"];
       const params: unknown[] = [];
       let idx = 1;
@@ -329,53 +458,105 @@ export const bitacoraRouter = router({
         params.push(input.hasta);
       }
       const where = conditions.join(" AND ");
-
-      // Total accesos
-      const totalRows = await ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
-        `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where}`,
-        ...params,
-      );
-      const totalAccesos = Number(totalRows[0]?.count ?? 0);
-
-      // Total firmas (acciones críticas)
       const accionesCriticas = ["FIRMAR", "CERTIFICAR", "ANULAR", "VALIDAR"];
-      const criticas = accionesCriticas.map((_, i) => `$${idx + i}`).join(", ");
-      const firmasParams = [...params, ...accionesCriticas];
-      const firmasRows = await ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
-        `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where} AND b.accion IN (${criticas})`,
-        ...firmasParams,
-      );
-      const totalFirmas = Number(firmasRows[0]?.count ?? 0);
 
-      // Top 5 recursos (por recurso_id — proxy de documento accedido)
-      const topDocRows = await ctx.prisma.$queryRawUnsafe<TopDocRow[]>(
-        `SELECT b.recurso_id::text AS contexto, COUNT(*) AS count
-         FROM ece.bitacora_acceso b
-         WHERE ${where} AND b.recurso_id IS NOT NULL
-         GROUP BY b.recurso_id
-         ORDER BY count DESC
-         LIMIT 5`,
-        ...params,
-      );
-      const topDocumentos = topDocRows.map((r) => ({
-        documento: r.contexto,
-        accesos: Number(r.count),
-      }));
+      const scoped = await withEceContext(ctx.prisma, ctx.user.id, establecimientoId, async (tx) => {
+        // Total accesos
+        const totalRows = await tx.$queryRawUnsafe<MetricCountRow[]>(
+          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where}`,
+          ...params,
+        );
+        const totalAccesos = Number(totalRows[0]?.count ?? 0);
 
-      // Top 5 usuarios (por auth_user_id)
-      const topUserRows = await ctx.prisma.$queryRawUnsafe<TopUserRow[]>(
-        `SELECT b.auth_user_id::text AS user_id, COUNT(*) AS count
-         FROM ece.bitacora_acceso b
-         WHERE ${where} AND b.auth_user_id IS NOT NULL
-         GROUP BY b.auth_user_id
-         ORDER BY count DESC
-         LIMIT 5`,
-        ...params,
-      );
-      const topUsuarios = topUserRows.map((r) => ({
-        userId: r.user_id,
-        accesos: Number(r.count),
-      }));
+        // Total firmas (acciones críticas)
+        const criticas = accionesCriticas.map((_, i) => `$${idx + i}`).join(", ");
+        const firmasParams = [...params, ...accionesCriticas];
+        const firmasRows = await tx.$queryRawUnsafe<MetricCountRow[]>(
+          `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${where} AND b.accion IN (${criticas})`,
+          ...firmasParams,
+        );
+        const totalFirmas = Number(firmasRows[0]?.count ?? 0);
+
+        // Top 5 recursos (por recurso_id — proxy de documento accedido)
+        const topDocRows = await tx.$queryRawUnsafe<TopDocRow[]>(
+          `SELECT b.recurso_id::text AS contexto, COUNT(*) AS count
+           FROM ece.bitacora_acceso b
+           WHERE ${where} AND b.recurso_id IS NOT NULL
+           GROUP BY b.recurso_id
+           ORDER BY count DESC
+           LIMIT 5`,
+          ...params,
+        );
+
+        // Top 5 usuarios (por auth_user_id)
+        const topUserRows = await tx.$queryRawUnsafe<TopUserRow[]>(
+          `SELECT b.auth_user_id::text AS user_id, COUNT(*) AS count
+           FROM ece.bitacora_acceso b
+           WHERE ${where} AND b.auth_user_id IS NOT NULL
+           GROUP BY b.auth_user_id
+           ORDER BY count DESC
+           LIMIT 5`,
+          ...params,
+        );
+
+        return { totalAccesos, totalFirmas, topDocRows, topUserRows };
+      });
+
+      // P1-2 — mergea eventos de sistema (ver comentario de fetchSistemaRows
+      // arriba). Top-5 combinado es best-effort: cada lado ya viene truncado
+      // a 5 (la consulta demotada no se toca), así que un contexto/usuario
+      // que quedara justo fuera del top-5 de AMBOS lados pero que sumado
+      // calificara para el top-5 global no se reflejaría — aceptable dado
+      // que los eventos de sistema (sin establecimiento) son un subconjunto
+      // marginal frente al volumen normal de bitácora.
+      const sistemaWhere = buildSistemaWhere({ desde: input.desde, hasta: input.hasta });
+      const [sistemaTotalRows, sistemaFirmasRows, sistemaTopDocRows, sistemaTopUserRows] =
+        await Promise.all([
+          ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
+            `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b WHERE ${sistemaWhere.clause}`,
+            ...sistemaWhere.params,
+          ),
+          ctx.prisma.$queryRawUnsafe<MetricCountRow[]>(
+            `SELECT COUNT(*) AS count FROM ece.bitacora_acceso b
+             WHERE ${sistemaWhere.clause}
+               AND b.accion IN (${accionesCriticas.map((_, i) => `$${sistemaWhere.params.length + i + 1}`).join(", ")})`,
+            ...sistemaWhere.params,
+            ...accionesCriticas,
+          ),
+          ctx.prisma.$queryRawUnsafe<TopDocRow[]>(
+            `SELECT b.recurso_id::text AS contexto, COUNT(*) AS count
+             FROM ece.bitacora_acceso b
+             WHERE ${sistemaWhere.clause} AND b.recurso_id IS NOT NULL
+             GROUP BY b.recurso_id
+             ORDER BY count DESC
+             LIMIT 5`,
+            ...sistemaWhere.params,
+          ),
+          ctx.prisma.$queryRawUnsafe<TopUserRow[]>(
+            `SELECT b.auth_user_id::text AS user_id, COUNT(*) AS count
+             FROM ece.bitacora_acceso b
+             WHERE ${sistemaWhere.clause} AND b.auth_user_id IS NOT NULL
+             GROUP BY b.auth_user_id
+             ORDER BY count DESC
+             LIMIT 5`,
+            ...sistemaWhere.params,
+          ),
+        ]);
+
+      const totalAccesos = scoped.totalAccesos + Number(sistemaTotalRows[0]?.count ?? 0);
+      const totalFirmas = scoped.totalFirmas + Number(sistemaFirmasRows[0]?.count ?? 0);
+
+      const topDocumentos = mergeTopCounts(
+        scoped.topDocRows.map((r) => ({ key: r.contexto, count: Number(r.count) })),
+        sistemaTopDocRows.map((r) => ({ key: r.contexto, count: Number(r.count) })),
+        5,
+      ).map((r) => ({ documento: r.key, accesos: r.count }));
+
+      const topUsuarios = mergeTopCounts(
+        scoped.topUserRows.map((r) => ({ key: r.user_id, count: Number(r.count) })),
+        sistemaTopUserRows.map((r) => ({ key: r.user_id, count: Number(r.count) })),
+        5,
+      ).map((r) => ({ userId: r.key, accesos: r.count }));
 
       return { totalAccesos, totalFirmas, topDocumentos, topUsuarios };
     }),
@@ -387,6 +568,28 @@ export const bitacoraRouter = router({
    *
    * protectedProcedure: cualquier usuario autenticado puede registrar
    * (el control de quién puede ver los registros está en list/exportCsv).
+   *
+   * CC-B — la policy `ece_biacc_insert` (sql/65) exige
+   * `establecimiento_id = ece.current_establecimiento_id() AND ... IS NOT NULL`.
+   * Cuando el caller SÍ manda `establecimientoId` se setea el contexto ECE y
+   * se demota el rol. Cuando NO lo manda (eventos globales/de sistema, p.ej.
+   * "view" sin documento asociado — ver segundo caso de
+   * `bitacora.integration.test.ts`) la policy de INSERT rechazaría CUALQUIER
+   * fila demotada por el `IS NOT NULL`, así que ese camino conserva el rol
+   * privilegiado (`demoteRole: false`) — no hay forma de satisfacer esa
+   * policy sin establecimiento. Documentado como excepción puntual, no un
+   * bypass general: list/exportCsv/metrics (la superficie de LECTURA) sí
+   * quedaron con RLS real en este PR.
+   *
+   * P2-1 (protección real, no la policy) — el GUC del camino demotado se
+   * seteaba con el `input.establecimientoId` tal cual lo mandara el CLIENTE:
+   * la policy de INSERT compara la fila contra ESE MISMO GUC, así que
+   * siempre "aprobaba" — comparar un valor contra sí mismo no es una
+   * protección, es una tautología. Un usuario de la sede A podía atribuir
+   * bitácora a la sede B con solo mandar su id. La protección real es esta
+   * validación server-side: `establecimientoId` (si viene) DEBE coincidir
+   * con `ctx.tenant.establishmentId` (la sede activa de la SESIÓN, no del
+   * input) — rechaza con FORBIDDEN en caso contrario.
    */
   register: protectedProcedure
     .input(bitacoraRegisterInput)
@@ -398,20 +601,36 @@ export const bitacoraRouter = router({
       const ipOrigen        = input.ip              ?? null;
       const establecimientoId = input.establecimientoId ?? null;
 
-      await ctx.prisma.$executeRawUnsafe(
-        `INSERT INTO ece.bitacora_acceso
-           (personal_id, recurso_id, accion, autorizado, ip_origen,
-            justificacion, auth_user_id, establecimiento_id)
-         VALUES ($1::uuid, $2::uuid, $3, $4, $5::inet, $6, $7::uuid, $8::uuid)`,
-        personalId,
-        recursoId,
-        input.accion,
-        input.autorizado,
-        ipOrigen,
-        justificacion,
-        ctx.user.id,
-        establecimientoId,
-      );
+      // P2-1 — el establecimiento del INSERT no puede ser arbitrario: debe
+      // ser el de la sesión activa (ctx.tenant), nunca el que mande el input.
+      if (establecimientoId !== null && establecimientoId !== (ctx.tenant?.establishmentId ?? null)) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "El establecimiento indicado no corresponde a la sede activa del usuario.",
+        });
+      }
+
+      await ctx.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT ece.set_ece_context(${ctx.user.id}::uuid, ${establecimientoId}::uuid)`;
+        if (establecimientoId !== null) {
+          await tx.$executeRawUnsafe(`SET LOCAL ROLE authenticated`);
+        }
+
+        await tx.$executeRawUnsafe(
+          `INSERT INTO ece.bitacora_acceso
+             (personal_id, recurso_id, accion, autorizado, ip_origen,
+              justificacion, auth_user_id, establecimiento_id)
+           VALUES ($1::uuid, $2::uuid, $3, $4, $5::inet, $6, $7::uuid, $8::uuid)`,
+          personalId,
+          recursoId,
+          input.accion,
+          input.autorizado,
+          ipOrigen,
+          justificacion,
+          ctx.user.id,
+          establecimientoId,
+        );
+      });
 
       return { ok: true as const };
     }),

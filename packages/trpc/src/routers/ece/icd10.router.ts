@@ -16,9 +16,19 @@
  *   listCombs    → requireRole(["DIR","ARCH","ADMIN"])
  *   createComb   → requireRole(["DIR","ADMIN"])
  *
- * ─── Nota sobre RLS ───────────────────────────────────────────────────────────
+ * ─── Nota sobre RLS (verificado contra prod, R1.2 2026-09) ────────────────────
  *   Icd10Catalog es global (no tenant-scoped), por tanto NO requiere
- *   withTenantContext. Las reglas de combinación tampoco son tenant-scoped.
+ *   withTenantContext. `ece.icd10_combinacion_invalida` también es catálogo
+ *   global (sin organization_id/establecimiento_id): su única policy en prod
+ *   es `icd10_comb_select_auth` (SELECT, qual=true, rol authenticated) — NO
+ *   existe policy de INSERT/UPDATE/ALL. Los SELECT (search/getByCode/validate/
+ *   listCombs) son igual de correctos demotados o sin demotar (misma
+ *   visibilidad). `createComb` (INSERT en icd10_combinacion_invalida) NO se
+ *   puede demotar: sin policy de INSERT, `authenticated` no tiene permiso y
+ *   la escritura fallaría con "new row violates row-level security policy"
+ *   para DIR/ADMIN — se queda privilegiado (ctx.prisma directo) a propósito.
+ *   Clasificado, no es un hallazgo de seguridad: no hay filtro de tenant que
+ *   saltarse en una tabla sin columna de organización.
  */
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";

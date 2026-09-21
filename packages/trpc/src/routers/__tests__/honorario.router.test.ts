@@ -193,6 +193,7 @@ describe("honorarioRouter.produccion.reprocesar", () => {
       accountId: "cuenta-1",
       tipo: "NO_HOSPITALARIO",
       encounterId: null,
+      currencyId: CURRENCY_ID,
     } as never);
     prisma.convenioHonorario.findFirst.mockResolvedValue({ id: CONVENIO_ID } as never);
     prisma.reglaHonorario.findMany.mockResolvedValue([
@@ -219,7 +220,12 @@ describe("honorarioRouter.produccion.reprocesar", () => {
 
     expect(prisma.patientAccountService.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ origen: "HONORARIO_MEDICO", referenciaId: PRODUCCION_ID, unitPrice: 20 }),
+        data: expect.objectContaining({
+          origen: "HONORARIO_MEDICO",
+          referenciaId: PRODUCCION_ID,
+          unitPrice: 20,
+          currencyId: CURRENCY_ID,
+        }),
       }),
     );
     expect(prisma.produccionMedica.update).toHaveBeenLastCalledWith({

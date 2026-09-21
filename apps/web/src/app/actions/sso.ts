@@ -32,19 +32,28 @@
  *   2. `handleSsoCallback` — intercambiar `code` por session vía
  *      `supabase.auth.exchangeCodeForSession`, leer claims, hacer upsert
  *      atómico de User + UserExternalIdentity.
- *   3. Persistir SsoProviderConfig en BD nueva (tabla `SsoProvider`,
- *      migración pendiente). Por ahora localStorage en cliente.
+ *
+ * R1.4 (plan de remediación 2026-09) — `listSsoProvidersForLogin` YA lee
+ * `SsoProviderConfig` (sql/258, admin CRUD en `/admin/sso-config` vía
+ * `trpc.ssoProviderConfig`) en vez de la constante mock. Mientras la tabla
+ * esté vacía (ninguna org configuró nada todavía), cae al mismo mock de
+ * siempre — CERO cambio de comportamiento observable hasta que un admin
+ * cree la primera fila. Esta función corre SIN sesión (pantalla /sso es
+ * pre-login) — usa el cliente Prisma singleton (bypass RLS a propósito,
+ * mismo perfil de exposición que el mock: metadata pública sin secrets).
  */
 
 import { randomUUID } from "node:crypto";
+import { prisma } from "@his/database";
 import {
+  ssoProviderConfigMetaSchema,
   type InitiateSsoLoginInput,
   type InitiateSsoLoginResult,
   type SsoCallbackInput,
   type SsoClaims,
   type SsoProvider,
   type SsoProviderConfig,
-} from "@his/contracts/schemas/sso";
+} from "@his/contracts";
 
 /**
  * Inicia el flujo SSO. MVP: siempre devuelve NOT_CONFIGURED.
@@ -118,22 +127,46 @@ export async function handleSsoCallback(
 }
 
 /**
- * MVP: lee configs desde una constante (mock). Sprint 2: query Prisma.
+ * Metadata pública de providers SSO para el selector `/sso` (sin sesión).
  *
- * Devuelve solo metadatos públicos (sin clientSecret) para mostrar en UI
- * pública /sso. La versión admin (con secrets) se obtiene desde
- * `listSsoProvidersAdmin` (no implementado en MVP).
+ * Lee `SsoProviderConfig` (enabled=true, todas las orgs — el filtro real es
+ * por dominio de email, no por tenant: el usuario aún no eligió organización
+ * en este punto del flujo). Si la tabla no tiene NINGUNA fila (ninguna org
+ * configuró SSO todavía vía `/admin/sso-config`) O la query falla (P2021
+ * "tabla no existe" — sql/258 aún no aplicado — u otro error de conexión),
+ * cae al mock legacy hardcodeado — así el comportamiento no cambia mientras
+ * la migración a BD esté en curso, y un problema de BD no vacía el selector
+ * `/sso` en vez de degradar.
+ *
+ * Nunca devuelve clientSecret: la tabla no tiene esa columna (ver sql/258).
  */
 export async function listSsoProvidersForLogin(
   organizationDomain?: string,
 ): Promise<
   Array<Pick<SsoProviderConfig, "id" | "provider" | "displayName" | "organizationDomain">>
 > {
-  // Mock data para que la UI tenga algo que mostrar.
-  // TODO(Sprint 2): const rows = await prisma.ssoProvider.findMany({
-  //   where: { active: true, ...(organizationDomain ? { organizationDomain } : {}) },
-  //   select: { id: true, provider: true, displayName: true, organizationDomain: true },
-  // });
+  let dbRows: Array<{ id: string; provider: string; displayName: string; config: unknown }> = [];
+  try {
+    dbRows = await prisma.ssoProviderConfig.findMany({
+      where: { enabled: true },
+      select: { id: true, provider: true, displayName: true, config: true },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[sso] listSsoProvidersForLogin: falló la consulta a BD, usando mock legacy:", err);
+  }
+
+  const fromDb = dbRows.map((r) => {
+    const parsed = ssoProviderConfigMetaSchema.safeParse(r.config);
+    return {
+      id: r.id,
+      provider: r.provider as SsoProvider,
+      displayName: r.displayName,
+      organizationDomain: parsed.success ? parsed.data.organizationDomain : undefined,
+    };
+  });
+
+  // Fallback: tabla vacía (MVP en transición, ninguna org configuró SSO aún).
   const mock: Array<
     Pick<SsoProviderConfig, "id" | "provider" | "displayName" | "organizationDomain">
   > = [
@@ -151,8 +184,9 @@ export async function listSsoProvidersForLogin(
     },
   ];
 
-  if (!organizationDomain) return mock;
-  return mock.filter((p) => p.organizationDomain === organizationDomain);
+  const all = fromDb.length > 0 ? fromDb : mock;
+  if (!organizationDomain) return all;
+  return all.filter((p) => p.organizationDomain === organizationDomain);
 }
 
 /**

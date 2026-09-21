@@ -276,7 +276,8 @@ describe("patientAccountRouter", () => {
         organizationId: MOCK_TENANT.organizationId,
       });
       expect(args.include).toMatchObject({
-        servicios: true,
+        // R2.3 (SQL 262) — servicios incluye la moneda del cargo (isoCode/symbol).
+        servicios: { include: { currency: { select: { isoCode: true, symbol: true } } } },
         tipoCuenta: { select: { id: true, code: true, nombre: true } },
       });
       expect(args.orderBy).toMatchObject({ numeroCuenta: "asc" });

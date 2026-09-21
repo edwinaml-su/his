@@ -3,17 +3,19 @@
 /**
  * US-2.5 — Configuración admin de proveedores SSO.
  *
- * MVP STUB. Tabla CRUD que persiste en localStorage (cliente). Sirve para:
- *   - Documentar la forma del modelo `SsoProvider` para Sprint 2.
- *   - Permitir a admins "preconfigurar" providers que se migrarán a BD.
- *   - Pruebas manuales de UX antes de cablear el IdP real.
+ * R1.4 (plan de remediación 2026-09) — reemplaza el localStorage MVP por
+ * persistencia real vía `trpc.ssoProviderConfig` (tabla `SsoProviderConfig`,
+ * sql/258). El flujo de login sigue sin cambios: el botón "Iniciar con
+ * Microsoft" de /login usa el provider `azure` de Supabase Auth nativo
+ * (configurado en el dashboard de Supabase), ajeno a esta pantalla. Esta
+ * config alimenta la pantalla alterna `/sso` (selector de provider, hoy
+ * stub: `initiateSsoLogin` siempre responde NOT_CONFIGURED).
  *
- * NO toca BD: cuando se implemente Sprint 2, los datos de localStorage se
- * descartan y todos los providers se gestionan via Prisma + RLS por org.
- *
- * Persistencia localStorage justificada solo para MVP — explícitamente
- * documentado en /sso-config para que admins entiendan que NO se sincroniza
- * entre navegadores ni dispositivos.
+ * SIN client secrets: el formulario no pide "Client Secret" — la tabla
+ * `SsoProviderConfig.config` (jsonb) solo guarda metadata no sensible
+ * (clientId, redirectUri, dominio, auto-aprovisionamiento). Si un IdP real
+ * necesita un secreto de aplicación, vive en env/Vercel o Supabase Vault,
+ * nunca en esta tabla — ver cabecera de sql/258.
  */
 import * as React from "react";
 import { Button } from "@his/ui/components/button";
@@ -44,38 +46,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@his/ui/components/dialog";
-import {
-  ssoProviderConfigSchema,
-  ssoProviderEnum,
-  ssoProtocolEnum,
-  type SsoProvider,
-  type SsoProviderConfig,
-} from "@his/contracts";
+import { ssoProviderEnum, type SsoProvider, type SsoProviderConfigMeta } from "@his/contracts";
+import { trpc } from "@/lib/trpc/react";
 
-const STORAGE_KEY = "his.sso.providers.mvp";
-
-type StoredConfig = SsoProviderConfig & { id: string };
-
-function loadFromStorage(): StoredConfig[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((row): row is StoredConfig => {
-      const r = ssoProviderConfigSchema.safeParse(row);
-      return r.success && !!r.data.id;
-    });
-  } catch {
-    return [];
-  }
-}
-
-function saveToStorage(rows: StoredConfig[]) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
-}
+type ProviderRow = {
+  id: string;
+  provider: SsoProvider;
+  displayName: string;
+  enabled: boolean;
+  config: SsoProviderConfigMeta;
+};
 
 const PROTOCOL_BY_PROVIDER: Record<SsoProvider, "SAML" | "OIDC" | "OAUTH2"> = {
   WORKOS: "SAML",
@@ -85,31 +65,28 @@ const PROTOCOL_BY_PROVIDER: Record<SsoProvider, "SAML" | "OIDC" | "OAUTH2"> = {
 };
 
 export default function SsoConfigPage() {
-  const [rows, setRows] = React.useState<StoredConfig[]>([]);
-  const [editing, setEditing] = React.useState<StoredConfig | null>(null);
+  const utils = trpc.useUtils();
+  const listQuery = trpc.ssoProviderConfig.list.useQuery();
+  const rows = listQuery.data ?? [];
+
+  const [editing, setEditing] = React.useState<ProviderRow | null>(null);
   const [formOpen, setFormOpen] = React.useState(false);
-  const [confirmDelete, setConfirmDelete] = React.useState<StoredConfig | null>(null);
+  const [confirmDelete, setConfirmDelete] = React.useState<ProviderRow | null>(null);
 
-  React.useEffect(() => {
-    setRows(loadFromStorage());
-  }, []);
+  const upsertMut = trpc.ssoProviderConfig.upsert.useMutation({
+    onSuccess: () => {
+      utils.ssoProviderConfig.list.invalidate();
+      setFormOpen(false);
+      setEditing(null);
+    },
+  });
 
-  const handleSave = (data: StoredConfig) => {
-    const next = editing
-      ? rows.map((r) => (r.id === editing.id ? data : r))
-      : [...rows, data];
-    setRows(next);
-    saveToStorage(next);
-    setFormOpen(false);
-    setEditing(null);
-  };
-
-  const handleDelete = (row: StoredConfig) => {
-    const next = rows.filter((r) => r.id !== row.id);
-    setRows(next);
-    saveToStorage(next);
-    setConfirmDelete(null);
-  };
+  const deleteMut = trpc.ssoProviderConfig.delete.useMutation({
+    onSuccess: () => {
+      utils.ssoProviderConfig.list.invalidate();
+      setConfirmDelete(null);
+    },
+  });
 
   return (
     <div className="space-y-6 p-6">
@@ -117,7 +94,7 @@ export default function SsoConfigPage() {
         <div>
           <h1 className="text-2xl font-semibold">Configuración SSO</h1>
           <p className="text-sm text-muted-foreground">
-            Gestiona los proveedores de Single Sign-On (SAML / OIDC / OAuth2).
+            Gestiona los proveedores de Single Sign-On (SAML / OIDC / OAuth2) de tu organización.
           </p>
         </div>
         <Button
@@ -132,10 +109,12 @@ export default function SsoConfigPage() {
 
       <Alert>
         <AlertDescription>
-          <strong>MVP — Configuración no persistente.</strong> Los proveedores
-          se guardan en almacenamiento local del navegador y NO se sincronizan
-          con la base de datos. La activación efectiva de SSO está planificada
-          para Sprint 2 (Supabase Auth nativo + WorkOS para SAML).
+          Esta pantalla configura el selector alterno <code>/sso</code> (hoy en preparación:
+          los botones muestran &quot;SSO en preparación&quot; hasta que se cablee el IdP real
+          en Sprint 2). El login con Microsoft de la pantalla principal (
+          <code>/login</code>) usa la integración nativa de Supabase Auth y no depende de esta
+          tabla. Por seguridad, el <strong>Client Secret</strong> no se gestiona aquí — vive en
+          variables de entorno o Supabase Vault.
         </AlertDescription>
       </Alert>
 
@@ -143,9 +122,11 @@ export default function SsoConfigPage() {
         <CardHeader>
           <CardTitle>Proveedores configurados</CardTitle>
           <CardDescription>
-            {rows.length === 0
-              ? "Aún no hay proveedores. Añade uno para preparar Sprint 2."
-              : `${rows.length} proveedor${rows.length === 1 ? "" : "es"} en cola para Sprint 2.`}
+            {listQuery.isLoading
+              ? "Cargando..."
+              : rows.length === 0
+                ? "Aún no hay proveedores configurados para esta organización."
+                : `${rows.length} proveedor${rows.length === 1 ? "" : "es"} configurado${rows.length === 1 ? "" : "s"}.`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -167,19 +148,19 @@ export default function SsoConfigPage() {
                   <TableRow key={r.id}>
                     <TableCell className="font-medium">{r.displayName}</TableCell>
                     <TableCell>{r.provider}</TableCell>
-                    <TableCell>{r.protocol}</TableCell>
+                    <TableCell>{PROTOCOL_BY_PROVIDER[r.provider]}</TableCell>
                     <TableCell className="text-muted-foreground">
-                      {r.organizationDomain ?? "—"}
+                      {r.config.organizationDomain ?? "—"}
                     </TableCell>
                     <TableCell>
-                      {r.autoProvision ? (
+                      {r.config.autoProvision ? (
                         <Badge variant="secondary">Sí</Badge>
                       ) : (
                         <Badge variant="outline">No</Badge>
                       )}
                     </TableCell>
                     <TableCell>
-                      {r.active ? (
+                      {r.enabled ? (
                         <Badge>Activo</Badge>
                       ) : (
                         <Badge variant="outline">Inactivo</Badge>
@@ -196,11 +177,7 @@ export default function SsoConfigPage() {
                       >
                         Editar
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setConfirmDelete(r)}
-                      >
+                      <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(r)}>
                         Eliminar
                       </Button>
                     </TableCell>
@@ -215,23 +192,23 @@ export default function SsoConfigPage() {
       <ProviderFormDialog
         open={formOpen}
         initial={editing}
+        pending={upsertMut.isPending}
+        error={upsertMut.error?.message ?? null}
         onClose={() => {
           setFormOpen(false);
           setEditing(null);
+          upsertMut.reset();
         }}
-        onSave={handleSave}
+        onSave={(input) => upsertMut.mutate(input)}
       />
 
-      <Dialog
-        open={!!confirmDelete}
-        onOpenChange={(o) => !o && setConfirmDelete(null)}
-      >
+      <Dialog open={!!confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Eliminar proveedor</DialogTitle>
             <DialogDescription>
-              ¿Eliminar la configuración de &quot;{confirmDelete?.displayName}&quot;? Esta
-              acción no se puede deshacer (en MVP).
+              ¿Eliminar la configuración de &quot;{confirmDelete?.displayName}&quot;? Esta acción
+              no se puede deshacer.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -240,7 +217,8 @@ export default function SsoConfigPage() {
             </Button>
             <Button
               variant="destructive"
-              onClick={() => confirmDelete && handleDelete(confirmDelete)}
+              disabled={deleteMut.isPending}
+              onClick={() => confirmDelete && deleteMut.mutate({ id: confirmDelete.id })}
             >
               Eliminar
             </Button>
@@ -251,74 +229,72 @@ export default function SsoConfigPage() {
   );
 }
 
-interface ProviderFormDialogProps {
-  open: boolean;
-  initial: StoredConfig | null;
-  onClose: () => void;
-  onSave: (config: StoredConfig) => void;
+interface UpsertInput {
+  provider: SsoProvider;
+  displayName: string;
+  enabled: boolean;
+  config: SsoProviderConfigMeta;
 }
 
-function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDialogProps) {
+interface ProviderFormDialogProps {
+  open: boolean;
+  initial: ProviderRow | null;
+  pending: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSave: (input: UpsertInput) => void;
+}
+
+function ProviderFormDialog({
+  open,
+  initial,
+  pending,
+  error,
+  onClose,
+  onSave,
+}: ProviderFormDialogProps) {
   const [provider, setProvider] = React.useState<SsoProvider>("GOOGLE_WORKSPACE");
   const [displayName, setDisplayName] = React.useState("");
   const [clientId, setClientId] = React.useState("");
-  const [clientSecret, setClientSecret] = React.useState("");
   const [redirectUri, setRedirectUri] = React.useState("");
   const [organizationDomain, setOrganizationDomain] = React.useState("");
   const [autoProvision, setAutoProvision] = React.useState(false);
-  const [active, setActive] = React.useState(true);
-  const [error, setError] = React.useState<string | null>(null);
+  const [enabled, setEnabled] = React.useState(true);
 
   React.useEffect(() => {
     if (!open) return;
     if (initial) {
       setProvider(initial.provider);
       setDisplayName(initial.displayName);
-      setClientId(initial.clientId);
-      setClientSecret(""); // No precargamos secretos por seguridad UI
-      setRedirectUri(initial.redirectUri);
-      setOrganizationDomain(initial.organizationDomain ?? "");
-      setAutoProvision(initial.autoProvision);
-      setActive(initial.active);
+      setClientId(initial.config.clientId ?? "");
+      setRedirectUri(initial.config.redirectUri ?? "");
+      setOrganizationDomain(initial.config.organizationDomain ?? "");
+      setAutoProvision(initial.config.autoProvision);
+      setEnabled(initial.enabled);
     } else {
       setProvider("GOOGLE_WORKSPACE");
       setDisplayName("");
       setClientId("");
-      setClientSecret("");
       setRedirectUri(typeof window !== "undefined" ? `${window.location.origin}/sso/callback` : "");
       setOrganizationDomain("");
       setAutoProvision(false);
-      setActive(true);
+      setEnabled(true);
     }
-    setError(null);
   }, [open, initial]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-
-    const candidate: SsoProviderConfig = {
-      id: initial?.id ?? crypto.randomUUID(),
+    onSave({
       provider,
-      protocol: PROTOCOL_BY_PROVIDER[provider],
       displayName,
-      clientId,
-      clientSecret: clientSecret || initial?.clientSecret,
-      redirectUri,
-      organizationDomain: organizationDomain || undefined,
-      // Mock: en MVP no hay org real, usamos UUID nil para satisfacer schema.
-      organizationId: initial?.organizationId ?? "00000000-0000-0000-0000-000000000000",
-      active,
-      autoProvision,
-    };
-
-    const parsed = ssoProviderConfigSchema.safeParse(candidate);
-    if (!parsed.success) {
-      setError(parsed.error.issues.map((i) => i.message).join("; "));
-      return;
-    }
-
-    onSave({ ...parsed.data, id: candidate.id! } as StoredConfig);
+      enabled,
+      config: {
+        clientId: clientId || undefined,
+        redirectUri: redirectUri || undefined,
+        organizationDomain: organizationDomain || undefined,
+        autoProvision,
+      },
+    });
   };
 
   return (
@@ -327,7 +303,7 @@ function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDial
         <DialogHeader>
           <DialogTitle>{initial ? "Editar proveedor" : "Nuevo proveedor SSO"}</DialogTitle>
           <DialogDescription>
-            Configuración para Sprint 2. En MVP no se aplica.
+            El Client Secret no se gestiona aquí — se configura por variable de entorno.
           </DialogDescription>
         </DialogHeader>
 
@@ -361,25 +337,7 @@ function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDial
 
           <div className="space-y-2">
             <Label htmlFor="clientId">Client ID</Label>
-            <Input
-              id="clientId"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="clientSecret">
-              Client Secret {initial ? "(dejar en blanco para no cambiar)" : ""}
-            </Label>
-            <Input
-              id="clientSecret"
-              type="password"
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              autoComplete="new-password"
-            />
+            <Input id="clientId" value={clientId} onChange={(e) => setClientId(e.target.value)} />
           </div>
 
           <div className="space-y-2">
@@ -388,14 +346,11 @@ function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDial
               id="redirectUri"
               value={redirectUri}
               onChange={(e) => setRedirectUri(e.target.value)}
-              required
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="organizationDomain">
-              Dominio organización (opcional)
-            </Label>
+            <Label htmlFor="organizationDomain">Dominio organización (opcional)</Label>
             <Input
               id="organizationDomain"
               value={organizationDomain}
@@ -416,8 +371,8 @@ function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDial
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={active}
-                onChange={(e) => setActive(e.target.checked)}
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
               />
               Activo
             </label>
@@ -433,7 +388,9 @@ function ProviderFormDialog({ open, initial, onClose, onSave }: ProviderFormDial
             <Button type="button" variant="outline" onClick={onClose}>
               Cancelar
             </Button>
-            <Button type="submit">{initial ? "Guardar" : "Crear"}</Button>
+            <Button type="submit" disabled={pending}>
+              {initial ? "Guardar" : "Crear"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

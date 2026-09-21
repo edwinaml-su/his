@@ -49,6 +49,7 @@ import { TRPCError } from "@trpc/server";
 import { router, requireRole } from "../../trpc";
 import { emitDomainEvent } from "@his/database";
 import { withWorkflowContext } from "../../workflow/context";
+import { withEceContext } from "../../ece/rls-context";
 
 // ─── Schemas Zod (inline para compatibilidad con worktree) ──────────────────
 // Los schemas canónicos viven en @his/contracts/src/schemas/ece-triaje.ts;
@@ -434,33 +435,45 @@ export const triajeEceRouter = router({
   linkToHisTriage: eceBase.input(linkToHisTriageInput).mutation(async ({ ctx, input }) => {
     const eceCtx = buildEceCtx(ctx);
 
-    return withWorkflowContext(ctx.prisma, eceCtx, async (tx) => {
-      // Verificar que el TriageEvaluation existe en schema public.
-      const triageEval = await ctx.prisma.triageEvaluation.findFirst({
-        where: { id: input.triageId, organizationId: ctx.tenant.organizationId },
-        select: { id: true },
-      });
-
-      if (!triageEval) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "TriageEvaluation HIS no encontrado en esta organización.",
+    // CC-B — antes leía public."TriageEvaluation" vía `ctx.prisma` directo
+    // (rol BYPASSRLS) dentro del callback de `withWorkflowContext`: esa policy
+    // exige `app.current_org_id` (no la resuelve `current_org_id_or_ece_context()`),
+    // GUC que `withWorkflowContext` nunca setea. Usamos `withEceContext` con
+    // `tenantContext` (mismo patrón dual-GUC de CC-0026/critical-result) para
+    // setear AMBOS contextos en la misma transacción sin partir la atomicidad.
+    return withEceContext(
+      ctx.prisma,
+      eceCtx.personalId,
+      eceCtx.establecimientoId,
+      async (tx) => {
+        // Verificar que el TriageEvaluation existe en schema public.
+        const triageEval = await tx.triageEvaluation.findFirst({
+          where: { id: input.triageId, organizationId: ctx.tenant.organizationId },
+          select: { id: true },
         });
-      }
 
-      const rows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-        UPDATE ece.hoja_triaje
-        SET evaluacion_triaje = evaluacion_triaje
-          || jsonb_build_object('his_triage_id', ${input.triageId})
-        WHERE id = ${input.id}::uuid
-        RETURNING id::text
-      `);
+        if (!triageEval) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "TriageEvaluation HIS no encontrado en esta organización.",
+          });
+        }
 
-      if (rows.length === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Hoja de triaje ECE no encontrada." });
-      }
+        const rows = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+          UPDATE ece.hoja_triaje
+          SET evaluacion_triaje = evaluacion_triaje
+            || jsonb_build_object('his_triage_id', ${input.triageId})
+          WHERE id = ${input.id}::uuid
+          RETURNING id::text
+        `);
 
-      return { id: rows[0]!.id, linkedTriageId: input.triageId };
-    });
+        if (rows.length === 0) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Hoja de triaje ECE no encontrada." });
+        }
+
+        return { id: rows[0]!.id, linkedTriageId: input.triageId };
+      },
+      { tenantContext: { userId: ctx.user.id, orgId: ctx.tenant.organizationId } },
+    );
   }),
 });
