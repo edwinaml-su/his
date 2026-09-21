@@ -9,7 +9,9 @@
  *   activar      → requireRole(["ADM","DIR"]) — abre período de contingencia
  *   desactivar   → requireRole(["ADM","DIR"]) — cierra período, alerta retro
  *   estadoActual → tenantProcedure — devuelve evento activo o null
- *   list         → requireRole(["ADM","DIR"]) — historial paginado
+ *   list         → requireRole(["ADM","DIR","NURSE","PHYSICIAN","ARCH"]) — historial
+ *                  paginado; ampliado (P1-1, revisión R3A) porque alimenta el
+ *                  selector de período de registrarRetroactivo
  *   registrarRetroactivo → requireRole(["NURSE","PHYSICIAN","ARCH"]) — US.F2.7.27
  *
  * RLS: withTenantContext en todas las mutations.
@@ -184,8 +186,14 @@ export const contingenciaRouter = router({
     });
   }),
 
-  /** Historial de eventos de contingencia de la organización. */
-  list: requireRole(["ADM", "DIR"])
+  /**
+   * Historial de eventos de contingencia de la organización.
+   * P1-1 (revisión R3A 2026-09): ampliado a NURSE/PHYSICIAN/ARCH — son la
+   * audiencia real de `registrarRetroactivo`, que necesita este `list` para
+   * poblar el selector de período. `motivo`/`activado_en`/`desactivado_en`
+   * son metadata operativa del evento de contingencia, no PHI del paciente.
+   */
+  list: requireRole(["ADM", "DIR", "NURSE", "PHYSICIAN", "ARCH"])
     .input(listInput)
     .query(async ({ ctx, input }) => {
       const orgId = ctx.tenant.organizationId;

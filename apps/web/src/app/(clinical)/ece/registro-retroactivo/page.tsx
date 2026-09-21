@@ -146,6 +146,16 @@ export default function RegistroRetroactivoPage() {
                   ))}
                 </SelectContent>
               </Select>
+              {/* P1-1 (revisión R3A): antes solo se usaba .data — un FORBIDDEN
+                  u otro error de esta query dejaba el Select vacío sin aviso. */}
+              {eventosQuery.error && (
+                <p role="alert" className="text-sm text-destructive mt-1">
+                  No se pudieron cargar los períodos de contingencia: {eventosQuery.error.message}
+                </p>
+              )}
+              {eventosQuery.isLoading && (
+                <p className="text-sm text-muted-foreground mt-1">Cargando períodos…</p>
+              )}
             </div>
 
             {/* Tipo de documento */}
