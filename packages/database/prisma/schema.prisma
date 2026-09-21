@@ -2994,6 +2994,34 @@ model Drug {
   alertLevel            String             @default("standard")
   /// Justificación ISMP para el nivel de alerta (ej. "ISMP High-Alert: insulin")
   alertRationale        String?
+
+  // R3.5 — cierre de drift documentado desde 2026-06-16 (CLAUDE.md §Gotchas):
+  // estas 20 columnas ya existen en prod (SQL `169-174`, srs-registro.router.ts
+  // las opera por $queryRawUnsafe) pero nunca se declararon en schema.prisma.
+  // Tipos y nombres verificados por introspección directa (information_schema.
+  // columns, tabla public."Drug") el 2026-09-21 — NO se migra el router a
+  // Prisma tipado en este cambio, solo se cierra el drift del modelo.
+  srsRegistroSanitario         String?   @db.VarChar(20)
+  srsIdProducto                String?   @db.VarChar(40)
+  srsTitular                   String?   @db.VarChar(200)
+  srsPrimeraAutorizacion       DateTime? @db.Date
+  srsAnualidad                 DateTime? @db.Date
+  srsCategoria                 String?   @db.VarChar(60)
+  srsClasificacion             String?   @db.VarChar(40)
+  srsEstado                    String?   @db.VarChar(20)
+  srsCondicionesAlmacenamiento String?   @db.Text
+  srsIndicacionesTerapeuticas  String?   @db.Text
+  srsContraindicaciones        String?   @db.Text
+  srsPrecauciones              String?   @db.Text
+  srsEfectosAdversos           String?   @db.Text
+  srsInteracciones             String?   @db.Text
+  srsVidaUtilMeses             Int?
+  srsViaAdministracion         String?   @db.VarChar(60)
+  srsFichaTecnicaUrl           String?   @db.Text
+  srsExpedienteUrl             String?   @db.Text
+  srsInformeEvaluacionUrl      String?   @db.Text
+  srsUltimaSincronizacion      DateTime? @db.Timestamptz()
+
   createdAt             DateTime           @default(now()) @db.Timestamptz()
   updatedAt             DateTime           @updatedAt @db.Timestamptz()
 
