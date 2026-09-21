@@ -47,6 +47,7 @@ import {
 } from "@/lib/auth/mfa-session";
 import { prisma } from "@his/database";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { getTenantContext } from "@/lib/auth/session";
 
 // -----------------------------------------------------------------------------
 // Constantes/tipos espejo de `@his/contracts/schemas/mfa`. NO importamos del
@@ -411,9 +412,21 @@ export async function enrollMfa(): Promise<
 /**
  * A07:2025 — deja la marca de sesión firmada que prueba el segundo factor.
  * Sin política configurada es un no-op (la cookie no se emite y nada la pide).
+ *
+ * R4.5 — CRÍTICO: resuelve el switch de organización (`tenant.mfaStaffRequired`)
+ * igual que `assertMfaOrRedirect` (mfa-guard.ts) y el cómputo de `mfaSatisfied`
+ * de `/api/trpc`. Este era el tercer call site de `readMfaPolicy()` y el único
+ * que quedó env-only: con el switch de una org en `true` y
+ * `MFA_REQUIRED_ROLE_CODES` vacío (el estado real de prod hoy), llamar
+ * `readMfaPolicy()` sin el flag resuelve `{mode: "off"}` — el TOTP se verifica
+ * con éxito pero la cookie NUNCA se emite, el layout vuelve a redirigir a
+ * `/mfa`, y el usuario queda en loop infinito (bloqueo total del staff de esa
+ * org al primer uso del switch). Hallazgo de review — no reintroducir un
+ * cuarto call site que llame `readMfaPolicy()` sin resolver la org activa.
  */
 async function markMfaSession(userId: string): Promise<void> {
-  const policy = readMfaPolicy();
+  const tenant = await getTenantContext();
+  const policy = readMfaPolicy(process.env, tenant?.mfaStaffRequired ?? false);
   if (policy.mode !== "enforced") return;
   const cookieStore = await cookies();
   cookieStore.set(MFA_COOKIE_NAME, issueMfaCookie(userId, policy.secret), {

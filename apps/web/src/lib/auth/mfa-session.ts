@@ -121,15 +121,23 @@ export function verifyMfaCookie(
 /**
  * Resuelve si la request satisface la política de MFA.
  * `true` cuando la política está apagada o el rol no la exige.
+ *
+ * `policy` es OBLIGATORIO a propósito (R4.5, hallazgo de review P2-2): un
+ * default `args.policy ?? readMfaPolicy()` es el mismo footgun que causó el
+ * P0 de `markMfaSession` — `readMfaPolicy()` sin argumentos es env-only y
+ * ignora el switch de organización. Los dos callers reales ya resuelven la
+ * política completa (env + org) antes de llamar esta función; si aparece un
+ * tercero que no compila por faltarle `policy`, esa es la señal correcta —
+ * mejor un error de tipos que un bypass silencioso en producción.
  */
 export function isMfaSatisfied(args: {
   userId: string | null;
   roleCodes: string[];
   cookie: string | undefined;
-  policy?: MfaPolicy;
+  policy: MfaPolicy;
   now?: number;
 }): boolean {
-  const policy = args.policy ?? readMfaPolicy();
+  const { policy } = args;
   if (!mfaRequiredForRoles(args.roleCodes, policy)) return true;
   if (policy.mode !== "enforced" || !args.userId) return false;
   return verifyMfaCookie(args.cookie, args.userId, policy.secret, args.now ?? Date.now());
