@@ -79,6 +79,13 @@ describe("eceCertificacionRouter", () => {
   // -------------------------------------------------------------------------
   describe("listCola", () => {
     it("devuelve documentos en estado validado", async () => {
+      // CC-B — listCola ahora corre dentro de withWorkflowContext
+      // (prisma.$transaction); sin este passthrough el callback nunca corre.
+      prisma.$transaction.mockImplementation(async (fn: (tx: PrismaClient) => Promise<unknown>) =>
+        fn(prisma),
+      );
+      prisma.$executeRawUnsafe.mockResolvedValue(0 as never);
+
       prisma.$queryRawUnsafe.mockResolvedValueOnce([
         {
           id: INSTANCIA_ID,
