@@ -245,6 +245,10 @@ export function PersonalSaludScreen({
   function handleSubmitEdit() {
     if (!editTarget) return;
     setFormError(null);
+    if (form.documentoIdentidad.trim().length < 1) {
+      setFormError("Documento de identidad es obligatorio.");
+      return;
+    }
     if (form.nombreCompleto.trim().length < 3) {
       setFormError("Nombre completo es obligatorio.");
       return;
@@ -255,6 +259,10 @@ export function PersonalSaludScreen({
     }
     updateMut.mutate({
       id: editTarget,
+      // D4b — editable: permite corregir los centinelas `PENDIENTE-DUI-*`
+      // que crea el sync R1.1. El servidor valida el checksum solo cuando
+      // el documento tiene forma de DUI (9 dígitos).
+      documentoIdentidad: form.documentoIdentidad.trim(),
       nombreCompleto: form.nombreCompleto.trim(),
       jvpmOJvp: form.jvpmOJvp.trim() || null,
       profesion: form.profesion.trim() || null,
@@ -680,11 +688,11 @@ function PersonalForm({
               setForm((f) => ({ ...f, documentoIdentidad: e.target.value }))
             }
             placeholder="DUI 00000000-0"
-            disabled={mode === "edit"}
             aria-describedby="documentoIdentidad-hint"
           />
           <p id="documentoIdentidad-hint" className="text-xs text-muted-foreground">
-            DUI / NIT / pasaporte — no editable después de creación.
+            DUI / NIT / pasaporte. Editable — necesario para corregir los
+            centinelas &quot;PENDIENTE-DUI-…&quot; creados automáticamente.
           </p>
         </div>
         <div className="space-y-1.5">

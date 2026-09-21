@@ -6250,7 +6250,12 @@ model EcePersonalSalud {
   establecimientoId String    @map("establecimiento_id") @db.Uuid
   documentoIdentidad String   @map("documento_identidad") @db.VarChar(40)
   nombreCompleto    String    @map("nombre_completo") @db.VarChar(200)
-  jvpmOJvp          String?   @map("jvpm_o_jvp") @db.VarChar(40)
+  // D4a: NO se declara aquí un campo `jvpmOJvp`/`jvpm_o_jvp` — esa columna
+  // nunca existió en la tabla aplicada (drift del insumo de diseño original,
+  // docs/backlog/fase2/_insumos/02_seguridad_personal.sql). El campo correcto
+  // ya está declarado más abajo como `jvpmCodigo @map("jvpm_codigo")`
+  // (confirmado por introspección R1A/R3B) — declararlo dos veces aquí
+  // duplicaría el mapeo a la misma columna física y Prisma lo rechaza.
   profesion         String?   @db.VarChar(100)
   activo            Boolean   @default(true)
   fechaBaja         DateTime? @map("fecha_baja") @db.Timestamptz()

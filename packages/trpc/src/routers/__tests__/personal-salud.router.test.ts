@@ -10,16 +10,21 @@
  * seguía fallando para ese usuario.
  *
  * Foco: `linkAuthUser`, `unlinkAuthUser`, `createAndLinkUser` — los tres
- * procedures tocados. No se cubre el resto del router (list/get/create/
- * update/setActive/listRoles/getPacientesReferidos/getReporteMedico), que
- * no se modificó en este cambio y no tenía tests previos (gap preexistente,
+ * procedures tocados por R03. No se cubre el resto del router (list/get/
+ * create/setActive/listRoles/getPacientesReferidos/getReporteMedico), que no
+ * se modificó en ese cambio y no tenía tests previos (gap preexistente,
  * fuera de alcance).
+ *
+ * D4b (R3B) agrega cobertura de `update` — específicamente el campo nuevo
+ * `documentoIdentidad` (permite corregir los centinelas `PENDIENTE-DUI-*`
+ * del sync R1.1) y su validación condicional de DUI.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mockDeep, type DeepMockProxy } from "vitest-mock-extended";
 import type { PrismaClient } from "@prisma/client";
 import { personalSaludRouter, CLINICAL_ROLE_CODES } from "../personal-salud.router";
 import { makeCtx, installTenantContextMock } from "../../__tests__/helpers/caller";
+import { VALID_DUIS_WITH_DASH, INVALID_DUIS } from "@his/test-utils";
 
 const PERSONAL_ID = "00000000-0000-0000-0000-0000000000e1";
 const USER_ID = "00000000-0000-0000-0000-0000000000e2";
@@ -242,5 +247,67 @@ describe("personalSalud.usuariosSinPerfil", () => {
     const call = prisma.$queryRaw.mock.calls[0]!;
     const interpolated = call.slice(1);
     expect(interpolated).toContainEqual(Array.from(CLINICAL_ROLE_CODES));
+  });
+});
+
+describe("personalSalud.update — D4b documentoIdentidad", () => {
+  it("permite corregir el documento (ej. centinela PENDIENTE-DUI-*) con un DUI válido", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // target existe
+      .mockResolvedValueOnce([]); // sin colisión de documento en el establecimiento
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const validDui = VALID_DUIS_WITH_DASH[9]!; // "12345678-4" — fixture canónico
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    const result = await caller.update({ id: PERSONAL_ID, documentoIdentidad: validDui });
+
+    expect(result).toEqual({ id: PERSONAL_ID });
+    const call = prisma.$executeRaw.mock.calls[0]!;
+    expect(call.slice(1)).toContain(validDui);
+  });
+
+  it("acepta documentos que NO tienen forma de DUI (pasaporte/DPI extranjero) sin exigir checksum", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }])
+      .mockResolvedValueOnce([]);
+    prisma.$transaction.mockImplementation(async (fn: (tx: unknown) => Promise<unknown>) =>
+      fn(prisma),
+    );
+    prisma.$executeRaw.mockResolvedValue(1);
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    // Pasaporte alfanumérico — no son 9 dígitos, el refine de zod no aplica validateDUI.
+    const result = await caller.update({ id: PERSONAL_ID, documentoIdentidad: "P1234567A" });
+
+    expect(result).toEqual({ id: PERSONAL_ID });
+  });
+
+  it("rechaza un documento con forma de DUI pero dígito verificador inválido (BAD_REQUEST de zod)", async () => {
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+
+    // 9 dígitos → se le exige el checksum; INVALID_DUIS.badCheck altera el
+    // verificador de un cuerpo válido (fixture canónico de @his/test-utils).
+    await expect(
+      caller.update({ id: PERSONAL_ID, documentoIdentidad: INVALID_DUIS.badCheck }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+    // El zod refine corta antes de tocar la BD.
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it("lanza CONFLICT si el nuevo documento ya pertenece a otro profesional del establecimiento", async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([{ id: PERSONAL_ID }]) // target existe
+      .mockResolvedValueOnce([{ id: OTHER_PERSONAL_ID }]); // colisión
+
+    const caller = personalSaludRouter.createCaller(makeCtx({ prisma }));
+    await expect(
+      caller.update({ id: PERSONAL_ID, documentoIdentidad: "P1234567A" }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });
