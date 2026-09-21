@@ -1,5 +1,7 @@
 -- =====================================================================
 -- 264_r3_unique_documento_personal.sql
+-- ⚠ APLICADO a prod (ejacvsgbewcerxtjtwto) el 2026-09-21 vía MCP — NO re-aplicar.
+-- Pre-check de duplicados: 0 filas; índice creado y verificado.
 -- P2-1 (revisión fix/r3b-derivados-cortos, sobre D4b) — el dup-check de
 -- `personalSalud.update` (documento_identidad) corre en la capa de
 -- aplicación, FUERA de la transacción de escritura: primero un SELECT de
