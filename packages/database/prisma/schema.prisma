@@ -3360,6 +3360,25 @@ model LabSlaConfig {
   @@schema("public")
 }
 
+/// R1.4 (plan remediación 2026-09, sql/258) — config SSO real por org.
+/// Reemplaza el localStorage de `/admin/sso-config`. `config` guarda SOLO
+/// metadata no sensible (clientId, redirectUri, organizationDomain,
+/// autoProvision, roleClaimMap) — el client_secret NUNCA vive aquí (ver
+/// cabecera de sql/258): si se necesita, va a Supabase Vault, no a esta tabla.
+model SsoProviderConfig {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  provider       String   @db.VarChar(30) /// WORKOS|AUTH0|GOOGLE_WORKSPACE|AZURE_AD (CHECK en sql/258).
+  displayName    String   @db.VarChar(100)
+  enabled        Boolean  @default(true)
+  config         Json     @default("{}")
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  @@unique([organizationId, provider])
+  @@schema("public")
+}
+
 /// Rediseño lab 2026-09 — parámetros ESCOGIDOS para un examen concreto de una
 /// solicitud (subset de LabTestParameter de la prueba).
 model LabOrderItemParameter {

@@ -5,6 +5,18 @@
 -- Dependencias: ADR 0009, public schema (tablas OLTP 4NF)
 -- Aplicar en: Supabase SQL Editor / mcp__supabase__apply_migration
 -- Siguiente: SQL 49 (RLS), Beta.19b (fact tables + dbt Silver layer)
+--
+-- ⚠️ HISTÓRICO — NUNCA APLICADO A PROD (confirmado 2026-09, R1.5 plan de
+-- remediación). El schema `analytics` sí existe en prod, pero fue creado
+-- ad-hoc por sql/122 y sql/249 (matviews independientes con su propio
+-- SECURITY DEFINER wrapper), no por este archivo — `dim_date`,
+-- `dim_organization`, `dim_establishment`, `dataset_catalog` y el rol
+-- `bi_reader` de este archivo NO existen en prod. sql/259 crea `bi_reader`
+-- + grants condicionales (`to_regclass`) sobre lo que exista hoy — este
+-- archivo queda como especificación de referencia para cuando @DA retome
+-- Beta.19 de verdad, no como algo aplicado. Antes de aplicarlo: verificar
+-- contra el estado real (`to_regclass`/`list_tables`), no asumir que
+-- `CREATE ... IF NOT EXISTS` es gratis — sql/259 documenta el detalle.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------

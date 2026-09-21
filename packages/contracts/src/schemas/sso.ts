@@ -176,3 +176,53 @@ export const ssoClaimsSchema = z.object({
 });
 
 export type SsoClaims = z.infer<typeof ssoClaimsSchema>;
+
+// =============================================================================
+// R1.4 (plan remediación 2026-09) — CRUD admin de SsoProviderConfig (sql/258).
+//
+// A diferencia de `ssoProviderConfigSchema` de arriba (forma "plana" MVP,
+// usada por la UI de localStorage y por los stubs de login), este bloque
+// modela la tabla REAL: `config` es un jsonb con metadata NO sensible
+// (clientId, redirectUri, organizationDomain, autoProvision, roleClaimMap).
+// clientSecret NUNCA se persiste aquí — ver cabecera de sql/258.
+// =============================================================================
+
+/** Metadata no sensible que vive en la columna `config` jsonb. */
+export const ssoProviderConfigMetaSchema = z.object({
+  clientId: z.string().trim().min(1).max(200).optional(),
+  redirectUri: z.string().url().optional(),
+  organizationDomain: z.string().trim().min(1).max(120).optional(),
+  autoProvision: z.boolean().default(false),
+  roleClaimMap: z.record(z.string()).optional(),
+});
+
+export type SsoProviderConfigMeta = z.infer<typeof ssoProviderConfigMetaSchema>;
+
+/** Fila real de `SsoProviderConfig` tal como la devuelve el router admin. */
+export const ssoProviderConfigRowSchema = z.object({
+  id: z.string().uuid(),
+  organizationId: z.string().uuid(),
+  provider: ssoProviderEnum,
+  displayName: z.string(),
+  enabled: z.boolean(),
+  config: ssoProviderConfigMetaSchema,
+  createdAt: z.date(),
+  updatedAt: z.date(),
+});
+
+export type SsoProviderConfigRow = z.infer<typeof ssoProviderConfigRowSchema>;
+
+export const ssoProviderConfigUpsertInput = z.object({
+  provider: ssoProviderEnum,
+  displayName: z.string().trim().min(1).max(100),
+  enabled: z.boolean().default(true),
+  config: ssoProviderConfigMetaSchema.default({}),
+});
+
+export type SsoProviderConfigUpsertInput = z.infer<typeof ssoProviderConfigUpsertInput>;
+
+export const ssoProviderConfigDeleteInput = z.object({
+  id: z.string().uuid(),
+});
+
+export type SsoProviderConfigDeleteInput = z.infer<typeof ssoProviderConfigDeleteInput>;
