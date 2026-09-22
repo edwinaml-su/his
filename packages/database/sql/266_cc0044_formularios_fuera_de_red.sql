@@ -27,8 +27,9 @@
 -- Cuentas/Seguros (DomainEvent) — ver docs/CC/CC-0044-formularios-fuera-de-red.md.
 --
 -- Idempotente (CREATE TABLE IF NOT EXISTS, DROP POLICY/TRIGGER IF EXISTS).
--- Requiere sql/235 aplicado ("Insurer" debe existir). NO aplicado a prod — el
--- orquestador (@Orq) lo aplica vía MCP. NO re-numerar: es el 266.
+-- Requiere sql/235 aplicado ("Insurer" debe existir).
+-- APLICADO a prod 2026-09-22 vía MCP apply_migration (verificado post-apply:
+-- 3 tablas, RLS+policies+triggers audit, anon sin privilegios) — NO re-aplicar.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
