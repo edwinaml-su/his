@@ -349,7 +349,7 @@ export const SECTIONS: NavSection[] = [
       { href: "/inventory", label: "Inventario", icon: Boxes,
         description: "Inventario de insumos médicos y stock por bodega." },
       { href: "/insurance", label: "Aseguradoras", icon: ShieldCheck,
-        description: "Catálogo de aseguradoras: pólizas, coberturas, deducibles." },
+        description: "Catálogo de aseguradoras: pólizas, coberturas, deducibles, formularios de médico fuera de red." },
       { href: "/consents", label: "Consentimientos de datos (GDPR)", icon: FileSignature,
         description: "Consentimientos de tratamiento de datos personales (GDPR/LOPD)." },
       { href: "/deaths", label: "Defunciones", icon: Skull,

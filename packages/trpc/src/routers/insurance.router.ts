@@ -35,12 +35,51 @@ import {
   coverageRuleCreateInput,
   coverageRuleListInput,
   coverageRuleDeactivateInput,
+  // CC-0044 — formularios de médico fuera de red
+  networkCallCensusCreateInput,
+  networkCallCensusUpdateInput,
+  networkCallCensusAddEntryInput,
+  networkCallCensusUpdateEntryInput,
+  networkCallCensusRemoveEntryInput,
+  networkCallCensusSignInput,
+  networkCallCensusAnularInput,
+  networkCallCensusListInput,
+  networkCallCensusByIdInput,
+  outOfNetworkAttestationCreateInput,
+  outOfNetworkAttestationUpdateInput,
+  outOfNetworkAttestationMarkFirmadoInput,
+  outOfNetworkAttestationAnularInput,
+  outOfNetworkAttestationListInput,
+  outOfNetworkAttestationByIdInput,
 } from "@his/contracts";
 import { router, tenantProcedure, requireRole } from "../trpc";
 import { withTenantContext } from "../rls-context";
 
 // b14: states that are treated as "open" for transitions.
 const OPEN_STATES = ["PENDING", "REQUESTED"] as const;
+
+// CC-0044 — sign() del censo de llamadas requiere rol médico (protocolo
+// AVANTE: "Médico de turno" firma el pie del formulario).
+const physicianProc = requireRole(["PHYSICIAN"]);
+
+/**
+ * CC-0044 — valida que `insurerId` (si viene) sea visible para el tenant
+ * (catálogo global o del propio tenant) — mismo criterio que
+ * `plan.create`/`coverage.create` de este router.
+ */
+async function assertInsurerVisible(
+  tx: Pick<Prisma.TransactionClient, "insurer">,
+  insurerId: string,
+  organizationId: string,
+): Promise<void> {
+  const insurer = await tx.insurer.findFirst({
+    where: { id: insurerId, OR: [{ organizationId: null }, { organizationId }] },
+    select: { id: true },
+  });
+  if (!insurer) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Aseguradora no visible para el tenant." });
+  }
+}
 
 // CC-0028 — config de planes/reglas de cobertura: mismo par de roles que
 // patient-account.router (ADMIN/ACCOUNTANT) para las escrituras financieras.
@@ -849,6 +888,464 @@ export const insuranceRouter = router({
         );
         if (updated.count === 0) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Regla no existe o ya está inactiva." });
+        }
+        return { ok: true as const };
+      }),
+  }),
+
+  /**
+   * CC-0044 — "Censo de llamada seguro médico" (NetworkCallCensus +
+   * NetworkCallCensusEntry). Documenta los médicos de la red a los que
+   * recepción llamó antes de admitir con un médico fuera de red.
+   *
+   * Estado: BORRADOR -> FIRMADO (sign, rol médico) | ANULADO. Sólo se edita
+   * (update/addEntry/updateEntry/removeEntry) en BORRADOR.
+   */
+  callCensus: router({
+    list: tenantProcedure
+      .input(networkCallCensusListInput)
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.networkCallCensus.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.insurerId && { insurerId: input.insurerId }),
+              ...(input.status && { status: input.status }),
+            },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              insurer: { select: { id: true, code: true, name: true } },
+              _count: { select: { entries: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take: input.limit,
+            skip: input.offset,
+          }),
+        );
+      }),
+
+    byId: tenantProcedure
+      .input(networkCallCensusByIdInput)
+      .query(async ({ ctx, input }) => {
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.networkCallCensus.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              account: { select: { id: true, numeroCuenta: true } },
+              insurer: { select: { id: true, code: true, name: true } },
+              medicoTurno: { select: { id: true, fullName: true } },
+              entries: { orderBy: { ordenIndex: "asc" } },
+            },
+          }),
+        );
+        if (!item) throw new TRPCError({ code: "NOT_FOUND" });
+        return item;
+      }),
+
+    create: tenantProcedure
+      .input(networkCallCensusCreateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const patient = await tx.patient.findFirst({
+            where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+            select: { id: true },
+          });
+          if (!patient) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no existe en la organización." });
+          }
+          if (input.patientAccountId) {
+            const account = await tx.patientAccount.findFirst({
+              where: {
+                id: input.patientAccountId,
+                organizationId: ctx.tenant.organizationId,
+                patientId: input.patientId,
+              },
+              select: { id: true },
+            });
+            if (!account) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no existe para este paciente." });
+            }
+          }
+          if (input.insurerId) {
+            await assertInsurerVisible(tx, input.insurerId, ctx.tenant.organizationId);
+          }
+          return tx.networkCallCensus.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: ctx.tenant.establishmentId ?? null,
+              patientId: input.patientId,
+              patientAccountId: input.patientAccountId ?? null,
+              insurerId: input.insurerId ?? null,
+              aseguradoraNombre: input.aseguradoraNombre ?? null,
+              diagnostico: input.diagnostico,
+              notas: input.notas ?? null,
+              createdBy: ctx.user.id,
+              entries: {
+                create: input.entries.map((e, i) => ({
+                  ordenIndex: e.ordenIndex ?? i,
+                  doctorNombre: e.doctorNombre,
+                  telefono: e.telefono ?? null,
+                  atendioLlamada: e.atendioLlamada ?? null,
+                  comentarios: e.comentarios ?? null,
+                })),
+              },
+            },
+            include: { entries: { orderBy: { ordenIndex: "asc" } } },
+          });
+        });
+      }),
+
+    /** Edición de cabecera — sólo permitida en BORRADOR. */
+    update: tenantProcedure
+      .input(networkCallCensusUpdateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          if (input.insurerId) {
+            await assertInsurerVisible(tx, input.insurerId, ctx.tenant.organizationId);
+          }
+          const updated = await tx.networkCallCensus.updateMany({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            data: {
+              patientAccountId: input.patientAccountId,
+              insurerId: input.insurerId,
+              aseguradoraNombre: input.aseguradoraNombre,
+              diagnostico: input.diagnostico,
+              notas: input.notas,
+              updatedBy: ctx.user.id,
+            },
+          });
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Censo no existe en la organización o no está en BORRADOR.",
+            });
+          }
+          return { ok: true as const };
+        });
+      }),
+
+    addEntry: tenantProcedure
+      .input(networkCallCensusAddEntryInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const census = await tx.networkCallCensus.findFirst({
+            where: { id: input.censusId, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            select: { id: true },
+          });
+          if (!census) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Censo no existe en la organización o no está en BORRADOR.",
+            });
+          }
+          return tx.networkCallCensusEntry.create({
+            data: {
+              censusId: input.censusId,
+              ordenIndex: input.entry.ordenIndex,
+              doctorNombre: input.entry.doctorNombre,
+              telefono: input.entry.telefono ?? null,
+              atendioLlamada: input.entry.atendioLlamada ?? null,
+              comentarios: input.entry.comentarios ?? null,
+            },
+          });
+        });
+      }),
+
+    updateEntry: tenantProcedure
+      .input(networkCallCensusUpdateEntryInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const census = await tx.networkCallCensus.findFirst({
+            where: { id: input.censusId, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            select: { id: true },
+          });
+          if (!census) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Censo no existe en la organización o no está en BORRADOR.",
+            });
+          }
+          const updated = await tx.networkCallCensusEntry.updateMany({
+            where: { id: input.entryId, censusId: input.censusId },
+            data: {
+              ordenIndex: input.entry.ordenIndex,
+              doctorNombre: input.entry.doctorNombre,
+              telefono: input.entry.telefono,
+              atendioLlamada: input.entry.atendioLlamada,
+              comentarios: input.entry.comentarios,
+            },
+          });
+          if (updated.count === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Fila del censo no existe." });
+          }
+          return { ok: true as const };
+        });
+      }),
+
+    removeEntry: tenantProcedure
+      .input(networkCallCensusRemoveEntryInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const census = await tx.networkCallCensus.findFirst({
+            where: { id: input.censusId, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            select: { id: true },
+          });
+          if (!census) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Censo no existe en la organización o no está en BORRADOR.",
+            });
+          }
+          const deleted = await tx.networkCallCensusEntry.deleteMany({
+            where: { id: input.entryId, censusId: input.censusId },
+          });
+          if (deleted.count === 0) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Fila del censo no existe." });
+          }
+          return { ok: true as const };
+        });
+      }),
+
+    /**
+     * Firma del médico de turno (pie del formulario) — requireRole(["PHYSICIAN"]).
+     * Sólo transiciona BORRADOR -> FIRMADO.
+     */
+    sign: physicianProc
+      .input(networkCallCensusSignInput)
+      .mutation(async ({ ctx, input }) => {
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.networkCallCensus.updateMany({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            data: {
+              status: "FIRMADO",
+              medicoTurnoUserId: ctx.user.id,
+              firmadoAt: new Date(),
+              updatedBy: ctx.user.id,
+            },
+          }),
+        );
+        if (updated.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Censo no existe en la organización o no está en BORRADOR.",
+          });
+        }
+        return { ok: true as const };
+      }),
+
+    anular: tenantProcedure
+      .input(networkCallCensusAnularInput)
+      .mutation(async ({ ctx, input }) => {
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.networkCallCensus.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["BORRADOR", "FIRMADO"] },
+            },
+            data: {
+              status: "ANULADO",
+              motivoAnulacion: input.motivo,
+              updatedBy: ctx.user.id,
+            },
+          }),
+        );
+        if (updated.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Censo no existe en la organización o ya está anulado.",
+          });
+        }
+        return { ok: true as const };
+      }),
+  }),
+
+  /**
+   * CC-0044 — "Constancia de atención por médico fuera de red" (respaldo
+   * AVANTE, firmada por el asegurado/responsable). Estado: PENDIENTE_FIRMA ->
+   * FIRMADO (markFirmado) | ANULADO. Sólo se edita en PENDIENTE_FIRMA.
+   */
+  outOfNetwork: router({
+    list: tenantProcedure
+      .input(outOfNetworkAttestationListInput)
+      .query(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outOfNetworkAttestation.findMany({
+            where: {
+              organizationId: ctx.tenant.organizationId,
+              ...(input.patientId && { patientId: input.patientId }),
+              ...(input.insurerId && { insurerId: input.insurerId }),
+              ...(input.status && { status: input.status }),
+            },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              insurer: { select: { id: true, code: true, name: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take: input.limit,
+            skip: input.offset,
+          }),
+        );
+      }),
+
+    byId: tenantProcedure
+      .input(outOfNetworkAttestationByIdInput)
+      .query(async ({ ctx, input }) => {
+        const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outOfNetworkAttestation.findFirst({
+            where: { id: input.id, organizationId: ctx.tenant.organizationId },
+            include: {
+              patient: { select: { id: true, firstName: true, lastName: true, mrn: true } },
+              account: { select: { id: true, numeroCuenta: true } },
+              insurer: { select: { id: true, code: true, name: true } },
+            },
+          }),
+        );
+        if (!item) throw new TRPCError({ code: "NOT_FOUND" });
+        return item;
+      }),
+
+    create: tenantProcedure
+      .input(outOfNetworkAttestationCreateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const patient = await tx.patient.findFirst({
+            where: { id: input.patientId, organizationId: ctx.tenant.organizationId },
+            select: { id: true },
+          });
+          if (!patient) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Paciente no existe en la organización." });
+          }
+          if (input.patientAccountId) {
+            const account = await tx.patientAccount.findFirst({
+              where: {
+                id: input.patientAccountId,
+                organizationId: ctx.tenant.organizationId,
+                patientId: input.patientId,
+              },
+              select: { id: true },
+            });
+            if (!account) {
+              throw new TRPCError({ code: "NOT_FOUND", message: "Cuenta no existe para este paciente." });
+            }
+          }
+          if (input.insurerId) {
+            await assertInsurerVisible(tx, input.insurerId, ctx.tenant.organizationId);
+          }
+          return tx.outOfNetworkAttestation.create({
+            data: {
+              organizationId: ctx.tenant.organizationId,
+              establishmentId: ctx.tenant.establishmentId ?? null,
+              patientId: input.patientId,
+              patientAccountId: input.patientAccountId ?? null,
+              insurerId: input.insurerId ?? null,
+              aseguradoraNombre: input.aseguradoraNombre ?? null,
+              polizaNumero: input.polizaNumero ?? null,
+              certificadoCarnet: input.certificadoCarnet ?? null,
+              aseguradoTitular: input.aseguradoTitular,
+              parentesco: input.parentesco,
+              parentescoOtro: input.parentescoOtro ?? null,
+              doctorNombre: input.doctorNombre,
+              doctorEspecialidad: input.doctorEspecialidad,
+              telefonoContacto: input.telefonoContacto ?? null,
+              lugarFecha: input.lugarFecha ?? null,
+              createdBy: ctx.user.id,
+            },
+          });
+        });
+      }),
+
+    /** Edición — sólo permitida en PENDIENTE_FIRMA. */
+    update: tenantProcedure
+      .input(outOfNetworkAttestationUpdateInput)
+      .mutation(async ({ ctx, input }) => {
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          if (input.insurerId) {
+            await assertInsurerVisible(tx, input.insurerId, ctx.tenant.organizationId);
+          }
+          const updated = await tx.outOfNetworkAttestation.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "PENDIENTE_FIRMA",
+            },
+            data: {
+              patientAccountId: input.patientAccountId,
+              insurerId: input.insurerId,
+              aseguradoraNombre: input.aseguradoraNombre,
+              polizaNumero: input.polizaNumero,
+              certificadoCarnet: input.certificadoCarnet,
+              aseguradoTitular: input.aseguradoTitular,
+              parentesco: input.parentesco,
+              parentescoOtro: input.parentescoOtro,
+              doctorNombre: input.doctorNombre,
+              doctorEspecialidad: input.doctorEspecialidad,
+              telefonoContacto: input.telefonoContacto,
+              lugarFecha: input.lugarFecha,
+              updatedBy: ctx.user.id,
+            },
+          });
+          if (updated.count === 0) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Constancia no existe en la organización o no está en PENDIENTE_FIRMA.",
+            });
+          }
+          return { ok: true as const };
+        });
+      }),
+
+    /** Registra que el impreso físico fue firmado por el asegurado/responsable. */
+    markFirmado: tenantProcedure
+      .input(outOfNetworkAttestationMarkFirmadoInput)
+      .mutation(async ({ ctx, input }) => {
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outOfNetworkAttestation.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: "PENDIENTE_FIRMA",
+            },
+            data: {
+              status: "FIRMADO",
+              firmadoAt: new Date(),
+              updatedBy: ctx.user.id,
+            },
+          }),
+        );
+        if (updated.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Constancia no existe en la organización o no está en PENDIENTE_FIRMA.",
+          });
+        }
+        return { ok: true as const };
+      }),
+
+    anular: tenantProcedure
+      .input(outOfNetworkAttestationAnularInput)
+      .mutation(async ({ ctx, input }) => {
+        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
+          tx.outOfNetworkAttestation.updateMany({
+            where: {
+              id: input.id,
+              organizationId: ctx.tenant.organizationId,
+              status: { in: ["PENDIENTE_FIRMA", "FIRMADO"] },
+            },
+            data: {
+              status: "ANULADO",
+              motivoAnulacion: input.motivo,
+              updatedBy: ctx.user.id,
+            },
+          }),
+        );
+        if (updated.count === 0) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Constancia no existe en la organización o ya está anulada.",
+          });
         }
         return { ok: true as const };
       }),

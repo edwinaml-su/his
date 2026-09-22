@@ -489,6 +489,9 @@ export default function PolizasAdminPage() {
           <Button variant="outline" asChild>
             <Link href="/insurance/plans">Planes</Link>
           </Button>
+          <Button variant="outline" asChild>
+            <Link href="/insurance/formularios">Formularios fuera de red</Link>
+          </Button>
           <Button onClick={() => setCreateOpen(true)}>Nueva póliza</Button>
         </div>
       </div>
