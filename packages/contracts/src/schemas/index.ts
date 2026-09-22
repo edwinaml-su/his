@@ -59,6 +59,7 @@ export * from "./imaging";
 export * from "./imaging-request";
 export * from "./inpatient";
 export * from "./insurance";
+export * from "./insurance-out-of-network";
 export * from "./inventory";
 export * from "./nutrition";
 export * from "./respiratory";

@@ -579,6 +579,9 @@ model Organization {
   abacRules                 AbacRule[]                 @relation("AbacRuleOrg")
   // CC-0026 — tareas de tablero generadas al firmar indicaciones/órdenes
   careTasks                 CareTask[]
+  // CC-0044 — formularios de médico fuera de red por organización
+  networkCallCensuses       NetworkCallCensus[]        @relation("NetworkCallCensusOrg")
+  outOfNetworkAttestations  OutOfNetworkAttestation[]  @relation("OutOfNetworkAttestationOrg")
 
   @@unique([countryId, taxId])
   @@index([parentId])
@@ -631,6 +634,9 @@ model Establishment {
   careTasks              CareTask[]
   // CC-0036 Ola 5 (REQ-HIS-AFIL-001 S6) — honorarios
   produccionesMedicas    ProduccionMedica[]
+  // CC-0044 — formularios de médico fuera de red por establecimiento
+  networkCallCensuses      NetworkCallCensus[]        @relation("NetworkCallCensusEstablishment")
+  outOfNetworkAttestations OutOfNetworkAttestation[]  @relation("OutOfNetworkAttestationEstablishment")
 
   @@unique([organizationId, code])
   @@schema("public")
@@ -754,6 +760,8 @@ model User {
   // CC-0036 Ola 1A — Rostering 24/7 (turnos)
   turnosAsignados           AsignacionTurno[]            @relation("AsignacionTurnoUsuario")
   turnosSustituidos         AsignacionTurno[]            @relation("AsignacionTurnoSustituto")
+  // CC-0044 — médico de turno que firma el censo de llamadas (médico fuera de red)
+  networkCallCensusFirmados NetworkCallCensus[]          @relation("NetworkCallCensusMedicoTurno")
 
   @@schema("public")
 }
@@ -1418,6 +1426,9 @@ model Patient {
   careTasks              CareTask[]
   // CC-0036 Ola 3 (REQ-HIS-AFIL-001 S3) — lista de espera de agenda
   listaEsperas           ListaEspera[]
+  // CC-0044 — formularios de médico fuera de red del paciente
+  networkCallCensuses      NetworkCallCensus[]        @relation("NetworkCallCensusPatient")
+  outOfNetworkAttestations OutOfNetworkAttestation[]  @relation("OutOfNetworkAttestationPatient")
 
   @@unique([organizationId, mrn])
   @@index([lastName, firstName])
@@ -4516,6 +4527,9 @@ model Insurer {
   tiposCuenta     TipoCuenta[]    @relation("TipoCuentaInsurer")
   // CC-0027 — cartas de cobertura/finiquito emitidas por esta aseguradora (opcional)
   coverageLetters CoverageLetter[] @relation("CoverageLetterInsurer")
+  // CC-0044 — formularios de médico fuera de red que referencian esta aseguradora
+  networkCallCensuses      NetworkCallCensus[]        @relation("NetworkCallCensusInsurer")
+  outOfNetworkAttestations OutOfNetworkAttestation[]  @relation("OutOfNetworkAttestationInsurer")
 
   @@unique([organizationId, code])
   @@index([active])
@@ -4680,6 +4694,109 @@ model CoverageRule {
   @@index([organizationId])
   @@index([planId])
   @@index([coverageId])
+  @@schema("public")
+}
+
+/// CC-0044 (SQL 266) — "Censo de llamada seguro médico": cabecera. Documenta
+/// los médicos de la red de la aseguradora a los que recepción llamó ANTES de
+/// admitir a un paciente con un médico fuera de red (protocolo AVANTE). Las
+/// filas (un médico llamado, con resultado) viven en `NetworkCallCensusEntry`.
+model NetworkCallCensus {
+  id                String    @id @default(uuid()) @db.Uuid
+  organizationId    String    @db.Uuid
+  establishmentId   String?   @db.Uuid
+  patientId         String    @db.Uuid
+  patientAccountId  String?   @db.Uuid
+  insurerId         String?   @db.Uuid
+  /// Texto libre cuando la aseguradora no está en el catálogo `Insurer`.
+  aseguradoraNombre String?   @db.VarChar(200)
+  diagnostico       String    @db.Text
+  /// BORRADOR | FIRMADO | ANULADO — CHECK en SQL 266.
+  status            String    @default("BORRADOR") @db.VarChar(20)
+  /// Médico de turno que firma el pie del formulario — se asigna en sign(), no en la creación.
+  medicoTurnoUserId String?   @db.Uuid
+  firmadoAt         DateTime? @db.Timestamptz()
+  notas             String?   @db.Text
+  /// Motivo requerido al anular (espejo de AuthorizationRequest.denialReason).
+  motivoAnulacion   String?   @db.VarChar(400)
+  createdAt         DateTime  @default(now()) @db.Timestamptz()
+  createdBy         String?   @db.Uuid
+  updatedAt         DateTime  @updatedAt @db.Timestamptz()
+  updatedBy         String?   @db.Uuid
+
+  organization  Organization    @relation("NetworkCallCensusOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment?  @relation("NetworkCallCensusEstablishment", fields: [establishmentId], references: [id], onDelete: SetNull)
+  patient       Patient         @relation("NetworkCallCensusPatient", fields: [patientId], references: [id], onDelete: Restrict)
+  account       PatientAccount? @relation("NetworkCallCensusAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
+  insurer       Insurer?        @relation("NetworkCallCensusInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
+  medicoTurno   User?           @relation("NetworkCallCensusMedicoTurno", fields: [medicoTurnoUserId], references: [id], onDelete: SetNull)
+  entries       NetworkCallCensusEntry[]
+
+  @@index([organizationId, patientId])
+  @@index([insurerId])
+  @@schema("public")
+}
+
+/// CC-0044 (SQL 266) — fila del censo de llamadas: un médico de la red al que
+/// se llamó, con resultado (SÍ/NO atendió) y comentario libre.
+model NetworkCallCensusEntry {
+  id             String   @id @default(uuid()) @db.Uuid
+  censusId       String   @db.Uuid
+  ordenIndex     Int      @default(0)
+  doctorNombre   String   @db.VarChar(200)
+  telefono       String?  @db.VarChar(40)
+  /// NULL = sin registrar; true/false = sí/no atendió la llamada.
+  atendioLlamada Boolean?
+  comentarios    String?  @db.VarChar(300)
+  createdAt      DateTime @default(now()) @db.Timestamptz()
+  updatedAt      DateTime @updatedAt @db.Timestamptz()
+
+  census NetworkCallCensus @relation(fields: [censusId], references: [id], onDelete: Cascade)
+
+  @@index([censusId])
+  @@schema("public")
+}
+
+/// CC-0044 (SQL 266) — "Constancia de atención por médico fuera de red"
+/// (respaldo AVANTE): el asegurado/responsable declara haber sido informado
+/// de que el médico tratante no pertenece a la red de su aseguradora. Se usa
+/// cuando la aseguradora no exige su propio formulario. `markFirmado` registra
+/// que el impreso físico fue firmado (sin firma digital en v1).
+model OutOfNetworkAttestation {
+  id                  String    @id @default(uuid()) @db.Uuid
+  organizationId      String    @db.Uuid
+  establishmentId     String?   @db.Uuid
+  patientId           String    @db.Uuid
+  patientAccountId    String?   @db.Uuid
+  insurerId           String?   @db.Uuid
+  aseguradoraNombre   String?   @db.VarChar(200)
+  polizaNumero        String?   @db.VarChar(80)
+  certificadoCarnet   String?   @db.VarChar(80)
+  aseguradoTitular    String    @db.VarChar(200)
+  /// TITULAR | CONYUGE | HIJO | OTRO — CHECK en SQL 266.
+  parentesco          String    @db.VarChar(20)
+  parentescoOtro       String?  @db.VarChar(120)
+  doctorNombre         String   @db.VarChar(200)
+  doctorEspecialidad   String   @db.VarChar(200)
+  telefonoContacto     String?  @db.VarChar(40)
+  lugarFecha           String?  @db.VarChar(200)
+  /// PENDIENTE_FIRMA | FIRMADO | ANULADO — CHECK en SQL 266.
+  status               String   @default("PENDIENTE_FIRMA") @db.VarChar(20)
+  firmadoAt            DateTime? @db.Timestamptz()
+  motivoAnulacion      String?  @db.VarChar(400)
+  createdAt            DateTime @default(now()) @db.Timestamptz()
+  createdBy            String?  @db.Uuid
+  updatedAt            DateTime @updatedAt @db.Timestamptz()
+  updatedBy            String?  @db.Uuid
+
+  organization  Organization    @relation("OutOfNetworkAttestationOrg", fields: [organizationId], references: [id], onDelete: Restrict)
+  establishment Establishment?  @relation("OutOfNetworkAttestationEstablishment", fields: [establishmentId], references: [id], onDelete: SetNull)
+  patient       Patient         @relation("OutOfNetworkAttestationPatient", fields: [patientId], references: [id], onDelete: Restrict)
+  account       PatientAccount? @relation("OutOfNetworkAttestationAccount", fields: [patientAccountId], references: [id], onDelete: SetNull)
+  insurer       Insurer?        @relation("OutOfNetworkAttestationInsurer", fields: [insurerId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, patientId])
+  @@index([insurerId])
   @@schema("public")
 }
 
@@ -9358,6 +9475,9 @@ model PatientAccount {
   /// CC-0027 — cuentas por cobrar y cartas de cobertura/finiquito de esta cuenta.
   accountsReceivable AccountReceivable[]
   coverageLetters    CoverageLetter[]
+  /// CC-0044 — formularios de médico fuera de red anclados a esta cuenta.
+  networkCallCensuses      NetworkCallCensus[]        @relation("NetworkCallCensusAccount")
+  outOfNetworkAttestations OutOfNetworkAttestation[]  @relation("OutOfNetworkAttestationAccount")
 
   @@unique([patientId, numeroCuenta])
   @@index([organizationId])
