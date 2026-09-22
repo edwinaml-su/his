@@ -6,7 +6,17 @@
  *
  * Edición sólo en PENDIENTE_FIRMA. `markFirmado` registra que el impreso
  * físico fue firmado por el asegurado/responsable (sin firma digital en v1).
- * Imprimible: layout fiel al formulario físico (patrón: ece/bitacora).
+ *
+ * Imprimible: renderizado como React (`<ConstanciaPrintView>`), NO
+ * `document.write`. Hallazgo P0 de la revisión adversarial: el patrón
+ * anterior (window.open + document.write interpolando strings de BD sin
+ * escapar) es un XSS almacenado — con el CSP de prod
+ * (`script-src 'self' 'unsafe-inline'`) un `<img onerror=...>` en un campo de
+ * texto ejecutaría con la sesión de la víctima. React escapa todo el
+ * contenido de texto por default; la vista imprimible vive en la misma
+ * página, oculta en pantalla y visible sólo bajo `@media print` vía Tailwind
+ * `hidden print:block`. Mismo patrón que
+ * `apps/web/src/components/epicrisis-pdf-preview.tsx`.
  */
 import * as React from "react";
 import { useParams } from "next/navigation";
@@ -36,8 +46,24 @@ function fmtFecha(d: string | Date | null | undefined): string {
   return new Date(d).toLocaleString("es-SV");
 }
 
-function imprimirConstancia(data: {
-  patienteNombre: string;
+/**
+ * Vista imprimible fiel a la "Constancia de atención por médico fuera de
+ * red" física. Renderiza texto de BD como children de JSX (React escapa
+ * automáticamente — ver nota de seguridad arriba).
+ */
+function ConstanciaPrintView({
+  pacienteNombre,
+  aseguradora,
+  polizaNumero,
+  certificadoCarnet,
+  aseguradoTitular,
+  parentesco,
+  doctorNombre,
+  doctorEspecialidad,
+  telefonoContacto,
+  lugarFecha,
+}: {
+  pacienteNombre: string;
   aseguradora: string;
   polizaNumero: string;
   certificadoCarnet: string;
@@ -48,73 +74,80 @@ function imprimirConstancia(data: {
   telefonoContacto: string;
   lugarFecha: string;
 }) {
-  const win = window.open("", "_blank");
-  if (!win) return;
+  const campoLabel: React.CSSProperties = { display: "inline-block", minWidth: 170 };
+  return (
+    <div className="hidden print:block" style={{ color: "#111", fontSize: "10pt" }}>
+      <header className="flex items-center gap-3 border-b-2 border-[#1a3c5e] pb-2">
+        {/* eslint-disable-next-line @next/next/no-img-element -- vista de impresión, no LCP */}
+        <img src="/avante-logo.svg" alt="AVANTE" style={{ height: 48 }} />
+        <div>
+          <h1 style={{ fontSize: "13pt", margin: 0, fontWeight: 700 }}>
+            Constancia de atención por médico fuera de red
+          </h1>
+          <p style={{ fontSize: "9pt", color: "#555", margin: "2px 0 0" }}>
+            Complejo Hospitalario Avante — Respaldo de aseguradora
+          </p>
+        </div>
+      </header>
 
-  win.document.write(`<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <title>Constancia de atención por médico fuera de red — AVANTE</title>
-  <style>
-    body { font-family: Arial, sans-serif; font-size: 10pt; margin: 20mm; color: #111; }
-    header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #1a3c5e; padding-bottom: 8px; }
-    header img { height: 48px; }
-    h1 { font-size: 13pt; margin: 0; }
-    .sub { font-size: 9pt; color: #555; margin: 2px 0 0; }
-    section { margin-top: 14pt; }
-    section h2 { font-size: 10.5pt; border-bottom: 1px solid #ccc; padding-bottom: 3px; }
-    .campo { margin: 4px 0; font-size: 10pt; }
-    .campo strong { display: inline-block; min-width: 170px; }
-    .declaracion { margin-top: 10pt; padding: 8px; border: 1px solid #ccc; background: #f7f7f7; font-size: 9.5pt; }
-    .firmas { margin-top: 40pt; display: flex; justify-content: space-between; }
-    .firma-linea { border-top: 1px solid #000; width: 260px; padding-top: 4px; font-size: 9pt; text-align: center; }
-    @media print { button { display: none; } }
-  </style>
-</head>
-<body>
-  <header>
-    <img src="/avante-logo.svg" alt="AVANTE" onerror="this.style.display='none'" />
-    <div>
-      <h1>Constancia de atención por médico fuera de red</h1>
-      <p class="sub">Complejo Hospitalario Avante — Respaldo de aseguradora</p>
+      <section style={{ marginTop: 14 }}>
+        <h2 style={{ fontSize: "10.5pt", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>
+          Datos del asegurado y del paciente
+        </h2>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Aseguradora:</strong> {aseguradora}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Póliza No.:</strong> {polizaNumero || "—"}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Certificado/Carné No.:</strong> {certificadoCarnet || "—"}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Asegurado titular:</strong> {aseguradoTitular}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Nombre del paciente:</strong> {pacienteNombre}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Parentesco con el titular:</strong> {parentesco}
+        </div>
+      </section>
+
+      <section style={{ marginTop: 14 }}>
+        <h2 style={{ fontSize: "10.5pt", borderBottom: "1px solid #ccc", paddingBottom: 3 }}>
+          Declaración
+        </h2>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>El Doctor/La Doctora:</strong> {doctorNombre}
+        </div>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Especialista en:</strong> {doctorEspecialidad}
+        </div>
+        <p style={{ marginTop: 10, padding: 8, border: "1px solid #ccc", background: "#f7f7f7", fontSize: "9.5pt" }}>
+          El asegurado declara haber sido informado de que el médico tratante NO pertenece a la red
+          de su aseguradora, que pueden no aplicar los beneficios de la póliza y que los
+          honorarios/gastos derivados de esta atención pueden correr por su cuenta. La selección del
+          especialista es criterio personal del asegurado/paciente, no una recomendación de AVANTE.
+        </p>
+        <div style={{ margin: "4px 0" }}>
+          <strong style={campoLabel}>Número de contacto:</strong> {telefonoContacto || "—"}
+        </div>
+      </section>
+
+      <div style={{ marginTop: 40, display: "flex", justifyContent: "space-between" }}>
+        <div style={{ borderTop: "1px solid #000", width: 260, paddingTop: 4, fontSize: "9pt", textAlign: "center" }}>
+          Nombre del asegurado
+        </div>
+        <div style={{ borderTop: "1px solid #000", width: 260, paddingTop: 4, fontSize: "9pt", textAlign: "center" }}>
+          Firma del asegurado
+        </div>
+      </div>
+      <p style={{ marginTop: 20, fontSize: "9pt" }}>
+        Lugar y fecha: {lugarFecha || "_______________________________"}
+      </p>
     </div>
-  </header>
-
-  <section>
-    <h2>Datos del asegurado y del paciente</h2>
-    <div class="campo"><strong>Aseguradora:</strong> ${data.aseguradora}</div>
-    <div class="campo"><strong>Póliza No.:</strong> ${data.polizaNumero || "—"}</div>
-    <div class="campo"><strong>Certificado/Carné No.:</strong> ${data.certificadoCarnet || "—"}</div>
-    <div class="campo"><strong>Asegurado titular:</strong> ${data.aseguradoTitular}</div>
-    <div class="campo"><strong>Nombre del paciente:</strong> ${data.patienteNombre}</div>
-    <div class="campo"><strong>Parentesco con el titular:</strong> ${data.parentesco}</div>
-  </section>
-
-  <section>
-    <h2>Declaración</h2>
-    <div class="campo"><strong>El Doctor/La Doctora:</strong> ${data.doctorNombre}</div>
-    <div class="campo"><strong>Especialista en:</strong> ${data.doctorEspecialidad}</div>
-    <p class="declaracion">
-      El asegurado declara haber sido informado de que el médico tratante NO pertenece a la red de
-      su aseguradora, que pueden no aplicar los beneficios de la póliza y que los honorarios/gastos
-      derivados de esta atención pueden correr por su cuenta. La selección del especialista es
-      criterio personal del asegurado/paciente, no una recomendación de AVANTE.
-    </p>
-    <div class="campo"><strong>Número de contacto:</strong> ${data.telefonoContacto || "—"}</div>
-  </section>
-
-  <div class="firmas">
-    <div class="firma-linea">Nombre del asegurado</div>
-    <div class="firma-linea">Firma del asegurado</div>
-  </div>
-  <p style="margin-top: 20pt; font-size: 9pt;">Lugar y fecha: ${data.lugarFecha || "_______________________________"}</p>
-
-  <br/>
-  <button onclick="window.print()">Imprimir / Guardar PDF</button>
-</body>
-</html>`);
-  win.document.close();
+  );
 }
 
 export default function DetalleConstanciaFueraDeRedPage() {
@@ -179,7 +212,7 @@ export default function DetalleConstanciaFueraDeRedPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-2xl font-bold">Constancia fuera de red</h1>
           <Badge variant={STATUS_BADGE[constancia.status] ?? "outline"}>{constancia.status}</Badge>
@@ -188,26 +221,7 @@ export default function DetalleConstanciaFueraDeRedPage() {
           <Button variant="outline" asChild>
             <Link href="/insurance/formularios">Volver</Link>
           </Button>
-          <Button
-            variant="outline"
-            onClick={() =>
-              imprimirConstancia({
-                patienteNombre: nombrePaciente,
-                aseguradora,
-                polizaNumero: constancia.polizaNumero ?? "",
-                certificadoCarnet: constancia.certificadoCarnet ?? "",
-                aseguradoTitular: constancia.aseguradoTitular,
-                parentesco:
-                  constancia.parentesco === "OTRO"
-                    ? constancia.parentescoOtro ?? "Otro"
-                    : PARENTESCO_LABELS[constancia.parentesco] ?? constancia.parentesco,
-                doctorNombre: constancia.doctorNombre,
-                doctorEspecialidad: constancia.doctorEspecialidad,
-                telefonoContacto: constancia.telefonoContacto ?? "",
-                lugarFecha: constancia.lugarFecha ?? "",
-              })
-            }
-          >
+          <Button variant="outline" onClick={() => window.print()}>
             Imprimir
           </Button>
           {pendiente ? (
@@ -223,6 +237,7 @@ export default function DetalleConstanciaFueraDeRedPage() {
         </div>
       </div>
 
+      <div className="space-y-4 print:hidden">
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -349,6 +364,24 @@ export default function DetalleConstanciaFueraDeRedPage() {
           )}
         </CardContent>
       </Card>
+      </div>
+
+      <ConstanciaPrintView
+        pacienteNombre={nombrePaciente}
+        aseguradora={aseguradora}
+        polizaNumero={constancia.polizaNumero ?? ""}
+        certificadoCarnet={constancia.certificadoCarnet ?? ""}
+        aseguradoTitular={constancia.aseguradoTitular}
+        parentesco={
+          constancia.parentesco === "OTRO"
+            ? constancia.parentescoOtro ?? "Otro"
+            : PARENTESCO_LABELS[constancia.parentesco] ?? constancia.parentesco
+        }
+        doctorNombre={constancia.doctorNombre}
+        doctorEspecialidad={constancia.doctorEspecialidad}
+        telefonoContacto={constancia.telefonoContacto ?? ""}
+        lugarFecha={constancia.lugarFecha ?? ""}
+      />
     </div>
   );
 }

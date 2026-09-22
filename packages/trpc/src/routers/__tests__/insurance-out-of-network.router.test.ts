@@ -27,6 +27,59 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
   });
 
   // -------------------------------------------------------------------------
+  // P1-1 (revisión adversarial) — formsWriterProc/formsReaderProc gatean
+  // ambos sub-routers (antes sólo `sign` tenía rol). Un rol sin ninguno de
+  // ADMIN/ADMISION/ACCOUNTANT/BILLING/PHYSICIAN debe recibir FORBIDDEN.
+  // -------------------------------------------------------------------------
+  describe("gates de rol (formsWriterProc / formsReaderProc)", () => {
+    const sinAcceso = { ...MOCK_TENANT, roleCodes: ["TRIAGIST"] };
+
+    it("callCensus.list FORBIDDEN sin rol de formulario", async () => {
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma, tenant: sinAcceso }));
+      await expect(caller.callCensus.list({ limit: 50, offset: 0 })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("callCensus.create FORBIDDEN sin rol de formulario", async () => {
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma, tenant: sinAcceso }));
+      await expect(
+        caller.callCensus.create({ patientId, aseguradoraNombre: "ISSS", diagnostico: "x", entries: [] }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("callCensus.list OK con rol ADMISION (aunque no sea médico/admin)", async () => {
+      prisma.networkCallCensus.findMany.mockResolvedValue([] as never);
+      const caller = insuranceRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["ADMISION"] } }),
+      );
+      await expect(caller.callCensus.list({ limit: 50, offset: 0 })).resolves.toEqual([]);
+    });
+
+    it("outOfNetwork.create FORBIDDEN sin rol de formulario", async () => {
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma, tenant: sinAcceso }));
+      await expect(
+        caller.outOfNetwork.create({
+          patientId,
+          aseguradoraNombre: "MAPFRE",
+          aseguradoTitular: "Juan Pérez",
+          parentesco: "TITULAR",
+          doctorNombre: "Dr. Gómez",
+          doctorEspecialidad: "Cirugía General",
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+
+    it("outOfNetwork.byId OK con rol PHYSICIAN (necesita leer para decidir si aplica)", async () => {
+      prisma.outOfNetworkAttestation.findFirst.mockResolvedValue({ id: u } as never);
+      const caller = insuranceRouter.createCaller(
+        makeCtx({ prisma, tenant: { ...MOCK_TENANT, roleCodes: ["PHYSICIAN"] } }),
+      );
+      await expect(caller.outOfNetwork.byId({ id: u })).resolves.toMatchObject({ id: u });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   describe("callCensus.create", () => {
     it("NOT_FOUND si el paciente no pertenece al tenant", async () => {
       prisma.patient.findFirst.mockResolvedValue(null as never);
@@ -114,18 +167,33 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
     });
 
     it("NOT_FOUND si el censo no existe o no está en BORRADOR", async () => {
-      prisma.networkCallCensus.updateMany.mockResolvedValue({ count: 0 } as never);
+      prisma.networkCallCensus.findFirst.mockResolvedValue(null as never);
       const caller = insuranceRouter.createCaller(makeCtx({ prisma })); // MOCK_TENANT incluye PHYSICIAN
       await expect(caller.callCensus.sign({ id: u })).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    // P2 (revisión adversarial) — un censo firmado con 0 llamadas no tiene
+    // valor probatorio del protocolo (documentar los intentos de localizar
+    // un médico de la red).
+    it("BAD_REQUEST si el censo no tiene ninguna fila (0 entries)", async () => {
+      prisma.networkCallCensus.findFirst.mockResolvedValue({
+        _count: { entries: 0 },
+      } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await expect(caller.callCensus.sign({ id: u })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(prisma.networkCallCensus.update).not.toHaveBeenCalled();
+    });
+
     it("OK: transiciona BORRADOR -> FIRMADO y asigna medicoTurnoUserId=ctx.user.id", async () => {
-      prisma.networkCallCensus.updateMany.mockResolvedValue({ count: 1 } as never);
+      prisma.networkCallCensus.findFirst.mockResolvedValue({
+        _count: { entries: 2 },
+      } as never);
+      prisma.networkCallCensus.update.mockResolvedValue({ id: u } as never);
       const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
       const result = await caller.callCensus.sign({ id: u });
       expect(result.ok).toBe(true);
-      const call = prisma.networkCallCensus.updateMany.mock.calls[0]![0]!;
-      expect((call.where as { status: string }).status).toBe("BORRADOR");
+      const call = prisma.networkCallCensus.update.mock.calls[0]![0]!;
+      expect((call.where as { id: string }).id).toBe(u);
       const data = call.data as { status: string; medicoTurnoUserId: string; firmadoAt: Date };
       expect(data.status).toBe("FIRMADO");
       expect(data.medicoTurnoUserId).toBeTruthy();
@@ -178,6 +246,43 @@ describe("insuranceRouter — CC-0044 formularios fuera de red", () => {
       const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
       const r = await caller.callCensus.addEntry({ censusId: u, entry: { doctorNombre: "Dr. X" } });
       expect(r.id).toBe("entry-1");
+    });
+
+    // P1-2 (revisión adversarial) — sin ordenIndex explícito, el router lo
+    // calcula como max(ordenIndex existente)+1 dentro de la misma tx, no un
+    // 0 fijo (el default de la columna). Dos addEntry seguidos quedan con
+    // índices crecientes.
+    it("addEntry asigna ordenIndex incremental cuando el caller no lo especifica (dos llamadas seguidas)", async () => {
+      prisma.networkCallCensus.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.networkCallCensusEntry.findFirst
+        .mockResolvedValueOnce(null as never) // censo sin filas aún
+        .mockResolvedValueOnce({ ordenIndex: 0 } as never); // ya existe la fila anterior
+      prisma.networkCallCensusEntry.create
+        .mockResolvedValueOnce({ id: "entry-1" } as never)
+        .mockResolvedValueOnce({ id: "entry-2" } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+
+      await caller.callCensus.addEntry({ censusId: u, entry: { doctorNombre: "Dr. A" } });
+      await caller.callCensus.addEntry({ censusId: u, entry: { doctorNombre: "Dr. B" } });
+
+      const firstData = prisma.networkCallCensusEntry.create.mock.calls[0]![0]!.data as {
+        ordenIndex: number;
+      };
+      const secondData = prisma.networkCallCensusEntry.create.mock.calls[1]![0]!.data as {
+        ordenIndex: number;
+      };
+      expect(firstData.ordenIndex).toBe(0);
+      expect(secondData.ordenIndex).toBe(1);
+    });
+
+    it("addEntry respeta ordenIndex explícito del caller (no recalcula)", async () => {
+      prisma.networkCallCensus.findFirst.mockResolvedValue({ id: u } as never);
+      prisma.networkCallCensusEntry.create.mockResolvedValue({ id: "entry-1" } as never);
+      const caller = insuranceRouter.createCaller(makeCtx({ prisma }));
+      await caller.callCensus.addEntry({ censusId: u, entry: { doctorNombre: "Dr. X", ordenIndex: 7 } });
+      expect(prisma.networkCallCensusEntry.findFirst).not.toHaveBeenCalled();
+      const data = prisma.networkCallCensusEntry.create.mock.calls[0]![0]!.data as { ordenIndex: number };
+      expect(data.ordenIndex).toBe(7);
     });
 
     it("removeEntry NOT_FOUND si la fila no existe", async () => {

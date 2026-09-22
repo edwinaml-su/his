@@ -62,6 +62,25 @@ const OPEN_STATES = ["PENDING", "REQUESTED"] as const;
 // AVANTE: "Médico de turno" firma el pie del formulario).
 const physicianProc = requireRole(["PHYSICIAN"]);
 
+// CC-0044 (P1-1, revisión adversarial) — el router original dejaba
+// create/update/addEntry/updateEntry/removeEntry/markFirmado/anular en
+// tenantProcedure sin gate de rol. Alineado con la convención del propio
+// archivo (`writerProc`/`coverageWriterProc`): estos formularios los llena
+// recepción/admisión al ingresar al paciente, no cualquier rol clínico o
+// administrativo del tenant. `ADMISION` es el código real de admisión del
+// catálogo RBAC (sql/194, ya usado en patient-identification.router.ts
+// "ADMIN/ADMISION"); se agregan ACCOUNTANT/BILLING porque el paso 5 del
+// protocolo ("notificar a Cuentas/Seguros") hace de estos formularios
+// insumo de facturación, igual criterio que `coverageWriterProc`.
+// Default RESTRICTIVO a propósito — abrir a más roles (ej. NURSE, MT) es
+// decisión pendiente de Edwin, ver docs/CC/CC-0044-formularios-fuera-de-red.md.
+const formsWriterProc = requireRole(["ADMIN", "ADMISION", "ACCOUNTANT", "BILLING"]);
+
+// CC-0044 (P1-1) — list/byId: mismos roles de escritura + PHYSICIAN, porque
+// el médico de turno necesita leer el censo para decidir si firma (sign ya
+// exige PHYSICIAN aparte, vía physicianProc).
+const formsReaderProc = requireRole(["ADMIN", "ADMISION", "ACCOUNTANT", "BILLING", "PHYSICIAN"]);
+
 /**
  * CC-0044 — valida que `insurerId` (si viene) sea visible para el tenant
  * (catálogo global o del propio tenant) — mismo criterio que
@@ -902,7 +921,7 @@ export const insuranceRouter = router({
    * (update/addEntry/updateEntry/removeEntry) en BORRADOR.
    */
   callCensus: router({
-    list: tenantProcedure
+    list: formsReaderProc
       .input(networkCallCensusListInput)
       .query(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -925,7 +944,7 @@ export const insuranceRouter = router({
         );
       }),
 
-    byId: tenantProcedure
+    byId: formsReaderProc
       .input(networkCallCensusByIdInput)
       .query(async ({ ctx, input }) => {
         const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -944,7 +963,7 @@ export const insuranceRouter = router({
         return item;
       }),
 
-    create: tenantProcedure
+    create: formsWriterProc
       .input(networkCallCensusCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -998,7 +1017,7 @@ export const insuranceRouter = router({
       }),
 
     /** Edición de cabecera — sólo permitida en BORRADOR. */
-    update: tenantProcedure
+    update: formsWriterProc
       .input(networkCallCensusUpdateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1026,7 +1045,7 @@ export const insuranceRouter = router({
         });
       }),
 
-    addEntry: tenantProcedure
+    addEntry: formsWriterProc
       .input(networkCallCensusAddEntryInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1040,10 +1059,25 @@ export const insuranceRouter = router({
               message: "Censo no existe en la organización o no está en BORRADOR.",
             });
           }
+          // P1-2 (revisión adversarial) — si el caller no envía ordenIndex,
+          // se calcula dentro de la MISMA transacción como
+          // max(ordenIndex existente) + 1, en vez de dejarlo en el default
+          // 0 de la BD (que rompía el orden de filas agregadas después del
+          // create inicial). Dos addEntry seguidos sin ordenIndex quedan con
+          // índices crecientes — ver test "addEntry asigna ordenIndex...".
+          let ordenIndex = input.entry.ordenIndex;
+          if (ordenIndex === undefined) {
+            const last = await tx.networkCallCensusEntry.findFirst({
+              where: { censusId: input.censusId },
+              orderBy: { ordenIndex: "desc" },
+              select: { ordenIndex: true },
+            });
+            ordenIndex = (last?.ordenIndex ?? -1) + 1;
+          }
           return tx.networkCallCensusEntry.create({
             data: {
               censusId: input.censusId,
-              ordenIndex: input.entry.ordenIndex,
+              ordenIndex,
               doctorNombre: input.entry.doctorNombre,
               telefono: input.entry.telefono ?? null,
               atendioLlamada: input.entry.atendioLlamada ?? null,
@@ -1053,7 +1087,7 @@ export const insuranceRouter = router({
         });
       }),
 
-    updateEntry: tenantProcedure
+    updateEntry: formsWriterProc
       .input(networkCallCensusUpdateEntryInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1084,7 +1118,7 @@ export const insuranceRouter = router({
         });
       }),
 
-    removeEntry: tenantProcedure
+    removeEntry: formsWriterProc
       .input(networkCallCensusRemoveEntryInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1110,32 +1144,45 @@ export const insuranceRouter = router({
 
     /**
      * Firma del médico de turno (pie del formulario) — requireRole(["PHYSICIAN"]).
-     * Sólo transiciona BORRADOR -> FIRMADO.
+     * Sólo transiciona BORRADOR -> FIRMADO. P2 (revisión adversarial): exige
+     * al menos 1 fila en el censo — un censo firmado con 0 llamadas no tiene
+     * valor probatorio (el propósito del formulario es documentar los
+     * intentos de localizar un médico de la red).
      */
     sign: physicianProc
       .input(networkCallCensusSignInput)
       .mutation(async ({ ctx, input }) => {
-        const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
-          tx.networkCallCensus.updateMany({
+        return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
+          const census = await tx.networkCallCensus.findFirst({
             where: { id: input.id, organizationId: ctx.tenant.organizationId, status: "BORRADOR" },
+            select: { _count: { select: { entries: true } } },
+          });
+          if (!census) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Censo no existe en la organización o no está en BORRADOR.",
+            });
+          }
+          if (census._count.entries === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "El censo debe tener al menos un médico llamado antes de firmarse.",
+            });
+          }
+          await tx.networkCallCensus.update({
+            where: { id: input.id },
             data: {
               status: "FIRMADO",
               medicoTurnoUserId: ctx.user.id,
               firmadoAt: new Date(),
               updatedBy: ctx.user.id,
             },
-          }),
-        );
-        if (updated.count === 0) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Censo no existe en la organización o no está en BORRADOR.",
           });
-        }
-        return { ok: true as const };
+          return { ok: true as const };
+        });
       }),
 
-    anular: tenantProcedure
+    anular: formsWriterProc
       .input(networkCallCensusAnularInput)
       .mutation(async ({ ctx, input }) => {
         const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -1168,7 +1215,7 @@ export const insuranceRouter = router({
    * FIRMADO (markFirmado) | ANULADO. Sólo se edita en PENDIENTE_FIRMA.
    */
   outOfNetwork: router({
-    list: tenantProcedure
+    list: formsReaderProc
       .input(outOfNetworkAttestationListInput)
       .query(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -1190,7 +1237,7 @@ export const insuranceRouter = router({
         );
       }),
 
-    byId: tenantProcedure
+    byId: formsReaderProc
       .input(outOfNetworkAttestationByIdInput)
       .query(async ({ ctx, input }) => {
         const item = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -1207,7 +1254,7 @@ export const insuranceRouter = router({
         return item;
       }),
 
-    create: tenantProcedure
+    create: formsWriterProc
       .input(outOfNetworkAttestationCreateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1258,7 +1305,7 @@ export const insuranceRouter = router({
       }),
 
     /** Edición — sólo permitida en PENDIENTE_FIRMA. */
-    update: tenantProcedure
+    update: formsWriterProc
       .input(outOfNetworkAttestationUpdateInput)
       .mutation(async ({ ctx, input }) => {
         return withTenantContext(ctx.prisma, ctx.tenant, async (tx) => {
@@ -1298,7 +1345,7 @@ export const insuranceRouter = router({
       }),
 
     /** Registra que el impreso físico fue firmado por el asegurado/responsable. */
-    markFirmado: tenantProcedure
+    markFirmado: formsWriterProc
       .input(outOfNetworkAttestationMarkFirmadoInput)
       .mutation(async ({ ctx, input }) => {
         const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>
@@ -1324,7 +1371,7 @@ export const insuranceRouter = router({
         return { ok: true as const };
       }),
 
-    anular: tenantProcedure
+    anular: formsWriterProc
       .input(outOfNetworkAttestationAnularInput)
       .mutation(async ({ ctx, input }) => {
         const updated = await withTenantContext(ctx.prisma, ctx.tenant, (tx) =>

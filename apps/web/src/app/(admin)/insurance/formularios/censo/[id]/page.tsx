@@ -4,8 +4,18 @@
  * CC-0044 — Detalle del "Censo de llamada seguro médico" (NetworkCallCensus).
  *
  * Edición de cabecera/filas sólo en BORRADOR. `sign` (rol médico) transiciona
- * a FIRMADO. Imprimible: layout fiel al formulario físico AVANTE
- * (`@media print`, patrón tomado de `apps/web/src/app/(admin)/ece/bitacora/page.tsx`).
+ * a FIRMADO.
+ *
+ * Imprimible: renderizado como React (`<CensoPrintView>`), NO `document.write`.
+ * Hallazgo P0 de la revisión adversarial: el patrón anterior (window.open +
+ * document.write interpolando strings de BD sin escapar) es un XSS
+ * almacenado — con el CSP de prod (`script-src 'self' 'unsafe-inline'`) un
+ * `<img onerror=...>` en un campo de texto (ej. `comentarios`) ejecutaría con
+ * la sesión de la víctima. React escapa todo el contenido de texto por
+ * default, así que renderizar la vista imprimible como JSX (oculta en
+ * pantalla, visible sólo bajo `@media print` vía Tailwind `hidden print:block`)
+ * cierra el vector sin perder fidelidad al formulario físico. Mismo patrón
+ * que `apps/web/src/components/epicrisis-pdf-preview.tsx`.
  */
 import * as React from "react";
 import { useParams } from "next/navigation";
@@ -51,89 +61,108 @@ function atendioLabel(v: boolean | null): string {
   return v ? "SÍ" : "NO";
 }
 
-/** Ventana imprimible fiel al formulario físico AVANTE (patrón: ece/bitacora). */
-function imprimirCenso(data: {
-  patienteNombre: string;
+interface CensoPrintEntry {
+  doctorNombre: string;
+  telefono: string;
+  atendioLlamada: boolean | null;
+  comentarios: string;
+}
+
+/**
+ * Vista imprimible fiel al "Censo de llamada seguro médico" físico. Renderiza
+ * texto de BD como children de JSX (React escapa automáticamente — ver nota
+ * de seguridad arriba). Rellena filas vacías hasta `ENTRY_ROWS_MIN_PRINT`
+ * para replicar el formato del impreso físico.
+ */
+function CensoPrintView({
+  pacienteNombre,
+  aseguradora,
+  diagnostico,
+  entries,
+  medicoTurnoNombre,
+}: {
+  pacienteNombre: string;
   aseguradora: string;
   diagnostico: string;
-  entries: Array<{ doctorNombre: string; telefono: string; atendioLlamada: boolean | null; comentarios: string }>;
+  entries: CensoPrintEntry[];
   medicoTurnoNombre: string;
 }) {
-  const win = window.open("", "_blank");
-  if (!win) return;
-
-  const filas = [...data.entries];
+  const filas: CensoPrintEntry[] = [...entries];
   while (filas.length < ENTRY_ROWS_MIN_PRINT) {
     filas.push({ doctorNombre: "", telefono: "", atendioLlamada: null, comentarios: "" });
   }
 
-  const filasHtml = filas
-    .map(
-      (e) => `<tr>
-        <td>${e.doctorNombre}</td>
-        <td>${e.telefono}</td>
-        <td>${e.atendioLlamada === null ? "" : e.atendioLlamada ? "SÍ" : "NO"}</td>
-        <td>${e.comentarios}</td>
-      </tr>`,
-    )
-    .join("");
+  return (
+    <div className="hidden print:block" style={{ color: "#111", fontSize: "10pt" }}>
+      <header className="flex items-center gap-3 border-b-2 border-[#1a3c5e] pb-2">
+        {/* eslint-disable-next-line @next/next/no-img-element -- ventana/vista de impresión, no LCP */}
+        <img src="/avante-logo.svg" alt="AVANTE" style={{ height: 48 }} />
+        <div>
+          <h1 style={{ fontSize: "13pt", margin: 0, fontWeight: 700 }}>
+            Censo de llamada seguro médico
+          </h1>
+          <p style={{ fontSize: "9pt", color: "#555", margin: "2px 0 0" }}>
+            Complejo Hospitalario Avante — Protocolo de recepción, médico fuera de red
+          </p>
+        </div>
+      </header>
 
-  win.document.write(`<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <title>Censo de llamada seguro médico — AVANTE</title>
-  <style>
-    body { font-family: Arial, sans-serif; font-size: 10pt; margin: 20mm; color: #111; }
-    header { display: flex; align-items: center; gap: 12px; border-bottom: 2px solid #1a3c5e; padding-bottom: 8px; }
-    header img { height: 48px; }
-    h1 { font-size: 13pt; margin: 0; }
-    .sub { font-size: 9pt; color: #555; margin: 2px 0 0; }
-    .campo { margin: 4px 0; font-size: 10pt; }
-    .campo strong { display: inline-block; min-width: 140px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 12pt; }
-    th { background: #1a3c5e; color: white; padding: 5px 6px; font-size: 9pt; text-align: left; }
-    td { border: 1px solid #ccc; padding: 6px; font-size: 9pt; height: 20pt; }
-    .firma { margin-top: 40pt; }
-    .firma-linea { margin-top: 30pt; border-top: 1px solid #000; width: 320px; padding-top: 4px; font-size: 9pt; }
-    @media print { button { display: none; } }
-  </style>
-</head>
-<body>
-  <header>
-    <img src="/avante-logo.svg" alt="AVANTE" onerror="this.style.display='none'" />
-    <div>
-      <h1>Censo de llamada seguro médico</h1>
-      <p class="sub">Complejo Hospitalario Avante — Protocolo de recepción, médico fuera de red</p>
+      <div style={{ margin: "4px 0" }}>
+        <strong style={{ display: "inline-block", minWidth: 140 }}>Paciente:</strong> {pacienteNombre}
+      </div>
+      <div style={{ margin: "4px 0" }}>
+        <strong style={{ display: "inline-block", minWidth: 140 }}>Compañía de seguros:</strong>{" "}
+        {aseguradora}
+      </div>
+      <div style={{ margin: "4px 0" }}>
+        <strong style={{ display: "inline-block", minWidth: 140 }}>Diagnóstico:</strong> {diagnostico}
+      </div>
+
+      <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
+        <thead>
+          <tr>
+            <th style={{ background: "#1a3c5e", color: "white", padding: "5px 6px", fontSize: "9pt", textAlign: "left" }}>
+              Nombre de médico
+            </th>
+            <th style={{ background: "#1a3c5e", color: "white", padding: "5px 6px", fontSize: "9pt", textAlign: "left" }}>
+              Número de teléfono
+            </th>
+            <th style={{ background: "#1a3c5e", color: "white", padding: "5px 6px", fontSize: "9pt", textAlign: "left" }}>
+              Atendió llamada
+            </th>
+            <th style={{ background: "#1a3c5e", color: "white", padding: "5px 6px", fontSize: "9pt", textAlign: "left" }}>
+              Comentarios
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {filas.map((f, i) => (
+            <tr key={i}>
+              <td style={{ border: "1px solid #ccc", padding: 6, fontSize: "9pt", height: 20 }}>
+                {f.doctorNombre}
+              </td>
+              <td style={{ border: "1px solid #ccc", padding: 6, fontSize: "9pt", height: 20 }}>
+                {f.telefono}
+              </td>
+              <td style={{ border: "1px solid #ccc", padding: 6, fontSize: "9pt", height: 20 }}>
+                {f.atendioLlamada === null ? "" : f.atendioLlamada ? "SÍ" : "NO"}
+              </td>
+              <td style={{ border: "1px solid #ccc", padding: 6, fontSize: "9pt", height: 20 }}>
+                {f.comentarios}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div style={{ marginTop: 40 }}>
+        <p>Médico de turno: {medicoTurnoNombre || "_______________________________"}</p>
+        <div style={{ marginTop: 30, borderTop: "1px solid #000", width: 320, paddingTop: 4, fontSize: "9pt" }}>
+          Firma y sello (No. J.V.P.M.)
+        </div>
+      </div>
     </div>
-  </header>
-
-  <div class="campo"><strong>Paciente:</strong> ${data.patienteNombre}</div>
-  <div class="campo"><strong>Compañía de seguros:</strong> ${data.aseguradora}</div>
-  <div class="campo"><strong>Diagnóstico:</strong> ${data.diagnostico}</div>
-
-  <table>
-    <thead>
-      <tr>
-        <th>Nombre de médico</th>
-        <th>Número de teléfono</th>
-        <th>Atendió llamada</th>
-        <th>Comentarios</th>
-      </tr>
-    </thead>
-    <tbody>${filasHtml}</tbody>
-  </table>
-
-  <div class="firma">
-    <p>Médico de turno: ${data.medicoTurnoNombre || "_______________________________"}</p>
-    <div class="firma-linea">Firma y sello (No. J.V.P.M.)</div>
-  </div>
-
-  <br/>
-  <button onclick="window.print()">Imprimir / Guardar PDF</button>
-</body>
-</html>`);
-  win.document.close();
+  );
 }
 
 export default function DetalleCensoLlamadasPage() {
@@ -224,7 +253,7 @@ export default function DetalleCensoLlamadasPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between print:hidden">
         <div>
           <h1 className="text-2xl font-bold">Censo de llamadas</h1>
           <Badge variant={STATUS_BADGE[censo.status] ?? "outline"}>{censo.status}</Badge>
@@ -233,23 +262,7 @@ export default function DetalleCensoLlamadasPage() {
           <Button variant="outline" asChild>
             <Link href="/insurance/formularios">Volver</Link>
           </Button>
-          <Button
-            variant="outline"
-            onClick={() =>
-              imprimirCenso({
-                patienteNombre: nombrePaciente,
-                aseguradora,
-                diagnostico: censo.diagnostico,
-                entries: censo.entries.map((e) => ({
-                  doctorNombre: e.doctorNombre,
-                  telefono: e.telefono ?? "",
-                  atendioLlamada: e.atendioLlamada,
-                  comentarios: e.comentarios ?? "",
-                })),
-                medicoTurnoNombre: censo.medicoTurno?.fullName ?? "",
-              })
-            }
-          >
+          <Button variant="outline" onClick={() => window.print()}>
             Imprimir
           </Button>
           {esBorrador ? (
@@ -265,6 +278,7 @@ export default function DetalleCensoLlamadasPage() {
         </div>
       </div>
 
+      <div className="space-y-4 print:hidden">
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}
@@ -437,6 +451,20 @@ export default function DetalleCensoLlamadasPage() {
           ) : null}
         </CardContent>
       </Card>
+      </div>
+
+      <CensoPrintView
+        pacienteNombre={nombrePaciente}
+        aseguradora={aseguradora}
+        diagnostico={censo.diagnostico}
+        entries={censo.entries.map((e) => ({
+          doctorNombre: e.doctorNombre,
+          telefono: e.telefono ?? "",
+          atendioLlamada: e.atendioLlamada,
+          comentarios: e.comentarios ?? "",
+        }))}
+        medicoTurnoNombre={censo.medicoTurno?.fullName ?? ""}
+      />
     </div>
   );
 }
